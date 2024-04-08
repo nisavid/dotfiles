@@ -1,0 +1,21 @@
+{{- $homePrefix := print .chezmoi.homeDir .chezmoi.pathSeparator -}}
+{{-
+  $batThemesPath :=
+    joinPath
+      (output "bat" "--config-dir" | trim)
+      "themes"
+    | trimPrefix $homePrefix
+-}}
+{{- $refreshPeriod := .catppuccin.refreshPeriod -}}
+{{- range $i, $flavor := .catppuccin.allFlavors -}}
+{{- if ne $i 0 }}{{ "\n\n" }}{{ end -}}
+[{{
+  joinPath
+    $batThemesPath
+    (print "catppuccin-" $flavor ".tmTheme")
+  | quote
+}}]
+refreshPeriod = {{ $refreshPeriod | quote }}
+type = "file"
+url = "https://github.com/catppuccin/bat/raw/main/themes/Catppuccin%20{{ $flavor | title }}.tmTheme"
+{{- end }}

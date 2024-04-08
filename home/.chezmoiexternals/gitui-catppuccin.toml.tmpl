@@ -1,0 +1,9 @@
+{{- $gituiThemesPath := joinPath ".config" "gitui" -}}
+{{- $refreshPeriod := .catppuccin.refreshPeriod -}}
+{{- range $i, $flavor := .catppuccin.allFlavors -}}
+{{- if ne $i 0 }}{{ "\n\n" }}{{ end -}}
+[{{ joinPath $gituiThemesPath (print "catppuccin-" $flavor ".ron") | quote }}]
+refreshPeriod = {{ $refreshPeriod | quote }}
+type = "file"
+url = "https://github.com/catppuccin/gitui/raw/main/theme/{{ $flavor }}.ron"
+{{- end }}

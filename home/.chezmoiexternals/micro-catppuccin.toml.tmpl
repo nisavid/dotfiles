@@ -1,0 +1,10 @@
+{{- $microColorschemesPath := joinPath ".config" "micro" "colorschemes" -}}
+{{- $refreshPeriod := .catppuccin.refreshPeriod -}}
+{{- range $i, $flavor := .catppuccin.allFlavors -}}
+{{- $fileName := print "catppuccin-" $flavor ".micro" -}}
+{{- if ne $i 0 }}{{ "\n\n" }}{{ end -}}
+[{{ joinPath $microColorschemesPath $fileName | quote }}]
+refreshPeriod = {{ $refreshPeriod | quote }}
+type = "file"
+url = "https://github.com/catppuccin/micro/raw/main/src/{{ $fileName }}"
+{{- end }}

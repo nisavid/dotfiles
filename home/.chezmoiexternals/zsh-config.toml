@@ -1,0 +1,4 @@
+[".config/zsh"]
+type = "git-repo"
+url = "https://github.com/nisavid/zsh-config"
+refreshPeriod = "24h"

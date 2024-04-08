@@ -1,0 +1,10 @@
+{{- $glamourThemesPath := joinPath ".config" "glamour" -}}
+{{- $refreshPeriod := .catppuccin.refreshPeriod -}}
+{{- range $i, $flavor := .catppuccin.allFlavors -}}
+{{- $fileName := print "catppuccin-" $flavor ".json" -}}
+{{- if ne $i 0 }}{{ "\n\n" }}{{ end -}}
+[{{ joinPath $glamourThemesPath $fileName | quote }}]
+refreshPeriod = {{ $refreshPeriod | quote }}
+type = "file"
+url = "https://github.com/catppuccin/glamour/raw/main/themes/{{ $fileName }}"
+{{- end }}
