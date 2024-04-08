@@ -1,0 +1,30 @@
+#!/bin/sh
+
+# Hashes of `$(bat --config-dir)/syntaxes/*.sublime-syntax`:
+{{-
+  range
+    glob (
+      joinPath
+        (output "bat" "--config-dir" | trim)
+        "syntaxes"
+        "*.sublime-syntax"
+    )
+}}
+#   {{ cat (sha256sum (include .)) (base .) }}
+{{- end }}
+
+# Hashes of `$(bat --config-dir)/themes/*.tmTheme`:
+{{-
+  range
+    glob (
+      joinPath
+        (output "bat" "--config-dir" | trim)
+        "themes"
+        "*.tmTheme"
+    )
+}}
+#   {{ cat (sha256sum (include .)) (base .) }}
+{{- end }}
+
+echo "Building bat cache..."
+bat cache --build

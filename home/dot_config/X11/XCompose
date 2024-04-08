@@ -1,0 +1,8 @@
+include "%L"
+include "%H/.config/X11/XCompose-vim"
+
+<Multi_key>        <bar> <greater>             : "‣"        # 2023 : TRIANGULAR BULLET
+<Multi_key>        <minus> <period>            : "⁃"        # 2043 : HYPHEN BULLET
+<Multi_key>        <minus> <minus> <comma>     : "⁃"        # 2212 : MINUS SIGN
+<Multi_key>        <slash> <f>                 : "∕"        # 2215 : DIVISION SLASH
+<Multi_key>        <comma> <equals>            : "◦"        # 25E6 : WHITE BULLET

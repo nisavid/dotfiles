@@ -1,0 +1,4 @@
+always-auth=true
+resolution-mode=time-based
+registry-supports-time-field=true
+shell-emulator=true

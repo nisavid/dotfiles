@@ -1,0 +1,205 @@
+[user]
+	name = Ivan D Vasin
+	email = ivan@nisavid.io
+[core]
+	autocrlf = input
+	pager = diff-so-fancy | less --tabs=4 -RFX
+	safecrlf = warn
+	whitespace = fix,-indent-with-non-tab,trailing-space,cr-at-eol
+[interactive]
+	diffFilter = diff-so-fancy --patch
+[branch]
+	autosetuprebase = always
+[diff]
+	algorithm = histogram
+	renames = copies
+	mnemonicPrefix = true
+[diff "lesspipe"]
+	textconv = LESSQUIET=1 lesspipe.sh
+	binary = true
+	cachetextconv = true
+[grep]
+	lineNumber = true
+[log]
+	date = iso
+[merge]
+	log = 100
+	tool = nvimdiff2
+	ff = only
+[pull]
+	rebase = merges
+[push]
+	default = simple
+[alias]
+	a = add --patch
+	aa = add --all
+	au = add --update
+	br = branch
+	brc = symbolic-ref --short HEAD
+	brd = branch --delete
+	cfg = config
+	cfgg = config --global
+	cfgge = config --global --edit
+	cfgl = config --local
+	cfgle = config --local --edit
+	chp = cherry-pick
+	chpa = cherry-pick --abort
+	chpc = cherry-pick --continue
+	ci = commit
+	cia = commit --amend
+	ciam = commit --amend --message
+	cian = commit --amend --no-edit
+	cim = commit --message
+	cin = commit --no-edit
+	cle = clean-disposable
+	clo = clone
+	clo1 = clone --depth=1
+	co = checkout
+	co- = checkout -
+	cob = checkout -b
+	coma = checkout main
+	d = diff --break-rewrites=/90 --find-renames=30 --find-copies=30
+	dc = diff --break-rewrites=/90 --find-renames=30 --find-copies=30 --cached
+	dcs = diff --break-rewrites=/90 --find-renames=30 --find-copies=30 --cached --stat
+	des = describe --dirty --broken --tags
+	desa = describe --dirty --broken --all
+	desc = describe --contains --dirty --broken --tags
+	desca = describe --contains --dirty --broken --all
+	ds = diff --break-rewrites=/90 --find-renames=30 --find-copies=30 --stat
+	f = fetch
+	g = grep
+	gbl = grep-blame
+	gi = gui
+	gibl = gui blame
+	gibr = gui browser
+	gici = gui citool
+	l = log
+	lgd = log --patch
+	lgd = log --patch
+	lgd1 = log --patch -1
+	lgs = log --stat
+	lgs1 = log --stat -1
+	lgsd = log --stat --patch
+	lgsd1 = log --stat --patch -1
+	lo = log --format='%C(yellow)%h %C(blue)%aN %C(cyan)%ad%C(red)%d %C()%s' --date=format-local:'%Y-%m-%d %H:%M:%S'
+	lol = log --format='%C(yellow)%h %C(blue)%aN %C(cyan)%ad%C(red)%d %C()%s' --date=format-local:'%Y-%m-%d %H:%M:%S' --graph
+	lol1 = log --format='%C(yellow)%h %C(blue)%aN %C(cyan)%ad%C(red)%d %C()%s' --date=format-local:'%Y-%m-%d %H:%M:%S' --graph -1
+	lola = log --format='%C(yellow)%h %C(blue)%aN %C(cyan)%ad%C(red)%d %C()%s' --date=format-local:'%Y-%m-%d %H:%M:%S' --graph --all
+	ls = ls-files
+	mg = merge
+	mgf = merge --ff-only
+	mgma = merge main
+	mgnf = merge --no-ff
+	mo = remote
+	pl = pull
+	prune-tags = !git tag --list | xargs git tag --delete && git fetch --tags
+	ps = push
+	psa = push --all
+	pscb = push-current-branch
+	psct = push-current-tag
+	psf = push --force
+	pso = push origin
+	rb = rebase
+	rba = rebase --abort
+	rbc = rebase --continue
+	rbi = rebase --interactive
+	rbima = rebase --interactive main
+	rbiup = rebase --interactive @{upstream}
+	rbma = rebase main
+	rmc = rm --cached
+	rs = reset
+	rshard = reset --hard
+	rshardma = reset --hard main
+	rshardup = reset --hard @{upstream}
+	s = status
+	ss = stash
+	ssa = stash apply
+	ssd = stash drop
+	ssd1 = stash drop stash@{1}
+	ssd2 = stash drop stash@{2}
+	ssd3 = stash drop stash@{3}
+	ssd4 = stash drop stash@{4}
+	ssd5 = stash drop stash@{5}
+	ssd6 = stash drop stash@{6}
+	ssd7 = stash drop stash@{7}
+	ssd8 = stash drop stash@{8}
+	ssl = stash list
+	ssp = stash pop
+	ssp1 = stash pop stash@{1}
+	ssp2 = stash pop stash@{2}
+	ssp3 = stash pop stash@{3}
+	ssp4 = stash pop stash@{4}
+	ssp5 = stash pop stash@{5}
+	ssp6 = stash pop stash@{6}
+	ssp7 = stash pop stash@{7}
+	ssp8 = stash pop stash@{8}
+	sss = stash show
+	sss1 = stash show stash@{1}
+	sss2 = stash show stash@{2}
+	sss3 = stash show stash@{3}
+	sss4 = stash show stash@{4}
+	sss5 = stash show stash@{5}
+	sss6 = stash show stash@{6}
+	sss7 = stash show stash@{7}
+	sss8 = stash show stash@{8}
+	sssp = stash show --patch
+	sssp1 = stash show --patch stash@{1}
+	sssp2 = stash show --patch stash@{2}
+	sssp3 = stash show --patch stash@{3}
+	sssp4 = stash show --patch stash@{4}
+	sssp5 = stash show --patch stash@{5}
+	sssp6 = stash show --patch stash@{6}
+	sssp7 = stash show --patch stash@{7}
+	sssp8 = stash show --patch stash@{8}
+	sssv = stash save
+	sssvk = stash save --keep-index
+	sssvp = stash save --patch
+	sssvpnk = stash save --patch --no-keep-index
+[color]
+	branch = auto
+	diff = auto
+	grep = auto
+	interactive = auto
+	showBranch = auto
+	status = auto
+	ui = true
+[color "branch"]
+	current = yellow reverse
+	local = yellow
+	remote = green
+[color "diff"]
+	meta = 11
+	frag = magenta bold
+	old = red bold
+	new = green bold
+	func = 146 bold
+	commit = yellow bold
+	whitespace = red reverse
+[color "status"]
+	added = yellow
+	changed = green
+	untracked = cyan
+[gui]
+	fontui = -family \"Inconsolata LGC for Powerline\" -size 11 -weight normal -slant roman -underline 0 -overstrike 0
+	fontdiff = -family \"Inconsolata LGC for Powerline\" -size 11 -weight normal -slant roman -underline 0 -overstrike 0
+	editor = gvim
+[cola]
+	fontdiff = Inconsolata LGC for Powerline,11,-1,5,50,0,0,0,0,0
+	tabwidth = 2
+	textwidth = 92
+	boldheaders = true
+[url "https://invent.kde.org/"]
+	insteadOf = kde:
+[url "ssh://git@invent.kde.org/"]
+	pushInsteadOf = kde:
+[credential "https://github.com"]
+	helper = 
+	helper = !/usr/bin/gh auth git-credential
+[credential "https://gist.github.com"]
+	helper = 
+	helper = !/usr/bin/gh auth git-credential
+[color "diff-highlight"]
+	oldNormal = red bold
+	oldHighlight = red bold 52
+	newNormal = green bold
+	newHighlight = green bold 22

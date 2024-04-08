@@ -1,0 +1,5 @@
+[catppuccin]
+accent = "sapphire"
+allFlavors = ["frappe", "latte", "macchiato", "mocha"]
+flavor = "mocha"
+refreshPeriod = "24h"
