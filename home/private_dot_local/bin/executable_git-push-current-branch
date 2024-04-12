@@ -1,0 +1,12 @@
+#!/bin/sh
+
+current_branch="$(git symbolic-ref --short HEAD)"
+
+[ -z "$current_branch" ] && exit 1
+
+# FIXME: ensure only one branch
+
+remote=origin
+[ $# -ge 1 ] && remote="$1"
+
+git push -u "$remote" "$current_branch"
