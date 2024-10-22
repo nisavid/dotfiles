@@ -5,5 +5,5 @@
 [{{ joinPath $gituiThemesPath (print "catppuccin-" $flavor ".ron") | quote }}]
 refreshPeriod = {{ $refreshPeriod | quote }}
 type = "file"
-url = "https://github.com/catppuccin/gitui/raw/main/theme/{{ $flavor }}.ron"
+url = "https://github.com/catppuccin/gitui/raw/main/themes/catppuccin-{{ $flavor }}.ron"
 {{- end }}
