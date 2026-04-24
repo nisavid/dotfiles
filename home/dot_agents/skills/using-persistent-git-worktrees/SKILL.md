@@ -1,6 +1,6 @@
 ---
 name: using-persistent-git-worktrees
-description: Use when starting feature work that needs isolation from the current workspace, before executing implementation plans in a git worktree, choosing, auditing, moving, repairing, cleaning up, or handing off persistent worktrees, or resolving sandbox and approval friction around sibling `.wt` setup.
+description: Use with using-git-worktrees when starting feature work that needs isolation from the current workspace, before executing implementation plans in a git worktree, choosing, auditing, moving, repairing, cleaning up, or handing off persistent worktrees, or resolving the local failure mode where coding agents use `.worktrees`, `worktrees`, `/tmp`, or global worktree paths instead of sibling `.wt` setup.
 ---
 
 # Using Persistent Git Worktrees
