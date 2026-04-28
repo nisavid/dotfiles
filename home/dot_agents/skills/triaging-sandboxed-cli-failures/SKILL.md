@@ -1,9 +1,9 @@
 ---
-name: authenticated-cli-sandbox-triage
+name: triaging-sandboxed-cli-failures
 description: Use when a CLI reports quota, auth, cache, DNS, network, read-only filesystem, or missing-state failures inside Codex or another sandbox
 ---
 
-# Authenticated CLI Sandbox Triage
+# Triaging Sandboxed CLI Failures
 
 ## Overview
 
