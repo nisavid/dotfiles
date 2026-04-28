@@ -1,0 +1,37 @@
+{
+  "data": {
+    "repository": {
+      "pullRequest": {
+        "number": 7,
+        "url": "https://github.com/base-owner/base-repo/pull/7",
+        "isDraft": false,
+        "baseRefName": "main",
+        "headRefName": "feature",
+        "baseRefOid": "base-sha",
+        "headRefOid": "head-sha",
+        "reviewDecision": "APPROVED",
+        "mergeStateStatus": "BLOCKED",
+        "mergeable": "MERGEABLE",
+        "reviewThreads": {
+          "nodes": [
+            {
+              "id": "outdated-thread",
+              "isResolved": false,
+              "isOutdated": true,
+              "path": "src/lib.rs",
+              "line": null,
+              "comments": {
+                "nodes": [{"author": {"login": "review-bot"}, "body": "Outdated but unresolved issue", "createdAt": "2026-04-28T00:00:00Z", "url": "https://github.com/base-owner/base-repo/pull/7#discussion_r3"}],
+                "pageInfo": {"hasNextPage": false, "endCursor": null}
+              }
+            }
+          ],
+          "pageInfo": {"hasNextPage": false, "endCursor": null}
+        },
+        "reviews": {"nodes": [], "pageInfo": {"hasNextPage": false, "endCursor": null}},
+        "reviewRequests": {"nodes": [], "pageInfo": {"hasNextPage": false, "endCursor": null}},
+        "statusCheckRollup": {"contexts": {"nodes": [], "pageInfo": {"hasNextPage": false, "endCursor": null}}}
+      }
+    }
+  }
+}

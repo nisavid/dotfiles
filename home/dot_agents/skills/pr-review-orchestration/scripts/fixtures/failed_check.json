@@ -1,0 +1,22 @@
+{
+  "data": {
+    "repository": {
+      "pullRequest": {
+        "number": 7,
+        "url": "https://github.com/base-owner/base-repo/pull/7",
+        "isDraft": false,
+        "baseRefName": "main",
+        "headRefName": "feature",
+        "baseRefOid": "base-sha",
+        "headRefOid": "head-sha",
+        "reviewDecision": "APPROVED",
+        "mergeStateStatus": "BLOCKED",
+        "mergeable": "MERGEABLE",
+        "reviewThreads": {"nodes": [], "pageInfo": {"hasNextPage": false, "endCursor": null}},
+        "reviews": {"nodes": [], "pageInfo": {"hasNextPage": false, "endCursor": null}},
+        "reviewRequests": {"nodes": [], "pageInfo": {"hasNextPage": false, "endCursor": null}},
+        "statusCheckRollup": {"contexts": {"nodes": [{"__typename": "CheckRun", "name": "CI", "status": "COMPLETED", "conclusion": "FAILURE"}], "pageInfo": {"hasNextPage": false, "endCursor": null}}}
+      }
+    }
+  }
+}

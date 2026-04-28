@@ -11,6 +11,11 @@ Ralph review means repeated review cycles until the latest review raises no find
 
 Apply this skill whenever the operator explicitly asks for Ralph semantics, regardless of any broader review strategy ladder. This skill also applies when `reviewing-before-finalizing` classifies a change as requiring Ralph review.
 
+When Ralph review targets PR review comments, bot review reruns, ready-for-review,
+merge readiness, stale review threads, requested reviewers, or blocked GitHub
+merge state, each Ralph cycle uses `pr-review-orchestration` once and follows
+its external-review budget gates.
+
 ## Review Loop
 
 Label each cycle as `Ralph Review Cycle N`.
