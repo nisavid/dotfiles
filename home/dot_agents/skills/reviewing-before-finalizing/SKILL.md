@@ -26,6 +26,12 @@ A review cycle means:
 
 Explicit Ralph terms take precedence over the strategy ladder below.
 
+## Pull Request Review State
+
+If finalization involves PR review comments, bot review reruns, ready-for-review,
+merge readiness, stale review threads, requested reviewers, or blocked GitHub
+merge state, use `pr-review-orchestration` for that portion of the work.
+
 ## Choose the Strategy
 
 If the operator did not already choose, classify the change:
