@@ -1,6 +1,6 @@
 ---
 name: reviewing-before-finalizing
-description: Use when changes appear ready to commit, merge, deploy, ship, release, finalize, or when the operator requests a review cycle, Ralph review, or review and revise until clean.
+description: Use when changes appear ready to commit, merge, deploy, ship, release, finalize, or when the operator requests a review cycle, Ralph review, Ralph-review, or review and revise until clean.
 ---
 
 # Reviewing Before Finalizing
@@ -15,6 +15,7 @@ Honor an explicit operator review policy first.
 | --- | --- |
 | "review cycle" | Run one complete review cycle. |
 | "Ralph review" | Run review cycles until a review yields no issues. |
+| "Ralph-review" | Same as Ralph review. |
 | "review and revise until clean" | Same as Ralph review. |
 
 A review cycle means:
