@@ -81,6 +81,19 @@ Do not treat stale or outdated threads as safe to ignore unless refreshed PR sta
 
 If a finding conflicts with the accepted spec or user decision, ask the user unless the spec is plainly obsolete and the correction is unambiguous.
 
+## Conversation Resolution
+
+When this skill is active, it owns PR conversation cleanup. If another GitHub comment-handling skill says not to resolve threads without explicit permission, treat this section as the more specific instruction for PR review orchestration.
+
+Resolve review threads yourself when the disposition is clear and evidenced:
+
+- `valid_fix_required`: resolve after the fix is committed, pushed, and the relevant checks or targeted verification pass.
+- `valid_but_already_fixed`: resolve after identifying the commit, current code, or check evidence that already addresses it.
+- `stale_or_outdated`: resolve after refreshed thread-aware PR state shows the thread is outdated, points at superseded code, or no longer blocks the current head.
+- `conflicts_with_spec`, `non_actionable_preference`, or `duplicate`: resolve when the accepted requirements, PR scope, or existing thread makes the reason concrete.
+
+Do not ask for separate permission before resolving those threads. Ask only when a thread is `needs_human_decision`, when resolving it would hide an unhandled valid finding, or when repository policy explicitly reserves resolution for humans.
+
 ## Merge Readiness
 
 Do not use a single bot approval as merge readiness. Merge readiness requires:
@@ -105,6 +118,7 @@ When Ralph review is requested for PR review, bot-review, comment-resolution, or
 | --- | --- |
 | Treating CodeRabbit approval as PR readiness | Fetch thread-aware PR state and inspect blockers. |
 | Rerunning a bot to diagnose branch protection | Run `pr_review_state.py` and update the ledger first. |
-| Resolving stale threads casually | Record evidence and confirm blocking state. |
+| Asking before resolving clearly handled threads | Classify them, record evidence, and resolve them under Conversation Resolution. |
+| Resolving stale threads casually | Record evidence, confirm refreshed thread state, then resolve them when the disposition is clear. |
 | Editing managed review skills | Keep them immutable; use this extension skill. |
 | Reviewing stale remote diffs | Push local fixes and confirm PR head SHA first. |
