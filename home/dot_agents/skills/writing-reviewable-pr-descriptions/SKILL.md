@@ -23,6 +23,8 @@ If a detail does not help review timing, order, risk focus, or merge readiness, 
 
 ## Default Shape
 
+For tiny PRs, do not inflate the body with shields, reviewer maps, or architecture sections. Use a short summary, verification, and blockers or follow-up only when they help review.
+
 For non-tiny PRs, start from `templates/large-pr-description.md`. Preserve the first viewport:
 
 1. Unheaded Shields.io rows: review gates, architecture, contracts.
