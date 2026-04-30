@@ -96,6 +96,11 @@ Do not ask for separate permission before resolving those threads. Ask only when
 
 ## Merge Readiness
 
+**REQUIRED SUB-SKILL:** Use `resolving-workflow-ownership` before final PR
+closeout when readiness, approval, merge actuation, or handoff ownership affects
+what the agent may decide, say, or do. Keep ownership policy in that skill; this
+skill only applies it to PR state.
+
 Do not use a single bot approval as merge readiness. Merge readiness requires:
 
 - clean local worktree when local closeout is requested
@@ -105,6 +110,12 @@ Do not use a single bot approval as merge readiness. Merge readiness requires:
 - no unresolved active threads with unhandled valid findings
 - review decision approved, or no review required by branch protection
 - GitHub merge state is mergeable or explicitly accepted
+
+After these gates pass, merge only when PR readiness decision and merge
+actuation are both agent-owned, required approvals are present, and hard
+constraints pass. If another owner controls an undecided readiness state, report
+the evidence without saying the PR is ready to merge. If another owner controls
+merge actuation, hand off without merging.
 
 When merge state is blocked or ambiguous, run `pr_review_state.py` before rerunning CodeRabbit or another external reviewer.
 
