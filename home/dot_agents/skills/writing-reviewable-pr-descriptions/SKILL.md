@@ -48,12 +48,19 @@ A reviewable large-PR description passes only when:
 
 ## Rules
 
+- **REQUIRED SUB-SKILL:** Use `resolving-workflow-ownership` when PR status,
+  readiness, approval, gate, merge, deploy, release, or closeout wording depends
+  on whether the agent, reviewer, operator, code owner, or another owner decides
+  or acts. Apply its language policy; do not copy its ownership table here.
 - Use shields, not a Markdown `Status Snapshot` table, for large or reviewer-heavy PRs.
 - Do not add agent-ledger sections like `Review Readiness` when the same information fits naturally in badges, alerts, dependencies, verification, current status, or blockers.
 - Say `review`, not `human review`.
 - Omit optional sections when they do not help reviewers. Do not add `None`, `N/A`, or negative rows unless the absence resolves a likely reviewer question.
 - Include `Current Status` only when it adds information not already visible in the first viewport.
 - Include `PR Readiness Blockers` only when concrete blockers remain.
+- State PR readiness or mergeability directly only when the readiness owner has
+  decided it or the agent owns that decision. Otherwise report evidence and the
+  remaining decision, approval, or action owner without implying readiness.
 - Do not define design choices by what they reject. Prefer `storage: append-only event log` over `not legacy storage`.
 - For stacked or companion PRs, state the base branch or PR, review order, whether this PR is reviewable now, and which diff areas may change.
 - Use small interface or interaction diagrams when they reduce cognitive load.
