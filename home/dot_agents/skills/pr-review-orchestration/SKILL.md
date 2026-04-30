@@ -1,6 +1,6 @@
 ---
 name: pr-review-orchestration
-description: Use when PR review loops, bot review reruns, CodeRabbit or Greptile cycles, unresolved pull request comments, ready-for-review, mark ready, merge readiness, blocked merges, stale review threads, or requested reviewers affect a coding task.
+description: Use when PR review loops, bot review reruns, CodeRabbit or Greptile cycles, unresolved pull request comments, ready-for-review, mark ready, merge readiness, blocked merges, stale review threads, requested reviewers, branch closeout, merge tasks, docs-only PRs, or skill-only PRs affect a pull request.
 ---
 
 # PR Review Orchestration
@@ -54,7 +54,7 @@ A completed external review cycle means the service accepted the current diff an
 
 Pending, authentication-blocked, policy-blocked, unavailable, rate-limited before review creation, timed-out-before-submission, or still-processing attempts are not completed cycles. Record the exact status or error.
 
-After two completed external review cycles on the same PR, run a loop-breaker sweep before another external review. Ask for explicit user approval before spending another cycle.
+After two completed external review cycles on the same PR, run a loop-breaker sweep before another external review. The sweep must reread the user/spec decision, refresh thread-aware PR state, audit unresolved/stale/duplicate threads, audit the local diff/head/checks, derive ownership gates with `resolving-workflow-ownership`, and record the next blocker or clearance. Ask for explicit user approval before spending another cycle.
 
 ## Review Item Handling
 
@@ -83,7 +83,7 @@ If a finding conflicts with the accepted spec or user decision, ask the user unl
 
 ## Conversation Resolution
 
-When this skill is active, it owns PR conversation cleanup. If another GitHub comment-handling skill says not to resolve threads without explicit permission, treat this section as the more specific instruction for PR review orchestration.
+When this skill is active, use `resolving-workflow-ownership` before resolving review threads. In delegated PR review loops, thread-resolution actuation is agent-owned only for the evidenced dispositions below unless repo policy or current instruction reserves it for another owner. If another GitHub comment-handling skill says not to resolve threads without explicit permission, treat this section as the more specific instruction for PR review orchestration.
 
 Resolve review threads yourself when the disposition is clear and evidenced:
 
