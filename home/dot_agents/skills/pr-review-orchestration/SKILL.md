@@ -26,6 +26,16 @@ For PR review loops, ready-for-review, bot reruns, or merge readiness:
 7. Refresh GitHub PR state.
 8. Close out only when blockers are gone; otherwise report the next blocker.
 
+## Branch Publishing Gate
+
+When you first push a task branch, create a draft PR in the same workflow turn
+unless the operator explicitly says not to create a PR. Do not leave pushed
+work branches PR-less as handoff state.
+
+Mark the PR ready only after local readiness gates pass and the PR body records
+the verification evidence. If the branch is not review-ready, keep the draft PR
+open and state the blocker in the PR body or a comment.
+
 Use `scripts/pr_review_state.py` for PR state and ledger work:
 
 ```bash
@@ -133,3 +143,4 @@ When Ralph review is requested for PR review, bot-review, comment-resolution, or
 | Resolving stale threads casually | Record evidence, confirm refreshed thread state, then resolve them when the disposition is clear. |
 | Editing managed review skills | Keep them immutable; use this extension skill. |
 | Reviewing stale remote diffs | Push local fixes and confirm PR head SHA first. |
+| Pushing a branch and planning to create the PR later | Create a draft PR immediately, then mark ready after readiness gates pass. |
