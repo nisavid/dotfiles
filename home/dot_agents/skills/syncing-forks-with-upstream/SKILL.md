@@ -1,36 +1,50 @@
 ---
 name: syncing-forks-with-upstream
-description: Use when syncing a fork with upstream, clicking Sync fork, using gh repo sync, merging upstream changes, or handling protected-main fork updates where upstream commit identity should be preserved.
+description: Use when syncing a fork with upstream, clicking Sync fork, using gh repo sync, merging upstream changes, or handling protected-main fork updates where upstream commit identity or intentional fork behavior must be preserved.
 ---
 
 # Syncing Forks With Upstream
 
 ## Overview
 
-When updating a fork from its source, preserve upstream commit objects. Fork sync is history maintenance first; PR review is secondary unless rules or conflicts force it.
+Fork sync preserves upstream commit identity and intentional local contracts. Use this before choosing a merge method, resolving conflicts, pushing a sync branch, or merging a protected-main sync PR.
 
-This extends `gh-cli`, `pr-review-orchestration`, and PR comment skills. Apply it before choosing a merge method.
+## Start With The Fork Contract
 
-## Decision Rule
+Before syncing:
+
+1. Read always-loaded agent instructions such as `AGENTS.md`.
+2. Look for repo-local fork policy files such as `.agents/fork-sync-policy.toml`, `docs/maintainers/fork-divergences.md`, or `docs/maintainers/fork-sync-policy.md`.
+3. Identify direct upstream, source upstream when different, fork remote, target branch, current upstream baseline, generated/runtime artifacts, and branch protection.
+4. If no policy exists, stop and use `onboarding-forks-for-agent-maintenance` before doing a broad sync.
+
+## Merge Method
 
 | Situation | Use | Avoid |
 | --- | --- | --- |
 | Fork can be updated directly | GitHub **Sync fork** or `gh repo sync OWNER/FORK -b BRANCH` | PR rebase/squash merge |
-| Direct sync is blocked by conflicts | Conflict-resolution PR, then normal merge commit | Replaying upstream commits |
+| Conflicts block direct sync | Conflict-resolution PR, then normal merge commit | Replaying upstream commits |
 | Branch protection requires PR | PR merged with a merge commit | Rebase merge, squash merge, cherry-pick series |
 | Local command-line sync is needed | `git fetch upstream`; `git merge upstream/main` | `git rebase upstream/main` |
 
-## Required Checks
+Never force sync, force-push, or overwrite fork history unless the operator explicitly asks to replace history.
 
-Before syncing:
+## Sync Ledger And Contract Review
 
-1. Identify fork remote, upstream remote, branch names, and branch protection.
-2. State whether preserving upstream commit identity is required. Default to required.
-3. Prefer `gh repo sync <fork> -b <branch>` or GitHub Sync fork when it can fast-forward or merge directly.
-4. If a PR is unavoidable, choose the merge method that preserves the upstream commit objects. On GitHub, that means a normal merge commit, not rebase or squash.
-5. Do not use `gh repo sync --force`, force-push, or overwrite history unless the user explicitly asks to replace fork history.
+Keep a short PR-body or temporary ledger:
 
-After syncing:
+- refs fetched and baseline commit;
+- policy files read;
+- intentional divergences checked;
+- affected contracts classified as preserved, upstream now implements it, obsolete by policy, intentionally changed, or uncertain;
+- exact local gates run before push;
+- unresolved uncertainty for maintainer triage.
+
+For changes touching names, paths, packaging, generated artifacts, release flow, security boundaries, updater behavior, or docs, adapt upstream behavior under local contracts. Do not push or merge while contracts are unchecked, uncertainty is untriaged, or required local gates are missing. Generated/runtime artifacts are evidence, not durable fixes.
+
+## Verification
+
+Run repo-local gates before pushing. If policy names a local build gate, CI is secondary evidence. After syncing, verify history shape:
 
 ```bash
 git fetch origin upstream
@@ -38,22 +52,13 @@ git merge-base --is-ancestor upstream/main origin/main
 git log --oneline --left-right --cherry-pick origin/main...upstream/main
 ```
 
-The ancestor check should pass. The cherry-pick check is only diagnostic; patch equivalence does not mean history was preserved.
+The ancestor check should pass. Patch equivalence does not prove commit identity.
 
-## Red Flags
+## Red Flags And Fixes
 
-- The command includes `gh pr merge --rebase`, `--squash`, `git rebase`, or `git cherry-pick` for upstream commits.
-- The command includes `gh repo sync --force` or force-push during routine fork sync.
-- A protected-branch PR is treated as permission to change the history shape.
-- Review automation chooses merge method based on linear history preference instead of fork-sync identity.
-- `git range-diff` shows `=` but `git merge-base --is-ancestor upstream/main origin/main` fails.
-- The PR branch has upstream commits intact, but the selected merge method will replay them.
-
-## Common Mistakes
-
-| Mistake | Correction |
-| --- | --- |
-| Using PR auto-merge with rebase because checks and reviews are required | Keep the PR, but select merge commit. |
-| Treating patch-equivalent commits as good enough | Verify ancestry; Git history depends on commit object identity. |
-| Assuming branch protection forbids structure-preserving sync | Check whether Sync fork or merge-commit PR is allowed before choosing rebase. |
-| Letting PR closeout skills decide the merge method alone | Apply this skill first, then run PR review orchestration inside that constraint. |
+- The plan only discusses commit identity and does not mention fork contracts.
+- A conflict accepts upstream names, paths, package versions, or docs without checking local policy.
+- A broad sync rewrites README, maintainer docs, package templates, or generated-app sources without divergence review.
+- The branch is pushed before local build gates named in policy have passed.
+- GitHub merge state or code-scanning blockers are inferred from summary checks instead of inspecting the blocking review/check/alert details.
+- Review comments are closed before the exact changed surface is revalidated.
