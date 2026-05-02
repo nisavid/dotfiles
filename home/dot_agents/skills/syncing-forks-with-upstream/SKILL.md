@@ -29,6 +29,19 @@ Before syncing:
 
 Never force sync, force-push, or overwrite fork history unless the operator explicitly asks to replace history.
 
+## PR Target Guard
+
+Before creating or updating a sync PR, verify the PR target repository is the fork being maintained, not the source upstream:
+
+```bash
+git remote -v
+gh repo view --json nameWithOwner,parent
+```
+
+For downstream fork sync PRs, pass the fork explicitly to GitHub CLI commands, such as `gh pr create --repo OWNER/FORK`, `gh pr view --repo OWNER/FORK`, `gh pr ready --repo OWNER/FORK`, `gh pr checks --repo OWNER/FORK`, and `gh pr merge --repo OWNER/FORK`.
+
+If `gh` opens a PR against the source upstream or parent repository, stop treating that PR as the sync PR. Close it if appropriate, recreate the PR against the maintained fork, and record the mistake in the handoff notes.
+
 ## Sync Ledger And Contract Review
 
 Keep a short PR-body or temporary ledger:
@@ -62,5 +75,6 @@ The ancestor check should pass. Patch equivalence is not commit identity.
 | Accepting upstream names, paths, versions, or docs by default | Check local policy and adapt upstream behavior. |
 | Rewriting README, maintainer docs, package templates, or generated-app sources broadly | Do divergence review first. |
 | Pushing before local gates pass | Run policy gates and record exact commands. |
+| Creating the sync PR against the source upstream | Close the mistaken PR if appropriate, then recreate it with `--repo OWNER/FORK`. |
 | Inferring GitHub blockers from summary status | Inspect blocking checks, alerts, reviews, and threads directly. |
 | Closing review comments without revalidation | Revalidate the changed surface first. |
