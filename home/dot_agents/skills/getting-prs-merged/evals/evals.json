@@ -39,6 +39,18 @@
     },
     {
       "id": 3,
+      "prompt": "Get this merged, but check the repo-local instructions first; this repo may require maintainer approval before resolving threads or merging.",
+      "expected_output": "The agent still uses the merge-closeout wrapper, discovers local policy before acting, follows any autonomy limits, and reports owner-controlled gates instead of forcing full autonomous closeout.",
+      "files": [],
+      "expectations": [
+        "The agent treats local policy discovery as an early step, not a final afterthought.",
+        "The agent applies repo-local guidance to ready-for-review, thread resolution, merge method, branch cleanup, and deploy closeout.",
+        "The agent does not resolve threads or merge when local policy reserves those actions for another owner.",
+        "The agent reports the exact owner-controlled gate when full autonomy is not allowed."
+      ]
+    },
+    {
+      "id": 4,
       "prompt": "Please just write a better PR description for this pull request.",
       "expected_output": "The wrapper should not be used as the main workflow; the agent should use the PR-description skill and avoid merge-oriented actions.",
       "files": [],
@@ -49,7 +61,7 @@
       ]
     },
     {
-      "id": 4,
+      "id": 5,
       "prompt": "Can you review PR #17 and tell me what you think?",
       "expected_output": "The wrapper should not turn a review request into a merge attempt; the agent should take a code-review stance and report findings.",
       "files": [],
