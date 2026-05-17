@@ -36,6 +36,14 @@
     "should_trigger": true
   },
   {
+    "query": "Get this merged, but obey the repo-local policy in AGENTS.md if it says thread resolution or merge actuation is maintainer-owned.",
+    "should_trigger": true
+  },
+  {
+    "query": "Drive this PR as far toward merge as policy allows. Stop at any owner-controlled approval gate and tell me exactly what remains.",
+    "should_trigger": true
+  },
+  {
     "query": "Please open a PR for these local changes but leave it as a draft; I am not ready to merge.",
     "should_trigger": false
   },
@@ -49,6 +57,10 @@
   },
   {
     "query": "What is blocking this PR right now? Do not change anything yet.",
+    "should_trigger": false
+  },
+  {
+    "query": "Read AGENTS.md and summarize the repo's PR merge policy without taking action.",
     "should_trigger": false
   },
   {
