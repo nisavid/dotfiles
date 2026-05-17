@@ -1,0 +1,63 @@
+{
+  "skill_name": "getting-prs-merged",
+  "evals": [
+    {
+      "id": 0,
+      "prompt": "Get this branch merged. There are local changes, no PR yet, and I want you to keep going unless you hit a real blocker.",
+      "expected_output": "The agent uses the wrapper, publishes the branch through a draft PR, updates reviewer-facing PR text, gates review-ready state on verification, then drives review and merge readiness until merged or blocked.",
+      "files": [],
+      "expectations": [
+        "The response starts from discovered repo and branch state instead of asking broad scope questions.",
+        "The agent uses yeet only for the publish/create-PR stage.",
+        "The agent marks the PR ready only after local readiness gates and PR body evidence are current.",
+        "The agent stops rather than merging if required checks, approvals, ownership, or branch protection block merge."
+      ]
+    },
+    {
+      "id": 1,
+      "prompt": "PR #42 is already open as a draft. Mark it review-ready and drive it to merge.",
+      "expected_output": "The agent resumes at the draft/ready gate, refreshes the PR body and state, marks ready when evidence supports it, then handles reviews and merge gates.",
+      "files": [],
+      "expectations": [
+        "The agent does not create a duplicate PR or replay completed publish work.",
+        "The agent uses writing-reviewable-pr-descriptions before publishing readiness claims.",
+        "The agent uses pr-review-orchestration for review-ready and merge-readiness decisions.",
+        "The agent reports the next blocker if merge cannot proceed."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Address the unresolved review comments on this PR, rerun the review loop, and merge once it is clean.",
+      "expected_output": "The agent fetches thread-aware review state, fixes actionable findings, pushes and verifies the new head, resolves evidenced threads through the orchestration policy, and merges only after gates pass.",
+      "files": [],
+      "expectations": [
+        "The agent uses github:gh-address-comments for actionable review-thread work.",
+        "The agent classifies comments and preserves ambiguous or human-owned decisions.",
+        "The agent refreshes PR state after pushing fixes.",
+        "The agent respects external review budget rules before requesting another review cycle."
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Please just write a better PR description for this pull request.",
+      "expected_output": "The wrapper should not be used as the main workflow; the agent should use the PR-description skill and avoid merge-oriented actions.",
+      "files": [],
+      "expectations": [
+        "The agent does not mark ready, address comments, request review, or merge.",
+        "The agent narrows the task to PR body work.",
+        "The agent avoids implying merge readiness unless the user asks for closeout."
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Can you review PR #17 and tell me what you think?",
+      "expected_output": "The wrapper should not turn a review request into a merge attempt; the agent should take a code-review stance and report findings.",
+      "files": [],
+      "expectations": [
+        "The agent does not publish, mark ready, resolve threads, or merge.",
+        "The agent treats the request as review-only unless the user adds a merge goal.",
+        "The agent reports findings before summary."
+      ]
+    }
+  ]
+}

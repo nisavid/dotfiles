@@ -1,0 +1,82 @@
+[
+  {
+    "query": "Get this merged. I think the changes are done; please handle the PR description, review-ready state, comments, checks, and merge unless something real blocks it.",
+    "should_trigger": true
+  },
+  {
+    "query": "Drive PR #18 to merge. It is already open, but I do not know whether the bot comments are stale.",
+    "should_trigger": true
+  },
+  {
+    "query": "ship this branch through github. start wherever the current state says we are and close it out.",
+    "should_trigger": true
+  },
+  {
+    "query": "The PR is draft and checks just turned green. Mark it ready and keep going until merged if the gates pass.",
+    "should_trigger": true
+  },
+  {
+    "query": "Address the unresolved review threads on this PR, rerun the review loop, and merge it once clean.",
+    "should_trigger": true
+  },
+  {
+    "query": "merge and close out this branch; clean up the remote branch/worktree too if repo policy allows it.",
+    "should_trigger": true
+  },
+  {
+    "query": "Continue the PR closeout from where the last run left off. I believe it still needs comment resolution and merge.",
+    "should_trigger": true
+  },
+  {
+    "query": "Get the package refresh PR over the line. It has one requested change, then branch protection should be the only remaining gate.",
+    "should_trigger": true
+  },
+  {
+    "query": "Use the normal merge-closeout workflow on this repo. Do the PR body, ready state, review loops, and merge.",
+    "should_trigger": true
+  },
+  {
+    "query": "Please open a PR for these local changes but leave it as a draft; I am not ready to merge.",
+    "should_trigger": false
+  },
+  {
+    "query": "Write a reviewable PR description for the current pull request.",
+    "should_trigger": false
+  },
+  {
+    "query": "Can you review PR #22 and list the bugs you find?",
+    "should_trigger": false
+  },
+  {
+    "query": "What is blocking this PR right now? Do not change anything yet.",
+    "should_trigger": false
+  },
+  {
+    "query": "Address this one CodeRabbit comment and pause for my review before pushing.",
+    "should_trigger": false
+  },
+  {
+    "query": "Mark the PR ready for review after checking the body; stop there.",
+    "should_trigger": false
+  },
+  {
+    "query": "Push my WIP branch to origin, but do not create a PR.",
+    "should_trigger": false
+  },
+  {
+    "query": "Close the GitHub issue linked from this PR as completed.",
+    "should_trigger": false
+  },
+  {
+    "query": "Run gh pr checks and tell me whether CI is still pending.",
+    "should_trigger": false
+  },
+  {
+    "query": "Clean up the local worktree from the merged branch I already handled manually.",
+    "should_trigger": false
+  },
+  {
+    "query": "Create a conventional commit for these files, but do not push yet.",
+    "should_trigger": false
+  }
+]
