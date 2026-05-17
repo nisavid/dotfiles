@@ -32,10 +32,6 @@
     "should_trigger": true
   },
   {
-    "query": "Use the normal merge-closeout workflow on this repo. Do the PR body, ready state, review loops, and merge.",
-    "should_trigger": true
-  },
-  {
     "query": "Get this merged, but obey the repo-local policy in AGENTS.md if it says thread resolution or merge actuation is maintainer-owned.",
     "should_trigger": true
   },
@@ -76,15 +72,7 @@
     "should_trigger": false
   },
   {
-    "query": "Close the GitHub issue linked from this PR as completed.",
-    "should_trigger": false
-  },
-  {
     "query": "Run gh pr checks and tell me whether CI is still pending.",
-    "should_trigger": false
-  },
-  {
-    "query": "Clean up the local worktree from the merged branch I already handled manually.",
     "should_trigger": false
   },
   {
