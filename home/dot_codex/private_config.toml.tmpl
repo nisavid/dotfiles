@@ -1,0 +1,507 @@
+model = "gpt-5.5"
+review_model = "gpt-5.4"
+model_reasoning_effort = "medium"
+plan_mode_reasoning_effort = "high"
+personality = "pragmatic"
+sandbox_mode = "workspace-write"
+approval_policy = "on-request"
+approvals_reviewer = "guardian_subagent"
+
+[features]
+apps = false
+js_repl = true
+guardian_approval = true
+prevent_idle_sleep = true
+undo = true
+memories = true
+hooks = true
+external_migration = true
+multi_agent = true
+codex_git_commit = true
+collaboration_modes = false
+plugin_hooks = true
+goals = true
+
+[tui]
+notifications = true
+notification_condition = "always"
+notification_method = "auto"
+theme = "catppuccin-mocha"
+terminal_title = [ "spinner", "project", "status", "thread", "task-progress" ]
+status_line = [
+  "model-with-reasoning",
+  "context-usage",
+  "five-hour-limit",
+  "weekly-limit",
+  "thread-title"
+]
+
+  [tui.model_availability_nux]
+  "gpt-5.5" = 4
+
+[agents]
+max_depth = 3
+
+[notice]
+hide_full_access_warning = true
+
+  [notice.external_config_migration_prompts]
+  home_last_prompted_at = 1_776_815_954
+  home = true
+
+[sandbox_workspace_write]
+network_access = true
+exclude_slash_tmp = false
+exclude_tmpdir_env_var = false
+
+[projects."/home/nisavid"]
+trust_level = "trusted"
+
+[projects."/home/nisavid/src/nisavid/tuned-limine"]
+trust_level = "trusted"
+
+[projects."/home/nisavid/src/paudley/ai-notes"]
+trust_level = "trusted"
+
+[projects."/home/nisavid/src/nisavid/arch-strix-halo-pkgs"]
+trust_level = "trusted"
+
+[projects."/home/nisavid/.cache/paru/clone/comfyui-desktop-2-beta"]
+trust_level = "trusted"
+
+[projects."/home/nisavid/src/nisavid/gemma4-reasoning-toolcall-investigations"]
+trust_level = "trusted"
+
+[projects."/home/nisavid/src/nisavid/arch-pkgs"]
+trust_level = "trusted"
+
+[projects."/home/nisavid/src/nisavid/codex-app-linux"]
+trust_level = "trusted"
+
+[projects."/home/nisavid/src/nisavid"]
+trust_level = "trusted"
+
+[projects."/home/nisavid/src/claude-session-viewer"]
+trust_level = "trusted"
+
+[projects."/home/nisavid/src/nisavid/utilyze"]
+trust_level = "trusted"
+
+[projects."/home/nisavid/.agents/skills"]
+trust_level = "trusted"
+
+[projects."/home/nisavid/src/nisavid/warp"]
+trust_level = "trusted"
+
+[projects."/home/nisavid/src/nisavid/agent-armory"]
+trust_level = "trusted"
+
+[projects."/home/nisavid/src/nisavid/lemonade"]
+trust_level = "trusted"
+
+[projects."/home/nisavid/src/nisavid/fork-ops"]
+trust_level = "trusted"
+
+[projects."/home/nisavid/Documents/Codex"]
+trust_level = "trusted"
+
+[[skills.config]]
+path = "/home/nisavid/.codex/plugins/cache/openai-curated/build-web-apps/fb0a18376bcd9f2604047fbe7459ec5aed70c64b/skills/stripe-best-practices/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/nisavid/.codex/plugins/cache/openai-curated/build-web-apps/fb0a18376bcd9f2604047fbe7459ec5aed70c64b/skills/supabase-best-practices/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/nisavid/.codex/plugins/cache/openai-curated/build-web-apps/fb0a18376bcd9f2604047fbe7459ec5aed70c64b/skills/deploy-to-vercel/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/nisavid/.codex/plugins/cache/openai-curated/cloudflare/fb0a18376bcd9f2604047fbe7459ec5aed70c64b/skills/wrangler/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/nisavid/.codex/plugins/cache/openai-curated/cloudflare/fb0a18376bcd9f2604047fbe7459ec5aed70c64b/skills/workers-best-practices/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/nisavid/.codex/plugins/cache/openai-curated/cloudflare/fb0a18376bcd9f2604047fbe7459ec5aed70c64b/skills/durable-objects/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/nisavid/.codex/plugins/cache/openai-curated/cloudflare/fb0a18376bcd9f2604047fbe7459ec5aed70c64b/skills/cloudflare/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/nisavid/.codex/plugins/cache/openai-curated/cloudflare/fb0a18376bcd9f2604047fbe7459ec5aed70c64b/skills/building-mcp-server-on-cloudflare/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/nisavid/.codex/plugins/cache/openai-curated/cloudflare/fb0a18376bcd9f2604047fbe7459ec5aed70c64b/skills/building-ai-agent-on-cloudflare/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/nisavid/.codex/plugins/cache/openai-curated/cloudflare/fb0a18376bcd9f2604047fbe7459ec5aed70c64b/skills/agents-sdk/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/nisavid/.codex/plugins/cache/openai-curated/vercel/fb0a18376bcd9f2604047fbe7459ec5aed70c64b/skills/workflow/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/nisavid/.codex/plugins/cache/openai-curated/vercel/fb0a18376bcd9f2604047fbe7459ec5aed70c64b/skills/verification/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/nisavid/.codex/plugins/cache/openai-curated/vercel/fb0a18376bcd9f2604047fbe7459ec5aed70c64b/skills/vercel-storage/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/nisavid/.codex/plugins/cache/openai-curated/vercel/fb0a18376bcd9f2604047fbe7459ec5aed70c64b/skills/vercel-services/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/nisavid/.codex/plugins/cache/openai-curated/vercel/fb0a18376bcd9f2604047fbe7459ec5aed70c64b/skills/vercel-queues/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/nisavid/.codex/plugins/cache/openai-curated/vercel/fb0a18376bcd9f2604047fbe7459ec5aed70c64b/skills/vercel-sandbox/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/nisavid/.codex/plugins/cache/openai-curated/vercel/fb0a18376bcd9f2604047fbe7459ec5aed70c64b/skills/vercel-functions/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/nisavid/.codex/plugins/cache/openai-curated/vercel/fb0a18376bcd9f2604047fbe7459ec5aed70c64b/skills/vercel-flags/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/nisavid/.codex/plugins/cache/openai-curated/vercel/fb0a18376bcd9f2604047fbe7459ec5aed70c64b/skills/vercel-firewall/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/nisavid/.codex/plugins/cache/openai-curated/vercel/fb0a18376bcd9f2604047fbe7459ec5aed70c64b/skills/vercel-agent/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/nisavid/.codex/plugins/cache/openai-curated/vercel/fb0a18376bcd9f2604047fbe7459ec5aed70c64b/skills/vercel-api/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/nisavid/.codex/plugins/cache/openai-curated/vercel/fb0a18376bcd9f2604047fbe7459ec5aed70c64b/skills/vercel-cli/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/nisavid/.codex/plugins/cache/openai-curated/vercel/fb0a18376bcd9f2604047fbe7459ec5aed70c64b/skills/v0-dev/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/nisavid/.codex/plugins/cache/openai-curated/vercel/fb0a18376bcd9f2604047fbe7459ec5aed70c64b/skills/turborepo/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/nisavid/.codex/plugins/cache/openai-curated/vercel/fb0a18376bcd9f2604047fbe7459ec5aed70c64b/skills/turbopack/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/nisavid/.codex/plugins/cache/openai-curated/vercel/fb0a18376bcd9f2604047fbe7459ec5aed70c64b/skills/swr/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/nisavid/.codex/plugins/cache/openai-curated/vercel/fb0a18376bcd9f2604047fbe7459ec5aed70c64b/skills/sign-in-with-vercel/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/nisavid/.codex/plugins/cache/openai-curated/vercel/fb0a18376bcd9f2604047fbe7459ec5aed70c64b/skills/satori/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/nisavid/.codex/plugins/cache/openai-curated/vercel/fb0a18376bcd9f2604047fbe7459ec5aed70c64b/skills/shadcn/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/nisavid/.codex/plugins/cache/openai-curated/test-android-apps/fb0a18376bcd9f2604047fbe7459ec5aed70c64b/skills/android-emulator-qa/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/nisavid/.agents/skills/deploy-to-vercel/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/nisavid/.codex/skills/doc/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/nisavid/.codex/plugins/cache/openai-curated/github/27651a43bf55185d924f7a1fc49043a0a8be65a0/skills/gh-fix-ci/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/nisavid/.codex/plugins/cache/openai-curated/hugging-face/27651a43bf55185d924f7a1fc49043a0a8be65a0/skills/gradio/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/nisavid/.codex/plugins/cache/openai-curated/hugging-face/27651a43bf55185d924f7a1fc49043a0a8be65a0/skills/jobs/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/nisavid/.codex/plugins/cache/openai-curated/hugging-face/27651a43bf55185d924f7a1fc49043a0a8be65a0/skills/llm-trainer/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/nisavid/.codex/plugins/cache/openai-curated/hugging-face/27651a43bf55185d924f7a1fc49043a0a8be65a0/skills/paper-publisher/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/nisavid/.codex/plugins/cache/openai-curated/hugging-face/27651a43bf55185d924f7a1fc49043a0a8be65a0/skills/vision-trainer/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/nisavid/.agents/skills/postgresql-optimization/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/nisavid/.agents/skills/brainstorming/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/nisavid/.agents/skills/dispatching-parallel-agents/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/nisavid/.agents/skills/executing-plans/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/nisavid/.agents/skills/finishing-a-development-branch/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/nisavid/.agents/skills/receiving-code-review/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/nisavid/.agents/skills/requesting-code-review/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/nisavid/.agents/skills/subagent-driven-development/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/nisavid/.agents/skills/systematic-debugging/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/nisavid/.agents/skills/test-driven-development/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/nisavid/.agents/skills/using-git-worktrees/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/nisavid/.agents/skills/using-superpowers/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/nisavid/.agents/skills/verification-before-completion/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/nisavid/.agents/skills/writing-plans/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/nisavid/.agents/skills/writing-skills/SKILL.md"
+enabled = false
+
+[plugins."github@openai-curated"]
+enabled = true
+
+[plugins."hugging-face@openai-curated"]
+enabled = true
+
+[plugins."plugin-eval@openai-curated"]
+enabled = false
+
+[plugins."coderabbit@openai-curated"]
+enabled = true
+
+[plugins."documents@openai-primary-runtime"]
+enabled = true
+
+[plugins."spreadsheets@openai-primary-runtime"]
+enabled = true
+
+[plugins."presentations@openai-primary-runtime"]
+enabled = true
+
+[plugins."agent-sdk-dev@claude-plugins-official"]
+enabled = false
+
+[plugins."claude-code-setup@claude-plugins-official"]
+enabled = false
+
+[plugins."claude-md-management@claude-plugins-official"]
+enabled = false
+
+[plugins."cloudflare@claude-plugins-official"]
+enabled = false
+
+[plugins."code-review@claude-plugins-official"]
+enabled = false
+
+[plugins."code-simplifier@claude-plugins-official"]
+enabled = false
+
+[plugins."commit-commands@claude-plugins-official"]
+enabled = false
+
+[plugins."explanatory-output-style@claude-plugins-official"]
+enabled = false
+
+[plugins."feature-dev@claude-plugins-official"]
+enabled = false
+
+[plugins."frontend-design@claude-plugins-official"]
+enabled = false
+
+[plugins."github@claude-plugins-official"]
+enabled = false
+
+[plugins."hookify@claude-plugins-official"]
+enabled = false
+
+[plugins."huggingface-skills@claude-plugins-official"]
+enabled = false
+
+[plugins."playground@claude-plugins-official"]
+enabled = false
+
+[plugins."playwright@claude-plugins-official"]
+enabled = false
+
+[plugins."plugin-dev@claude-plugins-official"]
+enabled = false
+
+[plugins."pr-review-toolkit@claude-plugins-official"]
+enabled = false
+
+[plugins."prisma@claude-plugins-official"]
+enabled = false
+
+[plugins."product-tracking-skills@claude-plugins-official"]
+enabled = false
+
+[plugins."railway@claude-plugins-official"]
+enabled = false
+
+[plugins."ralph-loop@claude-plugins-official"]
+enabled = false
+
+[plugins."remember@claude-plugins-official"]
+enabled = false
+
+[plugins."security-guidance@claude-plugins-official"]
+enabled = false
+
+[plugins."skill-creator@claude-plugins-official"]
+enabled = false
+
+[plugins."supabase@claude-plugins-official"]
+enabled = false
+
+[plugins."telegram@claude-plugins-official"]
+enabled = false
+
+[plugins."vercel@claude-plugins-official"]
+enabled = false
+
+[plugins."superpowers@openai-curated"]
+enabled = true
+
+[plugins."build-web-apps@openai-curated"]
+enabled = true
+
+[plugins."chatgpt-apps@openai-curated"]
+enabled = true
+
+[plugins."remotion@openai-curated"]
+enabled = true
+
+[plugins."codex-security@openai-curated"]
+enabled = true
+
+[plugins."cloudflare@openai-curated"]
+enabled = true
+
+[plugins."computer-use@openai-bundled"]
+enabled = true
+
+[plugins."hyperframes@openai-curated"]
+enabled = true
+
+[plugins."browser-use@openai-bundled"]
+enabled = true
+
+[plugins."chrome@openai-bundled"]
+enabled = true
+
+[marketplaces.openai-primary-runtime]
+last_updated = "2026-05-16T04:48:51Z"
+source_type = "local"
+source = "/home/nisavid/.cache/codex-runtimes/codex-primary-runtime/plugins/openai-primary-runtime"
+
+[marketplaces.claude-code-warp]
+last_updated = "2026-05-18T03:55:51Z"
+last_revision = "b8ad3cc6c1e40b2d2a944f900a4ae0904a54dd7f"
+source_type = "git"
+source = "https://github.com/warpdotdev/claude-code-warp.git"
+
+[marketplaces.claude-plugins-official]
+last_updated = "2026-05-18T03:55:52Z"
+last_revision = "f475d3ce5806c7edf9fc204ee276e7f45e24c798"
+source_type = "git"
+source = "https://github.com/anthropics/claude-plugins-official.git"
+
+[marketplaces.impeccable]
+last_updated = "2026-05-18T03:55:54Z"
+last_revision = "e1d3ea0b6f79ebccb80b9e4b0d2b2ad62a13205b"
+source_type = "git"
+source = "https://github.com/pbakaus/impeccable.git"
+
+[marketplaces.openai-bundled]
+last_updated = "2026-05-18T03:55:52Z"
+source_type = "local"
+source = "/home/nisavid/.codex/.tmp/bundled-marketplaces/openai-bundled"
+
+[mcp_servers.context7]
+url = "https://mcp.context7.com/mcp"
+
+[mcp_servers.context7.http_headers]
+CONTEXT7_API_KEY = "{{ env "CONTEXT7_API_KEY" }}"
+
+[mcp_servers.firecrawl]
+command = "npx"
+args = ["-y", "firecrawl-mcp"]
+env_vars = ["FIRECRAWL_API_KEY"]
+
+[mcp_servers.github]
+url = "https://api.githubcopilot.com/mcp/"
+bearer_token_env_var = "CODEX_GITHUB_PAT"
+
+[mcp_servers.openaiDeveloperDocs]
+url = "https://developers.openai.com/mcp"
+
+[shell_environment_policy.set]
+PATH = "/home/nisavid/.local/share/agents/codex-hf-cache-policy/bin:/home/nisavid/.local/share/pyenv/bin:/home/nisavid/.local/share/zi/polaris/sbin:/home/nisavid/.local/share/zi/polaris/bin:/home/nisavid/.local/bin:/home/nisavid/.local/bin/appimage:/home/nisavid/.cargo/bin:/home/nisavid/.local/share/pnpm:/home/nisavid/.local/share/krew/bin:/home/nisavid/.lmstudio/bin:/opt/codex-app/resources/node-runtime/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/opt/cuda/bin:/var/lib/flatpak/exports/bin:/usr/lib/jvm/default/bin:/usr/bin/site_perl:/usr/bin/vendor_perl:/usr/bin/core_perl:/opt/rocm/bin:/usr/lib/rustup/bin"
+
+[hooks.state]
+
+[hooks.state."/home/nisavid/.codex/hooks.json:pre_tool_use:0:0"]
+trusted_hash = "sha256:b065681c8986a1f6b4d16f18b302be568d1c86469da4ab24089e46b9f277ea8e"
+
+[hooks.state."/home/nisavid/.codex/hooks.json:session_start:0:0"]
+trusted_hash = "sha256:e709a2ee873ea9350c6d5f73f1b8e3020fc2f6b83130522bf926d82332fab3e5"
