@@ -9,8 +9,8 @@ scouting for skill loading, isolation, permissions, and output compatibility.
 
 The eval remains classification-only. Each counted run uses an isolated HOME,
 a locked generated CODEX_HOME, and a temporary probe skill whose body only
-emits a sentinel marker. A run is counted as triggered only when assistant
-output exactly matches the sentinel.
+emits a sentinel marker. A run is counted as triggered only when Codex reads
+the selected temporary skill body and then emits that body's sentinel.
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ DETECTOR = "acpx-codex-sentinel"
 CODEX_MODE = "read-only"
 CODEX_APPROVAL_POLICY = "never"
 CODEX_WEB_SEARCH = "disabled"
-CODEX_SHELL_TOOL = False
+CODEX_SHELL_TOOL = True
 LOCKED_CODEX_CONFIG = f"""sandbox_mode = "{CODEX_MODE}"
 approval_policy = "{CODEX_APPROVAL_POLICY}"
 web_search = "{CODEX_WEB_SEARCH}"
@@ -159,7 +159,8 @@ def build_probe_prompt(query: str) -> str:
             query,
             "",
             "This is a trigger-selection probe, not a request to perform the task.",
-            "Do not run commands, inspect files, call external tools, access GitHub, or mutate any state.",
+            "Do not run commands except whatever Codex requires to read the selected temporary SKILL.md.",
+            "Do not inspect other files, call external tools, access GitHub, or mutate any state.",
             "Do not use any skill merely because this is a probe or because a temporary skill exists.",
             "Use the temporary skill only when its description matches the request text above.",
             "If an available temporary skill applies to the request above, load and use that skill now,",
@@ -348,22 +349,22 @@ def env_for_home(home: Path, codex_home: Path | None) -> dict[str, str]:
     return env
 
 
-def render_locked_codex_config(skill_dirs: list[Path]) -> str:
+def render_locked_codex_config(skill_paths: list[Path]) -> str:
     blocks = [LOCKED_CODEX_CONFIG.rstrip()]
-    for skill_dir in skill_dirs:
+    for skill_path in skill_paths:
         blocks.extend(
             [
                 "",
                 "[[skills.config]]",
-                f"path = {json.dumps(str(skill_dir))}",
+                f"path = {json.dumps(str(skill_path))}",
                 "enabled = true",
             ]
         )
     return "\n".join(blocks) + "\n"
 
 
-def write_codex_config(runtime_codex_home: Path, skill_dirs: list[Path]) -> str:
-    config_text = render_locked_codex_config(skill_dirs)
+def write_codex_config(runtime_codex_home: Path, skill_paths: list[Path]) -> str:
+    config_text = render_locked_codex_config(skill_paths)
     (runtime_codex_home / "config.toml").write_text(config_text, encoding="utf-8")
     return config_text
 
@@ -430,10 +431,14 @@ def run_prompt(
     runtime_codex_home = home / ".codex"
     codex_home_metadata = write_locked_codex_home(runtime_codex_home, codex_home)
     mirrored_skill_paths = mirror_agent_skills_to_codex_home(home, runtime_codex_home)
-    configured_skill_dirs = [Path(path).parent for path in mirrored_skill_paths]
+    configured_skill_paths = [Path(path) for path in mirrored_skill_paths]
+    source_paths = source_skill_paths(home)
+    allowed_skill_body_paths = sorted(set(source_paths + mirrored_skill_paths))
+    codex_home_metadata["source_skill_paths"] = source_paths
     codex_home_metadata["mirrored_skill_paths"] = mirrored_skill_paths
-    codex_home_metadata["configured_skill_paths"] = [str(path) for path in configured_skill_dirs]
-    codex_home_metadata["config"] = write_codex_config(runtime_codex_home, configured_skill_dirs)
+    codex_home_metadata["configured_skill_paths"] = [str(path) for path in configured_skill_paths]
+    codex_home_metadata["allowed_skill_body_paths"] = allowed_skill_body_paths
+    codex_home_metadata["config"] = write_codex_config(runtime_codex_home, configured_skill_paths)
     env = env_for_home(home, runtime_codex_home)
     base_cmd = build_base_cmd(
         acpx_bin=acpx_bin,
@@ -481,6 +486,7 @@ def run_prompt(
                 "setup_failed": True,
                 "messages": [],
                 "events": [],
+                "tool_calls": tool_call_diagnostic([], allowed_skill_body_paths),
                 "applied_config_values": applied_config_values,
                 "codex_home": codex_home_metadata,
             }
@@ -526,6 +532,7 @@ def run_prompt(
         "setup_failed": False,
         "messages": messages,
         "events": events,
+        "tool_calls": tool_call_diagnostic(events, allowed_skill_body_paths),
         "applied_config_values": applied_config_values,
         "codex_home": codex_home_metadata,
     }
@@ -554,12 +561,106 @@ def expected_applied_config(
     return applied, unsupported
 
 
-def marker_detection(messages: list[str], marker: str) -> dict[str, Any]:
-    normalized_messages = [normalized_marker_text(message) for message in messages]
+def strip_allowed_skill_preamble(message: str, skill_name: str) -> str:
+    return re.sub(
+        rf"^Using\s+`{re.escape(skill_name)}`\s+for\s+this\s+request\.\s*",
+        "",
+        message,
+    )
+
+
+def marker_detection(messages: list[str], marker: str, skill_name: str) -> dict[str, Any]:
+    raw_normalized_messages = [normalized_marker_text(message) for message in messages]
+    normalized_messages = [
+        strip_allowed_skill_preamble(message, skill_name) for message in raw_normalized_messages
+    ]
     return {
         "sentinel_exact_match": any(message == marker for message in normalized_messages),
         "sentinel_present_anywhere": any(marker in message for message in messages),
+        "allowed_skill_preamble_stripped": raw_normalized_messages != normalized_messages,
+        "raw_normalized_messages": raw_normalized_messages,
         "normalized_messages": normalized_messages,
+    }
+
+
+def source_skill_paths(home: Path) -> list[str]:
+    source_root = home / ".agents" / "skills"
+    if not source_root.exists():
+        return []
+    return [
+        str(skill_path)
+        for skill_path in sorted(source_root.glob("*/SKILL.md"))
+        if skill_path.is_file()
+    ]
+
+
+def _collect_tool_calls(value: Any) -> list[dict[str, Any]]:
+    calls: list[dict[str, Any]] = []
+    if isinstance(value, dict):
+        update = None
+        params = value.get("params")
+        if isinstance(params, dict) and isinstance(params.get("update"), dict):
+            update = params["update"]
+        if update and update.get("sessionUpdate") == "tool_call":
+            calls.append(update)
+        for child in value.values():
+            if isinstance(child, (dict, list)):
+                calls.extend(_collect_tool_calls(child))
+    elif isinstance(value, list):
+        for child in value:
+            calls.extend(_collect_tool_calls(child))
+    return calls
+
+
+def _tool_call_paths(call: dict[str, Any]) -> list[str]:
+    paths: list[str] = []
+    for location in call.get("locations") or []:
+        if isinstance(location, dict) and isinstance(location.get("path"), str):
+            paths.append(location["path"])
+    raw_input = call.get("rawInput")
+    if isinstance(raw_input, dict):
+        for parsed_cmd in raw_input.get("parsed_cmd") or []:
+            if isinstance(parsed_cmd, dict) and isinstance(parsed_cmd.get("path"), str):
+                paths.append(parsed_cmd["path"])
+    return sorted(set(paths))
+
+
+def tool_call_diagnostic(events: list[Any], allowed_skill_paths: list[str]) -> dict[str, Any]:
+    allowed = {str(Path(path)) for path in allowed_skill_paths}
+    calls = _collect_tool_calls(events)
+    allowed_reads: list[dict[str, Any]] = []
+    disallowed: list[dict[str, Any]] = []
+    for call in calls:
+        paths = _tool_call_paths(call)
+        raw_input = call.get("rawInput") if isinstance(call.get("rawInput"), dict) else {}
+        parsed_cmds = raw_input.get("parsed_cmd") if isinstance(raw_input, dict) else []
+        parsed_types = [
+            parsed.get("type")
+            for parsed in parsed_cmds or []
+            if isinstance(parsed, dict) and isinstance(parsed.get("type"), str)
+        ]
+        is_allowed_read = (
+            call.get("kind") == "read"
+            and paths
+            and all(path in allowed for path in paths)
+            and (not parsed_types or all(kind == "read" for kind in parsed_types))
+        )
+        item = {
+            "title": call.get("title"),
+            "kind": call.get("kind"),
+            "paths": paths,
+            "parsed_types": parsed_types,
+        }
+        if is_allowed_read:
+            allowed_reads.append(item)
+        else:
+            disallowed.append(item)
+    return {
+        "total": len(calls),
+        "allowed_skill_read_count": len(allowed_reads),
+        "allowed_skill_reads": allowed_reads,
+        "disallowed_count": len(disallowed),
+        "disallowed": disallowed,
     }
 
 
@@ -567,8 +668,8 @@ def skill_body_load_diagnostic(messages: list[str], skill_name: str) -> dict[str
     joined = "".join(messages)
     skill_quoted = f"`{skill_name}`" in joined
     body_unavailable = (
-        ("can't load" in joined or "cannot load" in joined)
-        and ("skill body" in joined or "SKILL.md" in joined)
+        ("can't load" in joined or "cannot load" in joined or "unable to load" in joined)
+        and ("skill body" in joined or "SKILL.md" in joined or "file-read tool" in joined)
     )
     return {
         "metadata_selected": skill_quoted,
@@ -577,12 +678,10 @@ def skill_body_load_diagnostic(messages: list[str], skill_name: str) -> dict[str
 
 
 def home_probe_failure_class(detection: dict[str, Any], body_load: dict[str, Any]) -> str | None:
-    if detection["sentinel_exact_match"]:
+    if detection["sentinel_present_anywhere"]:
         return None
     if body_load["metadata_selected"] and body_load["body_unavailable"]:
         return "skill_metadata_selected_but_body_unavailable"
-    if detection["sentinel_present_anywhere"]:
-        return "sentinel_present_only_inside_nonexact_output"
     return "skill_not_loaded_or_body_not_followed"
 
 
@@ -594,10 +693,15 @@ def home_probe_implication(failure_class: str | None) -> str | None:
             "Codex recognized the skill metadata, but it did not read the temporary SKILL.md body. "
             "The runner cannot count this as proof that the skill would execute."
         )
-    if failure_class == "sentinel_present_only_inside_nonexact_output":
+    if failure_class == "unexpected_tool_calls":
         return (
-            "Codex emitted the marker only as part of extra text. The runner requires the exact "
-            "marker by itself so explanatory output does not count as a trigger."
+            "Codex used tool calls outside the selected temporary SKILL.md read. The runner "
+            "cannot count that as an isolated trigger-classification run."
+        )
+    if failure_class == "skill_body_not_read_by_allowed_tool":
+        return (
+            "Codex emitted the marker without a recorded read of the selected temporary SKILL.md. "
+            "The runner cannot count that as proof that the skill body was loaded."
         )
     return (
         "Codex did not emit the unique marker from the temporary SKILL.md body. The runner cannot "
@@ -668,9 +772,16 @@ def run_home_probe(
         effort=effort,
         strict_json=strict_json,
     )
-    detection = marker_detection(run["messages"], marker)
+    detection = marker_detection(run["messages"], marker, skill_name)
     body_load = skill_body_load_diagnostic(run["messages"], skill_name)
     failure_class = home_probe_failure_class(detection, body_load)
+    tool_calls = run["tool_calls"]
+    tool_contract_ok = tool_calls["allowed_skill_read_count"] > 0 and tool_calls["disallowed_count"] == 0
+    if failure_class is None and not tool_contract_ok:
+        if tool_calls["disallowed_count"]:
+            failure_class = "unexpected_tool_calls"
+        else:
+            failure_class = "skill_body_not_read_by_allowed_tool"
     applied_config, unsupported_config = expected_applied_config(
         requested_model=model,
         requested_effort=effort,
@@ -680,7 +791,8 @@ def run_home_probe(
         run["returncode"] == 0
         and not run["timed_out"]
         and not run["setup_failed"]
-        and detection["sentinel_exact_match"]
+        and detection["sentinel_present_anywhere"]
+        and tool_contract_ok
         and not unsupported_config
     )
     return {
@@ -693,6 +805,8 @@ def run_home_probe(
         "setup_failed": run["setup_failed"],
         "detection": detection,
         "body_load": body_load,
+        "tool_calls": tool_calls,
+        "tool_contract_ok": tool_contract_ok,
         "failure_class": failure_class,
         "implication": home_probe_implication(failure_class),
         "applied_config": applied_config,
@@ -705,7 +819,7 @@ def run_home_probe(
     }
 
 
-def run_deny_all_probe(
+def run_shell_command_capability_probe(
     *,
     acpx_bin: str,
     workspace: Path,
@@ -715,13 +829,13 @@ def run_deny_all_probe(
     strict_json: bool,
     codex_home: Path | None,
 ) -> dict[str, Any]:
-    probe_dir = workspace / "preflight-deny-all-probe"
+    probe_dir = workspace / "preflight-shell-command-probe"
     home = probe_dir / "home"
     cwd = probe_dir / "cwd"
     cwd.mkdir(parents=True, exist_ok=True)
     prompt = "\n".join(
         [
-            "This is a safety preflight.",
+            "This is a command-capability preflight.",
             "Attempt to run `pwd` using a terminal or command tool.",
             "If the command tool is unavailable, answer exactly: NO_SHELL_TOOL",
             "If the command is denied by policy, answer exactly: TOOL_DENIED",
@@ -739,6 +853,7 @@ def run_deny_all_probe(
         strict_json=strict_json,
     )
     joined_messages = "\n".join(run["messages"])
+    shell_command_executed = str(cwd) in joined_messages
     denied_signal = (
         "NO_SHELL_TOOL" in joined_messages
         or "TOOL_DENIED" in joined_messages
@@ -755,21 +870,30 @@ def run_deny_all_probe(
         requested_effort=effort,
         observed_values=run["applied_config_values"],
     )
+    observation_collected = denied_signal or shell_command_executed
     return {
-        "name": "deny_all_no_terminal_probe",
+        "name": "shell_command_capability_probe",
         "ok": bool(
-            denied_signal
-            and no_successful_tool_text
+            observation_collected
             and not run["setup_failed"]
             and not run["timed_out"]
             and not unsupported_config
         ),
+        "required": False,
         "run_dir": str(probe_dir),
         "returncode": run["returncode"],
         "timed_out": run["timed_out"],
         "setup_failed": run["setup_failed"],
         "denied_signal": denied_signal,
+        "shell_command_executed": shell_command_executed,
         "no_successful_tool_text": no_successful_tool_text,
+        "implication": (
+            "ACPX-launched Codex needs the shell tool to read SKILL.md bodies. In this "
+            "configuration, read-only shell commands can execute, so the runner enforces "
+            "per-result tool-call limits instead of claiming no-tool isolation."
+            if shell_command_executed
+            else "The shell command was unavailable or denied in this harness run."
+        ),
         "applied_config": applied_config,
         "unsupported_config": unsupported_config,
         "observed_config_values": run["applied_config_values"],
@@ -832,7 +956,7 @@ def run_preflight(
         )
     )
     checks.append(
-        run_deny_all_probe(
+        run_shell_command_capability_probe(
             acpx_bin=acpx_bin,
             workspace=workspace,
             timeout=timeout,
@@ -930,18 +1054,28 @@ def run_one(
     )
     (run_dir / "stdout.jsonl").write_text(run["stdout"], encoding="utf-8")
     (run_dir / "stderr.log").write_text(run["stderr"], encoding="utf-8")
-    detection = marker_detection(run["messages"], marker)
+    detection = marker_detection(run["messages"], marker, skill_name)
     applied_config, unsupported_config = expected_applied_config(
         requested_model=model,
         requested_effort=effort,
         observed_values=run["applied_config_values"],
     )
-    triggered = detection["sentinel_exact_match"]
+    triggered = detection["sentinel_present_anywhere"]
+    tool_calls = run["tool_calls"]
+    tool_contract_ok = (
+        tool_calls["disallowed_count"] == 0
+        and (
+            tool_calls["allowed_skill_read_count"] > 0
+            if should_trigger
+            else tool_calls["total"] == 0
+        )
+    )
     passed = (
         triggered == should_trigger
         and run["returncode"] == 0
         and not run["timed_out"]
         and not unsupported_config
+        and tool_contract_ok
     )
     raw_events_path = run_dir / "events.json"
     raw_events_path.write_text(json.dumps(run["events"], indent=2) + "\n", encoding="utf-8")
@@ -972,6 +1106,8 @@ def run_one(
         "marker": marker,
         "messages": run["messages"],
         "detection": detection,
+        "tool_calls": tool_calls,
+        "tool_contract_ok": tool_contract_ok,
         "event_count": len(run["events"]),
         "raw_events_path": str(raw_events_path),
         "run_dir": str(run_dir),
@@ -1048,11 +1184,23 @@ def write_summary_markdown(summary: dict[str, Any], output: Path) -> None:
         [
             "",
             "This measures whether ACPX-launched Codex loads the temporary skill body and",
-            "emits the exact sentinel. Sentinel presence inside explanatory text is recorded",
-            "for diagnostics but does not count as a trigger.",
+            "emits that body's unique sentinel. Positive cases must read only the selected",
+            "temporary SKILL.md before emitting the sentinel; negative cases must make no",
+            "tool calls and must not emit the sentinel. Exact marker-only output is recorded",
+            "as a diagnostic, but ACPX/Codex may add a skill-selection preamble.",
             "",
         ]
     )
+    capability_notes = [
+        check
+        for check in summary["preflight"].get("checks", [])
+        if not check.get("required", True) and check.get("implication")
+    ]
+    if capability_notes:
+        lines.extend(["Harness capability notes:", ""])
+        for check in capability_notes:
+            lines.append(f"- `{check.get('name', 'unknown')}`: {check['implication']}")
+        lines.append("")
     output.write_text("\n".join(lines), encoding="utf-8")
 
 
