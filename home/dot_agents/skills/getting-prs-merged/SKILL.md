@@ -1,7 +1,7 @@
 ---
 name: getting-prs-merged
 description: >-
-  Use when the user asks to get a GitHub branch or pull request merged end to end: "get this merged", "drive it to merge", "ship this PR", "merge and close out this branch", or resume PR closeout with review-ready, unresolved comments, review reruns, local policy gates, merge blockers, or branch cleanup still ahead. Do not use for PR-description-only, review-only, status-only, issue-triage, or publish-only requests unless merge closeout is the stated goal.
+  Use when the user explicitly asks to get a GitHub branch or pull request merged, shipped, over the line, or closed out end to end: "get this merged", "drive it to merge", "ship this PR", "merge and close out this branch", or resume a previously stated merge/closeout workflow. Do not use for single-step PR operations, PR-description-only, review-only, status-only, issue-triage, check-only, CI-check-only, comment-only, ready-only, open-PR-only, draft-PR-only, or publish-only requests unless the user also states a merge or closeout goal. Requests to inspect checks, blockers, readiness, comments, or policy without asking to continue toward merge do not trigger this skill. Requests that say to open a PR, leave it draft, or that the PR is not ready to merge do not trigger this skill.
 ---
 
 # Getting PRs Merged
