@@ -110,8 +110,10 @@ def write_probe_skill(
     description: str,
     marker: str,
     harness_label: str,
+    skill_root: Path | None = None,
 ) -> Path:
-    skill_dir = home / ".agents" / "skills" / name
+    skill_root = skill_root or home / ".agents" / "skills"
+    skill_dir = skill_root / name
     skill_dir.mkdir(parents=True, exist_ok=True)
     skill_md = skill_dir / "SKILL.md"
     skill_md.write_text(
@@ -143,7 +145,7 @@ def write_probe_skill(
 
 def build_probe_prompt(query: str, *, allow_skill_body_read_command: bool) -> str:
     command_rule = (
-        "Do not run commands except whatever Codex requires to read the selected temporary SKILL.md."
+        "Do not run commands except whatever the harness requires to read the selected temporary SKILL.md."
         if allow_skill_body_read_command
         else "Do not run commands, inspect files, call external tools, access GitHub, or mutate any state."
     )
