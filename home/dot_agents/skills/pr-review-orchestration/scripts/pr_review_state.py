@@ -507,6 +507,18 @@ def summary_text(state: dict[str, Any]) -> str:
         f"unresolved_threads: {len(state['github_state']['unresolved_threads'])}",
         f"checks: {len(state['github_state']['checks'])}",
     ]
+    for thread in state["github_state"]["unresolved_threads"]:
+        status = "outdated" if thread["is_outdated"] else "active"
+        location = thread.get("path") or "unknown-path"
+        if thread.get("line") is not None:
+            location = f"{location}:{thread['line']}"
+        lines.append(
+            "unresolved_thread: "
+            f"{status} {location} "
+            f"author={thread.get('author') or 'unknown'} "
+            f"url={thread.get('url') or 'none'} "
+            f"summary={thread.get('summary') or ''}"
+        )
     return "\n".join(lines)
 
 
