@@ -9,6 +9,8 @@ This skill coordinates PR review work across local review, GitHub thread state, 
 
 Core principle: know the PR state and local readiness before spending another external review cycle.
 
+Thread-state principle: unresolved review conversations are merge blockers in many repos even when checks are green, reviewers have approved, auto-merge is enabled, and `gh pr view` reports only a generic blocked state. Always verify review-thread state directly before explaining or handing off a blocked merge.
+
 ## Ownership Boundary
 
 Do not edit plugin-cache, lockfile-managed, generated, or byte-identical upstream skills to change this workflow. Keep those skills immutable and apply this user-local extension when their trigger language overlaps.
@@ -17,7 +19,7 @@ Do not edit plugin-cache, lockfile-managed, generated, or byte-identical upstrea
 
 For PR review loops, ready-for-review, bot reruns, or merge readiness:
 
-1. Inventory thread-aware GitHub PR state.
+1. Inventory thread-aware GitHub PR state, including unresolved active threads, unresolved outdated threads, pagination completeness, requested reviewers, reviews, checks, and merge state.
 2. Create or update the review ledger.
 3. Complete local readiness gates.
 4. Run local review when the change is non-trivial or uncertainty remains.
@@ -43,6 +45,8 @@ python ~/.agents/skills/pr-review-orchestration/scripts/pr_review_state.py --rep
 ```
 
 Add `--json` when the exact machine-readable state is needed.
+
+Use this helper again after every push, after external reviewers finish, after resolving any thread, and immediately before merge or blocked-merge diagnosis. Treat older snapshots as stale.
 
 ## Local Readiness Gate
 
@@ -104,6 +108,8 @@ Resolve review threads yourself when the disposition is clear and evidenced:
 
 Do not ask for separate permission before resolving those threads. Ask only when a thread is `needs_human_decision`, when resolving it would hide an unhandled valid finding, or when repository policy explicitly reserves resolution for humans.
 
+After resolving any thread, refresh thread-aware PR state and verify the unresolved thread count changed as expected before reassessing merge readiness.
+
 ## Merge Readiness
 
 **REQUIRED SUB-SKILL:** Use `resolving-workflow-ownership` before final PR
@@ -129,6 +135,17 @@ merge actuation, hand off without merging.
 
 When merge state is blocked or ambiguous, run `pr_review_state.py` before rerunning CodeRabbit or another external reviewer.
 
+## Blocked Merge Diagnosis
+
+When GitHub reports a blocked merge, diagnose in this order:
+
+1. Run `pr_review_state.py --repo OWNER/REPO --pr NUMBER --summary --json` or equivalent GraphQL state that includes `reviewThreads`.
+2. If `next_blocker` is `unresolved_review_threads` or `outdated_unresolved_review_threads`, classify each thread, apply the Conversation Resolution policy, resolve evidenced handled threads, refresh state, and only then continue.
+3. If thread pagination is incomplete, fix the state query or rerun the helper before drawing conclusions.
+4. Only after refreshed state shows zero unresolved threads should you explain the blocker as required approval, last-push approval, branch ruleset policy, bot-review state, or merge queue behavior.
+
+Do not infer the remaining blocker from `mergeStateStatus`, `reviewDecision`, status contexts, auto-merge state, or branch ruleset data until unresolved conversations have been checked on the current head.
+
 ## Ralph Review Interaction
 
 When Ralph review is requested for PR review, bot-review, comment-resolution, or merge-readiness work, each Ralph cycle runs this state machine once. Do not nest extra external-review loops inside a Ralph cycle unless the budget gates allow it.
@@ -139,6 +156,7 @@ When Ralph review is requested for PR review, bot-review, comment-resolution, or
 | --- | --- |
 | Treating CodeRabbit approval as PR readiness | Fetch thread-aware PR state and inspect blockers. |
 | Rerunning a bot to diagnose branch protection | Run `pr_review_state.py` and update the ledger first. |
+| Explaining `mergeStateStatus: BLOCKED` from checks, approvals, or rulesets before inspecting conversations | Refresh thread-aware state and resolve/report unresolved review threads first. |
 | Asking before resolving clearly handled threads | Classify them, record evidence, and resolve them under Conversation Resolution. |
 | Resolving stale threads casually | Record evidence, confirm refreshed thread state, then resolve them when the disposition is clear. |
 | Editing managed review skills | Keep them immutable; use this extension skill. |
