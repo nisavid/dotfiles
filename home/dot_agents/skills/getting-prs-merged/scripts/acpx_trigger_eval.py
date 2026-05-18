@@ -30,6 +30,7 @@ from typing import Any
 EFFORTS = ("low", "medium", "high", "xhigh")
 DRIVER_ID = "acpx-codex"
 DETECTOR = "acpx-codex-sentinel"
+CODEX_MODE = "read-only"
 GLOBAL_SKILL_ROOTS = (
     Path.home() / ".agents" / "skills",
     Path.home() / ".codex" / "skills",
@@ -130,6 +131,9 @@ def write_probe_skill(home: Path, *, name: str, description: str, marker: str) -
                 f"exactly `{marker}` and nothing else. Do not run commands, inspect files,",
                 "or continue the underlying workflow.",
                 "",
+                "Do not explain why the skill matched. Do not add a preamble, suffix,",
+                "markdown, punctuation, or any other text.",
+                "",
             ]
         ),
         encoding="utf-8",
@@ -150,6 +154,7 @@ def build_probe_prompt(query: str) -> str:
             "If an available temporary skill applies to the request above, load and use that skill now,",
             "then follow its SKILL.md instructions exactly and stop. Do not answer from the skill name",
             "or description alone; the triggered answer is defined only inside the loaded skill body.",
+            "Do not explain whether or why a skill applies.",
             "If no temporary skill is loaded, answer exactly: SKILL_NOT_TRIGGERED",
         ]
     )
@@ -201,9 +206,10 @@ def _collect_assistant_messages(value: Any) -> list[str]:
         method = value.get("method")
         params = value.get("params")
         if method == "session/update" and isinstance(params, dict):
-            update = params.get("sessionUpdate")
-            content = params.get("content")
-            if update in {"agent_message_chunk", "agent_message"}:
+            update = params.get("update") if isinstance(params.get("update"), dict) else params
+            update_type = update.get("sessionUpdate")
+            content = update.get("content")
+            if update_type in {"agent_message_chunk", "agent_message"}:
                 messages.extend(_content_text(content))
         item = value.get("item")
         if isinstance(item, dict) and item.get("type") == "agent_message":
@@ -227,8 +233,13 @@ def _collect_assistant_messages(value: Any) -> list[str]:
 def parse_acpx_output(stdout: str) -> tuple[list[Any], list[str]]:
     events = parse_json_stream(stdout)
     messages: list[str] = []
+    chunk_buffer: list[str] = []
     for event in events:
-        messages.extend(_collect_assistant_messages(event))
+        for message in _collect_assistant_messages(event):
+            messages.append(message)
+            chunk_buffer.append(message)
+    if chunk_buffer:
+        messages.append("".join(chunk_buffer))
     return events, messages
 
 
@@ -337,6 +348,7 @@ def run_prompt(
     model: str | None,
     effort: str | None,
     strict_json: bool,
+    mode: str,
 ) -> dict[str, Any]:
     env = env_for_home(home, codex_home)
     base_cmd = build_base_cmd(
@@ -350,48 +362,47 @@ def run_prompt(
     applied_config_values: dict[str, str] = {}
     session_name = f"trigger-{uuid.uuid4().hex[:12]}"
 
+    setup_steps = [
+        base_cmd + ["codex", "sessions", "new", "--name", session_name],
+        base_cmd + ["codex", "set-mode", mode, "-s", session_name],
+    ]
     if effort:
-        setup_steps = [
-            base_cmd + ["codex", "sessions", "new", "--name", session_name],
-            base_cmd + ["codex", "set", "reasoning_effort", effort, "-s", session_name],
-        ]
-        for setup_cmd in setup_steps:
-            returncode, stdout, stderr, timed_out, duration = completed_result(
-                setup_cmd,
-                cwd=cwd,
-                env=env,
-                timeout=timeout,
-            )
-            setup_config_values = parse_config_values(stdout)
-            applied_config_values.update(setup_config_values)
-            setup_commands.append(
-                {
-                    "command": setup_cmd,
-                    "returncode": returncode,
-                    "stdout": stdout,
-                    "stderr": stderr,
-                    "timed_out": timed_out,
-                    "duration_seconds": round(duration, 3),
-                    "config_values": setup_config_values,
-                }
-            )
-            if returncode != 0 or timed_out:
-                return {
-                    "command": setup_cmd,
-                    "setup_commands": setup_commands,
-                    "returncode": returncode,
-                    "stdout": stdout,
-                    "stderr": stderr,
-                    "timed_out": timed_out,
-                    "duration_seconds": round(duration, 3),
-                    "setup_failed": True,
-                    "messages": [],
-                    "events": [],
-                    "applied_config_values": applied_config_values,
-                }
-        cmd = base_cmd + ["codex", "prompt", "-s", session_name, prompt]
-    else:
-        cmd = base_cmd + ["codex", "exec", prompt]
+        setup_steps.append(base_cmd + ["codex", "set", "reasoning_effort", effort, "-s", session_name])
+    for setup_cmd in setup_steps:
+        returncode, stdout, stderr, timed_out, duration = completed_result(
+            setup_cmd,
+            cwd=cwd,
+            env=env,
+            timeout=timeout,
+        )
+        setup_config_values = parse_config_values(stdout)
+        applied_config_values.update(setup_config_values)
+        setup_commands.append(
+            {
+                "command": setup_cmd,
+                "returncode": returncode,
+                "stdout": stdout,
+                "stderr": stderr,
+                "timed_out": timed_out,
+                "duration_seconds": round(duration, 3),
+                "config_values": setup_config_values,
+            }
+        )
+        if returncode != 0 or timed_out:
+            return {
+                "command": setup_cmd,
+                "setup_commands": setup_commands,
+                "returncode": returncode,
+                "stdout": stdout,
+                "stderr": stderr,
+                "timed_out": timed_out,
+                "duration_seconds": round(duration, 3),
+                "setup_failed": True,
+                "messages": [],
+                "events": [],
+                "applied_config_values": applied_config_values,
+            }
+    cmd = base_cmd + ["codex", "prompt", "-s", session_name, prompt]
 
     returncode, stdout, stderr, timed_out, duration = completed_result(
         cmd,
@@ -436,12 +447,18 @@ def run_prompt(
 
 def expected_applied_config(
     *,
+    requested_mode: str,
     requested_model: str | None,
     requested_effort: str | None,
     observed_values: dict[str, str],
 ) -> tuple[dict[str, str], list[str]]:
     applied: dict[str, str] = {}
     unsupported: list[str] = []
+    observed_mode = observed_values.get("mode")
+    if observed_mode == requested_mode:
+        applied["mode"] = observed_mode
+    else:
+        unsupported.append("mode")
     if requested_model:
         observed_model = observed_values.get("model")
         if observed_model == requested_model:
@@ -528,9 +545,11 @@ def run_home_probe(
         model=model,
         effort=effort,
         strict_json=strict_json,
+        mode=CODEX_MODE,
     )
     detection = marker_detection(run["messages"], marker)
     applied_config, unsupported_config = expected_applied_config(
+        requested_mode=CODEX_MODE,
         requested_model=model,
         requested_effort=effort,
         observed_values=run["applied_config_values"],
@@ -591,10 +610,20 @@ def run_deny_all_probe(
         model=model,
         effort=effort,
         strict_json=strict_json,
+        mode=CODEX_MODE,
     )
-    denied_signal = run["returncode"] in {0, 5} or "PERMISSION" in run["stderr"].upper()
-    no_successful_tool_text = not any("pwd" in message and str(cwd) in message for message in run["messages"])
+    joined_messages = "\n".join(run["messages"])
+    denied_signal = (
+        "TOOL_DENIED" in joined_messages
+        or "PERMISSION" in run["stderr"].upper()
+        or "permission" in joined_messages.lower()
+        or "cannot run" in joined_messages.lower()
+        or "can't run" in joined_messages.lower()
+        or "unable to run" in joined_messages.lower()
+    )
+    no_successful_tool_text = str(cwd) not in joined_messages
     applied_config, unsupported_config = expected_applied_config(
+        requested_mode=CODEX_MODE,
         requested_model=model,
         requested_effort=effort,
         observed_values=run["applied_config_values"],
@@ -730,6 +759,7 @@ def run_one(
     requested_config = {
         "model": model,
         "reasoning_effort": effort,
+        "codex_mode": CODEX_MODE,
         "permission_mode": "deny-all",
         "terminal": False,
         "format": "json",
@@ -758,11 +788,13 @@ def run_one(
         model=model,
         effort=effort,
         strict_json=strict_json,
+        mode=CODEX_MODE,
     )
     (run_dir / "stdout.jsonl").write_text(run["stdout"], encoding="utf-8")
     (run_dir / "stderr.log").write_text(run["stderr"], encoding="utf-8")
     detection = marker_detection(run["messages"], marker)
     applied_config, unsupported_config = expected_applied_config(
+        requested_mode=CODEX_MODE,
         requested_model=model,
         requested_effort=effort,
         observed_values=run["applied_config_values"],
