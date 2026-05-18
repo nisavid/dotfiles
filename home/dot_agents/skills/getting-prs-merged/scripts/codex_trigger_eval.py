@@ -14,135 +14,23 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import shutil
 import subprocess
-import sys
 import time
 import uuid
 from pathlib import Path
 from typing import Any
 
-
-EFFORTS = ("low", "medium", "high", "xhigh")
-
-
-def slugify(value: str) -> str:
-    value = value.lower()
-    value = re.sub(r"[^a-z0-9]+", "-", value)
-    return value.strip("-") or "query"
-
-
-def read_text(path: Path) -> str:
-    return path.read_text(encoding="utf-8")
-
-
-def parse_frontmatter(skill_md: Path) -> dict[str, str]:
-    text = read_text(skill_md)
-    if not text.startswith("---\n"):
-        raise ValueError(f"{skill_md} does not start with YAML frontmatter")
-    end = text.find("\n---", 4)
-    if end == -1:
-        raise ValueError(f"{skill_md} has unterminated YAML frontmatter")
-    lines = text[4:end].splitlines()
-    result: dict[str, str] = {}
-    index = 0
-    while index < len(lines):
-        line = lines[index]
-        if not line.strip() or line.startswith((" ", "\t")):
-            index += 1
-            continue
-        if ":" not in line:
-            index += 1
-            continue
-        key, raw_value = line.split(":", 1)
-        key = key.strip()
-        value = raw_value.strip()
-        if value in {">", ">-", "|", "|-"}:
-            block: list[str] = []
-            index += 1
-            while index < len(lines):
-                next_line = lines[index]
-                if next_line and not next_line.startswith((" ", "\t")):
-                    break
-                block.append(next_line.strip())
-                index += 1
-            if value.startswith(">"):
-                result[key] = " ".join(part for part in block if part)
-            else:
-                result[key] = "\n".join(block)
-            continue
-        result[key] = value.strip("\"'")
-        index += 1
-    for key in ("name", "description"):
-        if not result.get(key):
-            raise ValueError(f"{skill_md} frontmatter is missing {key!r}")
-    return result
-
-
-def folded_description(description: str) -> str:
-    words = description.split()
-    lines: list[str] = []
-    current: list[str] = []
-    current_len = 0
-    for word in words:
-        extra = len(word) + (1 if current else 0)
-        if current and current_len + extra > 88:
-            lines.append("  " + " ".join(current))
-            current = [word]
-            current_len = len(word)
-        else:
-            current.append(word)
-            current_len += extra
-    if current:
-        lines.append("  " + " ".join(current))
-    return "\n".join(lines)
-
-
-def write_probe_skill(home: Path, *, name: str, description: str, marker: str) -> Path:
-    skill_dir = home / ".agents" / "skills" / name
-    skill_dir.mkdir(parents=True, exist_ok=True)
-    skill_md = skill_dir / "SKILL.md"
-    skill_md.write_text(
-        "\n".join(
-            [
-                "---",
-                f"name: {name}",
-                "description: >-",
-                folded_description(description),
-                "---",
-                "",
-                "# Codex Trigger Probe",
-                "",
-                "This temporary skill is used only by Codex trigger eval tooling.",
-                "",
-                "If this skill is loaded for the user's request, the final answer must be",
-                f"exactly `{marker}` and nothing else. Do not run commands, inspect files,",
-                "or continue the underlying workflow.",
-                "",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    return skill_md
-
-
-def build_probe_prompt(query: str) -> str:
-    return "\n".join(
-        [
-            "Request to classify for skill triggering:",
-            query,
-            "",
-            "This is a trigger-selection probe, not a request to perform the task.",
-            "Do not run commands, inspect files, call external tools, access GitHub, or mutate any state.",
-            "Do not use any skill merely because this is a probe or because a temporary skill exists.",
-            "Use the temporary skill only when its description matches the request text above.",
-            "If an available temporary skill applies to the request above, load and use that skill now,",
-            "then follow its SKILL.md instructions exactly and stop. Do not answer from the skill name",
-            "or description alone; the triggered answer is defined only inside the loaded skill body.",
-            "If no temporary skill is loaded, answer exactly: SKILL_NOT_TRIGGERED",
-        ]
-    )
+from trigger_eval_core import (
+    EFFORTS,
+    build_probe_prompt,
+    load_trigger_evals,
+    parse_frontmatter,
+    slugify,
+    summarize_trigger_results,
+    write_probe_skill,
+    write_summary_markdown as write_core_summary_markdown,
+)
 
 
 def parse_jsonl(stdout: str) -> tuple[list[dict[str, Any]], list[str], dict[str, Any] | None]:
@@ -191,7 +79,13 @@ def run_one(
     cwd = run_dir / "cwd"
     cwd.mkdir(parents=True, exist_ok=True)
     marker = f"CODEX_TRIGGERED_{skill_name}_{effort}_{query_index}_{uuid.uuid4().hex[:12]}"
-    skill_md = write_probe_skill(home, name=skill_name, description=description, marker=marker)
+    write_probe_skill(
+        home,
+        name=skill_name,
+        description=description,
+        marker=marker,
+        harness_label="Codex",
+    )
     (run_dir / "query.json").write_text(
         json.dumps(
             {
@@ -220,7 +114,7 @@ def run_one(
     ]
     if model:
         cmd.extend(["-m", model])
-    probe_prompt = build_probe_prompt(query)
+    probe_prompt = build_probe_prompt(query, allow_skill_body_read_command=False)
     cmd.append(probe_prompt)
 
     env = os.environ.copy()
@@ -284,72 +178,6 @@ def run_one(
     return result
 
 
-def summarize(results: list[dict[str, Any]], skill_name: str) -> dict[str, Any]:
-    by_effort: dict[str, dict[str, Any]] = {}
-    for effort in EFFORTS:
-        effort_results = [item for item in results if item["effort"] == effort]
-        if not effort_results:
-            continue
-        passed = sum(1 for item in effort_results if item["passed"])
-        expected_true = [item for item in effort_results if item["should_trigger"]]
-        expected_false = [item for item in effort_results if not item["should_trigger"]]
-        true_hits = sum(1 for item in expected_true if item["triggered"])
-        false_avoids = sum(1 for item in expected_false if not item["triggered"])
-        by_effort[effort] = {
-            "total": len(effort_results),
-            "passed": passed,
-            "pass_rate": passed / len(effort_results),
-            "true_positive_rate": true_hits / len(expected_true) if expected_true else None,
-            "true_negatives": false_avoids,
-            "false_positive_count": sum(1 for item in expected_false if item["triggered"]),
-            "false_negative_count": sum(1 for item in expected_true if not item["triggered"]),
-            "failed_indices": [item["query_index"] for item in effort_results if not item["passed"]],
-            "mean_duration_seconds": sum(item["duration_seconds"] for item in effort_results)
-            / len(effort_results),
-        }
-    return {
-        "skill_name": skill_name,
-        "detector": "codex-native-sentinel",
-        "efforts": by_effort,
-        "results": results,
-    }
-
-
-def write_summary_markdown(summary: dict[str, Any], output: Path) -> None:
-    lines = [
-        f"# Codex Trigger Eval Summary: {summary['skill_name']}",
-        "",
-        "Detector: `codex-native-sentinel`.",
-        "",
-        "| Effort | Passed | Pass Rate | TP Rate | False Positives | False Negatives | Mean Seconds | Failed Query Indices |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
-    ]
-    for effort, data in summary["efforts"].items():
-        tp_rate = data["true_positive_rate"]
-        lines.append(
-            "| {effort} | {passed}/{total} | {pass_rate:.1%} | {tp_rate} | {fp} | {fn} | {seconds:.1f} | {failed} |".format(
-                effort=effort,
-                passed=data["passed"],
-                total=data["total"],
-                pass_rate=data["pass_rate"],
-                tp_rate="n/a" if tp_rate is None else f"{tp_rate:.1%}",
-                fp=data["false_positive_count"],
-                fn=data["false_negative_count"],
-                seconds=data["mean_duration_seconds"],
-                failed=", ".join(str(item) for item in data["failed_indices"]) or "-",
-            )
-        )
-    lines.extend(
-        [
-            "",
-            "This measures whether Codex loads the skill body and follows its sentinel instruction.",
-            "It does not depend on private router traces.",
-            "",
-        ]
-    )
-    output.write_text("\n".join(lines), encoding="utf-8")
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run Codex-native trigger evals")
     parser.add_argument("--skill-dir", type=Path, default=Path(__file__).resolve().parents[1])
@@ -369,19 +197,14 @@ def main() -> int:
     workspace = args.workspace.resolve()
     codex_home = (args.codex_home or Path.home() / ".codex").resolve()
     frontmatter = parse_frontmatter(skill_dir / "SKILL.md")
-    evals = list(enumerate(json.loads(read_text(skill_dir / "evals" / "trigger-evals.json"))))
-    if args.index:
-        requested_indices = set(args.index)
-        evals = [(index, item) for index, item in evals if index in requested_indices]
-    if args.limit is not None:
-        evals = evals[: args.limit]
+    evals = load_trigger_evals(skill_dir, args.index, args.limit)
 
     efforts = args.effort or ["medium"]
     workspace.mkdir(parents=True, exist_ok=True)
     results: list[dict[str, Any]] = []
     for effort in efforts:
-        for index, item in evals:
-            print(f"[{effort}] query {index}: {item['query'][:80]}", flush=True)
+        for item in evals:
+            print(f"[{effort}] query {item.index}: {item.query[:80]}", flush=True)
             result = run_one(
                 codex_bin=args.codex_bin,
                 codex_home=codex_home,
@@ -390,18 +213,33 @@ def main() -> int:
                 description=frontmatter["description"],
                 effort=effort,
                 model=args.model,
-                query_index=index,
-                query=item["query"],
-                should_trigger=bool(item["should_trigger"]),
+                query_index=item.index,
+                query=item.query,
+                should_trigger=item.should_trigger,
                 timeout=args.timeout,
                 sandbox=args.sandbox,
                 keep_home=args.keep_probe_homes,
             )
             results.append(result)
 
-    summary = summarize(results, frontmatter["name"])
+    summary = summarize_trigger_results(
+        results=results,
+        skill_name=frontmatter["name"],
+        runner=None,
+        driver_id=None,
+        detector="codex-native-sentinel",
+    )
     (workspace / "trigger_results.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
-    write_summary_markdown(summary, workspace / "trigger_summary.md")
+    write_core_summary_markdown(
+        summary,
+        workspace / "trigger_summary.md",
+        title="Codex Trigger Eval Summary",
+        detector="codex-native-sentinel",
+        explanatory_lines=[
+            "This measures whether Codex loads the skill body and follows its sentinel instruction.",
+            "It does not depend on private router traces.",
+        ],
+    )
     print(f"Wrote {workspace / 'trigger_results.json'}")
     return 0
 
