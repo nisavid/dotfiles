@@ -348,10 +348,30 @@ def env_for_home(home: Path, codex_home: Path | None) -> dict[str, str]:
     return env
 
 
+def render_locked_codex_config(skill_dirs: list[Path]) -> str:
+    blocks = [LOCKED_CODEX_CONFIG.rstrip()]
+    for skill_dir in skill_dirs:
+        blocks.extend(
+            [
+                "",
+                "[[skills.config]]",
+                f"path = {json.dumps(str(skill_dir))}",
+                "enabled = true",
+            ]
+        )
+    return "\n".join(blocks) + "\n"
+
+
+def write_codex_config(runtime_codex_home: Path, skill_dirs: list[Path]) -> str:
+    config_text = render_locked_codex_config(skill_dirs)
+    (runtime_codex_home / "config.toml").write_text(config_text, encoding="utf-8")
+    return config_text
+
+
 def write_locked_codex_home(runtime_codex_home: Path, source_codex_home: Path | None) -> dict[str, Any]:
     runtime_codex_home.mkdir(parents=True, exist_ok=True)
     config_path = runtime_codex_home / "config.toml"
-    config_path.write_text(LOCKED_CODEX_CONFIG, encoding="utf-8")
+    config_text = write_codex_config(runtime_codex_home, [])
     auth_source_present = False
     auth_linked = False
     if source_codex_home:
@@ -367,7 +387,7 @@ def write_locked_codex_home(runtime_codex_home: Path, source_codex_home: Path | 
         "runtime_path": str(runtime_codex_home),
         "source_path": str(source_codex_home) if source_codex_home else None,
         "config_path": str(config_path),
-        "config": LOCKED_CODEX_CONFIG,
+        "config": config_text,
         "auth_source_present": auth_source_present,
         "auth_linked": auth_linked,
     }
@@ -409,9 +429,11 @@ def run_prompt(
 ) -> dict[str, Any]:
     runtime_codex_home = home / ".codex"
     codex_home_metadata = write_locked_codex_home(runtime_codex_home, codex_home)
-    codex_home_metadata["mirrored_skill_paths"] = mirror_agent_skills_to_codex_home(
-        home, runtime_codex_home
-    )
+    mirrored_skill_paths = mirror_agent_skills_to_codex_home(home, runtime_codex_home)
+    configured_skill_dirs = [Path(path).parent for path in mirrored_skill_paths]
+    codex_home_metadata["mirrored_skill_paths"] = mirrored_skill_paths
+    codex_home_metadata["configured_skill_paths"] = [str(path) for path in configured_skill_dirs]
+    codex_home_metadata["config"] = write_codex_config(runtime_codex_home, configured_skill_dirs)
     env = env_for_home(home, runtime_codex_home)
     base_cmd = build_base_cmd(
         acpx_bin=acpx_bin,
