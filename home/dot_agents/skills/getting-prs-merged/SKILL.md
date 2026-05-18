@@ -46,11 +46,13 @@ Read the applicable sub-skill before acting. Do not copy a weaker local substitu
    - Merge blockers present: use `pr-review-orchestration` to identify the next blocker before spending another review cycle.
 5. Iterate until merged or blocked.
    - After each fix, run the targeted checks, push the verified head, refresh PR state, update the PR body or ledger when status changed, and continue.
+   - When `pr-review-orchestration` classifies an unresolved review thread as fixed, already fixed, stale, outdated, duplicate, or otherwise handled with evidence, resolve it yourself as part of merge closeout. Do not ask for separate confirmation just because resolving the thread satisfies a branch-policy gate; ask only when the thread needs a human decision or repo policy reserves resolution for another owner.
    - Request or rerun external review only when local readiness gates allow it and the review budget rules allow another cycle.
 6. Merge only when the ownership and readiness gates pass.
    - Required checks are successful or explicitly accepted under repo policy.
    - Required approvals are present or not required.
    - No unresolved active thread contains an unhandled valid finding.
+   - Evidenced, handled review threads have been resolved under `pr-review-orchestration`; only human-decision or policy-reserved threads remain open.
    - The PR is mergeable, and merge actuation is agent-owned.
    - Use the repo's expected merge method and cleanup policy.
 
