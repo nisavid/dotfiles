@@ -45,16 +45,33 @@ Adapt execution to the current harness:
 - If the harness lacks completion timing or token metadata, leave timing absent or record the limitation instead of fabricating it.
 - If the harness lacks an interactive browser, generate a static review HTML file.
 - Keep baseline and with-skill prompts otherwise identical so differences measure the skill, not the setup.
+- To scaffold the standard workspace from `evals/evals.json`, run `scripts/prepare_behavior_evals.py --skill-dir <skill-dir> --workspace <workspace>`.
 
 ## Trigger Evals
 
 Trigger tests are harness-specific because each harness exposes skills differently.
 
 - Use `evals/trigger-evals.json` as the shared input format for should-trigger and should-not-trigger queries.
-- Run `scripts.run_eval` or `scripts.run_loop` only when testing Claude Code trigger behavior or when the user explicitly asks to use Claude's CLI.
-- For Codex or another non-Claude harness, use the harness's native trigger-eval mechanism if one exists.
-- If no native mechanism exists, prepare the trigger eval set and say it is ready but not executable in the current harness.
+- Use this skill's runner scripts for supported harnesses:
+  - `scripts/codex_trigger_eval.py --skill-dir <skill-dir> --workspace <workspace>`
+  - `scripts/acpx_trigger_eval.py --skill-dir <skill-dir> --workspace <workspace>`
+  - `scripts/claude_trigger_eval.py --skill-dir <skill-dir> --workspace <workspace>`
+  - `scripts/cursor_trigger_eval.py --skill-dir <skill-dir> --workspace <workspace>`
+- Each trigger runner installs a temporary probe skill with the target skill's name and description. The probe body contains a unique sentinel and no real task instructions.
+- Count a positive only when the harness provides evidence that the temporary skill body was loaded and the sentinel was emitted. Count a negative only when the sentinel is absent and the harness did not cross the runner's documented tool boundary.
+- Use the strictest contract the harness can support. When a harness lacks native skill invocation events, use the runner's documented surrogate signal, such as body-read evidence from a project rule shim, and report the weaker contract in the summary.
+- Run `scripts.run_eval` or `scripts.run_loop` only when testing Claude Code trigger behavior through the original `skill-creator` Claude-specific path or when the user explicitly asks to use Claude's CLI.
+- For an unsupported harness, define the capability gap before substituting a weaker workflow. Do not count a trigger eval unless the runner can observe a credible skill-selection or body-load signal for that harness.
 - Do not use Claude trigger results as evidence for Codex or another harness unless the user explicitly asked for a Claude-specific proxy result.
+
+### Harness Runner Contracts
+
+| Runner | Harness signal | Counted positive | Counted negative |
+| --- | --- | --- | --- |
+| `codex_trigger_eval.py` | Codex JSONL final message text from an isolated probe skill. | Sentinel appears in Codex output. | Sentinel is absent and the run exits cleanly. |
+| `acpx_trigger_eval.py` | ACPX/Codex JSON stream plus recorded read of the temporary `SKILL.md`. | Temporary skill body is read and its sentinel appears. | Sentinel is absent and no disallowed tool calls occur. |
+| `claude_trigger_eval.py` | Claude Code `Skill` tool call plus synthetic skill body delivery. | Matching `Skill` tool call occurs, the synthetic body is delivered, and the sentinel appears. | Sentinel is absent and no tool calls occur. |
+| `cursor_trigger_eval.py` | Cursor Agent project `AGENTS.md` shim plus temporary `.cursor/skills` body read. | Temporary skill body is read and its sentinel appears. | Sentinel is absent and the temporary skill body is not read. |
 
 ## Description Optimization
 
@@ -74,3 +91,4 @@ If the provided optimizer calls a different assistant, present it as optional cr
 | Forcing baseline benchmarks when no isolated baseline runner exists | Run qualitative with-skill checks and report the missing baseline capability. |
 | Dropping the review viewer because the browser differs | Use `--static` or the harness's browser/file affordance. |
 | Overriding subagent model or reasoning by habit | Inherit current settings unless the user requests a different model or effort. |
+| Keeping reusable eval runners inside one evaluated skill | Put harness-generic runners in this extension skill and leave skill-specific eval data under the target skill. |
