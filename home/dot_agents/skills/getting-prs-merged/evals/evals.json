@@ -81,6 +81,22 @@
     },
     {
       "id": 5,
+      "name": "coderabbit-skipped-review",
+      "prompt": "Using the provided scenario fixture, respond as the agent handling this request: \"Get this PR merged. The latest checks are green, but CodeRabbit skipped review and branch protection still wants review.\" Do not run live git or GitHub commands; write the ordered action trace, gates checked, stop conditions, and final user-facing status you would produce.",
+      "expected_output": "The agent does not treat a skipped CodeRabbit check as completed review evidence; after local readiness and budget gates pass, it comments on the PR to request CodeRabbit explicitly, refreshes PR state, and merges only after approval and branch-protection gates pass.",
+      "files": [
+        "evals/fixtures/coderabbit-skipped-review.md"
+      ],
+      "expectations": [
+        "The agent recognizes that a skipped CodeRabbit review is not a completed external review cycle.",
+        "The agent checks local readiness and external-review budget before requesting CodeRabbit again.",
+        "The agent comments on the PR with an explicit CodeRabbit request, normally @coderabbit-ai review.",
+        "The agent requests CodeRabbit approval explicitly when approval is the only remaining gate after clean evidence.",
+        "The agent refreshes PR state after CodeRabbit responds before merging."
+      ]
+    },
+    {
+      "id": 6,
       "name": "pr-description-only-near-miss",
       "prompt": "Using the provided scenario fixture, respond as the agent handling this request: \"Please just write a better PR description for this pull request.\" Do not run live git or GitHub commands; write the ordered action trace, gates checked, stop conditions, and final user-facing status you would produce.",
       "expected_output": "The wrapper should not be used as the main workflow; the agent should use the PR-description skill and avoid merge-oriented actions.",
@@ -94,7 +110,7 @@
       ]
     },
     {
-      "id": 6,
+      "id": 7,
       "name": "review-only-near-miss",
       "prompt": "Using the provided scenario fixture, respond as the agent handling this request: \"Can you review PR #17 and tell me what you think?\" Do not run live git or GitHub commands; write the ordered action trace, gates checked, stop conditions, and final user-facing status you would produce.",
       "expected_output": "The wrapper should not turn a review request into a merge attempt; the agent should take a code-review stance and report findings.",

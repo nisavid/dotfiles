@@ -48,6 +48,7 @@ Read the applicable sub-skill before acting. Do not copy a weaker local substitu
    - After each fix, run the targeted checks, push the verified head, refresh PR state, update the PR body or ledger when status changed, and continue.
    - When `pr-review-orchestration` classifies an unresolved review thread as fixed, already fixed, stale, outdated, duplicate, or otherwise handled with evidence, resolve it yourself as part of merge closeout. Do not ask for separate confirmation just because resolving the thread satisfies a branch-policy gate; ask only when the thread needs a human decision or repo policy reserves resolution for another owner.
    - Request or rerun external review only when local readiness gates allow it and the review budget rules allow another cycle.
+   - When CodeRabbit is the expected external reviewer and its latest check or comment says the review was skipped, do not treat that as a completed external review cycle. If local readiness gates pass and the external review budget allows another attempt, comment on the PR to request CodeRabbit explicitly, normally with `@coderabbit-ai review`. If the diff is already clean and the only remaining branch-protection gate is CodeRabbit approval, request that explicitly with `@coderabbit-ai approve pls`.
 6. Merge only when the ownership and readiness gates pass.
    - Required checks are successful or explicitly accepted under repo policy.
    - Required approvals are present or not required.
@@ -80,6 +81,7 @@ Finish with the PR URL, merge result or blocker, exact verification evidence, re
 | Treating "checks pass" as merge-ready | Inspect approvals, requested reviewers, thread state, mergeability, and ownership. |
 | Assuming full autonomy from "get this merged" | Read repo and workflow policy first; autonomy is scoped by those instructions. |
 | Skipping repo-local closeout rules | Apply local merge method, review policy, deploy guidance, and branch cleanup rules. |
+| Treating a skipped CodeRabbit check as final review evidence | Comment on the PR to request CodeRabbit explicitly when gates and budget allow it. |
 | Re-running review to diagnose a blocked merge | Read thread-aware PR state and branch protection first. |
 | Continuing past a human-owned decision | Report evidence and the decision owner instead of deciding by implication. |
 | Applying this to any PR-related request | Use this wrapper only when merge closeout is the goal. |
