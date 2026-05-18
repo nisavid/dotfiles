@@ -7,9 +7,10 @@ supports only the ``acpx-codex`` driver. When v2 begins, remove this note and
 replace the fixed driver with a capability-gated harness catalog plus runtime
 scouting for skill loading, isolation, permissions, and output compatibility.
 
-The eval remains classification-only. Each counted run uses an isolated HOME
-with a temporary probe skill whose body only emits a sentinel marker. A run is
-counted as triggered only when assistant output exactly matches the sentinel.
+The eval remains classification-only. Each counted run uses an isolated HOME,
+a locked generated CODEX_HOME, and a temporary probe skill whose body only
+emits a sentinel marker. A run is counted as triggered only when assistant
+output exactly matches the sentinel.
 """
 
 from __future__ import annotations
@@ -31,6 +32,16 @@ EFFORTS = ("low", "medium", "high", "xhigh")
 DRIVER_ID = "acpx-codex"
 DETECTOR = "acpx-codex-sentinel"
 CODEX_MODE = "read-only"
+CODEX_APPROVAL_POLICY = "never"
+CODEX_WEB_SEARCH = "disabled"
+CODEX_SHELL_TOOL = False
+LOCKED_CODEX_CONFIG = f"""sandbox_mode = "{CODEX_MODE}"
+approval_policy = "{CODEX_APPROVAL_POLICY}"
+web_search = "{CODEX_WEB_SEARCH}"
+
+[features]
+shell_tool = {str(CODEX_SHELL_TOOL).lower()}
+"""
 GLOBAL_SKILL_ROOTS = (
     Path.home() / ".agents" / "skills",
     Path.home() / ".codex" / "skills",
@@ -337,6 +348,53 @@ def env_for_home(home: Path, codex_home: Path | None) -> dict[str, str]:
     return env
 
 
+def write_locked_codex_home(runtime_codex_home: Path, source_codex_home: Path | None) -> dict[str, Any]:
+    runtime_codex_home.mkdir(parents=True, exist_ok=True)
+    config_path = runtime_codex_home / "config.toml"
+    config_path.write_text(LOCKED_CODEX_CONFIG, encoding="utf-8")
+    auth_source_present = False
+    auth_linked = False
+    if source_codex_home:
+        auth_source = source_codex_home / "auth.json"
+        auth_target = runtime_codex_home / "auth.json"
+        auth_source_present = auth_source.exists()
+        if auth_source_present:
+            if auth_target.exists() or auth_target.is_symlink():
+                auth_target.unlink()
+            auth_target.symlink_to(auth_source)
+            auth_linked = True
+    return {
+        "runtime_path": str(runtime_codex_home),
+        "source_path": str(source_codex_home) if source_codex_home else None,
+        "config_path": str(config_path),
+        "config": LOCKED_CODEX_CONFIG,
+        "auth_source_present": auth_source_present,
+        "auth_linked": auth_linked,
+    }
+
+
+def mirror_agent_skills_to_codex_home(home: Path, runtime_codex_home: Path) -> list[str]:
+    source_root = home / ".agents" / "skills"
+    target_root = runtime_codex_home / "skills"
+    mirrored: list[str] = []
+    if not source_root.exists():
+        return mirrored
+    target_root.mkdir(parents=True, exist_ok=True)
+    for source_skill in sorted(source_root.iterdir()):
+        if not (source_skill / "SKILL.md").is_file():
+            continue
+        target_skill = target_root / source_skill.name
+        shutil.copytree(source_skill, target_skill, dirs_exist_ok=True)
+        mirrored.append(str(target_skill / "SKILL.md"))
+    return mirrored
+
+
+def remove_runtime_auth(runtime_codex_home: Path) -> None:
+    auth_target = runtime_codex_home / "auth.json"
+    if auth_target.is_symlink():
+        auth_target.unlink()
+
+
 def run_prompt(
     *,
     acpx_bin: str,
@@ -348,9 +406,13 @@ def run_prompt(
     model: str | None,
     effort: str | None,
     strict_json: bool,
-    mode: str,
 ) -> dict[str, Any]:
-    env = env_for_home(home, codex_home)
+    runtime_codex_home = home / ".codex"
+    codex_home_metadata = write_locked_codex_home(runtime_codex_home, codex_home)
+    codex_home_metadata["mirrored_skill_paths"] = mirror_agent_skills_to_codex_home(
+        home, runtime_codex_home
+    )
+    env = env_for_home(home, runtime_codex_home)
     base_cmd = build_base_cmd(
         acpx_bin=acpx_bin,
         cwd=cwd,
@@ -362,10 +424,7 @@ def run_prompt(
     applied_config_values: dict[str, str] = {}
     session_name = f"trigger-{uuid.uuid4().hex[:12]}"
 
-    setup_steps = [
-        base_cmd + ["codex", "sessions", "new", "--name", session_name],
-        base_cmd + ["codex", "set-mode", mode, "-s", session_name],
-    ]
+    setup_steps = [base_cmd + ["codex", "sessions", "new", "--name", session_name]]
     if effort:
         setup_steps.append(base_cmd + ["codex", "set", "reasoning_effort", effort, "-s", session_name])
     for setup_cmd in setup_steps:
@@ -389,7 +448,7 @@ def run_prompt(
             }
         )
         if returncode != 0 or timed_out:
-            return {
+            result = {
                 "command": setup_cmd,
                 "setup_commands": setup_commands,
                 "returncode": returncode,
@@ -401,7 +460,10 @@ def run_prompt(
                 "messages": [],
                 "events": [],
                 "applied_config_values": applied_config_values,
+                "codex_home": codex_home_metadata,
             }
+            remove_runtime_auth(runtime_codex_home)
+            return result
     cmd = base_cmd + ["codex", "prompt", "-s", session_name, prompt]
 
     returncode, stdout, stderr, timed_out, duration = completed_result(
@@ -429,6 +491,7 @@ def run_prompt(
             "timed_out": close_timed_out,
             "duration_seconds": round(close_duration, 3),
         }
+    remove_runtime_auth(runtime_codex_home)
     return {
         "command": cmd,
         "setup_commands": setup_commands,
@@ -442,23 +505,18 @@ def run_prompt(
         "messages": messages,
         "events": events,
         "applied_config_values": applied_config_values,
+        "codex_home": codex_home_metadata,
     }
 
 
 def expected_applied_config(
     *,
-    requested_mode: str,
     requested_model: str | None,
     requested_effort: str | None,
     observed_values: dict[str, str],
 ) -> tuple[dict[str, str], list[str]]:
     applied: dict[str, str] = {}
     unsupported: list[str] = []
-    observed_mode = observed_values.get("mode")
-    if observed_mode == requested_mode:
-        applied["mode"] = observed_mode
-    else:
-        unsupported.append("mode")
     if requested_model:
         observed_model = observed_values.get("model")
         if observed_model == requested_model:
@@ -481,6 +539,48 @@ def marker_detection(messages: list[str], marker: str) -> dict[str, Any]:
         "sentinel_present_anywhere": any(marker in message for message in messages),
         "normalized_messages": normalized_messages,
     }
+
+
+def skill_body_load_diagnostic(messages: list[str], skill_name: str) -> dict[str, Any]:
+    joined = "".join(messages)
+    skill_quoted = f"`{skill_name}`" in joined
+    body_unavailable = (
+        ("can't load" in joined or "cannot load" in joined)
+        and ("skill body" in joined or "SKILL.md" in joined)
+    )
+    return {
+        "metadata_selected": skill_quoted,
+        "body_unavailable": body_unavailable,
+    }
+
+
+def home_probe_failure_class(detection: dict[str, Any], body_load: dict[str, Any]) -> str | None:
+    if detection["sentinel_exact_match"]:
+        return None
+    if body_load["metadata_selected"] and body_load["body_unavailable"]:
+        return "skill_metadata_selected_but_body_unavailable"
+    if detection["sentinel_present_anywhere"]:
+        return "sentinel_present_only_inside_nonexact_output"
+    return "skill_not_loaded_or_body_not_followed"
+
+
+def home_probe_implication(failure_class: str | None) -> str | None:
+    if failure_class is None:
+        return None
+    if failure_class == "skill_metadata_selected_but_body_unavailable":
+        return (
+            "Codex recognized the skill metadata, but it did not read the temporary SKILL.md body. "
+            "The runner cannot count this as proof that the skill would execute."
+        )
+    if failure_class == "sentinel_present_only_inside_nonexact_output":
+        return (
+            "Codex emitted the marker only as part of extra text. The runner requires the exact "
+            "marker by itself so explanatory output does not count as a trigger."
+        )
+    return (
+        "Codex did not emit the unique marker from the temporary SKILL.md body. The runner cannot "
+        "count this as proof that the skill loaded and followed its instructions."
+    )
 
 
 def check_acpx_binary(acpx_bin: str, timeout: int) -> dict[str, Any]:
@@ -545,11 +645,11 @@ def run_home_probe(
         model=model,
         effort=effort,
         strict_json=strict_json,
-        mode=CODEX_MODE,
     )
     detection = marker_detection(run["messages"], marker)
+    body_load = skill_body_load_diagnostic(run["messages"], skill_name)
+    failure_class = home_probe_failure_class(detection, body_load)
     applied_config, unsupported_config = expected_applied_config(
-        requested_mode=CODEX_MODE,
         requested_model=model,
         requested_effort=effort,
         observed_values=run["applied_config_values"],
@@ -570,9 +670,13 @@ def run_home_probe(
         "timed_out": run["timed_out"],
         "setup_failed": run["setup_failed"],
         "detection": detection,
+        "body_load": body_load,
+        "failure_class": failure_class,
+        "implication": home_probe_implication(failure_class),
         "applied_config": applied_config,
         "unsupported_config": unsupported_config,
         "observed_config_values": run["applied_config_values"],
+        "codex_home": run["codex_home"],
         "stderr": run["stderr"],
         "command": run["command"],
         "setup_commands": run["setup_commands"],
@@ -597,7 +701,8 @@ def run_deny_all_probe(
         [
             "This is a safety preflight.",
             "Attempt to run `pwd` using a terminal or command tool.",
-            "If tools are unavailable or denied, answer exactly: TOOL_DENIED",
+            "If the command tool is unavailable, answer exactly: NO_SHELL_TOOL",
+            "If the command is denied by policy, answer exactly: TOOL_DENIED",
         ]
     )
     run = run_prompt(
@@ -610,11 +715,12 @@ def run_deny_all_probe(
         model=model,
         effort=effort,
         strict_json=strict_json,
-        mode=CODEX_MODE,
     )
     joined_messages = "\n".join(run["messages"])
     denied_signal = (
-        "TOOL_DENIED" in joined_messages
+        "NO_SHELL_TOOL" in joined_messages
+        or "TOOL_DENIED" in joined_messages
+        or "tool unavailable" in joined_messages.lower()
         or "PERMISSION" in run["stderr"].upper()
         or "permission" in joined_messages.lower()
         or "cannot run" in joined_messages.lower()
@@ -623,7 +729,6 @@ def run_deny_all_probe(
     )
     no_successful_tool_text = str(cwd) not in joined_messages
     applied_config, unsupported_config = expected_applied_config(
-        requested_mode=CODEX_MODE,
         requested_model=model,
         requested_effort=effort,
         observed_values=run["applied_config_values"],
@@ -633,6 +738,7 @@ def run_deny_all_probe(
         "ok": bool(
             denied_signal
             and no_successful_tool_text
+            and not run["setup_failed"]
             and not run["timed_out"]
             and not unsupported_config
         ),
@@ -640,9 +746,12 @@ def run_deny_all_probe(
         "returncode": run["returncode"],
         "timed_out": run["timed_out"],
         "setup_failed": run["setup_failed"],
+        "denied_signal": denied_signal,
+        "no_successful_tool_text": no_successful_tool_text,
         "applied_config": applied_config,
         "unsupported_config": unsupported_config,
         "observed_config_values": run["applied_config_values"],
+        "codex_home": run["codex_home"],
         "messages": run["messages"],
         "stderr": run["stderr"],
         "command": run["command"],
@@ -719,7 +828,12 @@ def run_preflight(
     ok = all(check.get("ok") for check in required_checks)
     unsupported_reason = None
     if not ok:
-        failed = [check["name"] for check in required_checks if not check.get("ok")]
+        failed = []
+        for check in required_checks:
+            if check.get("ok"):
+                continue
+            failure_class = check.get("failure_class")
+            failed.append(f"{check['name']}:{failure_class}" if failure_class else check["name"])
         unsupported_reason = "preflight checks failed: " + ", ".join(failed)
     return {
         "ok": ok,
@@ -759,9 +873,12 @@ def run_one(
     requested_config = {
         "model": model,
         "reasoning_effort": effort,
-        "codex_mode": CODEX_MODE,
-        "permission_mode": "deny-all",
-        "terminal": False,
+        "codex_sandbox_mode": CODEX_MODE,
+        "codex_approval_policy": CODEX_APPROVAL_POLICY,
+        "codex_web_search": CODEX_WEB_SEARCH,
+        "codex_shell_tool": CODEX_SHELL_TOOL,
+        "acpx_permission_mode": "deny-all",
+        "acpx_terminal": False,
         "format": "json",
         "json_strict": strict_json,
     }
@@ -788,13 +905,11 @@ def run_one(
         model=model,
         effort=effort,
         strict_json=strict_json,
-        mode=CODEX_MODE,
     )
     (run_dir / "stdout.jsonl").write_text(run["stdout"], encoding="utf-8")
     (run_dir / "stderr.log").write_text(run["stderr"], encoding="utf-8")
     detection = marker_detection(run["messages"], marker)
     applied_config, unsupported_config = expected_applied_config(
-        requested_mode=CODEX_MODE,
         requested_model=model,
         requested_effort=effort,
         observed_values=run["applied_config_values"],
@@ -827,6 +942,7 @@ def run_one(
         "applied_config": applied_config,
         "observed_config_values": run["applied_config_values"],
         "unsupported_config": unsupported_config,
+        "codex_home": run["codex_home"],
         "preflight": {
             "ok": preflight["ok"],
             "unsupported_reason": preflight.get("unsupported_reason"),
@@ -941,6 +1057,15 @@ def write_unsupported(workspace: Path, skill_name: str, preflight: dict[str, Any
         "No trigger eval results were counted.",
         "",
     ]
+    failed_checks = [check for check in preflight.get("checks", []) if check.get("required", True) and not check.get("ok")]
+    if failed_checks:
+        lines.extend(["Failed required checks:", ""])
+        for check in failed_checks:
+            detail = check.get("failure_class") or check.get("reason") or "failed"
+            lines.append(f"- `{check.get('name', 'unknown')}`: {detail}.")
+            if check.get("implication"):
+                lines.append(f"  {check['implication']}")
+        lines.append("")
     (workspace / "trigger_summary.md").write_text("\n".join(lines), encoding="utf-8")
 
 
@@ -949,7 +1074,11 @@ def main() -> int:
     parser.add_argument("--skill-dir", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--workspace", type=Path, required=True)
     parser.add_argument("--acpx-bin", default="acpx")
-    parser.add_argument("--codex-home", type=Path)
+    parser.add_argument(
+        "--codex-home",
+        type=Path,
+        help="Source Codex home to borrow auth.json from; runtime config is generated and locked per run.",
+    )
     parser.add_argument("--model")
     parser.add_argument("--effort", action="append", choices=EFFORTS)
     parser.add_argument("--timeout", type=int, default=60)
