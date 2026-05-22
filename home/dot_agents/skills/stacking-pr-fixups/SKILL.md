@@ -36,7 +36,11 @@ A PR-fixup branch is a narrow patch stacked on the PR under review. Its base is 
    - Base: the base PR's head branch.
    - Body: state that the PR is stacked on the base PR, list the fixes, and include verification.
    - Mark ready and request review from the base PR author only when the readiness rule below allows it; report any review-request failure instead of silently skipping it.
-6. Verify GitHub metadata after publishing: base branch, head branch, draft state, URL, and requested reviewer.
+6. Comment on the base PR after the fixup PR exists:
+   - Offer the fixup PR link.
+   - Include only a terse, high-level summary of the issues addressed.
+   - Keep detailed receipts in the fixup PR body.
+7. Verify GitHub metadata after publishing: base branch, head branch, draft state, URL, requested reviewer, and base-PR comment.
 
 ## Readiness Rules
 
@@ -55,4 +59,5 @@ A PR-fixup branch is a narrow patch stacked on the PR under review. Its base is 
 | Reusing `-p0` after another fixup exists | Scan local heads, relevant remote heads, and open PR heads before choosing the suffix ordinal. |
 | Marking ready while fixes are speculative or incomplete | Stop at draft or branch-only and ask for the readiness decision. |
 | Requesting review while still draft | Request the base PR author's review only after ready-for-review. |
+| Duplicating the full fixup rationale on the base PR | Post a short pointer comment and keep details in the fixup PR. |
 | Sweeping nearby cleanup into the fixup | Keep the diff to the intended review fixes. |
