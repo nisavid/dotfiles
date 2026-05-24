@@ -51,9 +51,33 @@ Keep a short PR-body or temporary ledger:
 - intentional divergences checked;
 - affected contracts classified as preserved, upstream now implements it, obsolete by policy, intentionally changed, or uncertain;
 - exact local gates run before push;
-- unresolved uncertainty for maintainer triage.
+- unresolved uncertainty escalated to the operator, or linked to a durable,
+  discoverable follow-up when escalation is unavailable.
 
 For changes touching names, paths, packaging, generated artifacts, release flow, security boundaries, updater behavior, or docs, adapt upstream behavior under local contracts. Do not push or merge while contracts are unchecked, uncertainty is untriaged, or local gates are missing. Generated/runtime artifacts are evidence, not durable fixes.
+
+## Policy Gap Closeout
+
+During a sync, treat a discovered repeatable failure mode as part of the work.
+If you notice a hazard that future sync agents could miss, codify the rule
+before handoff instead of leaving it only in chat, the PR description, or local
+memory.
+
+Use the narrowest durable surface that will load at the right time:
+
+- repo-local fork policy for repository-specific names, paths, rename maps,
+  contracts, gates, and source boundaries;
+- this skill for fork-sync behavior that applies across maintained forks;
+- always-loaded repo instructions only for rules needed before a workflow can
+  choose the right triggered guidance;
+- tests or scripts for repeatable mechanical checks.
+
+Record the policy update in the sync ledger. If the right owner is unclear,
+escalate to the operator when the session allows. Only defer the decision when
+escalation is unavailable or the operator requested an uninterrupted run; in
+that case, record a durable, discoverable follow-up where the escalation would
+have happened. Preserve the safest local guard that prevents silent data loss,
+dropped upstream changes, history replay, or contract drift.
 
 ## Verification
 
@@ -76,5 +100,6 @@ The ancestor check should pass. Patch equivalence is not commit identity.
 | Rewriting README, maintainer docs, package templates, or generated-app sources broadly | Do divergence review first. |
 | Pushing before local gates pass | Run policy gates and record exact commands. |
 | Creating the sync PR against the source upstream | Close the mistaken PR if appropriate, then recreate it with `--repo OWNER/FORK`. |
+| Noticing a repeatable sync hazard but leaving it in chat only | Add it to the narrowest durable policy surface and record that closeout. |
 | Inferring GitHub blockers from summary status | Inspect blocking checks, alerts, reviews, and threads directly. |
 | Closing review comments without revalidation | Revalidate the changed surface first. |
