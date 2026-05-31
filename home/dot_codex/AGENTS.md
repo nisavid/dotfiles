@@ -14,6 +14,10 @@ Across repositories, keep local tracking branches current when doing so is safe.
 
 Do not pull when it could disturb unstaged changes, uncommitted work, local-only commits, in-progress conflict resolution, detached or unusual checkout state, or a task-specific workflow that requires preserving the current branch state.
 
+## Firecrawl Preference
+
+Prefer task-specific tools for the specialized cases they are designed to handle. When Firecrawl skills are available and applicable, prefer the relevant Firecrawl skill as the general-purpose fallback for the web function it covers. Use lower-level or more generic web access methods only when no task-specific or Firecrawl skill fits, or another tool is explicitly required.
+
 <!-- context7 -->
 Use Context7 MCP to fetch current documentation whenever the user asks about a library, framework, SDK, API, CLI tool, or cloud service -- even well-known ones like React, Next.js, Prisma, Express, Tailwind, Django, or Spring Boot. This includes API syntax, configuration, version migration, library-specific debugging, setup instructions, and CLI tool usage. Use even when you think you know the answer -- your training data may not reflect recent changes. Prefer this over web search for library docs.
 
