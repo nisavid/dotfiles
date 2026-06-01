@@ -9,6 +9,14 @@ description: Use when syncing a fork with upstream, clicking Sync fork, using gh
 
 Fork sync preserves upstream commit identity and local contracts. Use before choosing a merge method, resolving conflicts, pushing a sync branch, or merging a sync PR.
 
+The default completed state is that the maintained fork's target branch
+contains the synced upstream head. When branch protection requires a PR, the
+sync work includes opening the PR, driving it through required checks and review
+state, merging it with the repo-approved sync merge method, and verifying the
+post-merge target branch. Stop at an open PR only when the operator explicitly
+asks for that handoff, merge actuation is not agent-owned, or a concrete blocker
+remains.
+
 ## Start With The Fork Contract
 
 Before syncing:
@@ -103,3 +111,4 @@ The ancestor check should pass. Patch equivalence is not commit identity.
 | Noticing a repeatable sync hazard but leaving it in chat only | Add it to the narrowest durable policy surface and record that closeout. |
 | Inferring GitHub blockers from summary status | Inspect blocking checks, alerts, reviews, and threads directly. |
 | Closing review comments without revalidation | Revalidate the changed surface first. |
+| Treating the draft or open sync PR as the finished sync | Continue through ready-for-review, review/blocker resolution, merge, and post-merge verification unless explicitly handed off or blocked. |
