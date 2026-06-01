@@ -1,5 +1,5 @@
 include "%L"
-include "%H/.config/X11/XCompose-vim"
+#include "%H/.config/X11/XCompose-vim"
 
 <Multi_key>        <bar> <greater>             : "‣"        # 2023 : TRIANGULAR BULLET
 <Multi_key>        <minus> <period>            : "⁃"        # 2043 : HYPHEN BULLET
