@@ -24,8 +24,11 @@
 	date = iso
 [merge]
 	log = 100
-	tool = nvimdiff2
+	tool = cursor
 	ff = only
+[mergetool "cursor"]
+	cmd = cursor --wait --merge \"$REMOTE\" \"$LOCAL\" \"$BASE\" \"$MERGED\"
+	trustExitCode = false
 [pull]
 	rebase = merges
 [push]
