@@ -31,7 +31,7 @@ This is not a replacement for ordinary correctness, security, product, or regres
 
 Treat a change as non-trivial if it touches multiple modules, layers, languages, packages, behavior paths, runtime scripts, schemas, tests, build config, dependencies, migrations, generated contracts, reviewer-facing docs, or a large single-module implementation. When unsure, treat it as non-trivial. Do not use this for trivially understood edits where the full consequence is already visible in one small diff.
 
-Before reviewing, define the review boundary: current branch or PR base, staged and unstaged changes, untracked files, generated files, and any unrelated user changes that must not be touched.
+Before reviewing, define the review boundary: current branch or PR base, staged and unstaged changes, untracked files, generated files, and any unrelated user changes that must not be touched. Record the starting diffstat for that boundary before making tightening edits.
 
 Do not use this as a general architecture audit when there is no scoped change set to tighten.
 
@@ -65,7 +65,7 @@ Use `receiving-code-review` to triage every finding:
 
 Verify implemented cleanup by inspecting the resulting diff for unintended behavior changes and running targeted tests, lints, typechecks, formatters, codegen checks, or package-specific verification where applicable. For agent-facing docs or skills, also check frontmatter discovery, links or references, and pressure scenarios where the instructions shape future behavior. If a relevant check is skipped, report why.
 
-Collect report-bound findings in a conversation-visible summary. When writes are permitted, also use a scratch file outside the repo, such as `$TMPDIR/tightening-code-for-review-<timestamp>.md`, with sections for fixed, discarded, deferred, and pending items. Tell later reviewers about already-collected items so they do not duplicate them.
+Collect report-bound findings in a conversation-visible summary. When writes are permitted, also use a scratch file outside the repo, such as `$TMPDIR/tightening-code-for-review-<timestamp>.md`, with sections for starting diffstat, fixed, discarded, deferred, and pending items. Tell later reviewers about already-collected items so they do not duplicate them.
 
 Then use `ralph-review-until-clean` for this low-level pass. Previous findings count as resolved for the loop only after they are fixed, discarded with evidence, intentionally deferred with a gating condition, or recorded as a pending operator decision. Give each new reviewer the current report so the latest cycle can focus on new findings.
 
@@ -86,10 +86,14 @@ Verify implemented architecture improvements with checks that match the changed 
 
 Append report-bound items to the same summary and scratch file when available. Then use `ralph-review-until-clean` for this high-level pass with the same resolved-item rule as the low-level loop.
 
+After the high-level loop is clean, record the ending diffstat for the same review boundary. Compare it against the starting diffstat so the final report shows how the tightening changed the size and shape of the diff.
+
 ## Final Report
 
 Report:
 
+- The starting diffstat and ending diffstat for the reviewed boundary.
+- A high-level synopsis of the changes implemented during tightening, grouped by outcome or behavior rather than file-by-file inventory.
 - Findings fixed, with evidence and verification.
 - Findings discarded, with original evidence and counter-evidence.
 - Deferred items, each with a gating condition and tracking recommendation.
