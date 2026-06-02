@@ -1,7 +1,7 @@
 model = "gpt-5.5"
-review_model = "gpt-5.4"
-model_reasoning_effort = "medium"
-plan_mode_reasoning_effort = "high"
+review_model = "gpt-5.5"
+model_reasoning_effort = "high"
+plan_mode_reasoning_effort = "xhigh"
 personality = "pragmatic"
 sandbox_mode = "workspace-write"
 approval_policy = "on-request"
@@ -21,6 +21,8 @@ codex_git_commit = true
 collaboration_modes = false
 plugin_hooks = true
 goals = true
+terminal_resize_reflow = true
+mentions_v2 = true
 
 [tui]
 notifications = true
@@ -437,45 +439,59 @@ enabled = true
 [plugins."cloudflare@openai-curated"]
 enabled = true
 
-[plugins."computer-use@openai-bundled"]
-enabled = true
-
 [plugins."hyperframes@openai-curated"]
 enabled = true
 
 [plugins."browser-use@openai-bundled"]
 enabled = true
 
+[plugins."fork-ops@fork-ops"]
+enabled = true
+
+[plugins."read-aloud@openai-bundled"]
+enabled = true
+
+[plugins."computer-use@openai-bundled"]
+enabled = true
+
+[plugins."browser@openai-bundled"]
+enabled = true
+
 [plugins."chrome@openai-bundled"]
 enabled = true
 
 [marketplaces.openai-primary-runtime]
-last_updated = "2026-05-16T04:48:51Z"
+last_updated = "2026-05-22T01:48:38Z"
 source_type = "local"
 source = "/home/nisavid/.cache/codex-runtimes/codex-primary-runtime/plugins/openai-primary-runtime"
 
 [marketplaces.claude-code-warp]
-last_updated = "2026-05-18T03:55:51Z"
-last_revision = "b8ad3cc6c1e40b2d2a944f900a4ae0904a54dd7f"
+last_updated = "2026-05-28T05:56:08Z"
+last_revision = "bb6c1cf2f5cd7eb609678a2b175e7f4504ca61c2"
 source_type = "git"
 source = "https://github.com/warpdotdev/claude-code-warp.git"
 
 [marketplaces.claude-plugins-official]
-last_updated = "2026-05-18T03:55:52Z"
-last_revision = "f475d3ce5806c7edf9fc204ee276e7f45e24c798"
+last_updated = "2026-05-31T17:03:58Z"
+last_revision = "3d368d2972d9af8f52e96ae7d86d2686967af31f"
 source_type = "git"
 source = "https://github.com/anthropics/claude-plugins-official.git"
 
 [marketplaces.impeccable]
-last_updated = "2026-05-18T03:55:54Z"
-last_revision = "e1d3ea0b6f79ebccb80b9e4b0d2b2ad62a13205b"
+last_updated = "2026-05-30T12:16:13Z"
+last_revision = "b913668ba4d25b95c4a62278d3637837e9d2c6d9"
 source_type = "git"
 source = "https://github.com/pbakaus/impeccable.git"
 
 [marketplaces.openai-bundled]
-last_updated = "2026-05-18T03:55:52Z"
+last_updated = "2026-05-31T17:04:00Z"
 source_type = "local"
 source = "/home/nisavid/.codex/.tmp/bundled-marketplaces/openai-bundled"
+
+[marketplaces.fork-ops]
+last_updated = "2026-05-18T14:47:32Z"
+source_type = "local"
+source = "/home/nisavid/src/nisavid/fork-ops"
 
 [mcp_servers.context7]
 url = "https://mcp.context7.com/mcp"
@@ -495,6 +511,22 @@ bearer_token_env_var = "CODEX_GITHUB_PAT"
 [mcp_servers.openaiDeveloperDocs]
 url = "https://developers.openai.com/mcp"
 
+[mcp_servers.node_repl]
+args = []
+command = "/opt/codex-app/resources/node_repl"
+startup_timeout_sec = 120
+
+[mcp_servers.node_repl.env]
+NODE_REPL_NATIVE_PIPE_CONNECT_TIMEOUT_MS = "1000"
+NODE_REPL_NODE_MODULE_DIRS = ""
+NODE_REPL_NODE_PATH = "/opt/codex-app/resources/node-runtime/bin/node"
+NODE_REPL_TRUSTED_CODE_PATHS = "/home/nisavid/.codex"
+CODEX_HOME = "/home/nisavid/.codex"
+NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S = "167fdf579477181fba1773c1efb067b00c5a64fe85dafb50a2001bde198dc739"
+BROWSER_USE_AVAILABLE_BACKENDS = "chrome,iab"
+BROWSER_USE_MARKETPLACE_NAME = "openai-bundled"
+NODE_REPL_UNTRUSTED_ENV_ALLOWLIST = "BROWSER_USE_MARKETPLACE_NAME"
+
 [shell_environment_policy.set]
 PATH = "/home/nisavid/.local/share/agents/codex-hf-cache-policy/bin:/home/nisavid/.local/share/pyenv/bin:/home/nisavid/.local/share/zi/polaris/sbin:/home/nisavid/.local/share/zi/polaris/bin:/home/nisavid/.local/bin:/home/nisavid/.local/bin/appimage:/home/nisavid/.cargo/bin:/home/nisavid/.local/share/pnpm:/home/nisavid/.local/share/krew/bin:/home/nisavid/.lmstudio/bin:/opt/codex-app/resources/node-runtime/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/opt/cuda/bin:/var/lib/flatpak/exports/bin:/usr/lib/jvm/default/bin:/usr/bin/site_perl:/usr/bin/vendor_perl:/usr/bin/core_perl:/opt/rocm/bin:/usr/lib/rustup/bin"
 
@@ -505,3 +537,64 @@ trusted_hash = "sha256:b065681c8986a1f6b4d16f18b302be568d1c86469da4ab24089e46b9f
 
 [hooks.state."/home/nisavid/.codex/hooks.json:session_start:0:0"]
 trusted_hash = "sha256:e709a2ee873ea9350c6d5f73f1b8e3020fc2f6b83130522bf926d82332fab3e5"
+
+[desktop]
+ambient-suggestions-enabled = true
+appearanceLightCodeThemeId = "catppuccin"
+appearanceDarkCodeThemeId = "catppuccin"
+sansFontSize = 14
+codeFontSize = 13
+usePointerCursors = true
+composerEnterBehavior = "cmdIfMultiline"
+preventSleepWhileRunning = true
+keepRemoteControlAwakeWhilePluggedIn = true
+git-branch-prefix = "nisavid/"
+git-show-sidebar-pr-icons = true
+git-commit-instructions = """
+Write Conventional Commits with slash-separated nested scopes for brevity.
+
+Create cohesive commits that are conducive to cherry-picking, reverting, and interactive rebasing. Bundle together tightly related changes. Orthogonal changes belong in separate commits.
+
+Under normal circumstances, each commit should produce a new working state. Do not create commits that knowingly introduce regressions or new failures."""
+notifications-turn-mode = "always"
+conversationDetailMode = "STEPS_COMMANDS"
+worktree-keep-count = 30
+
+[desktop.appearanceLightChromeTheme]
+accent = "#8839ef"
+contrast = 45
+ink = "#4c4f69"
+opaqueWindows = false
+surface = "#eff1f5"
+
+[desktop.appearanceLightChromeTheme.fonts]
+code = "OperatorMonoSsmLig NF Book"
+ui = "Operator Ssm Book"
+
+[desktop.appearanceLightChromeTheme.semanticColors]
+diffAdded = "#40a02b"
+diffRemoved = "#d20f39"
+skill = "#8839ef"
+
+[desktop.appearanceDarkChromeTheme]
+accent = "#cba6f7"
+contrast = 60
+ink = "#cdd6f4"
+opaqueWindows = false
+surface = "#1e1e2e"
+
+[desktop.appearanceDarkChromeTheme.fonts]
+code = "OperatorMonoSsmLig NF Book"
+ui = "Operator Ssm Book"
+
+[desktop.appearanceDarkChromeTheme.semanticColors]
+diffAdded = "#a6e3a1"
+diffRemoved = "#f38ba8"
+skill = "#cba6f7"
+
+[desktop.open-in-target-preferences]
+global = "linux-desktop-code-oss"
+
+[desktop.open-in-target-preferences.perPath]
+"/home/nisavid/src/nisavid/agent-armory" = "fileManager"
+"/home/nisavid/.codex/worktrees/6bc8/arch-strix-halo-pkgs" = "linux-desktop-code-oss"
