@@ -30,7 +30,8 @@ Tier names below are intent labels, not literal model slugs. Resolve them to exp
 | Reviewer agents, including code, spec, architecture, and pre-closeout review | Latest GPT extra-high | Latest Opus highest-thinking tier, then the most intelligent available latest-generation model at its highest thinking effort. |
 | Many easy, low-risk implementation edits | Latest Composer Fast | Latest Gemini Flash, then the best cheap reliable fast model available. |
 | Rearchitecture or very high complexity across abstractions, interactions, scenarios, plans, or contingencies | Latest GPT extra-high | Latest Opus highest-thinking tier, then the most intelligent available latest-generation model. |
-| Human-facing writing, including user-facing copy, PR or issue text, published or internal docs, and lengthy explainer comments | Latest GPT extra-high | Latest Opus highest-thinking tier, then the most intelligent available latest-generation model. |
+| Human-facing writing, including user-facing copy, PR or issue text, published docs for humans, internal docs for human readers, and lengthy explainer comments | Latest Opus highest-thinking tier | Latest GPT extra-high, then the most intelligent available latest-generation model. |
+| Agent-facing writing, including skills, `AGENTS.md`, durable process instructions, handoffs, agent-readable specs, agent guidance, advice, journaling, and AI-consumed internal docs | Latest GPT extra-high | Latest GPT high or medium, then the most intelligent available non-Opus model. Use Opus only when no suitable GPT-family model is available, and state the limitation. |
 | UI design work, visual judgment, design critique, and non-copy UX decisions | Latest Opus highest-thinking tier | Latest GPT extra-high, then the most intelligent available latest-generation model. |
 | High complexity across abstractions, interactions, or scenarios, but not top-tier rearchitecture | Latest GPT high | Latest Opus highest-thinking tier, then the most intelligent available latest-generation model. |
 | Ordinary implementation delegated to a subagent | Latest Composer Fast | Latest GPT medium, latest Sonnet highest-thinking tier, then the most intelligent available latest-generation model. |
@@ -52,6 +53,8 @@ Use exact slugs from the environment. If these Cursor model slugs are available,
 
 For a small, easy, low-risk change, many orchestration skills will choose not to use a subagent. If a subagent is still required by the operator or workflow, treat it as ordinary implementation and prefer a cheap fast model.
 
+If the parent agent is already running the preferred GPT extra-high model but the subagent tool does not expose that model as an explicit slug, omit the `model` parameter so the subagent inherits the parent model. Do not fall back to Opus solely because the GPT extra-high slug is unavailable as an explicit subagent parameter.
+
 ## Mixed Tasks
 
 Pick the model for the hardest required judgment, not the largest line count.
@@ -59,6 +62,7 @@ Pick the model for the hardest required judgment, not the largest line count.
 - Review plus implementation: reviewer model for the review, implementer model for accepted fixes.
 - UI design plus mechanical UI edits: use a design/writing-capable model for design decisions; use a fast implementer only after the decisions are precise.
 - Copywriting inside a code task: use the human-facing writing row when the copy is user-facing, published, long, subtle, or likely to be reviewed on voice and clarity.
+- Agent-facing prose inside a docs, planning, review, or implementation task uses the agent-facing writing row. Do not route it to Opus merely because it is "documentation" or "writing."
 - Architecture plus cleanup: use the architecture row until the target shape is settled, then downgrade implementation if the remaining edits are mechanical.
 - Exploratory codebase research, CI or log investigation, shell or test running, browser QA, issue triage, and PR triage agents use the reviewer row when judgment dominates and the ordinary implementation row when execution is mechanical and well-scoped.
 
@@ -91,6 +95,7 @@ Do not rely on the subagent inheriting your session context.
 | --- | --- |
 | Using this to justify spawning a subagent | Decide delegation elsewhere; use this only after delegation is chosen. |
 | Sending reviewers to cheap fast models | Reviewers need judgment; use the reviewer row. |
+| Sending agent-facing docs, handoffs, skills, or instructions to Opus because they are "writing" | Use the agent-facing writing row; GPT is usually more effective and efficient for machine-consumed prose. |
 | Sending mechanical edits to top-tier models | Use a fast reliable implementer unless risk or ambiguity says otherwise. |
 | Hiding missing model support | State the limitation and fallback used. |
 | Omitting task intent from the prompt | Include specs, intent, and scope, not just file paths. |
