@@ -13,6 +13,8 @@ This skill complements `reviewing-before-finalizing`: use that skill for choosin
 
 The operator request, current mode, and higher-priority tool constraints decide whether edits are allowed. In review-only or read-only contexts, report proposed fixes instead of changing files.
 
+For architecture bloat, do not stop at labeling code as large, layered, or abstract. Construct simpler plausible shapes, check whether current user stories and contracts still work, and compare the incremental benefit of the current shape against its incremental cost to reviewers, maintainers, operators, and security surface. Only discard a simplification after that comparison has evidence.
+
 In read-only contexts, this produces a tightening report, not a completed code-tightening revision. Report-only acceptance means the tightening review is complete; it does not mean the code has been tightened. Do not claim the code has been tightened until accepted edits are applied and verified.
 
 In report-only Ralph review, unresolved valid findings remain pending decisions or blockers. A report-only cycle can complete the review artifact, but it cannot honestly claim a clean or tightened revision unless the latest cycle has no findings.
@@ -42,6 +44,7 @@ Do not use this as a general architecture audit when there is no scoped change s
 | Low-level | Can this implementation be smaller or clearer? | Remove valid bloat, defer scoped follow-ups, collect report items. |
 | Low-level loop | Did the revision introduce or reveal new bloat? | Run Ralph cycles until the latest pass is clean. |
 | High-level | Did this change add or reinforce shallow modules or poor locality? | Review architecture introduced or amplified by the diff. |
+| Alternative-shape check | What simpler architecture would still serve current stories? | Prototype enough of each plausible variant to estimate module, seam, complexity, and LOC impact. |
 | High-level loop | Are there new architecture items after revisions? | Run Ralph cycles until the latest pass is clean. |
 | Report | What remains and what was handled? | Summarize findings, decisions, evidence, and next-step options. |
 
@@ -75,6 +78,27 @@ After the low-level pass is clean, zoom out before reviewing architecture. Read 
 
 Use `improve-codebase-architecture` vocabulary and checks to frame the prompt, then prepare and send a concrete invocation to an available architecture-capable review subagent under current tool policy. When selecting the reviewer model, state any model limitation that affects confidence. If no suitable subagent capability is available, state that limitation and do the best local high-level pass, but do not claim the subagent-backed pass was completed. Do not run its broad architecture-report workflow unless the operator explicitly asks for that. Ask for critique of architecture introduced by the change, plus pre-existing problems that the change magnifies or reinforces. Require evidence for each item: code references, repo history, local docs, remote docs, examples, or other grounding.
 
+Require the reviewer and your own pass to examine these complexity axes explicitly:
+
+- module surfaces and file sprawl;
+- layer count and responsibility placement;
+- module separation and feature organization;
+- abstraction and specialization layers;
+- inter-module integration seams, DTOs, adapters, generated-contract glue, and pass-through helpers;
+- cross-runtime or cross-language duplicate contracts;
+- operational surfaces such as scripts, controllers, schedulers, reconcilers, workers, and background jobs.
+
+For each axis that materially grew in the diff, perform an alternative-shape check:
+
+1. Name one or more simpler plausible variants. Examples: collapse pass-through DTOs, merge shallow helpers into callers, keep one service boundary instead of service plus coordinator plus facade, organize files by workflow steps instead of technical nouns, or replace a custom compatibility layer with the canonical schema/type.
+2. Test each variant against currently relevant stories, specs, contracts, deployment modes, reviewer comments, and runtime constraints. Discard variants that would fail a current case.
+3. Ask whether the current shape provides enough incremental benefit over the simpler variant to justify its incremental cost: reviewer navigation, future maintenance, security surface, operational failure modes, test surface, and literal diff size. Discard variants only when the current shape wins with concrete evidence.
+4. Discard variants ruled out by other high-confidence constraints, and state those constraints.
+5. For remaining variants, prototype enough mentally or in scratch code to estimate impact on file count, seams, complexity, and LOC. Do not rely on intuition alone.
+6. Recommend variants whose benefit is high enough and risk is acceptable for the current review cycle. For higher-risk variants, report them as pending operator decisions or deferred follow-ups with a gating condition.
+
+Use the same discipline for "too much churn" objections: churn is a cost to weigh, not a reason to skip the alternative-shape check. A low-risk deletion of a needless seam is often less churn than asking every reviewer and future maintainer to carry that seam permanently.
+
 Triage with `receiving-code-review`:
 
 - Discard invalid critiques only with counter-evidence.
@@ -94,6 +118,7 @@ Report:
 
 - The starting diffstat and ending diffstat for the reviewed boundary.
 - A high-level synopsis of the changes implemented during tightening, grouped by outcome or behavior rather than file-by-file inventory.
+- The alternative shapes considered for material architecture bloat, including why each was recommended, discarded, deferred, or left pending.
 - Findings fixed, with evidence and verification.
 - Findings discarded, with original evidence and counter-evidence.
 - Deferred items, each with a gating condition and tracking recommendation.
@@ -110,6 +135,9 @@ Ask whether to compose a concrete handling plan. If high-level proposals would c
 | Treating passing tests as a reviewability pass | Still inspect bloat, indirection, and reader burden. |
 | Running only correctness review | Add the low-level tightening pass. |
 | Skipping architecture because problems predate the diff | Report pre-existing problems that the diff magnifies or reinforces. |
+| Calling a module large without testing simpler shapes | Name plausible variants and compare incremental current-shape benefit against incremental cost. |
+| Letting "too much churn" end the analysis | Treat churn as one cost in the comparison; still check whether a smaller change deletes a needless seam. |
+| Assuming every generated schema, DTO, adapter, or helper is a real boundary | Keep only boundaries with current contract value; challenge pass-through glue introduced by the diff. |
 | Letting reviewers repeat known items | Share the temporary report file with each new reviewer. |
 | Turning cleanup into unbounded refactoring | Implement only valid, in-scope, low-risk cleanup; report or defer the rest. |
 | Ending after one revised pass | Ralph means the latest labeled cycle has no findings. |
