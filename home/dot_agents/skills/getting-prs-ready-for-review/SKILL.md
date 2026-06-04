@@ -1,6 +1,13 @@
 ---
 name: getting-prs-ready-for-review
-description: Use when the operator asks to get a branch, change set, draft PR, or pull request ready for review end to end: "get this PR review-ready", "make this ready for review", "prepare this draft PR for review", "mark ready for review", "tighten then publish for review", or "review-ready yeet". Do not use for review-only, status-only, PR-description-only, draft-PR-only, publish-only, merge, ship, or closeout requests unless the operator also states a ready-for-review outcome.
+description: >-
+  Use when the operator asks to get a branch, change set, draft PR, or pull
+  request ready for review end to end: "get this PR review-ready", "make this
+  ready for review", "prepare this draft PR for review", "mark ready for
+  review", "tighten then publish for review", or "review-ready yeet". Do not
+  use for review-only, status-only, PR-description-only, draft-PR-only,
+  publish-only, merge, ship, or closeout requests unless the operator also
+  states a ready-for-review outcome.
 ---
 
 # Getting PRs Ready For Review
