@@ -1,6 +1,6 @@
 ---
 name: tightening-code-for-review
-description: Use when performing comprehensive code reviews of a current diff, pre-closeout reviews, ready-for-review checks, pre-merge reviews, final review of non-trivial changes, scoped reviews of agent-facing docs or durable process instructions, reviewability passes, cleanup before review, tightening PRs, making changes easier to review, reducing reader burden, bloat, overengineering, dead code, WET code, code smells, missed reuse, duplicated generic behavior, excessive abstraction, or architecture tightening in a scoped change set.
+description: Use when performing comprehensive code reviews of a current diff, pre-closeout reviews, ready-for-review checks, pre-merge reviews, final review of non-trivial changes, scoped reviews of agent-facing docs or durable process instructions, reviewability passes, cleanup before review, tightening PRs, making changes easier to review, reducing reader burden, bloat, overengineering, dead code, WET code, code smells, React/Next bloat, missed reuse, duplicated generic behavior, excessive abstraction, or architecture tightening in a scoped change set.
 ---
 
 # Tightening Code For Review
@@ -46,6 +46,7 @@ Do not use this as a general architecture audit when there is no scoped change s
 | Low-level | Can this implementation be smaller or clearer? | Remove valid bloat, defer scoped follow-ups, collect report items. |
 | Reuse | Is this code repeating behavior that should be shared or deleted? | Search for exact duplicates, near-duplicates, existing generic facilities, and underused abstractions. |
 | Code smells | Which small smells increase reader burden or diff size? | Check pass-throughs, branchy modes, speculative options, repeated translation, inert handling, and noisy tests. |
+| React/Next | Are React constructs carrying unnecessary work or surface area? | Check state/effects, memoization, client boundaries, imports, subscriptions, component boundaries, and design literals. |
 | Low-level loop | Did the revision introduce or reveal new bloat? | Run Ralph cycles until the latest pass is clean. |
 | High-level | Did this change add or reinforce shallow modules or poor locality? | Review architecture introduced or amplified by the diff. |
 | Alternative-shape check | What simpler architecture would still serve current stories? | Prototype enough of each plausible variant to estimate module, seam, complexity, and LOC impact. |
@@ -87,6 +88,25 @@ Treat a code smell as actionable only when it increases current diff size, reade
 
 Prefer deletion, inlining, collapsing, or moving code to the current owner when those actions make the reviewed behavior easier to see. Prefer extraction or generalization only when it removes real duplication, centralizes current policy, or replaces multiple bespoke paths with one clearer contract.
 
+## React And Next Debloating Checks
+
+For React, Next.js, or component-heavy frontend diffs, apply the same bloat standard to rendering work, client/server boundaries, and component structure. Check for:
+
+- derived values stored in React state or synchronized through effects instead of computed during render;
+- user actions modeled as state changes plus `useEffect` instead of handled directly in the event handler;
+- `useMemo`, `useCallback`, `memo`, refs, custom hooks, contexts, or providers around cheap, primitive, single-use, or single-consumer behavior;
+- combined hooks or effects that mix independent dependencies, and hooks whose only job is to forward values or rename state;
+- component definitions inside components to capture parent variables instead of passing props;
+- over-broad props crossing React Server Component or client-component boundaries, including whole objects, duplicate derived arrays, or server-side transformations where the client only needs a field or can derive locally;
+- duplicate client fetches, SWR subscriptions, global event listeners, storage reads, or cache wrappers that should have one shared owner;
+- barrel imports or broad third-party imports that pull unused modules when direct imports, conditional imports, dynamic imports, or existing bundler optimization would keep the surface smaller;
+- eager loading of heavy client-only components, analytics, logging, animation libraries, editors, charts, or browser APIs before the feature is activated;
+- hardcoded design text, image URLs, style literals, arbitrary color values, and repeated Tailwind fragments that belong in project data, theme tokens, or shared style utilities;
+- generated-design leftovers such as template placeholders, copied license headers, unused extracted assets, or design-only scaffolding that is not part of the target project;
+- component, hook, data, or style files that are either monolithic enough to hide ownership or split so thinly that each file only forwards props, JSX, or constants.
+
+Prefer the shape that exposes UI behavior and ownership most directly. Extract components, hooks, data, or style utilities when they own real repeated structure, behavior, data, or theme policy. Collapse them when they only add names, files, props, or imports.
+
 ## Low-Level Pass
 
 Use `requesting-code-review` to shape one or more review requests, then prepare and send a concrete invocation to an available review subagent under current tool policy. Override any SHA-only template by including the full review boundary: base or PR diff, staged and unstaged changes, untracked files, generated artifacts, and unrelated user changes that are out of scope. When selecting the reviewer model, state any model limitation that affects confidence. If no suitable subagent capability is available, state that limitation and do the best local pass, but do not claim the subagent-backed pass was completed. Ask reviewers to look only at the scoped change set for reader burden:
@@ -97,6 +117,7 @@ Use `requesting-code-review` to shape one or more review requests, then prepare 
 - exact duplicates, near-duplicates, copy-pasted tests, and repeated setup or teardown;
 - bespoke implementations of shared behavior that already exists elsewhere in the repo;
 - code smells from the debloating checklist when they increase current diff size, reader burden, test burden, or maintenance risk;
+- React/Next bloat from redundant state, effects, memoization, client-boundary payloads, imports, subscriptions, or hollow component boundaries;
 - imaginary future contingencies outside current stories and specs;
 - abstractions or layers whose cognitive and navigation cost is not justified by concrete current cases;
 - underused abstractions, compatibility branches, or code paths that should be collapsed, inlined, or deleted;
@@ -164,6 +185,7 @@ Report:
 - A high-level synopsis of the changes implemented during tightening, grouped by outcome or behavior rather than file-by-file inventory.
 - Reuse opportunities considered, including duplicates removed, generic facilities reused, underused abstractions collapsed, and proposals left pending.
 - Code smells considered, including which were fixed, discarded with evidence, deferred, or left pending.
+- For React/Next diffs, frontend-specific bloat considered, including state/effects, memoization, client boundaries, imports, subscriptions, component boundaries, data placement, and style token usage.
 - The alternative shapes considered for material architecture bloat, including why each was recommended, discarded, deferred, or left pending.
 - Findings fixed, with evidence and verification.
 - Findings discarded, with original evidence and counter-evidence.
@@ -183,6 +205,8 @@ Ask whether to compose a concrete handling plan. If high-level proposals would c
 | Skipping architecture because problems predate the diff | Report pre-existing problems that the diff magnifies or reinforces. |
 | Listing smells without a smaller shape | For each actionable smell, name the clearer current implementation shape. |
 | Treating every smell as a blocker | Act only when the smell increases current diff size, reader burden, test burden, operational surface, or maintenance risk. |
+| Treating React performance patterns as separate from reviewability | Use them to remove unnecessary state, effects, props, imports, subscriptions, and component boundaries. |
+| Splitting frontend code mechanically | Split around real UI, behavior, data, or style ownership; collapse files that only forward props or constants. |
 | Treating near-duplicates as unrelated because their literals differ | Check whether they are cases, parameters, strategies, adapters, or callbacks of the same behavior. |
 | Reimplementing generic repo behavior locally | Search for canonical helpers, schemas, fixtures, script utilities, and owning modules before accepting bespoke code. |
 | Preserving an abstraction because it already exists | Keep it only when current callers justify its cost; otherwise collapse, inline, or delete it. |
