@@ -1,6 +1,6 @@
 ---
 name: tightening-code-for-review
-description: Use when performing comprehensive code reviews of a current diff, pre-closeout reviews, ready-for-review checks, pre-merge reviews, final review of non-trivial changes, scoped reviews of agent-facing docs or durable process instructions, reviewability passes, cleanup before review, tightening PRs, making changes easier to review, reducing reader burden, bloat, overengineering, dead code, WET code, excessive abstraction, or architecture tightening in a scoped change set.
+description: Use when performing comprehensive code reviews of a current diff, pre-closeout reviews, ready-for-review checks, pre-merge reviews, final review of non-trivial changes, scoped reviews of agent-facing docs or durable process instructions, reviewability passes, cleanup before review, tightening PRs, making changes easier to review, reducing reader burden, bloat, overengineering, dead code, WET code, missed reuse, duplicated generic behavior, excessive abstraction, or architecture tightening in a scoped change set.
 ---
 
 # Tightening Code For Review
@@ -15,6 +15,8 @@ The operator request, current mode, and higher-priority tool constraints decide 
 
 For architecture bloat, do not stop at labeling code as large, layered, or abstract. Construct simpler plausible shapes, check whether current user stories and contracts still work, and compare the incremental benefit of the current shape against its incremental cost to reviewers, maintainers, operators, and security surface. Only discard a simplification after that comparison has evidence.
 
+For reuse bloat, do not stop at exact duplicated lines. Look for similar code that could become different cases, parameters, strategies, adapters, fixtures, or calls of the same shared implementation. Also look for bespoke behavior that duplicates generic repo facilities, and for parallel bespoke behaviors that should be made generic in a shared owning location.
+
 In read-only contexts, this produces a tightening report, not a completed code-tightening revision. Report-only acceptance means the tightening review is complete; it does not mean the code has been tightened. Do not claim the code has been tightened until accepted edits are applied and verified.
 
 In report-only Ralph review, unresolved valid findings remain pending decisions or blockers. A report-only cycle can complete the review artifact, but it cannot honestly claim a clean or tightened revision unless the latest cycle has no findings.
@@ -28,7 +30,7 @@ This is not a replacement for ordinary correctness, security, product, or regres
 - Reviewability passes, cleanup before review, PR tightening, or requests to make changes easier to review.
 - Scoped reviews of `SKILL.md`, agent-facing docs, durable process instructions, or other reviewable instruction changes where reader burden and maintainability matter.
 - Non-trivial change finalization, even when tests pass.
-- Reviews that mention bloat, overengineering, dead code, WET code, excessive abstraction, needless compatibility, or maintainability.
+- Reviews that mention bloat, overengineering, dead code, WET code, missed reuse, duplicate behavior, excessive abstraction, needless compatibility, or maintainability.
 - Large diffs where a reviewer would need to drill through several layers to understand the change.
 
 Treat a change as non-trivial if it touches multiple modules, layers, languages, packages, behavior paths, runtime scripts, schemas, tests, build config, dependencies, migrations, generated contracts, reviewer-facing docs, or a large single-module implementation. When unsure, treat it as non-trivial. Do not use this for trivially understood edits where the full consequence is already visible in one small diff.
@@ -42,11 +44,28 @@ Do not use this as a general architecture audit when there is no scoped change s
 | Phase | Ask | Action |
 | --- | --- | --- |
 | Low-level | Can this implementation be smaller or clearer? | Remove valid bloat, defer scoped follow-ups, collect report items. |
+| Reuse | Is this code repeating behavior that should be shared or deleted? | Search for exact duplicates, near-duplicates, existing generic facilities, and underused abstractions. |
 | Low-level loop | Did the revision introduce or reveal new bloat? | Run Ralph cycles until the latest pass is clean. |
 | High-level | Did this change add or reinforce shallow modules or poor locality? | Review architecture introduced or amplified by the diff. |
 | Alternative-shape check | What simpler architecture would still serve current stories? | Prototype enough of each plausible variant to estimate module, seam, complexity, and LOC impact. |
 | High-level loop | Are there new architecture items after revisions? | Run Ralph cycles until the latest pass is clean. |
 | Report | What remains and what was handled? | Summarize findings, decisions, evidence, and next-step options. |
+
+## Reuse And Debloating Checks
+
+Treat missed reuse as a reviewability defect when it makes the diff larger, splits policy across call sites, or forces reviewers to compare parallel implementations. Search the scoped change and nearby code for:
+
+- repeated code blocks, duplicated literals, duplicated branching, repeated setup or teardown, and copy-pasted tests;
+- near-duplicates that differ only by model, resource type, state, provider, environment, error shape, permission, or small formatting rules;
+- bespoke implementations of behavior already provided by shared helpers, hooks, services, schemas, validators, serializers, retry or cache wrappers, auth or permission checks, logging, metrics, error handling, fixtures, harnesses, or script utilities;
+- similar bespoke behaviors that should become one shared implementation with explicit cases, parameters, strategies, adapters, or callbacks;
+- cross-language, cross-runtime, frontend/backend, worker/API, or test/production copies of the same contract or policy;
+- compatibility branches, adapters, facades, or generic helpers whose current callers do not justify their existence;
+- abstractions that are too weakly leveraged and should be collapsed, inlined, or replaced by one concrete owning implementation.
+
+Do not reject a reuse opportunity just because it requires refactoring. Estimate the blast radius, contract risk, and verification cost. Implement it when the change is in scope and low risk; otherwise record a pending proposal or deferred follow-up with the exact shared owner and gating condition.
+
+Do not create generic code for its own sake. A shared implementation should improve current locality, policy consistency, or reviewer burden. If extracting shared code would hide a single simple case, preserve the simpler local shape or inline an underused abstraction instead.
 
 ## Low-Level Pass
 
@@ -54,9 +73,12 @@ Use `requesting-code-review` to shape one or more review requests, then prepare 
 
 - dead code, completed TODOs, obsolete notes, and historical comments;
 - needless compatibility layers or references to how code used to work;
-- needless comments, WET code, and avoidable repetition;
+- needless comments, WET code, avoidable repetition, and missed reuse;
+- exact duplicates, near-duplicates, copy-pasted tests, and repeated setup or teardown;
+- bespoke implementations of shared behavior that already exists elsewhere in the repo;
 - imaginary future contingencies outside current stories and specs;
 - abstractions or layers whose cognitive and navigation cost is not justified by concrete current cases;
+- underused abstractions, compatibility branches, or code paths that should be collapsed, inlined, or deleted;
 - other bloat or overengineering.
 
 Use `receiving-code-review` to triage every finding:
@@ -86,11 +108,12 @@ Require the reviewer and your own pass to examine these complexity axes explicit
 - abstraction and specialization layers;
 - inter-module integration seams, DTOs, adapters, generated-contract glue, and pass-through helpers;
 - cross-runtime or cross-language duplicate contracts;
+- reuse leverage, generic behavior ownership, and parallel implementations of the same policy;
 - operational surfaces such as scripts, controllers, schedulers, reconcilers, workers, and background jobs.
 
 For each axis that materially grew in the diff, perform an alternative-shape check:
 
-1. Name one or more simpler plausible variants. Examples: collapse pass-through DTOs, merge shallow helpers into callers, keep one service boundary instead of service plus coordinator plus facade, organize files by workflow steps instead of technical nouns, or replace a custom compatibility layer with the canonical schema/type.
+1. Name one or more simpler plausible variants. Examples: collapse pass-through DTOs, merge shallow helpers into callers, keep one service boundary instead of service plus coordinator plus facade, organize files by workflow steps instead of technical nouns, replace a custom compatibility layer with the canonical schema/type, route bespoke behavior through an existing shared helper, or consolidate parallel implementations under one shared owner.
 2. Test each variant against currently relevant stories, specs, contracts, deployment modes, reviewer comments, and runtime constraints. Discard variants that would fail a current case.
 3. Ask whether the current shape provides enough incremental benefit over the simpler variant to justify its incremental cost: reviewer navigation, future maintenance, security surface, operational failure modes, test surface, and literal diff size. Discard variants only when the current shape wins with concrete evidence.
 4. Discard variants ruled out by other high-confidence constraints, and state those constraints.
@@ -118,6 +141,7 @@ Report:
 
 - The starting diffstat and ending diffstat for the reviewed boundary.
 - A high-level synopsis of the changes implemented during tightening, grouped by outcome or behavior rather than file-by-file inventory.
+- Reuse opportunities considered, including duplicates removed, generic facilities reused, underused abstractions collapsed, and proposals left pending.
 - The alternative shapes considered for material architecture bloat, including why each was recommended, discarded, deferred, or left pending.
 - Findings fixed, with evidence and verification.
 - Findings discarded, with original evidence and counter-evidence.
@@ -135,6 +159,10 @@ Ask whether to compose a concrete handling plan. If high-level proposals would c
 | Treating passing tests as a reviewability pass | Still inspect bloat, indirection, and reader burden. |
 | Running only correctness review | Add the low-level tightening pass. |
 | Skipping architecture because problems predate the diff | Report pre-existing problems that the diff magnifies or reinforces. |
+| Treating near-duplicates as unrelated because their literals differ | Check whether they are cases, parameters, strategies, adapters, or callbacks of the same behavior. |
+| Reimplementing generic repo behavior locally | Search for canonical helpers, schemas, fixtures, script utilities, and owning modules before accepting bespoke code. |
+| Preserving an abstraction because it already exists | Keep it only when current callers justify its cost; otherwise collapse, inline, or delete it. |
+| Extracting a generic helper with no current leverage | Prefer the simpler local shape unless sharing improves current locality, policy consistency, or reviewer burden. |
 | Calling a module large without testing simpler shapes | Name plausible variants and compare incremental current-shape benefit against incremental cost. |
 | Letting "too much churn" end the analysis | Treat churn as one cost in the comparison; still check whether a smaller change deletes a needless seam. |
 | Assuming every generated schema, DTO, adapter, or helper is a real boundary | Keep only boundaries with current contract value; challenge pass-through glue introduced by the diff. |
