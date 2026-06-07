@@ -1,8 +1,23 @@
-# Global Agent Instructions
-
 ## Writing Policy
 
 When writing specs, tests, documentation, comments, or durable agent instructions, describe the current desired behavior and source shape directly. Use historical contrast only when the history itself is the subject, and keep normative rules stated in terms of the current system.
+
+### Human-Facing Writing Style
+
+When writing human-facing prose such as PR replies, PR bodies, issue comments, docs, or chat summaries, be terse, direct, warm, and firm.
+
+- Answer the question actually asked. Do not add tangential context just because related work happened recently.
+- Avoid apologetic couching, hedging, throat-clearing, and sycophancy. Be candid without being cold.
+- If agreeing and proceeding, say little.
+- If the answer or implementation has a nuance, caveat, or unexpected handling, mention it briefly and concretely.
+- Do not justify a reviewer’s own suggestion back to them.
+- Do not provide CLI docs, background explainers, or broad justification when the reviewer only asked whether something is supported or what will be done.
+- Do not quote the original review comment unless replying to a specific excerpt; the comment is already visible above the reply.
+- When referring to GitHub users, `@`-mention their handles.
+- If docs or self-documenting code already explain something well, tersely name or link that source rather than re-explaining it.
+- Prefer current desired behavior and current source shape over historical contrast. Mention history only when history is directly relevant.
+- For size or complexity concerns, avoid raw line counts unless they matter. Prefer a high-level responsibility map that tells readers where functionality lives.
+- Keep reviewer replies scoped to the review thread. Do not import unrelated decisions, recent refactors, or adjacent work unless they are needed to answer the comment.
 
 ## Pull Request Merge Policy
 
@@ -10,67 +25,35 @@ When multiple PR merge methods are available, prefer rebase merging by default. 
 
 Local repository policy takes precedence over this general preference. If the user gives an in-context instruction that contradicts local repository policy, treat it as an override only when it is clear the user is aware of the policy and intends to override it. Otherwise, ask before acting.
 
-## Tracking Branch Update Policy
-
-Across repositories, keep local tracking branches current when doing so is safe. Before starting work from a branch such as `main`, check the worktree state, local-only commits, upstream branch, and branch relationship. If the branch is clean, checked out normally, has no local-only commits or unpushed work, and its upstream is ahead, treat pulling the upstream branch as implicitly intended.
-
-Do not pull when it could disturb unstaged changes, uncommitted work, local-only commits, in-progress conflict resolution, detached or unusual checkout state, or a task-specific workflow that requires preserving the current branch state.
-
 ## Firecrawl Preference
 
-Prefer task-specific tools for the specialized cases they are designed to handle. When Firecrawl skills are available and applicable, prefer the relevant Firecrawl skill as the general-purpose fallback for the web function it covers. Use lower-level or more generic web access methods only when no task-specific or Firecrawl skill fits, or another tool is explicitly required.
+Prefer task-specific tools for the specialized cases they are designed to handle. When Firecrawl skills are available and applicable, prefer the relevant Firecrawl skill as the general-purpose fallback for the web function it covers. Use lower-level or more generic web access methods only when no task-specific or Firecrawl skill fits, or another tool is explicitly requested.
 
-## Computer Use On Linux
+## Browser Preference
 
-When testing or using Computer Use on Linux, treat readiness as several separate
-paths: window targeting, screenshots, AT-SPI accessibility, pointer input, raw
-keyboard input, and text/paste input can succeed or fail independently. Run the
-Computer Use readiness check first when practical, but do not infer that a
-specific target app exposes useful semantic controls just because readiness is
-green. Verify the target app with `get_app_state`; some apps expose only a
-sparse AT-SPI root while screenshot, focus, and pointer input still work.
+When a task entails browser use, prefer the built-in [@Browser](plugin://browser@openai-bundled) plugin.
 
-If ydotool diagnostics mention `Protocol wrong type for socket`, consider a
-datagram-vs-stream socket probe mismatch before concluding that `ydotoold` is
-missing or unusable. Recheck with the active backend build and socket-aware
-diagnostics.
+## Capture Policy
 
-For AT-SPI issues, remember that some non-GNOME sessions still use the
-historical `org.gnome.desktop.interface toolkit-accessibility` setting, and that
-`NO_AT_BRIDGE=1` in the target app's environment can suppress toolkit bridges
-even when the AT-SPI bus exists.
+When capturing screenshots or video, constrain the capture to the relevant component, region, window, or viewport. If the focus is on a particular component or region and the surroundings do not add useful context for the capture's purpose, capture only that region.
 
-Keyboard input may be physical-keycode based. The active desktop layout,
-remapped keys, and Compose-key configuration can transform literal key names and
-shortcuts after Computer Use injects them. For literal text, shortcut, or key
-parser tests, record the current layout before switching temporarily to a
-standard US/QWERTY layout when possible, then restore the recorded layout after
-the test. Prefer pointer clicks, screenshots, and file/clipboard verification
-over visual guessing.
+When capturing full windows or viewports, default to 1512 x 982 when the current dimensions are not vital to what the capture demonstrates. This size represents the full screen dimensions of a MacBook inverse-scaled by device pixel ratio.
 
-### Hatchery Computer Use
+When presenting a capture series with more than a few samples, present the series as a here.now site designed for the purpose the captures serve.
 
-On hatchery, the desktop is KDE Plasma on Wayland with KWin window targeting and
-XDG Desktop Portal screenshot/pointer paths. The usual layout indices are:
+## Here.now Sites
 
-- `0`: `us(dvp)` / Programmer Dvorak, shown as `dvp`.
-- `1`: `us(qw)` / English (US), shown as `qw`.
 
-Use KDE's keyboard-layout D-Bus API for reversible layout tests:
+If a here.now site benefits from a richer UI than plain HTML, CSS, and JavaScript can readily provide, create it as an SPA and use a suitable UI toolkit.
 
-```bash
-qdbus6 org.kde.keyboard /Layouts org.kde.KeyboardLayouts.getLayout
-qdbus6 --literal org.kde.keyboard /Layouts org.kde.KeyboardLayouts.getLayoutsList
-qdbus6 org.kde.keyboard /Layouts org.kde.KeyboardLayouts.setLayout 1
-qdbus6 org.kde.keyboard /Layouts org.kde.KeyboardLayouts.setLayout 0
-```
 
-For Computer Use key/text tests, record the starting layout. If the starting
-layout is `0` (`dvp`), switch to layout `1` (`qw`) only for the test, then
-restore the recorded layout. The user's Esc and Caps Lock are swapped, Right Alt
-is Compose, and the Windows key is Meta. Avoid assuming physical Escape, Caps
-Lock, AltGr, or Meta behavior; use window focus, screenshots, and explicit KDE
-D-Bus state where possible.
+Use the [$impeccable](/Users/ivan/.agents/skills/impeccable/SKILL.md) sub-skills to craft, analyze, revise, and polish here.now sites.
+
+## General Tips
+
+Do not codify unsettled or recently reversed team conventions in learned memory. Wait until a convention is clearly stable before recording it in `AGENTS.md` or shared skills.
+
+When reviewing tests, take care to check: Do the tests all test what they claim to test? Are they all testing externally-oriented specs rather than narrations of the code under test?
 
 ## Context7
 
