@@ -1,6 +1,6 @@
 ---
 name: writing-reviewable-pr-descriptions
-description: Use when writing or updating PR descriptions, pull request bodies, GitHub PR bodies, review summaries, or PR text where reviewers need concise scope, links, status, verification, review order, or pending work.
+description: Use when writing or updating PR descriptions, pull request bodies, GitHub PR bodies, review summaries, PR text, demo sections, screenshots, media cards, link-heavy bodies, access notes, caveats, or lossy rewrite risks.
 ---
 
 # Writing Reviewable PR Descriptions
@@ -56,7 +56,12 @@ Then add only the sections reviewers need: summary, architecture/contracts, conc
 
 - Determine PR scope from the platform's PR file list when possible: `gh pr diff --name-only` or `gh pr view --json files --jq '.files[].path'`.
 - Decide whether the description is for the pushed PR or for local pending branch changes. Prefer the pushed PR diff for published PR bodies; if local changes are included, state that explicitly or push first.
-- For existing PRs, read the current body before editing and remove stale status, blockers, review paths, verification claims, and leftover template text.
+- For existing PRs, fetch the live GitHub body immediately before any body edit, usually with `gh pr view <pr-or-branch> --json body --jq .body`. Treat that live body as the preservation baseline, not disposable source material.
+- Preserve still-current custom, user-authored, or user-requested sections unless the user explicitly asks to remove them or they are clearly stale or superseded. This includes demo/media cards, screenshots, image links, recordings, demo links, captions, access notes, passwords or temporary access details, issue or doc links, caveats, and review instructions.
+- When replacing or shortening a section, carry forward its still-current details into the replacement. If a section's preservation status is ambiguous, keep and tighten it or ask before removing it.
+- Remove stale status, blockers, review paths, verification claims, and leftover template text only after separating them from still-current custom material.
+- Before `gh pr edit`, compare the live baseline body with the proposed body and explicitly audit for unintended deletion of links, images, custom headings, demo/media sections, captions, access notes/passwords, issue references, caveats, and review instructions.
+- After `gh pr edit`, verify the stored body with `gh pr view <pr> --json body`. If the stored body differs from the intended body or the preservation audit fails, repair it before reporting completion.
 - Use file lists to bound scope, then inspect the actual diff or commit range before summarizing behavior. Do not write the PR story from filenames alone.
 - When a PR exists, read its base branch with `gh pr view --json baseRefName --jq .baseRefName`.
 - Before using local `HEAD` for a published PR body, verify it matches the pushed PR head with `gh pr view --json headRefOid --jq .headRefOid` and `git rev-parse HEAD`. If they differ, push first, use `gh pr diff`, or clearly state the body describes local pending changes.
@@ -81,6 +86,7 @@ A reviewable PR description passes only when:
 - Verification names checks run, skipped checks, failures, and not-yet-run checks when they affect reviewer confidence. Large PRs should separate current GitHub checks from local checks.
 - Remaining work is split by scope when both exist: PR readiness blockers before this PR is done, and story/epic follow-up that belongs outside this PR.
 - Reviewer-facing references are clickable when GitHub can link them.
+- Existing PR updates preserve still-current custom sections, media, links, access notes, captions, caveats, and review instructions from the live body unless removal was explicit or clearly required by current facts.
 - The body avoids local paths, transient scratch artifacts, and author-only notes.
 
 For large, stacked, cross-cutting, reviewer-heavy, or readiness-ambiguous PRs, it also passes only when:
