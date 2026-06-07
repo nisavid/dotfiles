@@ -1,6 +1,6 @@
 ---
 name: tightening-code-for-review
-description: Use when performing comprehensive code reviews of a current diff, pre-closeout reviews, ready-for-review checks, pre-merge reviews, final review of non-trivial changes, scoped reviews of agent-facing docs or durable process instructions, reviewability passes, cleanup before review, tightening PRs, making changes easier to review, reducing reader burden, bloat, overengineering, dead code, WET code, missed reuse, duplicated generic behavior, excessive abstraction, or architecture tightening in a scoped change set.
+description: Use when performing comprehensive code reviews of a current diff, pre-closeout reviews, ready-for-review checks, pre-merge reviews, final review of non-trivial changes, scoped reviews of agent-facing docs or durable process instructions, reviewability passes, cleanup before review, tightening PRs, making changes easier to review, reducing reader burden, bloat, overengineering, dead code, WET code, code smells, missed reuse, duplicated generic behavior, excessive abstraction, or architecture tightening in a scoped change set.
 ---
 
 # Tightening Code For Review
@@ -30,7 +30,7 @@ This is not a replacement for ordinary correctness, security, product, or regres
 - Reviewability passes, cleanup before review, PR tightening, or requests to make changes easier to review.
 - Scoped reviews of `SKILL.md`, agent-facing docs, durable process instructions, or other reviewable instruction changes where reader burden and maintainability matter.
 - Non-trivial change finalization, even when tests pass.
-- Reviews that mention bloat, overengineering, dead code, WET code, missed reuse, duplicate behavior, excessive abstraction, needless compatibility, or maintainability.
+- Reviews that mention bloat, overengineering, dead code, WET code, code smells, missed reuse, duplicate behavior, excessive abstraction, needless compatibility, or maintainability.
 - Large diffs where a reviewer would need to drill through several layers to understand the change.
 
 Treat a change as non-trivial if it touches multiple modules, layers, languages, packages, behavior paths, runtime scripts, schemas, tests, build config, dependencies, migrations, generated contracts, reviewer-facing docs, or a large single-module implementation. When unsure, treat it as non-trivial. Do not use this for trivially understood edits where the full consequence is already visible in one small diff.
@@ -45,6 +45,7 @@ Do not use this as a general architecture audit when there is no scoped change s
 | --- | --- | --- |
 | Low-level | Can this implementation be smaller or clearer? | Remove valid bloat, defer scoped follow-ups, collect report items. |
 | Reuse | Is this code repeating behavior that should be shared or deleted? | Search for exact duplicates, near-duplicates, existing generic facilities, and underused abstractions. |
+| Code smells | Which small smells increase reader burden or diff size? | Check pass-throughs, branchy modes, speculative options, repeated translation, inert handling, and noisy tests. |
 | Low-level loop | Did the revision introduce or reveal new bloat? | Run Ralph cycles until the latest pass is clean. |
 | High-level | Did this change add or reinforce shallow modules or poor locality? | Review architecture introduced or amplified by the diff. |
 | Alternative-shape check | What simpler architecture would still serve current stories? | Prototype enough of each plausible variant to estimate module, seam, complexity, and LOC impact. |
@@ -67,6 +68,25 @@ Do not reject a reuse opportunity just because it requires refactoring. Estimate
 
 Do not create generic code for its own sake. A shared implementation should improve current locality, policy consistency, or reviewer burden. If extracting shared code would hide a single simple case, preserve the simpler local shape or inline an underused abstraction instead.
 
+## Debloating Code Smells
+
+Treat a code smell as actionable only when it increases current diff size, reader burden, test burden, operational surface, or maintenance risk. For each smell, name the smaller or clearer shape before recommending work. Actively check for:
+
+- pass-through functions, classes, services, hooks, commands, or files that add names and navigation but no policy, validation, ownership, or useful isolation;
+- one-field wrappers, one-method interfaces, single-use types, redundant enums, marker classes, and type aliases that do not protect a real contract;
+- boolean flags, mode strings, options bags, strategy objects, or callback parameters that create branch matrices for one or two current cases;
+- default values, fallback paths, retries, null handling, catch/log/rethrow blocks, cache invalidation, or defensive validation that is not tied to a current producer, caller, or failure mode;
+- repeated mapping, reshaping, serialization, normalization, or rename layers between adjacent modules, especially when fields pass through unchanged;
+- configuration, environment, request context, clients, or dependencies threaded through layers without transformation or local ownership;
+- functions whose names promise domain behavior but mostly orchestrate plumbing, logging, metric labels, or data shuffling;
+- indirection that hides the main behavior behind factories, registries, builders, coordinators, facades, or lifecycle hooks with only one meaningful runtime path;
+- tests that duplicate implementation structure, overuse mocks of local code, assert intermediate plumbing instead of externally visible behavior, or require large fixtures for simple cases;
+- production code added only to make tests easier, test helpers that duplicate production policy, or fixtures that obscure the behavior under review;
+- comments, names, file boundaries, or module placement that make reviewers reconstruct ownership instead of reading behavior directly;
+- dependencies, generated artifacts, scripts, jobs, or runtime surfaces added for behavior that a smaller existing tool or local call can cover.
+
+Prefer deletion, inlining, collapsing, or moving code to the current owner when those actions make the reviewed behavior easier to see. Prefer extraction or generalization only when it removes real duplication, centralizes current policy, or replaces multiple bespoke paths with one clearer contract.
+
 ## Low-Level Pass
 
 Use `requesting-code-review` to shape one or more review requests, then prepare and send a concrete invocation to an available review subagent under current tool policy. Override any SHA-only template by including the full review boundary: base or PR diff, staged and unstaged changes, untracked files, generated artifacts, and unrelated user changes that are out of scope. When selecting the reviewer model, state any model limitation that affects confidence. If no suitable subagent capability is available, state that limitation and do the best local pass, but do not claim the subagent-backed pass was completed. Ask reviewers to look only at the scoped change set for reader burden:
@@ -76,6 +96,7 @@ Use `requesting-code-review` to shape one or more review requests, then prepare 
 - needless comments, WET code, avoidable repetition, and missed reuse;
 - exact duplicates, near-duplicates, copy-pasted tests, and repeated setup or teardown;
 - bespoke implementations of shared behavior that already exists elsewhere in the repo;
+- code smells from the debloating checklist when they increase current diff size, reader burden, test burden, or maintenance risk;
 - imaginary future contingencies outside current stories and specs;
 - abstractions or layers whose cognitive and navigation cost is not justified by concrete current cases;
 - underused abstractions, compatibility branches, or code paths that should be collapsed, inlined, or deleted;
@@ -142,6 +163,7 @@ Report:
 - The starting diffstat and ending diffstat for the reviewed boundary.
 - A high-level synopsis of the changes implemented during tightening, grouped by outcome or behavior rather than file-by-file inventory.
 - Reuse opportunities considered, including duplicates removed, generic facilities reused, underused abstractions collapsed, and proposals left pending.
+- Code smells considered, including which were fixed, discarded with evidence, deferred, or left pending.
 - The alternative shapes considered for material architecture bloat, including why each was recommended, discarded, deferred, or left pending.
 - Findings fixed, with evidence and verification.
 - Findings discarded, with original evidence and counter-evidence.
@@ -159,6 +181,8 @@ Ask whether to compose a concrete handling plan. If high-level proposals would c
 | Treating passing tests as a reviewability pass | Still inspect bloat, indirection, and reader burden. |
 | Running only correctness review | Add the low-level tightening pass. |
 | Skipping architecture because problems predate the diff | Report pre-existing problems that the diff magnifies or reinforces. |
+| Listing smells without a smaller shape | For each actionable smell, name the clearer current implementation shape. |
+| Treating every smell as a blocker | Act only when the smell increases current diff size, reader burden, test burden, operational surface, or maintenance risk. |
 | Treating near-duplicates as unrelated because their literals differ | Check whether they are cases, parameters, strategies, adapters, or callbacks of the same behavior. |
 | Reimplementing generic repo behavior locally | Search for canonical helpers, schemas, fixtures, script utilities, and owning modules before accepting bespoke code. |
 | Preserving an abstraction because it already exists | Keep it only when current callers justify its cost; otherwise collapse, inline, or delete it. |
