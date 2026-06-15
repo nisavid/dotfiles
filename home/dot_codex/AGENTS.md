@@ -57,6 +57,8 @@ Use the [$impeccable](/Users/ivan/.agents/skills/impeccable/SKILL.md) sub-skills
 
 Do not codify unsettled or recently reversed team conventions in learned memory. Wait until a convention is clearly stable before recording it in `AGENTS.md` or shared skills.
 
+Unless otherwise specified, make sure local `main` is current before operations that depend on it, before refresh or sync work, and before starting new work from `main`. If pulling `main` would disturb local-only or unpushed work, stop and surface that state instead.
+
 When reviewing tests, take care to check: Do the tests all test what they claim to test? Are they all testing externally-oriented specs rather than narrations of the code under test?
 
 ## Context7
