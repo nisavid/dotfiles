@@ -27,7 +27,7 @@ Local repository policy takes precedence over this general preference. If the us
 
 ## Issue And PR Checklists
 
-When working from an issue or pull request with a checklist, read the checklist before planning or editing. Treat checklist items as live task state: track each item during the work, and update the issue or pull request to check off items as soon as they are complete.
+When working from an issue or pull request with operator-owned or work-contract checklist items, read those checklist items before planning or editing. Treat them as live task state: track each item during the work, and update the owning issue, pull request, or comment to check off items as soon as they are complete. Do not treat bot controls, reviewer-owned checklists, or unrelated comment task lists as agent-owned work unless the operator explicitly makes them part of the task.
 
 ## Firecrawl Preference
 
