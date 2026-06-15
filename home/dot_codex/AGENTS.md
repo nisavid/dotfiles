@@ -25,6 +25,10 @@ When multiple PR merge methods are available, prefer rebase merging by default. 
 
 Local repository policy takes precedence over this general preference. If the user gives an in-context instruction that contradicts local repository policy, treat it as an override only when it is clear the user is aware of the policy and intends to override it. Otherwise, ask before acting.
 
+## Issue And PR Checklists
+
+When working from an issue or pull request with a checklist, read the checklist before planning or editing. Treat checklist items as live task state: track each item during the work, and update the issue or pull request to check off items as soon as they are complete.
+
 ## Firecrawl Preference
 
 Prefer task-specific tools for the specialized cases they are designed to handle. When Firecrawl skills are available and applicable, prefer the relevant Firecrawl skill as the general-purpose fallback for the web function it covers. Use lower-level or more generic web access methods only when no task-specific or Firecrawl skill fits, or another tool is explicitly requested.
