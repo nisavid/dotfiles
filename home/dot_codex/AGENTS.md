@@ -29,6 +29,16 @@ Local repository policy takes precedence over this general preference. If the us
 
 When working from an issue or pull request with operator-owned or work-contract checklist items, read those checklist items before planning or editing. Treat them as live task state: track each item during the work, and update the owning issue, pull request, or comment to check off items as soon as they are complete. Do not treat bot controls, reviewer-owned checklists, or unrelated comment task lists as agent-owned work unless the operator explicitly makes them part of the task.
 
+## Agent Delegation Policy
+
+This policy is standing authorization to use native subagents, peer agents, and separate agent sessions or threads when the case for delegation is strong. Use the least-permissive agent shape that fits the work, keep leadership and final integration local, and review delegated output before relying on it.
+
+When there is a strong case for parallelization or delegation, proceed without asking. A strong case exists when the price-weighted overhead and context cost of handoff and hand-back are very likely to be outweighed by direct savings from offloading work and indirect savings from avoiding context rot in the leader session. Prefer delegation for independent investigation, disjoint implementation scopes, browser or computer-use QA, long-running waits, separate-worktree work, or bounded execution that can materially advance the task without duplicating the leader's critical path.
+
+When the case for delegation is plausible but uncertain, ask for a decisive disposition before spawning or steering agents. Ask one narrow question at a time, in the style of `grilling`: make the decision point explicit, give the recommended answer, and scope the question only to whether to use subagents, peer agents, new sessions or threads, or existing sessions or threads for the prompted work. Use this path when the payoff depends on outcomes not yet known, the problem is underspecified, or the delegation boundary is not yet clear.
+
+When there is not a clear case for parallelization or delegation, do not delegate by default. Preserve the current harness rule: do not spawn subagents unless the user explicitly asks for subagents, delegation, or parallel agent work. Also do not create new peer sessions or threads, or steer existing peer sessions or threads, unless the user explicitly asks for that agent coordination or the active task clearly falls under the strong-case authorization above.
+
 ## Firecrawl Preference
 
 Prefer task-specific tools for the specialized cases they are designed to handle. When Firecrawl skills are available and applicable, prefer the relevant Firecrawl skill as the general-purpose fallback for the web function it covers. Use lower-level or more generic web access methods only when no task-specific or Firecrawl skill fits, or another tool is explicitly requested.
