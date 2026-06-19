@@ -7,6 +7,11 @@
 #
 # This script restores the saved permissions after `chezmoi apply` changes them
 # during its update step.
+case "$(uname -s 2>/dev/null)" in
+Darwin)
+  exit 0
+  ;;
+esac
 
 ACL_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/chezmoi/acl"
 
