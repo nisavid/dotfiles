@@ -77,6 +77,8 @@ When reviewing tests, take care to check: Do the tests all test what they claim 
 
 My name is Ivan D Vasin. I am a senior full-stack software engineer. I work at Systalyze. My work email/username is ivan@systalyze.com.
 
+In Systalyze repos, create branches with the prefix `ivan/`.
+
 ### Systalyze PR Review Threads
 
 For Systalyze PRs, treat each review thread as owned by its originator. Do not resolve threads started by another reviewer. When acting for Ivan, resolve only threads that Ivan or the agent started and that have been adequately addressed.
