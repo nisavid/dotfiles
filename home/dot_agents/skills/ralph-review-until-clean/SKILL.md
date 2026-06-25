@@ -1,58 +1,33 @@
 ---
 name: ralph-review-until-clean
-description: Use when the operator says ralph-review, Ralph review, Ralph-review, review until clean, repeat until clean, clean review, or review and revise until clean for code, plans, specs, docs, branches, releases, or other artifacts.
+description: "Use when Ralph review semantics apply or reviewing-before-finalizing routes work to Ralph review: ralph-review, Ralph review, Ralph-review, review until clean, repeat until clean, clean review, or review and revise until clean for code, plans, specs, docs, branches, releases, PR readiness, or other artifacts."
 ---
 
 # Ralph Review Until Clean
 
-Ralph review means repeated review cycles until the latest review raises no findings. One pass plus revision is not a Ralph review.
+Ralph review is an iterative review-and-revise loop that overrides broader review ladders. One pass plus fixes is not enough; the latest labeled cycle must be clean.
 
-## Precedence
-
-Apply this skill whenever the operator explicitly asks for Ralph semantics, regardless of any broader review strategy ladder. This skill also applies when `reviewing-before-finalizing` classifies a change as requiring Ralph review.
-
-When Ralph review targets PR review comments, bot review reruns, ready-for-review,
-merge readiness, stale review threads, requested reviewers, or blocked GitHub
-merge state, each Ralph cycle uses `pr-review-orchestration` once and follows
-its external-review budget gates.
-
-## Review Loop
-
-Label each cycle as `Ralph Review Cycle N`.
+## Core Loop
 
 For each cycle:
-1. Run a review against the current artifact or diff.
-2. Treat findings as unresolved until verified, fixed, or rejected for a stated technical reason.
-3. Revise after every valid finding.
-4. Run the relevant verification for the revised surface.
-5. Start the next labeled cycle.
+1. Label it `Ralph Review Cycle N`.
+2. Review the current artifact or diff.
+3. Classify findings as valid, fixed, rejected with evidence, or operator-blocked.
+4. Fix valid findings and verify the revised surface.
+5. Start the next labeled cycle from revised state.
 
-Stop only when the latest labeled cycle has no findings.
+Stop only when the latest cycle has no findings. If a decision blocks progress, report the blocked finding.
 
-## What To Review
+## Scope
 
-For code, prioritize bugs, regressions, missing tests, security risk, compatibility risk, operational risk, and maintainability traps.
+For code, plans, specs, docs, durable instructions, or ambiguous finding state, read [references/review-criteria.md](references/review-criteria.md).
 
-For plans, specs, docs, and durable instructions, also check:
+For PR review comments, bot reruns, ready-for-review, merge readiness, stale threads, requested reviewers, or blocked GitHub merge state, run `pr-review-orchestration` once per cycle and follow its external-review budget gates.
 
-- Decision completeness.
-- Ambiguous precedence.
-- Contradictions.
-- Missing test or verification coverage.
-- Rollout and rollback gaps.
-- Compatibility risk.
-- Implementation traps.
+## Pushback
 
-## Valid Pushback
+Reject findings only with evidence; passing tests, rollback, urgency, or inconvenience are not enough.
 
-Do not dismiss a finding because tests pass, rollback exists, the change is urgent, or the fix is inconvenient. If a finding is wrong, explain the evidence and continue the loop only after it is soundly rejected.
+## Anti-Recursion
 
-## Common Mistakes
-
-| Mistake | Fix |
-| --- | --- |
-| Stopping after fixing the first review's findings | Run another labeled cycle. |
-| Reporting a revision as a clean review | A clean review is a latest cycle with no findings. |
-| Dropping labels after the first pass | Keep cycle labels visible until completion. |
-| Applying only code criteria to plans or specs | Use the plan/spec/doc criteria too. |
-| Treating "review cycle" as Ralph review | A review cycle is one pass unless explicit Ralph terms or a stronger policy apply. |
+When reviewing review-loop instructions, label cycles on the instruction artifact; do not recurse indefinitely.
