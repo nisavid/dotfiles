@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review Other PRs"
+  short_description: "Review teammate PRs with Thermos discipline"
+  default_prompt: "Use $reviewing-others-prs to review this PR for correctness, maintainability, and GitHub-ready comments."
