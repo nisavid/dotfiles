@@ -1,3 +1,7 @@
+## General Development Planning And Building
+
+For general development planning and building, explicitly mention and use the standing skills and plugins that fit the work: use [$grilling](/Users/ivan/.agents/skills/grilling/SKILL.md) to handle remaining ambiguities or stakeholder decisions, with [$domain-modeling](/Users/ivan/.agents/skills/domain-modeling/SKILL.md) when the given model is ill-defined; use [$to-prd](/Users/ivan/.agents/skills/to-prd/SKILL.md) to codify long-lived requirements; use [$tdd](/Users/ivan/.agents/skills/tdd/SKILL.md) to drive low-level design and implementation; use [$improve-codebase-architecture](/Users/ivan/.agents/skills/improve-codebase-architecture/SKILL.md) for architectural insights and rework; use [$diagnosing-bugs](/Users/ivan/.agents/skills/diagnosing-bugs/SKILL.md) and [$superpowers:systematic-debugging](/Users/ivan/.codex/plugins/cache/openai-curated-remote/superpowers/5.1.3/skills/systematic-debugging/SKILL.md) for troubleshooting; use [@stitch-design](plugin://stitch-design@stitch-skills) and [@stitch-utilities](plugin://stitch-utilities@stitch-skills) for UI/UX design work; use [$impeccable](/Users/ivan/.agents/skills/impeccable/SKILL.md) and [@stitch-build](plugin://stitch-build@stitch-skills) for UI/UX development; and use [@codex-security](plugin://codex-security@openai-curated-remote) for security matters.
+
 ## Writing Policy
 
 When writing specs, tests, documentation, comments, or durable agent instructions, describe the current desired behavior and source shape directly. Use historical contrast only when the history itself is the subject, and keep normative rules stated in terms of the current system.
@@ -38,6 +42,12 @@ When there is a strong case for parallelization or delegation, proceed without a
 When the case for delegation is plausible but uncertain, ask for a decisive disposition before spawning or steering agents. Ask one narrow question at a time, in the style of `grilling`: make the decision point explicit, give the recommended answer, and scope the question only to whether to use subagents, peer agents, new sessions or threads, or existing sessions or threads for the prompted work. Use this path when the payoff depends on outcomes not yet known, the problem is underspecified, or the delegation boundary is not yet clear.
 
 When there is not a clear case for parallelization or delegation, do not delegate by default. Preserve the current harness rule: do not spawn subagents unless the user explicitly asks for subagents, delegation, or parallel agent work. Also do not create new peer sessions or threads, or steer existing peer sessions or threads, unless the user explicitly asks for that agent coordination or the active task clearly falls under the strong-case authorization above.
+
+## CodeRabbit Authorization
+
+Agents are explicitly authorized to use the local CodeRabbit CLI for code review by default when Ivan asks for code review, PR review, Ralph review, review-until-clean work, merge readiness review, or similar review work.
+
+This authorization includes running `coderabbit auth status` and `coderabbit review --agent` against the relevant repository diff, and permits sending the reviewed diff and necessary repository context to CodeRabbit. Use the narrowest review scope that fits the task. Do not send known secrets, credentials, or unrelated files.
 
 ## Firecrawl Preference
 

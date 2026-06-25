@@ -1,0 +1,42 @@
+{
+  "name": "thermos",
+  "version": "1.0.0+codex.20260625104412",
+  "description": "Thermo-nuclear branch review for Codex: deep correctness and security audits, strict maintainability review, and combined synthesis.",
+  "author": {
+    "name": "Cursor",
+    "email": "plugins@cursor.com",
+    "url": "https://github.com/cursor"
+  },
+  "homepage": "https://github.com/cursor/plugins/tree/main/thermos",
+  "repository": "https://github.com/cursor/plugins",
+  "license": "MIT",
+  "keywords": [
+    "thermos",
+    "thermo-nuclear",
+    "code-review",
+    "deep-review",
+    "code-quality",
+    "security-review"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Thermos",
+    "shortDescription": "Thermo-nuclear branch review.",
+    "longDescription": "Thermos ports Cursor's thermo-nuclear review workflow to Codex with separate correctness/security and code-quality rubrics plus a combined synthesis skill.",
+    "developerName": "Cursor",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Review"
+    ],
+    "websiteURL": "https://github.com/cursor/plugins/tree/main/thermos",
+    "privacyPolicyURL": "https://cursor.com/privacy",
+    "termsOfServiceURL": "https://cursor.com/terms",
+    "brandColor": "#F97316",
+    "logo": "./assets/logo.png",
+    "defaultPrompt": [
+      "Use $thermos to review the current branch.",
+      "Use $thermo-nuclear-review to audit this PR.",
+      "Use $thermo-nuclear-code-quality-review to check maintainability."
+    ]
+  }
+}

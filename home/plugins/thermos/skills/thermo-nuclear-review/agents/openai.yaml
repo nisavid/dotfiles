@@ -1,0 +1,4 @@
+interface:
+  display_name: "Thermo Nuclear Review"
+  short_description: "Audit branch changes for risks."
+  default_prompt: "Use $thermo-nuclear-review to audit this branch."
