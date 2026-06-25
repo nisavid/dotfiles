@@ -1,3 +1,7 @@
+## General Development Planning And Building
+
+For general development planning and building, explicitly mention and use the standing skills and plugins that fit the work: use [$grilling](/Users/ivan/.agents/skills/grilling/SKILL.md) to handle remaining ambiguities or stakeholder decisions, with [$domain-modeling](/Users/ivan/.agents/skills/domain-modeling/SKILL.md) when the given model is ill-defined; use [$to-prd](/Users/ivan/.agents/skills/to-prd/SKILL.md) to codify long-lived requirements; use [$tdd](/Users/ivan/.agents/skills/tdd/SKILL.md) to drive low-level design and implementation; use [$improve-codebase-architecture](/Users/ivan/.agents/skills/improve-codebase-architecture/SKILL.md) for architectural insights and rework; use [$diagnosing-bugs](/Users/ivan/.agents/skills/diagnosing-bugs/SKILL.md) and [$superpowers:systematic-debugging](/Users/ivan/.codex/plugins/cache/openai-curated-remote/superpowers/5.1.3/skills/systematic-debugging/SKILL.md) for troubleshooting; use [@stitch-design](plugin://stitch-design@stitch-skills) and [@stitch-utilities](plugin://stitch-utilities@stitch-skills) for UI/UX design work; use [$impeccable](/Users/ivan/.agents/skills/impeccable/SKILL.md) and [@stitch-build](plugin://stitch-build@stitch-skills) for UI/UX development; and use [@codex-security](plugin://codex-security@openai-curated-remote) for security matters.
+
 ## Writing Policy
 
 When writing specs, tests, documentation, comments, or durable agent instructions, describe the current desired behavior and source shape directly. Use historical contrast only when the history itself is the subject, and keep normative rules stated in terms of the current system.
@@ -39,6 +43,12 @@ When the case for delegation is plausible but uncertain, ask for a decisive disp
 
 When there is not a clear case for parallelization or delegation, do not delegate by default. Preserve the current harness rule: do not spawn subagents unless the user explicitly asks for subagents, delegation, or parallel agent work. Also do not create new peer sessions or threads, or steer existing peer sessions or threads, unless the user explicitly asks for that agent coordination or the active task clearly falls under the strong-case authorization above.
 
+## CodeRabbit Authorization
+
+Agents are explicitly authorized to use the local CodeRabbit CLI for code review by default when Ivan asks for code review, PR review, Ralph review, review-until-clean work, merge readiness review, or similar review work.
+
+This authorization includes running `coderabbit auth status` and `coderabbit review --agent` against the relevant repository diff, and permits sending the reviewed diff and necessary repository context to CodeRabbit. Use the narrowest review scope that fits the task. Do not send known secrets, credentials, or unrelated files.
+
 ## Firecrawl Preference
 
 Prefer task-specific tools for the specialized cases they are designed to handle. When Firecrawl skills are available and applicable, prefer the relevant Firecrawl skill as the general-purpose fallback for the web function it covers. Use lower-level or more generic web access methods only when no task-specific or Firecrawl skill fits, or another tool is explicitly requested.
@@ -77,7 +87,15 @@ When reviewing tests, take care to check: Do the tests all test what they claim 
 
 My name is Ivan D Vasin. I am a senior full-stack software engineer. I work at Systalyze. My work email/username is ivan@systalyze.com.
 
-In Systalyze repos, create branches with the prefix `ivan/`.
+In Systalyze repos, create branches with the prefix `ivan/`. Use Conventional Commits style for commit messages and PR titles.
+
+In the `systalyze` repo, use `/Users/ivan/.agents/skills/working-in-systalyze-worktrees/SKILL.md` for any task whose target is a `systalyze` checkout or worktree. That skill owns the target-mode decision and local-only branch workflow, including when to cherry-pick `main..ivan/setup-local` for setup/toolchain scaffolding and when to cherry-pick `main..ivan/impeccable` for grounding docs and agent-facing context. These commits are local development scaffolding: remove them from pushed product history.
+
+For `/Users/ivan/src/systalyze`, treat the main worktree as the default local-cluster host. Its local runtime stack is `ivan/impeccable` -> `ivan/setup-local` -> `ivan/local-runtime-policy-docs` -> `ivan/real-work-for-local-dev`; use that stack instead of the ordinary two-branch local setup workflow when preparing or refreshing the worktree for local runtime work. The MLX OptiQ local-cluster implementation lives on `ivan/real-work-for-local-dev`.
+
+That main worktree uses the partial Vite Plus adoption with `vpr` as the Node version manager, package manager, and script runner. It also has local-only `packages/systalyze-py` and `packages/dnn_model_images` submodule pointers: `packages/dnn_model_images` is git-ignored, and `packages/systalyze-py` is normally marked skip-worktree. Before pulling `main` or switching branches in this main worktree, unset skip-worktree for `packages/systalyze-py` and stash that path; after the Git operation, pop the stash and set skip-worktree again.
+
+When another worktree takes over the local-cluster role, use the same branch stack and commit/push workflow for that worktree, then run the target checkout's `dev:env:fnx:handoff` Node script to attach the cluster to its backend.
 
 ### Systalyze PR Review Threads
 
@@ -85,7 +103,7 @@ For Systalyze PRs, treat each review thread as owned by its originator. Do not r
 
 ### Systalyze Communications
 
-When posting chat messages, PR or issue comments, PR or issue descriptions, document content or comments, or other communications on Ivan's behalf, write as Ivan in the first person. Do not mention the agent as a separate actor or identity.
+When posting chat messages, PR or issue comments, PR or issue descriptions, document content or comments, or other communications on Ivan's behalf, write as Ivan in the first person. Do not mention the agent as a separate actor or identity unless it directly pertains to the topic.
 
 ### Systalyze Code Debloating
 
