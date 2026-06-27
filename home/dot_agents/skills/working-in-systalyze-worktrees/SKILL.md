@@ -22,13 +22,13 @@ Read-only tasks do not need local setup commits merely to inspect files, answer 
 
 ## Branch Roles
 
-| Role | Meaning |
-| --- | --- |
-| `PR_BRANCH` | The remote-backed or intended future branch for product commits that belong in a PR |
-| `LOCAL_BRANCH` | A local-only merge branch used for scouting, setup-local scaffolding, checks, edits, and local commits |
-| `AUX_BRANCH` | A non-product support branch such as `ivan/setup-local`, `ivan/impeccable`, or another explicitly named auxiliary branch |
-| `ivan/setup-local` | Auxiliary branch for local setup scripts, worktree setup, and local development tooling |
-| `ivan/impeccable` | Auxiliary branch for grounding docs, agent-facing context, domain, product, and design guidance |
+| Role               | Meaning                                                                                                                  |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------ |
+| `PR_BRANCH`        | The remote-backed or intended future branch for product commits that belong in a PR                                      |
+| `LOCAL_BRANCH`     | A local-only merge branch used for scouting, setup-local scaffolding, checks, edits, and local commits                   |
+| `AUX_BRANCH`       | A non-product support branch such as `ivan/setup-local`, `ivan/impeccable`, or another explicitly named auxiliary branch |
+| `ivan/setup-local` | Auxiliary branch for local setup scripts, worktree setup, and local development tooling                                  |
+| `ivan/impeccable`  | Auxiliary branch for grounding docs, agent-facing context, domain, product, and design guidance                          |
 
 Names can vary by task. Verify the actual PR head and branch ownership from Git and, when relevant, the live PR.
 
@@ -97,7 +97,8 @@ Before scouting, checks, implementation, or troubleshooting:
 5. Cherry-pick the local scaffolding range onto `LOCAL_BRANCH`:
    - `main..ivan/setup-local` for local setup and toolchain scaffolding.
    - `main..ivan/impeccable` only when grounding docs or agent-facing context are needed and equivalent changes are not already present.
-6. Keep `LOCAL_BRANCH` checked out while scouting, troubleshooting, running local checks, editing, and making local commits.
+6. If the target checkout has Serena setup support, run `scripts/setup-local.zsh serena` before using Serena in that worktree. Treat `packages/systalyze-py` and `packages/dnn_model_images` as separate Serena projects, not parent workspace folders.
+7. Keep `LOCAL_BRANCH` checked out while scouting, troubleshooting, running local checks, editing, and making local commits.
 
 Before applying `main..ivan/impeccable`, check whether its commits or equivalent patches are already present. Prefer ancestry checks when possible; otherwise compare `git cherry` or patch IDs for the `main..ivan/impeccable` range against the target branch. Do not duplicate grounding commits merely because their original commit IDs differ.
 
@@ -141,6 +142,8 @@ If CI appears stale after a successful local cherry-pick, compare the PR head SH
 ### Setup-local Changes
 
 Use `ivan/setup-local` for durable changes to local setup scripts, local worktree setup, Vite Plus or `vp`/`vpr` development setup, shell helpers, and agent workflows that exist to prepare a local working branch.
+
+Serena setup belongs here when it changes `scripts/setup-local.zsh`, ignored worktree-local Serena files, or local tool initialization. Do not put submodule-specific Serena configs into this branch unless the user explicitly asks to commit them.
 
 Recommended flow:
 

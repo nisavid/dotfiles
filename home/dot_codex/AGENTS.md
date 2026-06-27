@@ -83,6 +83,10 @@ Unless otherwise specified, make sure local `main` is current before operations 
 
 When reviewing tests, take care to check: Do the tests all test what they claim to test? Are they all testing externally-oriented specs rather than narrations of the code under test?
 
+## Serena
+
+When using Serena in a repo or worktree, prefer a committed `.serena/project.yml` plus an ignored `.serena/project.local.yml`. If a repo lacks committed Serena config or setup tooling, initialize Serena locally: infer languages from manifests, ignore in-repo `.claude/worktrees/**`, external sibling worktrees, dependency directories, caches, generated environments, and `.serena` runtime state; treat submodules and nested Git repos as separate Serena projects; do not add sibling worktrees as `additional_workspace_folders`; and give each worktree a unique local `project_name`.
+
 ## Systalyze
 
 My name is Ivan D Vasin. I am a senior full-stack software engineer. I work at Systalyze. My work email/username is ivan@systalyze.com.
@@ -132,6 +136,7 @@ We have development clusters (ostensibly mimicking what a customer's cluster wou
 ## Context7
 
 <!-- context7 -->
+
 Use Context7 MCP to fetch current documentation whenever the user asks about a library, framework, SDK, API, CLI tool, or cloud service -- even well-known ones like React, Next.js, Prisma, Express, Tailwind, Django, or Spring Boot. This includes API syntax, configuration, version migration, library-specific debugging, setup instructions, and CLI tool usage. Use even when you think you know the answer -- your training data may not reflect recent changes. Prefer this over web search for library docs.
 
 Do not use for: refactoring, writing scripts from scratch, debugging business logic, code review, or general programming concepts.
