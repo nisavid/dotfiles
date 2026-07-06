@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Regenerate work-private agent skills stored encrypted in this repo. Both the content and the
+# skill name are decrypted at apply time and written to their real local locations; neither is
+# committed in the clear. Requires the age identity key.
+set -euo pipefail
+
+rel={{ include ".private-skill-path.age" | decrypt | trim | quote }}
+skill_dir="${HOME}/.agents/skills/${rel}"
+mkdir -p "${skill_dir}"
+cat > "${skill_dir}/SKILL.md" <<'CHEZMOI_PRIVATE_SKILL_EOF'
+{{ include ".private-worktrees-skill.md.age" | decrypt }}
+CHEZMOI_PRIVATE_SKILL_EOF
+
+# Mirror into ~/.claude/skills as a relative symlink (matches the other agent-skill symlinks).
+mkdir -p "${HOME}/.claude/skills"
+ln -sfn "../../.agents/skills/${rel}" "${HOME}/.claude/skills/${rel}"

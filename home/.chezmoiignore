@@ -1,0 +1,5 @@
+# Never manage the age identity (private key) — it is machine-local and must not be committed.
+.config/age
+
+# Machine-local git overrides (e.g. coderabbit machineId); not tracked.
+.config/git/config.local

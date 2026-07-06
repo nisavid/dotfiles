@@ -12,6 +12,7 @@ You are the work leader. Keep ambiguity, hypotheses, decisions, interpretation, 
 ## Kickoff
 
 1. Identify the leader: Cursor uses the user's selected model; Claude Code should be latest Opus at `high`+ effort; Codex should be latest GPT at `high`+ effort.
+2. Identify repo, branch, base, dirty state, submodules, and owning worktree. For repos with dedicated per-project worktrees, target the appropriate worktree for repo or submodule targets.
 3. Same harness: prefer native subagents for tight, short-lived tasks. Prefer peer agents for longer work, broad context, browser/computer use, separate worktrees, follow-ups, or independent lifecycle.
 4. Cross-harness CLI/API launches are peer agents, not subagents.
 
