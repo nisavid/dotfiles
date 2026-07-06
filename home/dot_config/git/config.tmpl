@@ -1,6 +1,6 @@
 [user]
 	name = Ivan D Vasin
-	email = ivan@nisavid.io
+	email = {{ include ".private-git-email.age" | decrypt | trim }}
 [core]
 	autocrlf = input
 	pager = diff-so-fancy | less --tabs=4 -RFX
@@ -197,10 +197,10 @@
 	pushInsteadOf = kde:
 [credential "https://github.com"]
 	helper = 
-	helper = !/usr/bin/gh auth git-credential
+	helper = !{{ lookPath "gh" }} auth git-credential
 [credential "https://gist.github.com"]
 	helper = 
-	helper = !/usr/bin/gh auth git-credential
+	helper = !{{ lookPath "gh" }} auth git-credential
 [color "diff-highlight"]
 	oldNormal = red bold
 	oldHighlight = red bold 52
@@ -208,3 +208,13 @@
 	newHighlight = green bold 22
 [init]
 	defaultBranch = main
+[includeIf "gitdir:~/src/nisavid/"]
+	path = personal.inc
+[includeIf "gitdir:~/.config/zsh/"]
+	path = personal.inc
+[includeIf "gitdir:~/.config/nvim/"]
+	path = personal.inc
+[includeIf "gitdir:~/.local/share/chezmoi/"]
+	path = personal.inc
+[include]
+	path = config.local

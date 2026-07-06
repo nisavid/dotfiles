@@ -1,10 +1,12 @@
 ## General Development Planning And Building
 
-For general development planning and building, explicitly mention and use the standing skills and plugins that fit the work: use [$grilling](/Users/ivan/.agents/skills/grilling/SKILL.md) to handle remaining ambiguities or stakeholder decisions, with [$domain-modeling](/Users/ivan/.agents/skills/domain-modeling/SKILL.md) when the given model is ill-defined; use [$to-prd](/Users/ivan/.agents/skills/to-prd/SKILL.md) to codify long-lived requirements; use [$tdd](/Users/ivan/.agents/skills/tdd/SKILL.md) to drive low-level design and implementation; use [$improve-codebase-architecture](/Users/ivan/.agents/skills/improve-codebase-architecture/SKILL.md) for architectural insights and rework; use [$diagnosing-bugs](/Users/ivan/.agents/skills/diagnosing-bugs/SKILL.md) and [$superpowers:systematic-debugging](/Users/ivan/.codex/plugins/cache/openai-curated-remote/superpowers/5.1.3/skills/systematic-debugging/SKILL.md) for troubleshooting; use [@stitch-design](plugin://stitch-design@stitch-skills) and [@stitch-utilities](plugin://stitch-utilities@stitch-skills) for UI/UX design work; use [$impeccable](/Users/ivan/.agents/skills/impeccable/SKILL.md) and [@stitch-build](plugin://stitch-build@stitch-skills) for UI/UX development; and use [@codex-security](plugin://codex-security@openai-curated-remote) for security matters.
+For general development planning and building, explicitly mention and use the standing skills and plugins that fit the work: use `grilling` to handle remaining ambiguities or stakeholder decisions, with `domain-modeling` when the given model is ill-defined; use `to-prd` to codify long-lived requirements; use `tdd` to drive low-level design and implementation; use `improve-codebase-architecture` for architectural insights and rework; use `diagnosing-bugs` and `systematic-debugging` for troubleshooting; use `stitch-design` and `stitch-utilities` for UI/UX design work; use `impeccable` and `stitch-build` for UI/UX development; and use your security-review skill or plugin (e.g. `codex-security`) for security matters. Refer to these by name and let your harness resolve each to its own installed skill or plugin.
 
 ## Writing Policy
 
 When writing specs, tests, documentation, comments, or durable agent instructions, describe the current desired behavior and source shape directly. Use historical contrast only when the history itself is the subject, and keep normative rules stated in terms of the current system.
+
+For committed docs and submitted PR bodies/comments, use repo-relative paths, package/module names, or public/reviewable URLs. Do not include machine-local absolute file paths.
 
 ### Human-Facing Writing Style
 
@@ -55,7 +57,12 @@ Prefer task-specific tools for the specialized cases they are designed to handle
 
 ## Browser Preference
 
-When a task entails browser use, prefer the built-in [@Browser](plugin://browser@openai-bundled) plugin.
+Route browser work in this order:
+
+1. If page interaction is unnecessary, prefer the most task-specific fetch, search, API, or CLI tool.
+2. If a task needs an interactive browser session, try your harness's built-in browser tool first.
+3. Use a Chrome-specific browser tool first only when the user explicitly asks for Chrome or the task depends on the user's existing Chrome profile, tabs, installed extensions, Chrome extension setup/repair, or Chrome-specific debugging.
+4. If the built-in browser tool is unavailable, fails to connect, cannot complete setup, or fails on the needed navigation/interaction, fall back to the Chrome tool automatically and mention the fallback briefly.
 
 ## Capture Policy
 
@@ -67,15 +74,13 @@ When presenting a capture series with more than a few samples, present the serie
 
 ## Here.now Sites
 
-
 If a here.now site benefits from a richer UI than plain HTML, CSS, and JavaScript can readily provide, create it as an SPA and use a suitable UI toolkit.
 
-
-Use the [$impeccable](/Users/ivan/.agents/skills/impeccable/SKILL.md) sub-skills to craft, analyze, revise, and polish here.now sites.
+Use the `impeccable` sub-skills to craft, analyze, revise, and polish here.now sites.
 
 ## General Tips
 
-Do not codify unsettled or recently reversed team conventions in learned memory. Wait until a convention is clearly stable before recording it in `AGENTS.md` or shared skills.
+Do not codify unsettled or recently reversed team conventions in learned memory. Wait until a convention is clearly stable before recording it in `AGENTS.md`/`CLAUDE.md` or shared skills.
 
 Unless otherwise specified, make sure local `main` is current before operations that depend on it, before refresh or sync work, and before starting new work from `main`. If pulling `main` would disturb local-only or unpushed work, stop and surface that state instead.
 
@@ -83,7 +88,9 @@ When reviewing tests, take care to check: Do the tests all test what they claim 
 
 ## Serena
 
-When using Serena in a repo or worktree, prefer a committed `.serena/project.yml` plus an ignored `.serena/project.local.yml`. If a repo lacks committed Serena config or setup tooling, initialize Serena locally: infer languages from manifests, ignore in-repo `.claude/worktrees/**`, external sibling worktrees, dependency directories, caches, generated environments, and `.serena` runtime state; treat submodules and nested Git repos as separate Serena projects; do not add sibling worktrees as `additional_workspace_folders`; and give each worktree a unique local `project_name`.
+When using Serena in a repo or worktree, prefer a committed `.serena/project.yml` plus an ignored `.serena/project.local.yml`. If a repo lacks committed Serena config or setup tooling, initialize Serena locally: infer languages from manifests, ignore in-repo agent worktree directories (e.g. `.claude/worktrees/**`, `.codex/worktrees/**`), external sibling worktrees, dependency directories, caches, generated environments, and `.serena` runtime state; treat submodules and nested Git repos as separate Serena projects; do not add sibling worktrees as `additional_workspace_folders`; and give each worktree a unique local `project_name`.
+
+{{ include ".private-agents.md.age" | decrypt }}
 
 ## Context7
 
