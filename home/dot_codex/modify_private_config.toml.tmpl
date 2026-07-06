@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# chezmoi modify_ script for ~/.codex/config.toml.
+#
+# Codex owns this file and rewrites it continuously (per-session project trusts,
+# [hooks.state] hashes, marketplace timestamps, app-version paths, etc.). Rather than
+# manage the whole file, this script overlays only a minimal, curated set of settings
+# onto Codex's live file and passes everything else through untouched:
+#   - [tui] theme, [desktop] git-branch-prefix   (portable prefs)
+#   - [desktop.open-in-target-preferences] global (OS-branched editor target)
+#   - work-private writable_roots + project trusts (decrypted from an age partial)
+#
+# Requires `uv` on PATH; tomlkit is fetched+cached ephemerally (no global install).
+set -euo pipefail
+
+export HOMEDIR={{ .chezmoi.homeDir | quote }}
+export EDITOR_TARGET={{ if eq .chezmoi.os "darwin" }}"cursor"{{ else }}"linux-desktop-code-oss"{{ end }}
+export WORK_TOML_B64={{ include ".private-codex-work.toml.age" | decrypt | b64enc | quote }}
+
+# python3 reads the script via process substitution; the live config arrives on stdin.
+uv run --quiet --with tomlkit python3 <(cat <<'PYEOF'
+import os, sys, base64, tomlkit
+
+home = os.environ["HOMEDIR"]
+editor = os.environ["EDITOR_TARGET"]
+work = tomlkit.parse(base64.b64decode(os.environ["WORK_TOML_B64"]).decode())
+
+raw = sys.stdin.read()
+doc = tomlkit.parse(raw) if raw.strip() else tomlkit.document()
+
+def ensure_table(parent, key):
+    if key not in parent:
+        parent[key] = tomlkit.table()
+    return parent[key]
+
+ensure_table(doc, "tui")["theme"] = "catppuccin-mocha"
+desk = ensure_table(doc, "desktop")
+desk["git-branch-prefix"] = "nisavid/"
+ensure_table(desk, "open-in-target-preferences")["global"] = editor
+
+sww = ensure_table(doc, "sandbox_workspace_write")
+if "writable_roots" not in sww:
+    sww["writable_roots"] = tomlkit.array()
+roots = sww["writable_roots"]
+have = {str(x) for x in roots}
+for rel in work["writable_roots"]:
+    p = os.path.join(home, rel)
+    if p not in have:
+        roots.append(p); have.add(p)
+
+projs = ensure_table(doc, "projects")
+for rel in work["projects"]:
+    p = os.path.join(home, rel)
+    if p not in projs:
+        t = tomlkit.table(); t["trust_level"] = "trusted"; projs[p] = t
+
+sys.stdout.write(tomlkit.dumps(doc))
+PYEOF
+)
