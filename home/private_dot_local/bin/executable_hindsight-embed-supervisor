@@ -1,0 +1,100 @@
+#!/usr/bin/env zsh
+set -euo pipefail
+
+timestamp() {
+  /bin/date -u "+%Y-%m-%dT%H:%M:%SZ"
+}
+
+log() {
+  print -r -- "$(timestamp) $*"
+}
+
+fail() {
+  log "fatal: $*"
+  exit 1
+}
+
+require_current_user() {
+  if (( EUID == 0 || UID == 0 )); then
+    fail "refusing to run as root"
+  fi
+}
+
+control_status() {
+  "$uvx_bin" hindsight-embed control status --port "$port" >/dev/null 2>&1
+}
+
+start_control() {
+  "$uvx_bin" hindsight-embed control start --no-open --port "$port" >/dev/null 2>&1
+}
+
+stop_control() {
+  "$uvx_bin" hindsight-embed control stop --port "$port" >/dev/null 2>&1
+}
+
+wait_for_control() {
+  local attempt
+
+  for attempt in {1..15}; do
+    if control_status; then
+      return 0
+    fi
+    sleep 2
+  done
+
+  return 1
+}
+
+shutdown() {
+  log "stopping control center"
+  if ! stop_control; then
+    log "control stop failed or control center was already stopped"
+  fi
+  exit 0
+}
+
+main() {
+  emulate -L zsh
+  setopt pipe_fail no_unset
+
+  require_current_user
+
+  uvx_bin="${HINDSIGHT_EMBED_UVX:-$HOME/.local/bin/uvx}"
+  port="${HINDSIGHT_EMBED_PORT:-7878}"
+  poll_seconds="${HINDSIGHT_EMBED_POLL_SECONDS:-10}"
+  state_dir="${HINDSIGHT_EMBED_STATE_DIR:-$HOME/.local/state/hindsight-embed-launchd}"
+  log_dir="${state_dir}/logs"
+
+  mkdir -p "$log_dir"
+  exec >>"${log_dir}/supervisor.log" 2>&1
+
+  [[ -x "$uvx_bin" ]] || fail "uvx is not executable at ${uvx_bin}"
+
+  trap shutdown INT TERM
+
+  log "supervisor started pid=$$ port=${port}"
+
+  while true; do
+    if control_status; then
+      sleep "$poll_seconds"
+      continue
+    fi
+
+    log "control center is not healthy; starting"
+    if ! start_control; then
+      log "control start command failed"
+      sleep "$poll_seconds"
+      continue
+    fi
+
+    if wait_for_control; then
+      log "control center is healthy"
+    else
+      log "control center did not become healthy after start"
+    fi
+
+    sleep "$poll_seconds"
+  done
+}
+
+main "$@"

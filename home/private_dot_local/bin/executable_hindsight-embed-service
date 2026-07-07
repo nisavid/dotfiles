@@ -1,0 +1,178 @@
+#!/usr/bin/env zsh
+set -euo pipefail
+
+LABEL="com.hindsight.embed.control"
+PLIST="${HOME}/Library/LaunchAgents/${LABEL}.plist"
+SUPERVISOR="${HOME}/.local/bin/hindsight-embed-supervisor"
+UVX_BIN="${HINDSIGHT_EMBED_UVX:-${HOME}/.local/bin/uvx}"
+PORT="${HINDSIGHT_EMBED_PORT:-7878}"
+STATE_DIR="${HINDSIGHT_EMBED_STATE_DIR:-${HOME}/.local/state/hindsight-embed-launchd}"
+LOG_FILE="${STATE_DIR}/logs/supervisor.log"
+
+usage() {
+  cat <<EOF
+Usage: hindsight-embed-service <command>
+
+Commands:
+  install   Validate the installed LaunchAgent and load it for this user
+  start     Load or restart the LaunchAgent for this user
+  stop      Unload the LaunchAgent for this login session
+  status    Show launchd and hindsight control-center status
+  logs      Tail the supervisor log
+EOF
+}
+
+die() {
+  print -ru2 -- "hindsight-embed-service: $*"
+  exit 1
+}
+
+domain() {
+  print -r -- "gui/${UID}"
+}
+
+service_name() {
+  print -r -- "$(domain)/${LABEL}"
+}
+
+require_current_user() {
+  if (( EUID == 0 || UID == 0 )); then
+    die "refusing to run as root"
+  fi
+}
+
+is_loaded() {
+  /bin/launchctl print "$(service_name)" >/dev/null 2>&1
+}
+
+has_disabled_override() {
+  /bin/launchctl print-disabled "$(domain)" 2>/dev/null \
+    | /usr/bin/grep -F "\"${LABEL}\" => true" >/dev/null 2>&1
+}
+
+validate_installed_files() {
+  [[ -f "$PLIST" ]] || die "missing plist at ${PLIST}; run chezmoi apply for this target first"
+  [[ ! -L "$PLIST" ]] || die "refusing symlinked plist at ${PLIST}"
+  [[ -x "$SUPERVISOR" ]] || die "missing executable supervisor at ${SUPERVISOR}"
+  [[ -x "$UVX_BIN" ]] || die "uvx is not executable at ${UVX_BIN}"
+  /usr/bin/plutil -lint "$PLIST" >/dev/null
+}
+
+validate_launchd_state() {
+  if has_disabled_override; then
+    die "launchd has a disabled override for ${LABEL}; clear it explicitly before starting"
+  fi
+}
+
+control_status() {
+  "$UVX_BIN" hindsight-embed control status --port "$PORT"
+}
+
+wait_for_control() {
+  local attempt
+
+  for attempt in {1..20}; do
+    if control_status >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+
+  return 1
+}
+
+start_service() {
+  require_current_user
+  validate_installed_files
+  validate_launchd_state
+  mkdir -p "${STATE_DIR}/logs"
+
+  if is_loaded; then
+    /bin/launchctl kickstart -k "$(service_name)"
+  else
+    /bin/launchctl bootstrap "$(domain)" "$PLIST"
+  fi
+
+  if wait_for_control; then
+    print -r -- "${LABEL} is loaded and hindsight-embed control is healthy on port ${PORT}"
+  else
+    die "${LABEL} loaded, but hindsight-embed control did not become healthy; see ${LOG_FILE}"
+  fi
+}
+
+stop_service() {
+  require_current_user
+
+  if is_loaded; then
+    /bin/launchctl bootout "$(service_name)"
+    print -r -- "${LABEL} unloaded for this login session"
+  else
+    print -r -- "${LABEL} is not loaded"
+  fi
+
+  if [[ -x "$UVX_BIN" ]]; then
+    "$UVX_BIN" hindsight-embed control stop --port "$PORT" >/dev/null 2>&1 || true
+  fi
+}
+
+show_status() {
+  require_current_user
+  validate_installed_files
+
+  if is_loaded; then
+    print -r -- "launchd: loaded ($(service_name))"
+  else
+    print -r -- "launchd: not loaded ($(service_name))"
+  fi
+
+  if has_disabled_override; then
+    print -r -- "disabled override: true"
+  else
+    print -r -- "disabled override: false"
+  fi
+
+  print -r -- ""
+  if control_status; then
+    return 0
+  fi
+
+  print -ru2 -- "hindsight control status failed"
+  return 1
+}
+
+show_logs() {
+  mkdir -p "${STATE_DIR}/logs"
+  touch "$LOG_FILE"
+  tail -n 80 -f "$LOG_FILE"
+}
+
+main() {
+  emulate -L zsh
+  setopt pipe_fail no_unset
+
+  local command="${1:-}"
+
+  case "$command" in
+    install|start)
+      start_service
+      ;;
+    stop)
+      stop_service
+      ;;
+    status)
+      show_status
+      ;;
+    logs)
+      show_logs
+      ;;
+    -h|--help|help|"")
+      usage
+      ;;
+    *)
+      usage >&2
+      die "unknown command: ${command}"
+      ;;
+  esac
+}
+
+main "$@"

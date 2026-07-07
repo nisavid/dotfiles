@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.hindsight.embed.control</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>{{ joinPath .chezmoi.homeDir ".local/bin/hindsight-embed-supervisor" }}</string>
+  </array>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+
+  <key>WorkingDirectory</key>
+  <string>{{ .chezmoi.homeDir }}</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>{{ .chezmoi.homeDir }}</string>
+    <key>USER</key>
+    <string>{{ .chezmoi.username }}</string>
+    <key>LOGNAME</key>
+    <string>{{ .chezmoi.username }}</string>
+    <key>PATH</key>
+    <string>{{ joinPath .chezmoi.homeDir ".local/bin" }}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>HINDSIGHT_EMBED_UVX</key>
+    <string>{{ joinPath .chezmoi.homeDir ".local/bin/uvx" }}</string>
+    <key>HINDSIGHT_EMBED_PORT</key>
+    <string>7878</string>
+    <key>HINDSIGHT_EMBED_POLL_SECONDS</key>
+    <string>10</string>
+    <key>HINDSIGHT_EMBED_STATE_DIR</key>
+    <string>{{ joinPath .chezmoi.homeDir ".local/state/hindsight-embed-launchd" }}</string>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>/dev/null</string>
+  <key>StandardErrorPath</key>
+  <string>/dev/null</string>
+
+  <key>Umask</key>
+  <integer>63</integer>
+</dict>
+</plist>
