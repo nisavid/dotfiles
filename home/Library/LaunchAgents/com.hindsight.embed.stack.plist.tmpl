@@ -4,7 +4,7 @@
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.hindsight.embed.control</string>
+  <string>com.hindsight.embed.stack</string>
 
   <key>ProgramArguments</key>
   <array>
@@ -35,8 +35,18 @@
     <string>{{ joinPath .chezmoi.homeDir ".local/bin" }}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
     <key>HINDSIGHT_EMBED_UVX</key>
     <string>{{ joinPath .chezmoi.homeDir ".local/bin/uvx" }}</string>
-    <key>HINDSIGHT_EMBED_PORT</key>
+    <key>HINDSIGHT_EMBED_CONTROL_PORT</key>
     <string>7878</string>
+    <key>HINDSIGHT_EMBED_PROFILE</key>
+    <string>systalyze</string>
+    <key>HINDSIGHT_EMBED_API_PORT</key>
+    <string>7979</string>
+    <key>HINDSIGHT_EMBED_UI_PORT</key>
+    <string>17979</string>
+    <key>HINDSIGHT_EMBED_AUTOSTART_DAEMON</key>
+    <string>1</string>
+    <key>HINDSIGHT_EMBED_AUTOSTART_UI</key>
+    <string>1</string>
     <key>HINDSIGHT_EMBED_POLL_SECONDS</key>
     <string>10</string>
     <key>HINDSIGHT_EMBED_STATE_DIR</key>

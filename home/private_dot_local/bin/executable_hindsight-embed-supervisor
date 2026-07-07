@@ -1,55 +1,21 @@
 #!/usr/bin/env zsh
 set -euo pipefail
 
-timestamp() {
-  /bin/date -u "+%Y-%m-%dT%H:%M:%SZ"
+STACK_LIB="${HINDSIGHT_EMBED_STACK_LIB:-$HOME/.local/lib/hindsight-embed-stack.zsh}"
+[[ -r "$STACK_LIB" ]] || {
+  print -ru2 -- "hindsight-embed-supervisor: missing stack library at ${STACK_LIB}"
+  exit 1
 }
-
-log() {
-  print -r -- "$(timestamp) $*"
-}
+. "$STACK_LIB"
 
 fail() {
-  log "fatal: $*"
+  hindsight_stack_log "fatal: $*"
   exit 1
 }
 
-require_current_user() {
-  if (( EUID == 0 || UID == 0 )); then
-    fail "refusing to run as root"
-  fi
-}
-
-control_status() {
-  "$uvx_bin" hindsight-embed control status --port "$port" >/dev/null 2>&1
-}
-
-start_control() {
-  "$uvx_bin" hindsight-embed control start --no-open --port "$port" >/dev/null 2>&1
-}
-
-stop_control() {
-  "$uvx_bin" hindsight-embed control stop --port "$port" >/dev/null 2>&1
-}
-
-wait_for_control() {
-  local attempt
-
-  for attempt in {1..15}; do
-    if control_status; then
-      return 0
-    fi
-    sleep 2
-  done
-
-  return 1
-}
-
 shutdown() {
-  log "stopping control center"
-  if ! stop_control; then
-    log "control stop failed or control center was already stopped"
-  fi
+  hindsight_stack_log "stopping stack"
+  hindsight_stack_stop_all || true
   exit 0
 }
 
@@ -57,42 +23,24 @@ main() {
   emulate -L zsh
   setopt pipe_fail no_unset
 
-  require_current_user
+  hindsight_stack_load_config
+  hindsight_stack_require_current_user || exit 1
 
-  uvx_bin="${HINDSIGHT_EMBED_UVX:-$HOME/.local/bin/uvx}"
-  port="${HINDSIGHT_EMBED_PORT:-7878}"
-  poll_seconds="${HINDSIGHT_EMBED_POLL_SECONDS:-10}"
-  state_dir="${HINDSIGHT_EMBED_STATE_DIR:-$HOME/.local/state/hindsight-embed-launchd}"
-  log_dir="${state_dir}/logs"
+  local poll_seconds="${HINDSIGHT_EMBED_POLL_SECONDS:-10}"
+  local state_dir="${HINDSIGHT_EMBED_STATE_DIR:-$HOME/.local/state/hindsight-embed-launchd}"
+  local log_dir="${state_dir}/logs"
 
   mkdir -p "$log_dir"
   exec >>"${log_dir}/supervisor.log" 2>&1
 
-  [[ -x "$uvx_bin" ]] || fail "uvx is not executable at ${uvx_bin}"
+  hindsight_stack_require_tools || fail "missing required tools"
 
   trap shutdown INT TERM
 
-  log "supervisor started pid=$$ port=${port}"
+  hindsight_stack_log "supervisor started pid=$$ profile=${HINDSIGHT_EMBED_PROFILE} control_port=${HINDSIGHT_EMBED_CONTROL_PORT} api_port=${HINDSIGHT_EMBED_API_PORT} ui_port=${HINDSIGHT_EMBED_UI_PORT}"
 
   while true; do
-    if control_status; then
-      sleep "$poll_seconds"
-      continue
-    fi
-
-    log "control center is not healthy; starting"
-    if ! start_control; then
-      log "control start command failed"
-      sleep "$poll_seconds"
-      continue
-    fi
-
-    if wait_for_control; then
-      log "control center is healthy"
-    else
-      log "control center did not become healthy after start"
-    fi
-
+    hindsight_stack_reconcile_once || true
     sleep "$poll_seconds"
   done
 }

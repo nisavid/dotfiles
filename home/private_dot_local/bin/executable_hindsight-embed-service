@@ -1,13 +1,20 @@
 #!/usr/bin/env zsh
 set -euo pipefail
 
-LABEL="com.hindsight.embed.control"
-PLIST="${HOME}/Library/LaunchAgents/${LABEL}.plist"
+STACK_LABEL="com.hindsight.embed.stack"
+LEGACY_LABEL="com.hindsight.embed.control"
+PLIST="${HOME}/Library/LaunchAgents/${STACK_LABEL}.plist"
+LEGACY_PLIST="${HOME}/Library/LaunchAgents/${LEGACY_LABEL}.plist"
 SUPERVISOR="${HOME}/.local/bin/hindsight-embed-supervisor"
-UVX_BIN="${HINDSIGHT_EMBED_UVX:-${HOME}/.local/bin/uvx}"
-PORT="${HINDSIGHT_EMBED_PORT:-7878}"
+STACK_LIB="${HINDSIGHT_EMBED_STACK_LIB:-$HOME/.local/lib/hindsight-embed-stack.zsh}"
 STATE_DIR="${HINDSIGHT_EMBED_STATE_DIR:-${HOME}/.local/state/hindsight-embed-launchd}"
 LOG_FILE="${STATE_DIR}/logs/supervisor.log"
+
+[[ -r "$STACK_LIB" ]] || {
+  print -ru2 -- "hindsight-embed-service: missing stack library at ${STACK_LIB}"
+  exit 1
+}
+. "$STACK_LIB"
 
 usage() {
   cat <<EOF
@@ -16,8 +23,8 @@ Usage: hindsight-embed-service <command>
 Commands:
   install   Validate the installed LaunchAgent and load it for this user
   start     Load or restart the LaunchAgent for this user
-  stop      Unload the LaunchAgent for this login session
-  status    Show launchd and hindsight control-center status
+  stop      Unload the LaunchAgent and stop control, API, and UI
+  status    Show launchd and stack health
   logs      Tail the supervisor log
 EOF
 }
@@ -28,119 +35,127 @@ die() {
 }
 
 domain() {
+  emulate -L zsh
   print -r -- "gui/${UID}"
 }
 
 service_name() {
-  print -r -- "$(domain)/${LABEL}"
-}
-
-require_current_user() {
-  if (( EUID == 0 || UID == 0 )); then
-    die "refusing to run as root"
-  fi
+  emulate -L zsh
+  local label="$1"
+  print -r -- "$(domain)/${label}"
 }
 
 is_loaded() {
-  /bin/launchctl print "$(service_name)" >/dev/null 2>&1
+  emulate -L zsh
+  local label="$1"
+  /bin/launchctl print "$(service_name "$label")" >/dev/null 2>&1
 }
 
 has_disabled_override() {
+  emulate -L zsh
+  local label="$1"
   /bin/launchctl print-disabled "$(domain)" 2>/dev/null \
-    | /usr/bin/grep -F "\"${LABEL}\" => true" >/dev/null 2>&1
+    | /usr/bin/grep -F "\"${label}\" => true" >/dev/null 2>&1
+}
+
+bootout_if_loaded() {
+  emulate -L zsh
+  local label="$1"
+
+  if is_loaded "$label"; then
+    /bin/launchctl bootout "$(service_name "$label")"
+    print -r -- "${label} unloaded for this login session"
+  fi
 }
 
 validate_installed_files() {
+  emulate -L zsh
+  hindsight_stack_load_config
+
   [[ -f "$PLIST" ]] || die "missing plist at ${PLIST}; run chezmoi apply for this target first"
   [[ ! -L "$PLIST" ]] || die "refusing symlinked plist at ${PLIST}"
   [[ -x "$SUPERVISOR" ]] || die "missing executable supervisor at ${SUPERVISOR}"
-  [[ -x "$UVX_BIN" ]] || die "uvx is not executable at ${UVX_BIN}"
+  [[ -r "$STACK_LIB" ]] || die "missing stack library at ${STACK_LIB}"
+  [[ -x "$HINDSIGHT_EMBED_UVX" ]] || die "uvx is not executable at ${HINDSIGHT_EMBED_UVX}"
   /usr/bin/plutil -lint "$PLIST" >/dev/null
 }
 
 validate_launchd_state() {
-  if has_disabled_override; then
-    die "launchd has a disabled override for ${LABEL}; clear it explicitly before starting"
+  emulate -L zsh
+  if has_disabled_override "$STACK_LABEL"; then
+    die "launchd has a disabled override for ${STACK_LABEL}; clear it explicitly before starting"
   fi
 }
 
-control_status() {
-  "$UVX_BIN" hindsight-embed control status --port "$PORT"
-}
-
-wait_for_control() {
-  local attempt
-
-  for attempt in {1..20}; do
-    if control_status >/dev/null 2>&1; then
-      return 0
-    fi
-    sleep 1
-  done
-
-  return 1
-}
-
 start_service() {
-  require_current_user
+  emulate -L zsh
+  hindsight_stack_require_current_user || exit 1
   validate_installed_files
   validate_launchd_state
   mkdir -p "${STATE_DIR}/logs"
 
-  if is_loaded; then
-    /bin/launchctl kickstart -k "$(service_name)"
+  bootout_if_loaded "$LEGACY_LABEL"
+
+  if is_loaded "$STACK_LABEL"; then
+    /bin/launchctl kickstart -k "$(service_name "$STACK_LABEL")"
   else
     /bin/launchctl bootstrap "$(domain)" "$PLIST"
   fi
 
-  if wait_for_control; then
-    print -r -- "${LABEL} is loaded and hindsight-embed control is healthy on port ${PORT}"
+  if hindsight_stack_start_all; then
+    print -r -- "${STACK_LABEL} is loaded and Hindsight stack is healthy"
   else
-    die "${LABEL} loaded, but hindsight-embed control did not become healthy; see ${LOG_FILE}"
+    die "${STACK_LABEL} loaded, but Hindsight stack did not become healthy; see ${LOG_FILE}"
   fi
 }
 
 stop_service() {
-  require_current_user
+  emulate -L zsh
+  hindsight_stack_require_current_user || exit 1
 
-  if is_loaded; then
-    /bin/launchctl bootout "$(service_name)"
-    print -r -- "${LABEL} unloaded for this login session"
-  else
-    print -r -- "${LABEL} is not loaded"
-  fi
+  bootout_if_loaded "$STACK_LABEL"
+  bootout_if_loaded "$LEGACY_LABEL"
 
-  if [[ -x "$UVX_BIN" ]]; then
-    "$UVX_BIN" hindsight-embed control stop --port "$PORT" >/dev/null 2>&1 || true
+  if [[ -x "$HINDSIGHT_EMBED_UVX" ]]; then
+    hindsight_stack_stop_all
   fi
 }
 
 show_status() {
-  require_current_user
+  emulate -L zsh
+  hindsight_stack_require_current_user || exit 1
   validate_installed_files
 
-  if is_loaded; then
-    print -r -- "launchd: loaded ($(service_name))"
+  if is_loaded "$STACK_LABEL"; then
+    print -r -- "launchd: loaded ($(service_name "$STACK_LABEL"))"
   else
-    print -r -- "launchd: not loaded ($(service_name))"
+    print -r -- "launchd: not loaded ($(service_name "$STACK_LABEL"))"
   fi
 
-  if has_disabled_override; then
+  if is_loaded "$LEGACY_LABEL"; then
+    print -r -- "legacy launchd: loaded ($(service_name "$LEGACY_LABEL"))"
+  else
+    print -r -- "legacy launchd: not loaded ($(service_name "$LEGACY_LABEL"))"
+  fi
+
+  if [[ -e "$LEGACY_PLIST" ]]; then
+    print -r -- "legacy plist: present (${LEGACY_PLIST})"
+  else
+    print -r -- "legacy plist: absent"
+  fi
+
+  if has_disabled_override "$STACK_LABEL"; then
     print -r -- "disabled override: true"
   else
     print -r -- "disabled override: false"
   fi
 
   print -r -- ""
-  if control_status; then
-    return 0
-  fi
-
-  print -ru2 -- "hindsight control status failed"
-  return 1
+  hindsight_stack_status_report
 }
 
 show_logs() {
+  emulate -L zsh
   mkdir -p "${STATE_DIR}/logs"
   touch "$LOG_FILE"
   tail -n 80 -f "$LOG_FILE"
@@ -150,6 +165,7 @@ main() {
   emulate -L zsh
   setopt pipe_fail no_unset
 
+  hindsight_stack_load_config
   local command="${1:-}"
 
   case "$command" in

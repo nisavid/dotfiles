@@ -1,0 +1,225 @@
+#!/usr/bin/env zsh
+set -euo pipefail
+
+STACK_LIB="${HINDSIGHT_EMBED_STACK_LIB:-$HOME/.local/lib/hindsight-embed-stack.zsh}"
+[[ -r "$STACK_LIB" ]] || {
+  print -ru2 -- "hindsight-embed-single-bank-cleanup: missing stack library at ${STACK_LIB}"
+  exit 1
+}
+. "$STACK_LIB"
+
+usage() {
+  cat <<EOF
+Usage: hindsight-embed-single-bank-cleanup [--dry-run] [--apply] [--allow-nonempty-target]
+
+Dry-run is the default. --apply archives local profile/pg0 state, migrates rows
+from claude_code and the legacy Engineering bank id into engineering, normalizes
+the active profile to systalyze, and deletes the claude-code profile.
+
+Options:
+  --dry-run                 Print planned archive, schema, and profile changes
+  --apply                   Perform the archive, database migration, and profile cleanup
+  --allow-nonempty-target   Permit merge into a target bank that already has non-bank rows
+  -h, --help                Show this help
+EOF
+}
+
+die() {
+  print -ru2 -- "hindsight-embed-single-bank-cleanup: $*"
+  exit 1
+}
+
+api_python() {
+  emulate -L zsh
+  local candidate="${HINDSIGHT_EMBED_API_PYTHON:-$HOME/.local/share/uv/tools/hindsight-api/bin/python}"
+  [[ -x "$candidate" ]] || die "missing executable Hindsight API Python at ${candidate}"
+  print -r -- "$candidate"
+}
+
+migration_helper() {
+  emulate -L zsh
+  local candidate="${HINDSIGHT_EMBED_MIGRATION_HELPER:-$HOME/.local/libexec/hindsight-embed-single-bank-migrate.py}"
+  [[ -r "$candidate" ]] || die "missing migration helper at ${candidate}"
+  print -r -- "$candidate"
+}
+
+archive_root_for_timestamp() {
+  emulate -L zsh
+  local stamp
+  stamp="$(/bin/date -u +%Y%m%dT%H%M%SZ)"
+  print -r -- "$HOME/.hindsight/archives/single-bank-cleanup-${stamp}"
+}
+
+archive_sources() {
+  emulate -L zsh
+  local archive_dir="$1"
+  local -a sources=(
+    "$HOME/.hindsight/profiles"
+    "$HOME/.pg0/instances/hindsight-embed-systalyze"
+    "$HOME/.pg0/instances/hindsight-embed-claude-code"
+    "$HOME/.pg0/instances/hindsight-embed-"
+  )
+  local source target
+
+  mkdir -p "$archive_dir"
+  for source in "${sources[@]}"; do
+    if [[ -e "$source" ]]; then
+      target="${archive_dir}/${source:t}"
+      /usr/bin/ditto "$source" "$target"
+      print -r -- "archived: ${source} -> ${target}"
+    else
+      print -r -- "archive skip, missing: ${source}"
+    fi
+  done
+}
+
+print_api_bank_counts() {
+  emulate -L zsh
+  hindsight_stack_load_config
+
+  local python
+  python="$(api_python)"
+  local url="http://127.0.0.1:${HINDSIGHT_EMBED_API_PORT}/v1/default/banks"
+  local tmp
+  tmp="$(mktemp -t hindsight-banks.XXXXXX)"
+
+  if /usr/bin/curl -fsS --max-time 5 "$url" >"$tmp"; then
+    print -r -- "API bank counts from ${url}:"
+    "$python" -m json.tool "$tmp"
+  else
+    print -r -- "API bank counts unavailable from ${url}"
+  fi
+  rm -f "$tmp"
+}
+
+stop_managed_and_legacy_services() {
+  emulate -L zsh
+  hindsight_stack_load_config
+
+  if [[ -x "$HOME/.local/bin/hindsight-embed-service" ]]; then
+    "$HOME/.local/bin/hindsight-embed-service" stop >/dev/null 2>&1 || true
+  else
+    hindsight_stack_stop_all || true
+  fi
+
+  "$HINDSIGHT_EMBED_UVX" hindsight-embed --profile claude-code ui stop >/dev/null 2>&1 || true
+  "$HINDSIGHT_EMBED_UVX" hindsight-embed --profile claude-code daemon stop >/dev/null 2>&1 || true
+}
+
+start_systalyze_daemon_only() {
+  emulate -L zsh
+  hindsight_stack_load_config
+
+  "$HINDSIGHT_EMBED_UVX" hindsight-embed --profile "$HINDSIGHT_EMBED_PROFILE" daemon start >/dev/null 2>&1
+  hindsight_stack_wait_daemon || die "systalyze daemon did not become healthy"
+}
+
+run_migration_helper() {
+  emulate -L zsh
+  local mode="$1"
+  local allow_nonempty="$2"
+  local python helper
+  python="$(api_python)"
+  helper="$(migration_helper)"
+
+  local -a args=(
+    "$helper"
+    --mode "$mode"
+    --profile "$HINDSIGHT_EMBED_PROFILE"
+    --target-bank engineering
+    --source-bank claude_code
+    --source-bank Engineering
+  )
+  if [[ "$allow_nonempty" == "1" ]]; then
+    args+=(--allow-nonempty-target)
+  fi
+
+  "$python" "${args[@]}"
+}
+
+normalize_profile_config() {
+  emulate -L zsh
+  hindsight_stack_load_config
+
+  "$HINDSIGHT_EMBED_UVX" hindsight-embed profile set-env "$HINDSIGHT_EMBED_PROFILE" HINDSIGHT_BANK_ID engineering >/dev/null
+  "$HINDSIGHT_EMBED_UVX" hindsight-embed profile set-active "$HINDSIGHT_EMBED_PROFILE" >/dev/null
+  "$HINDSIGHT_EMBED_UVX" hindsight-embed --profile "$HINDSIGHT_EMBED_PROFILE" daemon stop >/dev/null 2>&1 || true
+  "$HINDSIGHT_EMBED_UVX" hindsight-embed profile delete claude-code >/dev/null 2>&1 || true
+}
+
+dry_run() {
+  emulate -L zsh
+  hindsight_stack_require_tools
+
+  local archive_dir
+  archive_dir="$(archive_root_for_timestamp)"
+  print_api_bank_counts
+  print -r -- ""
+  print -r -- "planned archive directory: ${archive_dir}"
+  print -r -- "planned profile changes:"
+  print -r -- "  set ${HINDSIGHT_EMBED_PROFILE} HINDSIGHT_BANK_ID=engineering"
+  print -r -- "  set active profile to ${HINDSIGHT_EMBED_PROFILE}"
+  print -r -- "  delete claude-code profile after archive exists"
+  print -r -- ""
+  run_migration_helper dry-run "${allow_nonempty_target}"
+}
+
+apply_cleanup() {
+  emulate -L zsh
+  hindsight_stack_require_current_user
+  hindsight_stack_require_tools
+
+  local archive_dir
+  archive_dir="$(archive_root_for_timestamp)"
+
+  print_api_bank_counts
+  stop_managed_and_legacy_services
+  archive_sources "$archive_dir"
+  start_systalyze_daemon_only
+  run_migration_helper apply "${allow_nonempty_target}"
+  normalize_profile_config
+  "$HOME/.local/bin/hindsight-embed-service" start
+  print -r -- "archive directory: ${archive_dir}"
+}
+
+main() {
+  emulate -L zsh
+  setopt pipe_fail no_unset
+
+  apply=0
+  allow_nonempty_target=0
+
+  while (( $# )); do
+    case "$1" in
+      --dry-run)
+        apply=0
+        shift
+        ;;
+      --apply)
+        apply=1
+        shift
+        ;;
+      --allow-nonempty-target)
+        allow_nonempty_target=1
+        shift
+        ;;
+      -h|--help|help)
+        usage
+        return 0
+        ;;
+      *)
+        usage >&2
+        die "unknown argument: $1"
+        ;;
+    esac
+  done
+
+  hindsight_stack_load_config
+  if (( apply )); then
+    apply_cleanup
+  else
+    dry_run
+  fi
+}
+
+main "$@"
