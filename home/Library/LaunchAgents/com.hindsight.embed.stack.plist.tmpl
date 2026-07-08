@@ -36,29 +36,29 @@
     <key>HINDSIGHT_EMBED_UVX</key>
     <string>{{ joinPath .chezmoi.homeDir ".local/bin/uvx" }}</string>
     <key>HINDSIGHT_EMBED_CONTROL_PORT</key>
-    <string>7878</string>
+    <string>{{ .hindsight.controlPort }}</string>
     <key>HINDSIGHT_EMBED_PROFILE</key>
-    <string>systalyze</string>
+    <string>{{ .hindsight.profile }}</string>
     <key>HINDSIGHT_EMBED_API_PORT</key>
-    <string>7979</string>
+    <string>{{ .hindsight.apiPort }}</string>
     <key>HINDSIGHT_EMBED_UI_PORT</key>
-    <string>17979</string>
+    <string>{{ .hindsight.uiPort }}</string>
     <key>HINDSIGHT_EMBED_UI_HOSTNAME</key>
-    <string>127.0.0.1</string>
+    <string>{{ .hindsight.uiHostname }}</string>
     <key>HINDSIGHT_EMBED_AUTOSTART_DAEMON</key>
-    <string>1</string>
+    <string>{{ if .hindsight.autostartDaemon }}1{{ else }}0{{ end }}</string>
     <key>HINDSIGHT_EMBED_AUTOSTART_UI</key>
-    <string>1</string>
+    <string>{{ if .hindsight.autostartUi }}1{{ else }}0{{ end }}</string>
     <key>HINDSIGHT_EMBED_POLL_SECONDS</key>
-    <string>10</string>
+    <string>{{ .hindsight.pollSeconds }}</string>
     <key>HINDSIGHT_EMBED_STATE_DIR</key>
     <string>{{ joinPath .chezmoi.homeDir ".local/state/hindsight-embed-launchd" }}</string>
   </dict>
 
   <key>StandardOutPath</key>
-  <string>/dev/null</string>
+  <string>{{ joinPath .chezmoi.homeDir "Library/Logs/hindsight-embed-stack.launchd.out.log" }}</string>
   <key>StandardErrorPath</key>
-  <string>/dev/null</string>
+  <string>{{ joinPath .chezmoi.homeDir "Library/Logs/hindsight-embed-stack.launchd.err.log" }}</string>
 
   <key>Umask</key>
   <integer>63</integer>

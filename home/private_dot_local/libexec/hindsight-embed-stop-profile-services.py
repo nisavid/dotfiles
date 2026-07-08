@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import shlex
 import subprocess
 import sys
 import time
@@ -16,6 +17,7 @@ class Target:
     kind: str
     port: int
     pid: int
+    cleanup_path: Path | None = None
 
 
 class StopError(RuntimeError):
@@ -36,6 +38,25 @@ def process_command(pid: int) -> str:
     if result.returncode != 0:
         return ""
     return result.stdout.strip()
+
+
+def process_args(pid: int) -> list[str]:
+    command = process_command(pid)
+    if not command:
+        return []
+    try:
+        return shlex.split(command)
+    except ValueError:
+        return []
+
+
+def has_arg_value(argv: list[str], name: str, value: str) -> bool:
+    for index, arg in enumerate(argv):
+        if arg == name and index + 1 < len(argv) and argv[index + 1] == value:
+            return True
+        if arg == f"{name}={value}":
+            return True
+    return False
 
 
 def process_has_open_file(pid: int, path: Path) -> bool:
@@ -66,17 +87,26 @@ def owns_hindsight_api(pid: int, paths) -> bool:
 
 
 def owns_hindsight_ui(pid: int, port: int, paths, api_url: str) -> bool:
-    command = process_command(pid)
-    if command:
+    argv = process_args(pid)
+    if argv:
         has_ui_marker = (
-            "hindsight-control-plane" in command
-            or "@vectorize-io/hindsight-control-plane" in command
+            any("hindsight-control-plane" in arg for arg in argv)
+            or any("@vectorize-io/hindsight-control-plane" in arg for arg in argv)
         )
-        has_port_marker = f"--port {port}" in command or f"--port={port}" in command
-        has_api_marker = f"--api-url {api_url}" in command or f"--api-url={api_url}" in command
+        has_port_marker = has_arg_value(argv, "--port", str(port))
+        has_api_marker = has_arg_value(argv, "--api-url", api_url)
         if has_ui_marker and has_port_marker and has_api_marker:
             return True
     return process_has_open_file(pid, paths.ui_log)
+
+
+def owns_hindsight_control(pid: int, port: int) -> bool:
+    argv = process_args(pid)
+    if not argv:
+        return False
+    has_control_marker = any(arg == "hindsight_embed.control_center.server" for arg in argv)
+    has_port_marker = has_arg_value(argv, "--port", str(port))
+    return has_control_marker and has_port_marker
 
 
 def fail_unverified(kind: str, port: int, pid: int) -> None:
@@ -106,6 +136,17 @@ def find_owned_targets(manager: DaemonEmbedManager, paths, api_url: str, api_por
     return targets
 
 
+def find_control_target(manager: DaemonEmbedManager, port: int) -> list[Target]:
+    pid_path = Path.home() / ".hindsight" / "control.pid"
+    pid = manager._find_pid_on_port(port)
+    if pid is None:
+        pid_path.unlink(missing_ok=True)
+        return []
+    if not owns_hindsight_control(pid, port):
+        fail_unverified("control", port, pid)
+    return [Target("control", port, pid, pid_path)]
+
+
 def stop_targets(manager: DaemonEmbedManager, targets: list[Target]) -> None:
     killed: set[int] = set()
     for target in targets:
@@ -118,6 +159,9 @@ def stop_targets(manager: DaemonEmbedManager, targets: list[Target]) -> None:
     ports = {target.port for target in targets}
     for _ in range(30):
         if not any(manager._is_port_in_use(port) for port in ports):
+            for target in targets:
+                if target.cleanup_path is not None:
+                    target.cleanup_path.unlink(missing_ok=True)
             return
         time.sleep(0.1)
 
@@ -125,8 +169,12 @@ def stop_targets(manager: DaemonEmbedManager, targets: list[Target]) -> None:
     raise StopError("ports still listening after stop: " + ", ".join(busy))
 
 
-def resolve_targets(args: argparse.Namespace) -> list[Target]:
-    manager = DaemonEmbedManager()
+def resolve_targets(manager: DaemonEmbedManager, args: argparse.Namespace) -> list[Target]:
+    if args.mode == "stop-control":
+        if args.control_port is None:
+            raise StopError("stop-control mode requires --control-port")
+        return find_control_target(manager, args.control_port)
+
     profile_manager = manager._profile_manager
 
     profile_exists = profile_manager.profile_exists(args.profile)
@@ -193,10 +241,11 @@ def resolve_targets(args: argparse.Namespace) -> list[Target]:
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Safely stop Hindsight profile services.")
-    parser.add_argument("--mode", choices=("normalize", "stop", "stop-api", "stop-ui"), required=True)
+    parser.add_argument("--mode", choices=("normalize", "stop", "stop-api", "stop-ui", "stop-control"), required=True)
     parser.add_argument("--profile", default="")
     parser.add_argument("--desired-api-port", type=int)
     parser.add_argument("--desired-ui-port", type=int)
+    parser.add_argument("--control-port", type=int)
     parser.add_argument("--require-profile", action="store_true")
     parser.add_argument("--allow-unregistered-profile", action="store_true")
     return parser.parse_args(argv)
@@ -206,7 +255,7 @@ def main(argv: list[str]) -> int:
     try:
         args = parse_args(argv)
         manager = DaemonEmbedManager()
-        targets = resolve_targets(args)
+        targets = resolve_targets(manager, args)
         stop_targets(manager, targets)
     except StopError as exc:
         print(f"hindsight-embed-stop-profile-services: {exc}", file=sys.stderr)

@@ -1,0 +1,11 @@
+[hindsight]
+profile = "systalyze"
+bank = "engineering"
+clientApiUrl = "http://localhost:7979"
+controlPort = 7878
+apiPort = 7979
+uiPort = 17979
+uiHostname = "127.0.0.1"
+autostartDaemon = true
+autostartUi = true
+pollSeconds = 10

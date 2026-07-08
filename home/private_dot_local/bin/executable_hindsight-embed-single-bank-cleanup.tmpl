@@ -13,8 +13,8 @@ usage() {
 Usage: hindsight-embed-single-bank-cleanup [--dry-run] [--apply] [--allow-nonempty-target]
 
 Dry-run is the default. --apply archives local profile/pg0 state, migrates rows
-from claude_code and the legacy Engineering bank id into engineering, normalizes
-the active profile to systalyze, and deletes the claude-code profile.
+from known legacy source bank ids into the configured canonical bank, normalizes
+the configured active profile, and deletes the claude-code profile.
 
 Options:
   --dry-run                 Print planned archive, schema, and profile changes
@@ -56,7 +56,7 @@ archive_root_for_timestamp() {
   emulate -L zsh
   local stamp
   stamp="$(/bin/date -u +%Y%m%dT%H%M%SZ)"
-  print -r -- "$HOME/.hindsight/archives/single-bank-cleanup-${stamp}"
+  print -r -- "$HOME/.hindsight/archives/single-bank-cleanup-${stamp}-$$"
 }
 
 archive_sources() {
@@ -64,14 +64,15 @@ archive_sources() {
   local archive_dir="$1"
   local -a sources=(
     "$HOME/.hindsight/profiles"
-    "$HOME/.pg0/instances/hindsight-embed-systalyze"
+    "$HOME/.pg0/instances/hindsight-embed-{{ .hindsight.profile }}"
     "$HOME/.pg0/instances/hindsight-embed-claude-code"
     "$HOME/.pg0/instances/hindsight-embed-default"
     "$HOME/.pg0/instances/hindsight-embed-"
   )
   local source target
 
-  mkdir -p "$archive_dir" || die "failed to create archive directory: ${archive_dir}"
+  mkdir -p "${archive_dir:h}" || die "failed to create archive parent directory: ${archive_dir:h}"
+  mkdir "$archive_dir" || die "failed to create unique archive directory: ${archive_dir}"
   for source in "${sources[@]}"; do
     if [[ -e "$source" ]]; then
       target="${archive_dir}/${source:t}"
@@ -268,16 +269,19 @@ stop_managed_and_legacy_services() {
   return 0
 }
 
-start_systalyze_daemon_only() {
+start_profile_daemon_only() {
   emulate -L zsh
   hindsight_stack_load_config
 
   hindsight_stack_daemon_start ||
     die "failed to start ${HINDSIGHT_EMBED_PROFILE} daemon"
-  hindsight_stack_wait_daemon || die "systalyze daemon did not become healthy"
+  if (( ${+temporary_daemon_started} )); then
+    temporary_daemon_started=1
+  fi
+  hindsight_stack_wait_daemon || die "${HINDSIGHT_EMBED_PROFILE} daemon did not become healthy"
 }
 
-stop_systalyze_daemon_only() {
+stop_profile_daemon_only() {
   emulate -L zsh
   hindsight_stack_load_config
 
@@ -295,6 +299,10 @@ run_migration_helper() {
   local mode="$1"
   local allow_nonempty="$2"
   local python helper
+  local -a source_banks=(
+    claude_code
+    Engineering
+  )
   python="$(api_python)"
   helper="$(migration_helper)"
 
@@ -302,10 +310,12 @@ run_migration_helper() {
     "$helper"
     --mode "$mode"
     --profile "$HINDSIGHT_EMBED_PROFILE"
-    --target-bank engineering
-    --source-bank claude_code
-    --source-bank Engineering
+    --target-bank {{ .hindsight.bank | quote }}
   )
+  local source_bank
+  for source_bank in "${source_banks[@]}"; do
+    args+=(--source-bank "$source_bank")
+  done
   if [[ "$allow_nonempty" == "1" ]]; then
     args+=(--allow-nonempty-target)
   fi
@@ -318,10 +328,10 @@ normalize_profile_config() {
   hindsight_stack_load_config
   local profile_rc
 
-  set_profile_bank engineering
+  set_profile_bank {{ .hindsight.bank | quote }}
   "$HINDSIGHT_EMBED_UVX" hindsight-embed profile set-active "$HINDSIGHT_EMBED_PROFILE" >/dev/null ||
     die "failed to set active profile to ${HINDSIGHT_EMBED_PROFILE}"
-  stop_systalyze_daemon_only ||
+  stop_profile_daemon_only ||
     die "failed to stop temporary ${HINDSIGHT_EMBED_PROFILE} migration daemon"
   if profile_name_present claude-code; then
     profile_rc=0
@@ -368,7 +378,7 @@ dry_run() {
   print -r -- ""
   print -r -- "planned archive directory: ${archive_dir}"
   print -r -- "planned profile changes:"
-  print -r -- "  set ${HINDSIGHT_EMBED_PROFILE} HINDSIGHT_BANK_ID=engineering"
+  print -r -- "  set ${HINDSIGHT_EMBED_PROFILE} HINDSIGHT_BANK_ID={{ .hindsight.bank }}"
   print -r -- "  set active profile to ${HINDSIGHT_EMBED_PROFILE}"
   print -r -- "  delete claude-code profile after archive exists"
   print -r -- ""
@@ -382,22 +392,29 @@ apply_cleanup() {
 
   local archive_dir
   archive_dir="$(archive_root_for_timestamp)"
-  local cleanup_recovery_needed cleanup_bank_restore_needed
+  local cleanup_recovery_needed cleanup_bank_restore_needed temporary_daemon_started
   local previous_bank_id_present previous_bank_id previous_bank_id_rc
   cleanup_recovery_needed=0
   cleanup_bank_restore_needed=0
+  temporary_daemon_started=0
   previous_bank_id_present=0
   previous_bank_id=""
   restore_stack_after_failure() {
     emulate -L zsh
+    if (( temporary_daemon_started )); then
+      if stop_profile_daemon_only; then
+        temporary_daemon_started=0
+      else
+        print -ru2 -- "hindsight-embed-single-bank-cleanup: failed to stop temporary migration daemon before recovery"
+        cleanup_recovery_needed=0
+      fi
+    fi
     if (( cleanup_bank_restore_needed )); then
       print -ru2 -- "hindsight-embed-single-bank-cleanup: cleanup failed; restoring previous profile bank config"
       if ! restore_profile_bank "$previous_bank_id_present" "$previous_bank_id"; then
         print -ru2 -- "hindsight-embed-single-bank-cleanup: bank config restore failed; not restarting managed stack automatically"
         cleanup_recovery_needed=0
       fi
-      stop_systalyze_daemon_only ||
-        print -ru2 -- "hindsight-embed-single-bank-cleanup: failed to stop temporary migration daemon before recovery"
     fi
     if (( cleanup_recovery_needed )); then
       print -ru2 -- "hindsight-embed-single-bank-cleanup: cleanup failed; attempting to restart managed stack"
@@ -428,12 +445,13 @@ apply_cleanup() {
       die "failed to read previous ${HINDSIGHT_EMBED_PROFILE} HINDSIGHT_BANK_ID"
       ;;
   esac
-  set_profile_bank engineering
+  set_profile_bank {{ .hindsight.bank | quote }}
   cleanup_bank_restore_needed=1
-  start_systalyze_daemon_only || die "failed to start migration daemon"
+  start_profile_daemon_only || die "failed to start migration daemon"
   run_migration_helper apply "${allow_nonempty_target}" || die "bank migration failed"
   cleanup_bank_restore_needed=0
   normalize_profile_config || die "failed to normalize profile config"
+  temporary_daemon_started=0
   start_managed_stack || die "failed to restart managed stack"
   cleanup_recovery_needed=0
   trap - EXIT
