@@ -63,9 +63,21 @@ bootout_if_loaded() {
   local label="$1"
 
   if is_loaded "$label"; then
-    /bin/launchctl bootout "$(service_name "$label")"
+    /bin/launchctl bootout "$(service_name "$label")" || return 1
     print -r -- "${label} unloaded for this login session"
   fi
+}
+
+retire_legacy_plist() {
+  emulate -L zsh
+  [[ -e "$LEGACY_PLIST" ]] || return 0
+  [[ ! -L "$LEGACY_PLIST" ]] || die "refusing symlinked legacy plist at ${LEGACY_PLIST}"
+
+  local legacy_dir="${STATE_DIR}/legacy"
+  local archive="${legacy_dir}/${LEGACY_LABEL}.$(/bin/date -u +%Y%m%dT%H%M%SZ).plist"
+  mkdir -p "$legacy_dir" || die "failed to create legacy archive directory: ${legacy_dir}"
+  /bin/mv "$LEGACY_PLIST" "$archive" || die "failed to archive legacy plist at ${LEGACY_PLIST}"
+  print -r -- "legacy plist archived: ${archive}"
 }
 
 validate_installed_files() {
@@ -77,7 +89,7 @@ validate_installed_files() {
   [[ -x "$SUPERVISOR" ]] || die "missing executable supervisor at ${SUPERVISOR}"
   [[ -r "$STACK_LIB" ]] || die "missing stack library at ${STACK_LIB}"
   [[ -x "$HINDSIGHT_EMBED_UVX" ]] || die "uvx is not executable at ${HINDSIGHT_EMBED_UVX}"
-  /usr/bin/plutil -lint "$PLIST" >/dev/null
+  /usr/bin/plutil -lint "$PLIST" >/dev/null || die "plist failed lint: ${PLIST}"
 }
 
 validate_launchd_state() {
@@ -92,17 +104,21 @@ start_service() {
   hindsight_stack_require_current_user || exit 1
   validate_installed_files
   validate_launchd_state
-  mkdir -p "${STATE_DIR}/logs"
+  mkdir -p "${STATE_DIR}/logs" || die "failed to create log directory: ${STATE_DIR}/logs"
 
-  bootout_if_loaded "$LEGACY_LABEL"
+  bootout_if_loaded "$LEGACY_LABEL" || die "failed to unload ${LEGACY_LABEL}"
 
   if is_loaded "$STACK_LABEL"; then
-    /bin/launchctl kickstart -k "$(service_name "$STACK_LABEL")"
+    /bin/launchctl kickstart -k "$(service_name "$STACK_LABEL")" ||
+      die "failed to restart ${STACK_LABEL}"
   else
-    /bin/launchctl bootstrap "$(domain)" "$PLIST"
+    /bin/launchctl bootstrap "$(domain)" "$PLIST" ||
+      die "failed to load ${STACK_LABEL} from ${PLIST}"
   fi
+  is_loaded "$STACK_LABEL" || die "${STACK_LABEL} is not loaded after launchctl operation"
 
   if hindsight_stack_start_all; then
+    retire_legacy_plist
     print -r -- "${STACK_LABEL} is loaded and Hindsight stack is healthy"
   else
     die "${STACK_LABEL} loaded, but Hindsight stack did not become healthy; see ${LOG_FILE}"
@@ -113,11 +129,11 @@ stop_service() {
   emulate -L zsh
   hindsight_stack_require_current_user || exit 1
 
-  bootout_if_loaded "$STACK_LABEL"
-  bootout_if_loaded "$LEGACY_LABEL"
+  bootout_if_loaded "$STACK_LABEL" || die "failed to unload ${STACK_LABEL}"
+  bootout_if_loaded "$LEGACY_LABEL" || die "failed to unload ${LEGACY_LABEL}"
 
   if [[ -x "$HINDSIGHT_EMBED_UVX" ]]; then
-    hindsight_stack_stop_all
+    hindsight_stack_stop_all || die "failed to stop Hindsight stack"
   fi
 }
 
@@ -156,8 +172,8 @@ show_status() {
 
 show_logs() {
   emulate -L zsh
-  mkdir -p "${STATE_DIR}/logs"
-  touch "$LOG_FILE"
+  mkdir -p "${STATE_DIR}/logs" || die "failed to create log directory: ${STATE_DIR}/logs"
+  touch "$LOG_FILE" || die "failed to open log file: ${LOG_FILE}"
   tail -n 80 -f "$LOG_FILE"
 }
 

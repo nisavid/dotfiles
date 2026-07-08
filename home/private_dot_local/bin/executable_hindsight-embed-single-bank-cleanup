@@ -43,6 +43,15 @@ migration_helper() {
   print -r -- "$candidate"
 }
 
+start_managed_stack() {
+  emulate -L zsh
+  if [[ -x "$HOME/.local/bin/hindsight-embed-service" ]]; then
+    "$HOME/.local/bin/hindsight-embed-service" start
+  else
+    hindsight_stack_start_all
+  fi
+}
+
 archive_root_for_timestamp() {
   emulate -L zsh
   local stamp
@@ -57,20 +66,154 @@ archive_sources() {
     "$HOME/.hindsight/profiles"
     "$HOME/.pg0/instances/hindsight-embed-systalyze"
     "$HOME/.pg0/instances/hindsight-embed-claude-code"
+    "$HOME/.pg0/instances/hindsight-embed-default"
     "$HOME/.pg0/instances/hindsight-embed-"
   )
   local source target
 
-  mkdir -p "$archive_dir"
+  mkdir -p "$archive_dir" || die "failed to create archive directory: ${archive_dir}"
   for source in "${sources[@]}"; do
     if [[ -e "$source" ]]; then
       target="${archive_dir}/${source:t}"
-      /usr/bin/ditto "$source" "$target"
+      /usr/bin/ditto "$source" "$target" || die "failed to archive ${source} to ${target}"
       print -r -- "archived: ${source} -> ${target}"
     else
       print -r -- "archive skip, missing: ${source}"
     fi
   done
+}
+
+profile_name_present() {
+  emulate -L zsh
+  local profile="$1"
+  profile_config_path "$profile" >/dev/null
+}
+
+profile_config_path() {
+  emulate -L zsh
+  local profile="$1"
+  local python tmp rc
+  python="$(api_python)"
+  tmp="$(mktemp -t hindsight-profiles.XXXXXX)" || die "failed to create temporary profile-list file"
+
+  if ! "$HINDSIGHT_EMBED_UVX" hindsight-embed profile list -o json >"$tmp" 2>/dev/null; then
+    rm -f "$tmp"
+    print -ru2 -- "hindsight-embed-single-bank-cleanup: failed to list Hindsight profiles"
+    return 2
+  fi
+
+  if "$python" - "$profile" "$tmp" <<'PY'
+import json
+import sys
+
+profile = sys.argv[1]
+path = sys.argv[2]
+try:
+    with open(path, encoding="utf-8") as handle:
+        profiles = json.load(handle)
+except (OSError, json.JSONDecodeError):
+    raise SystemExit(2)
+
+if not isinstance(profiles, list):
+    raise SystemExit(2)
+
+for item in profiles:
+    if isinstance(item, dict) and item.get("name") == profile:
+        config = item.get("config")
+        if not isinstance(config, str) or not config:
+            raise SystemExit(2)
+        print(config)
+        raise SystemExit(0)
+
+raise SystemExit(1)
+PY
+  then
+    rc=0
+  else
+    rc=$?
+  fi
+  rm -f "$tmp"
+  case "$rc" in
+    0)
+      return 0
+      ;;
+    1)
+      return 1
+      ;;
+    *)
+      print -ru2 -- "hindsight-embed-single-bank-cleanup: failed to parse Hindsight profile list"
+      return 2
+      ;;
+  esac
+}
+
+profile_env_value() {
+  emulate -L zsh
+  local profile="$1"
+  local key="$2"
+  local python config_path profile_rc
+  python="$(api_python)"
+  if config_path="$(profile_config_path "$profile")"; then
+    profile_rc=0
+  else
+    profile_rc=$?
+  fi
+  case "$profile_rc" in
+    0)
+      ;;
+    1)
+      return 1
+      ;;
+    *)
+      return "$profile_rc"
+      ;;
+  esac
+
+  "$python" - "$config_path" "$key" <<'PY'
+import sys
+
+path = sys.argv[1]
+key = sys.argv[2]
+prefix = f"{key}="
+
+try:
+    with open(path, encoding="utf-8") as handle:
+        for line in handle:
+            line = line.rstrip("\n").strip()
+            if line.startswith("export "):
+                line = line[7:].strip()
+            if line.startswith(prefix):
+                print(line[len(prefix):])
+                raise SystemExit(0)
+except OSError:
+    raise SystemExit(2)
+
+raise SystemExit(1)
+PY
+}
+
+set_profile_bank() {
+  emulate -L zsh
+  local bank_id="$1"
+  hindsight_stack_load_config
+
+  "$HINDSIGHT_EMBED_UVX" hindsight-embed profile set-env "$HINDSIGHT_EMBED_PROFILE" HINDSIGHT_BANK_ID "$bank_id" >/dev/null ||
+    die "failed to set ${HINDSIGHT_EMBED_PROFILE} HINDSIGHT_BANK_ID"
+}
+
+restore_profile_bank() {
+  emulate -L zsh
+  local previous_present="$1"
+  local previous_value="$2"
+  hindsight_stack_load_config
+
+  if [[ "$previous_present" == "1" ]]; then
+    "$HINDSIGHT_EMBED_UVX" hindsight-embed profile set-env "$HINDSIGHT_EMBED_PROFILE" HINDSIGHT_BANK_ID "$previous_value" >/dev/null ||
+      return 1
+  else
+    "$HINDSIGHT_EMBED_UVX" hindsight-embed profile remove-env "$HINDSIGHT_EMBED_PROFILE" HINDSIGHT_BANK_ID >/dev/null 2>&1 ||
+      return 1
+  fi
 }
 
 print_api_bank_counts() {
@@ -81,13 +224,18 @@ print_api_bank_counts() {
   python="$(api_python)"
   local url="http://127.0.0.1:${HINDSIGHT_EMBED_API_PORT}/v1/default/banks"
   local tmp
-  tmp="$(mktemp -t hindsight-banks.XXXXXX)"
+  tmp="$(mktemp -t hindsight-banks.XXXXXX)" || die "failed to create temporary bank-count file"
 
   if /usr/bin/curl -fsS --max-time 5 "$url" >"$tmp"; then
     print -r -- "API bank counts from ${url}:"
-    "$python" -m json.tool "$tmp"
+    "$python" -m json.tool "$tmp" || {
+      rm -f "$tmp"
+      return 1
+    }
   else
     print -r -- "API bank counts unavailable from ${url}"
+    rm -f "$tmp"
+    return 1
   fi
   rm -f "$tmp"
 }
@@ -97,21 +245,49 @@ stop_managed_and_legacy_services() {
   hindsight_stack_load_config
 
   if [[ -x "$HOME/.local/bin/hindsight-embed-service" ]]; then
-    "$HOME/.local/bin/hindsight-embed-service" stop >/dev/null 2>&1 || true
+    "$HOME/.local/bin/hindsight-embed-service" stop >/dev/null 2>&1 ||
+      die "failed to stop managed Hindsight service"
   else
-    hindsight_stack_stop_all || true
+    hindsight_stack_stop_all || die "failed to stop Hindsight stack"
   fi
 
-  "$HINDSIGHT_EMBED_UVX" hindsight-embed --profile claude-code ui stop >/dev/null 2>&1 || true
-  "$HINDSIGHT_EMBED_UVX" hindsight-embed --profile claude-code daemon stop >/dev/null 2>&1 || true
+  hindsight_stack_run_stop_helper \
+    --mode stop \
+    --profile "claude-code" \
+    --allow-unregistered-profile ||
+    die "failed to stop claude-code profile services"
+  hindsight_stack_run_stop_helper \
+    --mode stop \
+    --profile "" \
+    --allow-unregistered-profile ||
+    die "failed to stop default profile services"
+
+  hindsight_stack_ui_running && die "${HINDSIGHT_EMBED_PROFILE} UI is still running after stop"
+  hindsight_stack_daemon_running && die "${HINDSIGHT_EMBED_PROFILE} daemon is still running after stop"
+  hindsight_stack_control_running && die "control center is still running after stop"
+  return 0
 }
 
 start_systalyze_daemon_only() {
   emulate -L zsh
   hindsight_stack_load_config
 
-  "$HINDSIGHT_EMBED_UVX" hindsight-embed --profile "$HINDSIGHT_EMBED_PROFILE" daemon start >/dev/null 2>&1
+  hindsight_stack_daemon_start ||
+    die "failed to start ${HINDSIGHT_EMBED_PROFILE} daemon"
   hindsight_stack_wait_daemon || die "systalyze daemon did not become healthy"
+}
+
+stop_systalyze_daemon_only() {
+  emulate -L zsh
+  hindsight_stack_load_config
+
+  hindsight_stack_run_stop_helper \
+    --mode stop-api \
+    --profile "$HINDSIGHT_EMBED_PROFILE" \
+    --desired-api-port "$HINDSIGHT_EMBED_API_PORT" ||
+    return 1
+  hindsight_stack_wait_stopped_for daemon "$HINDSIGHT_EMBED_STOP_WAIT_SECONDS" ||
+    return 1
 }
 
 run_migration_helper() {
@@ -140,20 +316,55 @@ run_migration_helper() {
 normalize_profile_config() {
   emulate -L zsh
   hindsight_stack_load_config
+  local profile_rc
 
-  "$HINDSIGHT_EMBED_UVX" hindsight-embed profile set-env "$HINDSIGHT_EMBED_PROFILE" HINDSIGHT_BANK_ID engineering >/dev/null
-  "$HINDSIGHT_EMBED_UVX" hindsight-embed profile set-active "$HINDSIGHT_EMBED_PROFILE" >/dev/null
-  "$HINDSIGHT_EMBED_UVX" hindsight-embed --profile "$HINDSIGHT_EMBED_PROFILE" daemon stop >/dev/null 2>&1 || true
-  "$HINDSIGHT_EMBED_UVX" hindsight-embed profile delete claude-code >/dev/null 2>&1 || true
+  set_profile_bank engineering
+  "$HINDSIGHT_EMBED_UVX" hindsight-embed profile set-active "$HINDSIGHT_EMBED_PROFILE" >/dev/null ||
+    die "failed to set active profile to ${HINDSIGHT_EMBED_PROFILE}"
+  stop_systalyze_daemon_only ||
+    die "failed to stop temporary ${HINDSIGHT_EMBED_PROFILE} migration daemon"
+  if profile_name_present claude-code; then
+    profile_rc=0
+  else
+    profile_rc=$?
+  fi
+  case "$profile_rc" in
+    0)
+      "$HINDSIGHT_EMBED_UVX" hindsight-embed profile delete claude-code >/dev/null ||
+        die "failed to delete claude-code profile"
+      ;;
+    1)
+      ;;
+    *)
+      die "failed to check claude-code profile before delete"
+      ;;
+  esac
+
+  if profile_name_present claude-code; then
+    profile_rc=0
+  else
+    profile_rc=$?
+  fi
+  case "$profile_rc" in
+    0)
+      die "claude-code profile still exists after delete"
+      ;;
+    1)
+      ;;
+    *)
+      die "failed to verify claude-code profile deletion"
+      ;;
+  esac
+  return 0
 }
 
 dry_run() {
   emulate -L zsh
-  hindsight_stack_require_tools
+  hindsight_stack_require_tools || exit 1
 
   local archive_dir
   archive_dir="$(archive_root_for_timestamp)"
-  print_api_bank_counts
+  print_api_bank_counts || exit 1
   print -r -- ""
   print -r -- "planned archive directory: ${archive_dir}"
   print -r -- "planned profile changes:"
@@ -161,24 +372,71 @@ dry_run() {
   print -r -- "  set active profile to ${HINDSIGHT_EMBED_PROFILE}"
   print -r -- "  delete claude-code profile after archive exists"
   print -r -- ""
-  run_migration_helper dry-run "${allow_nonempty_target}"
+  run_migration_helper dry-run "${allow_nonempty_target}" || exit 1
 }
 
 apply_cleanup() {
   emulate -L zsh
-  hindsight_stack_require_current_user
-  hindsight_stack_require_tools
+  hindsight_stack_require_current_user || exit 1
+  hindsight_stack_require_tools || exit 1
 
   local archive_dir
   archive_dir="$(archive_root_for_timestamp)"
+  local cleanup_recovery_needed cleanup_bank_restore_needed
+  local previous_bank_id_present previous_bank_id previous_bank_id_rc
+  cleanup_recovery_needed=0
+  cleanup_bank_restore_needed=0
+  previous_bank_id_present=0
+  previous_bank_id=""
+  restore_stack_after_failure() {
+    emulate -L zsh
+    if (( cleanup_bank_restore_needed )); then
+      print -ru2 -- "hindsight-embed-single-bank-cleanup: cleanup failed; restoring previous profile bank config"
+      if ! restore_profile_bank "$previous_bank_id_present" "$previous_bank_id"; then
+        print -ru2 -- "hindsight-embed-single-bank-cleanup: bank config restore failed; not restarting managed stack automatically"
+        cleanup_recovery_needed=0
+      fi
+      stop_systalyze_daemon_only ||
+        print -ru2 -- "hindsight-embed-single-bank-cleanup: failed to stop temporary migration daemon before recovery"
+    fi
+    if (( cleanup_recovery_needed )); then
+      print -ru2 -- "hindsight-embed-single-bank-cleanup: cleanup failed; attempting to restart managed stack"
+      start_managed_stack >/dev/null 2>&1 ||
+        print -ru2 -- "hindsight-embed-single-bank-cleanup: restart attempt failed; run hindsight-embed-service start"
+    fi
+  }
+  trap restore_stack_after_failure EXIT
 
-  print_api_bank_counts
-  stop_managed_and_legacy_services
-  archive_sources "$archive_dir"
-  start_systalyze_daemon_only
-  run_migration_helper apply "${allow_nonempty_target}"
-  normalize_profile_config
-  "$HOME/.local/bin/hindsight-embed-service" start
+  print_api_bank_counts || die "failed to record API bank counts"
+  cleanup_recovery_needed=1
+  stop_managed_and_legacy_services || die "failed to stop managed and legacy services"
+  archive_sources "$archive_dir" || die "failed to archive cleanup sources"
+  if previous_bank_id="$(profile_env_value "$HINDSIGHT_EMBED_PROFILE" HINDSIGHT_BANK_ID)"; then
+    previous_bank_id_rc=0
+  else
+    previous_bank_id_rc=$?
+  fi
+  case "$previous_bank_id_rc" in
+    0)
+      previous_bank_id_present=1
+      ;;
+    1)
+      previous_bank_id_present=0
+      previous_bank_id=""
+      ;;
+    *)
+      die "failed to read previous ${HINDSIGHT_EMBED_PROFILE} HINDSIGHT_BANK_ID"
+      ;;
+  esac
+  set_profile_bank engineering
+  cleanup_bank_restore_needed=1
+  start_systalyze_daemon_only || die "failed to start migration daemon"
+  run_migration_helper apply "${allow_nonempty_target}" || die "bank migration failed"
+  cleanup_bank_restore_needed=0
+  normalize_profile_config || die "failed to normalize profile config"
+  start_managed_stack || die "failed to restart managed stack"
+  cleanup_recovery_needed=0
+  trap - EXIT
   print -r -- "archive directory: ${archive_dir}"
 }
 

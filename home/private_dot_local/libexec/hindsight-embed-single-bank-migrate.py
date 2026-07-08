@@ -14,6 +14,25 @@ import asyncpg
 
 DEFAULT_DB_AUTH = ("hindsight", "hindsight")
 DEFAULT_DB_NAME = "hindsight"
+EXPECTED_BANK_ID_TABLES = {
+    ("public", "async_operations"),
+    ("public", "audit_log"),
+    ("public", "bank_stats_cache"),
+    ("public", "banks"),
+    ("public", "chunks"),
+    ("public", "directives"),
+    ("public", "documents"),
+    ("public", "entities"),
+    ("public", "graph_maintenance_queue"),
+    ("public", "invalidated_memory_units"),
+    ("public", "llm_requests"),
+    ("public", "memory_links"),
+    ("public", "memory_units"),
+    ("public", "mental_model_history"),
+    ("public", "mental_models"),
+    ("public", "observation_history"),
+    ("public", "webhooks"),
+}
 
 
 class MigrationError(RuntimeError):
@@ -77,14 +96,33 @@ def database_url_for_profile(profile: str) -> str:
 async def fetch_bank_tables(conn: asyncpg.Connection) -> list[BankTable]:
     rows = await conn.fetch(
         """
-        SELECT table_schema, table_name
+        SELECT columns.table_schema, columns.table_name
         FROM information_schema.columns
-        WHERE table_schema = 'public'
-          AND column_name = 'bank_id'
-        ORDER BY table_schema, table_name
+        JOIN information_schema.tables
+          ON tables.table_schema = columns.table_schema
+         AND tables.table_name = columns.table_name
+        WHERE columns.table_schema = 'public'
+          AND columns.column_name = 'bank_id'
+          AND tables.table_type = 'BASE TABLE'
+        ORDER BY columns.table_schema, columns.table_name
         """
     )
     return [BankTable(row["table_schema"], row["table_name"]) for row in rows]
+
+
+def validate_bank_tables(tables: list[BankTable]) -> None:
+    actual = {(table.schema, table.table) for table in tables}
+    missing = sorted(EXPECTED_BANK_ID_TABLES - actual)
+    extra = sorted(actual - EXPECTED_BANK_ID_TABLES)
+    if extra:
+        raise MigrationError(
+            "unreviewed bank_id tables: " + ", ".join(f"{schema}.{table}" for schema, table in extra)
+        )
+    if missing:
+        message = "missing reviewed bank_id tables: " + ", ".join(f"{schema}.{table}" for schema, table in missing)
+        if os.getenv("HINDSIGHT_EMBED_MIGRATION_STRICT_SCHEMA"):
+            raise MigrationError(message)
+        print(f"warning: {message}", file=sys.stderr)
 
 
 async def fetch_unhandled_bank_columns(conn: asyncpg.Connection) -> list[str]:
@@ -166,6 +204,14 @@ async def fetch_foreign_keys(conn: asyncpg.Connection) -> list[ForeignKey]:
     ]
 
 
+async def lock_tables(conn: asyncpg.Connection, tables: list[BankTable]) -> None:
+    if not tables:
+        return
+
+    qualified_tables = ", ".join(table.qualified for table in tables)
+    await conn.execute(f"LOCK TABLE {qualified_tables} IN SHARE ROW EXCLUSIVE MODE")
+
+
 def print_counts(title: str, counts: dict[str, dict[str, int]]) -> None:
     print(title)
     for table, table_counts in counts.items():
@@ -176,23 +222,48 @@ def print_counts(title: str, counts: dict[str, dict[str, int]]) -> None:
         print(f"  {table}: {rendered}")
 
 
-async def assert_bank_rows(
+def source_reference_counts(
+    counts: dict[str, dict[str, int]],
+    source_banks: list[str],
+    *,
+    include_banks_table: bool = True,
+) -> dict[str, int]:
+    return {
+        bank_id: sum(
+            table_counts.get(bank_id, 0)
+            for table, table_counts in counts.items()
+            if include_banks_table or table != "public.banks"
+        )
+        for bank_id in source_banks
+    }
+
+
+def validate_distinct_bank_ids(
+    distinct_bank_ids: dict[str, list[str]],
+    source_banks: list[str],
+    target_bank: str,
+) -> None:
+    unexpected_values: list[str] = []
+    expected = {*source_banks, target_bank}
+    for table, values in distinct_bank_ids.items():
+        unexpected = [value for value in values if value not in expected]
+        if unexpected:
+            unexpected_values.append(f"{table}: {', '.join(unexpected)}")
+    if unexpected_values:
+        raise MigrationError(
+            "database contains unplanned bank_id values; rerun with additional --source-bank values "
+            "or resolve manually: "
+            + "; ".join(unexpected_values)
+        )
+
+
+async def assert_target_bank(
     conn: asyncpg.Connection,
     target_bank: str,
-    source_banks: list[str],
-    counts: dict[str, dict[str, int]],
 ) -> None:
     target_exists = await conn.fetchval("SELECT EXISTS (SELECT 1 FROM banks WHERE bank_id = $1)", target_bank)
     if not target_exists:
         raise MigrationError(f"target bank does not exist: {target_bank}")
-
-    source_refs = {
-        bank_id: sum(table_counts.get(bank_id, 0) for table_counts in counts.values())
-        for bank_id in source_banks
-    }
-    missing = [bank_id for bank_id, count in source_refs.items() if count == 0]
-    if missing:
-        raise MigrationError(f"source bank has no references to migrate: {', '.join(missing)}")
 
 
 async def migrate(args: argparse.Namespace) -> None:
@@ -200,6 +271,7 @@ async def migrate(args: argparse.Namespace) -> None:
     conn = await asyncpg.connect(database_url)
     try:
         tables = await fetch_bank_tables(conn)
+        validate_bank_tables(tables)
         update_tables = [table for table in tables if table.table != "banks"]
         bank_ids_to_count = [*args.source_bank, args.target_bank]
         counts = await fetch_bank_counts(conn, tables, bank_ids_to_count)
@@ -214,16 +286,7 @@ async def migrate(args: argparse.Namespace) -> None:
         print(f"foreign keys to cycle transactionally: {len(foreign_keys)}")
         print_counts("current rows by planned bank:", counts)
 
-        unexpected_values: list[str] = []
-        expected = {*args.source_bank, args.target_bank}
-        for table, values in distinct_bank_ids.items():
-            unexpected = [value for value in values if value not in expected]
-            if unexpected:
-                unexpected_values.append(f"{table}: {', '.join(unexpected)}")
-        if unexpected_values:
-            print("other bank_id values left untouched:")
-            for value in unexpected_values:
-                print(f"  {value}")
+        validate_distinct_bank_ids(distinct_bank_ids, args.source_bank, args.target_bank)
 
         if unhandled_columns:
             raise MigrationError(
@@ -231,27 +294,71 @@ async def migrate(args: argparse.Namespace) -> None:
                 + ", ".join(unhandled_columns)
             )
 
-        await assert_bank_rows(conn, args.target_bank, args.source_bank, counts)
+        await assert_target_bank(conn, args.target_bank)
 
-        target_nonempty = sum(
-            table_counts.get(args.target_bank, 0)
-            for table, table_counts in counts.items()
-            if table != "public.banks"
-        )
-        if target_nonempty and not args.allow_nonempty_target:
-            raise MigrationError(
-                f"target bank has {target_nonempty} non-bank rows; rerun with --allow-nonempty-target "
-                "only after confirming they are safe to merge"
-            )
-        if target_nonempty:
-            print(f"nonempty target override: {target_nonempty} existing non-bank rows")
+        source_refs = source_reference_counts(counts, args.source_bank, include_banks_table=False)
+        source_non_bank_total = sum(source_refs.values())
+        source_bank_row_total = sum(counts.get("public.banks", {}).get(bank_id, 0) for bank_id in args.source_bank)
+        if source_non_bank_total == 0 and source_bank_row_total == 0:
+            print("already clean: no source-bank references remain")
+            return
+        if source_non_bank_total == 0:
+            if args.mode == "dry-run":
+                print(f"dry-run: would delete {source_bank_row_total} source bank row(s); no non-bank references remain")
+                return
 
         if args.mode == "dry-run":
+            target_nonempty = sum(
+                table_counts.get(args.target_bank, 0)
+                for table, table_counts in counts.items()
+                if table != "public.banks"
+            )
+            if target_nonempty and not args.allow_nonempty_target:
+                raise MigrationError(
+                    f"target bank has {target_nonempty} non-bank rows; rerun with --allow-nonempty-target "
+                    "only after confirming they are safe to merge"
+                )
+            if target_nonempty:
+                print(f"nonempty target override: {target_nonempty} existing non-bank rows")
             print("dry-run: no database changes made")
             return
 
         async with conn.transaction():
             await conn.execute("SELECT pg_advisory_xact_lock(hashtext('hindsight-single-bank-cleanup'))")
+            await lock_tables(conn, tables)
+
+            locked_distinct_bank_ids = await fetch_distinct_bank_ids(conn, tables)
+            validate_distinct_bank_ids(locked_distinct_bank_ids, args.source_bank, args.target_bank)
+            locked_counts = await fetch_bank_counts(conn, tables, bank_ids_to_count)
+            locked_source_refs = source_reference_counts(locked_counts, args.source_bank, include_banks_table=False)
+            locked_source_non_bank_total = sum(locked_source_refs.values())
+            locked_source_bank_row_total = sum(
+                locked_counts.get("public.banks", {}).get(bank_id, 0) for bank_id in args.source_bank
+            )
+            if locked_source_non_bank_total == 0 and locked_source_bank_row_total == 0:
+                print("already clean: no source-bank references remain")
+                return
+            if locked_source_non_bank_total == 0:
+                status = await conn.execute(
+                    "DELETE FROM banks WHERE bank_id = ANY($1::text[])",
+                    args.source_bank,
+                )
+                print(f"public.banks: {status}")
+                print("apply: source bank rows removed")
+                return
+
+            target_nonempty = sum(
+                table_counts.get(args.target_bank, 0)
+                for table, table_counts in locked_counts.items()
+                if table != "public.banks"
+            )
+            if target_nonempty and not args.allow_nonempty_target:
+                raise MigrationError(
+                    f"target bank has {target_nonempty} non-bank rows; rerun with --allow-nonempty-target "
+                    "only after confirming they are safe to merge"
+                )
+            if target_nonempty:
+                print(f"nonempty target override: {target_nonempty} existing non-bank rows")
 
             for fk in foreign_keys:
                 await conn.execute(
