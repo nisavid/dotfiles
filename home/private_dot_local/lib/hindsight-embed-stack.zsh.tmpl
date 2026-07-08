@@ -9,15 +9,15 @@ hindsight_stack_load_config() {
   setopt no_unset
 
   typeset -g HINDSIGHT_EMBED_UVX="${HINDSIGHT_EMBED_UVX:-$HOME/.local/bin/uvx}"
-  typeset -g HINDSIGHT_EMBED_CONTROL_PORT="${HINDSIGHT_EMBED_CONTROL_PORT:-7878}"
-  typeset -g HINDSIGHT_EMBED_PROFILE="${HINDSIGHT_EMBED_PROFILE:-systalyze}"
-  typeset -g HINDSIGHT_EMBED_API_PORT="${HINDSIGHT_EMBED_API_PORT:-7979}"
-  typeset -g HINDSIGHT_EMBED_UI_PORT="${HINDSIGHT_EMBED_UI_PORT:-17979}"
-  typeset -g HINDSIGHT_EMBED_UI_HOSTNAME="${HINDSIGHT_EMBED_UI_HOSTNAME:-127.0.0.1}"
+  typeset -g HINDSIGHT_EMBED_CONTROL_PORT="${HINDSIGHT_EMBED_CONTROL_PORT:-{{ .hindsight.controlPort }}}"
+  typeset -g HINDSIGHT_EMBED_PROFILE="${HINDSIGHT_EMBED_PROFILE:-{{ .hindsight.profile }}}"
+  typeset -g HINDSIGHT_EMBED_API_PORT="${HINDSIGHT_EMBED_API_PORT:-{{ .hindsight.apiPort }}}"
+  typeset -g HINDSIGHT_EMBED_UI_PORT="${HINDSIGHT_EMBED_UI_PORT:-{{ .hindsight.uiPort }}}"
+  typeset -g HINDSIGHT_EMBED_UI_HOSTNAME="${HINDSIGHT_EMBED_UI_HOSTNAME:-{{ .hindsight.uiHostname }}}"
   typeset -g HINDSIGHT_EMBED_PYTHON="${HINDSIGHT_EMBED_PYTHON:-$HOME/.local/share/uv/tools/hindsight-embed/bin/python}"
   typeset -g HINDSIGHT_EMBED_STOP_HELPER="${HINDSIGHT_EMBED_STOP_HELPER:-$HOME/.local/libexec/hindsight-embed-stop-profile-services.py}"
-  typeset -g HINDSIGHT_EMBED_AUTOSTART_DAEMON="${HINDSIGHT_EMBED_AUTOSTART_DAEMON:-1}"
-  typeset -g HINDSIGHT_EMBED_AUTOSTART_UI="${HINDSIGHT_EMBED_AUTOSTART_UI:-1}"
+  typeset -g HINDSIGHT_EMBED_AUTOSTART_DAEMON="${HINDSIGHT_EMBED_AUTOSTART_DAEMON:-{{ if .hindsight.autostartDaemon }}1{{ else }}0{{ end }}}"
+  typeset -g HINDSIGHT_EMBED_AUTOSTART_UI="${HINDSIGHT_EMBED_AUTOSTART_UI:-{{ if .hindsight.autostartUi }}1{{ else }}0{{ end }}}"
   typeset -g HINDSIGHT_EMBED_CONTROL_WAIT_SECONDS="${HINDSIGHT_EMBED_CONTROL_WAIT_SECONDS:-30}"
   typeset -g HINDSIGHT_EMBED_DAEMON_WAIT_SECONDS="${HINDSIGHT_EMBED_DAEMON_WAIT_SECONDS:-120}"
   typeset -g HINDSIGHT_EMBED_UI_WAIT_SECONDS="${HINDSIGHT_EMBED_UI_WAIT_SECONDS:-60}"
@@ -57,6 +57,24 @@ hindsight_stack_require_tools() {
   fi
 }
 
+hindsight_stack_require_runtime_helpers() {
+  emulate -L zsh
+  hindsight_stack_load_config
+
+  [[ -x "$HINDSIGHT_EMBED_PYTHON" ]] || {
+    print -ru2 -- "hindsight-embed-stack: missing executable Hindsight embed Python at ${HINDSIGHT_EMBED_PYTHON}"
+    return 1
+  }
+  [[ -r "$HINDSIGHT_EMBED_STOP_HELPER" ]] || {
+    print -ru2 -- "hindsight-embed-stack: missing stop helper at ${HINDSIGHT_EMBED_STOP_HELPER}"
+    return 1
+  }
+  "$HINDSIGHT_EMBED_PYTHON" "$HINDSIGHT_EMBED_STOP_HELPER" --help >/dev/null 2>&1 || {
+    print -ru2 -- "hindsight-embed-stack: stop helper failed import/preflight at ${HINDSIGHT_EMBED_STOP_HELPER}"
+    return 1
+  }
+}
+
 hindsight_stack_enabled() {
   emulate -L zsh
   local value="${1:-}"
@@ -78,18 +96,24 @@ hindsight_stack_http_ok() {
   /usr/bin/curl -fsS --max-time 2 "$url" >/dev/null 2>&1
 }
 
+hindsight_stack_ui_url() {
+  emulate -L zsh
+  hindsight_stack_load_config
+
+  local host="$HINDSIGHT_EMBED_UI_HOSTNAME"
+  case "$host" in
+    ""|0.0.0.0|::)
+      host="127.0.0.1"
+      ;;
+  esac
+  print -r -- "http://${host}:${HINDSIGHT_EMBED_UI_PORT}"
+}
+
 hindsight_stack_run_stop_helper() {
   emulate -L zsh
   hindsight_stack_load_config
 
-  [[ -x "$HINDSIGHT_EMBED_PYTHON" ]] || {
-    print -ru2 -- "hindsight-embed-stack: missing executable Hindsight embed Python at ${HINDSIGHT_EMBED_PYTHON}"
-    return 1
-  }
-  [[ -r "$HINDSIGHT_EMBED_STOP_HELPER" ]] || {
-    print -ru2 -- "hindsight-embed-stack: missing stop helper at ${HINDSIGHT_EMBED_STOP_HELPER}"
-    return 1
-  }
+  hindsight_stack_require_runtime_helpers || return 1
 
   "$HINDSIGHT_EMBED_PYTHON" "$HINDSIGHT_EMBED_STOP_HELPER" \
     "$@"
@@ -145,46 +169,6 @@ hindsight_stack_port_listening() {
   /usr/sbin/lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1
 }
 
-hindsight_stack_stop_owned_control_listener() {
-  emulate -L zsh
-  hindsight_stack_load_config
-
-  [[ -x /usr/sbin/lsof ]] || return 1
-  [[ -x /bin/ps ]] || return 1
-  [[ -x /bin/kill ]] || return 1
-
-  local -a pids
-  local pid command lsof_output pid_file
-  pid_file="${HOME}/.hindsight/control.pid"
-  lsof_output="$(/usr/sbin/lsof -tiTCP:"$HINDSIGHT_EMBED_CONTROL_PORT" -sTCP:LISTEN 2>/dev/null || true)"
-  if [[ -z "$lsof_output" ]]; then
-    /bin/rm -f "$pid_file" 2>/dev/null || true
-    return 0
-  fi
-  pids=("${(@f)lsof_output}")
-
-  for pid in "${pids[@]}"; do
-    command="$(/bin/ps -p "$pid" -o command= 2>/dev/null || true)"
-    if [[ "$command" == *hindsight_embed.control_center.server* ]] &&
-      [[ "$command" == *"--port ${HINDSIGHT_EMBED_CONTROL_PORT}"* || "$command" == *"--port=${HINDSIGHT_EMBED_CONTROL_PORT}"* ]]; then
-      /bin/kill "$pid" 2>/dev/null || return 1
-    else
-      print -ru2 -- "hindsight-embed-stack: refusing to stop unverified listener on control port ${HINDSIGHT_EMBED_CONTROL_PORT} (pid ${pid})"
-      return 1
-    fi
-  done
-
-  integer i
-  for (( i = 0; i < HINDSIGHT_EMBED_STOP_WAIT_SECONDS; i++ )); do
-    if ! hindsight_stack_port_listening "$HINDSIGHT_EMBED_CONTROL_PORT"; then
-      /bin/rm -f "$pid_file" 2>/dev/null || true
-      return 0
-    fi
-    sleep 1
-  done
-  return 1
-}
-
 hindsight_stack_control_status() {
   emulate -L zsh
   hindsight_stack_load_config
@@ -225,7 +209,7 @@ hindsight_stack_ui_status() {
 
   "$HINDSIGHT_EMBED_UVX" hindsight-embed --profile "$HINDSIGHT_EMBED_PROFILE" ui status \
     --port "$HINDSIGHT_EMBED_UI_PORT" >/dev/null 2>&1 &&
-    hindsight_stack_http_ok "http://127.0.0.1:${HINDSIGHT_EMBED_UI_PORT}"
+    hindsight_stack_http_ok "$(hindsight_stack_ui_url)"
 }
 
 hindsight_stack_ui_running() {
@@ -234,7 +218,7 @@ hindsight_stack_ui_running() {
 
   "$HINDSIGHT_EMBED_UVX" hindsight-embed --profile "$HINDSIGHT_EMBED_PROFILE" ui status \
     --port "$HINDSIGHT_EMBED_UI_PORT" >/dev/null 2>&1 ||
-    hindsight_stack_http_ok "http://127.0.0.1:${HINDSIGHT_EMBED_UI_PORT}" ||
+    hindsight_stack_http_ok "$(hindsight_stack_ui_url)" ||
     hindsight_stack_port_listening "$HINDSIGHT_EMBED_UI_PORT"
 }
 
@@ -268,7 +252,9 @@ hindsight_stack_control_stop() {
   emulate -L zsh
   hindsight_stack_load_config
 
-  hindsight_stack_stop_owned_control_listener
+  hindsight_stack_run_stop_helper \
+    --mode stop-control \
+    --control-port "$HINDSIGHT_EMBED_CONTROL_PORT"
 }
 
 hindsight_stack_daemon_stop() {
@@ -413,7 +399,6 @@ hindsight_stack_reconcile_control() {
 hindsight_stack_reconcile_daemon() {
   emulate -L zsh
 
-  hindsight_stack_ensure_profile_ports || return 1
   if hindsight_stack_daemon_status; then
     return 0
   fi
@@ -480,12 +465,12 @@ hindsight_stack_start_all() {
   emulate -L zsh
   hindsight_stack_require_current_user || return 1
   hindsight_stack_require_tools || return 1
+  hindsight_stack_require_runtime_helpers || return 1
 
   hindsight_stack_control_status || hindsight_stack_control_start
   hindsight_stack_wait_control || return 1
 
   if hindsight_stack_enabled "$HINDSIGHT_EMBED_AUTOSTART_DAEMON"; then
-    hindsight_stack_ensure_profile_ports || return 1
     hindsight_stack_daemon_status || hindsight_stack_daemon_start
     hindsight_stack_wait_daemon || return 1
   fi
@@ -496,9 +481,25 @@ hindsight_stack_start_all() {
   fi
 }
 
+hindsight_stack_wait_all() {
+  emulate -L zsh
+  hindsight_stack_load_config
+
+  hindsight_stack_wait_control || return 1
+
+  if hindsight_stack_enabled "$HINDSIGHT_EMBED_AUTOSTART_DAEMON"; then
+    hindsight_stack_wait_daemon || return 1
+  fi
+
+  if hindsight_stack_enabled "$HINDSIGHT_EMBED_AUTOSTART_UI"; then
+    hindsight_stack_wait_ui || return 1
+  fi
+}
+
 hindsight_stack_stop_all() {
   emulate -L zsh
   hindsight_stack_load_config
+  hindsight_stack_require_current_user || return 1
 
   local ok=0
   hindsight_stack_stop_profile_services "$HINDSIGHT_EMBED_PROFILE" || ok=1
@@ -536,5 +537,5 @@ hindsight_stack_status_report() {
 
   print -r -- "control: $(hindsight_stack_status_word control) (http://localhost:${HINDSIGHT_EMBED_CONTROL_PORT})"
   print -r -- "daemon: $(hindsight_stack_status_word daemon) (${HINDSIGHT_EMBED_PROFILE}, http://127.0.0.1:${HINDSIGHT_EMBED_API_PORT})"
-  print -r -- "ui: $(hindsight_stack_status_word ui) (${HINDSIGHT_EMBED_PROFILE}, http://127.0.0.1:${HINDSIGHT_EMBED_UI_PORT})"
+  print -r -- "ui: $(hindsight_stack_status_word ui) (${HINDSIGHT_EMBED_PROFILE}, $(hindsight_stack_ui_url))"
 }

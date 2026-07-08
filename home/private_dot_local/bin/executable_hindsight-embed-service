@@ -9,19 +9,14 @@ SUPERVISOR="${HOME}/.local/bin/hindsight-embed-supervisor"
 STACK_LIB="${HINDSIGHT_EMBED_STACK_LIB:-$HOME/.local/lib/hindsight-embed-stack.zsh}"
 STATE_DIR="${HINDSIGHT_EMBED_STATE_DIR:-${HOME}/.local/state/hindsight-embed-launchd}"
 LOG_FILE="${STATE_DIR}/logs/supervisor.log"
-
-[[ -r "$STACK_LIB" ]] || {
-  print -ru2 -- "hindsight-embed-service: missing stack library at ${STACK_LIB}"
-  exit 1
-}
-. "$STACK_LIB"
+typeset -g HINDSIGHT_EMBED_STACK_LIB_LOADED=0
 
 usage() {
   cat <<EOF
 Usage: hindsight-embed-service <command>
 
 Commands:
-  install   Validate the installed LaunchAgent and load it for this user
+  install   Validate, retire legacy launchd state, and load the LaunchAgent
   start     Load or restart the LaunchAgent for this user
   stop      Unload the LaunchAgent and stop control, API, and UI
   status    Show launchd and stack health
@@ -32,6 +27,41 @@ EOF
 die() {
   print -ru2 -- "hindsight-embed-service: $*"
   exit 1
+}
+
+load_stack_lib() {
+  emulate -L zsh
+
+  if (( HINDSIGHT_EMBED_STACK_LIB_LOADED )); then
+    return 0
+  fi
+  [[ -r "$STACK_LIB" ]] || {
+    print -ru2 -- "hindsight-embed-service: missing stack library at ${STACK_LIB}"
+    return 1
+  }
+  . "$STACK_LIB" || {
+    print -ru2 -- "hindsight-embed-service: failed to source stack library at ${STACK_LIB}"
+    return 1
+  }
+  local required_function
+  for required_function in \
+    hindsight_stack_log \
+    hindsight_stack_load_config \
+    hindsight_stack_reconcile_once \
+    hindsight_stack_require_current_user \
+    hindsight_stack_require_tools \
+    hindsight_stack_require_runtime_helpers \
+    hindsight_stack_start_all \
+    hindsight_stack_status_report \
+    hindsight_stack_stop_all \
+    hindsight_stack_wait_all \
+    hindsight_stack_wait_stopped_for; do
+    if (( ! ${+functions[$required_function]} )); then
+      print -ru2 -- "hindsight-embed-service: invalid stack library at ${STACK_LIB}; missing ${required_function}"
+      return 1
+    fi
+  done
+  typeset -g HINDSIGHT_EMBED_STACK_LIB_LOADED=1
 }
 
 domain() {
@@ -55,7 +85,8 @@ has_disabled_override() {
   emulate -L zsh
   local label="$1"
   /bin/launchctl print-disabled "$(domain)" 2>/dev/null \
-    | /usr/bin/grep -F "\"${label}\" => true" >/dev/null 2>&1
+    | /usr/bin/grep -F "\"${label}\" =>" \
+    | /usr/bin/grep -E "=>[[:space:]]*(true|disabled)" >/dev/null 2>&1
 }
 
 bootout_if_loaded() {
@@ -89,6 +120,7 @@ validate_installed_files() {
   [[ -x "$SUPERVISOR" ]] || die "missing executable supervisor at ${SUPERVISOR}"
   [[ -r "$STACK_LIB" ]] || die "missing stack library at ${STACK_LIB}"
   [[ -x "$HINDSIGHT_EMBED_UVX" ]] || die "uvx is not executable at ${HINDSIGHT_EMBED_UVX}"
+  hindsight_stack_require_runtime_helpers || die "Hindsight helper runtime failed validation"
   /usr/bin/plutil -lint "$PLIST" >/dev/null || die "plist failed lint: ${PLIST}"
 }
 
@@ -99,14 +131,77 @@ validate_launchd_state() {
   fi
 }
 
-start_service() {
+show_installed_file_checks() {
+  emulate -L zsh
+  local ok=0
+  local stack_loaded=0
+  local uvx="${HINDSIGHT_EMBED_UVX:-$HOME/.local/bin/uvx}"
+
+  if load_stack_lib >/dev/null 2>&1; then
+    stack_loaded=1
+    hindsight_stack_load_config
+    uvx="$HINDSIGHT_EMBED_UVX"
+  fi
+
+  print -r -- "installed files:"
+
+  if [[ -f "$PLIST" && ! -L "$PLIST" ]]; then
+    print -r -- "  plist: ok (${PLIST})"
+    if /usr/bin/plutil -lint "$PLIST" >/dev/null 2>&1; then
+      print -r -- "  plist lint: ok"
+    else
+      print -r -- "  plist lint: failed"
+      ok=1
+    fi
+  else
+    print -r -- "  plist: missing or symlinked (${PLIST})"
+    ok=1
+  fi
+
+  if [[ -x "$SUPERVISOR" ]]; then
+    print -r -- "  supervisor: ok (${SUPERVISOR})"
+  else
+    print -r -- "  supervisor: missing or not executable (${SUPERVISOR})"
+    ok=1
+  fi
+
+  if (( stack_loaded )); then
+    print -r -- "  stack library: ok (${STACK_LIB})"
+  elif [[ -r "$STACK_LIB" ]]; then
+    print -r -- "  stack library: failed to load or invalid (${STACK_LIB})"
+    ok=1
+  else
+    print -r -- "  stack library: missing (${STACK_LIB})"
+    ok=1
+  fi
+
+  if [[ -x "$uvx" ]]; then
+    print -r -- "  uvx: ok (${uvx})"
+  else
+    print -r -- "  uvx: missing or not executable (${uvx})"
+    ok=1
+  fi
+
+  if (( stack_loaded )) && hindsight_stack_require_runtime_helpers >/dev/null 2>&1; then
+    print -r -- "  helper runtime: ok"
+  else
+    print -r -- "  helper runtime: failed"
+    ok=1
+  fi
+
+  return "$ok"
+}
+
+preflight_launchd_service() {
   emulate -L zsh
   hindsight_stack_require_current_user || exit 1
   validate_installed_files
   validate_launchd_state
   mkdir -p "${STATE_DIR}/logs" || die "failed to create log directory: ${STATE_DIR}/logs"
+}
 
-  bootout_if_loaded "$LEGACY_LABEL" || die "failed to unload ${LEGACY_LABEL}"
+load_launchd_service() {
+  emulate -L zsh
 
   if is_loaded "$STACK_LABEL"; then
     /bin/launchctl kickstart -k "$(service_name "$STACK_LABEL")" ||
@@ -117,47 +212,59 @@ start_service() {
   fi
   is_loaded "$STACK_LABEL" || die "${STACK_LABEL} is not loaded after launchctl operation"
 
-  if hindsight_stack_start_all; then
-    retire_legacy_plist
+  if hindsight_stack_wait_all; then
     print -r -- "${STACK_LABEL} is loaded and Hindsight stack is healthy"
   else
     die "${STACK_LABEL} loaded, but Hindsight stack did not become healthy; see ${LOG_FILE}"
   fi
 }
 
+start_launchd_service() {
+  emulate -L zsh
+
+  preflight_launchd_service
+  load_launchd_service
+}
+
+install_service() {
+  emulate -L zsh
+
+  preflight_launchd_service
+  bootout_if_loaded "$LEGACY_LABEL" || die "failed to unload ${LEGACY_LABEL}"
+  load_launchd_service
+  retire_legacy_plist
+}
+
 stop_service() {
   emulate -L zsh
-  hindsight_stack_require_current_user || exit 1
+  if (( EUID == 0 || UID == 0 )); then
+    die "refusing to run as root"
+  fi
 
   bootout_if_loaded "$STACK_LABEL" || die "failed to unload ${STACK_LABEL}"
-  bootout_if_loaded "$LEGACY_LABEL" || die "failed to unload ${LEGACY_LABEL}"
 
-  if [[ -x "$HINDSIGHT_EMBED_UVX" ]]; then
-    hindsight_stack_stop_all || die "failed to stop Hindsight stack"
+  load_stack_lib ||
+    die "launchd unloaded, but stack cleanup could not run because the stack library failed to load"
+  hindsight_stack_load_config
+  if hindsight_stack_wait_stopped_for ui "$HINDSIGHT_EMBED_STOP_WAIT_SECONDS" &&
+    hindsight_stack_wait_stopped_for daemon "$HINDSIGHT_EMBED_STOP_WAIT_SECONDS" &&
+    hindsight_stack_wait_stopped_for control "$HINDSIGHT_EMBED_STOP_WAIT_SECONDS"; then
+    return 0
   fi
+  hindsight_stack_stop_all || die "failed to stop Hindsight stack"
 }
 
 show_status() {
   emulate -L zsh
-  hindsight_stack_require_current_user || exit 1
-  validate_installed_files
+  if (( EUID == 0 || UID == 0 )); then
+    die "refusing to run as root"
+  fi
+  local install_ok=0
 
   if is_loaded "$STACK_LABEL"; then
     print -r -- "launchd: loaded ($(service_name "$STACK_LABEL"))"
   else
     print -r -- "launchd: not loaded ($(service_name "$STACK_LABEL"))"
-  fi
-
-  if is_loaded "$LEGACY_LABEL"; then
-    print -r -- "legacy launchd: loaded ($(service_name "$LEGACY_LABEL"))"
-  else
-    print -r -- "legacy launchd: not loaded ($(service_name "$LEGACY_LABEL"))"
-  fi
-
-  if [[ -e "$LEGACY_PLIST" ]]; then
-    print -r -- "legacy plist: present (${LEGACY_PLIST})"
-  else
-    print -r -- "legacy plist: absent"
   fi
 
   if has_disabled_override "$STACK_LABEL"; then
@@ -167,7 +274,14 @@ show_status() {
   fi
 
   print -r -- ""
-  hindsight_stack_status_report
+  show_installed_file_checks || install_ok=1
+
+  print -r -- ""
+  if (( install_ok == 0 && HINDSIGHT_EMBED_STACK_LIB_LOADED )); then
+    hindsight_stack_status_report
+  else
+    print -r -- "stack health: unavailable (install or runtime checks failed)"
+  fi
 }
 
 show_logs() {
@@ -181,12 +295,16 @@ main() {
   emulate -L zsh
   setopt pipe_fail no_unset
 
-  hindsight_stack_load_config
   local command="${1:-}"
 
   case "$command" in
-    install|start)
-      start_service
+    install)
+      load_stack_lib || exit 1
+      install_service
+      ;;
+    start)
+      load_stack_lib || exit 1
+      start_launchd_service
       ;;
     stop)
       stop_service

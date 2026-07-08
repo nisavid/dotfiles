@@ -2,11 +2,42 @@
 set -euo pipefail
 
 STACK_LIB="${HINDSIGHT_EMBED_STACK_LIB:-$HOME/.local/lib/hindsight-embed-stack.zsh}"
+STATE_DIR="${HINDSIGHT_EMBED_STATE_DIR:-$HOME/.local/state/hindsight-embed-launchd}"
+LOG_DIR="${STATE_DIR}/logs"
+
+mkdir -p "$LOG_DIR"
+exec >>"${LOG_DIR}/supervisor.log" 2>&1
+
 [[ -r "$STACK_LIB" ]] || {
   print -ru2 -- "hindsight-embed-supervisor: missing stack library at ${STACK_LIB}"
   exit 1
 }
-. "$STACK_LIB"
+
+source_stack_lib() {
+  emulate -L zsh
+
+  . "$STACK_LIB" || {
+    print -ru2 -- "hindsight-embed-supervisor: failed to source stack library at ${STACK_LIB}"
+    exit 1
+  }
+
+  local required_function
+  for required_function in \
+    hindsight_stack_load_config \
+    hindsight_stack_log \
+    hindsight_stack_reconcile_once \
+    hindsight_stack_require_current_user \
+    hindsight_stack_require_runtime_helpers \
+    hindsight_stack_require_tools \
+    hindsight_stack_stop_all; do
+    if (( ! ${+functions[$required_function]} )); then
+      print -ru2 -- "hindsight-embed-supervisor: invalid stack library at ${STACK_LIB}; missing ${required_function}"
+      exit 1
+    fi
+  done
+}
+
+source_stack_lib
 
 fail() {
   hindsight_stack_log "fatal: $*"
@@ -15,25 +46,24 @@ fail() {
 
 shutdown() {
   hindsight_stack_log "stopping stack"
-  hindsight_stack_stop_all || true
-  exit 0
+  if hindsight_stack_stop_all; then
+    exit 0
+  fi
+  hindsight_stack_log "stack stop failed"
+  exit 1
 }
 
 main() {
   emulate -L zsh
-  setopt pipe_fail no_unset
+  setopt err_exit pipe_fail no_unset
 
   hindsight_stack_load_config
   hindsight_stack_require_current_user || exit 1
 
   local poll_seconds="${HINDSIGHT_EMBED_POLL_SECONDS:-10}"
-  local state_dir="${HINDSIGHT_EMBED_STATE_DIR:-$HOME/.local/state/hindsight-embed-launchd}"
-  local log_dir="${state_dir}/logs"
-
-  mkdir -p "$log_dir"
-  exec >>"${log_dir}/supervisor.log" 2>&1
 
   hindsight_stack_require_tools || fail "missing required tools"
+  hindsight_stack_require_runtime_helpers || fail "missing required helper runtime"
 
   trap shutdown INT TERM
 

@@ -1,5 +1,0 @@
-{
-  "hindsightApiUrl": "http://localhost:7979",
-  "llmProvider": "openai-codex",
-  "bankId": "engineering"
-}

@@ -72,10 +72,6 @@ def sanitize_profile(profile: str | None) -> str:
 
 
 def database_url_for_profile(profile: str) -> str:
-    env_url = os.getenv("HINDSIGHT_EMBED_MIGRATION_DATABASE_URL")
-    if env_url:
-        return env_url
-
     instance = f"hindsight-embed-{sanitize_profile(profile)}"
     pid_file = Path.home() / ".pg0" / "instances" / instance / "data" / "postmaster.pid"
     if not pid_file.exists():
@@ -128,12 +124,16 @@ def validate_bank_tables(tables: list[BankTable]) -> None:
 async def fetch_unhandled_bank_columns(conn: asyncpg.Connection) -> list[str]:
     rows = await conn.fetch(
         """
-        SELECT table_schema, table_name, column_name
+        SELECT columns.table_schema, columns.table_name, columns.column_name
         FROM information_schema.columns
-        WHERE table_schema = 'public'
-          AND lower(column_name) LIKE '%bank%'
-          AND column_name <> 'bank_id'
-        ORDER BY table_schema, table_name, column_name
+        JOIN information_schema.tables
+          ON tables.table_schema = columns.table_schema
+         AND tables.table_name = columns.table_name
+        WHERE columns.table_schema = 'public'
+          AND lower(columns.column_name) LIKE '%bank%'
+          AND columns.column_name <> 'bank_id'
+          AND tables.table_type = 'BASE TABLE'
+        ORDER BY columns.table_schema, columns.table_name, columns.column_name
         """
     )
     return [f"{row['table_schema']}.{row['table_name']}.{row['column_name']}" for row in rows]
@@ -261,7 +261,7 @@ async def assert_target_bank(
     conn: asyncpg.Connection,
     target_bank: str,
 ) -> None:
-    target_exists = await conn.fetchval("SELECT EXISTS (SELECT 1 FROM banks WHERE bank_id = $1)", target_bank)
+    target_exists = await conn.fetchval('SELECT EXISTS (SELECT 1 FROM "public"."banks" WHERE bank_id = $1)', target_bank)
     if not target_exists:
         raise MigrationError(f"target bank does not exist: {target_bank}")
 
@@ -324,6 +324,7 @@ async def migrate(args: argparse.Namespace) -> None:
             return
 
         async with conn.transaction():
+            await conn.execute("SET LOCAL lock_timeout = '10s'")
             await conn.execute("SELECT pg_advisory_xact_lock(hashtext('hindsight-single-bank-cleanup'))")
             await lock_tables(conn, tables)
 
@@ -340,7 +341,7 @@ async def migrate(args: argparse.Namespace) -> None:
                 return
             if locked_source_non_bank_total == 0:
                 status = await conn.execute(
-                    "DELETE FROM banks WHERE bank_id = ANY($1::text[])",
+                    'DELETE FROM "public"."banks" WHERE bank_id = ANY($1::text[])',
                     args.source_bank,
                 )
                 print(f"public.banks: {status}")
@@ -379,7 +380,7 @@ async def migrate(args: argparse.Namespace) -> None:
                 raise MigrationError(f"{remaining_total} source-bank references remain after update")
 
             await conn.execute(
-                "DELETE FROM banks WHERE bank_id = ANY($1::text[])",
+                'DELETE FROM "public"."banks" WHERE bank_id = ANY($1::text[])',
                 args.source_bank,
             )
 
@@ -396,16 +397,13 @@ async def migrate(args: argparse.Namespace) -> None:
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Migrate Hindsight rows into a single canonical bank.")
     parser.add_argument("--mode", choices=("dry-run", "apply"), default="dry-run")
-    parser.add_argument("--profile", default="systalyze")
-    parser.add_argument("--source-bank", action="append", default=[])
-    parser.add_argument("--target-bank", default="engineering")
+    parser.add_argument("--profile", required=True)
+    parser.add_argument("--source-bank", action="append", required=True)
+    parser.add_argument("--target-bank", required=True)
     parser.add_argument("--allow-nonempty-target", action="store_true")
     args = parser.parse_args(argv)
-    if not args.source_bank:
-        args.source_bank = ["claude_code", "Engineering"]
-    else:
-        seen: set[str] = set()
-        args.source_bank = [bank for bank in args.source_bank if not (bank in seen or seen.add(bank))]
+    seen: set[str] = set()
+    args.source_bank = [bank for bank in args.source_bank if not (bank in seen or seen.add(bank))]
     if args.target_bank in args.source_bank:
         raise MigrationError("target bank cannot also be a source bank")
     return args
@@ -415,7 +413,7 @@ def main(argv: list[str]) -> int:
     try:
         args = parse_args(argv)
         asyncio.run(migrate(args))
-    except (MigrationError, asyncpg.PostgresError) as exc:
+    except (MigrationError, OSError, asyncpg.PostgresError) as exc:
         print(f"hindsight-embed-single-bank-migrate: {exc}", file=sys.stderr)
         return 1
     return 0
