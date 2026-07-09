@@ -7,6 +7,7 @@
 # onto Codex's live file and passes everything else through untouched:
 #   - [tui] theme, [desktop] git-branch-prefix   (portable prefs)
 #   - [desktop.open-in-target-preferences] global (OS-branched editor target)
+#   - macOS developer-tool writable_roots
 #   - work-private writable_roots + project trusts (decrypted from an age partial)
 #
 # Requires `uv` on PATH; tomlkit is fetched+cached ephemerally (no global install).
@@ -42,7 +43,28 @@ if "writable_roots" not in sww:
     sww["writable_roots"] = tomlkit.array()
 roots = sww["writable_roots"]
 have = {str(x) for x in roots}
-for rel in work["writable_roots"]:
+darwin_writable_roots = [
+    ".codex/worktrees",
+    ".t3/worktrees",
+    ".local/share/fnm",
+    ".local/share/go/bin",
+    ".local/share/go/pkg/sumdb",
+    ".local/share/uv",
+    ".local/share/yarn",
+    ".local/share/chezmoi",
+    ".local/share/graphite",
+    ".local/state",
+    ".config/gcloud",
+    ".config/graphite",
+    ".config/helm",
+    ".serena/memories",
+    ".kube",
+    ".cache",
+    ".npm",
+    ".yarn",
+    "Library/Caches",
+] if {{ if eq .chezmoi.os "darwin" }}True{{ else }}False{{ end }} else []
+for rel in darwin_writable_roots + work["writable_roots"]:
     p = os.path.join(home, rel)
     if p not in have:
         roots.append(p); have.add(p)
