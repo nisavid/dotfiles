@@ -88,8 +88,11 @@
 	lol = log --format='%C(yellow)%h %C(blue)%aN %C(cyan)%ad%C(red)%d %C()%s' --date=format-local:'%Y-%m-%d %H:%M:%S' --graph
 	lol1 = log --format='%C(yellow)%h %C(blue)%aN %C(cyan)%ad%C(red)%d %C()%s' --date=format-local:'%Y-%m-%d %H:%M:%S' --graph -1
 	lola = log --format='%C(yellow)%h %C(blue)%aN %C(cyan)%ad%C(red)%d %C()%s' --date=format-local:'%Y-%m-%d %H:%M:%S' --graph --all
+	lolma = log --format='%C(yellow)%h %C(blue)%aN %C(cyan)%ad%C(red)%d %C()%s' --date=format-local:'%Y-%m-%d %H:%M:%S' --graph --all main..
 	ls = ls-files
 	mg = merge
+	mga = merge --abort
+	mgb = merge-base
 	mgf = merge --ff-only
 	mgma = merge main
 	mgnf = merge --no-ff
@@ -102,6 +105,7 @@
 	psct = push-current-tag
 	psf = push --force
 	pso = push origin
+	r = restore
 	rb = rebase
 	rba = rebase --abort
 	rbc = rebase --continue
@@ -111,9 +115,9 @@
 	rbma = rebase main
 	rmc = rm --cached
 	rs = reset
-	rshard = reset --hard
-	rshardma = reset --hard main
-	rshardup = reset --hard @{upstream}
+	rsh = reset --hard
+	rshma = reset --hard main
+	rshup = reset --hard @{upstream}
 	s = status
 	ss = stash
 	ssa = stash apply
@@ -136,6 +140,10 @@
 	ssp6 = stash pop stash@{6}
 	ssp7 = stash pop stash@{7}
 	ssp8 = stash pop stash@{8}
+	ssps = stash push
+	sspsk = stash push --keep-index
+	sspsku = stash push --keep-index --include-untracked
+	sspsu = stash push --include-untracked
 	sss = stash show
 	sss1 = stash show stash@{1}
 	sss2 = stash show stash@{2}
@@ -158,6 +166,15 @@
 	sssvk = stash save --keep-index
 	sssvp = stash save --patch
 	sssvpnk = stash save --patch --no-keep-index
+	sw = switch
+	sw- = switch -
+	swc = switch --create
+	swd = switch --detach
+	swma = switch main
+	wt = worktree
+	wta = worktree add
+	wtl = worktree list
+	wtr = worktree rm
 [color]
 	branch = auto
 	diff = auto
