@@ -29,3 +29,8 @@ chezmoi init https://github.com/nisavid/dotfiles
 ```shell
 chezmoi apply
 ```
+
+## Services
+
+- [Hindsight local stack](docs/HINDSIGHT.md): configure and operate the
+  launchd-managed local Hindsight API and control-plane UI.
