@@ -75,6 +75,25 @@ hindsight_stack_require_runtime_helpers() {
   }
 }
 
+hindsight_stack_profile_exists() {
+  emulate -L zsh
+  hindsight_stack_load_config
+
+  [[ -n "$HINDSIGHT_EMBED_PROFILE" ]] || return 1
+  [[ -f "$HOME/.hindsight/profiles/${HINDSIGHT_EMBED_PROFILE}.env" ]]
+}
+
+hindsight_stack_require_profile() {
+  emulate -L zsh
+  hindsight_stack_load_config
+
+  hindsight_stack_profile_exists && return 0
+
+  print -ru2 -- "hindsight-embed-stack: configured profile '${HINDSIGHT_EMBED_PROFILE}' does not exist"
+  print -ru2 -- "configure it before starting the stack: ${HINDSIGHT_EMBED_UVX} hindsight-embed configure --profile '${HINDSIGHT_EMBED_PROFILE}' --port '${HINDSIGHT_EMBED_API_PORT}'"
+  return 1
+}
+
 hindsight_stack_enabled() {
   emulate -L zsh
   local value="${1:-}"
@@ -485,13 +504,16 @@ hindsight_stack_wait_all() {
   emulate -L zsh
   hindsight_stack_load_config
 
+  print -r -- "waiting for control on port ${HINDSIGHT_EMBED_CONTROL_PORT} (up to ${HINDSIGHT_EMBED_CONTROL_WAIT_SECONDS}s)"
   hindsight_stack_wait_control || return 1
 
   if hindsight_stack_enabled "$HINDSIGHT_EMBED_AUTOSTART_DAEMON"; then
+    print -r -- "waiting for daemon profile ${HINDSIGHT_EMBED_PROFILE} on port ${HINDSIGHT_EMBED_API_PORT} (up to ${HINDSIGHT_EMBED_DAEMON_WAIT_SECONDS}s)"
     hindsight_stack_wait_daemon || return 1
   fi
 
   if hindsight_stack_enabled "$HINDSIGHT_EMBED_AUTOSTART_UI"; then
+    print -r -- "waiting for UI profile ${HINDSIGHT_EMBED_PROFILE} on port ${HINDSIGHT_EMBED_UI_PORT} (up to ${HINDSIGHT_EMBED_UI_WAIT_SECONDS}s)"
     hindsight_stack_wait_ui || return 1
   fi
 }

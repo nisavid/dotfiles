@@ -49,6 +49,8 @@ load_stack_lib() {
     hindsight_stack_load_config \
     hindsight_stack_reconcile_once \
     hindsight_stack_require_current_user \
+    hindsight_stack_profile_exists \
+    hindsight_stack_require_profile \
     hindsight_stack_require_tools \
     hindsight_stack_require_runtime_helpers \
     hindsight_stack_start_all \
@@ -121,6 +123,7 @@ validate_installed_files() {
   [[ -r "$STACK_LIB" ]] || die "missing stack library at ${STACK_LIB}"
   [[ -x "$HINDSIGHT_EMBED_UVX" ]] || die "uvx is not executable at ${HINDSIGHT_EMBED_UVX}"
   hindsight_stack_require_runtime_helpers || die "Hindsight helper runtime failed validation"
+  hindsight_stack_require_profile || die "configured Hindsight profile preflight failed"
   /usr/bin/plutil -lint "$PLIST" >/dev/null || die "plist failed lint: ${PLIST}"
 }
 
@@ -186,6 +189,13 @@ show_installed_file_checks() {
     print -r -- "  helper runtime: ok"
   else
     print -r -- "  helper runtime: failed"
+    ok=1
+  fi
+
+  if (( stack_loaded )) && hindsight_stack_profile_exists; then
+    print -r -- "  configured profile: ok (${HINDSIGHT_EMBED_PROFILE})"
+  else
+    print -r -- "  configured profile: missing (${HINDSIGHT_EMBED_PROFILE:-unknown})"
     ok=1
   fi
 
@@ -282,6 +292,8 @@ show_status() {
   else
     print -r -- "stack health: unavailable (install or runtime checks failed)"
   fi
+
+  return "$install_ok"
 }
 
 show_logs() {
