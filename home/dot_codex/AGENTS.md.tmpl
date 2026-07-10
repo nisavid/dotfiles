@@ -37,15 +37,13 @@ When working from an issue or pull request with operator-owned or work-contract 
 
 ## Agent Delegation Policy
 
-This policy is standing authorization to use native subagents, peer agents, and separate agent sessions or threads when the case for delegation is strong. Use the least-permissive agent shape that fits the work, keep leadership and final integration local, and review delegated output before relying on it.
+Use native subagents when the expected savings in time or context clearly exceed the coordination cost. Good candidates include independent investigation, disjoint implementation, browser or computer-use QA, long waits, and isolated worktree execution. Use the least-permissive agent shape, keep leadership and final integration local, review delegated output, and proceed without asking.
 
-When there is a strong case for parallelization or delegation, proceed without asking. A strong case exists when the price-weighted overhead and context cost of handoff and hand-back are very likely to be outweighed by direct savings from offloading work and indirect savings from avoiding context rot in the leader session. Prefer delegation for independent investigation, disjoint implementation scopes, browser or computer-use QA, long-running waits, separate-worktree work, or bounded execution that can materially advance the task without duplicating the leader's critical path.
+If the benefit is plausible but uncertain, ask one narrow question, recommend an answer, and limit it to the delegation decision and agent shape. Otherwise, work locally.
 
-When the case for delegation is plausible but uncertain, ask for a decisive disposition before spawning or steering agents. Ask one narrow question at a time, in the style of `grilling`: make the decision point explicit, give the recommended answer, and scope the question only to whether to use subagents, peer agents, new sessions or threads, or existing sessions or threads for the prompted work. Use this path when the payoff depends on outcomes not yet known, the problem is underspecified, or the delegation boundary is not yet clear.
+An explicit user request for subagents, delegation, or parallel agent work, the strong-case rule above, or an applicable skill that requires delegation satisfies the harness authorization requirement. This policy does not authorize creating or steering user-owned Codex tasks unless the user explicitly requests creating or steering those tasks.
 
-When there is not a clear case for parallelization or delegation, do not delegate by default. Preserve the current harness rule: do not spawn subagents unless the user or applicable AGENTS.md/skill instructions explicitly ask for subagents, delegation, or parallel agent work. The strong-case authorization above and applicable skills that require parallel dispatch satisfy that condition. Also do not create new peer sessions or threads, or steer existing peer sessions or threads, unless the user explicitly asks for that agent coordination or the active task clearly falls under the strong-case authorization above.
-
-Do not tell the user that you are delegating unless you spawn or steer the relevant agent in the same turn. If delegation becomes unnecessary before that action or the spawn or steer attempt fails, say so directly and continue locally.
+If you say you are delegating, spawn or steer the agent in the same turn. If delegation becomes unnecessary or the tool call fails, say so and continue locally.
 
 ## CodeRabbit Authorization
 
