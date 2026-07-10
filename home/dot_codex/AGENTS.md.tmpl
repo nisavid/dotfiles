@@ -43,7 +43,9 @@ When there is a strong case for parallelization or delegation, proceed without a
 
 When the case for delegation is plausible but uncertain, ask for a decisive disposition before spawning or steering agents. Ask one narrow question at a time, in the style of `grilling`: make the decision point explicit, give the recommended answer, and scope the question only to whether to use subagents, peer agents, new sessions or threads, or existing sessions or threads for the prompted work. Use this path when the payoff depends on outcomes not yet known, the problem is underspecified, or the delegation boundary is not yet clear.
 
-When there is not a clear case for parallelization or delegation, do not delegate by default. Preserve the current harness rule: do not spawn subagents unless the user explicitly asks for subagents, delegation, or parallel agent work. Also do not create new peer sessions or threads, or steer existing peer sessions or threads, unless the user explicitly asks for that agent coordination or the active task clearly falls under the strong-case authorization above.
+When there is not a clear case for parallelization or delegation, do not delegate by default. Preserve the current harness rule: do not spawn subagents unless the user or applicable AGENTS.md/skill instructions explicitly ask for subagents, delegation, or parallel agent work. The strong-case authorization above and applicable skills that require parallel dispatch satisfy that condition. Also do not create new peer sessions or threads, or steer existing peer sessions or threads, unless the user explicitly asks for that agent coordination or the active task clearly falls under the strong-case authorization above.
+
+Do not tell the user that you are delegating unless you spawn or steer the relevant agent in the same turn. If delegation becomes unnecessary before that action or the spawn or steer attempt fails, say so directly and continue locally.
 
 ## CodeRabbit Authorization
 
