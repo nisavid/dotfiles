@@ -1,6 +1,9 @@
+{{- $identities := include ".private-git-identities.toml.age" | decrypt | fromToml -}}
+{{- $identityName := default "personal" (index .gitIdentity.defaultByHostname .chezmoi.hostname) -}}
+{{- $identity := index $identities $identityName -}}
 [user]
 	name = Ivan D Vasin
-	email = {{ include ".private-git-email.age" | decrypt | trim }}
+	email = {{ $identity.email | quote }}
 [core]
 	autocrlf = input
 	pager = diff-so-fancy | less --tabs=4 -RFX

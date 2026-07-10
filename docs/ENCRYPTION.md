@@ -16,8 +16,11 @@ hybrid ML-KEM-768 + X25519 scheme (`age-keygen -pq`).
   - `home/.private-agents.md.age` — the private, work-specific section of the global agent
     instructions, spliced into `home/dot_codex/AGENTS.md.tmpl` via
     `{{ include ".private-agents.md.age" | decrypt }}`.
-  - `home/.private-git-email.age` — the work git email, decrypted into
-    `home/dot_config/git/config.tmpl` as the global `user.email` default.
+  - `home/.private-git-identities.toml.age` — the Git identity registry,
+    decrypted into `home/dot_config/git/config.tmpl` and
+    `home/dot_config/git/personal.inc.tmpl`. The checked-in hostname mapping
+    in `home/.chezmoidata/git-identity.toml` selects an explicit default
+    identity; all other hosts use the `personal` identity.
 - The public `recipient` in the config is safe to commit. The private key is **never**
   committed (`.config/age` is in `home/.chezmoiignore`).
 

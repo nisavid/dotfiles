@@ -1,0 +1,3 @@
+{{- $identities := include ".private-git-identities.toml.age" | decrypt | fromToml -}}
+[user]
+	email = {{ $identities.personal.email | quote }}
