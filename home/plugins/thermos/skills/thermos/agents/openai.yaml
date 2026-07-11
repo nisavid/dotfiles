@@ -1,4 +1,0 @@
-interface:
-  display_name: "Thermos"
-  short_description: "Run paired thermo review passes."
-  default_prompt: "Use $thermos to review the current branch."
