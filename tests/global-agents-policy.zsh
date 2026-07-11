@@ -7,9 +7,11 @@ template="$source_root/dot_codex/private_AGENTS.md.tmpl"
 encryption_doc="$repo_root/docs/ENCRYPTION.md"
 rendered=$(mktemp "${TMPDIR:-/tmp}/global-agents-policy.XXXXXX")
 target_state=$(mktemp "${TMPDIR:-/tmp}/global-agents-state.XXXXXX")
+git_policy=$(mktemp "${TMPDIR:-/tmp}/global-agents-git-policy.XXXXXX")
 chmod 600 "$rendered"
 chmod 600 "$target_state"
-trap 'rm -f "$rendered" "$target_state"' EXIT
+chmod 600 "$git_policy"
+trap 'rm -f "$rendered" "$target_state" "$git_policy"' EXIT
 
 fail() {
   print -u2 -- "global AGENTS policy: $1"
@@ -30,20 +32,29 @@ chezmoi dump --format json "$HOME/.codex/AGENTS.md" > "$target_state"
 )
 [[ $(stat -f '%Lp' "$rendered") == 600 ]] || fail "rendered test artifact must be 0600"
 
+awk '
+  $0 == "## Git Checkpoints And Publication" { found = 1; next }
+  found && /^## / { exit }
+  found { print }
+' "$rendered" > "$git_policy"
+
+git_required=(
+  'commits and pushes as normal completion steps for task-owned changes'
+  'use `checkpointing-and-publishing-git-work` at task start, at every clean checkpoint, and before a stopping-point response'
+  'Stage and commit only task-owned work.'
+  'local-only and non-blocking only when explicitly classified by the operator, active task, or applicable repository policy'
+  'instructions to keep work uncommitted or local override default commit and publication'
+  'Ask about unrelated dirt while Ivan is available.'
+  'When he is away, commit safely separable task work without including unrelated changes.'
+  'Unresolved ownership, destination, identity, permission, conflicts, failed required checks or reviews, repository or release requirements, or inability to preserve remote work are gates.'
+  'Direct default-branch pushes and task-owned exact-lease rewrites with `--force-with-lease` are authorized when repository policy permits and remote work is preserved.'
+)
+
+for ((i = 1; i <= ${#git_required}; i++)); do
+  grep -Fq -- "$git_required[$i]" "$git_policy" || fail "Git checkpoint policy is missing required clause $i"
+done
+
 required=(
-  '## Git Checkpoints And Publication'
-  'Treat commits and pushes as normal completion steps for task-owned changes, not optional extras.'
-  'an explicit request to commit is not required.'
-  'Before responding at a stopping point, inspect Git status, the complete unpublished commit range, and upstream state.'
-  'Push only when every unpublished commit is task-owned or explicitly authorized and no other gate remains.'
-  'Explicitly classified local-only paths require no further ownership question'
-  'unrelated dirt does not block a safely separable task commit; never include unrelated changes.'
-  'When no upstream exists, set the unambiguous default remote and same-name branch as upstream.'
-  'Direct default-branch pushes are allowed when repository policy and remote protections permit them.'
-  'use `--force-with-lease` when the reconciled history requires it, never unconditional force.'
-  'This policy authorizes lease-protected rewrites, including on a default branch'
-  'an unresolved authentication identity or permission are gates.'
-  'Do not guess through an unresolved push destination, identity, permission, or remote-preservation gate'
   'operator owns the checklist and the active task authorizes changing the issue, pull request, or comment'
   'active task authorizes thread resolution'
   'Resolve a Systalyze pull request review thread only when the active task authorizes thread resolution, addressed evidence is present'
@@ -80,6 +91,22 @@ writing_line=$(grep -n '^## Writing$' "$rendered" | cut -d: -f1)
 next_heading=$(awk '$0 == "## Development Work" { found = 1; next } found && /^## / { print; exit }' "$rendered")
 [[ $next_heading == '## Git Checkpoints And Publication' ]] || \
   fail 'another section appears between Development Work and the Git checkpoint policy'
+
+git_policy_words=$(wc -w < "$git_policy" | tr -d ' ')
+((git_policy_words <= 160)) || fail "Git checkpoint policy exceeds 160 words ($git_policy_words)"
+
+procedural=(
+  'A **clean checkpoint** exists when'
+  'A **stopping point** is the point'
+  'the complete unpublished commit range'
+  'When no upstream exists, set the unambiguous default remote and same-name branch as upstream.'
+  'the remote advanced, fetch and inspect the remote state'
+  'After pushing, verify the remote tip.'
+)
+
+for phrase in $procedural; do
+  ! grep -Fq -- "$phrase" "$git_policy" || fail "Git checkpoint policy contains displaced procedure"
+done
 
 forbidden=(
   'ivan/impeccable'
