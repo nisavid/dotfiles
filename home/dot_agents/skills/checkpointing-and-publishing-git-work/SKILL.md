@@ -31,7 +31,7 @@ Use this order:
 6. Plan publication.
 7. Reconcile when required, then rerun the affected gates and planner.
 8. Execute the exact CAS push.
-9. End on a terminal `verified` plan.
+9. Post-verify the exact push endpoint and full destination ref, then end on a terminal `verified` plan.
 
 Audit the index and worktree before committing. Use `git --literal-pathspecs commit --only -- <owned paths>` only when every selected whole path is task-owned. Verify the committed path set and preservation of the unrelated index. Mixed ownership within a path blocks the commit.
 
