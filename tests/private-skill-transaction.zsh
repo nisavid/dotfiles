@@ -32,6 +32,7 @@ case ${1:-all} in
   apply-post-success-failures) test_outer_apply_post_success_catchable_failures_roll_back_immediately ;;
   apply-signals) test_outer_apply_signals_roll_back_immediately ;;
   apply-target-set) test_outer_apply_protects_every_explicit_target ;;
+  git-publication) test_git_publication_activation_target_set ;;
   unsupported-type) test_unsupported_apply_target_type_is_rejected ;;
   projected-modes) test_projected_apply_file_modes_are_preserved ;;
   apply-prepublish-failures) test_apply_projection_catchable_failures_cleanup ;;
@@ -63,6 +64,7 @@ case ${1:-all} in
     test_outer_apply_post_success_catchable_failures_roll_back_immediately
     test_outer_apply_signals_roll_back_immediately
     test_outer_apply_protects_every_explicit_target
+    test_git_publication_activation_target_set
     test_unsupported_apply_target_type_is_rejected
     test_projected_apply_file_modes_are_preserved
     test_apply_projection_catchable_failures_cleanup
