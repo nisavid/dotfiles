@@ -265,3 +265,79 @@ test_outer_apply_protects_every_explicit_target() {
   outer_target_scenario_committed_recovery
   outer_target_scenario_input_validation
 }
+
+assert_git_publication_old_set() {
+  [[ -d $APPLY_SKILL && ! -L $APPLY_SKILL ]] || fail 'old skill directory was not restored'
+  assert_eq "$(<$APPLY_SKILL/SKILL.md)" old-skill
+  [[ -L $APPLY_CLAUDE_LINK ]] || fail 'old Claude symlink was not restored'
+  assert_eq "$(readlink $APPLY_CLAUDE_LINK)" ../old-skill
+  assert_eq "$(<$APPLY_AGENTS)" old-agents
+}
+
+assert_git_publication_new_set() {
+  [[ -d $APPLY_SKILL && ! -L $APPLY_SKILL ]] || fail 'new skill directory was not retained'
+  assert_eq "$(<$APPLY_SKILL/SKILL.md)" new-skill
+  [[ -L $APPLY_CLAUDE_LINK ]] || fail 'new Claude symlink was not retained'
+  assert_eq "$(readlink $APPLY_CLAUDE_LINK)" ../../.agents/skills/checkpointing-and-publishing-git-work
+  assert_eq "$(<$APPLY_AGENTS)" new-agents
+}
+
+assert_git_publication_no_residue() {
+  tx_root=$XDG_STATE_HOME/chezmoi/private-skill-transaction
+  [[ ! -d $tx_root/apply-recovery ]] || fail 'Git publication activation retained encrypted recovery'
+  [[ -z $(find $tx_root -maxdepth 1 -type d -name 'phase.*' -print -quit) ]] ||
+    fail 'Git publication activation retained plaintext transaction state'
+  [[ -z $(find ${state_db:h} -maxdepth 1 -name '.chezmoistate.boltdb.private-skill-tx.*' -print -quit) ]] ||
+    fail 'Git publication activation retained persistent-state staging residue'
+}
+
+setup_git_publication_target_fixture() {
+  new_fixture
+  make_age_fixture
+  mkdir -m 700 -p "$fixture/bin" "$HOME/.agents/skills/checkpointing-and-publishing-git-work" \
+    "$HOME/.claude/skills" "$HOME/.codex"
+  export APPLY_SKILL=$HOME/.agents/skills/checkpointing-and-publishing-git-work
+  export APPLY_CLAUDE_LINK=$HOME/.claude/skills/checkpointing-and-publishing-git-work
+  export APPLY_AGENTS=$HOME/.codex/AGENTS.md
+  printf '%s\n' old-skill >$APPLY_SKILL/SKILL.md
+  ln -s ../old-skill $APPLY_CLAUDE_LINK
+  printf '%s\n' old-agents >$APPLY_AGENTS
+  state_db=$fixture/chezmoistate.boltdb
+  printf '%s\n' old-db >$state_db
+  chmod 600 $state_db
+  install_fake_chezmoi git-publication-target-set
+  export APPLY_PROJECTION=$fixture/projection
+  targets=(--force $APPLY_SKILL $APPLY_CLAUDE_LINK $APPLY_AGENTS)
+}
+
+test_git_publication_activation_target_set() {
+  local failure
+  for failure in fail-after-skill fail-after-link fail-after-agents fail-state; do
+    setup_git_publication_target_fixture
+    if PRIVATE_SKILL_TEST_APPLY_MODE=$failure $cli apply --identity $fixture/identity.txt \
+      --persistent-state $state_db --chezmoi $fixture/bin/fake-chezmoi -- $targets >/dev/null 2>&1; then
+      fail "$failure unexpectedly activated the Git publication target set"
+    fi
+    assert_eq "$(<$state_db)" old-db
+    assert_git_publication_old_set
+    assert_git_publication_no_residue
+  done
+
+  for failure in apply-new-manifest-fail apply-new-encryption-fail apply-ready-pointer-fail; do
+    setup_git_publication_target_fixture
+    if PRIVATE_SKILL_TX_TEST_FAILURE=$failure $cli apply --identity $fixture/identity.txt \
+      --persistent-state $state_db --chezmoi $fixture/bin/fake-chezmoi -- $targets >/dev/null 2>&1; then
+      fail "$failure unexpectedly activated the Git publication target set"
+    fi
+    assert_eq "$(<$state_db)" old-db
+    assert_git_publication_old_set
+    assert_git_publication_no_residue
+  done
+
+  setup_git_publication_target_fixture
+  $cli apply --identity $fixture/identity.txt --persistent-state $state_db \
+    --chezmoi $fixture/bin/fake-chezmoi -- $targets
+  assert_eq "$(<$state_db)" updated-db
+  assert_git_publication_new_set
+  assert_git_publication_no_residue
+}
