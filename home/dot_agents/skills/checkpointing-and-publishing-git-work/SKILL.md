@@ -45,9 +45,9 @@ scripts/plan_git_publication.py --repo <path> --request <json-file>
 
 Follow only the planner's `blocked`, `needs_reconciliation`, `ready`, or `verified` state. Never infer around a gate; use the command's `--help` and JSON contract for the full decision matrix.
 
-Immediately before pushing, rerun the planner and require the same plan, configuration, and endpoint digest. Execute only its immutable source SHA, one full heads refspec, exact existing or absent lease, options before `--`, no followed tags, and submodule mode `check`. Never push mutable `HEAD`, bare, `--all`, `--mirror`, a wildcard, multiple refspecs, or unconditional force.
+Immediately before every push, rerun the planner and explicitly confirm three unchanged bindings: the plan, configuration digest, and endpoint digest. Execute only its immutable source SHA, one full heads refspec, exact existing or absent lease, options before `--`, no followed tags, and submodule mode `check`. Never push mutable `HEAD`, bare, `--all`, `--mirror`, a wildcard, multiple refspecs, or unconditional force.
 
-Post-verify the exact endpoint and ref with the planner until it returns `verified`. If local HEAD moved after the immutable push, report the remaining local work.
+End only after the planner post-verifies the exact push endpoint and exact full ref and returns `verified`. If local HEAD moved after the immutable push, report the remaining local work.
 
 ## Preserve Evaluation Integrity
 
