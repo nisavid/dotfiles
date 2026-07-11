@@ -94,6 +94,7 @@ test_git_publication() {
   local skill="$skill_dir/SKILL.md"
   local metadata="$skill_dir/agents/openai.yaml"
   local link="$repo_dir/home/dot_claude/skills/symlink_checkpointing-and-publishing-git-work"
+  local workflow_start push_line verify_line plan_publish_line step_nine
 
   assert_skill_frontmatter "$skill" checkpointing-and-publishing-git-work
   assert_contains "$skill" 'starting any Git-backed implementation or review task' 'Git publication trigger must cover task start'
@@ -124,6 +125,16 @@ test_git_publication() {
   assert_contains "$skill" 'one full heads refspec' 'Git publication skill must require one full heads refspec'
   assert_contains "$skill" 'exact existing or absent lease' 'Git publication skill must require an exact CAS lease'
   assert_contains "$skill" 'submodule mode `check`' 'Git publication skill must require submodule check mode'
+  workflow_start="$(rg -n -m1 '^## Follow The Checkpoint Workflow$' "$skill" | cut -d: -f1)"
+  push_line="$(rg -n -m1 '^8\. Execute the exact CAS push\.$' "$skill" | cut -d: -f1)"
+  verify_line="$(rg -n -m1 '^9\. ' "$skill" | cut -d: -f1)"
+  plan_publish_line="$(rg -n -m1 '^## Plan And Publish$' "$skill" | cut -d: -f1)"
+  step_nine="$(sed -n "${verify_line}p" "$skill")"
+  [[ "$step_nine" == *'Post-verify'* && "$step_nine" == *'exact push endpoint'* &&
+    "$step_nine" == *'full destination ref'* && "$step_nine" == *'terminal `verified` plan'* ]] ||
+    fail 'Git publication workflow step 9 must name exact post-push identity verification'
+  (( workflow_start < push_line && push_line < verify_line && verify_line < plan_publish_line )) ||
+    fail 'Git publication post-push verification must follow the CAS push before Plan And Publish'
   assert_contains "$skill" 'terminal `verified` plan' 'Git publication skill must end on verified remote state'
   assert_contains "$skill" 'Never offer detached discard' 'Git publication skill must prohibit detached discard'
   assert_contains "$skill" 'only the raw prompt and fixture' 'Git publication eval instructions must prevent answer leakage'
