@@ -1,60 +1,46 @@
 # Encryption
 
-Work-specific and other private snippets in this repo are stored encrypted with
-[age](https://age-encryption.org) and spliced into their target files at `chezmoi apply`
-time. Encryption is passwordless (recipient-based) and **post-quantum**: keys use age's
-hybrid ML-KEM-768 + X25519 scheme (`age-keygen -pq`).
+This repository stores private configuration as recipient-encrypted [age](https://age-encryption.org) ciphertext. The configured key uses age's hybrid ML-KEM-768 and X25519 recipient scheme (`age-keygen -pq`). Private plaintext belongs only at its intended target or in a mode-restricted transaction phase.
 
-## How it works
+## Configuration
 
-- chezmoi is configured for age in the generated `~/.config/chezmoi/chezmoi.toml`
-  (produced from [`home/.chezmoi.toml.tmpl`](../home/.chezmoi.toml.tmpl) at `chezmoi init`).
-  It sets `encryption = "age"`, `[age] command = "age"`, the identity path, and the public
-  `recipient`.
-- Encrypted partials are armored `.age` files with neutral, dot-prefixed names so chezmoi
-  ignores them as targets but they remain readable via the `include` template function:
-  - `home/.private-agents.md.age` — the private, work-specific section of the global agent
-    instructions, spliced into `home/dot_codex/AGENTS.md.tmpl` via
-    `{{ include ".private-agents.md.age" | decrypt }}`.
-  - `home/.private-git-identities.toml.age` — the Git identity registry,
-    decrypted into `home/dot_config/git/config.tmpl` and
-    `home/dot_config/git/personal.inc.tmpl`. The checked-in hostname mapping
-    in `home/.chezmoidata/git-identity.toml` selects an explicit default
-    identity; all other hosts use the `personal` identity.
-- The public `recipient` in the config is safe to commit. The private key is **never**
-  committed (`.config/age` is in `home/.chezmoiignore`).
+[`home/.chezmoi.toml.tmpl`](../home/.chezmoi.toml.tmpl) configures age with the committed public recipient and the machine-local identity at `~/.config/age/key.txt`. The identity must remain mode `0600`; [`home/.chezmoiignore`](../home/.chezmoiignore) prevents chezmoi from managing it.
 
-## Where the key lives
+Dot-prefixed ciphertext files are source-only data. Chezmoi ignores them as targets, while templates and the private-skill restore hook can read them.
 
-`~/.config/age/key.txt` (mode `600`). This text file *is* the armored key:
+## Encrypted Sources And Plaintext Targets
 
-```
-# created: <timestamp>
-# public key: age1pq1...        <- recipient (public, also in chezmoi.toml)
-AGE-SECRET-KEY-PQ-1...          <- secret identity (KEEP PRIVATE)
-```
+- `home/.private-agents.md.age` supplies the private section of `home/dot_codex/private_AGENTS.md.tmpl`. Chezmoi renders the combined policy only to `~/.codex/AGENTS.md`; the `private_` source attribute gives that target mode `0600`.
+- `home/.private-git-identities.toml.age` supplies identity data only to the generated Git configuration targets. The public hostname map in `home/.chezmoidata/git-identity.toml` selects the default identity; unmapped hosts use the personal identity.
+- Each neutral `home/.private-skill-NN-path.age` and `home/.private-skill-NN-body.age` pair contains one relative skill path and its `SKILL.md`. The pair numbers reveal neither skill name nor destination. The restore transaction validates each pair, installs a mode-`0700` directory at `~/.agents/skills/<path>` with a mode-`0600` `SKILL.md`, and creates the corresponding relative symlink under `~/.claude/skills`.
 
-## Back it up now
+Do not add a plaintext private partial, identity registry, skill path, or skill body to the source tree.
 
-Copy `~/.config/age/key.txt` into a password manager and/or an offline encrypted store.
-**If this file is lost, the encrypted snippets are unrecoverable** — there is no password
-fallback by design.
+## Transactional Private-Skill Restore
 
-## Recovery on a new machine
+`home/run_onchange_after_restore-private-skills.sh.tmpl` hashes every ciphertext pair for change detection and passes the pairs to `scripts/private-skill-transaction`. The transaction:
 
-1. `brew install age chezmoi` (or the platform equivalent).
-2. Restore `~/.config/age/key.txt` from backup, then `chmod 600 ~/.config/age/key.txt`.
-3. `chezmoi init --apply nisavid/dotfiles`
+1. Acquires a cooperative lock under `${XDG_STATE_HOME:-~/.local/state}/chezmoi/private-skill-transaction`.
+2. Decrypts and validates every pair in a mode-`0700` phase with mode-`0600` files before changing a target.
+3. Saves encrypted recovery metadata and snapshots before publishing the replacement set.
+4. Installs and verifies every supplied skill and symlink pair. It then records completion and removes recovery state.
 
-`chezmoi init` generates `~/.config/chezmoi/chezmoi.toml` from `home/.chezmoi.toml.tmpl` (with
-the recipient baked in) *before* the first apply, and apply then decrypts the `.age` partials
-with the restored key. Without the key, `chezmoi apply` fails on the encrypted includes — this
-is expected; only keyed machines can render the private content.
+The supplied pairs are transactional inputs, not an authoritative inventory. Removed pairs are not pruned automatically. Remove obsolete live skill targets explicitly under separate authorization.
 
-## Rotating the key / adding a machine
+On a catchable failure, the transaction restores the previous set before returning an error. After an interruption, the next transaction acquisition inspects the encrypted recovery pointer: a pending transaction rolls back to the verified old set, while a completed transaction verifies the published set before clearing recovery data. It refuses recovery when live targets conflict with both the recorded old and desired states.
 
-Recipient-based age supports multiple recipients. To rotate or add a device key, generate a
-new PQ key, add its `age1pq1...` recipient to the `[age] recipients` list in
-`home/.chezmoi.toml.tmpl`, and re-encrypt the `.age` partials to all current recipients
-(`chezmoi re-add` / `age -r <r1> -r <r2> ...`). Do not mix post-quantum and classical
-recipients on the same file — that would weaken confidentiality to the classical recipient.
+## Key Backup And Recovery
+
+Back up `~/.config/age/key.txt` in a password manager or offline encrypted store. There is no password fallback. Losing every copy makes the ciphertext unrecoverable.
+
+On a new machine:
+
+1. Install age and chezmoi.
+2. Restore `~/.config/age/key.txt` and set mode `0600`.
+3. Run `chezmoi init --apply nisavid/dotfiles`.
+
+Initialization writes chezmoi's age configuration before apply. With the correct identity, apply renders the private target files and invokes the transactional skill restore. Without it, decryption fails and the private targets cannot be rendered; restore the identity and rerun apply.
+
+## Rotation And Additional Machines
+
+Generate a new post-quantum identity, add its public recipient to the age configuration, and re-encrypt every ciphertext to all active recipients. Verify decryption with each retained identity before removing an old recipient. Do not mix post-quantum and classical recipients on one file because the classical recipient determines the weaker confidentiality boundary.

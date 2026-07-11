@@ -1,0 +1,60 @@
+#!/bin/bash
+set -euo pipefail
+umask 077
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+# shellcheck source=scripts/private-skill-transaction.d/shared.bash
+source "$script_dir/private-skill-transaction.d/shared.bash"
+# shellcheck source=scripts/private-skill-transaction.d/instrumentation.bash
+source "$script_dir/private-skill-transaction.d/instrumentation.bash"
+# shellcheck source=scripts/private-skill-transaction.d/restore.bash
+source "$script_dir/private-skill-transaction.d/restore.bash"
+# shellcheck source=scripts/private-skill-transaction.d/apply.bash
+source "$script_dir/private-skill-transaction.d/apply.bash"
+# shellcheck source=scripts/private-skill-transaction.d/coordinator.bash
+source "$script_dir/private-skill-transaction.d/coordinator.bash"
+
+participant() {
+  local supplied=$1 root lock
+  shift
+  [[ -n ${PRIVATE_SKILL_TX_TOKEN:-} && $supplied == "$PRIVATE_SKILL_TX_TOKEN" ]] ||
+    die 'invalid transaction participant token'
+  [[ -e /dev/fd/9 ]] || die 'transaction lock descriptor is not inherited'
+  root=$(state_root)
+  lock=$root/lock
+  [[ -d $root && $(mode_of "$root") == 700 && -f $lock && ! -L $lock ]] ||
+    die 'transaction lock path is invalid'
+  [[ $(mode_of "$lock") == 600 && $(identity_of "$lock") == $(/usr/bin/stat -Lf '%i' /dev/fd/9) ]] ||
+    die 'transaction lock descriptor identity is invalid'
+  exec "$@"
+}
+
+with_lock() {
+  (($#)) || die 'with-lock requires a command'
+  ensure_lock
+  cleanup_orphan_prepublication_phases
+  local token
+  token=$(opaque_token)
+  export PRIVATE_SKILL_TX_TOKEN=$token
+  exec "$0" __participant "$token" "$@"
+}
+
+main() {
+  (($#)) || die 'command required'
+  local command=$1
+  shift
+  case $command in
+    with-lock) with_lock "$@" ;;
+    __participant) (($# >= 2)) || die 'participant requires token and command'; participant "$@" ;;
+    restore) restore_command "$@" ;;
+    __restore) (($# >= 1)) || die 'restore participant requires token'; restore_participant "$@" ;;
+    recover) recover_command "$@" ;;
+    __recover) (($# >= 1)) || die 'recover participant requires token'; recover_participant "$@" ;;
+    apply) apply_command "$@" ;;
+    __apply) (($# >= 1)) || die 'apply participant requires token'; apply_participant "$@" ;;
+    __apply-internal) (($# >= 1)) || die 'apply internal participant requires token'; apply_internal_participant "$@" ;;
+    *) die "unknown command: $command" ;;
+  esac
+}
+
+main "$@"
