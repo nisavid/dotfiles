@@ -89,22 +89,80 @@ test_serena() {
   assert_symlink_source "$link" '../../.agents/skills/using-serena-projects'
 }
 
+test_git_publication() {
+  local skill_dir="$repo_dir/home/dot_agents/skills/checkpointing-and-publishing-git-work"
+  local skill="$skill_dir/SKILL.md"
+  local metadata="$skill_dir/agents/openai.yaml"
+  local link="$repo_dir/home/dot_claude/skills/symlink_checkpointing-and-publishing-git-work"
+
+  assert_skill_frontmatter "$skill" checkpointing-and-publishing-git-work
+  assert_contains "$skill" 'starting any Git-backed implementation or review task' 'Git publication trigger must cover task start'
+  assert_contains "$skill" 'clean checkpoint, stopping point, commit, push, branch integration, and closeout' 'Git publication trigger must cover its full lifecycle'
+  assert_contains "$skill" 'finishing-a-development-branch' 'Git publication skill must name the overlapping managed skill'
+  assert_contains "$skill" 'conflicting completion menus or force rules' 'Git publication trigger must name the conflicting-rule failure mode'
+  assert_contains "$skill" 'accidental publication of non-task work' 'Git publication trigger must name the ownership failure mode'
+
+  [[ -f $metadata ]] || fail 'missing generated Git publication interface metadata'
+  assert_contains "$metadata" 'display_name: "Checkpoint and Publish Git Work"' 'Git publication display name is stale'
+  assert_contains "$metadata" 'short_description: "Commit and publish task-owned Git work safely"' 'Git publication short description is stale'
+  assert_contains "$metadata" 'default_prompt: "Use $checkpointing-and-publishing-git-work to checkpoint and publish the current Git task safely."' 'Git publication default prompt is stale'
+
+  [[ -f $skill_dir/scripts/plan_git_publication.py ]] || fail 'missing Git publication planner'
+  [[ -f $skill_dir/scripts/check_eval_gate.py ]] || fail 'missing Git publication evaluation gate'
+  [[ -f $skill_dir/evals/evals.json ]] || fail 'missing Git publication behavior evals'
+  [[ -f $skill_dir/evals/trigger-evals.json ]] || fail 'missing Git publication trigger evals'
+  (( $(find $skill_dir/evals/fixtures -type f -name '*.md' | wc -l | tr -d ' ') >= 8 )) ||
+    fail 'Git publication eval fixtures do not cover the required behavior groups'
+  assert_contains "$skill_dir/evals/trigger-evals.json" 'In Codex' 'trigger evals must include a Codex runner case'
+  assert_contains "$skill_dir/evals/trigger-evals.json" 'In Claude Code' 'trigger evals must include a Claude runner case'
+
+  assert_symlink_source "$link" '../../.agents/skills/checkpointing-and-publishing-git-work'
+  assert_contains "$skill" 'sole local owner of Git baseline capture' 'Git publication skill must own baseline capture'
+  assert_contains "$skill" 'Review-only tasks never mutate or publish' 'Git publication skill must preserve review-only behavior'
+  assert_contains "$skill" 'git --literal-pathspecs commit --only -- <owned paths>' 'Git publication skill must require literal task-only commits'
+  assert_contains "$skill" 'same plan, configuration, and endpoint digest' 'Git publication skill must bind the immediate pre-push plan'
+  assert_contains "$skill" 'one full heads refspec' 'Git publication skill must require one full heads refspec'
+  assert_contains "$skill" 'exact existing or absent lease' 'Git publication skill must require an exact CAS lease'
+  assert_contains "$skill" 'submodule mode `check`' 'Git publication skill must require submodule check mode'
+  assert_contains "$skill" 'terminal `verified` plan' 'Git publication skill must end on verified remote state'
+  assert_contains "$skill" 'Never offer detached discard' 'Git publication skill must prohibit detached discard'
+  assert_contains "$skill" 'only the raw prompt and fixture' 'Git publication eval instructions must prevent answer leakage'
+
+  python3 -m unittest discover -s "$skill_dir/tests" -p 'test_*.py'
+}
+
+typeset -a dry_targets
+
 case "${1:-all}" in
   context7)
     test_context7
+    dry_targets=("$HOME/.claude/skills/context7-mcp")
     ;;
   serena)
     test_serena
+    dry_targets=("$HOME/.claude/skills/using-serena-projects")
+    ;;
+  git-publication)
+    test_git_publication
+    dry_targets=(
+      "$HOME/.agents/skills/checkpointing-and-publishing-git-work"
+      "$HOME/.claude/skills/checkpointing-and-publishing-git-work"
+    )
     ;;
   all)
     test_context7
     test_serena
+    test_git_publication
+    dry_targets=(
+      "$HOME/.claude/skills/context7-mcp"
+      "$HOME/.claude/skills/using-serena-projects"
+      "$HOME/.agents/skills/checkpointing-and-publishing-git-work"
+      "$HOME/.claude/skills/checkpointing-and-publishing-git-work"
+    )
     ;;
   *)
-    fail 'usage: public-agent-skills.zsh [context7|serena|all]'
+    fail 'usage: public-agent-skills.zsh [context7|serena|git-publication|all]'
     ;;
 esac
 
-chezmoi apply --dry-run --verbose \
-  "$HOME/.claude/skills/context7-mcp" \
-  "$HOME/.claude/skills/using-serena-projects"
+chezmoi apply --dry-run --verbose $dry_targets

@@ -1,0 +1,15 @@
+[
+  {"query": "Implement this Git-backed change and finish the task safely.", "should_trigger": true},
+  {"query": "Review the current branch for bugs; this is review-only and must not mutate anything.", "should_trigger": true},
+  {"query": "The tests are green. Create the task checkpoint commit.", "should_trigger": true},
+  {"query": "Push the current task-owned commit and verify the remote tip.", "should_trigger": true},
+  {"query": "Close out this Git branch at the current stopping point.", "should_trigger": true},
+  {"query": "Reconcile the remote branch and publish with an exact lease.", "should_trigger": true},
+  {"query": "In Codex, implement the parser in this repository and commit clean checkpoints.", "should_trigger": true},
+  {"query": "In Claude Code, review this repository without changing or publishing it.", "should_trigger": true},
+  {"query": "Draft a birthday invitation in plain text.", "should_trigger": false},
+  {"query": "Explain what git push --force-with-lease means; take no action.", "should_trigger": false},
+  {"query": "Summarize this pasted diff without accessing a repository or taking action.", "should_trigger": false},
+  {"query": "In Codex, calculate these invoice totals from the pasted table.", "should_trigger": false},
+  {"query": "In Claude Code, explain conventional commit syntax but do not inspect or modify Git state.", "should_trigger": false}
+]

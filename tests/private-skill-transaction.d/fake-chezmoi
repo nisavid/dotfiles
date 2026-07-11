@@ -70,6 +70,19 @@ PY
       printf '%s\n' new-nested >"$projection/ordinary-parent/nested.txt"
       tar -cf "$output" -C "$projection" .
       ;;
+    git-publication-target-set)
+      projection=$APPLY_PROJECTION
+      rm -rf "$projection"
+      mkdir -m 700 -p \
+        "$projection/.agents/skills/checkpointing-and-publishing-git-work" \
+        "$projection/.claude/skills" \
+        "$projection/.codex"
+      printf '%s\n' new-skill >"$projection/.agents/skills/checkpointing-and-publishing-git-work/SKILL.md"
+      ln -s ../../.agents/skills/checkpointing-and-publishing-git-work \
+        "$projection/.claude/skills/checkpointing-and-publishing-git-work"
+      printf '%s\n' new-agents >"$projection/.codex/AGENTS.md"
+      tar -cf "$output" -C "$projection" .
+      ;;
     *) exit 64 ;;
   esac
   exit 0
@@ -127,9 +140,24 @@ if [[ $command == apply ]]; then
         kill) kill -KILL "$PPID"; exit 137 ;;
       esac
       ;;
+    git-publication-target-set)
+      printf '%s\n' updated-db >"$state"
+      rm -rf "$APPLY_SKILL"
+      mkdir -m 700 -p "$APPLY_SKILL"
+      printf '%s\n' new-skill >"$APPLY_SKILL/SKILL.md"
+      [[ ${PRIVATE_SKILL_TEST_APPLY_MODE:-success} != fail-after-skill ]] || exit 23
+      rm -rf "$APPLY_CLAUDE_LINK"
+      ln -s ../../.agents/skills/checkpointing-and-publishing-git-work "$APPLY_CLAUDE_LINK"
+      [[ ${PRIVATE_SKILL_TEST_APPLY_MODE:-success} != fail-after-link ]] || exit 23
+      rm -f "$APPLY_AGENTS"
+      printf '%s\n' new-agents >"$APPLY_AGENTS"
+      [[ ${PRIVATE_SKILL_TEST_APPLY_MODE:-success} != fail-after-agents ]] || exit 23
+      ;;
     *) exit 64 ;;
   esac
   exit 0
 fi
 
-[[ $command == state ]]
+if [[ $command == state ]]; then
+  [[ ${PRIVATE_SKILL_TEST_APPLY_MODE:-success} != fail-state ]] || exit 23
+fi
