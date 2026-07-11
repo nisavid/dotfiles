@@ -1,0 +1,135 @@
+#!/bin/bash
+set -eu
+
+if [[ -n ${PRIVATE_SKILL_TEST_INVOCATION_MARKER:-} ]]; then
+  printf '%s\n' invoked >"$PRIVATE_SKILL_TEST_INVOCATION_MARKER"
+fi
+
+mode=${PRIVATE_SKILL_FAKE_MODE:-empty}
+state=
+command=
+output=
+while (($#)); do
+  case $1 in
+    --persistent-state) state=$2; shift 2 ;;
+    archive|apply|state) command=$1; shift; break ;;
+    *) shift ;;
+  esac
+done
+
+if [[ $command == archive ]]; then
+  while (($#)); do
+    if [[ $1 == --output ]]; then output=$2; shift 2; continue; fi
+    shift
+  done
+  case $mode in
+    empty|nested-restore|db-only)
+      tar -cf "$output" --files-from /dev/null
+      ;;
+    projected-modes)
+      projection=${output}.contents
+      mkdir -m 700 "$projection"
+      printf '%s\n' public >"$projection/public.txt"
+      printf '%s\n' private >"$projection/private.txt"
+      chmod 644 "$projection/public.txt"
+      chmod 600 "$projection/private.txt"
+      tar -cf "$output" -C "$projection" .
+      ;;
+    archive-scenario)
+      [[ $APPLY_ARCHIVE_SCENARIO != archive-fail ]] || exit 23
+      /usr/bin/python3 - "$APPLY_ARCHIVE_SCENARIO" "$output" <<'PY'
+import io
+import sys
+import tarfile
+
+scenario, output = sys.argv[1:]
+with tarfile.open(output, "w") as archive:
+    if scenario == "unsafe-member":
+        member = tarfile.TarInfo("../escape")
+        member.size = 1
+        archive.addfile(member, io.BytesIO(b"x"))
+    elif scenario == "corrupt-archive":
+        member = tarfile.TarInfo("managed")
+        member.type = tarfile.LNKTYPE
+        member.linkname = "missing-hardlink-target"
+        archive.addfile(member)
+    elif scenario == "projected-fifo":
+        member = tarfile.TarInfo("managed")
+        member.type = tarfile.FIFOTYPE
+        member.mode = 0o600
+        archive.addfile(member)
+PY
+      ;;
+    target-set)
+      projection=$APPLY_PROJECTION
+      rm -rf "$projection"
+      mkdir -m 700 -p "$projection/ordinary-parent"
+      printf '%s\n' new-file >"$projection/regular.txt"
+      ln -s "$APPLY_LINK_DEST" "$projection/transition"
+      printf '%s\n' new-absent >"$projection/absent.txt"
+      printf '%s\n' new-nested >"$projection/ordinary-parent/nested.txt"
+      tar -cf "$output" -C "$projection" .
+      ;;
+    *) exit 64 ;;
+  esac
+  exit 0
+fi
+
+if [[ $command == apply ]]; then
+  case $mode in
+    empty) ;;
+    nested-restore)
+      printf '%s\n' updated-db >"$state"
+      "$PRIVATE_SKILL_TEST_CLI" restore --identity "$PRIVATE_SKILL_TEST_IDENTITY" \
+        --pair "$PRIVATE_SKILL_TEST_PATH" "$PRIVATE_SKILL_TEST_BODY"
+      exit "${PRIVATE_SKILL_TEST_APPLY_STATUS:-0}"
+      ;;
+    db-only)
+      printf '%s\n' updated-db >"$state"
+      if [[ -n ${PRIVATE_SKILL_TEST_LIVE_DB:-} ]]; then
+        printf '%s\n' concurrent-live-db >"$PRIVATE_SKILL_TEST_LIVE_DB"
+        chmod 600 "$PRIVATE_SKILL_TEST_LIVE_DB"
+      fi
+      if [[ -n ${PRIVATE_SKILL_TEST_SIGNAL:-} ]]; then
+        kill -"$PRIVATE_SKILL_TEST_SIGNAL" "$PPID"
+        sleep 1
+      fi
+      ;;
+    projected-modes)
+      printf '%s\n' updated-db >"$state"
+      printf '%s\n' public >"$APPLY_PUBLIC"
+      printf '%s\n' private >"$APPLY_PRIVATE"
+      chmod 644 "$APPLY_PUBLIC"
+      chmod 600 "$APPLY_PRIVATE"
+      ;;
+    target-set)
+      printf '%s\n' updated-db >"$state"
+      rm -f "$APPLY_REGULAR"
+      printf '%s\n' new-file >"$APPLY_REGULAR"
+      if [[ -d $APPLY_TRANSITION && ! -L $APPLY_TRANSITION ]]; then chmod 700 "$APPLY_TRANSITION"; fi
+      rm -rf "$APPLY_TRANSITION"
+      ln -s "$APPLY_LINK_DEST" "$APPLY_TRANSITION"
+      if [[ ${PRIVATE_SKILL_TEST_APPLY_MODE:-success} == kill-ephemeral ]]; then
+        printf '%s\n' unexpected >"$APPLY_LOGICAL"
+        kill -KILL "$PPID"; exit 137
+      fi
+      if [[ ${PRIVATE_SKILL_TEST_APPLY_MODE:-success} == kill-mixed ]]; then
+        kill -KILL "$PPID"; exit 137
+      fi
+      rm -f "$APPLY_ABSENT" "$APPLY_NESTED"
+      printf '%s\n' new-absent >"$APPLY_ABSENT"
+      printf '%s\n' new-nested >"$APPLY_NESTED"
+      if [[ ${PRIVATE_SKILL_TEST_APPLY_MODE:-success} == success-conflict ]]; then
+        printf '%s\n' concurrent-after-apply >"$APPLY_REGULAR"
+      fi
+      case ${PRIVATE_SKILL_TEST_APPLY_MODE:-success} in
+        fail) exit 23 ;;
+        kill) kill -KILL "$PPID"; exit 137 ;;
+      esac
+      ;;
+    *) exit 64 ;;
+  esac
+  exit 0
+fi
+
+[[ $command == state ]]
