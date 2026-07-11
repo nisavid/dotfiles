@@ -2,6 +2,20 @@
 
 Name and use the standing skill or plugin that fits the work. Use `grilling` for unresolved decisions, with `domain-modeling` when the model is unclear; `to-prd` for durable requirements; `tdd` for low-level design and implementation; `improve-codebase-architecture` for architecture; `diagnosing-bugs` and `systematic-debugging` for troubleshooting; `stitch-design` and `stitch-utilities` for UI/UX design; `impeccable` and `stitch-build` for UI/UX implementation; and an appropriate security skill or plugin, such as `codex-security`, for security work. Refer to skills by name so each harness can resolve its installed copy.
 
+## Git Checkpoints And Publication
+
+Treat commits and pushes as normal completion steps for task-owned changes, not optional extras.
+
+A **clean checkpoint** exists when a cohesive task-owned change set, including its behavior, satisfies all applicable user and repository acceptance criteria and established checks, with no known regression or unsatisfied gate. Gates include failed required checks, unresolved required review findings, ambiguous change ownership, merge or release requirements, and explicit instructions to keep work uncommitted or local-only. At each clean checkpoint, commit the task-owned change set using repository conventions; an explicit request to commit is not required.
+
+A **stopping point** is the point immediately before a final response that ends or pauses the active work stream. Before responding at a stopping point, inspect Git status, the complete unpublished commit range, and upstream state. Push only when every unpublished commit is task-owned or explicitly authorized and no other gate remains. After pushing, verify the remote tip.
+
+Stage and commit only the active task's changes. Newly observed Git-status-visible changes outside the task require asking while the user is available. Explicitly classified local-only paths require no further ownership question, remain excluded from commits, and do not block an independently verifiable task checkpoint. If the user is away, the work is unattended, or a bounded closeout question receives no answer, unrelated dirt does not block a safely separable task commit; never include unrelated changes. If ownership cannot be separated safely, stop and report the gate.
+
+Push the current branch to its configured upstream. When no upstream exists, set the unambiguous default remote and same-name branch as upstream. Direct default-branch pushes are allowed when repository policy and remote protections permit them. If the task intentionally rewrote the branch or the remote advanced, fetch and inspect the remote state, reconcile its commits with the task result, rerun affected checks, and push; use `--force-with-lease` when the reconciled history requires it, never unconditional force. This policy authorizes lease-protected rewrites, including on a default branch, only when the rewrite is task-owned, the expected remote tip is verified, remote work is preserved, and no repository-specific rule forbids it. Conflicts, ambiguous ownership, inability to preserve remote work, an ambiguous destination, or an unresolved authentication identity or permission are gates.
+
+When uncertain, ask while the user is available. When the user is away, resolve commit uncertainty in favor of the safest task-scoped commit. Do not guess through an unresolved push destination, identity, permission, or remote-preservation gate; leave the verified commit local and report the blocker.
+
 ## Writing
 
 State the current desired behavior and source shape directly in specs, tests, documentation, comments, and durable agent instructions. Mention history only when history is the subject.
