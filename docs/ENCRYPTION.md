@@ -12,9 +12,21 @@ Dot-prefixed ciphertext files are source-only data. Chezmoi ignores them as targ
 
 - `home/.private-agents.md.age` supplies the private section of `home/dot_codex/private_AGENTS.md.tmpl`. Chezmoi renders the combined policy only to `~/.codex/AGENTS.md`; the `private_` source attribute gives that target mode `0600`.
 - `home/.private-git-identities.toml.age` supplies identity data only to the generated Git configuration targets. The public hostname map in `home/.chezmoidata/git-identity.toml` selects the default identity; unmapped hosts use the personal identity.
+- `home/.private-prd-01.toml.age` is the source-only private deployment catalog for the Hindsight memory control-plane PRD. It holds organization-specific contextual-model IDs, canonical repository tags, legacy aliases, migration dispositions, and the literals that must remain absent from the public PRD. It has no plaintext target.
 - Each neutral `home/.private-skill-NN-path.age` and `home/.private-skill-NN-body.age` pair contains one relative skill path and its `SKILL.md`. The pair numbers reveal neither skill name nor destination. The restore transaction validates each pair, installs a mode-`0700` directory at `~/.agents/skills/<path>` with a mode-`0600` `SKILL.md`, and creates the corresponding relative symlink under `~/.claude/skills`.
 
-Do not add a plaintext private partial, identity registry, skill path, or skill body to the source tree.
+Do not add a plaintext private partial, deployment catalog, identity registry,
+skill path, or skill body to the source tree.
+
+## Source-Only Catalog Editing
+
+Edit a source-only catalog in a mode-`0700` temporary directory with a
+mode-`0600` plaintext file. Decrypt without writing plaintext to standard
+output, keep editor swap and backup files inside that phase, validate the
+catalog, re-encrypt to a temporary ciphertext with the committed recipient,
+and atomically replace the source ciphertext. Remove the plaintext phase on
+success, failure, or interruption. Never render the catalog into the repository
+or a persistent plaintext target.
 
 ## Transactional Private-Skill Restore
 
