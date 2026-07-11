@@ -71,6 +71,8 @@ required=(
   'Send only the minimum public query needed'
   'Use internal documentation only through a local, internal-only fallback.'
   'Use `using-serena-projects`'
+  'When asking Ivan a question, through a user-input widget or plain text, wait for his response by default.'
+  'Set no automatic timeout or auto-resolution unless Ivan explicitly requests one for that question or workflow.'
   'Keep one to three captures as discrete files.'
   'Present four or more captures as a local site-shaped collection.'
   'Publication requires separate authorization.'
