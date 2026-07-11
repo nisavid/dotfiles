@@ -1,0 +1,56 @@
+## Development Work
+
+Name and use the standing skill or plugin that fits the work. Use `grilling` for unresolved decisions, with `domain-modeling` when the model is unclear; `to-prd` for durable requirements; `tdd` for low-level design and implementation; `improve-codebase-architecture` for architecture; `diagnosing-bugs` and `systematic-debugging` for troubleshooting; `stitch-design` and `stitch-utilities` for UI/UX design; `impeccable` and `stitch-build` for UI/UX implementation; and an appropriate security skill or plugin, such as `codex-security`, for security work. Refer to skills by name so each harness can resolve its installed copy.
+
+## Writing
+
+State the current desired behavior and source shape directly in specs, tests, documentation, comments, and durable agent instructions. Mention history only when history is the subject.
+
+In committed docs and submitted pull request bodies or comments, use repo-relative paths, package or module names, and public or reviewable URLs. Never include machine-local absolute paths.
+
+Write human-facing prose that is terse, direct, warm, and firm. Answer the question asked. Omit tangents, apologetic framing, hedging, throat-clearing, sycophancy, and explanations the source already provides. Mention concrete caveats briefly. In review replies, do not restate the comment, justify the reviewer's suggestion, or import unrelated decisions. Mention GitHub users by handle.
+
+## Pull Requests And Issues
+
+Prefer rebase merging when several merge methods are available. Use squash merging only when repository policy requires it or the user explicitly requests it. Repository policy wins unless the user clearly intends an informed override; otherwise, ask.
+
+Read operator-owned and work-contract checklists before planning or editing. Change a checklist only when the operator owns the checklist and the active task authorizes changing the issue, pull request, or comment. Update each authorized item when its work is complete. Bot controls, reviewer-owned lists, and unrelated checklists are not agent work unless the operator adds them to the task.
+
+## Delegation
+
+Use native subagents when the expected savings in time or context clearly exceed coordination cost. Strong candidates include independent investigation, disjoint implementation, browser or computer-use QA, long waits, and isolated worktree execution. Use the least-permissive agent shape, keep leadership and integration local, and review delegated output.
+
+If the benefit is plausible but uncertain, ask one narrow delegation question and recommend an answer. Otherwise, work locally. An explicit user request, a strong case under this policy, or an applicable skill that requires delegation satisfies harness authorization. This policy does not authorize creating or steering user-owned Codex tasks unless the user explicitly requests it. If you announce delegation, spawn or steer the agent in the same turn or state why you continued locally.
+
+## Tool Routing
+
+Agents may use the local CodeRabbit CLI when Ivan requests code review, pull request review, Ralph review, review-until-clean work, merge-readiness review, or similar review work. This includes `coderabbit auth status` and `coderabbit review --agent` for the narrowest relevant diff and repository context. Never send known secrets, credentials, or unrelated files.
+
+Prefer specialized tools. When a Firecrawl skill fits a web task, use it as the general-purpose fallback before generic web access.
+
+For browser work:
+
+1. When interaction is unnecessary, use the most specific fetch, search, API, or CLI tool.
+2. For interactive work, try the harness's built-in browser first.
+3. Use Chrome first only when requested or when the task depends on the user's Chrome profile, tabs, extensions, setup, or Chrome-specific debugging.
+4. If the built-in browser cannot complete the interaction, fall back to Chrome and mention the fallback briefly.
+
+Use `context7-mcp` for current public documentation about a library, framework, SDK, API, CLI, or cloud service. Send only the minimum public query needed; do not send proprietary names, code, prompts, or context. Use internal documentation only through a local, internal-only fallback. Do not use Context7 for business logic, code review, general programming concepts, or work that does not require external documentation.
+
+Use `using-serena-projects` whenever Serena is needed in a repository or worktree.
+
+## Captures And Sites
+
+Capture only the relevant component, region, window, or viewport. Use 1512 x 982 for a full window or viewport only when exact dimensions do not matter. Keep one to three captures as discrete files. Present four or more captures as a local site-shaped collection. Publication requires separate authorization.
+
+When a Here.now site needs richer interaction than plain HTML, CSS, and JavaScript provide readily, build an SPA with a suitable UI toolkit. Use `impeccable` to craft and polish the site.
+
+## General Policy
+
+Do not record unsettled or recently reversed conventions in learned memory, `AGENTS.md`, `CLAUDE.md`, or shared skills.
+
+Only refresh local `main` when the operation depends on it. Stop and report the state if refresh would disturb local-only or unpushed work.
+
+Review tests for their claimed behavior and externally oriented contract, not a narration of implementation.
+
+{{ include ".private-agents.md.age" | decrypt }}

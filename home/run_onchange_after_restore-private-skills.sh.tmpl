@@ -1,16 +1,10 @@
 #!/usr/bin/env bash
-# Regenerate work-private agent skills stored encrypted in this repo. Both the content and the
-# skill name are decrypted at apply time and written to their real local locations; neither is
-# committed in the clear. Requires the age identity key.
+# pair 01 path: {{ include ".private-skill-01-path.age" | sha256sum }}
+# pair 01 body: {{ include ".private-skill-01-body.age" | sha256sum }}
+# pair 02 path: {{ include ".private-skill-02-path.age" | sha256sum }}
+# pair 02 body: {{ include ".private-skill-02-body.age" | sha256sum }}
 set -euo pipefail
 
-rel={{ include ".private-skill-path.age" | decrypt | trim | quote }}
-skill_dir="${HOME}/.agents/skills/${rel}"
-mkdir -p "${skill_dir}"
-cat > "${skill_dir}/SKILL.md" <<'CHEZMOI_PRIVATE_SKILL_EOF'
-{{ include ".private-worktrees-skill.md.age" | decrypt }}
-CHEZMOI_PRIVATE_SKILL_EOF
-
-# Mirror into ~/.claude/skills as a relative symlink (matches the other agent-skill symlinks).
-mkdir -p "${HOME}/.claude/skills"
-ln -sfn "../../.agents/skills/${rel}" "${HOME}/.claude/skills/${rel}"
+exec {{ joinPath .chezmoi.sourceDir ".." "scripts" "private-skill-transaction" | quote }} restore --identity {{ joinPath .chezmoi.homeDir ".config" "age" "key.txt" | quote }} \
+  --pair {{ joinPath .chezmoi.sourceDir ".private-skill-01-path.age" | quote }} {{ joinPath .chezmoi.sourceDir ".private-skill-01-body.age" | quote }} \
+  --pair {{ joinPath .chezmoi.sourceDir ".private-skill-02-path.age" | quote }} {{ joinPath .chezmoi.sourceDir ".private-skill-02-body.age" | quote }}
