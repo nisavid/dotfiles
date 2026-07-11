@@ -129,6 +129,36 @@ class EvalGateCliTests(unittest.TestCase):
 
         self.assert_failed(self.run_gate(), "expected run path is not a directory")
 
+    def test_variant_symlink_is_rejected(self) -> None:
+        self.populate_clean()
+        variant = self.workspace / "eval-1" / "without_skill"
+        external = self.root / "external-variant"
+        variant.rename(external)
+        variant.symlink_to(external, target_is_directory=True)
+
+        self.assert_failed(self.run_gate(), "evaluation path is not an isolated directory")
+
+    def test_eval_root_symlink_is_rejected_and_still_reported(self) -> None:
+        self.populate_clean()
+        eval_root = self.workspace / "eval-1"
+        external = self.root / "external-eval"
+        eval_root.rename(external)
+        eval_root.symlink_to(external, target_is_directory=True)
+
+        payload = self.assert_failed(
+            self.run_gate(), "evaluation path is not an isolated directory"
+        )
+        self.assertEqual([evaluation["id"] for evaluation in payload["evals"]], [1])
+
+    def test_artifact_symlink_is_rejected(self) -> None:
+        self.populate_clean()
+        artifact = self.workspace / "eval-1" / "with_skill" / "run-1" / "execution.json"
+        external = self.root / "external-execution.json"
+        artifact.rename(external)
+        artifact.symlink_to(external)
+
+        self.assert_failed(self.run_gate(), "evaluation artifact is not an isolated regular file")
+
     def test_setting_mismatch_fails(self) -> None:
         self.populate_clean()
         execution = self.workspace / "eval-1" / "without_skill" / "run-2" / "execution.json"

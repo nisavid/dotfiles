@@ -47,6 +47,22 @@ def require(condition: bool, message: str) -> None:
         raise MalformedInput(message)
 
 
+def is_contained(path: Path, root: Path) -> bool:
+    try:
+        path.resolve(strict=True).relative_to(root)
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def is_isolated_directory(path: Path, root: Path) -> bool:
+    return not path.is_symlink() and path.is_dir() and is_contained(path, root)
+
+
+def is_isolated_regular_file(path: Path, root: Path) -> bool:
+    return not path.is_symlink() and path.is_file() and is_contained(path, root)
+
+
 def load_evals(path: Path) -> tuple[str, list[dict[str, Any]]]:
     document = read_json(path, "evals file")
     require(isinstance(document, dict), "evals file must contain a JSON object")
@@ -148,6 +164,11 @@ def validate_grading(document: Any, expected_ids: list[str], location: str) -> d
 
 
 def evaluate(workspace: Path, evals: list[dict[str, Any]], runs: int) -> tuple[list[str], list[dict[str, Any]]]:
+    require(
+        not workspace.is_symlink() and workspace.is_dir(),
+        f"evaluation workspace is not an isolated directory: {workspace}",
+    )
+    workspace_root = workspace.resolve(strict=True)
     errors: list[str] = []
     results: list[dict[str, Any]] = []
     common_setting: tuple[str, str] | None = None
@@ -163,8 +184,13 @@ def evaluate(workspace: Path, evals: list[dict[str, Any]], runs: int) -> tuple[l
             for item in expectations
         }
         eval_root = workspace / f"eval-{eval_id}"
+        if not is_isolated_directory(eval_root, workspace_root):
+            errors.append(f"evaluation path is not an isolated directory: {eval_root}")
         for variant in ("with_skill", "without_skill"):
             variant_root = eval_root / variant
+            if not is_isolated_directory(variant_root, workspace_root):
+                errors.append(f"evaluation path is not an isolated directory: {variant_root}")
+                continue
             expected_names = {f"run-{run}" for run in range(1, runs + 1)}
             actual_names = {path.name for path in variant_root.iterdir()} if variant_root.is_dir() else set()
             missing = sorted(expected_names - actual_names)
@@ -175,14 +201,22 @@ def evaluate(workspace: Path, evals: list[dict[str, Any]], runs: int) -> tuple[l
                 errors.append(f"eval {eval_id} {variant} has extra run directories: {', '.join(extra)}")
             for run in range(1, runs + 1):
                 run_dir = variant_root / f"run-{run}"
-                if run_dir.is_symlink() or (run_dir.exists() and not run_dir.is_dir()):
+                if not is_isolated_directory(run_dir, workspace_root):
                     errors.append(f"expected run path is not a directory: {run_dir}")
-                    continue
-                if not run_dir.is_dir():
                     continue
                 location = f"eval {eval_id} {variant} run {run}"
                 try:
-                    execution = read_json(run_dir / "execution.json", f"{location} execution")
+                    execution_path = run_dir / "execution.json"
+                    grading_path = run_dir / "grading.json"
+                    require(
+                        is_isolated_regular_file(execution_path, workspace_root),
+                        f"evaluation artifact is not an isolated regular file: {execution_path}",
+                    )
+                    require(
+                        is_isolated_regular_file(grading_path, workspace_root),
+                        f"evaluation artifact is not an isolated regular file: {grading_path}",
+                    )
+                    execution = read_json(execution_path, f"{location} execution")
                     model, effort, used_tools = validate_execution(execution, location)
                     setting = (model, effort)
                     if common_setting is None:
@@ -191,7 +225,7 @@ def evaluate(workspace: Path, evals: list[dict[str, Any]], runs: int) -> tuple[l
                         errors.append(f"model/reasoning setting mismatch at {location}")
                     if used_tools:
                         errors.append(f"tool event invalidates {location}")
-                    grading = read_json(run_dir / "grading.json", f"{location} grading")
+                    grading = read_json(grading_path, f"{location} grading")
                     grades = validate_grading(grading, expected_ids, location)
                     if not used_tools:
                         for expectation_id, passed in grades.items():

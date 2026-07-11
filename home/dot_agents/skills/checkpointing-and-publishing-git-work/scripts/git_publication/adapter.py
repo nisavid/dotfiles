@@ -6,10 +6,18 @@ import os
 import re
 import secrets
 import subprocess
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 
-from .core import PublicationRequest, RepositorySnapshot, plan_publication
+from .core import (
+    AbsentTarget,
+    CreationBase,
+    PresentTarget,
+    PublicationRequest,
+    RepositorySnapshot,
+    plan_publication,
+)
 
 
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
@@ -126,12 +134,19 @@ class GitRepository:
         self.env.update({"GIT_NO_LAZY_FETCH": "1", "GIT_NO_REPLACE_OBJECTS": "1"})
 
     def run(
-        self, args: Sequence[str], check: bool = True, allowed: Sequence[int] = ()
+        self,
+        args: Sequence[str],
+        check: bool = True,
+        allowed: Sequence[int] = (),
+        env_overrides: Optional[Dict[str, str]] = None,
     ) -> subprocess.CompletedProcess:
+        env = self.env.copy()
+        if env_overrides:
+            env.update(env_overrides)
         completed = subprocess.run(
             ["git", *args],
             cwd=str(self.path),
-            env=self.env,
+            env=env,
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -322,7 +337,10 @@ def _resolve_destination(repo: GitRepository, request: PublicationRequest) -> Tu
         remote, selection = remotes[0], "sole_remote"
     else:
         raise PolicyGate("DESTINATION_REMOTE_AMBIGUOUS", remote_count=len(remotes))
-    _validate_remote(remote)
+    try:
+        _validate_remote(remote)
+    except MalformedRequest as error:
+        raise PolicyGate("DESTINATION_REMOTE_INVALID") from error
     if remote not in remotes:
         raise PolicyGate("DESTINATION_REMOTE_NOT_CONFIGURED", remote=remote)
 
@@ -331,7 +349,8 @@ def _resolve_destination(repo: GitRepository, request: PublicationRequest) -> Tu
         raise PolicyGate("PUSH_DEFAULT_AMBIGUOUS", count=len(push_default_values))
     mode = push_default_values[0] if push_default_values else "simple"
     default_ref = _default_push_ref(mode, branch_ref, remote, upstream_remote, upstream_ref)
-    configured_ref = _remote_push_ref(repo.config_all(f"remote.{remote}.push"), branch_ref)
+    remote_push_values = repo.config_all(f"remote.{remote}.push")
+    configured_ref = _remote_push_ref(remote_push_values, branch_ref)
     if configured_ref is not None and configured_ref != default_ref:
         raise PolicyGate(
             "PUSH_TARGET_CONFLICT", remote_push_ref=configured_ref, push_default_ref=default_ref
@@ -340,7 +359,7 @@ def _resolve_destination(repo: GitRepository, request: PublicationRequest) -> Tu
         "selection": selection,
         "branch_ref": branch_ref,
         "push_default": mode,
-        "remote_push": repo.config_all(f"remote.{remote}.push"),
+        "remote_push": remote_push_values,
     }
 
 
@@ -358,8 +377,31 @@ def _endpoint(repo: GitRepository, remote: str) -> Tuple[str, str]:
     return urls[0], _fingerprint(urls[0])
 
 
+def _run_endpoint(
+    repo: GitRepository,
+    endpoint: str,
+    prefix: Sequence[str],
+    suffix: Sequence[str] = (),
+    *,
+    check: bool = False,
+) -> subprocess.CompletedProcess:
+    alias = f"codex-checkpointing-{secrets.token_hex(16)}"
+    env_name = "CODEX_CHECKPOINTING_ENDPOINT"
+    return repo.run(
+        [
+            f"--config-env=remote.{alias}.url={env_name}",
+            *prefix,
+            "--",
+            alias,
+            *suffix,
+        ],
+        check=check,
+        env_overrides={env_name: endpoint},
+    )
+
+
 def _probe_ref(repo: GitRepository, endpoint: str, ref: str) -> Optional[str]:
-    result = repo.run(["ls-remote", "--refs", "--", endpoint, ref], check=False)
+    result = _run_endpoint(repo, endpoint, ["ls-remote", "--refs"], [ref])
     if result.returncode != 0:
         raise PolicyGate("PUSH_ENDPOINT_PROBE_FAILED")
     lines = [line for line in result.stdout.splitlines() if line]
@@ -374,13 +416,20 @@ def _probe_ref(repo: GitRepository, endpoint: str, ref: str) -> Optional[str]:
 
 
 def _advertised_heads(repo: GitRepository, endpoint: str) -> Dict[str, str]:
-    result = repo.run(["ls-remote", "--heads", "--", endpoint], check=False)
+    result = _run_endpoint(repo, endpoint, ["ls-remote", "--heads"])
     if result.returncode != 0:
         raise PolicyGate("PUSH_ENDPOINT_PROBE_FAILED")
     heads = {}
     for line in result.stdout.splitlines():
-        sha, ref = line.split("\t", 1)
-        if SHA_RE.fullmatch(sha) is None or not ref.startswith("refs/heads/"):
+        fields = line.split("\t", 1)
+        if len(fields) != 2:
+            raise PolicyGate("REMOTE_REF_PROBE_MALFORMED")
+        sha, ref = fields
+        if (
+            SHA_RE.fullmatch(sha) is None
+            or not ref.startswith("refs/heads/")
+            or ref in heads
+        ):
             raise PolicyGate("REMOTE_REF_PROBE_MALFORMED")
         heads[ref] = sha
     return heads
@@ -400,13 +449,14 @@ def _delete_temp(repo: GitRepository, ref: str, expected_shas: Sequence[str]) ->
         raise PolicyGate("TEMP_REF_CLEANUP_FAILED", ref=ref, reason="delete_failed")
 
 
-def _fetch_exact(
+@contextmanager
+def _stable_fetched_ref(
     repo: GitRepository,
     endpoint: str,
     ref: str,
     expected: str,
     reservation_sha: str,
-) -> str:
+) -> Iterator[str]:
     temp_ref = f"refs/codex/checkpointing/{secrets.token_hex(16)}"
     present = repo.run(["show-ref", "--verify", "--quiet", temp_ref], check=False)
     if present.returncode == 0:
@@ -419,7 +469,9 @@ def _fetch_exact(
     if reserved.returncode != 0:
         raise PolicyGate("TEMP_REF_COLLISION", ref=temp_ref)
     try:
-        result = repo.run(
+        result = _run_endpoint(
+            repo,
+            endpoint,
             [
                 "-c",
                 "maintenance.auto=false",
@@ -430,11 +482,8 @@ def _fetch_exact(
                 "--no-write-fetch-head",
                 "--no-recurse-submodules",
                 "--no-auto-maintenance",
-                "--",
-                endpoint,
-                f"+{ref}:{temp_ref}",
             ],
-            check=False,
+            [f"+{ref}:{temp_ref}"],
         )
         if result.returncode != 0:
             raise PolicyGate("REMOTE_REF_CHANGED_DURING_FETCH", ref=ref, expected_sha=expected)
@@ -443,10 +492,23 @@ def _fetch_exact(
             raise PolicyGate(
                 "REMOTE_REF_CHANGED_DURING_FETCH", ref=ref, expected_sha=expected, fetched_sha=fetched
             )
-        return temp_ref
-    except Exception:
-        _delete_temp(repo, temp_ref, (reservation_sha, expected))
+        if _probe_ref(repo, endpoint, ref) != expected:
+            raise PolicyGate("REMOTE_REF_CHANGED_DURING_FETCH", ref=ref, expected_sha=expected)
+        yield temp_ref
+    except BaseException as error:
+        try:
+            _delete_temp(repo, temp_ref, (reservation_sha, expected))
+        except PolicyGate as cleanup_error:
+            if isinstance(error, PolicyGate):
+                error.evidence["cleanup_failure"] = {
+                    "code": cleanup_error.code,
+                    "evidence": cleanup_error.evidence,
+                }
+            else:
+                raise cleanup_error from error
         raise
+    else:
+        _delete_temp(repo, temp_ref, (reservation_sha, expected))
 
 
 def _is_ancestor(repo: GitRepository, older: str, newer: str) -> bool:
@@ -472,70 +534,53 @@ def _config_digest(details: dict, fingerprint: str) -> str:
 
 def _snapshot(repo: GitRepository, request: PublicationRequest) -> RepositorySnapshot:
     context = {}
-    temp_refs = []
     try:
-        try:
-            remote, ref, selection = _resolve_destination(repo, request)
-            context["destination"] = {
-                "remote": remote,
-                "ref": ref,
-                "endpoint_fingerprint": None,
-                "config_digest": None,
-            }
-            endpoint, fingerprint = _endpoint(repo, remote)
-            digest = _config_digest(selection, fingerprint)
-            context["destination"].update(
-                {"endpoint_fingerprint": fingerprint, "config_digest": digest}
-            )
-            target_sha = _probe_ref(repo, endpoint, ref)
-            context["target"] = {"present": target_sha is not None, "sha": target_sha}
-            start_is_ancestor = _is_ancestor(repo, request.start_head, request.source_sha)
-            creation_base_sha = None
-            creation_base_is_ancestor = None
-            creation_base_to_start = ()
-            if target_sha is not None:
-                target_temp = _fetch_exact(
-                    repo, endpoint, ref, target_sha, request.source_sha
-                )
-                temp_refs.append((target_temp, (target_sha,)))
-                if _probe_ref(repo, endpoint, ref) != target_sha:
-                    raise PolicyGate(
-                        "REMOTE_REF_CHANGED_DURING_FETCH", ref=ref, expected_sha=target_sha
-                    )
+        remote, ref, selection = _resolve_destination(repo, request)
+        context["destination"] = {
+            "remote": remote,
+            "ref": ref,
+            "endpoint_fingerprint": None,
+            "config_digest": None,
+        }
+        endpoint, fingerprint = _endpoint(repo, remote)
+        digest = _config_digest(selection, fingerprint)
+        context["destination"].update(
+            {"endpoint_fingerprint": fingerprint, "config_digest": digest}
+        )
+        target_sha = _probe_ref(repo, endpoint, ref)
+        context["target"] = {"present": target_sha is not None, "sha": target_sha}
+        start_is_ancestor = _is_ancestor(repo, request.start_head, request.source_sha)
+        if target_sha is not None:
+            with _stable_fetched_ref(
+                repo, endpoint, ref, target_sha, request.source_sha
+            ) as target_temp:
                 outgoing = _rev_list(repo, f"{target_temp}..{request.source_sha}")
                 target_only = _rev_list(repo, f"{request.source_sha}..{target_temp}")
                 target_ancestor = _is_ancestor(repo, target_temp, request.source_sha)
-                start_advertised = (
-                    request.start_head in _advertised_heads(repo, endpoint).values()
-                )
-            else:
-                if _probe_ref(repo, endpoint, ref) is not None:
-                    raise PolicyGate("REMOTE_REF_APPEARED_DURING_PROBE", ref=ref)
-                advertised = _advertised_heads(repo, endpoint)
-                start_advertised = request.start_head in advertised.values()
-                baseline = request.start_head
-                if not start_advertised and request.creation_base_ref is not None:
-                    creation_base_sha = _probe_ref(
-                        repo, endpoint, request.creation_base_ref
-                    )
-                    if creation_base_sha is not None:
-                        base_temp = _fetch_exact(
-                            repo,
-                            endpoint,
-                            request.creation_base_ref,
-                            creation_base_sha,
-                            request.source_sha,
-                        )
-                        temp_refs.append((base_temp, (creation_base_sha,)))
-                        if (
-                            _probe_ref(repo, endpoint, request.creation_base_ref)
-                            != creation_base_sha
-                        ):
-                            raise PolicyGate(
-                                "REMOTE_REF_CHANGED_DURING_FETCH",
-                                ref=request.creation_base_ref,
-                                expected_sha=creation_base_sha,
-                            )
+            target = PresentTarget(
+                sha=target_sha,
+                outgoing_shas=outgoing,
+                target_only_shas=target_only,
+                is_ancestor=target_ancestor,
+            )
+        else:
+            if _probe_ref(repo, endpoint, ref) is not None:
+                raise PolicyGate("REMOTE_REF_APPEARED_DURING_PROBE", ref=ref)
+            advertised = _advertised_heads(repo, endpoint)
+            start_advertised = request.start_head in advertised.values()
+            baseline = request.start_head
+            creation_base = None
+            if not start_advertised and request.creation_base_ref is not None:
+                creation_base_sha = _probe_ref(repo, endpoint, request.creation_base_ref)
+                if creation_base_sha is not None:
+                    creation_base_to_start = ()
+                    with _stable_fetched_ref(
+                        repo,
+                        endpoint,
+                        request.creation_base_ref,
+                        creation_base_sha,
+                        request.source_sha,
+                    ) as base_temp:
                         creation_base_is_ancestor = _is_ancestor(
                             repo, base_temp, request.start_head
                         )
@@ -543,37 +588,26 @@ def _snapshot(repo: GitRepository, request: PublicationRequest) -> RepositorySna
                             creation_base_to_start = _rev_list(
                                 repo, f"{base_temp}..{request.start_head}"
                             )
-                            baseline = base_temp
-                outgoing = _rev_list(repo, f"{baseline}..{request.source_sha}")
-                target_only = ()
-                target_ancestor = False
-
-            return RepositorySnapshot(
-                remote=remote,
-                ref=ref,
-                endpoint_fingerprint=fingerprint,
-                config_digest=digest,
-                target_present=target_sha is not None,
-                target_sha=target_sha,
+                            baseline = creation_base_sha
+                    creation_base = CreationBase(
+                        sha=creation_base_sha,
+                        is_ancestor=creation_base_is_ancestor,
+                        to_start_shas=creation_base_to_start,
+                    )
+            outgoing = _rev_list(repo, f"{baseline}..{request.source_sha}")
+            target = AbsentTarget(
                 outgoing_shas=outgoing,
-                target_only_shas=target_only,
-                target_is_ancestor=target_ancestor,
-                start_is_ancestor=start_is_ancestor,
                 start_advertised=start_advertised,
-                creation_base_sha=creation_base_sha,
-                creation_base_is_ancestor=creation_base_is_ancestor,
-                creation_base_to_start_shas=creation_base_to_start,
+                creation_base=creation_base,
             )
-        finally:
-            cleanup_failure = None
-            for temp_ref, expected_shas in reversed(temp_refs):
-                try:
-                    _delete_temp(repo, temp_ref, expected_shas)
-                except PolicyGate as gate:
-                    if cleanup_failure is None:
-                        cleanup_failure = gate
-            if cleanup_failure is not None:
-                raise cleanup_failure
+        return RepositorySnapshot(
+            remote=remote,
+            ref=ref,
+            endpoint_fingerprint=fingerprint,
+            config_digest=digest,
+            target=target,
+            start_is_ancestor=start_is_ancestor,
+        )
     except PolicyGate as gate:
         gate.retain_context(context)
         raise

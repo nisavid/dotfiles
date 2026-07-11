@@ -6,7 +6,14 @@ from pathlib import Path
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from git_publication.core import PublicationRequest, RepositorySnapshot, plan_publication
+from git_publication.core import (
+    AbsentTarget,
+    CreationBase,
+    PresentTarget,
+    PublicationRequest,
+    RepositorySnapshot,
+    plan_publication,
+)
 
 
 A = "a" * 40
@@ -31,27 +38,54 @@ def request(**overrides):
 
 
 def snapshot(**overrides):
+    target_present = overrides.pop("target_present", True)
+    target_sha = overrides.pop("target_sha", A)
+    outgoing_shas = overrides.pop("outgoing_shas", (B,))
+    target_only_shas = overrides.pop("target_only_shas", ())
+    target_is_ancestor = overrides.pop("target_is_ancestor", True)
+    start_advertised = overrides.pop("start_advertised", True)
+    creation_base_sha = overrides.pop("creation_base_sha", None)
+    creation_base_is_ancestor = overrides.pop("creation_base_is_ancestor", None)
+    creation_base_to_start_shas = overrides.pop("creation_base_to_start_shas", ())
+    if target_present:
+        target = PresentTarget(
+            sha=target_sha,
+            outgoing_shas=outgoing_shas,
+            target_only_shas=target_only_shas,
+            is_ancestor=target_is_ancestor,
+        )
+    else:
+        creation_base = (
+            CreationBase(
+                sha=creation_base_sha,
+                is_ancestor=creation_base_is_ancestor,
+                to_start_shas=creation_base_to_start_shas,
+            )
+            if creation_base_sha is not None
+            else None
+        )
+        target = AbsentTarget(
+            outgoing_shas=outgoing_shas,
+            start_advertised=start_advertised,
+            creation_base=creation_base,
+        )
     values = {
         "remote": "upstream",
         "ref": "refs/heads/topic",
         "endpoint_fingerprint": "sha256:endpoint",
         "config_digest": "sha256:config",
-        "target_present": True,
-        "target_sha": A,
-        "outgoing_shas": (B,),
-        "target_only_shas": (),
-        "target_is_ancestor": True,
+        "target": target,
         "start_is_ancestor": True,
-        "start_advertised": True,
-        "creation_base_sha": None,
-        "creation_base_is_ancestor": None,
-        "creation_base_to_start_shas": (),
     }
     values.update(overrides)
     return RepositorySnapshot(**values)
 
 
 class CorePlanningTests(unittest.TestCase):
+    def test_present_target_requires_a_sha(self):
+        with self.assertRaises(ValueError):
+            PresentTarget(sha=None, outgoing_shas=(), target_only_shas=(), is_ancestor=False)
+
     def test_ready_fast_forward_uses_immutable_source_and_exact_lease(self):
         result = plan_publication(request(), snapshot())
 
@@ -74,6 +108,15 @@ class CorePlanningTests(unittest.TestCase):
     def test_verified_has_no_push(self):
         result = plan_publication(request(), snapshot(target_sha=B, outgoing_shas=()))
         self.assertEqual(result["status"], "verified")
+        self.assertIsNone(result["push"])
+
+    def test_verified_does_not_bypass_invalid_start_ancestry(self):
+        result = plan_publication(
+            request(),
+            snapshot(target_sha=B, outgoing_shas=(), start_is_ancestor=False),
+        )
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reasons"][0]["code"], "START_NOT_ANCESTOR_OF_SOURCE")
         self.assertIsNone(result["push"])
 
     def test_unowned_outgoing_commit_blocks(self):

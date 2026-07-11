@@ -120,7 +120,7 @@ test_git_publication() {
   assert_contains "$skill" 'sole local owner of Git baseline capture' 'Git publication skill must own baseline capture'
   assert_contains "$skill" 'Review-only tasks never mutate or publish' 'Git publication skill must preserve review-only behavior'
   assert_contains "$skill" 'git --literal-pathspecs commit --only -- <owned paths>' 'Git publication skill must require literal task-only commits'
-  assert_contains "$skill" 'same plan, configuration, and endpoint digest' 'Git publication skill must bind the immediate pre-push plan'
+  assert_contains "$skill" 'three unchanged bindings: the plan, configuration digest, and endpoint digest' 'Git publication skill must bind the immediate pre-push plan'
   assert_contains "$skill" 'one full heads refspec' 'Git publication skill must require one full heads refspec'
   assert_contains "$skill" 'exact existing or absent lease' 'Git publication skill must require an exact CAS lease'
   assert_contains "$skill" 'submodule mode `check`' 'Git publication skill must require submodule check mode'
