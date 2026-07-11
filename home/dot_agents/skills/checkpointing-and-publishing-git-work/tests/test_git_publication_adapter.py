@@ -77,6 +77,66 @@ class RequestTests(unittest.TestCase):
                 dict(complete, explicit_destination={"remote": "publish", "ref": "refs/heads/x:refs/heads/y"})
             )
 
+    def test_credential_bearing_endpoint_never_enters_transport_argv(self):
+        endpoint = "https://user:secret@example.invalid/repository"
+
+        class RecordingRepository:
+            def __init__(self):
+                self.args = None
+                self.env_overrides = None
+
+            def run(self, args, check=True, allowed=(), env_overrides=None):
+                self.args = args
+                self.env_overrides = env_overrides
+                return subprocess.CompletedProcess(["git", *args], 0, "", "")
+
+        repo = RecordingRepository()
+        adapter._run_endpoint(repo, endpoint, ["ls-remote", "--heads"])
+
+        self.assertNotIn(endpoint, repo.args)
+        self.assertNotIn("secret", " ".join(repo.args))
+        self.assertEqual(repo.env_overrides, {"CODEX_CHECKPOINTING_ENDPOINT": endpoint})
+
+    def test_remote_push_selection_and_digest_share_one_config_snapshot(self):
+        class ChangingConfigRepository:
+            def __init__(self):
+                self.remote_push_reads = 0
+
+            def output(self, args, allowed=()):
+                if args == ["remote"]:
+                    return "publish"
+                if args == ["symbolic-ref", "-q", "HEAD"]:
+                    return "refs/heads/topic"
+                if args[0] == "for-each-ref":
+                    return "publish\x00refs/heads/topic"
+                raise AssertionError(args)
+
+            def config_all(self, key):
+                values = {
+                    "branch.topic.pushRemote": ["publish"],
+                    "remote.pushDefault": [],
+                    "push.default": ["simple"],
+                }
+                if key == "remote.publish.push":
+                    self.remote_push_reads += 1
+                    return [
+                        "refs/heads/topic"
+                        if self.remote_push_reads == 1
+                        else "refs/heads/topic:refs/heads/changed"
+                    ]
+                return values[key]
+
+        repo = ChangingConfigRepository()
+        request = parse_request(
+            raw_request("a" * 40, "b" * 40, explicit_destination=None)
+        )
+
+        _, ref, selection = adapter._resolve_destination(repo, request)
+
+        self.assertEqual(ref, "refs/heads/topic")
+        self.assertEqual(selection["remote_push"], ["refs/heads/topic"])
+        self.assertEqual(repo.remote_push_reads, 1)
+
 
 class RepositoryPlanningTests(unittest.TestCase):
     def setUp(self):
@@ -228,11 +288,13 @@ class RepositoryPlanningTests(unittest.TestCase):
         source = commit(self.repo, "change")
         real_run = subprocess.run
         observed = []
+        observed_commands = []
 
         def recording_run(*args, **kwargs):
             command = args[0] if args else kwargs.get("args")
             if command and command[0] == "git" and kwargs.get("cwd") == str(self.repo):
                 observed.append(kwargs["env"])
+                observed_commands.append(command)
             return real_run(*args, **kwargs)
 
         adapter.subprocess.run = recording_run
@@ -250,27 +312,43 @@ class RepositoryPlanningTests(unittest.TestCase):
                 for env in observed
             )
         )
+        transport_commands = [
+            command
+            for command in observed_commands
+            if "ls-remote" in command or "fetch" in command
+        ]
+        self.assertTrue(transport_commands)
+        self.assertTrue(
+            all(str(self.remote) not in argument for command in transport_commands for argument in command)
+        )
 
     def test_target_change_after_exact_fetch_gates_and_cleans_temp_ref(self):
         source = commit(self.repo, "change")
-        original_fetch = adapter._fetch_exact
+        original_probe = adapter._probe_ref
+        target_probes = 0
 
-        def fetch_then_delete(repo, endpoint, ref, expected, reservation_sha):
-            temp_ref = original_fetch(repo, endpoint, ref, expected, reservation_sha)
-            git(self.repo, "push", "publish", f":{ref}")
-            return temp_ref
+        def delete_before_stability_probe(repo, endpoint, ref):
+            nonlocal target_probes
+            if ref == "refs/heads/topic":
+                target_probes += 1
+                if target_probes == 2:
+                    git(self.repo, "push", "publish", f":{ref}")
+            return original_probe(repo, endpoint, ref)
 
-        adapter._fetch_exact = fetch_then_delete
+        adapter._probe_ref = delete_before_stability_probe
         try:
             result = self.plan(raw_request(self.start, source))
         finally:
-            adapter._fetch_exact = original_fetch
+            adapter._probe_ref = original_probe
 
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(result["reasons"][0]["code"], "REMOTE_REF_CHANGED_DURING_FETCH")
         self.assertEqual(
             git(self.repo, "for-each-ref", "--format=%(refname)", "refs/codex/checkpointing"), ""
         )
+        self.assertEqual(result["destination"]["remote"], "publish")
+        self.assertEqual(result["target"], {"present": True, "sha": self.start})
+        self.assertNotIn(str(self.remote), json.dumps(result))
 
     def test_target_creation_between_absence_probes_gates(self):
         source = commit(self.repo, "change")
@@ -400,6 +478,15 @@ class RepositoryPlanningTests(unittest.TestCase):
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(result["reasons"][0]["code"], "PUSH_DEFAULT_AMBIGUOUS")
 
+    def test_invalid_configured_push_remote_is_a_repository_gate(self):
+        source = commit(self.repo, "change")
+        git(self.repo, "config", "branch.topic.pushRemote", "")
+
+        result = self.plan(raw_request(self.start, source, explicit_destination=None))
+
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reasons"][0]["code"], "DESTINATION_REMOTE_INVALID")
+
     def test_remote_push_without_colon_resolves_current_branch(self):
         source = commit(self.repo, "change")
         git(self.repo, "config", "branch.topic.pushRemote", "publish")
@@ -463,10 +550,16 @@ class RepositoryPlanningTests(unittest.TestCase):
         source = commit(self.repo, "change")
         original_run = adapter.GitRepository.run
 
-        def fail_delete(repo, args, check=True, allowed=()):
+        def fail_delete(repo, args, check=True, allowed=(), env_overrides=None):
             if args[:2] == ["update-ref", "-d"]:
                 return subprocess.CompletedProcess(["git", *args], 1, "", "injected cleanup failure")
-            return original_run(repo, args, check=check, allowed=allowed)
+            return original_run(
+                repo,
+                args,
+                check=check,
+                allowed=allowed,
+                env_overrides=env_overrides,
+            )
 
         adapter.GitRepository.run = fail_delete
         try:
@@ -483,25 +576,59 @@ class RepositoryPlanningTests(unittest.TestCase):
         self.assertEqual(result["target"], {"present": True, "sha": self.start})
         self.assertNotIn(str(self.remote), json.dumps(result))
 
-    def test_late_probe_race_retains_safe_observation_context(self):
+    def test_existing_target_does_not_probe_unrelated_advertised_heads(self):
         source = commit(self.repo, "change")
-        original_fetch = adapter._fetch_exact
+        original_run_endpoint = adapter._run_endpoint
 
-        def fetch_then_delete(repo, endpoint, ref, expected, reservation_sha):
-            temp_ref = original_fetch(repo, endpoint, ref, expected, reservation_sha)
-            git(self.repo, "push", "publish", f":{ref}")
-            return temp_ref
+        def malformed_heads(repo, endpoint, prefix, suffix=(), **kwargs):
+            if prefix == ["ls-remote", "--heads"]:
+                return subprocess.CompletedProcess(
+                    ["git", *prefix], 0, "malformed-output\n", ""
+                )
+            return original_run_endpoint(
+                repo, endpoint, prefix, suffix, **kwargs
+            )
 
-        adapter._fetch_exact = fetch_then_delete
+        adapter._run_endpoint = malformed_heads
         try:
             result = self.plan(raw_request(self.start, source))
         finally:
-            adapter._fetch_exact = original_fetch
+            adapter._run_endpoint = original_run_endpoint
+
+        self.assertEqual(result["status"], "ready")
+
+    def test_absent_target_malformed_advertised_heads_is_a_stable_policy_gate(self):
+        source = commit(self.repo, "change")
+        original_run_endpoint = adapter._run_endpoint
+
+        def malformed_heads(repo, endpoint, prefix, suffix=(), **kwargs):
+            if prefix == ["ls-remote", "--heads"]:
+                return subprocess.CompletedProcess(
+                    ["git", *prefix], 0, "malformed-output\n", ""
+                )
+            return original_run_endpoint(
+                repo, endpoint, prefix, suffix, **kwargs
+            )
+
+        adapter._run_endpoint = malformed_heads
+        try:
+            result = self.plan(
+                raw_request(
+                    self.start,
+                    source,
+                    explicit_destination={
+                        "remote": "publish",
+                        "ref": "refs/heads/new",
+                    },
+                    allow_create=True,
+                )
+            )
+        finally:
+            adapter._run_endpoint = original_run_endpoint
 
         self.assertEqual(result["status"], "blocked")
-        self.assertEqual(result["reasons"][0]["code"], "REMOTE_REF_CHANGED_DURING_FETCH")
+        self.assertEqual(result["reasons"][0]["code"], "REMOTE_REF_PROBE_MALFORMED")
         self.assertEqual(result["destination"]["remote"], "publish")
-        self.assertEqual(result["target"], {"present": True, "sha": self.start})
         self.assertNotIn(str(self.remote), json.dumps(result))
 
     def test_push_plan_has_a_single_option_boundary(self):
