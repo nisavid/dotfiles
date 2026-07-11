@@ -31,6 +31,19 @@ chezmoi dump --format json "$HOME/.codex/AGENTS.md" > "$target_state"
 [[ $(stat -f '%Lp' "$rendered") == 600 ]] || fail "rendered test artifact must be 0600"
 
 required=(
+  '## Git Checkpoints And Publication'
+  'Treat commits and pushes as normal completion steps for task-owned changes, not optional extras.'
+  'an explicit request to commit is not required.'
+  'Before responding at a stopping point, inspect Git status, the complete unpublished commit range, and upstream state.'
+  'Push only when every unpublished commit is task-owned or explicitly authorized and no other gate remains.'
+  'Explicitly classified local-only paths require no further ownership question'
+  'unrelated dirt does not block a safely separable task commit; never include unrelated changes.'
+  'When no upstream exists, set the unambiguous default remote and same-name branch as upstream.'
+  'Direct default-branch pushes are allowed when repository policy and remote protections permit them.'
+  'use `--force-with-lease` when the reconciled history requires it, never unconditional force.'
+  'This policy authorizes lease-protected rewrites, including on a default branch'
+  'an unresolved authentication identity or permission are gates.'
+  'Do not guess through an unresolved push destination, identity, permission, or remote-preservation gate'
   'operator owns the checklist and the active task authorizes changing the issue, pull request, or comment'
   'active task authorizes thread resolution'
   'Resolve a Systalyze pull request review thread only when the active task authorizes thread resolution, addressed evidence is present'
@@ -57,6 +70,16 @@ required=(
 for ((i = 1; i <= ${#required}; i++)); do
   grep -Fq -- "$required[$i]" "$rendered" || fail "missing required clause $i"
 done
+
+development_line=$(grep -n '^## Development Work$' "$rendered" | cut -d: -f1)
+git_policy_line=$(grep -n '^## Git Checkpoints And Publication$' "$rendered" | cut -d: -f1)
+writing_line=$(grep -n '^## Writing$' "$rendered" | cut -d: -f1)
+[[ -n $development_line && -n $git_policy_line && -n $writing_line ]] || fail 'required policy sections are missing'
+((development_line < git_policy_line && git_policy_line < writing_line)) || \
+  fail 'Git checkpoint policy is not immediately after Development Work'
+next_heading=$(awk '$0 == "## Development Work" { found = 1; next } found && /^## / { print; exit }' "$rendered")
+[[ $next_heading == '## Git Checkpoints And Publication' ]] || \
+  fail 'another section appears between Development Work and the Git checkpoint policy'
 
 forbidden=(
   'ivan/impeccable'
