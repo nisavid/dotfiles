@@ -14,9 +14,9 @@
 set -euo pipefail
 
 export HOMEDIR={{ .chezmoi.homeDir | quote }}
-{{ $editorTarget := default "linux-desktop-code-oss" (default (index .editorTarget.defaultByOs .chezmoi.os) (index .editorTarget.defaultByHostname .chezmoi.hostname)) }}
-export EDITOR_TARGET={{ $editorTarget | quote }}
 {{ $identityName := default "personal" (index .gitIdentity.defaultByHostname .chezmoi.hostname) }}
+{{ $editorTarget := default "cursor" (index .editorTarget.defaultByIdentity $identityName) }}
+export EDITOR_TARGET={{ $editorTarget | quote }}
 export GIT_BRANCH_PREFIX={{ if or (eq $identityName "systalyze") (eq $identityName "stlz-bcs") }}"ivan/"{{ else }}"nisavid/"{{ end }}
 export WORK_TOML_B64={{ include ".private-codex-work.toml.age" | decrypt | b64enc | quote }}
 
