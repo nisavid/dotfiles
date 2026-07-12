@@ -13,11 +13,11 @@ LIB = ROOT / "home/private_dot_local/lib"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
-from hindsight_memory_control_plane.adapters import AdapterError, AuthenticationError, FakeAdapter
+from hindsight_memory_control_plane.adapters import AdapterError, AuthenticationError, FakeAdapter, RollbackBundle
 from hindsight_memory_control_plane.http_adapter import HttpAdapter
 from hindsight_memory_control_plane.migration_adapter import AdminMigrationAdapter, MigrationAdapterError
 from hindsight_memory_control_plane.canonical import digest
-from hindsight_memory_control_plane.model import Action, EndpointIdentity, OperationSnapshot, Plan
+from hindsight_memory_control_plane.model import Action, EndpointIdentity, Inventory, OperationSnapshot, Plan
 from hindsight_memory_control_plane.reconcile import ApplyError, apply_plan, create_rollback_bundle, parse_migration_gate
 
 
@@ -33,40 +33,276 @@ def plan_for(state, *actions):
     return Plan(1, "1" * 64, "2" * 64, "core", endpoint, digest(state), OperationSnapshot(True), (), values, False, digest(body))
 
 
-class FakeAdapterContractTest(unittest.TestCase):
-    def test_reads_and_mutations_are_explicit_and_record_payload_free_calls(self):
-        adapter = FakeAdapter(
-            schema=1,
-            endpoint={"profile_id": "core", "scheme": "http", "host": "127.0.0.1", "port": 7979, "tenant": "default"},
-            state={"config": {"mode": "safe"}},
-        )
-
-        self.assertEqual(adapter.schema_version(), 1)
-        self.assertEqual(adapter.read_config(), {"mode": "safe"})
-        adapter.patch_config({"mode": "active"})
-
-        self.assertEqual([call["method"] for call in adapter.calls], ["schema_version", "read_config", "patch_config"])
-        self.assertEqual(adapter.calls[-1], {"method": "patch_config", "metadata": {"keys": ["mode"]}})
-
-    def test_covers_every_explicit_observable_operation(self):
-        adapter = FakeAdapter(
-            endpoint={"profile_id": "core", "scheme": "http", "host": "127.0.0.1", "port": 7979, "tenant": "default"},
-        )
-        adapter.endpoint_identity()
-        for method in (adapter.read_stats, adapter.read_tags, adapter.read_scopes, adapter.read_documents,
-                       adapter.read_models, adapter.read_directives, adapter.read_operations,
-                       adapter.read_invalidated_memories, adapter.export_template):
-            method()
-        for method in (adapter.template_dry_run, adapter.import_template, adapter.patch_config,
-                       adapter.upsert_model, adapter.upsert_directive, adapter.transfer_documents,
-                       adapter.reapply_invalidated_memories, adapter.delete_bank):
-            method({"id": "item"})
-        serialized = json.dumps(adapter.calls)
-        self.assertNotIn('"item"', serialized)
-        self.assertNotIn("top-secret", serialized)
+def inventory_for(port, *, scheme="http", host="127.0.0.1", approved_tls=False):
+    endpoint = {"profile_id": "core", "scheme": scheme, "host": host, "port": port, "tenant": "default"}
+    raw = {
+        "schema_version": 1, "machine": {"base_port": port}, "archetype": {},
+        "profiles": [{"id": "core", "slot": 0, "port": port, "scheme": scheme, "host": host, "tenant": "default"}],
+        "providers": [], "banks": [], "harnesses": [], "migration": {},
+        "policy": {"approved_tls_endpoints": [endpoint] if approved_tls else []},
+    }
+    artifact = {key: raw[key] for key in ("schema_version", "archetype", "profiles", "providers", "banks", "harnesses", "policy")}
+    return Inventory(1, raw["machine"], raw["archetype"], tuple(raw["profiles"]), (), (), (), raw["migration"], raw["policy"], digest(raw), digest(artifact))
 
 
-class HttpAdapterContractTest(unittest.TestCase):
+class AdapterContractMixin:
+    def assert_operation(self, method, path):
+        raise NotImplementedError
+
+    def test_schema_version(self):
+        self.assertEqual(self.adapter.schema_version(), 1)
+        self.assert_operation("GET", "/v1/schema")
+
+    def test_endpoint_identity(self):
+        self.assertEqual(self.adapter.endpoint_identity(), self.endpoint)
+        self.assert_operation("GET", "/v1/identity")
+
+    def test_snapshot(self):
+        self.assertEqual(self.adapter.snapshot(), {"endpoint": self.endpoint.to_dict(), "state": self.state, "operations": self.operations})
+
+    def test_read_config(self):
+        self.assertEqual(self.adapter.read_config(), {"mode": "safe"})
+        self.assert_operation("GET", "/v1/config")
+
+    def test_read_stats(self):
+        self.assertEqual(self.adapter.read_stats(), {"count": 2})
+        self.assert_operation("GET", "/v1/stats")
+
+    def test_read_tags(self):
+        self.assertEqual(self.adapter.read_tags(), {"tags": ["a"]})
+        self.assert_operation("GET", "/v1/tags")
+
+    def test_read_scopes(self):
+        self.assertEqual(self.adapter.read_scopes(), {"scopes": ["s"]})
+        self.assert_operation("GET", "/v1/scopes")
+
+    def test_read_documents(self):
+        self.assertEqual(self.adapter.read_documents(), {"documents": [{"id": "d"}]})
+        self.assert_operation("GET", "/v1/documents")
+
+    def test_read_models(self):
+        self.assertEqual(self.adapter.read_models(), {"models": [{"id": "m0"}]})
+        self.assert_operation("GET", "/v1/models")
+
+    def test_read_directives(self):
+        self.assertEqual(self.adapter.read_directives(), {"directives": [{"id": "r0"}]})
+        self.assert_operation("GET", "/v1/directives")
+
+    def test_read_operations(self):
+        self.assertEqual(self.adapter.read_operations(), self.operations)
+        self.assert_operation("GET", "/v1/operations")
+
+    def test_template_dry_run(self):
+        value = {"template": "t"}
+        self.assertEqual(self.adapter.template_dry_run(value), {"valid": True, "digest": digest(value)})
+        self.assert_operation("POST", "/v1/templates/dry-run")
+
+    def test_export_template(self):
+        self.assertEqual(self.adapter.export_template(), {"template": "exported"})
+        self.assert_operation("GET", "/v1/templates/export")
+
+    def test_import_template(self):
+        self.assertEqual(self.adapter.import_template({"template": "new"}), {"imported": True})
+        self.assert_operation("POST", "/v1/templates/import")
+
+    def test_patch_config(self):
+        self.assertEqual(self.adapter.patch_config({"mode": "active"}), {"mode": "active"})
+        self.assert_operation("PATCH", "/v1/config")
+
+    def test_upsert_model(self):
+        self.assertEqual(self.adapter.upsert_model({"id": "m"}), {"upserted": "m"})
+        self.assert_operation("PUT", "/v1/models")
+
+    def test_upsert_directive(self):
+        self.assertEqual(self.adapter.upsert_directive({"id": "r"}), {"upserted": "r"})
+        self.assert_operation("PUT", "/v1/directives")
+
+    def test_transfer_documents(self):
+        self.assertEqual(self.adapter.transfer_documents({"count": 2}), {"transferred": 2})
+        self.assert_operation("POST", "/v1/documents/transfer")
+
+    def test_invalidated_memory_inventory(self):
+        self.assertEqual(self.adapter.read_invalidated_memories(), {"invalidated_memories": [{"id": "i"}]})
+        self.assert_operation("GET", "/v1/memories/invalidated")
+
+    def test_reapply_invalidated_memories(self):
+        self.assertEqual(self.adapter.reapply_invalidated_memories({"count": 2}), {"reapplied": 2})
+        self.assert_operation("POST", "/v1/memories/invalidated/reapply")
+
+    def test_delete_bank(self):
+        self.assertEqual(self.adapter.delete_bank({"bank_id": "b"}), {"deleted": True})
+        self.assert_operation("DELETE", "/v1/banks")
+
+    def test_create_verify_and_restore_rollback(self):
+        bundle = self.adapter.create_rollback_bundle("a" * 64, ("action-1",))
+        self.assertIsInstance(bundle, RollbackBundle)
+        self.assertTrue(self.adapter.verify_rollback_bundle(bundle))
+        self.adapter.restore(bundle)
+        self.assert_rollback_contract(bundle)
+
+
+class FakeAdapterContractTest(AdapterContractMixin, unittest.TestCase):
+    def setUp(self):
+        self.endpoint = EndpointIdentity("core", "http", "127.0.0.1", 7979, "default")
+        self.operations = {"idle": True, "active": []}
+        self.state = {
+            "config": {"mode": "safe"}, "stats": {"count": 2}, "tags": {"tags": ["a"]},
+            "scopes": {"scopes": ["s"]}, "documents": {"documents": [{"id": "d"}]},
+            "models": {"models": [{"id": "m0"}]}, "directives": {"directives": [{"id": "r0"}]},
+            "invalidated_memories": {"invalidated_memories": [{"id": "i"}]}, "template": {"template": "exported"},
+        }
+        self.adapter = FakeAdapter(endpoint=self.endpoint.to_dict(), state=self.state, operations=self.operations)
+
+    def assert_operation(self, method, path):
+        expected = {
+            "/v1/schema": "schema_version", "/v1/identity": "endpoint_identity", "/v1/config": "read_config" if method == "GET" else "patch_config",
+            "/v1/stats": "read_stats", "/v1/tags": "read_tags", "/v1/scopes": "read_scopes", "/v1/documents": "read_documents",
+            "/v1/models": "read_models" if method == "GET" else "upsert_model", "/v1/directives": "read_directives" if method == "GET" else "upsert_directive",
+            "/v1/operations": "read_operations", "/v1/templates/dry-run": "template_dry_run", "/v1/templates/export": "export_template",
+            "/v1/templates/import": "import_template", "/v1/documents/transfer": "transfer_documents",
+            "/v1/memories/invalidated": "read_invalidated_memories", "/v1/memories/invalidated/reapply": "reapply_invalidated_memories",
+            "/v1/banks": "delete_bank",
+        }[path]
+        self.assertEqual(self.adapter.calls[-1]["method"], expected)
+        self.assertNotIn("top-secret", json.dumps(self.adapter.calls))
+
+    def assert_rollback_contract(self, bundle):
+        self.assertEqual([call["method"] for call in self.adapter.calls[-3:]],
+                         ["create_rollback_bundle", "verify_rollback_bundle", "restore"])
+        self.assertNotIn("documents", json.dumps(self.adapter.calls[-3:]))
+
+
+class HttpAdapterContractTest(AdapterContractMixin, unittest.TestCase):
+    def setUp(self):
+        self.seen = []
+        self.operations = {"idle": True, "active": []}
+        state = {
+            "config": {"mode": "safe"}, "stats": {"count": 2}, "tags": {"tags": ["a"]},
+            "scopes": {"scopes": ["s"]}, "documents": {"documents": [{"id": "d"}]},
+            "models": {"models": [{"id": "m0"}]}, "directives": {"directives": [{"id": "r0"}]},
+            "invalidated_memories": {"invalidated_memories": [{"id": "i"}]}, "template": {"template": "exported"},
+        }
+        responses = {
+            ("GET", "/v1/schema"): {"schema_version": 1}, ("GET", "/v1/state"): state,
+            ("GET", "/v1/config"): state["config"], ("GET", "/v1/stats"): state["stats"],
+            ("GET", "/v1/tags"): state["tags"], ("GET", "/v1/scopes"): state["scopes"],
+            ("GET", "/v1/documents"): state["documents"], ("GET", "/v1/models"): state["models"],
+            ("GET", "/v1/directives"): state["directives"], ("GET", "/v1/operations"): self.operations,
+            ("GET", "/v1/memories/invalidated"): state["invalidated_memories"], ("GET", "/v1/templates/export"): state["template"],
+            ("POST", "/v1/templates/dry-run"): {"valid": True, "digest": digest({"template": "t"})},
+            ("POST", "/v1/templates/import"): {"imported": True}, ("PATCH", "/v1/config"): {"mode": "active"},
+            ("PUT", "/v1/models"): {"upserted": "m"}, ("PUT", "/v1/directives"): {"upserted": "r"},
+            ("POST", "/v1/documents/transfer"): {"transferred": 2},
+            ("POST", "/v1/memories/invalidated/reapply"): {"reapplied": 2}, ("DELETE", "/v1/banks"): {"deleted": True},
+        }
+
+        class Handler(BaseHTTPRequestHandler):
+            def _serve(handler):
+                length = int(handler.headers.get("Content-Length", "0"))
+                request_body = json.loads(handler.rfile.read(length) or b"{}")
+                self.seen.append((handler.command, handler.path, handler.headers.get("Authorization"), request_body))
+                if handler.path == "/v1/identity":
+                    value = self.endpoint.to_dict()
+                elif handler.path == "/v1/rollbacks":
+                    body = {"rollback_id": "server-rb-1", "plan_digest": request_body["plan_digest"], "action_ids": request_body["action_ids"],
+                            "prestate_digest": digest(state), "endpoint_digest": digest(self.endpoint.to_dict())}
+                    bundle_digest = digest(body)
+                    value = {**body, "bundle_digest": bundle_digest, "restore_proof_digest": digest({"bundle_digest": bundle_digest})}
+                elif handler.path.endswith("/verify"):
+                    value = {"verified": True}
+                elif handler.path.endswith("/restore"):
+                    value = {"restored": True}
+                else:
+                    value = responses[(handler.command, handler.path)]
+                raw = json.dumps(value).encode()
+                handler.send_response(200)
+                handler.send_header("Content-Length", str(len(raw)))
+                handler.end_headers()
+                handler.wfile.write(raw)
+            do_GET = do_POST = do_PATCH = do_PUT = do_DELETE = _serve
+            def log_message(self, *_args): pass
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.endpoint = EndpointIdentity("core", "http", "127.0.0.1", self.server.server_port, "default")
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.addCleanup(self.server.shutdown)
+        self.addCleanup(self.server.server_close)
+        self.state = state
+        self.adapter = HttpAdapter(inventory=inventory_for(self.server.server_port), profile_id="core", token_resolver=lambda: "contract-token")
+
+    def assert_operation(self, method, path):
+        self.assertEqual(self.seen[-1][:3], (method, path, "Bearer contract-token"))
+
+    def assert_rollback_contract(self, bundle):
+        self.assertEqual([(item[0], item[1]) for item in self.seen[-3:]], [
+            ("POST", "/v1/rollbacks"),
+            ("POST", f"/v1/rollbacks/{bundle.rollback_id}/verify"),
+            ("POST", f"/v1/rollbacks/{bundle.rollback_id}/restore"),
+        ])
+        self.assertEqual(self.seen[-1][3], bundle.to_dict())
+
+
+class HttpAdapterSecurityTest(unittest.TestCase):
+    def test_endpoint_must_be_derived_from_inventory_and_scheme_policy(self):
+        with self.assertRaisesRegex(AdapterError, "digests"):
+            HttpAdapter(inventory=replace(inventory_for(7979), inventory_digest="0" * 64), profile_id="core", token_resolver=lambda: "token")
+        with self.assertRaisesRegex(AdapterError, "loopback"):
+            HttpAdapter(inventory=inventory_for(80, host="example.com"), profile_id="core", token_resolver=lambda: "token")
+        with self.assertRaisesRegex(AdapterError, "scheme"):
+            HttpAdapter(inventory=inventory_for(80, scheme="ftp"), profile_id="core", token_resolver=lambda: "token")
+        with self.assertRaisesRegex(AdapterError, "approved"):
+            HttpAdapter(inventory=inventory_for(443, scheme="https", host="example.com"), profile_id="core", token_resolver=lambda: "token")
+        approved = HttpAdapter(inventory=inventory_for(443, scheme="https", host="example.com", approved_tls=True), profile_id="core", token_resolver=lambda: "token")
+        self.assertEqual(approved.endpoint.host, "example.com")
+
+    def test_iterencoded_request_is_stopped_at_byte_bound_before_network(self):
+        class Handler(BaseHTTPRequestHandler):
+            def do_PATCH(self):
+                self.send_response(500)
+                self.end_headers()
+            def log_message(self, *_args): pass
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.shutdown)
+        self.addCleanup(server.server_close)
+        adapter = HttpAdapter(inventory=inventory_for(server.server_port), profile_id="core", token_resolver=lambda: "token", max_json_bytes=32)
+        with self.assertRaisesRegex(AdapterError, "request exceeds"):
+            adapter.patch_config({"value": "x" * 100_000})
+        self.assertEqual(adapter.recordings, [])
+
+    def test_invalid_content_length_is_normalized(self):
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Length", "invalid")
+                self.end_headers()
+                self.wfile.write(b"{}")
+            def log_message(self, *_args): pass
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.shutdown)
+        self.addCleanup(server.server_close)
+        adapter = HttpAdapter(inventory=inventory_for(server.server_port), profile_id="core", token_resolver=lambda: "token")
+        with self.assertRaisesRegex(AdapterError, "Content-Length"):
+            adapter.read_config()
+
+    def test_non_object_json_is_normalized(self):
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                body = b"[]"
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            def log_message(self, *_args): pass
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.shutdown)
+        self.addCleanup(server.server_close)
+        adapter = HttpAdapter(inventory=inventory_for(server.server_port), profile_id="core", token_resolver=lambda: "token")
+        with self.assertRaisesRegex(AdapterError, "non-object"):
+            adapter.read_config()
+
     def test_uses_resolved_bearer_token_without_recording_or_exposing_it(self):
         token = "top-secret-token"
         seen = []
@@ -89,54 +325,12 @@ class HttpAdapterContractTest(unittest.TestCase):
         thread.start()
         self.addCleanup(server.shutdown)
         self.addCleanup(server.server_close)
-        adapter = HttpAdapter(
-            endpoint={"profile_id": "core", "scheme": "http", "host": "127.0.0.1", "port": server.server_port, "tenant": "default"},
-            token_resolver=lambda: token,
-        )
+        adapter = HttpAdapter(inventory=inventory_for(server.server_port), profile_id="core", token_resolver=lambda: token)
 
         self.assertEqual(adapter.read_config(), {"mode": "safe"})
         self.assertEqual(seen, [("/v1/config", f"Bearer {token}")])
         self.assertNotIn(token, repr(adapter))
         self.assertNotIn(token, json.dumps(adapter.recordings))
-
-    def test_all_explicit_operations_use_bearer_auth_and_bounded_json(self):
-        seen = []
-        identity = {"profile_id": "core", "scheme": "http", "host": "127.0.0.1", "port": 1, "tenant": "default"}
-
-        class Handler(BaseHTTPRequestHandler):
-            def _serve(self):
-                seen.append((self.command, self.path, self.headers.get("Authorization")))
-                if self.path == "/v1/schema":
-                    value = {"schema_version": 1}
-                elif self.path == "/v1/identity":
-                    value = {**identity, "port": self.server.server_port}
-                else:
-                    value = {}
-                body = json.dumps(value).encode()
-                self.send_response(200)
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
-            do_GET = do_POST = do_PATCH = do_PUT = do_DELETE = _serve
-            def log_message(self, *_args): pass
-
-        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        threading.Thread(target=server.serve_forever, daemon=True).start()
-        self.addCleanup(server.shutdown)
-        self.addCleanup(server.server_close)
-        adapter = HttpAdapter(endpoint={**identity, "port": server.server_port}, token_resolver=lambda: "token")
-        adapter.schema_version()
-        adapter.endpoint_identity()
-        for method in (adapter.read_config, adapter.read_stats, adapter.read_tags, adapter.read_scopes,
-                       adapter.read_documents, adapter.read_models, adapter.read_directives,
-                       adapter.read_operations, adapter.read_invalidated_memories, adapter.export_template):
-            method()
-        for method in (adapter.template_dry_run, adapter.import_template, adapter.patch_config,
-                       adapter.upsert_model, adapter.upsert_directive, adapter.transfer_documents,
-                       adapter.reapply_invalidated_memories, adapter.delete_bank):
-            method({"id": "item"})
-        self.assertTrue(seen)
-        self.assertTrue(all(auth == "Bearer token" for _, _, auth in seen))
 
     def test_preserves_401_redacts_token_and_rejects_oversized_json(self):
         token = "never-print-this-token"
@@ -155,10 +349,7 @@ class HttpAdapterContractTest(unittest.TestCase):
         threading.Thread(target=server.serve_forever, daemon=True).start()
         self.addCleanup(server.shutdown)
         self.addCleanup(server.server_close)
-        adapter = HttpAdapter(
-            endpoint={"profile_id": "core", "scheme": "http", "host": "127.0.0.1", "port": server.server_port, "tenant": "default"},
-            token_resolver=lambda: token, max_json_bytes=1024, timeout=100,
-        )
+        adapter = HttpAdapter(inventory=inventory_for(server.server_port), profile_id="core", token_resolver=lambda: token, max_json_bytes=1024, timeout=100)
         with self.assertRaises(AuthenticationError) as auth:
             adapter.read_config()
         self.assertNotIn(token, str(auth.exception))
@@ -183,10 +374,7 @@ class HttpAdapterContractTest(unittest.TestCase):
         threading.Thread(target=server.serve_forever, daemon=True).start()
         self.addCleanup(server.shutdown)
         self.addCleanup(server.server_close)
-        adapter = HttpAdapter(
-            endpoint={"profile_id": "core", "scheme": "http", "host": "127.0.0.1", "port": server.server_port, "tenant": "default"},
-            token_resolver=lambda: "timeout-secret", timeout=0.1,
-        )
+        adapter = HttpAdapter(inventory=inventory_for(server.server_port), profile_id="core", token_resolver=lambda: "timeout-secret", timeout=0.1)
         with self.assertRaises(AdapterError) as failure:
             adapter.read_config()
         self.assertNotIn("timeout-secret", str(failure.exception))
@@ -236,6 +424,41 @@ class AdminMigrationAdapterContractTest(unittest.TestCase):
 
 
 class GuardedApplyTest(unittest.TestCase):
+    def test_fake_applies_digest_verified_migration_only_with_matching_gate(self):
+        from hindsight_memory_control_plane.reconcile import build_mutation_plan
+
+        adapter = self.adapter()
+        base = plan_for({})
+        mutation = build_mutation_plan(
+            base,
+            migration_run_id="run-1",
+            actions=[{"id": "migrate-1", "kind": "migrate_bank", "artifact_digest": base.artifact_digest}],
+        )
+        rollback = create_rollback_bundle(mutation, adapter)
+        matching = {
+            "rollback_bundle": rollback,
+            "migration_gate": {
+                "export": {"run_id": "run-1", "artifact_digest": base.artifact_digest},
+                "import": {"run_id": "run-1", "artifact_digest": base.artifact_digest},
+            },
+        }
+
+        self.assertEqual(apply_plan(mutation, adapter, mutation.plan_digest, matching).status, "applied")
+        self.assertEqual(apply_plan(mutation, adapter, mutation.plan_digest, {"rollback_bundle": rollback}).reason, "migration_gate_required")
+
+    def test_mutation_plan_deserialization_is_closed_and_digest_verified(self):
+        from hindsight_memory_control_plane.reconcile import build_mutation_plan, mutation_plan_from_dict
+        base = plan_for({})
+        mutation = build_mutation_plan(base, migration_run_id="run-1", actions=[
+            {"id": "migrate-1", "kind": "migrate_bank", "artifact_digest": base.artifact_digest},
+        ])
+        self.assertEqual(mutation_plan_from_dict(mutation.to_dict()), mutation)
+        unknown = {**mutation.to_dict(), "payload": "forbidden"}
+        with self.assertRaisesRegex(ApplyError, "closed"):
+            mutation_plan_from_dict(unknown)
+        tampered = {**mutation.to_dict(), "migration_run_id": "run-2"}
+        with self.assertRaisesRegex(ApplyError, "digest"):
+            mutation_plan_from_dict(tampered)
     def adapter(self, state=None, **kwargs):
         return FakeAdapter(
             endpoint={"profile_id": "core", "scheme": "http", "host": "127.0.0.1", "port": 7979, "tenant": "default"},
@@ -265,7 +488,7 @@ class GuardedApplyTest(unittest.TestCase):
 
         self.assertEqual(result.status, "operator_blocked")
         self.assertTrue(result.rollback_attempted)
-        self.assertFalse(result.activation_enabled)
+        self.assertIsNone(result.activation_enabled)
         self.assertFalse(adapter.activation_enabled)
 
     def test_refuses_fresh_state_operation_endpoint_and_restore_proof_failures(self):
@@ -285,7 +508,7 @@ class GuardedApplyTest(unittest.TestCase):
         self.assertEqual(apply_plan(plan, endpoint, plan.plan_digest, {"rollback_bundle": endpoint_bundle}).reason, "endpoint_identity_drift")
 
         data_plan = plan_for({"documents": []})
-        unproved = self.adapter(state={"documents": []}, disposable_restore_verified=False)
+        unproved = self.adapter(state={"documents": []}, restore_proof_valid=False)
         unproved_bundle = create_rollback_bundle(data_plan, unproved)
         self.assertEqual(apply_plan(data_plan, unproved, data_plan.plan_digest, {"rollback_bundle": unproved_bundle}).reason, "disposable_restore_proof_required")
 
@@ -322,6 +545,55 @@ class GuardedApplyTest(unittest.TestCase):
         plan = replace(plan_for({}), destructive=True)
         result = apply_plan(plan, adapter, plan.plan_digest, {"rollback_bundle": {}})
         self.assertEqual(result.reason, "invalid_or_destructive_plan")
+
+    def test_migration_gate_mismatch_is_refused_through_apply_boundary(self):
+        from hindsight_memory_control_plane.reconcile import build_mutation_plan
+        adapter = self.adapter()
+        base = plan_for({})
+        mutation = build_mutation_plan(base, migration_run_id="run-1", actions=[
+            {"id": "migrate-1", "kind": "migrate_bank", "artifact_digest": base.artifact_digest},
+        ])
+        rollback = create_rollback_bundle(mutation, adapter)
+        gate = {
+            "rollback_bundle": rollback,
+            "migration_gate": {
+                "export": {"run_id": "run-1", "artifact_digest": base.artifact_digest},
+                "import": {"run_id": "run-2", "artifact_digest": base.artifact_digest},
+            },
+        }
+        self.assertEqual(apply_plan(mutation, adapter, mutation.plan_digest, gate).reason, "migration_gate_mismatch")
+
+    def test_caller_cannot_forge_restore_proof(self):
+        adapter = self.adapter(state={"documents": []}, restore_proof_valid=True)
+        plan = plan_for({"documents": []})
+        bundle = create_rollback_bundle(plan, adapter)
+        forged = replace(bundle, restore_proof_digest="f" * 64)
+        result = apply_plan(plan, adapter, plan.plan_digest, {"rollback_bundle": forged})
+        self.assertEqual(result.reason, "disposable_restore_proof_required")
+
+    def test_any_ordinary_exception_after_mutation_attempts_rollback(self):
+        class ExplodingFake(FakeAdapter):
+            def apply_action(self, action):
+                self.state["partial"] = True
+                raise ValueError("private payload must not escape")
+        adapter = ExplodingFake(endpoint={"profile_id": "core", "scheme": "http", "host": "127.0.0.1", "port": 7979, "tenant": "default"})
+        plan = plan_for({})
+        bundle = create_rollback_bundle(plan, adapter)
+        result = apply_plan(plan, adapter, plan.plan_digest, {"rollback_bundle": bundle})
+        self.assertEqual(result.status, "rolled_back")
+        self.assertEqual(adapter.state, {})
+        self.assertNotIn("private payload", result.reason)
+
+    def test_rollback_and_activation_disable_failure_leave_activation_unknown(self):
+        adapter = self.adapter()
+        plan = plan_for({})
+        bundle = create_rollback_bundle(plan, adapter)
+        adapter.fail_postcondition_for = "01-create"
+        adapter.fail_restore = True
+        adapter.fail_disable_activation = True
+        result = apply_plan(plan, adapter, plan.plan_digest, {"rollback_bundle": bundle})
+        self.assertEqual(result.status, "operator_blocked")
+        self.assertIsNone(result.activation_enabled)
 
 
 if __name__ == "__main__":
