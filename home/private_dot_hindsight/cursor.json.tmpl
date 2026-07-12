@@ -1,4 +1,10 @@
 {
-  "hindsightApiUrl": "{{ .hindsight.clientApiUrl }}",
-  "bankId": "{{ .hindsight.bank }}"
+  "schemaVersion": 1,
+  "broker": {
+    "transport": "unix",
+    "path": "{{ joinPath .chezmoi.homeDir ".local/state/hindsight-memory/broker.sock" }}",
+    "scope": "user"
+  },
+  "adapter": "cursor",
+  "active": false
 }
