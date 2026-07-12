@@ -120,6 +120,20 @@ def _validate(raw: dict[str, Any]) -> Inventory:
 
     profile_by_id = {record["id"]: record for record in profiles}
     provider_by_id = {record["id"]: record for record in providers}
+    for provider in providers:
+        if provider.get("role") not in ROLES:
+            raise InventoryError(f"provider {provider['id']} has invalid role")
+        if provider.get("placement") not in PLACEMENTS:
+            raise InventoryError(f"provider {provider['id']} has invalid placement")
+        data_classes = provider.get("data_classes")
+        if (
+            not isinstance(data_classes, list)
+            or not all(isinstance(item, str) and item for item in data_classes)
+            or len(set(data_classes)) != len(data_classes)
+        ):
+            raise InventoryError(
+                f"provider {provider['id']} data_classes must be an array of unique non-empty strings"
+            )
     base_port = machine.get("base_port", 7979)
     if type(base_port) is not int:
         raise InventoryError("machine base_port must be an integer")
@@ -150,14 +164,10 @@ def _validate(raw: dict[str, Any]) -> Inventory:
                 if selected_id not in provider_by_id:
                     raise InventoryError(f"profile {profile['id']} references unknown provider {selected_id}")
                 provider = provider_by_id[selected_id]
-                if provider.get("role") not in (None, role):
+                if provider["role"] != role:
                     raise InventoryError(f"provider {selected_id} cannot serve role {role}")
-                placement = provider.get("placement")
-                if placement not in PLACEMENTS:
-                    raise InventoryError(f"provider {selected_id} has invalid placement")
-                permitted = provider.get("data_classes", [])
-                if not isinstance(permitted, list):
-                    raise InventoryError(f"provider {selected_id} data_classes must be an array")
+                placement = provider["placement"]
+                permitted = provider["data_classes"]
                 for data_class in data_classes:
                     if data_class not in permitted:
                         raise InventoryError(f"provider {selected_id} cannot receive {data_class} data")
@@ -178,8 +188,11 @@ def _validate(raw: dict[str, Any]) -> Inventory:
         authority = bank.get("authority", "none")
         if authority not in {"authoritative", "replica", "none"}:
             raise InventoryError(f"bank {bank['id']} has invalid authority")
+        writable = bank.get("writable", True)
+        if not isinstance(writable, bool):
+            raise InventoryError(f"bank {bank['id']} writable must be boolean")
         data_class = bank.get("data_class", bank.get("kind"))
-        if data_class == "engineering" and authority == "authoritative" and bank.get("writable", True):
+        if data_class == "engineering" and authority == "authoritative" and writable:
             engineering_authorities += 1
 
     engineering_enabled = policy.get("engineering_memory_enabled", machine.get("engineering_memory_enabled", False))

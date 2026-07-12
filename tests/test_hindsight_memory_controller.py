@@ -182,6 +182,36 @@ class ControllerCliTest(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0, f"case {index} unexpectedly passed")
                 self.assertIn(message, result.stderr)
 
+    def test_validate_rejects_invalid_unreferenced_providers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tmp = Path(directory)
+            invalid_providers = [
+                {"id": "unused", "role": "secret", "placement": "local", "data_classes": ["engineering"]},
+                {"id": "unused", "role": "llm", "placement": "elsewhere", "data_classes": ["engineering"]},
+                {"id": "unused", "role": "llm", "placement": "local", "data_classes": "engineering"},
+                {"id": "unused", "role": "llm", "placement": "local", "data_classes": ["engineering", 7]},
+            ]
+            for index, provider in enumerate(invalid_providers):
+                value = inventory()
+                value["providers"].append(provider)
+                fixture = tmp / f"provider-{index}.json"
+                self.write_json(fixture, value)
+                result = self.run_cli(tmp, "validate", "--inventory", fixture)
+                self.assertNotEqual(result.returncode, 0, f"unreferenced provider case {index} unexpectedly passed")
+                self.assertIn("provider unused", result.stderr)
+
+    def test_validate_requires_boolean_bank_writable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tmp = Path(directory)
+            for index, writable in enumerate(("false", 1, 0, None, [], {})):
+                value = inventory()
+                value["banks"][0]["writable"] = writable
+                fixture = tmp / f"writable-{index}.json"
+                self.write_json(fixture, value)
+                result = self.run_cli(tmp, "validate", "--inventory", fixture)
+                self.assertNotEqual(result.returncode, 0, f"non-boolean writable case {index} unexpectedly passed")
+                self.assertIn("writable must be boolean", result.stderr)
+
     def test_plan_is_digest_bound_canonical_and_private(self):
         with tempfile.TemporaryDirectory() as directory:
             tmp = Path(directory)
