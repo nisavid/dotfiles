@@ -1,11 +1,10 @@
 {
-  "hindsightApiUrl": "{{ .hindsight.clientApiUrl }}",
-  "bankId": "{{ .hindsight.bank }}",
-  "autoRetain": true,
-  "retainTags": [
-    "scope:active",
-    "agent:claude-code",
-    "source:claude-plugin"
-  ],
-  "retainContext": "Claude Code coding-agent session transcript from Ivan's engineering work (Systalyze monorepo, related repos, and local dev/cluster operations)"
+  "schemaVersion": 1,
+  "broker": {
+    "transport": "unix",
+    "path": "{{ joinPath .chezmoi.homeDir ".local/state/hindsight-memory/broker.sock" }}",
+    "scope": "user"
+  },
+  "adapter": "claude-code",
+  "active": false
 }
