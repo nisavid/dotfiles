@@ -329,6 +329,88 @@ class DurableWorkTest(unittest.TestCase):
         retried = self.client.retain_outcome(capability, sequence=1, action_id="before", request={"document_id": "doc", "epoch": 1, "checkpoint": 1, "outcome": "done"})
         self.assertEqual(retried["disposition"], "queued")
 
+    def test_digest_mirror_failure_cannot_undo_canonical_enqueue_ack(self):
+        capability = self.exchange()
+        original = __import__("hindsight_memory_control_plane.broker", fromlist=["_atomic_json"])._atomic_json
+        def fail_mirror(path, value):
+            if Path(path).name in {"used_nonces.json", "revoked_nonces.json"}:
+                raise OSError("derived mirror unavailable")
+            return original(path, value)
+        with patch("hindsight_memory_control_plane.broker._atomic_json", side_effect=fail_mirror):
+            response = self.client.retain_outcome(capability, sequence=1, action_id="mirror", request={"document_id": "doc", "epoch": 1, "checkpoint": 1, "outcome": "done"})
+        self.assertEqual(response["disposition"], "queued")
+        state = self.work()
+        self.assertEqual(state["sessions"]["session-1"]["sequence"], 1)
+        with self.assertRaisesRegex(BrokerError, "ACTION_REPLAY"):
+            self.client.retain_outcome(capability, sequence=2, action_id="mirror", request={"document_id": "doc", "epoch": 1, "checkpoint": 1, "outcome": "done"})
+        self._stop()
+        (self.state / "used_nonces.json").unlink(missing_ok=True)
+        (self.state / "revoked_nonces.json").unlink(missing_ok=True)
+        self._start()
+        self.assertTrue((self.state / "used_nonces.json").exists())
+        self.assertEqual(json.loads((self.state / "used_nonces.json").read_text()), self.work()["used_nonces"])
+
+    def test_enqueue_revalidates_when_close_wins_after_preflight(self):
+        capability = self.exchange()
+        entered = threading.Event()
+        release = threading.Event()
+        original = self.broker._enqueue_watermarked
+        def paused(*args, **kwargs):
+            entered.set()
+            release.wait(1)
+            return original(*args, **kwargs)
+        self.broker._enqueue_watermarked = paused
+        failure = []
+        thread = threading.Thread(target=lambda: self._capture_error(
+            failure,
+            lambda: self.broker.retain_outcome(capability, sequence=1, action_id="racing-retain", request={"document_id": "doc", "epoch": 1, "checkpoint": 1, "outcome": "done"}),
+        ))
+        thread.start()
+        self.assertTrue(entered.wait(0.2))
+        closed = self.broker.session_close(capability, sequence=2, action_id="racing-close", timeout_seconds=0)
+        release.set()
+        thread.join()
+        self.assertEqual(closed["disposition"], "closed")
+        self.assertEqual(failure, ["REVOKED"])
+        state = self.work()
+        self.assertTrue(state["sessions"]["session-1"]["closed"])
+        self.assertIn(state["sessions"]["session-1"]["revocation_digest"], state["revoked_nonces"])
+
+    def test_close_is_retryable_before_atomic_commit_and_drainable_after_commit(self):
+        capability = self.exchange()
+        original_atomic = __import__("hindsight_memory_control_plane.broker", fromlist=["_atomic_json"])._atomic_json
+        failed = {"once": False}
+        def fail_commit(path, value):
+            if Path(path).name == "durable_work.json" and not failed["once"]:
+                failed["once"] = True
+                raise OSError("before close commit")
+            return original_atomic(path, value)
+        with patch("hindsight_memory_control_plane.broker._atomic_json", side_effect=fail_commit):
+            with self.assertRaises(OSError):
+                self.broker.session_close(capability, sequence=1, action_id="close-retry", timeout_seconds=0)
+        retried = self.broker.session_close(capability, sequence=1, action_id="close-retry", timeout_seconds=0)
+        self.assertEqual(retried["disposition"], "closed")
+
+        mint = self.client.session_mint("control", claims(session_id="close-after"), ttl_seconds=30)
+        other = self.client.session_exchange(mint["payload"]["handle"])["payload"]["capability"]
+        with patch.object(self.broker, "_submit_write", side_effect=OSError("after close commit")):
+            with self.assertRaises(OSError):
+                self.broker.session_close(other, sequence=1, action_id="close-after", timeout_seconds=0)
+        state = self.work()
+        self.assertTrue(state["sessions"]["close-after"]["closed"])
+        self.assertTrue(any(item["session_id"] == "close-after" for item in state["queue"]))
+        self._stop()
+        self._start()
+        time.sleep(0.05)
+        self.assertFalse(any(item["session_id"] == "close-after" for item in self.work()["queue"]))
+
+    @staticmethod
+    def _capture_error(target, operation):
+        try:
+            operation()
+        except BrokerError as error:
+            target.append(error.code)
+
     def test_restart_replays_after_enqueue_with_same_idempotency_key(self):
         class FailOnceFake(FakeAdapter):
             def __init__(self):
@@ -461,6 +543,38 @@ class DurableWorkTest(unittest.TestCase):
         release.set()
         time.sleep(0.05)
         self.assertEqual(self.work()["generation"], replacement_generation)
+
+    def test_replacement_generation_fences_all_old_broker_state_transitions(self):
+        capability = self.exchange()
+        self.client.recall(capability, sequence=1, action_id="preserved-read", request={"query": "q"})
+        mint = self.client.session_mint("control", claims(session_id="pending-exchange"), ttl_seconds=30)
+        handle = mint["payload"]["handle"]
+        before = self.work()
+        replacement = Broker(
+            state_dir=self.state, signing_key=b"z" * 32,
+            routes={"local-core": {"bank": BANK, "adapter": self.adapter}},
+            policy_digest=DIGEST_A, artifact_digest=DIGEST_B, mint_authorizer=authorize_mint,
+        )
+        try:
+            after_start = self.work()
+            self.assertEqual(after_start["sessions"], before["sessions"])
+            self.assertEqual(after_start["queue"], before["queue"])
+            self.assertEqual(after_start["completed"], before["completed"])
+            with self.assertRaisesRegex(BrokerError, "BROKER_RETIRED"):
+                self.broker.session_exchange(handle)
+            for operation in (
+                lambda: self.broker.retain_outcome(capability, sequence=2, action_id="old-enqueue", request={"document_id": "doc", "epoch": 2, "checkpoint": 1, "outcome": "old"}),
+                lambda: self.broker.retain_outcome(capability, sequence=2, action_id="old-stale", request={"document_id": "doc", "epoch": 0, "checkpoint": 1, "outcome": "old"}),
+                lambda: self.broker.session_close(capability, sequence=2, action_id="old-close", timeout_seconds=0),
+            ):
+                with self.assertRaisesRegex(BrokerError, "BROKER_RETIRED"):
+                    operation()
+            shutdown = self.broker.shutdown(timeout_seconds=0)
+            self.assertTrue(shutdown["retired"])
+            self.assertEqual(self.work()["generation"], after_start["generation"])
+            self.assertEqual(self.work()["sessions"], after_start["sessions"])
+        finally:
+            replacement.shutdown(timeout_seconds=1)
 
 
 if __name__ == "__main__":
