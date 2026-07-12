@@ -1,6 +1,6 @@
 ---
 name: checkpointing-and-publishing-git-work
-description: Use when starting any Git-backed implementation or review task, and continue through clean checkpoint, stopping point, commit, push, branch integration, and closeout. Extends finishing-a-development-branch while preventing conflicting completion menus or force rules and accidental publication of non-task work.
+description: Use when handling any Git-backed change and safe task completion. Use when asked to implement a change in a repository and commit clean checkpoints; review a branch or repository for bugs, including review-only work; create commits or checkpoints; push and verify a remote branch; reconcile with an exact lease; integrate a branch; or close out Git work. If a repository task says "In Codex" or "In Claude Code," apply in either harness, even when mutation or publication is forbidden. Do not use for Git explanations or pasted summaries without repository action. Owns safe task-only commits and publication; extends finishing-a-development-branch without conflicting completion menus or force rules and without publishing non-task work.
 ---
 
 # Checkpoint And Publish Git Work
@@ -45,7 +45,9 @@ scripts/plan_git_publication.py --repo <path> --request <json-file>
 
 Follow only the planner's `blocked`, `needs_reconciliation`, `ready`, or `verified` state. Never infer around a gate; use the command's `--help` and JSON contract for the full decision matrix.
 
-Immediately before every push, rerun the planner and explicitly confirm three unchanged bindings: the plan, configuration digest, and endpoint digest. Execute only its immutable source SHA, one full heads refspec, exact existing or absent lease, options before `--`, no followed tags, and submodule mode `check`. Never push mutable `HEAD`, bare, `--all`, `--mirror`, a wildcard, multiple refspecs, or unconditional force.
+When step 6 returns `ready`, capture and review that plan as the publication baseline. If step 7 reconciliation is required, establish or replace the baseline only after the affected gates pass and the planner returns a new `ready` plan. Immediately before every push, rerun the planner and require the entire rerun plan to match the reviewed `ready` baseline, including `source_sha`, destination, lease, refspec, `destination.config_digest`, and `destination.endpoint_fingerprint`. Execute only its immutable source SHA, one explicit nonempty `<source_sha>:<full-ref>` branch-update refspec, exact existing or absent lease, options before `--`, no followed tags, and submodule mode `check`. Never use a deletion refspec such as `:<full-ref>`, mutable `HEAD`, bare, `--all`, `--mirror`, a wildcard, multiple refspecs, or unconditional force.
+
+Never remove a SHA listed in `target_only_shas` unless that exact SHA appears in `removal_authorized_commits`. If missing removal authorization is the sole gate, preserve the planner's `needs_reconciliation` status; if another gate also remains, require `blocked`. When all target-only SHAs are authorized and no other gate remains, the planner may return `ready`. Remote-ref deletion is outside this skill and planner; use a separately authorized branch-deletion workflow.
 
 End only after the planner post-verifies the exact push endpoint and exact full ref and returns `verified`. If local HEAD moved after the immutable push, report the remaining local work.
 

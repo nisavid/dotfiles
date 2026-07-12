@@ -97,11 +97,16 @@ test_git_publication() {
   local workflow_start push_line verify_line plan_publish_line step_nine
 
   assert_skill_frontmatter "$skill" checkpointing-and-publishing-git-work
-  assert_contains "$skill" 'starting any Git-backed implementation or review task' 'Git publication trigger must cover task start'
-  assert_contains "$skill" 'clean checkpoint, stopping point, commit, push, branch integration, and closeout' 'Git publication trigger must cover its full lifecycle'
+  assert_contains "$skill" 'any Git-backed change and safe task completion' 'Git publication trigger must cover broad Git-backed task completion'
+  assert_contains "$skill" 'implement a change in a repository and commit clean checkpoints' 'Git publication trigger must cover repository implementation and checkpoints'
+  assert_contains "$skill" 'review a branch or repository for bugs, including review-only work' 'Git publication trigger must cover repository-backed non-mutating review work'
+  assert_contains "$skill" 'push and verify a remote branch' 'Git publication trigger must cover publication and remote verification'
+  assert_contains "$skill" 'reconcile with an exact lease' 'Git publication trigger must cover reconciliation and exact leases'
+  assert_contains "$skill" 'If a repository task says "In Codex" or "In Claude Code," apply in either harness' 'Git publication trigger must ignore harness-name phrasing'
+  assert_contains "$skill" 'Do not use for Git explanations or pasted summaries without repository action' 'Git publication trigger must exclude explanation-only requests'
   assert_contains "$skill" 'finishing-a-development-branch' 'Git publication skill must name the overlapping managed skill'
   assert_contains "$skill" 'conflicting completion menus or force rules' 'Git publication trigger must name the conflicting-rule failure mode'
-  assert_contains "$skill" 'accidental publication of non-task work' 'Git publication trigger must name the ownership failure mode'
+  assert_contains "$skill" 'publishing non-task work' 'Git publication trigger must name the ownership failure mode'
 
   [[ -f $metadata ]] || fail 'missing generated Git publication interface metadata'
   assert_contains "$metadata" 'display_name: "Checkpoint and Publish Git Work"' 'Git publication display name is stale'
@@ -114,15 +119,22 @@ test_git_publication() {
   [[ -f $skill_dir/evals/trigger-evals.json ]] || fail 'missing Git publication trigger evals'
   (( $(find $skill_dir/evals/fixtures -type f -name '*.md' | wc -l | tr -d ' ') >= 8 )) ||
     fail 'Git publication eval fixtures do not cover the required behavior groups'
-  assert_contains "$skill_dir/evals/trigger-evals.json" 'In Codex' 'trigger evals must include a Codex runner case'
-  assert_contains "$skill_dir/evals/trigger-evals.json" 'In Claude Code' 'trigger evals must include a Claude runner case'
-
   assert_symlink_source "$link" '../../.agents/skills/checkpointing-and-publishing-git-work'
   assert_contains "$skill" 'sole local owner of Git baseline capture' 'Git publication skill must own baseline capture'
   assert_contains "$skill" 'Review-only tasks never mutate or publish' 'Git publication skill must preserve review-only behavior'
   assert_contains "$skill" 'git --literal-pathspecs commit --only -- <owned paths>' 'Git publication skill must require literal task-only commits'
-  assert_contains "$skill" 'three unchanged bindings: the plan, configuration digest, and endpoint digest' 'Git publication skill must bind the immediate pre-push plan'
-  assert_contains "$skill" 'one full heads refspec' 'Git publication skill must require one full heads refspec'
+  assert_contains "$skill" 'When step 6 returns `ready`, capture and review that plan as the publication baseline' 'Git publication skill must capture the direct-ready comparison baseline'
+  assert_contains "$skill" 'If step 7 reconciliation is required, establish or replace the baseline only after the affected gates pass and the planner returns a new `ready` plan' 'Git publication skill must replace the baseline after reconciliation'
+  assert_contains "$skill" 'Immediately before every push, rerun the planner and require the entire rerun plan to match the reviewed `ready` baseline' 'Git publication skill must bind the immediate rerun to the reviewed ready plan'
+  assert_contains "$skill" '`source_sha`, destination, lease, refspec, `destination.config_digest`, and `destination.endpoint_fingerprint`' 'Git publication skill must bind every immutable push identity field'
+  assert_contains "$skill" 'Never remove a SHA listed in `target_only_shas` unless that exact SHA appears in `removal_authorized_commits`' 'Git publication skill must require exact target-only removal authorization'
+  assert_contains "$skill" "If missing removal authorization is the sole gate, preserve the planner's \`needs_reconciliation\` status" 'Git publication skill must preserve the canonical missing-authorization state'
+  assert_contains "$skill" 'if another gate also remains, require `blocked`' 'Git publication skill must preserve the canonical combined-gate state'
+  assert_contains "$skill" 'When all target-only SHAs are authorized and no other gate remains, the planner may return `ready`' 'Git publication skill must preserve the canonical authorized-rewrite state'
+  assert_contains "$skill" 'Remote-ref deletion is outside this skill and planner' 'Git publication skill must reject remote-ref deletion'
+  assert_contains "$skill" 'separately authorized branch-deletion workflow' 'Git publication skill must route branch deletion to its owning workflow'
+  assert_contains "$skill" 'one explicit nonempty `<source_sha>:<full-ref>` branch-update refspec' 'Git publication skill must require one nonempty-source branch-update refspec'
+  assert_contains "$skill" 'Never use a deletion refspec such as `:<full-ref>`' 'Git publication skill must reject deletion refspecs'
   assert_contains "$skill" 'exact existing or absent lease' 'Git publication skill must require an exact CAS lease'
   assert_contains "$skill" 'submodule mode `check`' 'Git publication skill must require submodule check mode'
   workflow_start="$(rg -n -m1 '^## Follow The Checkpoint Workflow$' "$skill" | cut -d: -f1)"
