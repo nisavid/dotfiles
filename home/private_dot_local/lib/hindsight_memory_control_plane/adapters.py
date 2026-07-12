@@ -1,6 +1,7 @@
 """Explicit data-plane adapter contract and deterministic in-memory test adapter."""
 
 from copy import deepcopy
+from dataclasses import dataclass
 from typing import Any, Mapping, Protocol, runtime_checkable
 
 from .canonical import digest
@@ -13,6 +14,30 @@ class AdapterError(RuntimeError):
 
 class AuthenticationError(AdapterError):
     """The endpoint rejected the resolved bearer token."""
+
+
+@dataclass(frozen=True)
+class RollbackBundle:
+    """Opaque adapter-attested handle to an adapter-owned prestate snapshot."""
+
+    rollback_id: str
+    plan_digest: str
+    action_ids: tuple[str, ...]
+    prestate_digest: str
+    endpoint_digest: str
+    bundle_digest: str
+    restore_proof_digest: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "rollback_id": self.rollback_id,
+            "plan_digest": self.plan_digest,
+            "action_ids": list(self.action_ids),
+            "prestate_digest": self.prestate_digest,
+            "endpoint_digest": self.endpoint_digest,
+            "bundle_digest": self.bundle_digest,
+            "restore_proof_digest": self.restore_proof_digest,
+        }
 
 
 @runtime_checkable
@@ -40,7 +65,9 @@ class Adapter(Protocol):
     def delete_bank(self, bank: Mapping[str, Any]) -> Mapping[str, Any]: ...
     def apply_action(self, action: Any) -> None: ...
     def verify_postcondition(self, action: Any) -> bool: ...
-    def restore(self, rollback: Mapping[str, Any]) -> None: ...
+    def create_rollback_bundle(self, plan_digest: str, action_ids: tuple[str, ...]) -> RollbackBundle: ...
+    def verify_rollback_bundle(self, rollback: RollbackBundle) -> bool: ...
+    def restore(self, rollback: RollbackBundle) -> None: ...
     def disable_activation(self) -> None: ...
 
 
@@ -48,16 +75,18 @@ class FakeAdapter:
     """Adapter fake that records only operation names and bounded structural metadata."""
 
     def __init__(self, *, schema: int = 1, endpoint: Mapping[str, Any], state: Mapping[str, Any] | None = None,
-                 operations: Mapping[str, Any] | None = None, disposable_restore_verified: bool = True) -> None:
+                 operations: Mapping[str, Any] | None = None, restore_proof_valid: bool = True) -> None:
         self.schema = schema
         self.endpoint = EndpointIdentity(**dict(endpoint))
         self.state = deepcopy(dict(state or {}))
         self.operations = deepcopy(dict(operations or {"idle": True, "active": []}))
-        self.disposable_restore_verified = disposable_restore_verified
+        self.restore_proof_valid = restore_proof_valid
         self.calls: list[dict[str, Any]] = []
         self.fail_postcondition_for: str | None = None
         self.fail_restore = False
+        self.fail_disable_activation = False
         self.activation_enabled = True
+        self._rollbacks: dict[str, dict[str, Any]] = {}
 
     def _record(self, method: str, metadata: Mapping[str, Any] | None = None) -> None:
         self.calls.append({"method": method, "metadata": dict(metadata or {})})
@@ -115,7 +144,8 @@ class FakeAdapter:
     def _upsert(self, collection: str, value: Mapping[str, Any]):
         self._record(f"upsert_{collection[:-1]}", self._keys(value))
         identifier = value.get("id", value.get(f"{collection[:-1]}_id"))
-        items = self.state.setdefault(collection, [])
+        stored = self.state.setdefault(collection, {collection: []})
+        items = stored.setdefault(collection, []) if isinstance(stored, dict) else stored
         items[:] = [item for item in items if item.get("id", item.get(f"{collection[:-1]}_id")) != identifier]
         items.append(deep_thaw(value))
         return {"upserted": identifier}
@@ -154,7 +184,7 @@ class FakeAdapter:
         }
         if action.kind in methods:
             methods[action.kind](details)
-        elif action.kind in {"create_bank", "reload_profile", "report_unmanaged"}:
+        elif action.kind in {"create_bank", "reload_profile", "report_unmanaged", "import_bank", "migrate_bank", "replace_canonical_bank"}:
             self._record(action.kind, self._keys(details))
         else:
             raise AdapterError(f"unsupported apply action: {action.kind}")
@@ -163,12 +193,43 @@ class FakeAdapter:
         self._record("verify_postcondition", {"action_id": action.id})
         return self.fail_postcondition_for != action.id
 
-    def restore(self, rollback):
-        self._record("restore", {"bundle_digest": rollback.get("bundle_digest", "")})
+    def create_rollback_bundle(self, plan_digest: str, action_ids: tuple[str, ...]) -> RollbackBundle:
+        prestate = deepcopy(self.state)
+        prestate_digest = digest(prestate)
+        endpoint_digest = digest(self.endpoint.to_dict())
+        rollback_id = f"rollback-{len(self._rollbacks) + 1}"
+        body = {
+            "rollback_id": rollback_id, "plan_digest": plan_digest, "action_ids": list(action_ids),
+            "prestate_digest": prestate_digest, "endpoint_digest": endpoint_digest,
+        }
+        bundle_digest = digest(body)
+        proof_digest = digest({"rollback_id": rollback_id, "bundle_digest": bundle_digest, "attested": "fake-adapter"})
+        bundle = RollbackBundle(rollback_id, plan_digest, action_ids, prestate_digest, endpoint_digest, bundle_digest, proof_digest)
+        data_bearing = any(key in prestate for key in ("documents", "memories", "invalidated_memories"))
+        self._rollbacks[rollback_id] = {
+            "bundle": bundle, "state": prestate,
+            "verified": self.restore_proof_valid or not data_bearing,
+        }
+        self._record("create_rollback_bundle", {"action_count": len(action_ids)})
+        return bundle
+
+    def verify_rollback_bundle(self, rollback: RollbackBundle) -> bool:
+        record = self._rollbacks.get(rollback.rollback_id)
+        verified = bool(record and record["bundle"] == rollback and record["verified"])
+        self._record("verify_rollback_bundle", {"rollback_id": rollback.rollback_id})
+        return verified
+
+    def restore(self, rollback: RollbackBundle):
+        self._record("restore", {"rollback_id": rollback.rollback_id})
         if self.fail_restore:
             raise AdapterError("rollback failed")
-        self.state = deepcopy(dict(rollback["state"]))
+        record = self._rollbacks.get(rollback.rollback_id)
+        if not record or record["bundle"] != rollback:
+            raise AdapterError("rollback attestation is unknown")
+        self.state = deepcopy(record["state"])
 
     def disable_activation(self) -> None:
         self._record("disable_activation")
+        if self.fail_disable_activation:
+            raise AdapterError("activation disable failed")
         self.activation_enabled = False

@@ -6,8 +6,10 @@ from typing import Any, Callable, Mapping
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from .adapters import AdapterError, AuthenticationError
-from .model import EndpointIdentity
+from .adapters import AdapterError, AuthenticationError, RollbackBundle
+from .canonical import digest
+from .model import EndpointIdentity, Inventory
+from .planning import inventory_endpoint
 
 
 class HttpAdapter:
@@ -34,14 +36,19 @@ class HttpAdapter:
         "delete_bank": ("DELETE", "/v1/banks"),
     }
 
-    def __init__(self, *, endpoint: Mapping[str, Any], token_resolver: Callable[[], str], timeout: float = 5.0,
-                 max_json_bytes: int = 1_048_576,
-                 inventory_approved_tls_endpoints: set[tuple[str, int, str, str]] | None = None) -> None:
-        self.endpoint = EndpointIdentity(**dict(endpoint))
+    def __init__(self, *, inventory: Inventory, profile_id: str, token_resolver: Callable[[], str],
+                 timeout: float = 5.0, max_json_bytes: int = 1_048_576) -> None:
+        if not isinstance(inventory, Inventory):
+            raise AdapterError("validated inventory is required")
+        raw = inventory.to_dict()
+        artifact = {key: raw[key] for key in ("schema_version", "archetype", "profiles", "providers", "banks", "harnesses", "policy")}
+        if digest(raw) != inventory.inventory_digest or digest(artifact) != inventory.artifact_digest:
+            raise AdapterError("validated inventory digests do not match")
+        self.endpoint = inventory_endpoint(inventory, profile_id)
+        self._inventory = inventory
         self._token_resolver = token_resolver
         self.timeout = min(max(float(timeout), 0.1), 30.0)
         self.max_json_bytes = min(max(int(max_json_bytes), 1), 8_388_608)
-        self._approved_tls_endpoints = frozenset(inventory_approved_tls_endpoints or ())
         self.recordings: list[dict[str, Any]] = []
         self._validate_endpoint()
 
@@ -55,11 +62,31 @@ class HttpAdapter:
             loopback = loopback or __import__("ipaddress").ip_address(host).is_loopback
         except ValueError:
             pass
+        if self.endpoint.scheme not in {"http", "https"}:
+            raise AdapterError("endpoint scheme is not permitted")
         if self.endpoint.scheme == "http" and not loopback:
             raise AdapterError("plain HTTP is restricted to loopback endpoints")
-        approved_identity = (host, self.endpoint.port, self.endpoint.profile_id, self.endpoint.tenant)
-        if self.endpoint.scheme == "https" and not loopback and approved_identity not in self._approved_tls_endpoints:
+        approved = self._inventory.policy.get("approved_tls_endpoints", [])
+        if self.endpoint.scheme == "https" and not loopback and self.endpoint.to_dict() not in approved:
             raise AdapterError("TLS endpoint is not approved by inventory")
+
+    def _encode(self, payload: Mapping[str, Any]) -> bytes:
+        chunks: list[bytes] = []
+        size = 0
+        encoder = json.JSONEncoder(sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        try:
+            for chunk in encoder.iterencode(payload):
+                remaining = self.max_json_bytes - size
+                if len(chunk) > remaining:
+                    raise AdapterError("JSON request exceeds configured size limit")
+                encoded = chunk.encode("utf-8")
+                if len(encoded) > remaining:
+                    raise AdapterError("JSON request exceeds configured size limit")
+                chunks.append(encoded)
+                size += len(encoded)
+        except (TypeError, ValueError, UnicodeEncodeError):
+            raise AdapterError("JSON request is invalid") from None
+        return b"".join(chunks)
 
     def _request(self, method: str, path: str, payload: Mapping[str, Any] | None = None) -> Any:
         try:
@@ -68,9 +95,7 @@ class HttpAdapter:
             raise AuthenticationError("bearer token resolution failed") from None
         if not isinstance(token, str) or not token:
             raise AuthenticationError("bearer token resolver returned no token")
-        body = None if payload is None else json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-        if body is not None and len(body) > self.max_json_bytes:
-            raise AdapterError("JSON request exceeds configured size limit")
+        body = None if payload is None else self._encode(payload)
         url = f"{self.endpoint.scheme}://{self.endpoint.host}:{self.endpoint.port}{path}"
         request = Request(url, data=body, method=method, headers={
             "Accept": "application/json",
@@ -81,8 +106,13 @@ class HttpAdapter:
         try:
             with urlopen(request, timeout=self.timeout) as response:
                 content_length = response.headers.get("Content-Length")
-                if content_length and int(content_length) > self.max_json_bytes:
-                    raise AdapterError("JSON response exceeds configured size limit")
+                if content_length:
+                    try:
+                        declared_length = int(content_length)
+                    except ValueError:
+                        raise AdapterError("endpoint returned invalid Content-Length") from None
+                    if declared_length < 0 or declared_length > self.max_json_bytes:
+                        raise AdapterError("JSON response exceeds configured size limit")
                 raw = response.read(self.max_json_bytes + 1)
                 if len(raw) > self.max_json_bytes:
                     raise AdapterError("JSON response exceeds configured size limit")
@@ -93,9 +123,12 @@ class HttpAdapter:
         except (URLError, socket.timeout, TimeoutError, OSError):
             raise AdapterError("endpoint request failed") from None
         try:
-            return json.loads(raw)
+            value = json.loads(raw)
         except (UnicodeDecodeError, json.JSONDecodeError):
             raise AdapterError("endpoint returned invalid JSON") from None
+        if not isinstance(value, dict):
+            raise AdapterError("endpoint returned non-object JSON")
+        return value
 
     def schema_version(self) -> int:
         value = self._request("GET", self.READ_PATHS["schema_version"])
@@ -151,6 +184,9 @@ class HttpAdapter:
             "create_bank": ("POST", "/v1/banks"),
             "reload_profile": ("POST", "/v1/profiles/reload"),
             "report_unmanaged": ("POST", "/v1/unmanaged/report"),
+            "import_bank": ("POST", "/v1/migrations/import"),
+            "migrate_bank": ("POST", "/v1/migrations/apply"),
+            "replace_canonical_bank": ("POST", "/v1/migrations/replace"),
         }
         try:
             if action.kind in direct:
@@ -165,8 +201,35 @@ class HttpAdapter:
         result = self._request("POST", "/v1/postconditions/verify", {"action_id": action.id})
         return result.get("verified") is True
 
-    def restore(self, rollback):
-        self._request("POST", "/v1/restore", {"bundle_digest": rollback["bundle_digest"]})
+    def create_rollback_bundle(self, plan_digest: str, action_ids: tuple[str, ...]) -> RollbackBundle:
+        value = self._request("POST", "/v1/rollbacks", {"plan_digest": plan_digest, "action_ids": list(action_ids)})
+        if set(value) != set(RollbackBundle.__dataclass_fields__):
+            raise AdapterError("rollback attestation schema is invalid")
+        try:
+            bundle = RollbackBundle(
+                rollback_id=value["rollback_id"], plan_digest=value["plan_digest"],
+                action_ids=tuple(value["action_ids"]), prestate_digest=value["prestate_digest"],
+                endpoint_digest=value["endpoint_digest"], bundle_digest=value["bundle_digest"],
+                restore_proof_digest=value["restore_proof_digest"],
+            )
+        except (KeyError, TypeError):
+            raise AdapterError("rollback attestation schema is invalid") from None
+        digests = (bundle.plan_digest, bundle.prestate_digest, bundle.endpoint_digest,
+                   bundle.bundle_digest, bundle.restore_proof_digest)
+        if (
+            not isinstance(bundle.rollback_id, str) or not bundle.rollback_id or len(bundle.rollback_id) > 128
+            or bundle.plan_digest != plan_digest or bundle.action_ids != action_ids
+            or not all(isinstance(item, str) and len(item) == 64 and all(char in "0123456789abcdef" for char in item) for item in digests)
+        ):
+            raise AdapterError("rollback attestation is not bound to the request")
+        return bundle
+
+    def verify_rollback_bundle(self, rollback: RollbackBundle) -> bool:
+        value = self._request("POST", f"/v1/rollbacks/{rollback.rollback_id}/verify", rollback.to_dict())
+        return value.get("verified") is True
+
+    def restore(self, rollback: RollbackBundle):
+        self._request("POST", f"/v1/rollbacks/{rollback.rollback_id}/restore", rollback.to_dict())
 
     def disable_activation(self):
         self._request("POST", "/v1/activation/disable", {})
