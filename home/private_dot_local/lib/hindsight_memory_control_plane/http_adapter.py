@@ -1,6 +1,7 @@
 """Bounded, redacting HTTP implementation of the data-plane adapter contract."""
 
 import json
+import re
 import socket
 from typing import Any, Callable, Mapping
 from urllib.error import HTTPError, URLError
@@ -13,6 +14,7 @@ from .planning import inventory_endpoint
 
 
 class HttpAdapter:
+    ROLLBACK_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
     READ_PATHS = {
         "schema_version": "/v1/schema",
         "read_config": "/v1/config",
@@ -217,19 +219,24 @@ class HttpAdapter:
         digests = (bundle.plan_digest, bundle.prestate_digest, bundle.endpoint_digest,
                    bundle.bundle_digest, bundle.restore_proof_digest)
         if (
-            not isinstance(bundle.rollback_id, str) or not bundle.rollback_id or len(bundle.rollback_id) > 128
+            not isinstance(bundle.rollback_id, str) or self.ROLLBACK_ID.fullmatch(bundle.rollback_id) is None
             or bundle.plan_digest != plan_digest or bundle.action_ids != action_ids
             or not all(isinstance(item, str) and len(item) == 64 and all(char in "0123456789abcdef" for char in item) for item in digests)
         ):
             raise AdapterError("rollback attestation is not bound to the request")
         return bundle
 
+    def _rollback_path(self, rollback: RollbackBundle, operation: str) -> str:
+        if not isinstance(rollback, RollbackBundle) or self.ROLLBACK_ID.fullmatch(rollback.rollback_id) is None:
+            raise AdapterError("rollback attestation ID is invalid")
+        return f"/v1/rollbacks/{rollback.rollback_id}/{operation}"
+
     def verify_rollback_bundle(self, rollback: RollbackBundle) -> bool:
-        value = self._request("POST", f"/v1/rollbacks/{rollback.rollback_id}/verify", rollback.to_dict())
+        value = self._request("POST", self._rollback_path(rollback, "verify"), rollback.to_dict())
         return value.get("verified") is True
 
     def restore(self, rollback: RollbackBundle):
-        self._request("POST", f"/v1/rollbacks/{rollback.rollback_id}/restore", rollback.to_dict())
+        self._request("POST", self._rollback_path(rollback, "restore"), rollback.to_dict())
 
     def disable_activation(self):
         self._request("POST", "/v1/activation/disable", {})
