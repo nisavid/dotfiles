@@ -1,0 +1,276 @@
+import hashlib
+import json
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+import unittest
+
+
+ROOT = Path(__file__).resolve().parents[1]
+CLI = ROOT / "home/private_dot_local/bin/executable_hindsight-memory"
+LIB = ROOT / "home/private_dot_local/lib"
+if str(LIB) not in __import__("sys").path:
+    __import__("sys").path.insert(0, str(LIB))
+
+from hindsight_memory_control_plane.ledger import LedgerError, append_record
+
+
+def inventory():
+    return {
+        "schema_version": 1,
+        "machine": {"id": "test-mac", "base_port": 7979},
+        "archetype": {"id": "trusted-workstation"},
+        "profiles": [
+            {
+                "id": "core",
+                "slot": 0,
+                "enabled": True,
+                "host": "127.0.0.1",
+                "roles": {
+                    "llm": "local-llm",
+                    "embedding": "local-embedding",
+                    "reranking": "local-reranker",
+                },
+                "data_classes": ["engineering", "personal"],
+            }
+        ],
+        "providers": [
+            {
+                "id": "local-llm",
+                "role": "llm",
+                "placement": "local",
+                "data_classes": ["engineering", "personal"],
+            },
+            {
+                "id": "local-embedding",
+                "role": "embedding",
+                "placement": "local",
+                "data_classes": ["engineering", "personal"],
+            },
+            {
+                "id": "local-reranker",
+                "role": "reranking",
+                "placement": "local",
+                "data_classes": ["engineering", "personal"],
+            },
+        ],
+        "banks": [
+            {
+                "id": "engineering",
+                "profile_id": "core",
+                "data_class": "engineering",
+                "authority": "authoritative",
+                "writable": True,
+            }
+        ],
+        "harnesses": [
+            {
+                "id": "codex",
+                "profile_id": "core",
+                "home_bank": {"profile_id": "core", "bank_id": "engineering"},
+            }
+        ],
+        "migration": {
+            "artifact_dir": "/tmp/hindsight-artifacts",
+            "proposal_log": "/tmp/hindsight-proposals.md",
+        },
+        "policy": {
+            "engineering_memory_enabled": True,
+            "allowed_placements": {
+                "engineering": ["local", "private-remote"],
+                "personal": ["local", "private-remote"],
+            },
+        },
+    }
+
+
+class ControllerCliTest(unittest.TestCase):
+    def run_cli(self, state_dir, *args):
+        return subprocess.run(
+            ["python3", str(CLI), "--state-dir", str(state_dir), *map(str, args)],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+        )
+
+    def write_json(self, path, value, *, pretty=False):
+        path.write_text(
+            json.dumps(value, indent=2 if pretty else None, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+    def test_validate_is_closed_and_reports_a_known_canonical_digest(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tmp = Path(directory)
+            compact = tmp / "compact.json"
+            pretty = tmp / "pretty.json"
+            self.write_json(compact, inventory())
+            self.write_json(pretty, inventory(), pretty=True)
+
+            expected = "e240cb5a96a1ea63de338e695798b4e190414ead42db0ac107a2858bbf83fad7"
+            for fixture in (compact, pretty):
+                result = self.run_cli(tmp, "validate", "--inventory", fixture)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                output = json.loads(result.stdout)
+                self.assertEqual(output["inventory_digest"], expected)
+                self.assertRegex(output["artifact_digest"], r"^[0-9a-f]{64}$")
+
+            for key in ("policy",):
+                invalid = inventory()
+                del invalid[key]
+                fixture = tmp / f"missing-{key}.json"
+                self.write_json(fixture, invalid)
+                result = self.run_cli(tmp, "validate", "--inventory", fixture)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("root keys", result.stderr)
+
+            invalid = inventory()
+            invalid["surprise"] = True
+            fixture = tmp / "unknown.json"
+            self.write_json(fixture, invalid)
+            result = self.run_cli(tmp, "validate", "--inventory", fixture)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("root keys", result.stderr)
+
+            invalid = inventory()
+            invalid["banks"].append(dict(invalid["banks"][0]))
+            fixture = tmp / "duplicate.json"
+            self.write_json(fixture, invalid)
+            result = self.run_cli(tmp, "validate", "--inventory", fixture)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("duplicate banks id", result.stderr)
+
+    def test_validate_rejects_references_authority_ports_placement_and_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tmp = Path(directory)
+            invalid_cases = []
+
+            disabled_reference = inventory()
+            disabled_reference["profiles"][0]["enabled"] = False
+            disabled_reference["profiles"][0]["roles"]["llm"] = "missing-provider"
+            invalid_cases.append((disabled_reference, "unknown provider"))
+
+            split_brain = inventory()
+            split_brain["banks"].append({"id": "engineering-2", "profile_id": "core", "data_class": "engineering", "authority": "authoritative", "writable": True})
+            invalid_cases.append((split_brain, "exactly one authoritative write bank"))
+
+            collision = inventory()
+            collision["profiles"].append({**collision["profiles"][0], "id": "other", "slot": 1, "port": 7979})
+            invalid_cases.append((collision, "endpoint collision"))
+
+            forbidden = inventory()
+            forbidden["providers"][0]["placement"] = "third-party-hosted"
+            invalid_cases.append((forbidden, "placement is forbidden"))
+
+            relative_path = inventory()
+            relative_path["migration"]["artifact_dir"] = "artifacts"
+            invalid_cases.append((relative_path, "path must be absolute"))
+
+            for index, (value, message) in enumerate(invalid_cases):
+                fixture = tmp / f"invalid-{index}.json"
+                self.write_json(fixture, value)
+                result = self.run_cli(tmp, "validate", "--inventory", fixture)
+                self.assertNotEqual(result.returncode, 0, f"case {index} unexpectedly passed")
+                self.assertIn(message, result.stderr)
+
+    def test_plan_is_digest_bound_canonical_and_private(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tmp = Path(directory)
+            fixture = tmp / "inventory.json"
+            live = tmp / "live.json"
+            operations = tmp / "operations.json"
+            output = tmp / "plan.json"
+            self.write_json(fixture, inventory())
+            self.write_json(
+                live,
+                {
+                    "profile_id": "core",
+                    "endpoint": {
+                        "profile_id": "core",
+                        "scheme": "http",
+                        "host": "127.0.0.1",
+                        "port": 7979,
+                        "tenant": "default",
+                    },
+                    "state": {"banks": []},
+                    "compatibility": [{"check": "provider-contract", "compatible": True}],
+                    "actions": [
+                        {"id": "01-create-engineering", "kind": "create_bank", "bank": {"profile_id": "core", "bank_id": "engineering"}},
+                        {"id": "02-configure-engineering", "kind": "configure_bank", "bank": {"profile_id": "core", "bank_id": "engineering"}},
+                    ],
+                },
+            )
+            self.write_json(operations, {"idle": True, "active": []})
+
+            result = self.run_cli(
+                tmp,
+                "plan",
+                "--inventory", fixture,
+                "--live-state", live,
+                "--operations", operations,
+                "--output", output,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            value = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(
+                set(value),
+                {
+                    "schema_version", "inventory_digest", "artifact_digest",
+                    "target_profile", "target_endpoint", "live_state_digest",
+                    "operations", "compatibility", "actions", "destructive",
+                    "plan_digest",
+                },
+            )
+            self.assertEqual(value["target_endpoint"]["port"], 7979)
+            self.assertEqual(value["operations"], {"active": [], "idle": True})
+            self.assertEqual([a["id"] for a in value["actions"]], ["01-create-engineering", "02-configure-engineering"])
+            self.assertFalse(value["destructive"])
+            body = dict(value)
+            plan_digest = body.pop("plan_digest")
+            canonical = json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+            self.assertEqual(plan_digest, hashlib.sha256(canonical).hexdigest())
+            self.assertEqual(output.read_bytes(), json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode() + b"\n")
+            self.assertEqual(os.stat(output).st_mode & 0o777, 0o600)
+
+            status = self.run_cli(
+                tmp,
+                "status",
+                "--inventory", fixture,
+                "--live-state", live,
+                "--plan", output,
+            )
+            self.assertEqual(status.returncode, 0, status.stderr)
+            self.assertEqual(
+                {key: json.loads(status.stdout)[key] for key in ("desired_agrees", "live_agrees", "plan_agrees")},
+                {"desired_agrees": True, "live_agrees": True, "plan_agrees": True},
+            )
+
+    def test_ledger_is_canonical_private_and_payload_free(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ledger = Path(directory) / "controller.jsonl"
+            record = {
+                "schema_version": 1,
+                "action_id": "retain-1",
+                "correlation_id": "session-1",
+                "source_bank": {"profile_id": "core", "bank_id": "engineering"},
+                "target_bank": {"profile_id": "core", "bank_id": "personal"},
+                "policy_digest": "1" * 64,
+                "artifact_digest": "2" * 64,
+                "decision": "deny",
+                "reason_code": "CROSS_BANK_POLICY_DENY",
+                "timestamp": "2026-07-12T17:00:00Z",
+                "reversible_record_id": None,
+            }
+            append_record(ledger, record)
+            self.assertEqual(ledger.read_bytes(), json.dumps(record, sort_keys=True, separators=(",", ":")).encode() + b"\n")
+            self.assertEqual(os.stat(ledger).st_mode & 0o777, 0o600)
+
+            contaminated = dict(record)
+            contaminated["source_bank"] = {"profile_id": "core", "bank_id": "engineering", "metadata": {"prompt": "secret"}}
+            with self.assertRaisesRegex(LedgerError, "payload-like key"):
+                append_record(ledger, contaminated)
+
+
+if __name__ == "__main__":
+    unittest.main()
