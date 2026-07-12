@@ -1,0 +1,103 @@
+#!/usr/bin/env python3
+"""Validate and inspect Hindsight memory desired-state plans."""
+
+import argparse
+import json
+import os
+from pathlib import Path
+import sys
+from typing import Any
+
+
+LIB = Path(__file__).resolve().parents[1] / "lib"
+sys.path.insert(0, str(LIB))
+
+from hindsight_memory_control_plane import (  # noqa: E402
+    InventoryError,
+    PlanError,
+    build_plan,
+    canonical_bytes,
+    digest,
+    load_inventory,
+)
+
+
+def read_json(path: str | Path) -> Any:
+    return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def write_private(path: str | Path, value: Any) -> None:
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.fchmod(descriptor, 0o600)
+        os.write(descriptor, canonical_bytes(value) + b"\n")
+    finally:
+        os.close(descriptor)
+
+
+def validate_command(args: argparse.Namespace) -> int:
+    inventory = load_inventory(args.inventory)
+    print(json.dumps({"inventory_digest": inventory.inventory_digest, "artifact_digest": inventory.artifact_digest}, sort_keys=True))
+    return 0
+
+
+def plan_command(args: argparse.Namespace) -> int:
+    inventory = load_inventory(args.inventory)
+    plan = build_plan(inventory, read_json(args.live_state), read_json(args.operations))
+    output = Path(args.output) if args.output else Path(args.state_dir) / "plan.json"
+    write_private(output, plan.to_dict())
+    print(json.dumps({"plan": str(output), "plan_digest": plan.plan_digest}, sort_keys=True))
+    return 0
+
+
+def status_command(args: argparse.Namespace) -> int:
+    inventory = load_inventory(args.inventory)
+    live = read_json(args.live_state)
+    plan_value = read_json(args.plan)
+    current_live_digest = digest(live.get("state", live.get("live_state", {})))
+    desired_agrees = plan_value.get("inventory_digest") == inventory.inventory_digest and plan_value.get("artifact_digest") == inventory.artifact_digest
+    live_agrees = plan_value.get("live_state_digest") == current_live_digest
+    plan_body = dict(plan_value)
+    claimed = plan_body.pop("plan_digest", None)
+    plan_agrees = isinstance(claimed, str) and claimed == digest(plan_body)
+    print(json.dumps({"desired_agrees": desired_agrees, "live_agrees": live_agrees, "plan_agrees": plan_agrees, "inventory_digest": inventory.inventory_digest, "artifact_digest": inventory.artifact_digest, "live_state_digest": current_live_digest, "plan_digest": claimed}, sort_keys=True))
+    return 0
+
+
+def parser() -> argparse.ArgumentParser:
+    value = argparse.ArgumentParser(prog="hindsight-memory")
+    value.add_argument("--state-dir", required=True)
+    commands = value.add_subparsers(dest="command", required=True)
+
+    validate = commands.add_parser("validate")
+    validate.add_argument("--inventory", required=True)
+    validate.set_defaults(run=validate_command)
+
+    plan = commands.add_parser("plan")
+    plan.add_argument("--inventory", required=True)
+    plan.add_argument("--live-state", required=True)
+    plan.add_argument("--operations", required=True)
+    plan.add_argument("--output")
+    plan.set_defaults(run=plan_command)
+
+    status = commands.add_parser("status")
+    status.add_argument("--inventory", required=True)
+    status.add_argument("--live-state", required=True)
+    status.add_argument("--plan", required=True)
+    status.set_defaults(run=status_command)
+    return value
+
+
+def main() -> int:
+    try:
+        args = parser().parse_args()
+        return args.run(args)
+    except (InventoryError, PlanError, OSError, json.JSONDecodeError) as error:
+        print(f"hindsight-memory: {error}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
