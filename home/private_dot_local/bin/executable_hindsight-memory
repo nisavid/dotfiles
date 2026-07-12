@@ -2,6 +2,7 @@
 """Validate and inspect Hindsight memory desired-state plans."""
 
 import argparse
+import hmac
 import json
 import os
 from pathlib import Path
@@ -18,7 +19,10 @@ from hindsight_memory_control_plane import (  # noqa: E402
     build_plan,
     canonical_bytes,
     digest,
+    inventory_endpoint,
     load_inventory,
+    plan_from_dict,
+    verify_plan,
 )
 
 
@@ -55,14 +59,16 @@ def plan_command(args: argparse.Namespace) -> int:
 def status_command(args: argparse.Namespace) -> int:
     inventory = load_inventory(args.inventory)
     live = read_json(args.live_state)
-    plan_value = read_json(args.plan)
+    plan = plan_from_dict(read_json(args.plan))
+    verify_plan(plan)
     current_live_digest = digest(live.get("state", live.get("live_state", {})))
-    desired_agrees = plan_value.get("inventory_digest") == inventory.inventory_digest and plan_value.get("artifact_digest") == inventory.artifact_digest
-    live_agrees = plan_value.get("live_state_digest") == current_live_digest
-    plan_body = dict(plan_value)
-    claimed = plan_body.pop("plan_digest", None)
-    plan_agrees = isinstance(claimed, str) and claimed == digest(plan_body)
-    print(json.dumps({"desired_agrees": desired_agrees, "live_agrees": live_agrees, "plan_agrees": plan_agrees, "inventory_digest": inventory.inventory_digest, "artifact_digest": inventory.artifact_digest, "live_state_digest": current_live_digest, "plan_digest": claimed}, sort_keys=True))
+    desired_agrees = (
+        hmac.compare_digest(plan.inventory_digest, inventory.inventory_digest)
+        and hmac.compare_digest(plan.artifact_digest, inventory.artifact_digest)
+        and plan.target_endpoint == inventory_endpoint(inventory, plan.target_profile)
+    )
+    live_agrees = hmac.compare_digest(plan.live_state_digest, current_live_digest)
+    print(json.dumps({"desired_agrees": desired_agrees, "live_agrees": live_agrees, "plan_agrees": True, "inventory_digest": inventory.inventory_digest, "artifact_digest": inventory.artifact_digest, "live_state_digest": current_live_digest, "plan_digest": plan.plan_digest}, sort_keys=True))
     return 0
 
 

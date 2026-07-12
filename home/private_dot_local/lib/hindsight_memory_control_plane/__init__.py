@@ -4,7 +4,7 @@ from .canonical import canonical_bytes, digest
 from .inventory import InventoryError, load_inventory
 from .ledger import LedgerError, append_record
 from .model import Action, BankRef, EndpointIdentity, Inventory, OperationSnapshot, Plan
-from .planning import PlanError, build_plan, verify_plan
+from .planning import PlanError, build_plan, inventory_endpoint, plan_from_dict, verify_plan
 
 __all__ = [
     "Action",
@@ -21,5 +21,7 @@ __all__ = [
     "canonical_bytes",
     "digest",
     "load_inventory",
+    "inventory_endpoint",
+    "plan_from_dict",
     "verify_plan",
 ]

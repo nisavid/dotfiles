@@ -13,6 +13,14 @@ LIB = ROOT / "home/private_dot_local/lib"
 if str(LIB) not in __import__("sys").path:
     __import__("sys").path.insert(0, str(LIB))
 
+from hindsight_memory_control_plane import (
+    OperationSnapshot,
+    PlanError,
+    build_plan,
+    canonical_bytes,
+    load_inventory,
+    verify_plan,
+)
 from hindsight_memory_control_plane.ledger import LedgerError, append_record
 
 
@@ -246,6 +254,141 @@ class ControllerCliTest(unittest.TestCase):
                 {"desired_agrees": True, "live_agrees": True, "plan_agrees": True},
             )
 
+    def test_plan_rejects_destructive_kinds_even_when_the_flag_is_missing_or_false(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tmp = Path(directory)
+            fixture = tmp / "inventory.json"
+            operations = tmp / "operations.json"
+            self.write_json(fixture, inventory())
+            self.write_json(operations, {"idle": True, "active": []})
+            for suffix in ({}, {"destructive": False}):
+                live = tmp / f"live-{len(suffix)}.json"
+                self.write_json(
+                    live,
+                    {
+                        "profile_id": "core",
+                        "endpoint": {"profile_id": "core", "scheme": "http", "host": "127.0.0.1", "port": 7979, "tenant": "default"},
+                        "state": {},
+                        "compatibility": [],
+                        "actions": [{"id": "delete-1", "kind": "delete_bank", "bank": {"profile_id": "core", "bank_id": "engineering"}, **suffix}],
+                    },
+                )
+                result = self.run_cli(tmp, "plan", "--inventory", fixture, "--live-state", live, "--operations", operations)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("destructive action kind", result.stderr)
+
+    def test_plan_artifacts_reject_private_and_payload_carriers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tmp = Path(directory)
+            fixture = tmp / "inventory.json"
+            live = tmp / "live.json"
+            operations = tmp / "operations.json"
+            self.write_json(fixture, inventory())
+            base_live = {
+                "profile_id": "core",
+                "endpoint": {"profile_id": "core", "scheme": "http", "host": "127.0.0.1", "port": 7979, "tenant": "default"},
+                "state": {},
+                "compatibility": [{"check": "provider-contract", "compatible": True}],
+                "actions": [{"id": "create-1", "kind": "create_bank", "bank": {"profile_id": "core", "bank_id": "engineering"}}],
+            }
+            adversarial = [
+                ({"idle": False, "active": [{"id": "op-1", "kind": "retain", "status": "running", "token": "private"}]}, base_live, "operations"),
+                ({"idle": True, "active": []}, {**base_live, "compatibility": [{"check": "provider-contract", "compatible": True, "api_key": "private"}]}, "compatibility"),
+                ({"idle": True, "active": []}, {**base_live, "actions": [{"id": "create-1", "kind": "create_bank", "bank": {"profile_id": "core", "bank_id": "engineering"}, "control_key": "private"}]}, "action"),
+                ({"idle": True, "active": []}, {**base_live, "actions": [{"id": "create-1", "kind": "create_bank", "bank": {"profile_id": "core", "bank_id": "engineering"}, "metadata": {"note": "innocuous nested payload"}}]}, "action"),
+            ]
+            for index, (operation_value, live_value, message) in enumerate(adversarial):
+                self.write_json(operations, operation_value)
+                self.write_json(live, live_value)
+                result = self.run_cli(tmp, "plan", "--inventory", fixture, "--live-state", live, "--operations", operations)
+                self.assertNotEqual(result.returncode, 0, f"adversarial case {index} unexpectedly passed")
+                self.assertIn(message, result.stderr)
+
+            desired = load_inventory(fixture)
+            with self.assertRaisesRegex(PlanError, "operations entry"):
+                build_plan(
+                    desired,
+                    base_live,
+                    OperationSnapshot(False, ({"id": "op-1", "kind": "retain", "status": "running", "signing_key": "private"},)),
+                )
+
+    def test_plan_owns_immutable_copies_of_all_nested_values(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tmp = Path(directory)
+            fixture = tmp / "inventory.json"
+            self.write_json(fixture, inventory())
+            desired = load_inventory(fixture)
+            live = {
+                "profile_id": "core",
+                "endpoint": {"profile_id": "core", "scheme": "http", "host": "127.0.0.1", "port": 7979, "tenant": "default"},
+                "state": {},
+                "compatibility": [{"check": "provider-contract", "compatible": True}],
+                "actions": [{"id": "create-1", "kind": "create_bank", "bank": {"profile_id": "core", "bank_id": "engineering"}}],
+            }
+            operations = {"idle": False, "active": [{"id": "op-1", "kind": "retain", "status": "running", "profile_id": "core"}]}
+            plan = build_plan(desired, live, operations)
+            before = canonical_bytes(plan.to_dict())
+
+            live["compatibility"][0]["compatible"] = False
+            live["actions"][0]["bank"]["bank_id"] = "personal"
+            operations["active"][0]["status"] = "failed"
+            with self.assertRaises(TypeError):
+                plan.compatibility[0]["compatible"] = False
+            with self.assertRaises(TypeError):
+                plan.actions[0].details["bank"] = {"bank_id": "personal"}
+            with self.assertRaises(TypeError):
+                plan.operations.active[0]["status"] = "failed"
+            with self.assertRaises(TypeError):
+                desired.profiles[0]["id"] = "changed"
+
+            self.assertEqual(canonical_bytes(plan.to_dict()), before)
+            verify_plan(plan)
+
+    def test_plan_rejects_live_endpoint_drift_from_inventory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tmp = Path(directory)
+            fixture = tmp / "inventory.json"
+            live = tmp / "live.json"
+            operations = tmp / "operations.json"
+            self.write_json(fixture, inventory())
+            self.write_json(operations, {"idle": True, "active": []})
+            self.write_json(live, {"profile_id": "core", "endpoint": {"profile_id": "core", "scheme": "http", "host": "127.0.0.1", "port": 7980, "tenant": "default"}, "state": {}, "compatibility": [], "actions": []})
+            result = self.run_cli(tmp, "plan", "--inventory", fixture, "--live-state", live, "--operations", operations)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("endpoint identity does not match inventory", result.stderr)
+
+    def test_status_rejects_unknown_and_malformed_plan_fields(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tmp = Path(directory)
+            fixture = tmp / "inventory.json"
+            live = tmp / "live.json"
+            operations = tmp / "operations.json"
+            plan = tmp / "plan.json"
+            self.write_json(fixture, inventory())
+            self.write_json(operations, {"idle": True, "active": []})
+            self.write_json(live, {"profile_id": "core", "endpoint": {"profile_id": "core", "scheme": "http", "host": "127.0.0.1", "port": 7979, "tenant": "default"}, "state": {}, "compatibility": [], "actions": []})
+            self.assertEqual(self.run_cli(tmp, "plan", "--inventory", fixture, "--live-state", live, "--operations", operations, "--output", plan).returncode, 0)
+
+            value = json.loads(plan.read_text())
+            value["secret"] = "private"
+            self.write_json(plan, value)
+            unknown = self.run_cli(tmp, "status", "--inventory", fixture, "--live-state", live, "--plan", plan)
+            self.assertNotEqual(unknown.returncode, 0)
+            self.assertIn("plan keys", unknown.stderr)
+
+            del value["secret"]
+            value["plan_digest"] = "not-a-digest"
+            self.write_json(plan, value)
+            malformed = self.run_cli(tmp, "status", "--inventory", fixture, "--live-state", live, "--plan", plan)
+            self.assertNotEqual(malformed.returncode, 0)
+            self.assertIn("plan_digest", malformed.stderr)
+
+            value["plan_digest"] = "0" * 64
+            self.write_json(plan, value)
+            tampered = self.run_cli(tmp, "status", "--inventory", fixture, "--live-state", live, "--plan", plan)
+            self.assertNotEqual(tampered.returncode, 0)
+            self.assertIn("plan digest does not match plan body", tampered.stderr)
+
     def test_ledger_is_canonical_private_and_payload_free(self):
         with tempfile.TemporaryDirectory() as directory:
             ledger = Path(directory) / "controller.jsonl"
@@ -253,8 +396,8 @@ class ControllerCliTest(unittest.TestCase):
                 "schema_version": 1,
                 "action_id": "retain-1",
                 "correlation_id": "session-1",
-                "source_bank": {"profile_id": "core", "bank_id": "engineering"},
-                "target_bank": {"profile_id": "core", "bank_id": "personal"},
+                "source_bank": {"profile_id": "core", "bank_id": "engineering", "endpoint": {"profile_id": "core", "scheme": "http", "host": "127.0.0.1", "port": 7979, "tenant": "default"}},
+                "target_bank": {"profile_id": "core", "bank_id": "personal", "endpoint": {"profile_id": "core", "scheme": "http", "host": "127.0.0.1", "port": 7979, "tenant": "default"}},
                 "policy_digest": "1" * 64,
                 "artifact_digest": "2" * 64,
                 "decision": "deny",
@@ -266,10 +409,22 @@ class ControllerCliTest(unittest.TestCase):
             self.assertEqual(ledger.read_bytes(), json.dumps(record, sort_keys=True, separators=(",", ":")).encode() + b"\n")
             self.assertEqual(os.stat(ledger).st_mode & 0o777, 0o600)
 
+            for key in ("token", "api_key", "control_key", "signing_key", "secret"):
+                contaminated = dict(record)
+                contaminated["source_bank"] = {**record["source_bank"], key: "private"}
+                with self.assertRaisesRegex(LedgerError, "bank reference keys"):
+                    append_record(ledger, contaminated)
+
             contaminated = dict(record)
-            contaminated["source_bank"] = {"profile_id": "core", "bank_id": "engineering", "metadata": {"prompt": "secret"}}
-            with self.assertRaisesRegex(LedgerError, "payload-like key"):
+            contaminated["source_bank"] = {**record["source_bank"], "metadata": {"note": "innocuous nested payload"}}
+            with self.assertRaisesRegex(LedgerError, "bank reference keys"):
                 append_record(ledger, contaminated)
+
+            for missing in ("source_bank", "target_bank", "reversible_record_id"):
+                incomplete = dict(record)
+                del incomplete[missing]
+                with self.assertRaisesRegex(LedgerError, "missing keys"):
+                    append_record(ledger, incomplete)
 
 
 if __name__ == "__main__":
