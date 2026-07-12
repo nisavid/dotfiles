@@ -32,6 +32,8 @@ CLAIM_KEYS = frozenset({
     "session_id", "harness_id", "home_bank", "trust_class", "companion_id",
     "policy_digest", "artifact_digest", "methods", "route",
 })
+ENVELOPE_KEYS = CLAIM_KEYS | {"kind", "issued_at", "expires_at", "nonce", "revocation_id", "broker_generation"}
+CAPABILITY_KEYS = CLAIM_KEYS | {"kind", "issued_at", "expires_at", "nonce", "revocation_id"}
 FORBIDDEN_KEYS = frozenset({
     "destination", "destination_bank", "target_bank", "home_bank", "bank", "bank_id",
     "endpoint", "url", "authorization", "bearer", "credential", "credentials", "token",
@@ -280,6 +282,9 @@ class Broker:
             raise BrokerError("CAPABILITY_INVALID") from error
         if not isinstance(claims, dict) or claims.get("kind") != kind:
             raise BrokerError("CAPABILITY_INVALID")
+        expected = ENVELOPE_KEYS if kind == "exchange" else CAPABILITY_KEYS
+        if set(claims) != expected:
+            raise BrokerError("CAPABILITY_INVALID")
         if type(claims.get("expires_at")) not in (int, float) or self.clock() >= claims["expires_at"]:
             raise BrokerError("EXPIRED")
         return claims
@@ -327,13 +332,26 @@ class Broker:
             or any(route.get("bank", {}).get(key) != value["home_bank"][key] for key in ("profile_id", "bank_id"))
         ):
             raise BrokerError("MINT_DENIED")
-        now = self.clock()
-        envelope = {
-            **value, "kind": "exchange", "issued_at": now, "expires_at": now + ttl_seconds,
-            "nonce": secrets.token_hex(32), "revocation_id": secrets.token_hex(32),
-        }
-        handle = secrets.token_hex(32)
-        _atomic_json(self.state_dir / "handles" / f"{handle}.json", {"envelope": self._sign(envelope)})
+        with self._lock:
+            if self._closed:
+                raise BrokerError("BROKER_CLOSED")
+            descriptor = self._lease_descriptor()
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX)
+                current = self._validate_work(_read_json(self._work_path, self._empty_work()))
+                if current["generation"] != self._generation:
+                    raise BrokerError("BROKER_RETIRED")
+                now = self.clock()
+                envelope = {
+                    **value, "kind": "exchange", "issued_at": now, "expires_at": now + ttl_seconds,
+                    "nonce": secrets.token_hex(32), "revocation_id": secrets.token_hex(32),
+                    "broker_generation": current["generation"],
+                }
+                handle = secrets.token_hex(32)
+                _atomic_json(self.state_dir / "handles" / f"{handle}.json", {"envelope": self._sign(envelope)})
+            finally:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+                os.close(descriptor)
         return self._bootstrap_response("session-mint", "session_mint", value["session_id"], {"handle": handle})
 
     def session_exchange(self, handle: str) -> dict[str, Any]:
@@ -360,6 +378,8 @@ class Broker:
             }
             capability = self._sign(capability_claims)
             def exchange(work):
+                if claims["broker_generation"] != work["generation"]:
+                    raise BrokerError("BROKER_RETIRED")
                 recovered = work["exchanges"].get(handle)
                 if nonce_digest in work["used_nonces"]:
                     if recovered:
