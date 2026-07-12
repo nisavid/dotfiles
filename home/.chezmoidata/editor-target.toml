@@ -1,0 +1,8 @@
+# [desktop.open-in-target-preferences] global editor target for Codex.
+# Resolved per hostname, then per OS, then falls back to the final default.
+[editorTarget.defaultByHostname]
+"Mac-F44R4751FW" = "vscode"
+
+[editorTarget.defaultByOs]
+"darwin" = "cursor"
+"linux" = "linux-desktop-code-oss"

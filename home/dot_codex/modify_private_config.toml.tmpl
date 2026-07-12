@@ -6,7 +6,7 @@
 # manage the whole file, this script overlays only a minimal, curated set of settings
 # onto Codex's live file and passes everything else through untouched:
 #   - [tui] theme, [desktop] git-branch-prefix   (portable prefs)
-#   - [desktop.open-in-target-preferences] global (OS-branched editor target)
+#   - [desktop.open-in-target-preferences] global (parametrized editor target)
 #   - macOS developer-tool writable_roots
 #   - work-private writable_roots + project trusts (decrypted from an age partial)
 #
@@ -14,7 +14,8 @@
 set -euo pipefail
 
 export HOMEDIR={{ .chezmoi.homeDir | quote }}
-export EDITOR_TARGET={{ if eq .chezmoi.os "darwin" }}"cursor"{{ else }}"linux-desktop-code-oss"{{ end }}
+{{ $editorTarget := default "linux-desktop-code-oss" (default (index .editorTarget.defaultByOs .chezmoi.os) (index .editorTarget.defaultByHostname .chezmoi.hostname)) }}
+export EDITOR_TARGET={{ $editorTarget | quote }}
 {{ $identityName := default "personal" (index .gitIdentity.defaultByHostname .chezmoi.hostname) }}
 export GIT_BRANCH_PREFIX={{ if or (eq $identityName "systalyze") (eq $identityName "stlz-bcs") }}"ivan/"{{ else }}"nisavid/"{{ end }}
 export WORK_TOML_B64={{ include ".private-codex-work.toml.age" | decrypt | b64enc | quote }}
