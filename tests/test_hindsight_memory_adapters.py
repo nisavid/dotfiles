@@ -150,6 +150,40 @@ class AdapterContractMixin:
         self.assertEqual(self.adapter.delete_bank({"bank_id": "b"}), {"deleted": True})
         self.assert_operation("DELETE", "/v1/banks")
 
+    def test_runtime_memory_reads(self):
+        self.assertEqual(self.adapter.recall({"query": "q", "limit": 2}), {"memories": [{"id": "m1"}]})
+        self.assert_operation("POST", "/v1/runtime/recall")
+        self.assertEqual(self.adapter.mental_model_fetch({"model_id": "model1"}), {"models": [{"id": "model1"}]})
+        self.assert_operation("POST", "/v1/runtime/mental-model")
+        self.assertEqual(self.adapter.session_status({"session_id": "session-1"}), {"status": "ready"})
+        self.assert_operation("POST", "/v1/runtime/session-status")
+
+    def test_runtime_memory_writes_are_idempotent(self):
+        checkpoint = {"document_id": "d", "epoch": 1, "checkpoint": 2, "idempotency_key": "a" * 64}
+        retain = {**checkpoint, "outcome": "done", "idempotency_key": "c" * 64}
+        reflection = {"reflection": "note", "idempotency_key": "b" * 64}
+        self.assertEqual(self.adapter.transcript_checkpoint(checkpoint), {"applied": True})
+        self.assert_operation("PUT", "/v1/runtime/transcript-checkpoint")
+        self.assertEqual(self.adapter.retain_outcome(retain), {"retained": True})
+        self.assert_operation("PUT", "/v1/runtime/outcome")
+        self.assertEqual(self.adapter.reflect(reflection), {"accepted": True})
+        self.assert_operation("PUT", "/v1/runtime/reflection")
+        before = len(getattr(self.adapter, "calls", getattr(self, "seen", [])))
+        self.assertEqual(self.adapter.retain_outcome(retain), {"retained": True})
+        after = len(getattr(self.adapter, "calls", getattr(self, "seen", [])))
+        self.assertEqual(after, before)
+        with self.assertRaisesRegex(AdapterError, "digest drift"):
+            self.adapter.retain_outcome({**retain, "outcome": "changed"})
+
+    def test_runtime_memory_payloads_are_closed(self):
+        with self.assertRaisesRegex(AdapterError, "schema"):
+            self.adapter.recall({"query": "q", "endpoint": "http://forbidden"})
+        with self.assertRaisesRegex(AdapterError, "schema"):
+            self.adapter.retain_outcome({
+                "document_id": "d", "epoch": 1, "checkpoint": 1, "outcome": "done",
+                "idempotency_key": "a" * 64, "token": "forbidden",
+            })
+
     def test_create_verify_and_restore_rollback(self):
         bundle = self.adapter.create_rollback_bundle("a" * 64, ("action-1",))
         self.assertIsInstance(bundle, RollbackBundle)
@@ -179,6 +213,9 @@ class FakeAdapterContractTest(AdapterContractMixin, unittest.TestCase):
             "/v1/templates/import": "import_template", "/v1/documents/transfer": "transfer_documents",
             "/v1/memories/invalidated": "read_invalidated_memories", "/v1/memories/invalidated/reapply": "reapply_invalidated_memories",
             "/v1/banks": "delete_bank",
+            "/v1/runtime/recall": "recall", "/v1/runtime/mental-model": "mental_model_fetch",
+            "/v1/runtime/session-status": "session_status", "/v1/runtime/transcript-checkpoint": "transcript_checkpoint",
+            "/v1/runtime/outcome": "retain_outcome", "/v1/runtime/reflection": "reflect",
         }[path]
         self.assertEqual(self.adapter.calls[-1]["method"], expected)
         self.assertNotIn("top-secret", json.dumps(self.adapter.calls))
@@ -211,6 +248,12 @@ class HttpAdapterContractTest(AdapterContractMixin, unittest.TestCase):
             ("PUT", "/v1/models"): {"upserted": "m"}, ("PUT", "/v1/directives"): {"upserted": "r"},
             ("POST", "/v1/documents/transfer"): {"transferred": 2},
             ("POST", "/v1/memories/invalidated/reapply"): {"reapplied": 2}, ("DELETE", "/v1/banks"): {"deleted": True},
+            ("POST", "/v1/runtime/recall"): {"memories": [{"id": "m1"}]},
+            ("POST", "/v1/runtime/mental-model"): {"models": [{"id": "model1"}]},
+            ("POST", "/v1/runtime/session-status"): {"status": "ready"},
+            ("PUT", "/v1/runtime/transcript-checkpoint"): {"applied": True},
+            ("PUT", "/v1/runtime/outcome"): {"retained": True},
+            ("PUT", "/v1/runtime/reflection"): {"accepted": True},
         }
 
         class Handler(BaseHTTPRequestHandler):

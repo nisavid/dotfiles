@@ -1,14 +1,16 @@
-"""Private runtime memory broker with scoped, one-use session exchange."""
+"""Private runtime memory broker with scoped capabilities and durable writes."""
 
 from __future__ import annotations
 
 import base64
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
+from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError as FutureTimeout
 from copy import deepcopy
 from datetime import datetime, timezone
 import hashlib
 import hmac
+import fcntl
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -17,23 +19,33 @@ import threading
 import time
 from typing import Any, Callable, Mapping
 
+from .adapters import Adapter
 from .canonical import canonical_bytes
 from .ledger import append_record
 
 
 CAPABILITY_METHODS = frozenset({
-    "recall", "mental_model_fetch", "checkpoint", "retain_outcome", "reflect",
-    "session_status", "session_close",
+    "recall", "mental_model_fetch", "transcript_checkpoint", "retain_outcome",
+    "reflect", "session_status", "session_close",
 })
 CLAIM_KEYS = frozenset({
     "session_id", "harness_id", "home_bank", "trust_class", "companion_id",
     "policy_digest", "artifact_digest", "methods", "route",
 })
-FORBIDDEN_REQUEST_KEYS = frozenset({
-    "endpoint", "token", "api_key", "control_key", "signing_key", "secret",
-    "bank", "bank_id", "home_bank", "target_bank", "destination_bank", "route",
+FORBIDDEN_KEYS = frozenset({
+    "destination", "destination_bank", "target_bank", "home_bank", "bank", "bank_id",
+    "endpoint", "url", "authorization", "bearer", "credential", "credentials", "token",
+    "api_key", "control_key", "signing_key", "secret", "route",
 })
 IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}\Z")
+DIGEST = re.compile(r"[0-9a-f]{64}\Z")
+REQUEST_SCHEMAS = {
+    "recall": ({"query"}, {"limit"}),
+    "mental_model_fetch": ({"model_id"}, set()),
+    "transcript_checkpoint": ({"document_id", "epoch", "checkpoint"}, set()),
+    "retain_outcome": ({"document_id", "epoch", "checkpoint", "outcome"}, set()),
+    "reflect": ({"reflection"}, set()),
+}
 
 
 class BrokerError(ValueError):
@@ -64,12 +76,22 @@ def _atomic_json(path: Path, value: Any) -> None:
     try:
         os.fchmod(descriptor, 0o600)
         body = canonical_bytes(value)
-        os.write(descriptor, body)
+        written = 0
+        while written < len(body):
+            count = os.write(descriptor, body[written:])
+            if count <= 0:
+                raise OSError("state write failed")
+            written += count
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
     os.replace(temporary, path)
     os.chmod(path, 0o600)
+    directory = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
 
 
 def _read_json(path: Path, default: Any) -> Any:
@@ -81,25 +103,27 @@ def _read_json(path: Path, default: Any) -> Any:
         raise BrokerError("STATE_INVALID") from error
 
 
-def _digest(value: str) -> str:
+def _sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def _contains_forbidden_key(value: Any) -> bool:
+def _has_forbidden_key(value: Any) -> bool:
     if isinstance(value, Mapping):
-        return any(key in FORBIDDEN_REQUEST_KEYS or _contains_forbidden_key(child) for key, child in value.items())
+        return any(not isinstance(key, str) or key.lower() in FORBIDDEN_KEYS or _has_forbidden_key(child)
+                   for key, child in value.items())
     if isinstance(value, (list, tuple)):
-        return any(_contains_forbidden_key(child) for child in value)
+        return any(_has_forbidden_key(child) for child in value)
     return False
 
 
 class Broker:
-    """Authorize harness memory calls without exposing route credentials."""
+    """Authorize memory calls and persist writes before adapter dispatch."""
 
     def __init__(
         self, *, state_dir: str | Path, signing_key: bytes | Callable[[], bytes],
         routes: Mapping[str, Mapping[str, Any]], policy_digest: str,
         artifact_digest: str, ledger_path: str | Path | None = None,
+        mint_authorizer: Callable[[str, Mapping[str, Any], float], Mapping[str, Any]] | None = None,
         clock: Callable[[], float] = time.time, max_payload_bytes: int = 64 * 1024,
     ) -> None:
         self.state_dir = Path(state_dir)
@@ -110,38 +134,101 @@ class Broker:
             raise BrokerError("SIGNING_KEY_INVALID")
         self.__signing_key = bytes(key)
         self.routes = {str(name): dict(route) for name, route in routes.items()}
+        for route in self.routes.values():
+            if not isinstance(route.get("adapter"), Adapter):
+                raise BrokerError("ADAPTER_INVALID")
         self.policy_digest = policy_digest
         self.artifact_digest = artifact_digest
         self.ledger_path = Path(ledger_path) if ledger_path else None
+        self._mint_authorizer = mint_authorizer
         self.clock = clock
         self.max_payload_bytes = max_payload_bytes
         self._lock = threading.RLock()
         self._document_locks: dict[tuple[str, str, str], threading.Lock] = {}
-        self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="hindsight-broker")
-        self._retain_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="hindsight-retain")
+        self._work_locks: dict[str, threading.Lock] = {}
+        self._read_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="hindsight-read")
+        self._write_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="hindsight-write")
+        self._read_futures: set[Future[Any]] = set()
+        self._write_futures: set[Future[Any]] = set()
         self._used_path = self.state_dir / "used_nonces.json"
         self._revoked_path = self.state_dir / "revoked_nonces.json"
-        self._sessions_path = self.state_dir / "sessions.json"
-        self._queue_path = self.state_dir / "queue.json"
-        self._checkpoint_path = self.state_dir / "checkpoints.json"
-        self._outcome_path = self.state_dir / "outcome_watermarks.json"
+        self._work_path = self.state_dir / "durable_work.json"
+        self._lease_path = self.state_dir / "broker.lease"
         self._used = set(_read_json(self._used_path, []))
         self._revoked = set(_read_json(self._revoked_path, []))
-        self._sessions = _read_json(self._sessions_path, {})
-        self._queue = _read_json(self._queue_path, [])
-        self._checkpoints = _read_json(self._checkpoint_path, {})
-        self._outcomes = _read_json(self._outcome_path, {})
+        self._work = _read_json(self._work_path, {
+            "queue": [], "completed": {}, "sessions": {}, "used_nonces": [], "exchanges": {}, "generation": "initial",
+        })
+        if not isinstance(self._work, dict) or set(self._work) != {"queue", "completed", "sessions", "used_nonces", "exchanges", "generation"}:
+            raise BrokerError("STATE_INVALID")
+        self._generation = secrets.token_hex(32)
+        self._work["generation"] = self._generation
+        self._used = set(self._work["used_nonces"])
+        self._replace_generation(self._work)
         self._closed = False
-        for item in tuple(self._queue):
-            route = self.routes.get(item.get("route")) if isinstance(item, dict) else None
-            if route is not None and isinstance(item.get("queue_id"), str):
-                self._retain_executor.submit(self._drain_item, item["queue_id"], route)
+        for item in tuple(self._work["queue"]):
+            self._submit_write(item["queue_id"])
 
-    def shutdown(self) -> None:
-        if not self._closed:
+    def shutdown(self, *, timeout_seconds: float = 2) -> dict[str, int]:
+        if self._closed:
+            return {"undrained": len(self._work["queue"]), "active_reads": 0, "active_writes": 0}
+        timeout = self._timeout(timeout_seconds)
+        with self._lock:
+            stopped = deepcopy(self._work)
+            stopped["generation"] = f"stopped-{secrets.token_hex(24)}"
+            self._commit_owned(stopped)
+            self._work = stopped
             self._closed = True
-            self._executor.shutdown(wait=False, cancel_futures=False)
-            self._retain_executor.shutdown(wait=False, cancel_futures=False)
+            for future in self._read_futures:
+                future.cancel()
+            for future in self._write_futures:
+                future.cancel()
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            with self._lock:
+                if not self._read_futures and not self._write_futures:
+                    break
+            time.sleep(min(0.005, max(0, deadline - time.monotonic())))
+        self._read_executor.shutdown(wait=False, cancel_futures=True)
+        self._write_executor.shutdown(wait=False, cancel_futures=True)
+        with self._lock:
+            return {
+                "undrained": len(self._work["queue"]),
+                "active_reads": sum(not future.done() for future in self._read_futures),
+                "active_writes": sum(not future.done() for future in self._write_futures),
+            }
+
+    def _owns_generation(self) -> bool:
+        try:
+            return _read_json(self._work_path, {}).get("generation") == self._generation
+        except BrokerError:
+            return False
+
+    def _lease_descriptor(self) -> int:
+        descriptor = os.open(self._lease_path, os.O_RDWR | os.O_CREAT, 0o600)
+        os.fchmod(descriptor, 0o600)
+        return descriptor
+
+    def _replace_generation(self, value: Mapping[str, Any]) -> None:
+        descriptor = self._lease_descriptor()
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            _atomic_json(self._work_path, value)
+        finally:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            os.close(descriptor)
+
+    def _commit_owned(self, value: Mapping[str, Any]) -> None:
+        descriptor = self._lease_descriptor()
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            current = _read_json(self._work_path, {})
+            if current.get("generation") != self._generation:
+                raise BrokerError("BROKER_RETIRED")
+            _atomic_json(self._work_path, value)
+        finally:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            os.close(descriptor)
 
     def _sign(self, claims: Mapping[str, Any]) -> str:
         body = canonical_bytes(claims)
@@ -166,77 +253,118 @@ class Broker:
             raise BrokerError("EXPIRED")
         return claims
 
-    def _validate_base_claims(self, claims: Mapping[str, Any]) -> dict[str, Any]:
+    def _validate_claims(self, claims: Mapping[str, Any]) -> dict[str, Any]:
         if not isinstance(claims, Mapping) or set(claims) != CLAIM_KEYS:
             raise BrokerError("SCHEMA_INVALID")
-        normalized = deepcopy(dict(claims))
+        value = deepcopy(dict(claims))
         for key in ("session_id", "harness_id", "trust_class", "companion_id", "route"):
-            if not isinstance(normalized[key], str) or not IDENTIFIER.fullmatch(normalized[key]):
+            if not isinstance(value[key], str) or not IDENTIFIER.fullmatch(value[key]):
                 raise BrokerError("SCHEMA_INVALID")
-        home = normalized["home_bank"]
-        if not isinstance(home, dict) or set(home) != {"profile_id", "bank_id"}:
+        if not isinstance(value["home_bank"], dict) or set(value["home_bank"]) != {"profile_id", "bank_id"}:
             raise BrokerError("SCHEMA_INVALID")
-        if not all(isinstance(home[key], str) and home[key] for key in home):
+        if not all(isinstance(item, str) and IDENTIFIER.fullmatch(item) for item in value["home_bank"].values()):
             raise BrokerError("SCHEMA_INVALID")
-        if not all(isinstance(normalized[key], str) and len(normalized[key]) == 64 for key in ("policy_digest", "artifact_digest")):
+        if not all(isinstance(value[key], str) and DIGEST.fullmatch(value[key]) for key in ("policy_digest", "artifact_digest")):
             raise BrokerError("SCHEMA_INVALID")
-        methods = normalized["methods"]
+        methods = value["methods"]
         if not isinstance(methods, list) or len(methods) != len(set(methods)) or not set(methods) <= CAPABILITY_METHODS:
             raise BrokerError("SCHEMA_INVALID")
-        normalized["methods"] = sorted(methods)
-        return normalized
+        value["methods"] = sorted(methods)
+        return value
 
-    def session_mint(self, claims: Mapping[str, Any], *, ttl_seconds: float = 60) -> str:
-        normalized = self._validate_base_claims(claims)
-        if type(ttl_seconds) not in (int, float) or ttl_seconds < 0 or ttl_seconds > 300:
+    def _bootstrap_response(self, action_id: str, method: str, session_id: str, payload: Any) -> dict[str, Any]:
+        action_digest = hashlib.sha256(canonical_bytes({
+            "action_id": action_id, "method": method, "sequence": 0,
+            "session_id": session_id, "capability_nonce_digest": None,
+        })).hexdigest()
+        return self._response(action_id, action_digest, "ok", payload)
+
+    def session_mint(self, control_capability: str, claims: Mapping[str, Any], *, ttl_seconds: float = 60) -> dict[str, Any]:
+        value = self._validate_claims(claims)
+        if type(ttl_seconds) not in (int, float) or not math.isfinite(ttl_seconds) or ttl_seconds < 0 or ttl_seconds > 300:
             raise BrokerError("SCHEMA_INVALID")
+        if self._mint_authorizer is None or not isinstance(control_capability, str) or not control_capability:
+            raise BrokerError("MINT_DENIED")
+        try:
+            authorized = self._validate_claims(self._mint_authorizer(control_capability, deepcopy(value), ttl_seconds))
+        except Exception:
+            raise BrokerError("MINT_DENIED") from None
+        route = self.routes.get(value["route"])
+        if (
+            authorized != value or value["policy_digest"] != self.policy_digest
+            or value["artifact_digest"] != self.artifact_digest or route is None
+            or any(route.get("bank", {}).get(key) != value["home_bank"][key] for key in ("profile_id", "bank_id"))
+        ):
+            raise BrokerError("MINT_DENIED")
         now = self.clock()
         envelope = {
-            **normalized, "kind": "exchange", "issued_at": now,
-            "expires_at": now + ttl_seconds, "nonce": secrets.token_hex(32),
-            "revocation_id": secrets.token_hex(32),
+            **value, "kind": "exchange", "issued_at": now, "expires_at": now + ttl_seconds,
+            "nonce": secrets.token_hex(32), "revocation_id": secrets.token_hex(32),
         }
         handle = secrets.token_hex(32)
         _atomic_json(self.state_dir / "handles" / f"{handle}.json", {"envelope": self._sign(envelope)})
-        return handle
+        return self._bootstrap_response("session-mint", "session_mint", value["session_id"], {"handle": handle})
 
     def session_exchange(self, handle: str) -> dict[str, Any]:
-        if not isinstance(handle, str) or len(handle) != 64 or any(character not in "0123456789abcdef" for character in handle):
+        if not isinstance(handle, str) or not re.fullmatch(r"[0-9a-f]{64}", handle):
             raise BrokerError("HANDLE_INVALID")
         path = self.state_dir / "handles" / f"{handle}.json"
         with self._lock:
             record = _read_json(path, None)
             if not isinstance(record, dict) or set(record) != {"envelope"}:
-                raise BrokerError("HANDLE_USED")
+                recovered = self._work["exchanges"].get(handle)
+                if not recovered:
+                    raise BrokerError("HANDLE_USED")
+                return self._bootstrap_response("session-exchange", "session_exchange", recovered["session_id"], {
+                    "capability": recovered["capability"], "expires_at": recovered["expires_at"],
+                })
             claims = self._verify(record["envelope"], "exchange")
-            nonce_digest = _digest(claims["nonce"])
-            if nonce_digest in self._used:
+            nonce_digest = _sha256_text(claims["nonce"])
+            recovered = self._work["exchanges"].get(handle)
+            if nonce_digest in self._work["used_nonces"] and recovered:
+                try:
+                    path.unlink()
+                except FileNotFoundError:
+                    pass
+                return self._bootstrap_response("session-exchange", "session_exchange", recovered["session_id"], {
+                    "capability": recovered["capability"], "expires_at": recovered["expires_at"],
+                })
+            now = self.clock()
+            capability_claims = {
+                **{key: claims[key] for key in CLAIM_KEYS}, "kind": "capability",
+                "issued_at": now, "expires_at": claims["expires_at"],
+                "nonce": secrets.token_hex(32), "revocation_id": claims["revocation_id"],
+            }
+            capability = self._sign(capability_claims)
+            work = deepcopy(self._work)
+            if nonce_digest in work["used_nonces"]:
                 raise BrokerError("HANDLE_USED")
-            self._used.add(nonce_digest)
+            work["used_nonces"].append(nonce_digest)
+            sessions = work["sessions"]
+            sessions[claims["session_id"]] = {
+                "nonce_digest": _sha256_text(capability_claims["nonce"]),
+                "revocation_digest": _sha256_text(claims["revocation_id"]),
+                "sequence": 0, "action_ids": [], "closed": False,
+            }
+            work["exchanges"][handle] = {
+                "session_id": claims["session_id"], "capability": capability,
+                "expires_at": claims["expires_at"], "nonce_digest": nonce_digest,
+            }
+            _atomic_json(self._work_path, work)
+            self._work = work
+            self._used = set(work["used_nonces"])
             _atomic_json(self._used_path, sorted(self._used))
             try:
                 path.unlink()
-            except FileNotFoundError as error:
-                raise BrokerError("HANDLE_USED") from error
-            now = self.clock()
-            capability_claims = {
-                **{key: claims[key] for key in CLAIM_KEYS},
-                "kind": "capability", "issued_at": now,
-                "expires_at": claims["expires_at"], "nonce": secrets.token_hex(32),
-                "revocation_id": claims["revocation_id"],
-            }
-            capability = self._sign(capability_claims)
-            self._sessions[claims["session_id"]] = {
-                "nonce_digest": _digest(capability_claims["nonce"]),
-                "revocation_digest": _digest(claims["revocation_id"]),
-                "sequence": 0, "action_ids": [], "closed": False,
-            }
-            _atomic_json(self._sessions_path, self._sessions)
-            return {"capability": capability, "expires_at": claims["expires_at"]}
+            except FileNotFoundError:
+                pass
+        return self._bootstrap_response("session-exchange", "session_exchange", claims["session_id"], {
+            "capability": capability, "expires_at": claims["expires_at"],
+        })
 
-    def _authorize(self, capability: Any, method: str, sequence: Any, action_id: Any) -> tuple[dict[str, Any], dict[str, Any]]:
-        token = capability.get("capability") if isinstance(capability, dict) and set(capability) == {"capability", "expires_at"} else capability
-        claims = self._verify(token, "capability")
+    def _authorize(self, capability: str, method: str, sequence: Any, action_id: Any,
+                   *, commit: bool = True) -> tuple[dict[str, Any], dict[str, Any], str]:
+        claims = self._verify(capability, "capability")
         if method not in claims.get("methods", []):
             raise BrokerError("METHOD_DENIED")
         if claims.get("policy_digest") != self.policy_digest or claims.get("artifact_digest") != self.artifact_digest:
@@ -244,14 +372,21 @@ class Broker:
         route = self.routes.get(claims.get("route"))
         if not route:
             raise BrokerError("ROUTE_DENIED")
-        route_bank = route.get("bank")
-        if not isinstance(route_bank, Mapping) or any(route_bank.get(key) != claims["home_bank"].get(key) for key in ("profile_id", "bank_id")):
+        bank = route.get("bank")
+        if not isinstance(bank, Mapping) or any(bank.get(key) != claims["home_bank"].get(key) for key in ("profile_id", "bank_id")):
             raise BrokerError("ROUTE_DENIED")
+        if not isinstance(route.get("adapter"), Adapter):
+            raise BrokerError("ADAPTER_INVALID")
         if type(sequence) is not int or sequence < 1 or not isinstance(action_id, str) or not IDENTIFIER.fullmatch(action_id):
             raise BrokerError("SCHEMA_INVALID")
+        nonce_digest = _sha256_text(claims["nonce"])
+        action_digest = hashlib.sha256(canonical_bytes({
+            "action_id": action_id, "method": method, "sequence": sequence,
+            "session_id": claims["session_id"], "harness_id": claims["harness_id"],
+            "capability_nonce_digest": nonce_digest,
+        })).hexdigest()
         with self._lock:
-            state = self._sessions.get(claims["session_id"])
-            nonce_digest = _digest(claims["nonce"])
+            state = self._work["sessions"].get(claims["session_id"])
             if not state or state.get("nonce_digest") != nonce_digest:
                 raise BrokerError("CAPABILITY_INVALID")
             if state.get("revocation_digest") in self._revoked or state.get("closed"):
@@ -260,197 +395,317 @@ class Broker:
                 raise BrokerError("ACTION_REPLAY")
             if sequence <= state["sequence"]:
                 raise BrokerError("SEQUENCE_ROLLBACK")
-            state["sequence"] = sequence
-            state["action_ids"].append(action_id)
-            _atomic_json(self._sessions_path, self._sessions)
-        return claims, route
+            if commit:
+                work = deepcopy(self._work)
+                self._commit_action(work, claims, sequence, action_id)
+                _atomic_json(self._work_path, work)
+                self._work = work
+        return claims, route, action_digest
 
-    def _request(self, value: Any) -> dict[str, Any]:
-        if not isinstance(value, dict) or _contains_forbidden_key(value):
+    @staticmethod
+    def _commit_action(work: dict[str, Any], claims: Mapping[str, Any], sequence: int, action_id: str) -> None:
+        state = work["sessions"][claims["session_id"]]
+        if action_id in state["action_ids"]:
+            raise BrokerError("ACTION_REPLAY")
+        if sequence <= state["sequence"]:
+            raise BrokerError("SEQUENCE_ROLLBACK")
+        state["sequence"] = sequence
+        state["action_ids"].append(action_id)
+
+    def _validate_request(self, method: str, request: Any) -> dict[str, Any]:
+        if not isinstance(request, dict) or _has_forbidden_key(request):
             raise BrokerError("SCHEMA_INVALID")
+        required, optional = REQUEST_SCHEMAS[method]
+        if not required <= set(request) or set(request) - required - optional:
+            raise BrokerError("SCHEMA_INVALID")
+        value = deepcopy(request)
+        for key in required | optional:
+            if key not in value:
+                continue
+            item = value[key]
+            if key in {"epoch", "checkpoint", "limit"}:
+                if type(item) is not int or item < 0 or item > 1_000_000:
+                    raise BrokerError("SCHEMA_INVALID")
+            elif key == "document_id":
+                if not isinstance(item, str) or not IDENTIFIER.fullmatch(item):
+                    raise BrokerError("SCHEMA_INVALID")
+            elif not isinstance(item, str) or not item or len(item.encode("utf-8")) > self.max_payload_bytes:
+                raise BrokerError("SCHEMA_INVALID")
         if len(canonical_bytes(value)) > self.max_payload_bytes:
             raise BrokerError("REQUEST_TOO_LARGE")
-        return deepcopy(value)
-
-    def _invoke(self, route: Mapping[str, Any], method: str, request: Mapping[str, Any], timeout: float) -> tuple[bool, Any]:
-        adapter = route.get("adapter")
-        operation = getattr(adapter, method, None)
-        if operation is None:
-            raise BrokerError("ADAPTER_UNAVAILABLE")
-        future = self._executor.submit(operation, deepcopy(request))
-        try:
-            return True, future.result(timeout=max(0, timeout))
-        except FutureTimeout:
-            future.cancel()
-            return False, None
-        except Exception as error:
-            raise BrokerError("ADAPTER_UNAVAILABLE") from error
-
-    def _read_call(self, method: str, empty: Mapping[str, Any], capability: Any, sequence: int, action_id: str,
-                   request: Mapping[str, Any], timeout_seconds: float, unknown: Mapping[str, Any]) -> dict[str, Any]:
-        if unknown:
-            raise BrokerError("SCHEMA_INVALID")
-        _, route = self._authorize(capability, method, sequence, action_id)
-        ok, payload = self._invoke(route, method, self._request(request), timeout_seconds)
-        if not ok:
-            return self._result("unavailable", empty, {"code": "MEMORY_UNAVAILABLE", "visible": True})
-        if len(canonical_bytes(payload)) > self.max_payload_bytes:
-            return self._result("unavailable", empty, {"code": "MEMORY_UNAVAILABLE", "visible": True})
-        return self._result("ok", payload)
-
-    def _result(self, disposition: str, payload: Any = None, diagnostic: Any = None) -> dict[str, Any]:
-        value = {
-            "schema_version": 1, "policy_digest": self.policy_digest,
-            "artifact_digest": self.artifact_digest, "disposition": disposition,
-            "payload": deepcopy(payload),
-        }
-        if diagnostic is not None:
-            value["diagnostic"] = diagnostic
         return value
 
-    def recall(self, capability: Any, *, sequence: int, action_id: str, request: Mapping[str, Any],
-               timeout_seconds: float = 2, **unknown: Any) -> dict[str, Any]:
-        return self._read_call("recall", {"memories": []}, capability, sequence, action_id, request, timeout_seconds, unknown)
-
-    def mental_model_fetch(self, capability: Any, *, sequence: int, action_id: str, request: Mapping[str, Any],
-                           timeout_seconds: float = 2, **unknown: Any) -> dict[str, Any]:
-        return self._read_call("mental_model_fetch", {"models": []}, capability, sequence, action_id, request, timeout_seconds, unknown)
-
-    def reflect(self, capability: Any, *, sequence: int, action_id: str, request: Mapping[str, Any],
-                timeout_seconds: float = 2, **unknown: Any) -> dict[str, Any]:
-        if unknown:
-            raise BrokerError("SCHEMA_INVALID")
-        _, route = self._authorize(capability, "reflect", sequence, action_id)
-        ok, payload = self._invoke(route, "reflect", self._request(request), timeout_seconds)
-        if ok and len(canonical_bytes(payload)) > self.max_payload_bytes:
-            ok, payload = False, None
-        return self._result("ok" if ok else "unavailable", payload if ok else None,
-                            None if ok else {"code": "MEMORY_UNAVAILABLE", "visible": True})
-
-    def checkpoint(self, capability: Any, *, sequence: int, action_id: str, request: Mapping[str, Any],
-                   timeout_seconds: float = 2, **unknown: Any) -> dict[str, Any]:
-        if unknown:
-            raise BrokerError("SCHEMA_INVALID")
-        claims, route = self._authorize(capability, "checkpoint", sequence, action_id)
-        value = self._request(request)
-        if set(value) != {"document_id", "epoch", "checkpoint"} or not isinstance(value["document_id"], str) or not IDENTIFIER.fullmatch(value["document_id"]) or type(value["epoch"]) is not int or type(value["checkpoint"]) is not int:
-            raise BrokerError("SCHEMA_INVALID")
-        key = (claims["home_bank"]["profile_id"], claims["home_bank"]["bank_id"], value["document_id"])
-        encoded_key = "/".join(key)
-        with self._lock:
-            document_lock = self._document_locks.setdefault(key, threading.Lock())
-        with document_lock:
-            previous = self._checkpoints.get(encoded_key)
-            watermark = [value["epoch"], value["checkpoint"]]
-            if previous == watermark:
-                return self._result("idempotent", {"watermark": watermark})
-            if previous is not None and tuple(watermark) <= tuple(previous):
-                return self._result("stale", {"watermark": previous})
-            ok, payload = self._invoke(route, "checkpoint", value, timeout_seconds)
-            if not ok:
-                return self._result("unavailable", None, {"code": "MEMORY_UNAVAILABLE", "visible": True})
-            self._checkpoints[encoded_key] = watermark
-            _atomic_json(self._checkpoint_path, self._checkpoints)
-            return self._result("applied", {"watermark": watermark, "adapter": payload})
-
-    def retain_outcome(self, capability: Any, *, sequence: int, action_id: str, request: Mapping[str, Any],
-                       **unknown: Any) -> dict[str, Any]:
-        if unknown:
-            raise BrokerError("SCHEMA_INVALID")
-        claims, route = self._authorize(capability, "retain_outcome", sequence, action_id)
-        value = self._request(request)
-        required = {"document_id", "epoch", "checkpoint", "outcome"}
-        if set(value) != required or not isinstance(value["document_id"], str) or not IDENTIFIER.fullmatch(value["document_id"]) or type(value["epoch"]) is not int or type(value["checkpoint"]) is not int or not isinstance(value["outcome"], str):
-            raise BrokerError("SCHEMA_INVALID")
-        queue_id = secrets.token_hex(16)
-        document_key = "/".join((claims["home_bank"]["profile_id"], claims["home_bank"]["bank_id"], value["document_id"]))
-        watermark = [value["epoch"], value["checkpoint"]]
-        request_digest = hashlib.sha256(canonical_bytes(value)).hexdigest()
-        with self._lock:
-            previous = self._outcomes.get(document_key)
-            if previous is not None and previous["watermark"] == watermark:
-                if previous["request_digest"] != request_digest:
-                    raise BrokerError("DIGEST_DRIFT")
-                return self._result("idempotent", {"watermark": watermark})
-            if previous is not None and tuple(watermark) <= tuple(previous["watermark"]):
-                return self._result("stale", {"watermark": previous["watermark"]})
-        item = {
-            "queue_id": queue_id, "session_id": claims["session_id"], "route": claims["route"],
-            "bank_ref": claims["home_bank"], "document_id": value["document_id"],
-            "epoch": value["epoch"], "checkpoint": value["checkpoint"], "request": value,
+    def _response(self, action_id: str, action_digest: str, disposition: str, payload: Any,
+                  diagnostic: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        try:
+            if payload is not None and len(canonical_bytes(payload)) > self.max_payload_bytes:
+                payload = None
+                disposition = "unavailable"
+                diagnostic = {"code": "RESPONSE_TOO_LARGE", "visible": True}
+        except (TypeError, ValueError):
+            payload = None
+            disposition = "unavailable"
+            diagnostic = {"code": "RESPONSE_INVALID", "visible": True}
+        return {
+            "schema_version": 1, "action_id": action_id, "action_digest": action_digest,
+            "policy_digest": self.policy_digest, "artifact_digest": self.artifact_digest,
+            "disposition": disposition, "payload": deepcopy(payload),
+            "diagnostic": deepcopy(diagnostic),
         }
-        with self._lock:
-            self._outcomes[document_key] = {"watermark": watermark, "request_digest": request_digest}
-            self._queue.append(item)
-            _atomic_json(self._outcome_path, self._outcomes)
-            _atomic_json(self._queue_path, self._queue)
-        self._retain_executor.submit(self._drain_item, queue_id, route)
-        return self._result("queued", {"queue_id": queue_id, "watermark": [value["epoch"], value["checkpoint"]]})
 
-    def _drain_item(self, queue_id: str, route: Mapping[str, Any]) -> None:
-        # Yield so the durable queued response never waits on the adapter.
-        time.sleep(0.01)
+    def _adapter_payload(self, method: str, payload: Any) -> dict[str, Any]:
+        expected = {
+            "recall": {"memories"}, "mental_model_fetch": {"models"}, "session_status": {"status"}, "reflect": {"accepted"},
+        }[method]
+        if not isinstance(payload, dict) or set(payload) != expected or _has_forbidden_key(payload):
+            raise BrokerError("RESPONSE_INVALID")
+        if method in {"recall", "mental_model_fetch"} and not isinstance(next(iter(payload.values())), list):
+            raise BrokerError("RESPONSE_INVALID")
+        if method == "session_status" and not isinstance(payload["status"], str):
+            raise BrokerError("RESPONSE_INVALID")
+        if method == "reflect" and type(payload["accepted"]) is not bool:
+            raise BrokerError("RESPONSE_INVALID")
+        if len(canonical_bytes(payload)) > self.max_payload_bytes:
+            raise BrokerError("RESPONSE_TOO_LARGE")
+        return deepcopy(payload)
+
+    def _read_call(self, method: str, empty: Mapping[str, Any], capability: str, sequence: int,
+                   action_id: str, request: Mapping[str, Any], timeout_seconds: float) -> dict[str, Any]:
+        timeout = self._timeout(timeout_seconds)
+        value = self._validate_request(method, request)
+        _, route, action_digest = self._authorize(capability, method, sequence, action_id)
+        operation = getattr(route["adapter"], method)
+        future = self._read_executor.submit(operation, value)
         with self._lock:
-            item = next((entry for entry in self._queue if entry["queue_id"] == queue_id), None)
+            self._read_futures.add(future)
+        future.add_done_callback(self._discard_read_future)
+        try:
+            payload = future.result(timeout=timeout)
+        except FutureTimeout:
+            return self._response(action_id, action_digest, "unavailable", empty, {"code": "MEMORY_UNAVAILABLE", "visible": True})
+        except Exception:
+            return self._response(action_id, action_digest, "unavailable", empty, {"code": "MEMORY_UNAVAILABLE", "visible": True})
+        try:
+            payload = self._adapter_payload(method, payload)
+        except BrokerError as error:
+            return self._response(action_id, action_digest, "unavailable", empty, {"code": error.code, "visible": True})
+        return self._response(action_id, action_digest, "ok", payload)
+
+    def _discard_read_future(self, future: Future[Any]) -> None:
+        with self._lock:
+            self._read_futures.discard(future)
+
+    def _submit_write(self, queue_id: str) -> None:
+        future = self._write_executor.submit(self._drain_item, queue_id)
+        with self._lock:
+            self._write_futures.add(future)
+        future.add_done_callback(self._discard_write_future)
+
+    def _discard_write_future(self, future: Future[Any]) -> None:
+        with self._lock:
+            self._write_futures.discard(future)
+
+    @staticmethod
+    def _timeout(value: Any) -> float:
+        if type(value) not in (int, float) or not math.isfinite(value) or value < 0 or value > 30:
+            raise BrokerError("SCHEMA_INVALID")
+        return float(value)
+
+    def recall(self, capability: str, *, sequence: int, action_id: str, request: Mapping[str, Any], timeout_seconds: float = 2) -> dict[str, Any]:
+        return self._read_call("recall", {"memories": []}, capability, sequence, action_id, request, timeout_seconds)
+
+    def mental_model_fetch(self, capability: str, *, sequence: int, action_id: str, request: Mapping[str, Any], timeout_seconds: float = 2) -> dict[str, Any]:
+        return self._read_call("mental_model_fetch", {"models": []}, capability, sequence, action_id, request, timeout_seconds)
+
+    def _document_lock(self, claims: Mapping[str, Any], document_id: str) -> threading.Lock:
+        key = (claims["home_bank"]["profile_id"], claims["home_bank"]["bank_id"], document_id)
+        with self._lock:
+            return self._document_locks.setdefault(key, threading.Lock())
+
+    def _enqueue_watermarked(self, method: str, claims: Mapping[str, Any], route: Mapping[str, Any],
+                             sequence: int, action_id: str, action_digest: str,
+                             request: Mapping[str, Any]) -> dict[str, Any]:
+        document_id = request["document_id"]
+        state_key = "/".join((method, claims["home_bank"]["profile_id"], claims["home_bank"]["bank_id"], document_id))
+        watermark = [request["epoch"], request["checkpoint"]]
+        request_digest = hashlib.sha256(canonical_bytes(request)).hexdigest()
+        with self._document_lock(claims, document_id):
+            with self._lock:
+                records = [entry for entry in self._work["queue"] if entry.get("state_key") == state_key]
+                completed = self._work["completed"].get(state_key)
+                if completed:
+                    records.append(completed)
+                if records:
+                    latest = max(records, key=lambda entry: tuple(entry["watermark"]))
+                    if latest["watermark"] == watermark:
+                        if latest["request_digest"] != request_digest:
+                            raise BrokerError("DIGEST_DRIFT")
+                        candidate = deepcopy(self._work)
+                        self._commit_action(candidate, claims, sequence, action_id)
+                        _atomic_json(self._work_path, candidate)
+                        self._work = candidate
+                        return self._response(action_id, action_digest, "idempotent", {"watermark": watermark})
+                    if tuple(watermark) < tuple(latest["watermark"]):
+                        candidate = deepcopy(self._work)
+                        self._commit_action(candidate, claims, sequence, action_id)
+                        _atomic_json(self._work_path, candidate)
+                        self._work = candidate
+                        return self._response(action_id, action_digest, "stale", {"watermark": latest["watermark"]})
+                item = {
+                    "queue_id": secrets.token_hex(16), "session_id": claims["session_id"],
+                    "route": claims["route"], "method": method, "state_key": state_key,
+                    "watermark": watermark, "request_digest": request_digest,
+                    "idempotency_key": action_digest,
+                    "adapter_request": {**request, "idempotency_key": action_digest},
+                    "attempts": 0, "last_error": None, "next_retry": None,
+                }
+                candidate = deepcopy(self._work)
+                self._commit_action(candidate, claims, sequence, action_id)
+                candidate["queue"].append(item)
+                _atomic_json(self._work_path, candidate)
+                self._work = candidate
+            self._submit_write(item["queue_id"])
+        return self._response(action_id, action_digest, "queued", {"watermark": watermark, "queue_id": item["queue_id"]})
+
+    def transcript_checkpoint(self, capability: str, *, sequence: int, action_id: str, request: Mapping[str, Any]) -> dict[str, Any]:
+        value = self._validate_request("transcript_checkpoint", request)
+        claims, route, action_digest = self._authorize(capability, "transcript_checkpoint", sequence, action_id, commit=False)
+        return self._enqueue_watermarked("transcript_checkpoint", claims, route, sequence, action_id, action_digest, value)
+
+    def retain_outcome(self, capability: str, *, sequence: int, action_id: str, request: Mapping[str, Any]) -> dict[str, Any]:
+        value = self._validate_request("retain_outcome", request)
+        claims, route, action_digest = self._authorize(capability, "retain_outcome", sequence, action_id, commit=False)
+        return self._enqueue_watermarked("retain_outcome", claims, route, sequence, action_id, action_digest, value)
+
+    def reflect(self, capability: str, *, sequence: int, action_id: str, request: Mapping[str, Any], timeout_seconds: float = 2) -> dict[str, Any]:
+        timeout = self._timeout(timeout_seconds)
+        value = self._validate_request("reflect", request)
+        _, route, action_digest = self._authorize(capability, "reflect", sequence, action_id)
+        future = self._read_executor.submit(route["adapter"].reflect, {**value, "idempotency_key": action_digest})
+        with self._lock:
+            self._read_futures.add(future)
+        future.add_done_callback(self._discard_read_future)
+        try:
+            payload = self._adapter_payload("reflect", future.result(timeout=timeout))
+            return self._response(action_id, action_digest, "ok", payload)
+        except Exception:
+            return self._response(action_id, action_digest, "unavailable", None, {"code": "REFLECT_UNAVAILABLE", "visible": True})
+
+    def _drain_item(self, queue_id: str) -> None:
+        with self._lock:
+            item = next((entry for entry in self._work["queue"] if entry["queue_id"] == queue_id), None)
+            work_lock = self._work_locks.setdefault(item["state_key"] if item else queue_id, threading.Lock())
         if item is None:
             return
-        try:
-            operation = getattr(route.get("adapter"), "retain_outcome")
-            operation(deepcopy(item["request"]))
-        except Exception:
-            return
-        with self._lock:
-            self._queue = [entry for entry in self._queue if entry["queue_id"] != queue_id]
-            _atomic_json(self._queue_path, self._queue)
+        while not self._closed:
+            wait_for_older = False
+            retry_delay = 0.0
+            with work_lock:
+                with self._lock:
+                    item = next((entry for entry in self._work["queue"] if entry["queue_id"] == queue_id), None)
+                if item is None:
+                    return
+                with self._lock:
+                    same_key = [entry for entry in self._work["queue"] if entry["state_key"] == item["state_key"]]
+                if item["watermark"] != min((entry["watermark"] for entry in same_key), key=tuple):
+                    wait_for_older = True
+                if wait_for_older:
+                    pass
+                else:
+                    route = self.routes.get(item["route"])
+                    if route is None or not isinstance(route.get("adapter"), Adapter):
+                        return
+                    try:
+                        getattr(route["adapter"], item["method"])(deepcopy(item["adapter_request"]))
+                    except Exception:
+                        retry_delay = min(0.1, 0.01 * (2 ** min(item["attempts"], 4)))
+                        with self._lock:
+                            candidate = deepcopy(self._work)
+                            current = next(entry for entry in candidate["queue"] if entry["queue_id"] == queue_id)
+                            current["attempts"] += 1
+                            current["last_error"] = "ADAPTER_UNAVAILABLE"
+                            current["next_retry"] = self.clock() + retry_delay
+                            try:
+                                self._commit_owned(candidate)
+                            except BrokerError:
+                                return
+                            self._work = candidate
+                    else:
+                        if self._closed:
+                            return
+                        with self._lock:
+                            current = next((entry for entry in self._work["queue"] if entry["queue_id"] == queue_id), None)
+                            if current is None or self._closed:
+                                return
+                            candidate = deepcopy(self._work)
+                            candidate["queue"] = [entry for entry in candidate["queue"] if entry["queue_id"] != queue_id]
+                            candidate["completed"][item["state_key"]] = {
+                                "watermark": item["watermark"], "request_digest": item["request_digest"],
+                                "idempotency_key": item["idempotency_key"],
+                            }
+                            try:
+                                self._commit_owned(candidate)
+                            except Exception:
+                                return
+                            self._work = candidate
+                        return
+            time.sleep(0.005 if wait_for_older else retry_delay)
 
-    def session_status(self, capability: Any, *, sequence: int, action_id: str, **unknown: Any) -> dict[str, Any]:
-        if unknown:
-            raise BrokerError("SCHEMA_INVALID")
-        claims, _ = self._authorize(capability, "session_status", sequence, action_id)
+    def session_status(self, capability: str, *, sequence: int, action_id: str, timeout_seconds: float = 2) -> dict[str, Any]:
+        timeout = self._timeout(timeout_seconds)
+        claims, route, action_digest = self._authorize(capability, "session_status", sequence, action_id)
+        future = self._read_executor.submit(route["adapter"].session_status, {"session_id": claims["session_id"]})
         with self._lock:
-            queued = sum(entry["session_id"] == claims["session_id"] for entry in self._queue)
-        return self._result("active", {"queued": queued})
-
-    def session_close(self, capability: Any, *, sequence: int, action_id: str,
-                      timeout_seconds: float = 2, **unknown: Any) -> dict[str, Any]:
-        if unknown:
-            raise BrokerError("SCHEMA_INVALID")
-        claims, route = self._authorize(capability, "session_close", sequence, action_id)
-        deadline = time.monotonic() + max(0, timeout_seconds)
-        remaining = max(0, deadline - time.monotonic())
+            self._read_futures.add(future)
+            queued = sum(entry["session_id"] == claims["session_id"] for entry in self._work["queue"])
+            failures = [{"attempts": entry["attempts"], "last_error": entry["last_error"], "next_retry": entry["next_retry"]}
+                        for entry in self._work["queue"] if entry["session_id"] == claims["session_id"] and entry["last_error"]]
+        future.add_done_callback(self._discard_read_future)
         try:
-            final_ok, _ = self._invoke(
-                route, "checkpoint", {"session_id": claims["session_id"], "final": True}, remaining,
-            )
-        except BrokerError:
-            final_ok = False
+            adapter_status = future.result(timeout=timeout)
+            adapter_status = self._adapter_payload("session_status", adapter_status)
+            return self._response(action_id, action_digest, "active", {"queued": queued, "failures": failures, "adapter": adapter_status})
+        except (FutureTimeout, Exception):
+            return self._response(action_id, action_digest, "unavailable", {"queued": queued, "failures": failures}, {"code": "MEMORY_UNAVAILABLE", "visible": True})
+
+    def session_close(self, capability: str, *, sequence: int, action_id: str, timeout_seconds: float = 2) -> dict[str, Any]:
+        timeout = self._timeout(timeout_seconds)
+        claims, route, action_digest = self._authorize(capability, "session_close", sequence, action_id, commit=False)
+        final_document = f"final-{hashlib.sha256(claims['session_id'].encode()).hexdigest()[:32]}"
+        self._enqueue_watermarked(
+            "transcript_checkpoint", claims, route, sequence, action_id, action_digest,
+            {"document_id": final_document, "epoch": 0, "checkpoint": sequence},
+        )
+        deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             with self._lock:
-                pending = sum(entry["session_id"] == claims["session_id"] for entry in self._queue)
+                pending = sum(entry["session_id"] == claims["session_id"] for entry in self._work["queue"])
             if not pending:
                 break
             time.sleep(min(0.005, max(0, deadline - time.monotonic())))
         with self._lock:
-            state = self._sessions[claims["session_id"]]
-            state["closed"] = True
-            self._revoked.add(state["revocation_digest"])
-            pending = sum(entry["session_id"] == claims["session_id"] for entry in self._queue)
-            _atomic_json(self._revoked_path, sorted(self._revoked))
-            _atomic_json(self._sessions_path, self._sessions)
-        self._write_ledger(claims, action_id, "apply", "SESSION_CLOSED")
-        return self._result("closed", {"undrained": pending, "final_checkpoint": "applied" if final_ok else "unavailable"}) | {"undrained": pending}
+            pending = sum(entry["session_id"] == claims["session_id"] for entry in self._work["queue"])
+            work = deepcopy(self._work)
+            work["sessions"][claims["session_id"]]["closed"] = True
+            revoked = self._revoked | {work["sessions"][claims["session_id"]]["revocation_digest"]}
+            _atomic_json(self._revoked_path, sorted(revoked))
+            _atomic_json(self._work_path, work)
+            self._revoked, self._work = revoked, work
+        self._write_ledger(claims, action_id)
+        return self._response(action_id, action_digest, "closed", {
+            "undrained": pending, "final_checkpoint": "drained" if pending == 0 else "queued",
+        })
 
-    def _write_ledger(self, claims: Mapping[str, Any], action_id: str, decision: str, reason: str) -> None:
+    def _write_ledger(self, claims: Mapping[str, Any], action_id: str) -> None:
         if self.ledger_path is None:
             return
-        route = self.routes.get(claims["route"], {})
-        bank = route.get("bank")
+        bank = self.routes.get(claims["route"], {}).get("bank")
         if not isinstance(bank, dict) or set(bank) != {"profile_id", "bank_id", "endpoint"}:
             return
         append_record(self.ledger_path, {
             "schema_version": 1, "action_id": action_id, "correlation_id": claims["session_id"],
             "source_bank": bank, "target_bank": bank, "policy_digest": self.policy_digest,
-            "artifact_digest": self.artifact_digest, "decision": decision, "reason_code": reason,
+            "artifact_digest": self.artifact_digest, "decision": "apply", "reason_code": "SESSION_CLOSED",
             "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
             "reversible_record_id": None,
         })

@@ -14,17 +14,15 @@ from .broker import Broker, BrokerError
 
 MAX_REQUEST_BYTES = 128 * 1024
 RPC_METHODS = {
+    "session_mint": "session_mint",
     "session_exchange": "session_exchange",
-    "exchange": "session_exchange",
     "session_close": "session_close",
-    "close": "session_close",
     "recall": "recall",
     "mental_model_fetch": "mental_model_fetch",
-    "checkpoint": "checkpoint",
+    "transcript_checkpoint": "transcript_checkpoint",
     "retain_outcome": "retain_outcome",
     "reflect": "reflect",
     "session_status": "session_status",
-    "status": "session_status",
 }
 
 
@@ -67,19 +65,21 @@ class UnixJsonRpcServer:
         with connection:
             stream = connection.makefile("rwb")
             line = stream.readline(self.max_request_bytes + 1)
-            if len(line) > self.max_request_bytes or not line.endswith(b"\n"):
-                response = self._error(None, -32600, "REQUEST_INVALID")
-            else:
+            response = self._error(None, -32600, "REQUEST_INVALID")
+            if len(line) <= self.max_request_bytes and line.endswith(b"\n"):
                 response = self.dispatch(line)
             stream.write(json.dumps(response, sort_keys=True, separators=(",", ":")).encode() + b"\n")
             stream.flush()
 
     def dispatch(self, line: bytes) -> dict[str, Any]:
+        request: Any = None
         try:
             request = json.loads(line)
             if not isinstance(request, dict) or set(request) != {"jsonrpc", "id", "method", "params"}:
                 raise BrokerError("SCHEMA_INVALID")
             if request["jsonrpc"] != "2.0" or not isinstance(request["method"], str) or not isinstance(request["params"], dict):
+                raise BrokerError("SCHEMA_INVALID")
+            if request["id"] is not None and type(request["id"]) not in {str, int}:
                 raise BrokerError("SCHEMA_INVALID")
             target = RPC_METHODS.get(request["method"])
             if target is None:
@@ -89,11 +89,11 @@ class UnixJsonRpcServer:
         except (json.JSONDecodeError, UnicodeDecodeError):
             return self._error(None, -32700, "PARSE_ERROR")
         except BrokerError as error:
-            identifier = request.get("id") if isinstance(locals().get("request"), dict) else None
-            return self._error(identifier, -32000, error.code)
+            return self._error(request.get("id") if isinstance(request, dict) else None, -32000, error.code)
+        except (TypeError, ValueError):
+            return self._error(request.get("id") if isinstance(request, dict) else None, -32602, "SCHEMA_INVALID")
         except Exception:
-            identifier = request.get("id") if isinstance(locals().get("request"), dict) else None
-            return self._error(identifier, -32603, "INTERNAL_ERROR")
+            return self._error(request.get("id") if isinstance(request, dict) else None, -32603, "INTERNAL_ERROR")
 
     @staticmethod
     def _error(identifier: Any, number: int, code: str) -> dict[str, Any]:
@@ -117,7 +117,7 @@ class JsonRpcClient:
         self.timeout_seconds = timeout_seconds
         self._next_id = 0
 
-    def call(self, method: str, params: Mapping[str, Any]) -> Any:
+    def _call(self, method: str, params: Mapping[str, Any]) -> Any:
         self._next_id += 1
         request = {"jsonrpc": "2.0", "id": self._next_id, "method": method, "params": dict(params)}
         body = json.dumps(request, sort_keys=True, separators=(",", ":")).encode() + b"\n"
@@ -129,12 +129,46 @@ class JsonRpcClient:
             connection.connect(str(self.path))
             connection.sendall(body)
             response = connection.makefile("rb").readline(MAX_REQUEST_BYTES + 1)
+        if len(response) > MAX_REQUEST_BYTES or not response.endswith(b"\n"):
+            raise BrokerError("RESPONSE_INVALID")
         try:
             decoded = json.loads(response)
         except (json.JSONDecodeError, UnicodeDecodeError) as error:
             raise BrokerError("RESPONSE_INVALID") from error
+        if not isinstance(decoded, dict) or decoded.get("jsonrpc") != "2.0" or decoded.get("id") != self._next_id:
+            raise BrokerError("RESPONSE_INVALID")
         if set(decoded) == {"jsonrpc", "id", "error"}:
-            raise BrokerError(decoded["error"].get("message", "RPC_ERROR"))
-        if set(decoded) != {"jsonrpc", "id", "result"}:
+            error = decoded["error"]
+            if not isinstance(error, dict) or set(error) != {"code", "message"} or type(error["code"]) is not int or not isinstance(error["message"], str):
+                raise BrokerError("RESPONSE_INVALID")
+            raise BrokerError(error["message"])
+        if set(decoded) != {"jsonrpc", "id", "result"} or not isinstance(decoded["result"], dict):
             raise BrokerError("RESPONSE_INVALID")
         return decoded["result"]
+
+    def session_mint(self, control_capability: str, claims: Mapping[str, Any], *, ttl_seconds: float = 60):
+        return self._call("session_mint", {"control_capability": control_capability, "claims": dict(claims), "ttl_seconds": ttl_seconds})
+
+    def session_exchange(self, handle: str):
+        return self._call("session_exchange", {"handle": handle})
+
+    def session_close(self, capability: str, *, sequence: int, action_id: str, timeout_seconds: float = 2):
+        return self._call("session_close", {"capability": capability, "sequence": sequence, "action_id": action_id, "timeout_seconds": timeout_seconds})
+
+    def recall(self, capability: str, *, sequence: int, action_id: str, request: Mapping[str, Any], timeout_seconds: float = 2):
+        return self._call("recall", {"capability": capability, "sequence": sequence, "action_id": action_id, "request": dict(request), "timeout_seconds": timeout_seconds})
+
+    def mental_model_fetch(self, capability: str, *, sequence: int, action_id: str, request: Mapping[str, Any], timeout_seconds: float = 2):
+        return self._call("mental_model_fetch", {"capability": capability, "sequence": sequence, "action_id": action_id, "request": dict(request), "timeout_seconds": timeout_seconds})
+
+    def transcript_checkpoint(self, capability: str, *, sequence: int, action_id: str, request: Mapping[str, Any]):
+        return self._call("transcript_checkpoint", {"capability": capability, "sequence": sequence, "action_id": action_id, "request": dict(request)})
+
+    def retain_outcome(self, capability: str, *, sequence: int, action_id: str, request: Mapping[str, Any]):
+        return self._call("retain_outcome", {"capability": capability, "sequence": sequence, "action_id": action_id, "request": dict(request)})
+
+    def reflect(self, capability: str, *, sequence: int, action_id: str, request: Mapping[str, Any], timeout_seconds: float = 2):
+        return self._call("reflect", {"capability": capability, "sequence": sequence, "action_id": action_id, "request": dict(request), "timeout_seconds": timeout_seconds})
+
+    def session_status(self, capability: str, *, sequence: int, action_id: str, timeout_seconds: float = 2):
+        return self._call("session_status", {"capability": capability, "sequence": sequence, "action_id": action_id, "timeout_seconds": timeout_seconds})
