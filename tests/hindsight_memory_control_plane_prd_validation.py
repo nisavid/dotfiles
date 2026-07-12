@@ -370,16 +370,20 @@ def validate_publication_range(
     commits = git(
         repo_root, "rev-list", "--reverse", f"{publication_base}..HEAD"
     ).splitlines()
-    scanned: set[tuple[str, str]] = set()
+    scanned: set[tuple[str, bytes]] = set()
     for commit in commits:
+        commit_object = git(repo_root, "cat-file", "commit", commit, text=False)
+        if contains_forbidden(commit_object, forbidden):
+            reject("publication_range_disclosure")
         tree = git(repo_root, "ls-tree", "-r", "-z", commit, text=False)
         for record in tree.split(b"\0"):
             if not record:
                 continue
             metadata, raw_path = record.split(b"\t", 1)
             _mode, object_type, object_id = metadata.decode("ascii").split()
-            path = raw_path.decode("utf-8", errors="surrogateescape")
-            key = (object_id, path)
+            if contains_forbidden(raw_path, forbidden):
+                reject("publication_range_disclosure")
+            key = (object_id, raw_path)
             if (
                 object_type != "blob"
                 or object_id not in new_objects
@@ -397,13 +401,26 @@ def validate_publication_range(
             "diff",
             "--name-only",
             "--diff-filter=ACMRT",
+            "-z",
             "HEAD",
-        ).splitlines()
+            text=False,
+        ).split(b"\0")
     )
     worktree_paths.update(
-        git(repo_root, "ls-files", "--others", "--exclude-standard").splitlines()
+        git(
+            repo_root,
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+            "-z",
+            text=False,
+        ).split(b"\0")
     )
-    for path in worktree_paths:
+    worktree_paths.discard(b"")
+    for raw_path in worktree_paths:
+        if contains_forbidden(raw_path, forbidden):
+            reject("working_tree_disclosure")
+        path = raw_path.decode(sys.getfilesystemencoding(), errors="surrogateescape")
         candidate = repo_root / path
         if candidate.is_file() and contains_forbidden(
             candidate.read_bytes(), forbidden
@@ -411,37 +428,40 @@ def validate_publication_range(
             reject("working_tree_disclosure")
 
 
+def initialize_adversary_repo(root: str) -> tuple[Path, str]:
+    repo = Path(root)
+    subprocess.run(
+        ["git", "init", "--quiet", str(repo)],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "user.name", "Synthetic Test"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "user.email", "test@example.invalid"],
+        check=True,
+    )
+    (repo / "base.txt").write_text("public baseline\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "--", "base.txt"], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "commit", "--quiet", "-m", "base"],
+        check=True,
+    )
+    base = subprocess.check_output(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True
+    ).strip()
+    return repo, base
+
+
 def validate_age_suffix_adversaries() -> None:
     forbidden = ("synthetic-private-marker",)
     missed: list[str] = []
     for case in ("committed", "worktree"):
         with tempfile.TemporaryDirectory(prefix="hindsight-age-adversary-") as root:
-            repo = Path(root)
-            subprocess.run(
-                ["git", "init", "--quiet", str(repo)],
-                check=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            subprocess.run(
-                ["git", "-C", str(repo), "config", "user.name", "Synthetic Test"],
-                check=True,
-            )
-            subprocess.run(
-                ["git", "-C", str(repo), "config", "user.email", "test@example.invalid"],
-                check=True,
-            )
-            (repo / "base.txt").write_text("public baseline\n", encoding="utf-8")
-            subprocess.run(
-                ["git", "-C", str(repo), "add", "--", "base.txt"], check=True
-            )
-            subprocess.run(
-                ["git", "-C", str(repo), "commit", "--quiet", "-m", "base"],
-                check=True,
-            )
-            base = subprocess.check_output(
-                ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True
-            ).strip()
+            repo, base = initialize_adversary_repo(root)
             (repo / "disguised.age").write_text(
                 f"{forbidden[0]}\n", encoding="utf-8"
             )
@@ -467,6 +487,60 @@ def validate_age_suffix_adversaries() -> None:
         reject("age_suffix_plaintext_bypass")
 
 
+def validate_publication_metadata_adversaries() -> None:
+    forbidden = ("synthetic-private-marker",)
+    with tempfile.TemporaryDirectory(prefix="hindsight-metadata-adversary-") as root:
+        repo, base = initialize_adversary_repo(root)
+        (repo / "change.txt").write_text("public change\n", encoding="utf-8")
+        subprocess.run(
+            ["git", "-C", str(repo), "add", "--", "change.txt"], check=True
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "--quiet", "-m", forbidden[0]],
+            check=True,
+        )
+        try:
+            validate_publication_range(repo, base, forbidden)
+        except ValidationError as error:
+            if error.code != "publication_range_disclosure":
+                reject("metadata_wrong_rejection")
+        else:
+            reject("commit_metadata_disclosure_bypass")
+
+    with tempfile.TemporaryDirectory(prefix="hindsight-path-adversary-") as root:
+        repo, base = initialize_adversary_repo(root)
+        (repo / f"{forbidden[0]}.txt").write_text("public change\n", encoding="utf-8")
+        subprocess.run(
+            ["git", "-C", str(repo), "add", "--", f"{forbidden[0]}.txt"],
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "--quiet", "-m", "public change"],
+            check=True,
+        )
+        try:
+            validate_publication_range(repo, base, forbidden)
+        except ValidationError as error:
+            if error.code != "publication_range_disclosure":
+                reject("metadata_wrong_rejection")
+        else:
+            reject("tree_path_disclosure_bypass")
+
+
+def validate_worktree_path_adversary() -> None:
+    forbidden = ("synthetic-private-marker",)
+    with tempfile.TemporaryDirectory(prefix="hindsight-worktree-path-adversary-") as root:
+        repo, base = initialize_adversary_repo(root)
+        (repo / "leak\npart.age").write_text(f"{forbidden[0]}\n", encoding="utf-8")
+        try:
+            validate_publication_range(repo, base, forbidden)
+        except ValidationError as error:
+            if error.code != "working_tree_disclosure":
+                reject("worktree_path_wrong_rejection")
+        else:
+            reject("worktree_path_disclosure_bypass")
+
+
 def main() -> int:
     if len(sys.argv) != 5:
         print("private hindsight memory control plane PRD: invalid invocation", file=sys.stderr)
@@ -478,6 +552,8 @@ def main() -> int:
     try:
         validate_synthetic_migration_cases()
         validate_age_suffix_adversaries()
+        validate_publication_metadata_adversaries()
+        validate_worktree_path_adversary()
         with catalog_path.open("rb") as handle:
             catalog = tomllib.load(handle)
         validated = validate_catalog(catalog)
