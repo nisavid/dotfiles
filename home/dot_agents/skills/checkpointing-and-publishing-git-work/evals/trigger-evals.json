@@ -5,6 +5,7 @@
   {"query": "Push the current task-owned commit and verify the remote tip.", "should_trigger": true},
   {"query": "Close out this Git branch at the current stopping point.", "should_trigger": true},
   {"query": "Reconcile the remote branch and publish with an exact lease.", "should_trigger": true},
+  {"query": "Implement the parser in this repository and commit clean checkpoints.", "should_trigger": true},
   {"query": "In Codex, implement the parser in this repository and commit clean checkpoints.", "should_trigger": true},
   {"query": "In Claude Code, review this repository without changing or publishing it.", "should_trigger": true},
   {"query": "Draft a birthday invitation in plain text.", "should_trigger": false},
