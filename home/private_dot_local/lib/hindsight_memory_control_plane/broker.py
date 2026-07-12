@@ -154,30 +154,26 @@ class Broker:
         self._revoked_path = self.state_dir / "revoked_nonces.json"
         self._work_path = self.state_dir / "durable_work.json"
         self._lease_path = self.state_dir / "broker.lease"
-        self._used = set(_read_json(self._used_path, []))
-        self._revoked = set(_read_json(self._revoked_path, []))
-        self._work = _read_json(self._work_path, {
-            "queue": [], "completed": {}, "sessions": {}, "used_nonces": [], "exchanges": {}, "generation": "initial",
-        })
-        if not isinstance(self._work, dict) or set(self._work) != {"queue", "completed", "sessions", "used_nonces", "exchanges", "generation"}:
-            raise BrokerError("STATE_INVALID")
         self._generation = secrets.token_hex(32)
-        self._work["generation"] = self._generation
+        self._work = self._install_generation()
         self._used = set(self._work["used_nonces"])
-        self._replace_generation(self._work)
+        self._revoked = set(self._work["revoked_nonces"])
         self._closed = False
         for item in tuple(self._work["queue"]):
             self._submit_write(item["queue_id"])
 
     def shutdown(self, *, timeout_seconds: float = 2) -> dict[str, int]:
         if self._closed:
-            return {"undrained": len(self._work["queue"]), "active_reads": 0, "active_writes": 0}
+            return {"undrained": len(self._work["queue"]), "active_reads": 0, "active_writes": 0, "retired": False}
         timeout = self._timeout(timeout_seconds)
+        retired = False
         with self._lock:
-            stopped = deepcopy(self._work)
-            stopped["generation"] = f"stopped-{secrets.token_hex(24)}"
-            self._commit_owned(stopped)
-            self._work = stopped
+            try:
+                self._transaction(lambda work: work.__setitem__("generation", f"stopped-{secrets.token_hex(24)}"))
+            except BrokerError as error:
+                if error.code != "BROKER_RETIRED":
+                    raise
+                retired = True
             self._closed = True
             for future in self._read_futures:
                 future.cancel()
@@ -196,6 +192,7 @@ class Broker:
                 "undrained": len(self._work["queue"]),
                 "active_reads": sum(not future.done() for future in self._read_futures),
                 "active_writes": sum(not future.done() for future in self._write_futures),
+                "retired": retired,
             }
 
     def _owns_generation(self) -> bool:
@@ -209,23 +206,57 @@ class Broker:
         os.fchmod(descriptor, 0o600)
         return descriptor
 
-    def _replace_generation(self, value: Mapping[str, Any]) -> None:
+    @staticmethod
+    def _empty_work() -> dict[str, Any]:
+        return {
+            "queue": [], "completed": {}, "sessions": {}, "used_nonces": [],
+            "revoked_nonces": [], "exchanges": {}, "generation": "initial",
+        }
+
+    def _validate_work(self, value: Any) -> dict[str, Any]:
+        if not isinstance(value, dict) or set(value) != set(self._empty_work()):
+            raise BrokerError("STATE_INVALID")
+        return value
+
+    def _sync_digest_mirrors(self, value: Mapping[str, Any]) -> None:
+        _atomic_json(self._used_path, value["used_nonces"])
+        _atomic_json(self._revoked_path, value["revoked_nonces"])
+
+    def _install_generation(self) -> dict[str, Any]:
         descriptor = self._lease_descriptor()
         try:
             fcntl.flock(descriptor, fcntl.LOCK_EX)
+            current = self._validate_work(_read_json(self._work_path, self._empty_work()))
+            value = deepcopy(current)
+            value["generation"] = self._generation
             _atomic_json(self._work_path, value)
+            try:
+                self._sync_digest_mirrors(value)
+            except OSError:
+                pass
+            return value
         finally:
             fcntl.flock(descriptor, fcntl.LOCK_UN)
             os.close(descriptor)
 
-    def _commit_owned(self, value: Mapping[str, Any]) -> None:
+    def _transaction(self, mutation: Callable[[dict[str, Any]], Any]) -> Any:
         descriptor = self._lease_descriptor()
         try:
             fcntl.flock(descriptor, fcntl.LOCK_EX)
-            current = _read_json(self._work_path, {})
+            current = self._validate_work(_read_json(self._work_path, self._empty_work()))
             if current.get("generation") != self._generation:
                 raise BrokerError("BROKER_RETIRED")
+            value = deepcopy(current)
+            result = mutation(value)
             _atomic_json(self._work_path, value)
+            self._work = value
+            self._used = set(value["used_nonces"])
+            self._revoked = set(value["revoked_nonces"])
+            try:
+                self._sync_digest_mirrors(value)
+            except OSError:
+                pass
+            return result
         finally:
             fcntl.flock(descriptor, fcntl.LOCK_UN)
             os.close(descriptor)
@@ -312,23 +343,15 @@ class Broker:
         with self._lock:
             record = _read_json(path, None)
             if not isinstance(record, dict) or set(record) != {"envelope"}:
-                recovered = self._work["exchanges"].get(handle)
-                if not recovered:
-                    raise BrokerError("HANDLE_USED")
-                return self._bootstrap_response("session-exchange", "session_exchange", recovered["session_id"], {
-                    "capability": recovered["capability"], "expires_at": recovered["expires_at"],
-                })
+                def recover(work):
+                    recovered = work["exchanges"].get(handle)
+                    if not recovered:
+                        raise BrokerError("HANDLE_USED")
+                    return deepcopy(recovered)
+                recovered = self._transaction(recover)
+                return self._exchange_response(recovered)
             claims = self._verify(record["envelope"], "exchange")
             nonce_digest = _sha256_text(claims["nonce"])
-            recovered = self._work["exchanges"].get(handle)
-            if nonce_digest in self._work["used_nonces"] and recovered:
-                try:
-                    path.unlink()
-                except FileNotFoundError:
-                    pass
-                return self._bootstrap_response("session-exchange", "session_exchange", recovered["session_id"], {
-                    "capability": recovered["capability"], "expires_at": recovered["expires_at"],
-                })
             now = self.clock()
             capability_claims = {
                 **{key: claims[key] for key in CLAIM_KEYS}, "kind": "capability",
@@ -336,30 +359,34 @@ class Broker:
                 "nonce": secrets.token_hex(32), "revocation_id": claims["revocation_id"],
             }
             capability = self._sign(capability_claims)
-            work = deepcopy(self._work)
-            if nonce_digest in work["used_nonces"]:
-                raise BrokerError("HANDLE_USED")
-            work["used_nonces"].append(nonce_digest)
-            sessions = work["sessions"]
-            sessions[claims["session_id"]] = {
-                "nonce_digest": _sha256_text(capability_claims["nonce"]),
-                "revocation_digest": _sha256_text(claims["revocation_id"]),
-                "sequence": 0, "action_ids": [], "closed": False,
-            }
-            work["exchanges"][handle] = {
-                "session_id": claims["session_id"], "capability": capability,
-                "expires_at": claims["expires_at"], "nonce_digest": nonce_digest,
-            }
-            _atomic_json(self._work_path, work)
-            self._work = work
-            self._used = set(work["used_nonces"])
-            _atomic_json(self._used_path, sorted(self._used))
+            def exchange(work):
+                recovered = work["exchanges"].get(handle)
+                if nonce_digest in work["used_nonces"]:
+                    if recovered:
+                        return deepcopy(recovered)
+                    raise BrokerError("HANDLE_USED")
+                work["used_nonces"].append(nonce_digest)
+                work["sessions"][claims["session_id"]] = {
+                    "nonce_digest": _sha256_text(capability_claims["nonce"]),
+                    "revocation_digest": _sha256_text(claims["revocation_id"]),
+                    "sequence": 0, "action_ids": [], "closed": False,
+                }
+                recovered = {
+                    "session_id": claims["session_id"], "capability": capability,
+                    "expires_at": claims["expires_at"], "nonce_digest": nonce_digest,
+                }
+                work["exchanges"][handle] = recovered
+                return deepcopy(recovered)
+            recovered = self._transaction(exchange)
             try:
                 path.unlink()
             except FileNotFoundError:
                 pass
-        return self._bootstrap_response("session-exchange", "session_exchange", claims["session_id"], {
-            "capability": capability, "expires_at": claims["expires_at"],
+        return self._exchange_response(recovered)
+
+    def _exchange_response(self, recovered: Mapping[str, Any]) -> dict[str, Any]:
+        return self._bootstrap_response("session-exchange", "session_exchange", recovered["session_id"], {
+            "capability": recovered["capability"], "expires_at": recovered["expires_at"],
         })
 
     def _authorize(self, capability: str, method: str, sequence: Any, action_id: Any,
@@ -385,26 +412,20 @@ class Broker:
             "session_id": claims["session_id"], "harness_id": claims["harness_id"],
             "capability_nonce_digest": nonce_digest,
         })).hexdigest()
-        with self._lock:
-            state = self._work["sessions"].get(claims["session_id"])
-            if not state or state.get("nonce_digest") != nonce_digest:
-                raise BrokerError("CAPABILITY_INVALID")
-            if state.get("revocation_digest") in self._revoked or state.get("closed"):
-                raise BrokerError("REVOKED")
-            if action_id in state["action_ids"]:
-                raise BrokerError("ACTION_REPLAY")
-            if sequence <= state["sequence"]:
-                raise BrokerError("SEQUENCE_ROLLBACK")
-            if commit:
-                work = deepcopy(self._work)
-                self._commit_action(work, claims, sequence, action_id)
-                _atomic_json(self._work_path, work)
-                self._work = work
+        if commit:
+            with self._lock:
+                def authorize(work):
+                    self._commit_action(work, claims, sequence, action_id)
+                self._transaction(authorize)
         return claims, route, action_digest
 
     @staticmethod
     def _commit_action(work: dict[str, Any], claims: Mapping[str, Any], sequence: int, action_id: str) -> None:
-        state = work["sessions"][claims["session_id"]]
+        state = work["sessions"].get(claims["session_id"])
+        if not state or state.get("nonce_digest") != _sha256_text(claims["nonce"]):
+            raise BrokerError("CAPABILITY_INVALID")
+        if state.get("revocation_digest") in work["revoked_nonces"] or state.get("closed"):
+            raise BrokerError("REVOKED")
         if action_id in state["action_ids"]:
             raise BrokerError("ACTION_REPLAY")
         if sequence <= state["sequence"]:
@@ -531,41 +552,36 @@ class Broker:
         request_digest = hashlib.sha256(canonical_bytes(request)).hexdigest()
         with self._document_lock(claims, document_id):
             with self._lock:
-                records = [entry for entry in self._work["queue"] if entry.get("state_key") == state_key]
-                completed = self._work["completed"].get(state_key)
-                if completed:
-                    records.append(completed)
-                if records:
-                    latest = max(records, key=lambda entry: tuple(entry["watermark"]))
-                    if latest["watermark"] == watermark:
-                        if latest["request_digest"] != request_digest:
-                            raise BrokerError("DIGEST_DRIFT")
-                        candidate = deepcopy(self._work)
-                        self._commit_action(candidate, claims, sequence, action_id)
-                        _atomic_json(self._work_path, candidate)
-                        self._work = candidate
-                        return self._response(action_id, action_digest, "idempotent", {"watermark": watermark})
-                    if tuple(watermark) < tuple(latest["watermark"]):
-                        candidate = deepcopy(self._work)
-                        self._commit_action(candidate, claims, sequence, action_id)
-                        _atomic_json(self._work_path, candidate)
-                        self._work = candidate
-                        return self._response(action_id, action_digest, "stale", {"watermark": latest["watermark"]})
-                item = {
-                    "queue_id": secrets.token_hex(16), "session_id": claims["session_id"],
-                    "route": claims["route"], "method": method, "state_key": state_key,
-                    "watermark": watermark, "request_digest": request_digest,
-                    "idempotency_key": action_digest,
-                    "adapter_request": {**request, "idempotency_key": action_digest},
-                    "attempts": 0, "last_error": None, "next_retry": None,
-                }
-                candidate = deepcopy(self._work)
-                self._commit_action(candidate, claims, sequence, action_id)
-                candidate["queue"].append(item)
-                _atomic_json(self._work_path, candidate)
-                self._work = candidate
-            self._submit_write(item["queue_id"])
-        return self._response(action_id, action_digest, "queued", {"watermark": watermark, "queue_id": item["queue_id"]})
+                def enqueue(work):
+                    records = [entry for entry in work["queue"] if entry.get("state_key") == state_key]
+                    completed = work["completed"].get(state_key)
+                    if completed:
+                        records.append(completed)
+                    if records:
+                        latest = max(records, key=lambda entry: tuple(entry["watermark"]))
+                        if latest["watermark"] == watermark:
+                            if latest["request_digest"] != request_digest:
+                                raise BrokerError("DIGEST_DRIFT")
+                            self._commit_action(work, claims, sequence, action_id)
+                            return {"disposition": "idempotent", "payload": {"watermark": watermark}, "queue_id": None}
+                        if tuple(watermark) < tuple(latest["watermark"]):
+                            self._commit_action(work, claims, sequence, action_id)
+                            return {"disposition": "stale", "payload": {"watermark": latest["watermark"]}, "queue_id": None}
+                    item = {
+                        "queue_id": secrets.token_hex(16), "session_id": claims["session_id"],
+                        "route": claims["route"], "method": method, "state_key": state_key,
+                        "watermark": watermark, "request_digest": request_digest,
+                        "idempotency_key": action_digest,
+                        "adapter_request": {**request, "idempotency_key": action_digest},
+                        "attempts": 0, "last_error": None, "next_retry": None,
+                    }
+                    self._commit_action(work, claims, sequence, action_id)
+                    work["queue"].append(item)
+                    return {"disposition": "queued", "payload": {"watermark": watermark, "queue_id": item["queue_id"]}, "queue_id": item["queue_id"]}
+                result = self._transaction(enqueue)
+            if result["queue_id"]:
+                self._submit_write(result["queue_id"])
+        return self._response(action_id, action_digest, result["disposition"], result["payload"])
 
     def transcript_checkpoint(self, capability: str, *, sequence: int, action_id: str, request: Mapping[str, Any]) -> dict[str, Any]:
         value = self._validate_request("transcript_checkpoint", request)
@@ -620,34 +636,30 @@ class Broker:
                     except Exception:
                         retry_delay = min(0.1, 0.01 * (2 ** min(item["attempts"], 4)))
                         with self._lock:
-                            candidate = deepcopy(self._work)
-                            current = next(entry for entry in candidate["queue"] if entry["queue_id"] == queue_id)
-                            current["attempts"] += 1
-                            current["last_error"] = "ADAPTER_UNAVAILABLE"
-                            current["next_retry"] = self.clock() + retry_delay
+                            def fail(work):
+                                current = next(entry for entry in work["queue"] if entry["queue_id"] == queue_id)
+                                current["attempts"] += 1
+                                current["last_error"] = "ADAPTER_UNAVAILABLE"
+                                current["next_retry"] = self.clock() + retry_delay
                             try:
-                                self._commit_owned(candidate)
-                            except BrokerError:
+                                self._transaction(fail)
+                            except (BrokerError, StopIteration):
                                 return
-                            self._work = candidate
                     else:
                         if self._closed:
                             return
                         with self._lock:
-                            current = next((entry for entry in self._work["queue"] if entry["queue_id"] == queue_id), None)
-                            if current is None or self._closed:
-                                return
-                            candidate = deepcopy(self._work)
-                            candidate["queue"] = [entry for entry in candidate["queue"] if entry["queue_id"] != queue_id]
-                            candidate["completed"][item["state_key"]] = {
-                                "watermark": item["watermark"], "request_digest": item["request_digest"],
-                                "idempotency_key": item["idempotency_key"],
-                            }
+                            def complete(work):
+                                current = next(entry for entry in work["queue"] if entry["queue_id"] == queue_id)
+                                work["queue"] = [entry for entry in work["queue"] if entry["queue_id"] != queue_id]
+                                work["completed"][current["state_key"]] = {
+                                    "watermark": current["watermark"], "request_digest": current["request_digest"],
+                                    "idempotency_key": current["idempotency_key"],
+                                }
                             try:
-                                self._commit_owned(candidate)
-                            except Exception:
+                                self._transaction(complete)
+                            except (BrokerError, StopIteration):
                                 return
-                            self._work = candidate
                         return
             time.sleep(0.005 if wait_for_older else retry_delay)
 
@@ -670,12 +682,29 @@ class Broker:
 
     def session_close(self, capability: str, *, sequence: int, action_id: str, timeout_seconds: float = 2) -> dict[str, Any]:
         timeout = self._timeout(timeout_seconds)
-        claims, route, action_digest = self._authorize(capability, "session_close", sequence, action_id, commit=False)
+        claims, _, action_digest = self._authorize(capability, "session_close", sequence, action_id, commit=False)
         final_document = f"final-{hashlib.sha256(claims['session_id'].encode()).hexdigest()[:32]}"
-        self._enqueue_watermarked(
-            "transcript_checkpoint", claims, route, sequence, action_id, action_digest,
-            {"document_id": final_document, "epoch": 0, "checkpoint": sequence},
-        )
+        final_request = {"document_id": final_document, "epoch": 0, "checkpoint": sequence}
+        queue_id = secrets.token_hex(16)
+        state_key = "/".join(("transcript_checkpoint", claims["home_bank"]["profile_id"], claims["home_bank"]["bank_id"], final_document))
+        item = {
+            "queue_id": queue_id, "session_id": claims["session_id"], "route": claims["route"],
+            "method": "transcript_checkpoint", "state_key": state_key, "watermark": [0, sequence],
+            "request_digest": hashlib.sha256(canonical_bytes(final_request)).hexdigest(),
+            "idempotency_key": action_digest,
+            "adapter_request": {**final_request, "idempotency_key": action_digest},
+            "attempts": 0, "last_error": None, "next_retry": None,
+        }
+        with self._lock:
+            def close(work):
+                self._commit_action(work, claims, sequence, action_id)
+                work["queue"].append(item)
+                state = work["sessions"][claims["session_id"]]
+                state["closed"] = True
+                if state["revocation_digest"] not in work["revoked_nonces"]:
+                    work["revoked_nonces"].append(state["revocation_digest"])
+            self._transaction(close)
+        self._submit_write(queue_id)
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             with self._lock:
@@ -685,12 +714,6 @@ class Broker:
             time.sleep(min(0.005, max(0, deadline - time.monotonic())))
         with self._lock:
             pending = sum(entry["session_id"] == claims["session_id"] for entry in self._work["queue"])
-            work = deepcopy(self._work)
-            work["sessions"][claims["session_id"]]["closed"] = True
-            revoked = self._revoked | {work["sessions"][claims["session_id"]]["revocation_digest"]}
-            _atomic_json(self._revoked_path, sorted(revoked))
-            _atomic_json(self._work_path, work)
-            self._revoked, self._work = revoked, work
         self._write_ledger(claims, action_id)
         return self._response(action_id, action_digest, "closed", {
             "undrained": pending, "final_checkpoint": "drained" if pending == 0 else "queued",
