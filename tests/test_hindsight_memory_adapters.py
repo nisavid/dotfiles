@@ -1,9 +1,12 @@
 import json
+from io import BytesIO
 from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.error import HTTPError
 import threading
 import time
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 import sys
 
@@ -43,6 +46,20 @@ def inventory_for(port, *, scheme="http", host="127.0.0.1", approved_tls=False):
     }
     artifact = {key: raw[key] for key in ("schema_version", "archetype", "profiles", "providers", "banks", "harnesses", "policy")}
     return Inventory(1, raw["machine"], raw["archetype"], tuple(raw["profiles"]), (), (), (), raw["migration"], raw["policy"], digest(raw), digest(artifact))
+
+
+def start_http_server(test_case, handler):
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    def cleanup():
+        server.shutdown()
+        thread.join(timeout=2)
+        server.server_close()
+
+    test_case.addCleanup(cleanup)
+    return server
 
 
 class AdapterContractMixin:
@@ -222,11 +239,8 @@ class HttpAdapterContractTest(AdapterContractMixin, unittest.TestCase):
             do_GET = do_POST = do_PATCH = do_PUT = do_DELETE = _serve
             def log_message(self, *_args): pass
 
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.server = start_http_server(self, Handler)
         self.endpoint = EndpointIdentity("core", "http", "127.0.0.1", self.server.server_port, "default")
-        threading.Thread(target=self.server.serve_forever, daemon=True).start()
-        self.addCleanup(self.server.shutdown)
-        self.addCleanup(self.server.server_close)
         self.state = state
         self.adapter = HttpAdapter(inventory=inventory_for(self.server.server_port), profile_id="core", token_resolver=lambda: "contract-token")
 
@@ -243,6 +257,25 @@ class HttpAdapterContractTest(AdapterContractMixin, unittest.TestCase):
 
 
 class HttpAdapterSecurityTest(unittest.TestCase):
+    def test_http_error_response_is_closed_after_authentication_failure(self):
+        adapter = HttpAdapter(
+            inventory=inventory_for(7979),
+            profile_id="core",
+            token_resolver=lambda: "token",
+        )
+        response_body = BytesIO(b'{}')
+        failure = HTTPError(
+            "http://127.0.0.1:7979/v1/schema",
+            401,
+            "Unauthorized",
+            {},
+            response_body,
+        )
+        with patch("hindsight_memory_control_plane.http_adapter.urlopen", side_effect=failure):
+            with self.assertRaises(AuthenticationError):
+                adapter.schema_version()
+        self.assertTrue(response_body.closed)
+
     def assert_rollback_id_rejected(self, rollback_id):
         requests = []
 
@@ -267,10 +300,7 @@ class HttpAdapterSecurityTest(unittest.TestCase):
                 self.wfile.write(body)
             def log_message(self, *_args): pass
 
-        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        threading.Thread(target=server.serve_forever, daemon=True).start()
-        self.addCleanup(server.shutdown)
-        self.addCleanup(server.server_close)
+        server = start_http_server(self, Handler)
         adapter = HttpAdapter(inventory=inventory_for(server.server_port), profile_id="core", token_resolver=lambda: "token")
         with self.assertRaisesRegex(AdapterError, "rollback attestation"):
             adapter.create_rollback_bundle("a" * 64, ("action-1",))
@@ -314,10 +344,7 @@ class HttpAdapterSecurityTest(unittest.TestCase):
                 self.send_response(500)
                 self.end_headers()
             def log_message(self, *_args): pass
-        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        threading.Thread(target=server.serve_forever, daemon=True).start()
-        self.addCleanup(server.shutdown)
-        self.addCleanup(server.server_close)
+        server = start_http_server(self, Handler)
         adapter = HttpAdapter(inventory=inventory_for(server.server_port), profile_id="core", token_resolver=lambda: "token", max_json_bytes=32)
         with self.assertRaisesRegex(AdapterError, "request exceeds"):
             adapter.patch_config({"value": "x" * 100_000})
@@ -331,10 +358,7 @@ class HttpAdapterSecurityTest(unittest.TestCase):
                 self.end_headers()
                 self.wfile.write(b"{}")
             def log_message(self, *_args): pass
-        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        threading.Thread(target=server.serve_forever, daemon=True).start()
-        self.addCleanup(server.shutdown)
-        self.addCleanup(server.server_close)
+        server = start_http_server(self, Handler)
         adapter = HttpAdapter(inventory=inventory_for(server.server_port), profile_id="core", token_resolver=lambda: "token")
         with self.assertRaisesRegex(AdapterError, "Content-Length"):
             adapter.read_config()
@@ -348,10 +372,7 @@ class HttpAdapterSecurityTest(unittest.TestCase):
                 self.end_headers()
                 self.wfile.write(body)
             def log_message(self, *_args): pass
-        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        threading.Thread(target=server.serve_forever, daemon=True).start()
-        self.addCleanup(server.shutdown)
-        self.addCleanup(server.server_close)
+        server = start_http_server(self, Handler)
         adapter = HttpAdapter(inventory=inventory_for(server.server_port), profile_id="core", token_resolver=lambda: "token")
         with self.assertRaisesRegex(AdapterError, "non-object"):
             adapter.read_config()
@@ -373,11 +394,7 @@ class HttpAdapterSecurityTest(unittest.TestCase):
             def log_message(self, *_args):
                 pass
 
-        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        self.addCleanup(server.shutdown)
-        self.addCleanup(server.server_close)
+        server = start_http_server(self, Handler)
         adapter = HttpAdapter(inventory=inventory_for(server.server_port), profile_id="core", token_resolver=lambda: token)
 
         self.assertEqual(adapter.read_config(), {"mode": "safe"})
@@ -398,10 +415,7 @@ class HttpAdapterSecurityTest(unittest.TestCase):
                 self.wfile.write(body)
             def log_message(self, *_args): pass
 
-        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        threading.Thread(target=server.serve_forever, daemon=True).start()
-        self.addCleanup(server.shutdown)
-        self.addCleanup(server.server_close)
+        server = start_http_server(self, Handler)
         adapter = HttpAdapter(inventory=inventory_for(server.server_port), profile_id="core", token_resolver=lambda: token, max_json_bytes=1024, timeout=100)
         with self.assertRaises(AuthenticationError) as auth:
             adapter.read_config()
@@ -423,10 +437,7 @@ class HttpAdapterSecurityTest(unittest.TestCase):
                     pass
             def log_message(self, *_args): pass
 
-        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        threading.Thread(target=server.serve_forever, daemon=True).start()
-        self.addCleanup(server.shutdown)
-        self.addCleanup(server.server_close)
+        server = start_http_server(self, Handler)
         adapter = HttpAdapter(inventory=inventory_for(server.server_port), profile_id="core", token_resolver=lambda: "timeout-secret", timeout=0.1)
         with self.assertRaises(AdapterError) as failure:
             adapter.read_config()

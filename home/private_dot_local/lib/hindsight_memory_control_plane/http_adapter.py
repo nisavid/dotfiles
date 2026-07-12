@@ -119,9 +119,12 @@ class HttpAdapter:
                 if len(raw) > self.max_json_bytes:
                     raise AdapterError("JSON response exceeds configured size limit")
         except HTTPError as error:
-            if error.code == 401:
-                raise AuthenticationError("endpoint authentication failed (HTTP 401)") from None
-            raise AdapterError(f"endpoint request failed (HTTP {error.code})") from None
+            try:
+                if error.code == 401:
+                    raise AuthenticationError("endpoint authentication failed (HTTP 401)") from None
+                raise AdapterError(f"endpoint request failed (HTTP {error.code})") from None
+            finally:
+                error.close()
         except (URLError, socket.timeout, TimeoutError, OSError):
             raise AdapterError("endpoint request failed") from None
         try:
