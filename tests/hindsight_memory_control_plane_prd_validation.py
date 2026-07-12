@@ -395,6 +395,34 @@ def validate_publication_range(
             if contains_forbidden(blob, forbidden):
                 reject("publication_range_disclosure")
 
+    staged_paths = set(
+        git(
+            repo_root,
+            "diff",
+            "--cached",
+            "--name-only",
+            "--diff-filter=ACMRT",
+            "-z",
+            "HEAD",
+            text=False,
+        ).split(b"\0")
+    )
+    staged_paths.discard(b"")
+    index = git(repo_root, "ls-files", "--stage", "-z", text=False)
+    for record in index.split(b"\0"):
+        if not record:
+            continue
+        metadata, raw_path = record.split(b"\t", 1)
+        mode, object_id, stage = metadata.decode("ascii").split()
+        if stage != "0" or raw_path not in staged_paths:
+            continue
+        if contains_forbidden(raw_path, forbidden):
+            reject("working_tree_disclosure")
+        if mode != "160000":
+            blob = git(repo_root, "cat-file", "blob", object_id, text=False)
+            if contains_forbidden(blob, forbidden):
+                reject("working_tree_disclosure")
+
     worktree_paths = set(
         git(
             repo_root,
@@ -553,6 +581,30 @@ def validate_worktree_path_adversaries() -> None:
                 reject("worktree_path_wrong_rejection")
         else:
             reject("worktree_symlink_disclosure_bypass")
+
+    for kind in ("symlink", "regular"):
+        with tempfile.TemporaryDirectory(
+            prefix=f"hindsight-index-{kind}-adversary-"
+        ) as root:
+            repo, base = initialize_adversary_repo(root)
+            candidate = repo / "disguised-payload"
+            if kind == "symlink":
+                candidate.symlink_to(forbidden[0])
+            else:
+                candidate.write_text(f"{forbidden[0]}\n", encoding="utf-8")
+            subprocess.run(
+                ["git", "-C", str(repo), "add", "--", "disguised-payload"],
+                check=True,
+            )
+            candidate.unlink()
+            candidate.write_text("public replacement\n", encoding="utf-8")
+            try:
+                validate_publication_range(repo, base, forbidden)
+            except ValidationError as error:
+                if error.code != "working_tree_disclosure":
+                    reject("worktree_path_wrong_rejection")
+            else:
+                reject("index_payload_disclosure_bypass")
 
 
 def main() -> int:
