@@ -422,7 +422,10 @@ def validate_publication_range(
             reject("working_tree_disclosure")
         path = raw_path.decode(sys.getfilesystemencoding(), errors="surrogateescape")
         candidate = repo_root / path
-        if candidate.is_file() and contains_forbidden(
+        if candidate.is_symlink():
+            if contains_forbidden(str(candidate.readlink()), forbidden):
+                reject("working_tree_disclosure")
+        elif candidate.is_file() and contains_forbidden(
             candidate.read_bytes(), forbidden
         ):
             reject("working_tree_disclosure")
@@ -527,7 +530,7 @@ def validate_publication_metadata_adversaries() -> None:
             reject("tree_path_disclosure_bypass")
 
 
-def validate_worktree_path_adversary() -> None:
+def validate_worktree_path_adversaries() -> None:
     forbidden = ("synthetic-private-marker",)
     with tempfile.TemporaryDirectory(prefix="hindsight-worktree-path-adversary-") as root:
         repo, base = initialize_adversary_repo(root)
@@ -539,6 +542,17 @@ def validate_worktree_path_adversary() -> None:
                 reject("worktree_path_wrong_rejection")
         else:
             reject("worktree_path_disclosure_bypass")
+
+    with tempfile.TemporaryDirectory(prefix="hindsight-worktree-link-adversary-") as root:
+        repo, base = initialize_adversary_repo(root)
+        (repo / "disguised-link").symlink_to(forbidden[0])
+        try:
+            validate_publication_range(repo, base, forbidden)
+        except ValidationError as error:
+            if error.code != "working_tree_disclosure":
+                reject("worktree_path_wrong_rejection")
+        else:
+            reject("worktree_symlink_disclosure_bypass")
 
 
 def main() -> int:
@@ -553,7 +567,7 @@ def main() -> int:
         validate_synthetic_migration_cases()
         validate_age_suffix_adversaries()
         validate_publication_metadata_adversaries()
-        validate_worktree_path_adversary()
+        validate_worktree_path_adversaries()
         with catalog_path.open("rb") as handle:
             catalog = tomllib.load(handle)
         validated = validate_catalog(catalog)
