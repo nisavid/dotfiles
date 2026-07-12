@@ -243,6 +243,59 @@ class HttpAdapterContractTest(AdapterContractMixin, unittest.TestCase):
 
 
 class HttpAdapterSecurityTest(unittest.TestCase):
+    def assert_rollback_id_rejected(self, rollback_id):
+        requests = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                requests.append(self.path)
+                length = int(self.headers.get("Content-Length", "0"))
+                request = json.loads(self.rfile.read(length))
+                value = {
+                    "rollback_id": rollback_id,
+                    "plan_digest": request["plan_digest"],
+                    "action_ids": request["action_ids"],
+                    "prestate_digest": "b" * 64,
+                    "endpoint_digest": "c" * 64,
+                    "bundle_digest": "d" * 64,
+                    "restore_proof_digest": "e" * 64,
+                }
+                body = json.dumps(value).encode()
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            def log_message(self, *_args): pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.shutdown)
+        self.addCleanup(server.server_close)
+        adapter = HttpAdapter(inventory=inventory_for(server.server_port), profile_id="core", token_resolver=lambda: "token")
+        with self.assertRaisesRegex(AdapterError, "rollback attestation"):
+            adapter.create_rollback_bundle("a" * 64, ("action-1",))
+        forged = RollbackBundle(rollback_id, "a" * 64, ("action-1",), "b" * 64, "c" * 64, "d" * 64, "e" * 64)
+        with self.assertRaisesRegex(AdapterError, "rollback attestation"):
+            adapter.verify_rollback_bundle(forged)
+        with self.assertRaisesRegex(AdapterError, "rollback attestation"):
+            adapter.restore(forged)
+        self.assertEqual(requests, ["/v1/rollbacks"])
+
+    def test_rollback_id_rejects_slash(self):
+        self.assert_rollback_id_rejected("safe/escape")
+
+    def test_rollback_id_rejects_query(self):
+        self.assert_rollback_id_rejected("safe?query=1")
+
+    def test_rollback_id_rejects_fragment(self):
+        self.assert_rollback_id_rejected("safe#fragment")
+
+    def test_rollback_id_rejects_control_character(self):
+        self.assert_rollback_id_rejected("safe\nprivate")
+
+    def test_rollback_id_rejects_oversized_value(self):
+        self.assert_rollback_id_rejected("a" * 129)
+
     def test_endpoint_must_be_derived_from_inventory_and_scheme_policy(self):
         with self.assertRaisesRegex(AdapterError, "digests"):
             HttpAdapter(inventory=replace(inventory_for(7979), inventory_digest="0" * 64), profile_id="core", token_resolver=lambda: "token")
@@ -424,6 +477,29 @@ class AdminMigrationAdapterContractTest(unittest.TestCase):
 
 
 class GuardedApplyTest(unittest.TestCase):
+    def test_adapter_attested_stale_prestate_bundle_is_refused_before_mutation(self):
+        plan = plan_for({"version": "fresh"})
+        adapter = self.adapter(state={"version": "stale"})
+        bundle = create_rollback_bundle(plan, adapter)
+        adapter.state = {"version": "fresh"}
+
+        result = apply_plan(plan, adapter, plan.plan_digest, {"rollback_bundle": bundle})
+
+        self.assertEqual(result.reason, "rollback_prestate_mismatch")
+        self.assertNotIn("create_bank", [call["method"] for call in adapter.calls])
+
+    def test_adapter_attested_stale_endpoint_bundle_is_refused_before_mutation(self):
+        plan = plan_for({})
+        adapter = self.adapter()
+        adapter.endpoint = EndpointIdentity("core", "http", "127.0.0.1", 7980, "default")
+        bundle = create_rollback_bundle(plan, adapter)
+        adapter.endpoint = plan.target_endpoint
+
+        result = apply_plan(plan, adapter, plan.plan_digest, {"rollback_bundle": bundle})
+
+        self.assertEqual(result.reason, "rollback_endpoint_mismatch")
+        self.assertNotIn("create_bank", [call["method"] for call in adapter.calls])
+
     def test_fake_applies_digest_verified_migration_only_with_matching_gate(self):
         from hindsight_memory_control_plane.reconcile import build_mutation_plan
 
@@ -459,6 +535,49 @@ class GuardedApplyTest(unittest.TestCase):
         tampered = {**mutation.to_dict(), "migration_run_id": "run-2"}
         with self.assertRaisesRegex(ApplyError, "digest"):
             mutation_plan_from_dict(tampered)
+
+    def test_mutation_action_id_rejects_oversized_identifier(self):
+        from hindsight_memory_control_plane.reconcile import build_mutation_plan
+        base = plan_for({})
+        with self.assertRaisesRegex(ApplyError, "action id"):
+            build_mutation_plan(base, migration_run_id="run-1", actions=[
+                {"id": "a" * 129, "kind": "migrate_bank", "artifact_digest": base.artifact_digest},
+            ])
+
+    def test_mutation_action_id_rejects_payload_like_identifier(self):
+        from hindsight_memory_control_plane.reconcile import build_mutation_plan
+        base = plan_for({})
+        with self.assertRaisesRegex(ApplyError, "action id"):
+            build_mutation_plan(base, migration_run_id="run-1", actions=[
+                {"id": "payload={secret}", "kind": "migrate_bank", "artifact_digest": base.artifact_digest},
+            ])
+
+    def test_mutation_action_id_rejects_control_characters(self):
+        from hindsight_memory_control_plane.reconcile import build_mutation_plan
+        base = plan_for({})
+        with self.assertRaisesRegex(ApplyError, "action id"):
+            build_mutation_plan(base, migration_run_id="run-1", actions=[
+                {"id": "migration\nprivate", "kind": "migrate_bank", "artifact_digest": base.artifact_digest},
+            ])
+
+    def test_valid_mutation_action_id_remains_ledger_safe(self):
+        from hindsight_memory_control_plane.reconcile import build_mutation_plan
+        base = plan_for({})
+        adapter = self.adapter()
+        mutation = build_mutation_plan(base, migration_run_id="run-1", actions=[
+            {"id": "migration-01.safe", "kind": "migrate_bank", "artifact_digest": base.artifact_digest},
+        ])
+        rollback = create_rollback_bundle(mutation, adapter)
+        gate = {"rollback_bundle": rollback, "migration_gate": {
+            "export": {"run_id": "run-1", "artifact_digest": base.artifact_digest},
+            "import": {"run_id": "run-1", "artifact_digest": base.artifact_digest},
+        }}
+        result = apply_plan(mutation, adapter, mutation.plan_digest, gate)
+        self.assertEqual(result.status, "applied")
+        self.assertEqual(result.ledger, (
+            {"action_id": "migration-01.safe", "status": "applied"},
+            {"action_id": "migration-01.safe", "status": "verified"},
+        ))
     def adapter(self, state=None, **kwargs):
         return FakeAdapter(
             endpoint={"profile_id": "core", "scheme": "http", "host": "127.0.0.1", "port": 7979, "tenant": "default"},

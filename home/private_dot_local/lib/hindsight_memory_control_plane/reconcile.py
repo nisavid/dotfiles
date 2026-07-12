@@ -12,6 +12,7 @@ from .planning import PlanError, plan_from_dict, verify_plan
 
 
 DIGEST = re.compile(r"[0-9a-f]{64}\Z")
+SAFE_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}\Z")
 MUTATION_KINDS = {"import_bank", "migrate_bank", "replace_canonical_bank"}
 
 
@@ -67,7 +68,7 @@ def _mutation_actions(values: Any) -> tuple[Action, ...]:
         if not isinstance(value, Mapping) or set(value) - {"id", "kind", "artifact_digest", "archive_digest", "source_bank", "target_bank"}:
             raise ApplyError("mutation action schema is closed")
         identifier, kind = value.get("id"), value.get("kind")
-        if not isinstance(identifier, str) or not identifier or identifier in seen:
+        if not isinstance(identifier, str) or SAFE_IDENTIFIER.fullmatch(identifier) is None or identifier in seen:
             raise ApplyError("mutation action id is invalid or duplicated")
         if kind not in MUTATION_KINDS:
             raise ApplyError("mutation action kind is not permitted")
@@ -89,7 +90,7 @@ def _mutation_actions(values: Any) -> tuple[Action, ...]:
 
 def build_mutation_plan(base_plan: Plan, *, migration_run_id: str, actions: Any) -> MutationPlan:
     verify_plan(base_plan)
-    if not isinstance(migration_run_id, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}", migration_run_id) is None:
+    if not isinstance(migration_run_id, str) or SAFE_IDENTIFIER.fullmatch(migration_run_id) is None:
         raise ApplyError("migration run ID is invalid")
     normalized = _mutation_actions(actions)
     body = {
@@ -189,11 +190,18 @@ def apply_plan(plan: Plan | MutationPlan, adapter: Adapter, approval_digest: str
         return _refused("fresh_state_unavailable")
     if fresh.get("endpoint") != plan.target_endpoint.to_dict():
         return _refused("endpoint_identity_drift")
-    if digest(fresh.get("state")) != plan.live_state_digest:
+    fresh_state_digest = digest(fresh.get("state"))
+    if fresh_state_digest != plan.live_state_digest:
         return _refused("live_state_drift")
     operations = fresh.get("operations")
     if not isinstance(operations, Mapping) or operations.get("idle") is not True or operations.get("active") != []:
         return _refused("operations_not_idle")
+    if rollback.prestate_digest != plan.live_state_digest or rollback.prestate_digest != fresh_state_digest:
+        return _refused("rollback_prestate_mismatch")
+    fresh_endpoint_digest = digest(fresh.get("endpoint"))
+    expected_endpoint_digest = digest(plan.target_endpoint.to_dict())
+    if rollback.endpoint_digest != expected_endpoint_digest or rollback.endpoint_digest != fresh_endpoint_digest:
+        return _refused("rollback_endpoint_mismatch")
     try:
         if adapter.verify_rollback_bundle(rollback) is not True:
             return _refused("disposable_restore_proof_required")
