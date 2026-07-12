@@ -15,6 +15,8 @@ set -euo pipefail
 
 export HOMEDIR={{ .chezmoi.homeDir | quote }}
 export EDITOR_TARGET={{ if eq .chezmoi.os "darwin" }}"cursor"{{ else }}"linux-desktop-code-oss"{{ end }}
+{{ $identityName := default "personal" (index .gitIdentity.defaultByHostname .chezmoi.hostname) }}
+export GIT_BRANCH_PREFIX={{ if or (eq $identityName "systalyze") (eq $identityName "stlz-bcs") }}"ivan/"{{ else }}"nisavid/"{{ end }}
 export WORK_TOML_B64={{ include ".private-codex-work.toml.age" | decrypt | b64enc | quote }}
 
 # python3 reads the script via process substitution; the live config arrives on stdin.
@@ -35,7 +37,7 @@ def ensure_table(parent, key):
 
 ensure_table(doc, "tui")["theme"] = "catppuccin-mocha"
 desk = ensure_table(doc, "desktop")
-desk["git-branch-prefix"] = "nisavid/"
+desk["git-branch-prefix"] = os.environ["GIT_BRANCH_PREFIX"]
 ensure_table(desk, "open-in-target-preferences")["global"] = editor
 
 sww = ensure_table(doc, "sandbox_workspace_write")

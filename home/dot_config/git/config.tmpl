@@ -3,7 +3,7 @@
 {{- $identity := index $identities $identityName -}}
 [user]
 	name = Ivan D Vasin
-	email = {{ $identity.email | quote }}
+	email = {{ $identity.email }}
 [core]
 	autocrlf = input
 	pager = diff-so-fancy | less --tabs=4 -RFX
@@ -52,6 +52,7 @@
 	chpa = cherry-pick --abort
 	chpc = cherry-pick --continue
 	ci = commit
+	cm = commit
 	cia = commit --amend
 	ciam = commit --amend --message
 	cian = commit --amend --no-edit
@@ -63,8 +64,9 @@
 	co = checkout
 	co- = checkout -
 	cob = checkout -b
-	coma = checkout main
+	coma = !git checkout "$(git default-branch)"
 	d = diff --break-rewrites=/90 --find-renames=30 --find-copies=30
+	df = diff
 	dc = diff --break-rewrites=/90 --find-renames=30 --find-copies=30 --cached
 	dcs = diff --break-rewrites=/90 --find-renames=30 --find-copies=30 --cached --stat
 	des = describe --dirty --broken --tags
@@ -80,6 +82,7 @@
 	gibr = gui browser
 	gici = gui citool
 	l = log
+	lg = log
 	lgd = log --patch
 	lgd = log --patch
 	lgd1 = log --patch -1
@@ -91,13 +94,13 @@
 	lol = log --format='%C(yellow)%h %C(blue)%aN %C(cyan)%ad%C(red)%d %C()%s' --date=format-local:'%Y-%m-%d %H:%M:%S' --graph
 	lol1 = log --format='%C(yellow)%h %C(blue)%aN %C(cyan)%ad%C(red)%d %C()%s' --date=format-local:'%Y-%m-%d %H:%M:%S' --graph -1
 	lola = log --format='%C(yellow)%h %C(blue)%aN %C(cyan)%ad%C(red)%d %C()%s' --date=format-local:'%Y-%m-%d %H:%M:%S' --graph --all
-	lolma = log --format='%C(yellow)%h %C(blue)%aN %C(cyan)%ad%C(red)%d %C()%s' --date=format-local:'%Y-%m-%d %H:%M:%S' --graph --all main..
+	lolma = !git log --format='%C(yellow)%h %C(blue)%aN %C(cyan)%ad%C(red)%d %C()%s' --date=format-local:'%Y-%m-%d %H:%M:%S' --graph "$(git default-branch)"..HEAD
 	ls = ls-files
 	mg = merge
 	mga = merge --abort
 	mgb = merge-base
 	mgf = merge --ff-only
-	mgma = merge main
+	mgma = !git merge "$(git default-branch)"
 	mgnf = merge --no-ff
 	mo = remote
 	pl = pull
@@ -113,15 +116,22 @@
 	rba = rebase --abort
 	rbc = rebase --continue
 	rbi = rebase --interactive
-	rbima = rebase --interactive main
+	rbima = !git rebase --interactive "$(git default-branch)"
 	rbiup = rebase --interactive @{upstream}
-	rbma = rebase main
+	rbma = !git rebase "$(git default-branch)"
 	rmc = rm --cached
 	rs = reset
 	rsh = reset --hard
-	rshma = reset --hard main
+	rshma = !git reset --hard "$(git default-branch)"
 	rshup = reset --hard @{upstream}
 	s = status
+	sm = submodule
+	sma = submodule add
+	smi = submodule init
+	sms = submodule status
+	smu = submodule update
+	st = status
+	sub = submodule
 	ss = stash
 	ssa = stash apply
 	ssd = stash drop
@@ -173,7 +183,8 @@
 	sw- = switch -
 	swc = switch --create
 	swd = switch --detach
-	swma = switch main
+	swma = !git switch "$(git default-branch)"
+	default-branch = !git symbolic-ref --short refs/remotes/origin/HEAD | sed 's|^origin/||'
 	wt = worktree
 	wta = worktree add
 	wtl = worktree list
