@@ -138,4 +138,3 @@ class JsonRpcClient:
         if set(decoded) != {"jsonrpc", "id", "result"}:
             raise BrokerError("RESPONSE_INVALID")
         return decoded["result"]
-
