@@ -576,6 +576,67 @@ class DurableWorkTest(unittest.TestCase):
         finally:
             replacement.shutdown(timeout_seconds=1)
 
+    def test_staged_mint_is_generation_bound_and_closed_brokers_cannot_mint(self):
+        staged = self.client.session_mint("control", claims(session_id="staged-old"), ttl_seconds=30)
+        handle = staged["payload"]["handle"]
+        replacement = Broker(
+            state_dir=self.state, signing_key=b"z" * 32,
+            routes={"local-core": {"bank": BANK, "adapter": self.adapter}},
+            policy_digest=DIGEST_A, artifact_digest=DIGEST_B, mint_authorizer=authorize_mint,
+        )
+        try:
+            with self.assertRaisesRegex(BrokerError, "BROKER_RETIRED"):
+                replacement.session_exchange(handle)
+            handles = set((self.state / "handles").glob("*.json"))
+            with self.assertRaisesRegex(BrokerError, "BROKER_RETIRED"):
+                self.broker.session_mint("control", claims(session_id="retired-mint"), ttl_seconds=30)
+            self.assertEqual(set((self.state / "handles").glob("*.json")), handles)
+            current = replacement.session_mint("control", claims(session_id="current-mint"), ttl_seconds=30)
+            exchanged = replacement.session_exchange(current["payload"]["handle"])
+            self.assertIn("capability", exchanged["payload"])
+        finally:
+            replacement.shutdown(timeout_seconds=1)
+        shutdown = self.broker.shutdown(timeout_seconds=0)
+        self.assertTrue(shutdown["retired"])
+        with self.assertRaisesRegex(BrokerError, "BROKER_CLOSED"):
+            self.broker.session_mint("control", claims(session_id="closed-mint"), ttl_seconds=30)
+
+    def test_staged_mint_holds_generation_lease_against_replacement_race(self):
+        entered = threading.Event()
+        release = threading.Event()
+        original = __import__("hindsight_memory_control_plane.broker", fromlist=["_atomic_json"])._atomic_json
+        def pause_handle(path, value):
+            if Path(path).parent.name == "handles" and not entered.is_set():
+                entered.set()
+                release.wait(1)
+            return original(path, value)
+        minted = []
+        replacements = []
+        with patch("hindsight_memory_control_plane.broker._atomic_json", side_effect=pause_handle):
+            mint_thread = threading.Thread(target=lambda: minted.append(
+                self.broker.session_mint("control", claims(session_id="racing-mint"), ttl_seconds=30)
+            ))
+            mint_thread.start()
+            self.assertTrue(entered.wait(0.2))
+            replacement_thread = threading.Thread(target=lambda: replacements.append(Broker(
+                state_dir=self.state, signing_key=b"z" * 32,
+                routes={"local-core": {"bank": BANK, "adapter": self.adapter}},
+                policy_digest=DIGEST_A, artifact_digest=DIGEST_B, mint_authorizer=authorize_mint,
+            )))
+            replacement_thread.start()
+            time.sleep(0.02)
+            self.assertTrue(replacement_thread.is_alive())
+            release.set()
+            mint_thread.join()
+            replacement_thread.join()
+        replacement = replacements[0]
+        try:
+            handle = minted[0]["payload"]["handle"]
+            with self.assertRaisesRegex(BrokerError, "BROKER_RETIRED"):
+                replacement.session_exchange(handle)
+        finally:
+            replacement.shutdown(timeout_seconds=1)
+
 
 if __name__ == "__main__":
     unittest.main()
