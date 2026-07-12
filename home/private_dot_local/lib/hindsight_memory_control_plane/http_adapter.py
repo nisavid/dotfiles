@@ -7,7 +7,7 @@ from typing import Any, Callable, Mapping
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from .adapters import AdapterError, AuthenticationError, RollbackBundle
+from .adapters import AdapterError, AuthenticationError, RollbackBundle, validate_runtime_request
 from .canonical import digest
 from .model import EndpointIdentity, Inventory
 from .planning import inventory_endpoint
@@ -52,6 +52,7 @@ class HttpAdapter:
         self.timeout = min(max(float(timeout), 0.1), 30.0)
         self.max_json_bytes = min(max(int(max_json_bytes), 1), 8_388_608)
         self.recordings: list[dict[str, Any]] = []
+        self._runtime_results: dict[str, tuple[str, Mapping[str, Any]]] = {}
         self._validate_endpoint()
 
     def __repr__(self) -> str:
@@ -243,3 +244,29 @@ class HttpAdapter:
 
     def disable_activation(self):
         self._request("POST", "/v1/activation/disable", {})
+
+    def recall(self, request): return self._request("POST", "/v1/runtime/recall", validate_runtime_request("recall", request))
+    def mental_model_fetch(self, request): return self._request("POST", "/v1/runtime/mental-model", validate_runtime_request("mental_model_fetch", request))
+    def session_status(self, request): return self._request("POST", "/v1/runtime/session-status", validate_runtime_request("session_status", request))
+
+    def _runtime_write(self, path: str, request: Mapping[str, Any]):
+        method = {
+            "/v1/runtime/transcript-checkpoint": "transcript_checkpoint",
+            "/v1/runtime/outcome": "retain_outcome",
+            "/v1/runtime/reflection": "reflect",
+        }[path]
+        request = validate_runtime_request(method, request)
+        key = request["idempotency_key"]
+        request_digest = digest(request)
+        if key in self._runtime_results:
+            stored_digest, result = self._runtime_results[key]
+            if stored_digest != request_digest:
+                raise AdapterError("runtime idempotency digest drift")
+            return result
+        result = self._request("PUT", path, request)
+        self._runtime_results[key] = (request_digest, result)
+        return result
+
+    def transcript_checkpoint(self, request): return self._runtime_write("/v1/runtime/transcript-checkpoint", request)
+    def retain_outcome(self, request): return self._runtime_write("/v1/runtime/outcome", request)
+    def reflect(self, request): return self._runtime_write("/v1/runtime/reflection", request)

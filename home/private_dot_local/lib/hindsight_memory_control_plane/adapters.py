@@ -8,6 +8,35 @@ from .canonical import digest
 from .model import EndpointIdentity, deep_thaw
 
 
+RUNTIME_SCHEMAS = {
+    "recall": ({"query"}, {"limit"}),
+    "mental_model_fetch": ({"model_id"}, set()),
+    "session_status": ({"session_id"}, set()),
+    "transcript_checkpoint": ({"document_id", "epoch", "checkpoint", "idempotency_key"}, set()),
+    "retain_outcome": ({"document_id", "epoch", "checkpoint", "outcome", "idempotency_key"}, set()),
+    "reflect": ({"reflection", "idempotency_key"}, set()),
+}
+
+
+def validate_runtime_request(method: str, request: Mapping[str, Any]) -> dict[str, Any]:
+    if method not in RUNTIME_SCHEMAS or not isinstance(request, Mapping):
+        raise AdapterError("runtime request schema is invalid")
+    required, optional = RUNTIME_SCHEMAS[method]
+    if not required <= set(request) or set(request) - required - optional:
+        raise AdapterError("runtime request schema is invalid")
+    value = deepcopy(dict(request))
+    for key, item in value.items():
+        if key in {"epoch", "checkpoint", "limit"}:
+            if type(item) is not int or item < 0 or item > 1_000_000:
+                raise AdapterError("runtime request schema is invalid")
+        elif key == "idempotency_key":
+            if not isinstance(item, str) or len(item) != 64 or any(char not in "0123456789abcdef" for char in item):
+                raise AdapterError("runtime request schema is invalid")
+        elif not isinstance(item, str) or not item or len(item.encode("utf-8")) > 65_536:
+            raise AdapterError("runtime request schema is invalid")
+    return value
+
+
 class AdapterError(RuntimeError):
     """A redacted adapter failure safe to show to an operator."""
 
@@ -69,6 +98,12 @@ class Adapter(Protocol):
     def verify_rollback_bundle(self, rollback: RollbackBundle) -> bool: ...
     def restore(self, rollback: RollbackBundle) -> None: ...
     def disable_activation(self) -> None: ...
+    def recall(self, request: Mapping[str, Any]) -> Mapping[str, Any]: ...
+    def mental_model_fetch(self, request: Mapping[str, Any]) -> Mapping[str, Any]: ...
+    def transcript_checkpoint(self, request: Mapping[str, Any]) -> Mapping[str, Any]: ...
+    def retain_outcome(self, request: Mapping[str, Any]) -> Mapping[str, Any]: ...
+    def reflect(self, request: Mapping[str, Any]) -> Mapping[str, Any]: ...
+    def session_status(self, request: Mapping[str, Any]) -> Mapping[str, Any]: ...
 
 
 class FakeAdapter:
@@ -87,6 +122,7 @@ class FakeAdapter:
         self.fail_disable_activation = False
         self.activation_enabled = True
         self._rollbacks: dict[str, dict[str, Any]] = {}
+        self._runtime_results: dict[str, tuple[str, Mapping[str, Any]]] = {}
 
     def _record(self, method: str, metadata: Mapping[str, Any] | None = None) -> None:
         self.calls.append({"method": method, "metadata": dict(metadata or {})})
@@ -233,3 +269,40 @@ class FakeAdapter:
         if self.fail_disable_activation:
             raise AdapterError("activation disable failed")
         self.activation_enabled = False
+
+    def recall(self, request):
+        request = validate_runtime_request("recall", request)
+        self._record("recall", self._keys(request))
+        return deepcopy(self.state.get("recall", {"memories": [{"id": "m1"}]}))
+
+    def mental_model_fetch(self, request):
+        request = validate_runtime_request("mental_model_fetch", request)
+        self._record("mental_model_fetch", self._keys(request))
+        return deepcopy(self.state.get("mental_model_fetch", {"models": [{"id": "model1"}]}))
+
+    def session_status(self, request):
+        request = validate_runtime_request("session_status", request)
+        self._record("session_status", self._keys(request))
+        return deepcopy(self.state.get("session_status", {"status": "ready"}))
+
+    def _runtime_write(self, method: str, request: Mapping[str, Any], result: Mapping[str, Any]):
+        request = validate_runtime_request(method, request)
+        key = request["idempotency_key"]
+        request_digest = digest(request)
+        if key in self._runtime_results:
+            stored_digest, stored_result = self._runtime_results[key]
+            if stored_digest != request_digest:
+                raise AdapterError("runtime idempotency digest drift")
+            return deepcopy(stored_result)
+        self._record(method, self._keys(request))
+        self._runtime_results[key] = (request_digest, deepcopy(result))
+        return deepcopy(result)
+
+    def transcript_checkpoint(self, request):
+        return self._runtime_write("transcript_checkpoint", request, {"applied": True})
+
+    def retain_outcome(self, request):
+        return self._runtime_write("retain_outcome", request, {"retained": True})
+
+    def reflect(self, request):
+        return self._runtime_write("reflect", request, {"accepted": True})

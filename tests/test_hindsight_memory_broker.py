@@ -1,239 +1,466 @@
+import base64
+import hashlib
 import json
 import os
 from pathlib import Path
+import socket
 import sys
 import tempfile
+import threading
 import time
 import unittest
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
 LIB = ROOT / "home" / "private_dot_local" / "lib"
 sys.path.insert(0, str(LIB))
 
+from hindsight_memory_control_plane.adapters import AdapterError, FakeAdapter
 from hindsight_memory_control_plane.broker import Broker, BrokerError
+from hindsight_memory_control_plane.canonical import canonical_bytes
 from hindsight_memory_control_plane.server import JsonRpcClient, UnixJsonRpcServer
 
 
 DIGEST_A = "a" * 64
 DIGEST_B = "b" * 64
 BANK = {"profile_id": "core", "bank_id": "engineering"}
+ENDPOINT = {"profile_id": "core", "scheme": "http", "host": "127.0.0.1", "port": 7979, "tenant": "default"}
+METHODS = ["recall", "mental_model_fetch", "transcript_checkpoint", "retain_outcome", "reflect", "session_status", "session_close"]
+RESPONSE_KEYS = {"schema_version", "action_id", "action_digest", "policy_digest", "artifact_digest", "disposition", "payload", "diagnostic"}
 
 
-class MemoryAdapter:
-    def __init__(self):
-        self.calls = []
-        self.retained = []
-
-    def recall(self, request):
-        self.calls.append(("recall", request))
-        return {"memories": [{"id": "m1"}]}
-
-    def mental_model_fetch(self, request):
-        self.calls.append(("mental_model_fetch", request))
-        return {"models": [{"id": "model1"}]}
-
-    def checkpoint(self, request):
-        self.calls.append(("checkpoint", request))
-        return {"applied": True}
-
-    def retain_outcome(self, request):
-        self.calls.append(("retain_outcome", request))
-        self.retained.append(request)
-        return {"retained": True}
-
-    def reflect(self, request):
-        self.calls.append(("reflect", request))
-        return {"accepted": True}
+def authorize_mint(control, requested, ttl):
+    if control != "control" or requested.get("harness_id") != "codex" or ttl > 60:
+        return {}
+    return requested
 
 
 def claims(**changes):
     value = {
-        "session_id": "session-1",
-        "harness_id": "codex",
-        "home_bank": BANK,
-        "trust_class": "local",
-        "companion_id": "gui-1",
-        "policy_digest": DIGEST_A,
-        "artifact_digest": DIGEST_B,
-        "methods": ["recall", "mental_model_fetch", "checkpoint", "retain_outcome", "reflect", "session_status", "session_close"],
-        "route": "local-core",
+        "session_id": "session-1", "harness_id": "codex", "home_bank": BANK,
+        "trust_class": "local", "companion_id": "gui-1",
+        "policy_digest": DIGEST_A, "artifact_digest": DIGEST_B,
+        "methods": METHODS, "route": "local-core",
     }
     value.update(changes)
     return value
 
 
-class BrokerContractTest(unittest.TestCase):
+class BrokerSocketTest(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
-        self.adapter = MemoryAdapter()
+        self.state = self.root / "state"
+        self.socket_path = self.root / "broker.sock"
+        self.adapter = FakeAdapter(endpoint=ENDPOINT)
+        self.start(self.adapter)
+
+    def start(self, adapter):
         self.broker = Broker(
-            state_dir=self.root / "state",
-            signing_key=b"k" * 32,
-            routes={"local-core": {"bank": BANK, "adapter": self.adapter}},
-            policy_digest=DIGEST_A,
-            artifact_digest=DIGEST_B,
+            state_dir=self.state, signing_key=b"k" * 32,
+            routes={"local-core": {"bank": BANK, "adapter": adapter}},
+            policy_digest=DIGEST_A, artifact_digest=DIGEST_B,
+            mint_authorizer=authorize_mint,
+            max_payload_bytes=4096,
         )
+        self.server = UnixJsonRpcServer(self.socket_path, self.broker)
+        self.server.start()
+        self.client = JsonRpcClient(self.socket_path)
+
+    def stop(self):
+        self.server.close()
+        self.broker.shutdown()
 
     def tearDown(self):
-        self.broker.shutdown()
+        self.stop()
         self.temporary.cleanup()
 
     def exchange(self, **changes):
-        staged = self.broker.session_mint(claims(**changes), ttl_seconds=30)
-        return self.broker.session_exchange(staged)
+        minted = self.client.session_mint("control", claims(**changes), ttl_seconds=30)
+        self.assert_response(minted, "session-mint")
+        exchanged = self.client.session_exchange(minted["payload"]["handle"])
+        self.assert_response(exchanged, "session-exchange")
+        return exchanged["payload"]["capability"]
 
-    def test_socket_exchange_is_private_and_consumes_staged_handle(self):
-        socket_path = self.root / "broker.sock"
-        server = UnixJsonRpcServer(socket_path, self.broker)
-        server.start()
-        self.addCleanup(server.close)
-        staged = self.broker.session_mint(claims(), ttl_seconds=30)
-        handle_path = self.root / "state" / "handles" / f"{staged}.json"
-        self.assertTrue(handle_path.exists())
-        client = JsonRpcClient(socket_path)
-        result = client.call("session_exchange", {"handle": staged})
-        self.assertIn("capability", result)
-        self.assertEqual(os.stat(socket_path).st_mode & 0o777, 0o600)
-        self.assertFalse(handle_path.exists())
-        with self.assertRaises(BrokerError):
-            self.broker.session_exchange(staged)
+    def assert_response(self, response, action_id):
+        self.assertEqual(set(response), RESPONSE_KEYS)
+        self.assertEqual(response["schema_version"], 1)
+        self.assertEqual(response["action_id"], action_id)
+        self.assertRegex(response["action_digest"], r"^[0-9a-f]{64}$")
+        self.assertEqual(response["policy_digest"], DIGEST_A)
+        self.assertEqual(response["artifact_digest"], DIGEST_B)
 
-    def test_capability_rejects_replay_sequence_and_binding_drift(self):
+    def raw_rpc(self, method, params):
+        request = {"jsonrpc": "2.0", "id": 91, "method": method, "params": params}
+        connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        with connection:
+            connection.connect(str(self.socket_path))
+            connection.sendall(json.dumps(request).encode() + b"\n")
+            return json.loads(connection.makefile("rb").readline())
+
+    def test_all_typed_clients_use_private_socket_and_real_adapter(self):
         capability = self.exchange()
-        first = self.broker.recall(capability, sequence=1, action_id="recall-1", request={"query": "bounded"})
-        self.assertEqual(first["disposition"], "ok")
+        recall = self.client.recall(capability, sequence=1, action_id="recall-1", request={"query": "q", "limit": 2})
+        model = self.client.mental_model_fetch(capability, sequence=2, action_id="model-1", request={"model_id": "model1"})
+        checkpoint = self.client.transcript_checkpoint(capability, sequence=3, action_id="checkpoint-1", request={"document_id": "doc", "epoch": 1, "checkpoint": 1})
+        retain = self.client.retain_outcome(capability, sequence=4, action_id="retain-1", request={"document_id": "doc", "epoch": 1, "checkpoint": 1, "outcome": "done"})
+        reflect = self.client.reflect(capability, sequence=5, action_id="reflect-1", request={"reflection": "note"})
+        status = self.client.session_status(capability, sequence=6, action_id="status-1")
+        closed = self.client.session_close(capability, sequence=7, action_id="close-1", timeout_seconds=1)
+        for response, action in ((recall, "recall-1"), (model, "model-1"), (checkpoint, "checkpoint-1"),
+                                 (retain, "retain-1"), (reflect, "reflect-1"), (status, "status-1"), (closed, "close-1")):
+            self.assert_response(response, action)
+        self.assertEqual(os.stat(self.socket_path).st_mode & 0o777, 0o600)
+        called = {entry["method"] for entry in self.adapter.calls}
+        self.assertTrue({"recall", "mental_model_fetch", "transcript_checkpoint", "retain_outcome", "reflect", "session_status"} <= called)
+
+    def test_action_digest_is_canonical_and_capability_bound(self):
+        capability = self.exchange()
+        response = self.client.recall(capability, sequence=1, action_id="recall-digest", request={"query": "q"})
+        body = json.loads(base64.urlsafe_b64decode(capability.split(".")[0] + "=="))
+        expected = hashlib.sha256(canonical_bytes({
+            "action_id": "recall-digest", "method": "recall", "sequence": 1,
+            "session_id": "session-1", "harness_id": "codex",
+            "capability_nonce_digest": hashlib.sha256(body["nonce"].encode()).hexdigest(),
+        })).hexdigest()
+        self.assertEqual(response["action_digest"], expected)
+
+    def test_socket_rejects_unknown_nested_routing_and_auth_before_adapter(self):
+        capability = self.exchange()
+        forbidden = ("destination", "bank", "bank_id", "endpoint", "url", "authorization", "bearer", "credential", "token")
+        for sequence, key in enumerate(forbidden, 1):
+            before = len(self.adapter.calls)
+            response = self.raw_rpc("recall", {
+                "capability": capability, "sequence": sequence, "action_id": f"bad-{sequence}",
+                "request": {"query": {"text": "q", key: "private"}},
+            })
+            self.assertEqual(response["error"]["message"], "SCHEMA_INVALID")
+            self.assertNotIn("private", json.dumps(response))
+            self.assertEqual(len(self.adapter.calls), before)
+        alias = self.raw_rpc("checkpoint", {})
+        self.assertEqual(alias["error"]["message"], "METHOD_DENIED")
+
+    def test_invalid_ttl_and_timeout_are_rejected_before_session_or_adapter_state(self):
+        invalid_mint = self.raw_rpc("session_mint", {"control_capability": "control", "claims": claims(), "ttl_seconds": float("nan")})
+        self.assertEqual(invalid_mint["error"]["message"], "SCHEMA_INVALID")
+        capability = self.exchange()
+        invalid_read = self.raw_rpc("recall", {
+            "capability": capability, "sequence": 1, "action_id": "timeout-action",
+            "request": {"query": "q"}, "timeout_seconds": "invalid",
+        })
+        self.assertEqual(invalid_read["error"]["message"], "SCHEMA_INVALID")
+        valid = self.client.recall(capability, sequence=1, action_id="timeout-action", request={"query": "q"})
+        self.assertEqual(valid["disposition"], "ok")
+
+    def test_mint_requires_control_capability_and_verifier_bound_claims(self):
+        for control, requested in (("wrong", claims()), ("control", claims(harness_id="other"))):
+            response = self.raw_rpc("session_mint", {
+                "control_capability": control, "claims": requested, "ttl_seconds": 30,
+            })
+            self.assertEqual(response["error"]["message"], "MINT_DENIED")
+
+    def test_json_rpc_ids_are_scalar_and_non_boolean(self):
+        for identifier in (True, 1.5, [], {}):
+            request = {"jsonrpc": "2.0", "id": identifier, "method": "session_mint", "params": {}}
+            connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            with connection:
+                connection.connect(str(self.socket_path))
+                connection.sendall(json.dumps(request).encode() + b"\n")
+                response = json.loads(connection.makefile("rb").readline())
+            self.assertEqual(response["error"]["message"], "SCHEMA_INVALID")
+
+    def test_replay_expiry_revocation_sequence_digest_method_and_route_survive_restart(self):
+        capability = self.exchange()
+        self.client.recall(capability, sequence=1, action_id="once", request={"query": "q"})
         with self.assertRaisesRegex(BrokerError, "ACTION_REPLAY"):
-            self.broker.recall(capability, sequence=2, action_id="recall-1", request={"query": "bounded"})
+            self.client.recall(capability, sequence=2, action_id="once", request={"query": "q"})
         with self.assertRaisesRegex(BrokerError, "SEQUENCE_ROLLBACK"):
-            self.broker.recall(capability, sequence=1, action_id="recall-2", request={"query": "bounded"})
+            self.client.recall(capability, sequence=1, action_id="older", request={"query": "q"})
+        limited = self.exchange(session_id="limited", methods=["recall"])
+        with self.assertRaisesRegex(BrokerError, "METHOD_DENIED"):
+            self.client.reflect(limited, sequence=1, action_id="denied", request={"reflection": "x"})
+        wrong = self.exchange(session_id="wrong")
+        saved_route = self.broker.routes.pop("local-core")
+        with self.assertRaisesRegex(BrokerError, "ROUTE_DENIED"):
+            self.client.recall(wrong, sequence=1, action_id="route", request={"query": "q"})
+        self.broker.routes["local-core"] = saved_route
+        expired = self.client.session_mint("control", claims(session_id="expired"), ttl_seconds=0)
+        with self.assertRaisesRegex(BrokerError, "EXPIRED"):
+            self.client.session_exchange(expired["payload"]["handle"])
+        closed = self.exchange(session_id="closed")
+        self.client.session_close(closed, sequence=1, action_id="close", timeout_seconds=1)
+        self.stop()
+        self.start(self.adapter)
+        with self.assertRaisesRegex(BrokerError, "REVOKED"):
+            self.client.recall(closed, sequence=2, action_id="after-close", request={"query": "q"})
         self.broker.policy_digest = "c" * 64
         with self.assertRaisesRegex(BrokerError, "DIGEST_DRIFT"):
-            self.broker.recall(capability, sequence=3, action_id="recall-3", request={"query": "bounded"})
-
-    def test_method_route_expiry_and_revocation_are_bound(self):
-        limited = self.exchange(methods=["recall"])
-        with self.assertRaisesRegex(BrokerError, "METHOD_DENIED"):
-            self.broker.reflect(limited, sequence=1, action_id="reflect-1", request={})
-        wrong_route = self.exchange(route="unknown")
-        with self.assertRaisesRegex(BrokerError, "ROUTE_DENIED"):
-            self.broker.recall(wrong_route, sequence=1, action_id="route-1", request={})
-        expired_handle = self.broker.session_mint(claims(), ttl_seconds=0)
-        time.sleep(0.01)
-        with self.assertRaisesRegex(BrokerError, "EXPIRED"):
-            self.broker.session_exchange(expired_handle)
-        revoked = self.exchange(session_id="session-revoked")
-        self.broker.session_close(revoked, sequence=1, action_id="close-1", timeout_seconds=0.01)
-        with self.assertRaisesRegex(BrokerError, "REVOKED"):
-            self.broker.recall(revoked, sequence=2, action_id="closed-1", request={})
-
-    def test_persisted_nonce_state_is_private_digest_only_and_route_bank_is_exact(self):
-        capability = self.exchange()
-        used_path = self.root / "state" / "used_nonces.json"
-        session_path = self.root / "state" / "sessions.json"
-        for path in (used_path, session_path):
+            self.client.recall(capability, sequence=3, action_id="drift", request={"query": "q"})
+        for name in ("used_nonces.json", "revoked_nonces.json"):
+            path = self.state / name
             self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
-            self.assertNotIn("k" * 32, path.read_text(encoding="utf-8"))
-        used = json.loads(used_path.read_text(encoding="utf-8"))
-        self.assertTrue(all(len(value) == 64 for value in used))
-        self.broker.routes["local-core"]["bank"] = {"profile_id": "core", "bank_id": "other"}
-        with self.assertRaisesRegex(BrokerError, "ROUTE_DENIED"):
-            self.broker.recall(capability, sequence=1, action_id="wrong-bank-1", request={})
+            self.assertTrue(all(len(value) == 64 for value in json.loads(path.read_text())))
+            self.assertNotIn("k" * 32, path.read_text())
 
-    def test_closed_rpc_schema_and_content_free_diagnostics(self):
+    def test_read_and_model_timeouts_discard_late_payload_and_shutdown_drains(self):
+        class SlowFake(FakeAdapter):
+            def recall(self, request):
+                time.sleep(0.05)
+                return {"memories": [{"payload": "private"}]}
+            def mental_model_fetch(self, request):
+                time.sleep(0.05)
+                return {"models": [{"payload": "private"}]}
+        self.stop()
+        self.adapter = SlowFake(endpoint=ENDPOINT)
+        self.start(self.adapter)
         capability = self.exchange()
-        with self.assertRaisesRegex(BrokerError, "SCHEMA_INVALID") as caught:
-            self.broker.recall(capability, sequence=1, action_id="bad-1", request={"query": "secret"}, extra="secret")
-        self.assertNotIn("secret", str(caught.exception))
+        recalled = self.client.recall(capability, sequence=1, action_id="slow-recall", request={"query": "q"}, timeout_seconds=0)
+        modeled = self.client.mental_model_fetch(capability, sequence=2, action_id="slow-model", request={"model_id": "m"}, timeout_seconds=0)
+        self.assertEqual(recalled["payload"], {"memories": []})
+        self.assertEqual(modeled["payload"], {"models": []})
+        for response in (recalled, modeled):
+            self.assertEqual(response["diagnostic"], {"code": "MEMORY_UNAVAILABLE", "visible": True})
+            self.assertNotIn("private", json.dumps(response))
+
+    def test_shutdown_has_explicit_bound_and_reports_active_read(self):
+        release = threading.Event()
+        class HungFake(FakeAdapter):
+            def recall(self, request):
+                release.wait(1)
+                return {"memories": []}
+        self.stop()
+        self.adapter = HungFake(endpoint=ENDPOINT)
+        self.start(self.adapter)
+        capability = self.exchange()
+        self.client.recall(capability, sequence=1, action_id="hung", request={"query": "q"}, timeout_seconds=0)
+        started = time.monotonic()
+        status = self.broker.shutdown(timeout_seconds=0)
+        self.assertLess(time.monotonic() - started, 0.05)
+        self.assertGreaterEqual(status["active_reads"], 1)
+        release.set()
+
+    def test_response_payload_is_bounded(self):
+        self.adapter.state["recall"] = {"memories": [{"value": "x" * 8192}]}
+        capability = self.exchange()
+        response = self.client.recall(capability, sequence=1, action_id="large", request={"query": "q"})
+        self.assertEqual(response["disposition"], "unavailable")
+        self.assertEqual(response["payload"], {"memories": []})
+        self.assertEqual(response["diagnostic"]["code"], "RESPONSE_TOO_LARGE")
+
+    def test_reflect_timeout_is_synchronous_and_visible(self):
+        class SlowReflect(FakeAdapter):
+            def reflect(self, request):
+                time.sleep(0.05)
+                return super().reflect(request)
+        self.stop()
+        self.adapter = SlowReflect(endpoint=ENDPOINT)
+        self.start(self.adapter)
+        capability = self.exchange()
+        response = self.client.reflect(capability, sequence=1, action_id="reflect-timeout", request={"reflection": "note"}, timeout_seconds=0)
+        self.assertEqual(response["disposition"], "unavailable")
+        self.assertEqual(response["diagnostic"]["code"], "REFLECT_UNAVAILABLE")
+
+    def test_adapter_response_cannot_expose_routing_or_credentials(self):
+        self.adapter.state["recall"] = {"memories": [{"token": "private"}]}
+        capability = self.exchange()
+        response = self.client.recall(capability, sequence=1, action_id="redacted", request={"query": "q"})
+        self.assertEqual(response["payload"], {"memories": []})
+        self.assertEqual(response["diagnostic"]["code"], "RESPONSE_INVALID")
+        self.assertNotIn("private", json.dumps(response))
 
 
-class BrokerOrderingTest(unittest.TestCase):
+class DurableWorkTest(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
-        self.adapter = MemoryAdapter()
-        self.broker = Broker(
-            state_dir=self.root / "state", signing_key=b"z" * 32,
+        self.state = self.root / "state"
+        self.socket_path = self.root / "broker.sock"
+        self.adapter = FakeAdapter(endpoint=ENDPOINT)
+        self._start()
+
+    def _start(self):
+        self.broker = Broker(state_dir=self.state, signing_key=b"z" * 32,
             routes={"local-core": {"bank": BANK, "adapter": self.adapter}},
             policy_digest=DIGEST_A, artifact_digest=DIGEST_B,
-        )
-        staged = self.broker.session_mint(claims(), ttl_seconds=30)
-        self.capability = self.broker.session_exchange(staged)
+            mint_authorizer=authorize_mint)
+        self.server = UnixJsonRpcServer(self.socket_path, self.broker)
+        self.server.start()
+        self.client = JsonRpcClient(self.socket_path)
+
+    def _stop(self):
+        self.server.close()
+        self.broker.shutdown()
 
     def tearDown(self):
-        self.broker.shutdown()
+        self._stop()
         self.temporary.cleanup()
 
-    def test_retain_returns_durable_watermark_and_checkpoint_is_monotonic_idempotent(self):
-        queued = self.broker.retain_outcome(
-            self.capability, sequence=1, action_id="retain-1",
-            request={"document_id": "transcript", "epoch": 1, "checkpoint": 1, "outcome": "done"},
-        )
-        self.assertEqual(queued["disposition"], "queued")
-        self.assertTrue((self.root / "state" / "queue.json").exists())
-        first = self.broker.checkpoint(
-            self.capability, sequence=2, action_id="checkpoint-1",
-            request={"document_id": "transcript", "epoch": 1, "checkpoint": 2},
-        )
-        retry = self.broker.checkpoint(
-            self.capability, sequence=3, action_id="checkpoint-2",
-            request={"document_id": "transcript", "epoch": 1, "checkpoint": 2},
-        )
-        stale = self.broker.checkpoint(
-            self.capability, sequence=4, action_id="checkpoint-3",
-            request={"document_id": "transcript", "epoch": 1, "checkpoint": 1},
-        )
-        self.assertEqual(first["disposition"], "applied")
-        self.assertEqual(retry["disposition"], "idempotent")
-        self.assertEqual(stale["disposition"], "stale")
-        self.assertEqual([call[0] for call in self.adapter.calls].count("checkpoint"), 1)
+    def exchange(self):
+        mint = self.client.session_mint("control", claims(), ttl_seconds=30)
+        return self.client.session_exchange(mint["payload"]["handle"])["payload"]["capability"]
 
-    def test_retain_replacement_accepts_only_newer_watermarks_and_retries_idempotently(self):
-        first = self.broker.retain_outcome(
-            self.capability, sequence=1, action_id="retain-order-1",
-            request={"document_id": "transcript", "epoch": 3, "checkpoint": 4, "outcome": "first"},
-        )
-        retry = self.broker.retain_outcome(
-            self.capability, sequence=2, action_id="retain-order-2",
-            request={"document_id": "transcript", "epoch": 3, "checkpoint": 4, "outcome": "first"},
-        )
-        stale = self.broker.retain_outcome(
-            self.capability, sequence=3, action_id="retain-order-3",
-            request={"document_id": "transcript", "epoch": 3, "checkpoint": 3, "outcome": "stale"},
-        )
-        newer = self.broker.retain_outcome(
-            self.capability, sequence=4, action_id="retain-order-4",
-            request={"document_id": "transcript", "epoch": 4, "checkpoint": 1, "outcome": "newer"},
-        )
-        self.assertEqual(first["disposition"], "queued")
-        self.assertEqual(retry["disposition"], "idempotent")
-        self.assertEqual(stale["disposition"], "stale")
-        self.assertEqual(newer["disposition"], "queued")
+    def work(self):
+        return json.loads((self.state / "durable_work.json").read_text())
 
-    def test_timeout_returns_no_memory_and_visible_payload_free_diagnostic(self):
-        class SlowAdapter(MemoryAdapter):
-            def recall(self, request):
+    def test_queue_and_watermark_are_one_atomic_private_state_before_ack(self):
+        capability = self.exchange()
+        response = self.client.retain_outcome(capability, sequence=1, action_id="retain", request={"document_id": "doc", "epoch": 1, "checkpoint": 1, "outcome": "done"})
+        self.assertEqual(response["disposition"], "queued")
+        self.assertEqual(os.stat(self.state / "durable_work.json").st_mode & 0o777, 0o600)
+        state = self.work()
+        records = state["queue"] + list(state["completed"].values())
+        self.assertTrue(any(record["watermark"] == [1, 1] for record in records))
+        self.assertTrue(all("idempotency_key" in record for record in records))
+
+    def test_enqueue_failure_leaves_no_orphan_watermark(self):
+        capability = self.exchange()
+        original = __import__("hindsight_memory_control_plane.broker", fromlist=["_atomic_json"])._atomic_json
+        def fail_work(path, value):
+            if Path(path).name == "durable_work.json":
+                raise OSError("simulated crash")
+            return original(path, value)
+        with patch("hindsight_memory_control_plane.broker._atomic_json", side_effect=fail_work):
+            with self.assertRaisesRegex(BrokerError, "INTERNAL_ERROR"):
+                self.client.retain_outcome(capability, sequence=1, action_id="before", request={"document_id": "doc", "epoch": 1, "checkpoint": 1, "outcome": "done"})
+        state = self.work()
+        self.assertEqual(state["queue"], [])
+        self.assertEqual(state["completed"], {})
+        retried = self.client.retain_outcome(capability, sequence=1, action_id="before", request={"document_id": "doc", "epoch": 1, "checkpoint": 1, "outcome": "done"})
+        self.assertEqual(retried["disposition"], "queued")
+
+    def test_restart_replays_after_enqueue_with_same_idempotency_key(self):
+        class FailOnceFake(FakeAdapter):
+            def __init__(self):
+                super().__init__(endpoint=ENDPOINT)
+                self.fail = True
+            def retain_outcome(self, request):
+                if self.fail:
+                    self.fail = False
+                    raise SystemExit("crash after enqueue")
+                return super().retain_outcome(request)
+        self._stop()
+        self.adapter = FailOnceFake()
+        self._start()
+        capability = self.exchange()
+        response = self.client.retain_outcome(capability, sequence=1, action_id="after-enqueue", request={"document_id": "doc", "epoch": 1, "checkpoint": 1, "outcome": "done"})
+        key = response["action_digest"]
+        time.sleep(0.03)
+        self.assertEqual(self.work()["queue"][0]["idempotency_key"], key)
+        self._stop()
+        self._start()
+        time.sleep(0.03)
+        self.assertEqual(self.work()["queue"], [])
+        retain_calls = [entry for entry in self.adapter.calls if entry["method"] == "retain_outcome"]
+        self.assertEqual(len(retain_calls), 1)
+
+    def test_restart_after_adapter_success_before_dequeue_reuses_key(self):
+        class CrashAfterSuccess(FakeAdapter):
+            def __init__(self):
+                super().__init__(endpoint=ENDPOINT)
+                self.crash = True
+            def retain_outcome(self, request):
+                result = super().retain_outcome(request)
+                if self.crash:
+                    self.crash = False
+                    raise SystemExit("crash window")
+                return result
+        self._stop()
+        self.adapter = CrashAfterSuccess()
+        self._start()
+        capability = self.exchange()
+        response = self.client.retain_outcome(capability, sequence=1, action_id="after-success", request={"document_id": "doc", "epoch": 1, "checkpoint": 1, "outcome": "done"})
+        time.sleep(0.03)
+        self.assertEqual(self.work()["queue"][0]["idempotency_key"], response["action_digest"])
+        self._stop()
+        self._start()
+        time.sleep(0.03)
+        self.assertEqual(self.work()["queue"], [])
+        self.assertEqual(len([entry for entry in self.adapter.calls if entry["method"] == "retain_outcome"]), 1)
+
+    def test_concurrent_older_watermark_cannot_replace_newer(self):
+        capability = self.exchange()
+        barrier = threading.Barrier(3)
+        outcomes = []
+        def send(sequence, action, epoch):
+            client = JsonRpcClient(self.socket_path)
+            barrier.wait()
+            try:
+                outcomes.append(client.retain_outcome(capability, sequence=sequence, action_id=action,
+                    request={"document_id": "doc", "epoch": epoch, "checkpoint": 1, "outcome": action}))
+            except BrokerError as error:
+                outcomes.append(error.code)
+        threads = [threading.Thread(target=send, args=(1, "older", 1)), threading.Thread(target=send, args=(2, "newer", 2))]
+        for thread in threads: thread.start()
+        barrier.wait()
+        for thread in threads: thread.join()
+        time.sleep(0.03)
+        records = list(self.work()["completed"].values()) + self.work()["queue"]
+        self.assertEqual(max(tuple(record["watermark"]) for record in records), (2, 1))
+        self.assertFalse(any(tuple(record["watermark"]) > (2, 1) for record in records))
+
+    def test_stale_and_idempotent_responses_consume_actions(self):
+        capability = self.exchange()
+        self.client.retain_outcome(capability, sequence=1, action_id="first", request={"document_id": "doc", "epoch": 2, "checkpoint": 1, "outcome": "new"})
+        stale = self.client.retain_outcome(capability, sequence=2, action_id="stale", request={"document_id": "doc", "epoch": 1, "checkpoint": 1, "outcome": "old"})
+        same = self.client.retain_outcome(capability, sequence=3, action_id="same", request={"document_id": "doc", "epoch": 2, "checkpoint": 1, "outcome": "new"})
+        self.assertEqual(stale["disposition"], "stale")
+        self.assertEqual(same["disposition"], "idempotent")
+        with self.assertRaisesRegex(BrokerError, "ACTION_REPLAY"):
+            self.client.recall(capability, sequence=4, action_id="same", request={"query": "q"})
+
+    def test_exchange_recovers_same_capability_after_unlink_crash(self):
+        mint = self.client.session_mint("control", claims(), ttl_seconds=30)
+        handle = mint["payload"]["handle"]
+        original_unlink = Path.unlink
+        def fail_handle(path, *args, **kwargs):
+            if path.name == f"{handle}.json":
+                raise OSError("crash after state commit")
+            return original_unlink(path, *args, **kwargs)
+        with patch.object(Path, "unlink", fail_handle):
+            with self.assertRaisesRegex(BrokerError, "INTERNAL_ERROR"):
+                self.client.session_exchange(handle)
+        recovered = self.client.session_exchange(handle)
+        again = self.client.session_exchange(handle)
+        self.assertEqual(recovered["payload"]["capability"], again["payload"]["capability"])
+
+    def test_close_reports_slow_undrained_durable_work(self):
+        class SlowWriteFake(FakeAdapter):
+            def retain_outcome(self, request):
                 time.sleep(0.1)
-                return {"memories": [{"payload": "private"}]}
-        self.broker.routes["local-core"]["adapter"] = SlowAdapter()
-        result = self.broker.recall(
-            self.capability, sequence=1, action_id="timeout-1", request={"query": "private"}, timeout_seconds=0.01,
-        )
-        self.assertEqual(result["payload"], {"memories": []})
-        self.assertEqual(result["diagnostic"]["code"], "MEMORY_UNAVAILABLE")
-        self.assertNotIn("private", json.dumps(result["diagnostic"]))
+                return super().retain_outcome(request)
+        self._stop()
+        self.adapter = SlowWriteFake(endpoint=ENDPOINT)
+        self._start()
+        capability = self.exchange()
+        self.client.retain_outcome(capability, sequence=1, action_id="retain-close", request={"document_id": "doc", "epoch": 1, "checkpoint": 1, "outcome": "done"})
+        closed = self.client.session_close(capability, sequence=2, action_id="close", timeout_seconds=0)
+        self.assertEqual(closed["disposition"], "closed")
+        self.assertGreaterEqual(closed["payload"]["undrained"], 1)
 
-    def test_close_is_bounded_and_reports_undrained_work(self):
-        self.broker.retain_outcome(
-            self.capability, sequence=1, action_id="retain-close",
-            request={"document_id": "transcript", "epoch": 2, "checkpoint": 1, "outcome": "done"},
-        )
-        result = self.broker.session_close(
-            self.capability, sequence=2, action_id="close-2", timeout_seconds=0,
-        )
-        self.assertEqual(result["disposition"], "closed")
-        self.assertGreaterEqual(result["undrained"], 1)
+    def test_late_retired_worker_cannot_overwrite_replacement_generation(self):
+        release = threading.Event()
+        started = threading.Event()
+        class FencedFake(FakeAdapter):
+            def retain_outcome(self, request):
+                if not started.is_set():
+                    started.set()
+                    release.wait(1)
+                return super().retain_outcome(request)
+        self._stop()
+        self.adapter = FencedFake(endpoint=ENDPOINT)
+        self._start()
+        capability = self.exchange()
+        self.client.retain_outcome(capability, sequence=1, action_id="fenced", request={"document_id": "doc", "epoch": 1, "checkpoint": 1, "outcome": "done"})
+        self.assertTrue(started.wait(0.2))
+        self.server.close()
+        stopped = self.broker.shutdown(timeout_seconds=0)
+        self.assertGreaterEqual(stopped["undrained"], 1)
+        self._start()
+        replacement_generation = self.work()["generation"]
+        release.set()
+        time.sleep(0.05)
+        self.assertEqual(self.work()["generation"], replacement_generation)
 
 
 if __name__ == "__main__":
