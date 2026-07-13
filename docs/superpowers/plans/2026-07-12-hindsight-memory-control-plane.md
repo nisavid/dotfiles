@@ -199,31 +199,31 @@
 - Consumes: resolved profile/provider/bank archetypes, private catalog digests, benchmark cases, and broker routes.
 - Produces: closed tag/scope policy, engineering/personal/airlock bank specifications, provider compatibility results, benchmark reports, airlock launch plans, and authenticated loopback control endpoints.
 
-- [ ] **Step 1: Write red bank-policy tests**
+- [x] **Step 1: Write red bank-policy tests**
 
   Assert the exact engineering and personal missions, dispositions, entity-label values, global/contextual model caps and source rules, disabled native refresh schedules, closed tag vocabulary, one semantic scope per retain, selector precedence, projection-only routine cross-bank writes, Memory Defense settings, and disabled native body-bearing audit/LLM tracing. Assert transient state, credentials, tool traffic, injected memory blocks, and recently reversed conventions cannot become durable policy input.
 
-- [ ] **Step 2: Implement immutable bank and routing policy**
+- [x] **Step 2: Implement immutable bank and routing policy**
 
   Resolve public archetypes plus the authenticated private catalog into a policy artifact whose public serialization contains only disclosure-safe IDs and digests. Enforce exactly one authoritative engineering write bank when enabled, explicit personal-session routing, strict contextual selector precedence, and no arbitrary caller-supplied companion bank.
 
-- [ ] **Step 3: Write and implement provider compatibility tests**
+- [x] **Step 3: Write and implement provider compatibility tests**
 
   Validate independent LLM/embedding/reranking role bindings, placement/data-class authorization, TLS identity for private-remote providers, credential locators without values, readiness/version/license gates, immutable embedding identity for populated storage, explicit revision switching, and visible reranker fallback/disablement. Keep live Claude Code LLM and Jina MLX reranker as current state; represent GPT-5.3 Codex Spark and MemReranker only as blocked desired candidates until their named adapter/benchmark gates pass.
 
-- [ ] **Step 4: Write and implement deterministic benchmark evaluation**
+- [x] **Step 4: Write and implement deterministic benchmark evaluation**
 
   Parse schema-versioned synthetic/private cases, compute Recall@20 and nDCG@10 from independently supplied relevance judgments, bootstrap deterministic confidence intervals from a recorded seed, enforce must-recall and must-not-return gates, and report latency/cost/memory/model-footprint/provider/license dimensions plus the Pareto frontier. Promotion must require no material retrieval regression or leakage failure and at least one meaningful gain.
 
-- [ ] **Step 5: Write and implement airlock plan validation**
+- [x] **Step 5: Write and implement airlock plan validation**
 
   Through a fake OrbStack runner, require a fresh isolated Linux machine, disabled macOS integration and host/peer networking, explicit read-only inputs and narrow output, root-owned egress enforcement, an unprivileged no-sudo harness, tamper/reachability probes, independent profile/token/session state, chunk-only retention with observations/consolidation/models disabled, no core-bank recall, and verified encrypted export plus immediate ephemeral teardown. Host GUI harnesses must remain non-airlock-capable.
 
-- [ ] **Step 6: Write and implement the authenticated control service**
+- [x] **Step 6: Write and implement the authenticated control service**
 
   Bind only `127.0.0.1` or `::1`, require an independent access-key resolver on every UI/control request, reject missing/wrong keys and proxy-derived authentication, cap request/response sizes, and expose only health, redacted status, plan inspection, and broker session operations. Prove successful responses cannot reveal data-plane tokens or signing material.
 
-- [ ] **Step 7: Run and commit**
+- [x] **Step 7: Run and commit**
 
   Run: `python3 -m unittest tests.test_hindsight_memory_policy tests.test_hindsight_memory_benchmark tests.test_hindsight_memory_airlock tests.test_hindsight_memory_control_server -v`
 
