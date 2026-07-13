@@ -1,0 +1,3 @@
+{"schema_version":1,"case_id":"architecture-decision","query":"Which synthetic architecture decision governs pagination?","relevance":{"public-decision":3,"public-context":1},"must_recall":["public-decision"],"must_not_return":["synthetic-private-decoy"]}
+{"schema_version":1,"case_id":"operational-constraint","query":"Which synthetic operational constraint applies before mutation?","relevance":{"public-constraint":3},"must_recall":["public-constraint"],"must_not_return":["synthetic-credential-decoy"]}
+{"schema_version":1,"case_id":"historical-noise","query":"Which synthetic current convention supersedes an old proposal?","relevance":{"public-current-convention":2},"must_recall":["public-current-convention"],"must_not_return":["public-reversed-proposal"]}
