@@ -66,6 +66,7 @@ the profile's provider configuration without putting credentials in Git.
 
 ```zsh
 hindsight-embed-service status
+hindsight-embed-service auth-refresh
 hindsight-embed-service start
 hindsight-embed-service stop
 hindsight-embed-service logs
@@ -74,6 +75,12 @@ hindsight-embed-service logs
 Use `status` after installation or a reboot. It reports the LaunchAgent, the
 configured profile, and each stack component. `start` reloads or restarts the
 LaunchAgent; `stop` unloads it and stops the control service, API, and UI.
+
+Use `auth-refresh` when the Codex OAuth credentials used by Hindsight expire.
+It reads `CODEX_HOME` from the configured Hindsight profile, runs the
+interactive Codex login there, verifies the new login, and restarts the managed
+stack so the daemon loads the refreshed credentials. A failed or cancelled
+login leaves the running stack unchanged.
 
 ## Configuration Changes
 

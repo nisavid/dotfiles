@@ -136,3 +136,78 @@ assert_missing_profile_blocks_mutation() {
 
 assert_missing_profile_blocks_mutation start
 assert_missing_profile_blocks_mutation install
+
+auth_home="$test_home/hindsight-codex"
+print -r -- "CODEX_HOME=${auth_home}" >> "$test_home/.hindsight/profiles/present-profile.env"
+mock_codex="$tmp_dir/codex"
+cat > "$mock_codex" <<'EOF'
+#!/usr/bin/env zsh
+set -euo pipefail
+print -r -- "${CODEX_HOME}|$*" >> "${CODEX_TEST_CALLS}"
+case "$*" in
+  login)
+    [[ "${CODEX_TEST_LOGIN_FAIL:-0}" == 0 ]] || exit 1
+    mkdir -p "$CODEX_HOME"
+    print -r -- '{"auth_mode":"chatgpt","tokens":{"access_token":"test"}}' > "$CODEX_HOME/auth.json"
+    ;;
+  'login status')
+    ;;
+  *)
+    exit 2
+    ;;
+esac
+EOF
+chmod 700 "$mock_codex"
+
+auth_calls="$tmp_dir/auth-calls"
+service_calls="$tmp_dir/auth-refresh-service-calls"
+mock_service="$tmp_dir/hindsight-embed-service"
+cat > "$mock_service" <<'EOF'
+#!/usr/bin/env zsh
+set -euo pipefail
+print -r -- "$*" >> "$HINDSIGHT_TEST_SERVICE_CALLS"
+EOF
+chmod 700 "$mock_service"
+
+HOME="$test_home" \
+  HINDSIGHT_EMBED_STACK_LIB="$rendered_stack_lib" \
+  HINDSIGHT_EMBED_PROFILE="present-profile" \
+  HINDSIGHT_EMBED_CODEX="$mock_codex" \
+  HINDSIGHT_EMBED_SERVICE="$mock_service" \
+  HINDSIGHT_TEST_SERVICE_CALLS="$service_calls" \
+  CODEX_TEST_CALLS="$auth_calls" \
+  zsh "$repo_dir/home/private_dot_local/bin/executable_hindsight-embed-service" auth-refresh
+
+expected_auth_call="${auth_home}|login"
+rg -Fx -q "$expected_auth_call" "$auth_calls" || {
+  print -ru2 -- "auth refresh did not log in with the profile CODEX_HOME"
+  exit 1
+}
+expected_status_call="${auth_home}|login status"
+rg -Fx -q "$expected_status_call" "$auth_calls" || {
+  print -ru2 -- "auth refresh did not verify the refreshed Codex login"
+  exit 1
+}
+[[ "$(<"$service_calls")" == $'stop\nstart' ]] || {
+  print -ru2 -- "auth refresh did not fully stop and start the managed stack after login"
+  exit 1
+}
+
+failed_service_calls="$tmp_dir/failed-auth-refresh-service-calls"
+if HOME="$test_home" \
+  HINDSIGHT_EMBED_STACK_LIB="$rendered_stack_lib" \
+  HINDSIGHT_EMBED_PROFILE="present-profile" \
+  HINDSIGHT_EMBED_CODEX="$mock_codex" \
+  HINDSIGHT_EMBED_SERVICE="$mock_service" \
+  HINDSIGHT_TEST_SERVICE_CALLS="$failed_service_calls" \
+  CODEX_TEST_CALLS="$auth_calls" \
+  CODEX_TEST_LOGIN_FAIL=1 \
+  zsh "$repo_dir/home/private_dot_local/bin/executable_hindsight-embed-service" auth-refresh \
+  >/dev/null 2>&1; then
+  print -ru2 -- "auth refresh unexpectedly succeeded after a failed Codex login"
+  exit 1
+fi
+[[ ! -e "$failed_service_calls" ]] || {
+  print -ru2 -- "auth refresh restarted the managed stack after a failed Codex login"
+  exit 1
+}

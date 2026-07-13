@@ -17,6 +17,8 @@ Usage: hindsight-embed-service <command>
 
 Commands:
   install   Validate, retire legacy launchd state, and load the LaunchAgent
+  auth-refresh
+            Refresh Codex login for Hindsight and restart the managed stack
   start     Load or restart the LaunchAgent for this user
   stop      Unload the LaunchAgent and stop control, API, and UI
   status    Show launchd and stack health
@@ -245,6 +247,59 @@ install_service() {
   retire_legacy_plist
 }
 
+hindsight_codex_home() {
+  emulate -L zsh
+  hindsight_stack_load_config
+
+  local profile_file="$HOME/.hindsight/profiles/${HINDSIGHT_EMBED_PROFILE}.env"
+  local line codex_home
+  while IFS= read -r line; do
+    [[ "$line" == CODEX_HOME=* ]] || continue
+    codex_home="${line#CODEX_HOME=}"
+    [[ "$codex_home" == /* ]] || {
+      print -ru2 -- "hindsight-embed-service: ${profile_file} must set CODEX_HOME to an absolute path"
+      return 1
+    }
+    print -r -- "$codex_home"
+    return 0
+  done < "$profile_file"
+
+  print -ru2 -- "hindsight-embed-service: ${profile_file} does not set CODEX_HOME"
+  return 1
+}
+
+refresh_codex_auth() {
+  emulate -L zsh
+  hindsight_stack_require_current_user || exit 1
+  hindsight_stack_require_profile || die "configured Hindsight profile preflight failed"
+
+  local codex="${HINDSIGHT_EMBED_CODEX:-}"
+  if [[ -z "$codex" ]]; then
+    codex="$(command -v codex 2>/dev/null)" || die "Codex CLI is not installed"
+  fi
+  [[ -x "$codex" ]] || die "Codex CLI is not executable at ${codex}"
+
+  local codex_home
+  codex_home="$(hindsight_codex_home)" || die "failed to read Hindsight Codex credential path"
+
+  print -r -- "Refreshing Codex login for Hindsight profile ${HINDSIGHT_EMBED_PROFILE}"
+  CODEX_HOME="$codex_home" "$codex" login || die "Codex login failed; Hindsight was not restarted"
+  CODEX_HOME="$codex_home" "$codex" login status >/dev/null ||
+    die "Codex login verification failed; Hindsight was not restarted"
+
+  print -r -- "Codex login refreshed; restarting the managed Hindsight stack"
+  if [[ -n "${HINDSIGHT_EMBED_SERVICE:-}" ]]; then
+    [[ -x "$HINDSIGHT_EMBED_SERVICE" ]] ||
+      die "managed service command is not executable at ${HINDSIGHT_EMBED_SERVICE}"
+    "$HINDSIGHT_EMBED_SERVICE" stop
+    "$HINDSIGHT_EMBED_SERVICE" start
+  else
+    bootout_if_loaded "$STACK_LABEL" || die "failed to unload ${STACK_LABEL}"
+    hindsight_stack_stop_all || die "failed to stop Hindsight stack after Codex login"
+    start_launchd_service
+  fi
+}
+
 stop_service() {
   emulate -L zsh
   if (( EUID == 0 || UID == 0 )); then
@@ -313,6 +368,10 @@ main() {
     install)
       load_stack_lib || exit 1
       install_service
+      ;;
+    auth-refresh)
+      load_stack_lib || exit 1
+      refresh_codex_auth
       ;;
     start)
       load_stack_lib || exit 1

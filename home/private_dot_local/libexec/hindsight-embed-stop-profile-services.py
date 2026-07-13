@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import argparse
+import os
 import shlex
+import signal
 import subprocess
 import sys
 import time
@@ -22,6 +24,12 @@ class Target:
 
 class StopError(RuntimeError):
     pass
+
+
+def ensure_system_tool_path() -> None:
+    current = [entry for entry in os.environ.get("PATH", "").split(os.pathsep) if entry]
+    required = [entry for entry in ("/usr/sbin", "/sbin") if entry not in current]
+    os.environ["PATH"] = os.pathsep.join(required + current)
 
 
 def process_command(pid: int) -> str:
@@ -153,7 +161,20 @@ def stop_targets(manager: DaemonEmbedManager, targets: list[Target]) -> None:
         if target.pid in killed:
             continue
         if not manager._kill_process(target.pid):
-            raise StopError(f"failed to stop {target.kind} process on port {target.port} (pid {target.pid})")
+            current_pid = manager._find_pid_on_port(target.port)
+            if current_pid is not None and current_pid != target.pid:
+                raise StopError(
+                    f"refusing to stop changed listener on {target.kind} port {target.port} "
+                    f"(expected pid {target.pid}, found pid {current_pid})"
+                )
+            if current_pid == target.pid:
+                try:
+                    os.kill(target.pid, signal.SIGKILL)
+                except OSError as exc:
+                    raise StopError(
+                        f"failed to force-stop {target.kind} process on port {target.port} "
+                        f"(pid {target.pid}): {type(exc).__name__}"
+                    ) from exc
         killed.add(target.pid)
 
     ports = {target.port for target in targets}
@@ -253,6 +274,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 def main(argv: list[str]) -> int:
     try:
+        ensure_system_tool_path()
         args = parse_args(argv)
         manager = DaemonEmbedManager()
         targets = resolve_targets(manager, args)
