@@ -37,25 +37,25 @@
 - Produces: `canonical_bytes(value) -> bytes`, `digest(value) -> str`, `load_inventory(path) -> Inventory`, `build_plan(inventory, live_state, operations) -> Plan`, `verify_plan(plan) -> None`, and CLI commands `validate`, `plan`, and `status`.
 - Consumes: JSON desired state whose root contains exactly `schema_version`, `machine`, `archetype`, `profiles`, `providers`, `banks`, `harnesses`, `migration`, and `policy`.
 
-- [ ] **Step 1: Write the failing CLI tests**
+- [x] **Step 1: Write the failing CLI tests**
 
   Add tests that invoke `python3 home/private_dot_local/bin/executable_hindsight-memory --state-dir <tmp> validate --inventory <fixture>`, reject unknown/missing keys and duplicate IDs, and assert that two semantically identical inventories produce the literal known SHA-256 of their canonical JSON. Add a plan test whose expected JSON contains `schema_version`, all required bound digests, the target endpoint identity, an idle operations snapshot, compatibility results, ordered actions, `destructive: false`, and `plan_digest`.
 
-- [ ] **Step 2: Run the focused test and prove red**
+- [x] **Step 2: Run the focused test and prove red**
 
   Run: `python3 -m unittest tests.test_hindsight_memory_controller -v`
 
   Expected: FAIL because `executable_hindsight-memory` and the package do not exist.
 
-- [ ] **Step 3: Implement canonicalization, closed-schema validation, domain records, and planning**
+- [x] **Step 3: Implement canonicalization, closed-schema validation, domain records, and planning**
 
   Use `json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode()` as the sole canonical encoding. Parse every digest-bearing JSON input with duplicate-key rejection and non-finite-number rejection. Define frozen dataclasses for `BankRef`, `EndpointIdentity`, `OperationSnapshot`, `Action`, `Plan`, and `Inventory`. Validate exact root keys, integer `schema_version == 1` without accepting booleans, unique IDs, bank references, provider role references, profile authority, one authoritative engineering write bank when engineering memory is enabled, derived/overridden port collisions, provider placement/data-class compatibility, and migration artifact/proposal paths. Serialize plans without `plan_digest`, hash that body, then add `plan_digest`; verification recomputes it and uses `hmac.compare_digest`. The executable bootstraps the managed sibling `lib` directory before importing the package so direct `python3` invocation is self-contained.
 
-- [ ] **Step 4: Implement content-free ledger and CLI acceptance seam**
+- [x] **Step 4: Implement content-free ledger and CLI acceptance seam**
 
   Write JSONL records containing only schema version, action/correlation IDs, bank references, policy/artifact digests, decision, reason code, timestamp, and reversible record ID. Reject payload-like keys recursively. Make `validate` print the resolved inventory/artifact digests, `plan` write canonical JSON with mode `0600`, and `status` report desired/live/plan digest agreement without mutation.
 
-- [ ] **Step 5: Run focused and existing contract tests**
+- [x] **Step 5: Run focused and existing contract tests**
 
   Run: `python3 -m unittest tests.test_hindsight_memory_controller -v`
 
@@ -63,7 +63,7 @@
 
   Expected: PASS, with no changed file outside Task 1 paths.
 
-- [ ] **Step 6: Commit the vertical slice**
+- [x] **Step 6: Commit the vertical slice**
 
   Commit literal Task 1 paths with: `feat(hindsight/controller): add immutable desired-state planning`
 
@@ -80,27 +80,27 @@
 - Consumes: `Plan`, `Inventory`, and `Adapter.snapshot()` from Task 1.
 - Produces: `Adapter` protocol, `FakeAdapter`, `HttpAdapter`, `AdminMigrationAdapter`, `create_rollback_bundle()`, and `apply_plan(plan, adapter, approval_digest, gate) -> ApplyResult`.
 
-- [ ] **Step 1: Write one red contract test per observable operation**
+- [x] **Step 1: Write one red contract test per observable operation**
 
   Exercise the same suite against `FakeAdapter` and an in-process HTTP fixture: schema/version discovery, endpoint identity, config/stats/tags/scopes/documents/models/directives/operations reads, template dry-run/export/import, config patch, model/directive upsert, document transfer, invalidated-memory inventory/reapply, and bank deletion. Assert bearer-token headers are present on data-plane requests, absent from exceptions and recordings, and `401` is preserved as an authentication failure.
 
-- [ ] **Step 2: Write red apply-safety tests**
+- [x] **Step 2: Write red apply-safety tests**
 
   Prove apply refuses a wrong approval digest, live-state drift, non-idle operations, missing rollback bundle, failed disposable restore proof, destructive action in an ordinary plan, missing migration gate, and endpoint-identity drift. Prove a failed postcondition triggers rollback and that rollback failure returns an operator-blocked result with activation disabled.
 
-- [ ] **Step 3: Implement the adapter protocol and fakes**
+- [x] **Step 3: Implement the adapter protocol and fakes**
 
   Keep read and mutation methods explicit. `FakeAdapter` records method names and redacted metadata only. `HttpAdapter` uses a dedicated `urllib.request` opener with ambient proxy use disabled, redirects rejected before credentials can reach another hop, and an explicit default TLS context with certificate and hostname verification. It accepts only loopback or inventory-approved TLS endpoints, a bearer-token resolver callback, bounded timeouts, strict JSON size limits, and exception redaction. It never accepts a token in its constructor serialization or a plan. Cover proxy, redirect, and TLS verification failures.
 
-- [ ] **Step 4: Implement the compatibility-gated admin adapter**
+- [x] **Step 4: Implement the compatibility-gated admin adapter**
 
   Accept a trusted absolute `hindsight-admin` executable, immutable file-identity binding, argv factory, and runner seam. Execute a version/identity probe before use, then revalidate the binary identity before every operation. Run from a fixed trusted working directory with a minimal allowlisted environment. Permit only exact `export-bank`, `import-bank`, `backup`, and `restore` argv shapes rooted at that executable; reject shell strings, relative or replaced binaries, unknown versions, missing archive digests, and absent disposable restore evidence. Never accept direct SQL or database credentials.
 
-- [ ] **Step 5: Implement guarded apply and automatic rollback**
+- [x] **Step 5: Implement guarded apply and automatic rollback**
 
   Revalidate the immutable plan and approval digest, refetch endpoint/live/operations state, require the action-specific rollback bundle, apply actions in order, verify each postcondition, restore on the first failure, and append payload-free ledger records. Migration gate parsing must require matching run ID and artifact digest in both gate halves.
 
-- [ ] **Step 6: Run and commit**
+- [x] **Step 6: Run and commit**
 
   Run: `python3 -m unittest tests.test_hindsight_memory_adapters -v`
 
@@ -121,23 +121,23 @@
 - Consumes: resolved bank routes, policy/artifact digests, `Adapter`, ledger, and a signing-key resolver.
 - Produces: JSON-RPC Unix-socket server plus `session mint`, `session exchange`, `session close`, `recall`, `mental_model_fetch`, `checkpoint`, `retain_outcome`, `reflect`, and `session_status` CLI clients.
 
-- [ ] **Step 1: Write red broker contract tests**
+- [x] **Step 1: Write red broker contract tests**
 
   Through a temporary Unix socket, assert socket mode `0600`, bounded one-use envelope expiry, atomic staged-handle deletion, concurrent exchanges redeem one handle once and return the same stored capability, signed capability binding, monotonic sequence enforcement, action-ID replay rejection, idempotent writes, digest/revocation/method/route checks, fixed home bank, no caller-supplied raw endpoint/token/bank destination, and payload-free diagnostics.
 
-- [ ] **Step 2: Write red availability and retain-ordering tests**
+- [x] **Step 2: Write red availability and retain-ordering tests**
 
   Assert recall/model-fetch timeout returns no memory plus a visible diagnostic, retain returns a durable queued watermark without blocking, transcript replacements serialize by bank/document, only newer epoch/checkpoint watermarks apply, retry is idempotent, and close reports undrained work after its bounded final checkpoint.
 
-- [ ] **Step 3: Implement HMAC-signed opaque envelopes and capabilities**
+- [x] **Step 3: Implement HMAC-signed opaque envelopes and capabilities**
 
   Use random 256-bit nonces and keys, canonical JSON claims, HMAC-SHA256, constant-time verification, wall-clock expiry, and persisted used/revoked nonce digests. Serialize one-use check-and-mark across processes with a shared lock and commit it through mode-`0600` atomic replacement plus file and containing-directory `fsync` before returning a capability. Signing material never leaves the broker.
 
-- [ ] **Step 4: Implement versioned JSON-RPC routing**
+- [x] **Step 4: Implement versioned JSON-RPC routing**
 
   Parse newline-delimited requests with a fixed maximum size. Resolve routes from the capability and inventory, dispatch only the stable method allowlist, redact diagnostics, and return schema/action/policy/artifact digests plus bounded disposition/payload. Serialize checkpoint writes per `(bank_ref, document_id)`.
 
-- [ ] **Step 5: Run and commit**
+- [x] **Step 5: Run and commit**
 
   Run: `python3 -m unittest tests.test_hindsight_memory_broker -v`
 
@@ -158,19 +158,19 @@
 - Consumes: resolved harness bindings and broker socket path.
 - Produces: minimal broker-only configurations, owned-key manifests, `render_harnesses()`, `activation_plan()`, and `rollback_activation()`.
 
-- [ ] **Step 1: Write red renderer tests**
+- [x] **Step 1: Write red renderer tests**
 
   Start from fixtures containing unknown harness-owned keys. Assert rendering preserves them, changes only declared owned keys, emits no raw Hindsight URL/bank/token, leaves hooks and automatic writes disabled, and records exact pre-activation owned values for rollback.
 
-- [ ] **Step 2: Implement minimal disabled renderers**
+- [x] **Step 2: Implement minimal disabled renderers**
 
   Replace direct API/bank output with schema version, broker socket locator, adapter identity, and `active: false`. Preserve unknown settings and registrations through a merge at the rendered-target seam. Do not make `chezmoi apply` activate any adapter.
 
-- [ ] **Step 3: Implement separate digest-bound activation plans**
+- [x] **Step 3: Implement separate digest-bound activation plans**
 
   Activation requires unchanged inventory/artifact/policy digests, healthy broker/profile, adapter self-test, and exact owned-key pre-state. Rollback restores those owned values and disables the adapter on any post-check failure.
 
-- [ ] **Step 4: Run and commit**
+- [x] **Step 4: Run and commit**
 
   Run: `python3 -m unittest tests.test_hindsight_memory_harnesses -v`
 
