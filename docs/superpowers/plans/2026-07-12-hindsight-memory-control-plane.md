@@ -245,23 +245,23 @@
 - Consumes: curated Codex files, Claude files, or portable Markdown/JSONL manifests and controller planning/apply APIs.
 - Produces: canonical import projections, coverage records, resumable state, digest-bound import plans, and one-question-at-a-time onboarding decisions.
 
-- [ ] **Step 1: Write red import projection tests**
+- [x] **Step 1: Write red import projection tests**
 
   Assert stable IDs from source locator plus source-native identity, timestamps, exact line/file provenance, deterministic closed-vocabulary tags, intended scope, relationship hints, and exactly one coverage disposition per source item. Assert reordered input yields the same projection digest, malformed or secret-like items fail closed, and resume skips only items whose identity and digest match.
 
-- [ ] **Step 2: Implement inspect/project/validate/plan/reconcile**
+- [x] **Step 2: Implement inspect/project/validate/plan/reconcile**
 
   Keep novelty/duplicate/conflict/omission decisions as proposals. The import client may inspect and create plans in this tranche, but its `apply` path must use the controller gate and therefore cannot mutate without later exact approval.
 
-- [ ] **Step 3: Write and implement onboarding decision tests**
+- [x] **Step 3: Write and implement onboarding decision tests**
 
   Assert one decision at a time, two to four mutually exclusive choices, recommendation first and labeled, no timeout, plain-prompt fallback, content-free decision log, and coverage of machine archetype, profiles, providers, credentials, banks, harnesses, models, activation, and import. Persist only non-secret desired choices; official login flows are returned as explicit operator actions.
 
-- [ ] **Step 4: Write thin agent-facing skills**
+- [x] **Step 4: Write thin agent-facing skills**
 
   Both skills must call the controller workflow rather than bypassing plans. The onboarding skill must use the user-input widget when present and wait indefinitely for Ivan's answer. The import skill must stop before apply until an exact digest-bound plan is approved.
 
-- [ ] **Step 5: Run and commit**
+- [x] **Step 5: Run and commit**
 
   Run: `python3 -m unittest tests.test_hindsight_memory_importing tests.test_hindsight_memory_onboarding -v`
 
