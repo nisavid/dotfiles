@@ -13,13 +13,13 @@ typeset -g HINDSIGHT_EMBED_STACK_LIB_LOADED=0
 
 usage() {
   cat <<EOF
-Usage: hindsight-embed-service <command>
+Usage: hindsight-embed-service <command> [options]
 
 Commands:
   install   Validate, retire legacy launchd state, and load the LaunchAgent
   start     Load or restart the LaunchAgent for this user
   stop      Unload the LaunchAgent and stop control, API, and UI
-  status    Show launchd and stack health
+  status [--profile <name>]  Show fleet or selected-profile health
   logs      Tail the supervisor log
 EOF
 }
@@ -48,8 +48,11 @@ load_stack_lib() {
     hindsight_stack_log \
     hindsight_stack_load_config \
     hindsight_stack_broker_status \
+    hindsight_stack_enabled_profiles \
+    hindsight_stack_fleet_profiles_csv \
     hindsight_stack_reconcile_once \
     hindsight_stack_require_current_user \
+    hindsight_stack_require_fleet_profiles \
     hindsight_stack_profile_exists \
     hindsight_stack_require_profile \
     hindsight_stack_require_tools \
@@ -58,6 +61,7 @@ load_stack_lib() {
     hindsight_stack_status_report \
     hindsight_stack_stop_all \
     hindsight_stack_wait_all \
+    hindsight_stack_validate_fleet \
     hindsight_stack_wait_stopped_for; do
     if (( ! ${+functions[$required_function]} )); then
       print -ru2 -- "hindsight-embed-service: invalid stack library at ${STACK_LIB}; missing ${required_function}"
@@ -125,6 +129,8 @@ validate_installed_files() {
   [[ -x "$HINDSIGHT_EMBED_UVX" ]] || die "uvx is not executable at ${HINDSIGHT_EMBED_UVX}"
   hindsight_stack_require_runtime_helpers || die "Hindsight helper runtime failed validation"
   hindsight_stack_require_profile || die "configured Hindsight profile preflight failed"
+  hindsight_stack_require_fleet_profiles || die "configured Hindsight fleet preflight failed"
+  hindsight_stack_validate_fleet || die "configured Hindsight fleet validation failed"
   [[ -x "$HINDSIGHT_MEMORY_CLI" ]] || die "memory controller is not executable at ${HINDSIGHT_MEMORY_CLI}"
   /usr/bin/plutil -lint "$PLIST" >/dev/null || die "plist failed lint: ${PLIST}"
 }
@@ -208,6 +214,15 @@ show_installed_file_checks() {
     ok=1
   fi
 
+  if (( stack_loaded )) &&
+    hindsight_stack_require_fleet_profiles >/dev/null 2>&1 &&
+    hindsight_stack_validate_fleet >/dev/null 2>&1; then
+    print -r -- "  enabled profiles: ok ($(hindsight_stack_fleet_profiles_csv))"
+  else
+    print -r -- "  enabled profiles: invalid"
+    ok=1
+  fi
+
   return "$ok"
 }
 
@@ -265,12 +280,6 @@ stop_service() {
   load_stack_lib ||
     die "launchd unloaded, but stack cleanup could not run because the stack library failed to load"
   hindsight_stack_load_config
-  if hindsight_stack_wait_stopped_for ui "$HINDSIGHT_EMBED_STOP_WAIT_SECONDS" &&
-    hindsight_stack_wait_stopped_for daemon "$HINDSIGHT_EMBED_STOP_WAIT_SECONDS" &&
-    hindsight_stack_wait_stopped_for broker "$HINDSIGHT_EMBED_STOP_WAIT_SECONDS" &&
-    hindsight_stack_wait_stopped_for control "$HINDSIGHT_EMBED_STOP_WAIT_SECONDS"; then
-    return 0
-  fi
   hindsight_stack_stop_all || die "failed to stop Hindsight stack"
 }
 
@@ -279,6 +288,7 @@ show_status() {
   if (( EUID == 0 || UID == 0 )); then
     die "refusing to run as root"
   fi
+  local selected_profile="${1:-}"
   local install_ok=0
 
   if is_loaded "$STACK_LABEL"; then
@@ -298,7 +308,7 @@ show_status() {
 
   print -r -- ""
   if (( install_ok == 0 && HINDSIGHT_EMBED_STACK_LIB_LOADED )); then
-    hindsight_stack_status_report
+    hindsight_stack_status_report "$selected_profile"
   else
     print -r -- "stack health: unavailable (install or runtime checks failed)"
   fi
@@ -318,6 +328,7 @@ main() {
   setopt pipe_fail no_unset
 
   local command="${1:-}"
+  local selected_profile=""
 
   case "$command" in
     install)
@@ -332,7 +343,15 @@ main() {
       stop_service
       ;;
     status)
-      show_status
+      if (( $# == 1 )); then
+        show_status
+      elif (( $# == 3 )) && [[ "$2" == --profile && -n "$3" ]]; then
+        selected_profile="$3"
+        show_status "$selected_profile"
+      else
+        usage >&2
+        die "status accepts only --profile <name>"
+      fi
       ;;
     logs)
       show_logs

@@ -41,6 +41,12 @@
     <string>127.0.0.1</string>
     <key>HINDSIGHT_EMBED_PROFILE</key>
     <string>{{ .hindsight.profile }}</string>
+    <key>HINDSIGHT_EMBED_FLEET_PROFILES</key>
+    <string>{{ .hindsight.profile }}</string>
+    <key>HINDSIGHT_EMBED_API_BASE_PORT</key>
+    <string>{{ .hindsight.apiPort }}</string>
+    <key>HINDSIGHT_EMBED_UI_BASE_PORT</key>
+    <string>{{ .hindsight.uiPort }}</string>
     <key>HINDSIGHT_EMBED_API_PORT</key>
     <string>{{ .hindsight.apiPort }}</string>
     <key>HINDSIGHT_EMBED_UI_PORT</key>
@@ -60,7 +66,7 @@
     <key>HINDSIGHT_MEMORY_BROKER_SOCKET</key>
     <string>{{ joinPath .chezmoi.homeDir ".local/state/hindsight-memory/broker.sock" }}</string>
     <key>HINDSIGHT_MEMORY_BROKER_WAIT_SECONDS</key>
-    <string>30</string>
+    <string>{{ index .hindsight "memoryBrokerWaitSeconds" | default 30 }}</string>
     <key>HINDSIGHT_EMBED_STATE_DIR</key>
     <string>{{ joinPath .chezmoi.homeDir ".local/state/hindsight-embed-launchd" }}</string>
   </dict>

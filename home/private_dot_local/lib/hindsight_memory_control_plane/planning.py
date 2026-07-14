@@ -4,6 +4,7 @@ import hmac
 import re
 from typing import Any, Mapping
 
+from .action_contracts import ACTION_SCHEMAS, DESTRUCTIVE_ACTION_KINDS
 from .canonical import digest
 from .model import Action, EndpointIdentity, Inventory, OperationSnapshot, Plan
 
@@ -20,24 +21,6 @@ OPERATION_KINDS = {"apply", "consolidate", "export", "import", "migration", "ref
 OPERATION_STATUSES = {"pending", "running", "succeeded", "failed", "cancelled"}
 COMPATIBILITY_KEYS = {"check", "compatible", "reason_code", "profile_id", "provider_id", "model_id", "artifact_digest", "endpoint", "status"}
 COMPATIBILITY_STATUSES = {"pass", "fail", "blocked", "unknown", "degraded"}
-DESTRUCTIVE_ACTION_KINDS = {
-    "delete_bank", "delete_directive", "delete_model", "delete_profile",
-    "import_bank", "migrate_bank", "prune_bank", "prune_model",
-    "replace_canonical_bank", "retire_artifact",
-}
-ACTION_SCHEMAS = {
-    "activate_model": ({"profile_id", "provider_id", "model_id", "revision"}, {"profile_id", "provider_id", "model_id", "revision"}),
-    "configure_bank": ({"bank", "artifact_digest"}, {"bank"}),
-    "configure_profile": ({"profile_id", "artifact_digest"}, {"profile_id"}),
-    "create_bank": ({"bank"}, {"bank"}),
-    "install_model": ({"profile_id", "provider_id", "model_id", "revision", "artifact_digest"}, {"profile_id", "provider_id", "model_id", "revision", "artifact_digest"}),
-    "reload_profile": ({"profile_id", "reason_code"}, {"profile_id", "reason_code"}),
-    "report_unmanaged": ({"profile_id", "reason_code"}, {"profile_id", "reason_code"}),
-    "set_auto_consolidation": ({"bank", "enabled"}, {"bank", "enabled"}),
-    "set_memory_defense": ({"bank", "enabled"}, {"bank", "enabled"}),
-    "upsert_directive": ({"bank", "directive_id", "artifact_digest"}, {"bank", "directive_id", "artifact_digest"}),
-    "upsert_model": ({"bank", "model_id", "revision", "artifact_digest"}, {"bank", "model_id", "revision", "artifact_digest"}),
-}
 IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}\Z")
 DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 
@@ -173,9 +156,9 @@ def _actions(value: Any) -> tuple[Action, ...]:
         if identifier in ids:
             raise PlanError(f"duplicate action id: {identifier}")
         ids.add(identifier)
-        allowed, required = ACTION_SCHEMAS[kind]
+        fields = ACTION_SCHEMAS[kind]
         details = {key: value for key, value in item.items() if key not in {"id", "kind"}}
-        _exact_mapping(details, allowed, "action details", required)
+        _exact_mapping(details, fields, "action details", fields)
         normalized: dict[str, Any] = {}
         for key, value in details.items():
             if key == "bank":
@@ -190,6 +173,187 @@ def _actions(value: Any) -> tuple[Action, ...]:
                 normalized[key] = _identifier(value, f"action {key}")
         result.append(Action(identifier, kind, normalized))
     return tuple(result)
+
+
+def _observed_banks(state: Mapping[str, Any], target_profile: str) -> dict[str, Mapping[str, Any]]:
+    values = state.get("banks", [])
+    if not isinstance(values, list):
+        raise PlanError("live state banks must be an array")
+    result: dict[str, Mapping[str, Any]] = {}
+    for value in values:
+        if not isinstance(value, Mapping):
+            raise PlanError("live state bank must be an object")
+        profile_id = value.get("profile_id", target_profile)
+        if profile_id != target_profile:
+            continue
+        bank_id = _identifier(value.get("bank_id", value.get("id")), "live state bank id")
+        if bank_id in result:
+            raise PlanError("live state bank identities must be unique")
+        result[bank_id] = value
+    return result
+
+
+def _desired_collection(value: Any, label: str) -> list[Mapping[str, Any]]:
+    if value is None:
+        return []
+    if not isinstance(value, (list, tuple)):
+        raise PlanError(f"desired bank {label} must be an array")
+    result: list[Mapping[str, Any]] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, Mapping):
+            raise PlanError(f"desired bank {label} entry must be an object")
+        identifier = _identifier(item.get("id"), f"desired bank {label} id")
+        if identifier in seen:
+            raise PlanError(f"desired bank {label} identities must be unique")
+        seen.add(identifier)
+        result.append(item)
+    return sorted(result, key=lambda item: item["id"])
+
+
+def _observed_collection(
+    bank: Mapping[str, Any] | None,
+    label: str,
+) -> dict[str, Mapping[str, Any]]:
+    values = [] if bank is None else bank.get(label, [])
+    if not isinstance(values, list):
+        raise PlanError(f"live state bank {label} must be an array")
+    result: dict[str, Mapping[str, Any]] = {}
+    for item in values:
+        if not isinstance(item, Mapping):
+            raise PlanError(f"live state bank {label} entry must be an object")
+        identifier = _identifier(item.get("id"), f"live state bank {label} id")
+        if identifier in result:
+            raise PlanError(f"live state bank {label} identities must be unique")
+        result[identifier] = item
+    return result
+
+
+def _derive_actions(
+    inventory: Inventory,
+    target_profile: str,
+    state: Mapping[str, Any],
+) -> tuple[Action, ...]:
+    if not isinstance(state, Mapping):
+        raise PlanError("live state must contain an object state")
+    observed = _observed_banks(state, target_profile)
+    desired = sorted(
+        (
+            bank
+            for bank in inventory.banks
+            if bank.get("profile_id", bank.get("profile")) == target_profile
+        ),
+        key=lambda bank: bank["id"],
+    )
+    proposed: list[dict[str, Any]] = []
+
+    profile_artifact = state.get("profile_artifact_digest")
+    if profile_artifact is not None:
+        profile = next(item for item in inventory.profiles if item["id"] == target_profile)
+        expected = digest(profile.get("config", profile))
+        if profile_artifact != expected:
+            proposed.append(
+                {
+                    "kind": "configure_profile",
+                    "profile_id": target_profile,
+                    "artifact_digest": expected,
+                    "_label": f"configure-profile-{target_profile}",
+                }
+            )
+
+    desired_ids: set[str] = set()
+    for bank in desired:
+        bank_id = _identifier(bank["id"], "desired bank id")
+        desired_ids.add(bank_id)
+        bank_ref = {"profile_id": target_profile, "bank_id": bank_id}
+        actual = observed.get(bank_id)
+        bank_artifact = digest(bank.get("config", bank))
+        if actual is None:
+            proposed.append(
+                {
+                    "kind": "create_bank",
+                    "bank": bank_ref,
+                    "_label": f"create-bank-{bank_id}",
+                }
+            )
+        if actual is None or actual.get("artifact_digest") != bank_artifact:
+            proposed.append(
+                {
+                    "kind": "configure_bank",
+                    "bank": bank_ref,
+                    "artifact_digest": bank_artifact,
+                    "_label": f"configure-bank-{bank_id}",
+                }
+            )
+
+        for desired_key, actual_key, kind in (
+            ("enable_auto_consolidation", "enable_auto_consolidation", "set_auto_consolidation"),
+            ("memory_defense", "memory_defense", "set_memory_defense"),
+        ):
+            enabled = bank.get(desired_key)
+            if enabled is None:
+                continue
+            if not isinstance(enabled, bool):
+                raise PlanError(f"desired bank {desired_key} must be boolean")
+            if actual is None or actual.get(actual_key) is not enabled:
+                proposed.append(
+                    {
+                        "kind": kind,
+                        "bank": bank_ref,
+                        "enabled": enabled,
+                        "_label": f"{kind.replace('_', '-')}-{bank_id}",
+                    }
+                )
+
+        observed_models = _observed_collection(actual, "models")
+        for model in _desired_collection(bank.get("models"), "models"):
+            model_id = model["id"]
+            revision = _identifier(model.get("revision"), "desired model revision")
+            artifact = digest(model)
+            current = observed_models.get(model_id)
+            if current is None or current.get("revision") != revision or current.get("artifact_digest") != artifact:
+                proposed.append(
+                    {
+                        "kind": "upsert_model",
+                        "bank": bank_ref,
+                        "model_id": model_id,
+                        "revision": revision,
+                        "artifact_digest": artifact,
+                        "_label": f"upsert-model-{bank_id}-{model_id}",
+                    }
+                )
+
+        observed_directives = _observed_collection(actual, "directives")
+        for directive in _desired_collection(bank.get("directives"), "directives"):
+            directive_id = directive["id"]
+            artifact = digest(directive)
+            current = observed_directives.get(directive_id)
+            if current is None or current.get("artifact_digest") != artifact:
+                proposed.append(
+                    {
+                        "kind": "upsert_directive",
+                        "bank": bank_ref,
+                        "directive_id": directive_id,
+                        "artifact_digest": artifact,
+                        "_label": f"upsert-directive-{bank_id}-{directive_id}",
+                    }
+                )
+
+    for bank_id in sorted(set(observed) - desired_ids):
+        proposed.append(
+            {
+                "kind": "report_unmanaged",
+                "profile_id": target_profile,
+                "reason_code": f"unmanaged-bank-{bank_id}",
+                "_label": f"report-unmanaged-bank-{bank_id}",
+            }
+        )
+
+    records = []
+    for index, proposal in enumerate(proposed, 1):
+        label = proposal.pop("_label")
+        records.append({"id": f"{index:02d}-{label}", **proposal})
+    return _actions(records)
 
 
 def inventory_endpoint(inventory: Inventory, profile_id: str) -> EndpointIdentity:
@@ -212,6 +376,8 @@ def inventory_endpoint(inventory: Inventory, profile_id: str) -> EndpointIdentit
 def build_plan(inventory: Inventory, live_state: Mapping[str, Any], operations: Any) -> Plan:
     if not isinstance(live_state, dict):
         raise PlanError("live state must be an object")
+    if "actions" in live_state:
+        raise PlanError("live state cannot supply proposed actions")
     target_profile = _identifier(live_state.get("profile_id", live_state.get("target_profile")), "target profile")
     expected_endpoint = inventory_endpoint(inventory, target_profile)
     live_endpoint = _endpoint(live_state.get("endpoint", live_state.get("target_endpoint")), target_profile)
@@ -219,8 +385,8 @@ def build_plan(inventory: Inventory, live_state: Mapping[str, Any], operations: 
         raise PlanError("live endpoint identity does not match inventory")
     operation_snapshot = _operations(operations)
     compatibility = _compatibility(live_state.get("compatibility", []))
-    actions = _actions(live_state.get("actions", []))
     state = live_state.get("state", live_state.get("live_state", {}))
+    actions = _derive_actions(inventory, target_profile, state)
     body = {
         "schema_version": 1,
         "inventory_digest": inventory.inventory_digest,

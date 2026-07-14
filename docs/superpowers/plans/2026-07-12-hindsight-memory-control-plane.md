@@ -370,6 +370,8 @@
 
   Review authentication boundaries, capability replay/expiry, symlink and path traversal, file modes, canonical digest binding, TOCTOU/drift checks, rollback completeness, subprocess argv safety, HTTP size/time limits, secret/payload logging, template inactivity, and migration-gate enforcement. Fix every critical or important finding and rerun affected tests before declaring the cycle clean.
 
+  Non-security broad review completed on 2026-07-14 across independent standards and PRD/specification axes. The clean review covers semantic desired-state planning, production artifact resolution, distinct migration and rollback digest binding, automatic full-schema admin rollback, curated import adapters, and multi-profile fleet supervision. The Python controller suite and public shell contract suites pass after the review fixes.
+
   Deferred by the operator until the Codex security-scan harness issue is fixed. Do not claim this gate clean from tests or partial review evidence.
 
 - [ ] **Step 6: Create the final task-owned checkpoint**

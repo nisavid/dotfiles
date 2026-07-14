@@ -11,19 +11,26 @@ hindsight_stack_load_config() {
   typeset -g HINDSIGHT_EMBED_UVX="${HINDSIGHT_EMBED_UVX:-$HOME/.local/bin/uvx}"
   typeset -g HINDSIGHT_EMBED_CONTROL_PORT="${HINDSIGHT_EMBED_CONTROL_PORT:-{{ .hindsight.controlPort }}}"
   typeset -g HINDSIGHT_EMBED_CONTROL_HOSTNAME="${HINDSIGHT_EMBED_CONTROL_HOSTNAME:-127.0.0.1}"
-  typeset -g HINDSIGHT_EMBED_PROFILE="${HINDSIGHT_EMBED_PROFILE:-{{ .hindsight.profile }}}"
-  typeset -g HINDSIGHT_EMBED_API_PORT="${HINDSIGHT_EMBED_API_PORT:-{{ .hindsight.apiPort }}}"
-  typeset -g HINDSIGHT_EMBED_UI_PORT="${HINDSIGHT_EMBED_UI_PORT:-{{ .hindsight.uiPort }}}"
+  typeset -g HINDSIGHT_EMBED_PRIMARY_PROFILE="${HINDSIGHT_EMBED_PRIMARY_PROFILE:-${HINDSIGHT_EMBED_PROFILE:-{{ .hindsight.profile }}}}"
+  typeset -g HINDSIGHT_EMBED_FLEET_PROFILES="${HINDSIGHT_EMBED_FLEET_PROFILES:-{{ .hindsight.profile }}}"
+  typeset -g HINDSIGHT_EMBED_PROFILE="${HINDSIGHT_EMBED_PROFILE:-$HINDSIGHT_EMBED_PRIMARY_PROFILE}"
+  typeset -g HINDSIGHT_EMBED_API_BASE_PORT="${HINDSIGHT_EMBED_API_BASE_PORT:-${HINDSIGHT_EMBED_API_PORT:-{{ .hindsight.apiPort }}}}"
+  typeset -g HINDSIGHT_EMBED_UI_BASE_PORT="${HINDSIGHT_EMBED_UI_BASE_PORT:-${HINDSIGHT_EMBED_UI_PORT:-{{ .hindsight.uiPort }}}}"
+  typeset -g HINDSIGHT_EMBED_API_PORT="${HINDSIGHT_EMBED_API_PORT:-$HINDSIGHT_EMBED_API_BASE_PORT}"
+  typeset -g HINDSIGHT_EMBED_UI_PORT="${HINDSIGHT_EMBED_UI_PORT:-$HINDSIGHT_EMBED_UI_BASE_PORT}"
   typeset -g HINDSIGHT_EMBED_UI_HOSTNAME="${HINDSIGHT_EMBED_UI_HOSTNAME:-{{ .hindsight.uiHostname }}}"
   typeset -g HINDSIGHT_EMBED_PYTHON="${HINDSIGHT_EMBED_PYTHON:-$HOME/.local/share/uv/tools/hindsight-embed/bin/python}"
   typeset -g HINDSIGHT_EMBED_STOP_HELPER="${HINDSIGHT_EMBED_STOP_HELPER:-$HOME/.local/libexec/hindsight-embed-stop-profile-services.py}"
   typeset -g HINDSIGHT_MEMORY_CLI="${HINDSIGHT_MEMORY_CLI:-$HOME/.local/bin/hindsight-memory}"
   typeset -g HINDSIGHT_MEMORY_STATE_DIR="${HINDSIGHT_MEMORY_STATE_DIR:-$HOME/.local/state/hindsight-memory}"
   typeset -g HINDSIGHT_MEMORY_BROKER_SOCKET="${HINDSIGHT_MEMORY_BROKER_SOCKET:-$HINDSIGHT_MEMORY_STATE_DIR/broker.sock}"
+  typeset -g HINDSIGHT_EMBED_STATE_DIR="${HINDSIGHT_EMBED_STATE_DIR:-$HOME/.local/state/hindsight-embed-launchd}"
+  typeset -g HINDSIGHT_EMBED_PROFILE_SLOT_DIR="${HINDSIGHT_EMBED_PROFILE_SLOT_DIR:-$HINDSIGHT_EMBED_STATE_DIR/profile-slots}"
   typeset -g HINDSIGHT_EMBED_AUTOSTART_DAEMON="${HINDSIGHT_EMBED_AUTOSTART_DAEMON:-{{ if .hindsight.autostartDaemon }}1{{ else }}0{{ end }}}"
   typeset -g HINDSIGHT_EMBED_AUTOSTART_UI="${HINDSIGHT_EMBED_AUTOSTART_UI:-{{ if .hindsight.autostartUi }}1{{ else }}0{{ end }}}"
   typeset -g HINDSIGHT_EMBED_CONTROL_WAIT_SECONDS="${HINDSIGHT_EMBED_CONTROL_WAIT_SECONDS:-30}"
   typeset -g HINDSIGHT_EMBED_DAEMON_WAIT_SECONDS="${HINDSIGHT_EMBED_DAEMON_WAIT_SECONDS:-120}"
+  typeset -g HINDSIGHT_EMBED_SIDECAR_WAIT_SECONDS="${HINDSIGHT_EMBED_SIDECAR_WAIT_SECONDS:-120}"
   typeset -g HINDSIGHT_EMBED_UI_WAIT_SECONDS="${HINDSIGHT_EMBED_UI_WAIT_SECONDS:-60}"
   typeset -g HINDSIGHT_MEMORY_BROKER_WAIT_SECONDS="${HINDSIGHT_MEMORY_BROKER_WAIT_SECONDS:-30}"
   typeset -g HINDSIGHT_EMBED_STOP_WAIT_SECONDS="${HINDSIGHT_EMBED_STOP_WAIT_SECONDS:-30}"
@@ -105,12 +112,221 @@ hindsight_stack_require_runtime_helpers() {
   }
 }
 
+hindsight_stack_valid_profile_name() {
+  emulate -L zsh
+  local profile="$1"
+  [[ "$profile" =~ '^[A-Za-z0-9][A-Za-z0-9._-]*$' ]]
+}
+
+hindsight_stack_enabled_profiles() {
+  emulate -L zsh
+  hindsight_stack_load_config
+
+  local normalized="${HINDSIGHT_EMBED_FLEET_PROFILES//,/ }"
+  local profile
+  typeset -A seen
+  for profile in ${=normalized}; do
+    hindsight_stack_valid_profile_name "$profile" || {
+      print -ru2 -- "hindsight-embed-stack: invalid enabled profile name: ${profile}"
+      return 1
+    }
+    [[ -z "${seen[$profile]:-}" ]] || continue
+    seen[$profile]=1
+    print -r -- "$profile"
+  done
+}
+
+hindsight_stack_fleet_profiles_csv() {
+  emulate -L zsh
+  local -a profiles
+  profiles=("${(@f)$(hindsight_stack_enabled_profiles)}") || return 1
+  local IFS=,
+  print -r -- "${profiles[*]}"
+}
+
+hindsight_stack_profile_enabled() {
+  emulate -L zsh
+  local requested="$1" profile
+  local -a profiles
+  profiles=("${(@f)$(hindsight_stack_enabled_profiles)}") || return 1
+  for profile in "${profiles[@]}"; do
+    [[ "$profile" == "$requested" ]] && return 0
+  done
+  return 1
+}
+
+hindsight_stack_port_valid() {
+  emulate -L zsh
+  local value="$1"
+  [[ "$value" == <1-65535> ]]
+}
+
+hindsight_stack_profile_env_prefix() {
+  emulate -L zsh
+  local value="${1:u}"
+  value="${value//[^A-Z0-9]/_}"
+  print -r -- "$value"
+}
+
+hindsight_stack_profile_port_override() {
+  emulate -L zsh
+  local profile="$1" kind="$2"
+  local prefix="$(hindsight_stack_profile_env_prefix "$profile")"
+  local variable="HINDSIGHT_EMBED_PROFILE_${prefix}_${kind}_PORT"
+  (( ${+parameters[$variable]} )) || return 1
+  print -r -- "${(P)variable}"
+}
+
+hindsight_stack_profile_slot() {
+  emulate -L zsh
+  setopt no_unset
+  hindsight_stack_load_config
+
+  local profile="$1"
+  hindsight_stack_valid_profile_name "$profile" || return 1
+  /bin/mkdir -p "$HINDSIGHT_EMBED_PROFILE_SLOT_DIR" || return 1
+  [[ -d "$HINDSIGHT_EMBED_PROFILE_SLOT_DIR" && ! -L "$HINDSIGHT_EMBED_PROFILE_SLOT_DIR" ]] || {
+    print -ru2 -- "hindsight-embed-stack: refusing unsafe profile slot directory: ${HINDSIGHT_EMBED_PROFILE_SLOT_DIR}"
+    return 1
+  }
+  /bin/chmod 700 "$HINDSIGHT_EMBED_PROFILE_SLOT_DIR" || return 1
+
+  local slot_file="$HINDSIGHT_EMBED_PROFILE_SLOT_DIR/${profile}.slot"
+  local lock_dir="$HINDSIGHT_EMBED_PROFILE_SLOT_DIR/.allocation.lock"
+  integer lock_attempt=0
+  until /bin/mkdir "$lock_dir" 2>/dev/null; do
+    (( lock_attempt += 1 ))
+    (( lock_attempt < 200 )) || {
+      print -ru2 -- "hindsight-embed-stack: timed out acquiring profile slot allocation lock"
+      return 1
+    }
+    sleep 0.05
+  done
+
+  local result=0 slot temporary existing value
+  typeset -A used
+  if [[ -e "$slot_file" ]]; then
+    if [[ ! -f "$slot_file" || -L "$slot_file" ]]; then
+      print -ru2 -- "hindsight-embed-stack: refusing unsafe profile slot file: ${slot_file}"
+      result=1
+    elif ! /bin/chmod 600 "$slot_file"; then
+      result=1
+    else
+      slot="$(<"$slot_file")"
+      if [[ "$slot" != <0-> ]]; then
+        print -ru2 -- "hindsight-embed-stack: invalid persisted slot for profile ${profile}"
+        result=1
+      fi
+    fi
+  else
+    for existing in "$HINDSIGHT_EMBED_PROFILE_SLOT_DIR"/*.slot(N); do
+      [[ -f "$existing" && ! -L "$existing" ]] || continue
+      value="$(<"$existing")"
+      [[ "$value" == <0-> ]] && used[$value]=1
+    done
+    slot=0
+    while [[ -n "${used[$slot]:-}" ]]; do
+      (( slot += 1 ))
+    done
+    temporary="${slot_file}.$$.$RANDOM"
+    if ! ( umask 077; print -r -- "$slot" > "$temporary" ); then
+      result=1
+    elif ! /bin/chmod 600 "$temporary" || ! /bin/mv "$temporary" "$slot_file"; then
+      /bin/rm -f "$temporary"
+      result=1
+    fi
+  fi
+  /bin/rmdir "$lock_dir" || result=1
+  (( result == 0 )) && print -r -- "$slot"
+  return "$result"
+}
+
+hindsight_stack_select_profile() {
+  emulate -L zsh
+  setopt no_unset
+  hindsight_stack_load_config
+
+  local profile="$1"
+  hindsight_stack_profile_enabled "$profile" || {
+    print -ru2 -- "hindsight-embed-stack: profile '${profile}' is not enabled"
+    return 1
+  }
+  hindsight_stack_profile_exists "$profile" || {
+    print -ru2 -- "hindsight-embed-stack: enabled profile '${profile}' does not exist"
+    return 1
+  }
+  local slot="$(hindsight_stack_profile_slot "$profile")" || return 1
+  local api_port ui_port
+  api_port="$(hindsight_stack_profile_port_override "$profile" API 2>/dev/null || print -r -- $(( HINDSIGHT_EMBED_API_BASE_PORT + slot )))"
+  ui_port="$(hindsight_stack_profile_port_override "$profile" UI 2>/dev/null || print -r -- $(( HINDSIGHT_EMBED_UI_BASE_PORT + slot )))"
+  hindsight_stack_port_valid "$api_port" || {
+    print -ru2 -- "hindsight-embed-stack: invalid API port for profile ${profile}: ${api_port}"
+    return 1
+  }
+  hindsight_stack_port_valid "$ui_port" || {
+    print -ru2 -- "hindsight-embed-stack: invalid UI port for profile ${profile}: ${ui_port}"
+    return 1
+  }
+
+  typeset -g HINDSIGHT_EMBED_PROFILE="$profile"
+  typeset -g HINDSIGHT_EMBED_PROFILE_SLOT="$slot"
+  typeset -g HINDSIGHT_EMBED_API_PORT="$api_port"
+  typeset -g HINDSIGHT_EMBED_UI_PORT="$ui_port"
+}
+
+typeset -ga HINDSIGHT_EMBED_PROFILE_STATE_STACK=()
+
+hindsight_stack_push_profile_state() {
+  emulate -L zsh
+  HINDSIGHT_EMBED_PROFILE_STATE_STACK+=(
+    "${HINDSIGHT_EMBED_PROFILE:-}|${HINDSIGHT_EMBED_PROFILE_SLOT:-}|${HINDSIGHT_EMBED_API_PORT:-}|${HINDSIGHT_EMBED_UI_PORT:-}"
+  )
+}
+
+hindsight_stack_pop_profile_state() {
+  emulate -L zsh
+  (( ${#HINDSIGHT_EMBED_PROFILE_STATE_STACK} > 0 )) || return 0
+  local state="${HINDSIGHT_EMBED_PROFILE_STATE_STACK[-1]}"
+  HINDSIGHT_EMBED_PROFILE_STATE_STACK[-1]=()
+  local -a values
+  values=("${(@s:|:)state}")
+  typeset -g HINDSIGHT_EMBED_PROFILE="${values[1]:-}"
+  typeset -g HINDSIGHT_EMBED_PROFILE_SLOT="${values[2]:-}"
+  typeset -g HINDSIGHT_EMBED_API_PORT="${values[3]:-}"
+  typeset -g HINDSIGHT_EMBED_UI_PORT="${values[4]:-}"
+}
+
+hindsight_stack_for_each_profile() {
+  emulate -L zsh
+  hindsight_stack_load_config
+  local callback="$1"
+  shift
+  local profile_filter="$1"
+  shift
+  (( $+functions[$callback] )) || return 2
+  local -a profiles
+  profiles=("${(@f)$(hindsight_stack_enabled_profiles)}") || return 1
+  hindsight_stack_push_profile_state
+  TRAPEXIT() { hindsight_stack_pop_profile_state }
+  local profile ok=0
+  for profile in "${profiles[@]}"; do
+    [[ -z "$profile_filter" || "$profile_filter" == "$profile" ]] || continue
+    hindsight_stack_select_profile "$profile" || {
+      ok=1
+      continue
+    }
+    "$callback" "$profile" "$@" || ok=1
+  done
+  return "$ok"
+}
+
 hindsight_stack_profile_exists() {
   emulate -L zsh
   hindsight_stack_load_config
 
-  [[ -n "$HINDSIGHT_EMBED_PROFILE" ]] || return 1
-  [[ -f "$HOME/.hindsight/profiles/${HINDSIGHT_EMBED_PROFILE}.env" ]]
+  local profile="${1:-$HINDSIGHT_EMBED_PROFILE}"
+  [[ -n "$profile" ]] || return 1
+  [[ -f "$HOME/.hindsight/profiles/${profile}.env" ]]
 }
 
 hindsight_stack_require_profile() {
@@ -122,6 +338,26 @@ hindsight_stack_require_profile() {
   print -ru2 -- "hindsight-embed-stack: configured profile '${HINDSIGHT_EMBED_PROFILE}' does not exist"
   print -ru2 -- "configure it before starting the stack: ${HINDSIGHT_EMBED_UVX} hindsight-embed configure --profile '${HINDSIGHT_EMBED_PROFILE}' --port '${HINDSIGHT_EMBED_API_PORT}'"
   return 1
+}
+
+hindsight_stack_require_fleet_profiles() {
+  emulate -L zsh
+  hindsight_stack_load_config
+
+  local count=0 profile
+  local -a profiles
+  profiles=("${(@f)$(hindsight_stack_enabled_profiles)}") || return 1
+  for profile in "${profiles[@]}"; do
+    (( count += 1 ))
+    hindsight_stack_profile_exists "$profile" || {
+      print -ru2 -- "hindsight-embed-stack: enabled profile '${profile}' does not exist"
+      return 1
+    }
+  done
+  (( count > 0 )) || {
+    print -ru2 -- "hindsight-embed-stack: at least one enabled profile is required"
+    return 1
+  }
 }
 
 hindsight_stack_enabled() {
@@ -156,6 +392,215 @@ hindsight_stack_ui_url() {
       ;;
   esac
   print -r -- "http://${host}:${HINDSIGHT_EMBED_UI_PORT}"
+}
+
+hindsight_stack_sidecar_root() {
+  emulate -L zsh
+  hindsight_stack_load_config
+  print -r -- "$HOME/.hindsight/profiles/${HINDSIGHT_EMBED_PROFILE}.sidecars"
+}
+
+hindsight_stack_sidecar_names() {
+  emulate -L zsh
+  local root="$(hindsight_stack_sidecar_root)"
+  local directory name
+  for directory in "$root"/*(N/); do
+    name="${directory:t}"
+    hindsight_stack_valid_profile_name "$name" || {
+      print -ru2 -- "hindsight-embed-stack: invalid sidecar name for profile ${HINDSIGHT_EMBED_PROFILE}: ${name}"
+      return 1
+    }
+    print -r -- "$name"
+  done
+}
+
+hindsight_stack_sidecar_file_value() {
+  emulate -L zsh
+  local sidecar="$1" filename="$2"
+  local path="$(hindsight_stack_sidecar_root)/${sidecar}/${filename}"
+  [[ -f "$path" && ! -L "$path" ]] || return 1
+  local value="$(<"$path")"
+  print -r -- "$value"
+}
+
+hindsight_stack_sidecar_port() {
+  emulate -L zsh
+  hindsight_stack_load_config
+  local sidecar="$1" port base
+  port="$(hindsight_stack_sidecar_file_value "$sidecar" port 2>/dev/null || true)"
+  if [[ -z "$port" ]]; then
+    base="$(hindsight_stack_sidecar_file_value "$sidecar" port-base 2>/dev/null || true)"
+    hindsight_stack_port_valid "$base" || {
+      print -ru2 -- "hindsight-embed-stack: sidecar ${HINDSIGHT_EMBED_PROFILE}/${sidecar} requires a valid port-base or port"
+      return 1
+    }
+    port=$(( base + HINDSIGHT_EMBED_PROFILE_SLOT ))
+  fi
+  hindsight_stack_port_valid "$port" || {
+    print -ru2 -- "hindsight-embed-stack: invalid sidecar port for ${HINDSIGHT_EMBED_PROFILE}/${sidecar}: ${port}"
+    return 1
+  }
+  print -r -- "$port"
+}
+
+hindsight_stack_sidecar_health_url() {
+  emulate -L zsh
+  local sidecar="$1"
+  local port="$(hindsight_stack_sidecar_port "$sidecar")" || return 1
+  local path="$(hindsight_stack_sidecar_file_value "$sidecar" health-path 2>/dev/null || print -r -- /health)"
+  [[ "$path" == /* && "$path" != *[[:space:]]* ]] || {
+    print -ru2 -- "hindsight-embed-stack: invalid sidecar health path for ${HINDSIGHT_EMBED_PROFILE}/${sidecar}"
+    return 1
+  }
+  print -r -- "http://127.0.0.1:${port}${path}"
+}
+
+hindsight_stack_sidecar_command() {
+  emulate -L zsh
+  local sidecar="$1" command="$2"
+  local executable="$(hindsight_stack_sidecar_root)/${sidecar}/${command}"
+  [[ -x "$executable" && ! -L "$executable" ]] || return 1
+  local port="$(hindsight_stack_sidecar_port "$sidecar")" || return 1
+  HINDSIGHT_EMBED_PROFILE="$HINDSIGHT_EMBED_PROFILE" \
+    HINDSIGHT_EMBED_PROFILE_SLOT="$HINDSIGHT_EMBED_PROFILE_SLOT" \
+    HINDSIGHT_EMBED_SIDECAR_NAME="$sidecar" \
+    HINDSIGHT_EMBED_SIDECAR_PORT="$port" \
+    "$executable"
+}
+
+hindsight_stack_sidecar_status() {
+  emulate -L zsh
+  local sidecar="$1"
+  if [[ -x "$(hindsight_stack_sidecar_root)/${sidecar}/status" ]]; then
+    hindsight_stack_sidecar_command "$sidecar" status >/dev/null 2>&1
+  else
+    hindsight_stack_http_ok "$(hindsight_stack_sidecar_health_url "$sidecar")"
+  fi
+}
+
+hindsight_stack_sidecars_status() {
+  emulate -L zsh
+  local sidecar count=0
+  local -a sidecars
+  sidecars=("${(@f)$(hindsight_stack_sidecar_names)}") || return 1
+  sidecars=("${(@)sidecars:#}")
+  for sidecar in "${sidecars[@]}"; do
+    (( count += 1 ))
+    hindsight_stack_sidecar_status "$sidecar" || return 1
+  done
+  return 0
+}
+
+hindsight_stack_wait_sidecars() {
+  emulate -L zsh
+  hindsight_stack_load_config
+  integer deadline=$(( $(/bin/date +%s) + HINDSIGHT_EMBED_SIDECAR_WAIT_SECONDS ))
+  while (( $(/bin/date +%s) <= deadline )); do
+    hindsight_stack_sidecars_status && return 0
+    sleep 2
+  done
+  return 1
+}
+
+hindsight_stack_wait_sidecars_stopped() {
+  emulate -L zsh
+  hindsight_stack_load_config
+  integer deadline=$(( $(/bin/date +%s) + HINDSIGHT_EMBED_STOP_WAIT_SECONDS ))
+  local sidecar running
+  local -a sidecars
+  sidecars=("${(@f)$(hindsight_stack_sidecar_names)}") || return 1
+  sidecars=("${(@)sidecars:#}")
+  while (( $(/bin/date +%s) <= deadline )); do
+    running=0
+    for sidecar in "${sidecars[@]}"; do
+      hindsight_stack_sidecar_status "$sidecar" && running=1
+    done
+    (( running == 0 )) && return 0
+    sleep 2
+  done
+  return 1
+}
+
+hindsight_stack_reconcile_sidecars() {
+  emulate -L zsh
+  local sidecar key ok=0
+  local -a sidecars
+  sidecars=("${(@f)$(hindsight_stack_sidecar_names)}") || return 1
+  sidecars=("${(@)sidecars:#}")
+  for sidecar in "${sidecars[@]}"; do
+    hindsight_stack_sidecar_status "$sidecar" && continue
+    key="sidecar:${HINDSIGHT_EMBED_PROFILE}:${sidecar}"
+    if ! hindsight_stack_can_start "$key"; then
+      ok=1
+      continue
+    fi
+    hindsight_stack_mark_start "$key"
+    hindsight_stack_log "sidecar is not healthy; starting ${HINDSIGHT_EMBED_PROFILE}/${sidecar}"
+    hindsight_stack_sidecar_command "$sidecar" start >/dev/null 2>&1 || ok=1
+  done
+  (( ok == 0 )) && hindsight_stack_wait_sidecars
+}
+
+hindsight_stack_stop_sidecars() {
+  emulate -L zsh
+  local -a sidecars
+  sidecars=("${(@f)$(hindsight_stack_sidecar_names)}") || return 1
+  sidecars=("${(@)sidecars:#}")
+  local sidecar ok=0
+  for sidecar in "${(@Oa)sidecars}"; do
+    hindsight_stack_sidecar_status "$sidecar" || continue
+    hindsight_stack_sidecar_command "$sidecar" stop >/dev/null 2>&1 || ok=1
+  done
+  return "$ok"
+}
+
+hindsight_stack_validate_profile_endpoints() {
+  emulate -L zsh
+  local profile="$1" sidecar port owner
+  local -a profile_endpoints sidecars
+  integer endpoint_index
+  profile_endpoints=(
+    "$HINDSIGHT_EMBED_API_PORT" "${profile}/api"
+    "$HINDSIGHT_EMBED_UI_PORT" "${profile}/ui"
+  )
+  endpoint_index=1
+  while (( endpoint_index <= ${#profile_endpoints} )); do
+    port="${profile_endpoints[$endpoint_index]}"
+    owner="${profile_endpoints[$(( endpoint_index + 1 ))]}"
+    if [[ -n "${endpoints[$port]:-}" ]]; then
+      print -ru2 -- "hindsight-embed-stack: endpoint collision on port ${port}: ${endpoints[$port]} and ${owner}"
+      return 1
+    fi
+    endpoints[$port]="$owner"
+    (( endpoint_index += 2 ))
+  done
+  sidecars=("${(@f)$(hindsight_stack_sidecar_names)}") || return 1
+  sidecars=("${(@)sidecars:#}")
+  for sidecar in "${sidecars[@]}"; do
+    port="$(hindsight_stack_sidecar_port "$sidecar")" || return 1
+    owner="${profile}/sidecar/${sidecar}"
+    if [[ -n "${endpoints[$port]:-}" ]]; then
+      print -ru2 -- "hindsight-embed-stack: endpoint collision on port ${port}: ${endpoints[$port]} and ${owner}"
+      return 1
+    fi
+    endpoints[$port]="$owner"
+  done
+}
+
+hindsight_stack_validate_fleet() {
+  emulate -L zsh
+  setopt no_unset
+  hindsight_stack_load_config
+  hindsight_stack_require_loopback || return 1
+  hindsight_stack_require_fleet_profiles || return 1
+  hindsight_stack_port_valid "$HINDSIGHT_EMBED_CONTROL_PORT" || {
+    print -ru2 -- "hindsight-embed-stack: invalid machine-global control port"
+    return 1
+  }
+
+  typeset -A endpoints
+  endpoints[$HINDSIGHT_EMBED_CONTROL_PORT]="control"
+  hindsight_stack_for_each_profile hindsight_stack_validate_profile_endpoints ""
 }
 
 hindsight_stack_run_stop_helper() {
@@ -298,9 +743,18 @@ hindsight_stack_broker_start() {
   emulate -L zsh
   hindsight_stack_load_config
 
-  "$HINDSIGHT_MEMORY_CLI" --state-dir "$HINDSIGHT_MEMORY_STATE_DIR" \
-    broker serve --socket "$HINDSIGHT_MEMORY_BROKER_SOCKET" \
-    --profile "$HINDSIGHT_EMBED_PROFILE" &
+  local -a arguments
+  arguments=(
+    --state-dir "$HINDSIGHT_MEMORY_STATE_DIR"
+    broker serve --socket "$HINDSIGHT_MEMORY_BROKER_SOCKET"
+  )
+  local profile
+  local -a profiles
+  profiles=("${(@f)$(hindsight_stack_enabled_profiles)}") || return 1
+  for profile in "${profiles[@]}"; do
+    arguments+=(--profile "$profile")
+  done
+  "$HINDSIGHT_MEMORY_CLI" "${arguments[@]}" &
 }
 
 hindsight_stack_daemon_start() {
@@ -511,15 +965,17 @@ hindsight_stack_reconcile_broker() {
 hindsight_stack_reconcile_daemon() {
   emulate -L zsh
 
+  local component="daemon:${HINDSIGHT_EMBED_PROFILE}"
+
   if hindsight_stack_daemon_status; then
     return 0
   fi
 
-  if ! hindsight_stack_can_start daemon; then
+  if ! hindsight_stack_can_start "$component"; then
     return 1
   fi
 
-  hindsight_stack_mark_start daemon
+  hindsight_stack_mark_start "$component"
   hindsight_stack_log "daemon is not healthy; starting ${HINDSIGHT_EMBED_PROFILE}"
   if ! hindsight_stack_daemon_start; then
     hindsight_stack_log "daemon start command failed"
@@ -531,21 +987,36 @@ hindsight_stack_reconcile_daemon() {
 hindsight_stack_reconcile_ui() {
   emulate -L zsh
 
+  local component="ui:${HINDSIGHT_EMBED_PROFILE}"
+
   if hindsight_stack_ui_status; then
     return 0
   fi
 
-  if ! hindsight_stack_can_start ui; then
+  if ! hindsight_stack_can_start "$component"; then
     return 1
   fi
 
-  hindsight_stack_mark_start ui
+  hindsight_stack_mark_start "$component"
   hindsight_stack_log "ui is not healthy; starting ${HINDSIGHT_EMBED_PROFILE}"
   if ! hindsight_stack_ui_start; then
     hindsight_stack_log "ui start command failed"
     return 1
   fi
   hindsight_stack_wait_ui
+}
+
+hindsight_stack_reconcile_profile() {
+  emulate -L zsh
+  local ok=0
+  hindsight_stack_reconcile_sidecars || ok=1
+  if hindsight_stack_enabled "$HINDSIGHT_EMBED_AUTOSTART_DAEMON"; then
+    hindsight_stack_reconcile_daemon || ok=1
+  fi
+  if hindsight_stack_enabled "$HINDSIGHT_EMBED_AUTOSTART_UI" && hindsight_stack_daemon_status; then
+    hindsight_stack_reconcile_ui || ok=1
+  fi
+  return "$ok"
 }
 
 hindsight_stack_reconcile_once() {
@@ -562,26 +1033,33 @@ hindsight_stack_reconcile_once() {
     ok=1
   fi
 
+  hindsight_stack_for_each_profile hindsight_stack_reconcile_profile "" || ok=1
+
+  return "$ok"
+}
+
+hindsight_stack_start_profile() {
+  emulate -L zsh
+  local ok=0
+  hindsight_stack_reconcile_sidecars || ok=1
   if hindsight_stack_enabled "$HINDSIGHT_EMBED_AUTOSTART_DAEMON"; then
-    if ! hindsight_stack_reconcile_daemon; then
-      ok=1
-    fi
+    hindsight_stack_daemon_status || hindsight_stack_daemon_start
+    hindsight_stack_wait_daemon || ok=1
   fi
-
-  if hindsight_stack_enabled "$HINDSIGHT_EMBED_AUTOSTART_UI" && hindsight_stack_daemon_status; then
-    if ! hindsight_stack_reconcile_ui; then
-      ok=1
-    fi
+  if hindsight_stack_enabled "$HINDSIGHT_EMBED_AUTOSTART_UI"; then
+    hindsight_stack_ui_status || hindsight_stack_ui_start
+    hindsight_stack_wait_ui || ok=1
   fi
-
   return "$ok"
 }
 
 hindsight_stack_start_all() {
   emulate -L zsh
+  hindsight_stack_load_config
   hindsight_stack_require_current_user || return 1
   hindsight_stack_require_tools || return 1
   hindsight_stack_require_runtime_helpers || return 1
+  hindsight_stack_validate_fleet || return 1
 
   hindsight_stack_broker_status || hindsight_stack_broker_start
   hindsight_stack_wait_broker || return 1
@@ -589,15 +1067,23 @@ hindsight_stack_start_all() {
   hindsight_stack_control_status || hindsight_stack_control_start
   hindsight_stack_wait_control || return 1
 
-  if hindsight_stack_enabled "$HINDSIGHT_EMBED_AUTOSTART_DAEMON"; then
-    hindsight_stack_daemon_status || hindsight_stack_daemon_start
-    hindsight_stack_wait_daemon || return 1
-  fi
+  hindsight_stack_for_each_profile hindsight_stack_start_profile ""
+}
 
-  if hindsight_stack_enabled "$HINDSIGHT_EMBED_AUTOSTART_UI"; then
-    hindsight_stack_ui_status || hindsight_stack_ui_start
-    hindsight_stack_wait_ui || return 1
+hindsight_stack_wait_profile() {
+  emulate -L zsh
+  local profile="$1" ok=0
+  print -r -- "waiting for sidecars for profile ${profile} (up to ${HINDSIGHT_EMBED_SIDECAR_WAIT_SECONDS}s)"
+  hindsight_stack_wait_sidecars || ok=1
+  if hindsight_stack_enabled "$HINDSIGHT_EMBED_AUTOSTART_DAEMON"; then
+    print -r -- "waiting for daemon profile ${profile} on port ${HINDSIGHT_EMBED_API_PORT} (up to ${HINDSIGHT_EMBED_DAEMON_WAIT_SECONDS}s)"
+    hindsight_stack_wait_daemon || ok=1
   fi
+  if hindsight_stack_enabled "$HINDSIGHT_EMBED_AUTOSTART_UI"; then
+    print -r -- "waiting for UI profile ${profile} on port ${HINDSIGHT_EMBED_UI_PORT} (up to ${HINDSIGHT_EMBED_UI_WAIT_SECONDS}s)"
+    hindsight_stack_wait_ui || ok=1
+  fi
+  return "$ok"
 }
 
 hindsight_stack_wait_all() {
@@ -610,15 +1096,18 @@ hindsight_stack_wait_all() {
   print -r -- "waiting for control on port ${HINDSIGHT_EMBED_CONTROL_PORT} (up to ${HINDSIGHT_EMBED_CONTROL_WAIT_SECONDS}s)"
   hindsight_stack_wait_control || return 1
 
-  if hindsight_stack_enabled "$HINDSIGHT_EMBED_AUTOSTART_DAEMON"; then
-    print -r -- "waiting for daemon profile ${HINDSIGHT_EMBED_PROFILE} on port ${HINDSIGHT_EMBED_API_PORT} (up to ${HINDSIGHT_EMBED_DAEMON_WAIT_SECONDS}s)"
-    hindsight_stack_wait_daemon || return 1
-  fi
+  hindsight_stack_for_each_profile hindsight_stack_wait_profile ""
+}
 
-  if hindsight_stack_enabled "$HINDSIGHT_EMBED_AUTOSTART_UI"; then
-    print -r -- "waiting for UI profile ${HINDSIGHT_EMBED_PROFILE} on port ${HINDSIGHT_EMBED_UI_PORT} (up to ${HINDSIGHT_EMBED_UI_WAIT_SECONDS}s)"
-    hindsight_stack_wait_ui || return 1
-  fi
+hindsight_stack_stop_profile() {
+  emulate -L zsh
+  local profile="$1" ok=0
+  hindsight_stack_stop_profile_services "$profile" || ok=1
+  hindsight_stack_wait_stopped_for ui "$HINDSIGHT_EMBED_STOP_WAIT_SECONDS" || ok=1
+  hindsight_stack_wait_stopped_for daemon "$HINDSIGHT_EMBED_STOP_WAIT_SECONDS" || ok=1
+  hindsight_stack_stop_sidecars || ok=1
+  hindsight_stack_wait_sidecars_stopped || ok=1
+  return "$ok"
 }
 
 hindsight_stack_stop_all() {
@@ -627,13 +1116,15 @@ hindsight_stack_stop_all() {
   hindsight_stack_require_current_user || return 1
 
   local ok=0
-  hindsight_stack_stop_profile_services "$HINDSIGHT_EMBED_PROFILE" || ok=1
-  hindsight_stack_wait_stopped_for ui "$HINDSIGHT_EMBED_STOP_WAIT_SECONDS" || ok=1
-  hindsight_stack_wait_stopped_for daemon "$HINDSIGHT_EMBED_STOP_WAIT_SECONDS" || ok=1
-  hindsight_stack_broker_stop || ok=1
-  hindsight_stack_wait_stopped_for broker "$HINDSIGHT_EMBED_STOP_WAIT_SECONDS" || ok=1
-  hindsight_stack_control_stop || true
-  hindsight_stack_wait_stopped_for control "$HINDSIGHT_EMBED_STOP_WAIT_SECONDS" || ok=1
+  hindsight_stack_for_each_profile hindsight_stack_stop_profile "" || ok=1
+  if hindsight_stack_broker_running; then
+    hindsight_stack_broker_stop || ok=1
+    hindsight_stack_wait_stopped_for broker "$HINDSIGHT_EMBED_STOP_WAIT_SECONDS" || ok=1
+  fi
+  if hindsight_stack_control_running; then
+    hindsight_stack_control_stop || true
+    hindsight_stack_wait_stopped_for control "$HINDSIGHT_EMBED_STOP_WAIT_SECONDS" || ok=1
+  fi
   return "$ok"
 }
 
@@ -661,12 +1152,70 @@ hindsight_stack_status_word() {
   esac
 }
 
+hindsight_stack_status_profile() {
+  emulate -L zsh
+  local profile="$1" sidecar
+  [[ -z "$requested" || "$requested" == "$profile" ]] || return 0
+  daemon_health="$(hindsight_stack_status_word daemon)"
+  ui_health="$(hindsight_stack_status_word ui)"
+  [[ "$daemon_health" == healthy ]] || fleet_health=degraded
+  [[ "$ui_health" == healthy ]] || fleet_health=degraded
+  sidecar_records=()
+  local -a sidecars
+  sidecars=("${(@f)$(hindsight_stack_sidecar_names)}") || {
+    fleet_health=degraded
+    return 1
+  }
+  sidecars=("${(@)sidecars:#}")
+  for sidecar in "${sidecars[@]}"; do
+    if hindsight_stack_sidecar_status "$sidecar"; then
+      sidecar_health=healthy
+    else
+      sidecar_health=down
+      fleet_health=degraded
+    fi
+    sidecar_records+=("${sidecar}=${sidecar_health}@$(hindsight_stack_sidecar_port "$sidecar")")
+  done
+  if (( ${#sidecar_records} == 0 )); then
+    sidecar_health=none
+  else
+    sidecar_health="${(j:,:)sidecar_records}"
+  fi
+  profile_records+=("profile ${profile}: slot=${HINDSIGHT_EMBED_PROFILE_SLOT} api=${daemon_health}@${HINDSIGHT_EMBED_API_PORT} ui=${ui_health}@${HINDSIGHT_EMBED_UI_PORT} sidecars=${sidecar_health}")
+}
+
 hindsight_stack_status_report() {
   emulate -L zsh
   hindsight_stack_load_config
-
+  hindsight_stack_push_profile_state
+  hindsight_stack_select_profile "$HINDSIGHT_EMBED_PRIMARY_PROFILE" || {
+    hindsight_stack_pop_profile_state
+    return 1
+  }
   print -r -- "broker: $(hindsight_stack_status_word broker) (${HINDSIGHT_MEMORY_BROKER_SOCKET})"
   print -r -- "control: $(hindsight_stack_status_word control) (http://${HINDSIGHT_EMBED_CONTROL_HOSTNAME}:${HINDSIGHT_EMBED_CONTROL_PORT})"
   print -r -- "daemon: $(hindsight_stack_status_word daemon) (${HINDSIGHT_EMBED_PROFILE}, http://127.0.0.1:${HINDSIGHT_EMBED_API_PORT})"
   print -r -- "ui: $(hindsight_stack_status_word ui) (${HINDSIGHT_EMBED_PROFILE}, $(hindsight_stack_ui_url))"
+  hindsight_stack_pop_profile_state
+
+  local requested="${1:-}"
+  local -a profiles sidecar_records profile_records
+  profiles=("${(@f)$(hindsight_stack_enabled_profiles)}") || return 1
+  if [[ -n "$requested" ]]; then
+    hindsight_stack_profile_enabled "$requested" || {
+      print -ru2 -- "hindsight-embed-stack: profile '${requested}' is not enabled"
+      return 1
+    }
+  fi
+
+  local fleet_health=healthy daemon_health ui_health sidecar_health
+  hindsight_stack_broker_status || fleet_health=degraded
+  hindsight_stack_control_status || fleet_health=degraded
+  local profile_count="${#profiles}"
+  [[ -z "$requested" ]] || profile_count=1
+  local profile_label=profiles
+  (( profile_count == 1 )) && profile_label=profile
+  hindsight_stack_for_each_profile hindsight_stack_status_profile "$requested" || fleet_health=degraded
+  print -r -- "fleet: ${fleet_health} (${profile_count} enabled ${profile_label})"
+  print -rl -- "${profile_records[@]}"
 }

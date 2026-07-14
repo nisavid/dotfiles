@@ -9,6 +9,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
+from .action_contracts import ACTION_METHODS, ARTIFACT_ACTION_KINDS
 from .adapters import AdapterError, AuthenticationError, RollbackBundle, validate_runtime_request
 from .canonical import digest
 from .model import BankRef, EndpointIdentity, Inventory
@@ -39,12 +40,21 @@ class HttpAdapter:
         "reapply_invalidated_memories": ("POST", "/v1/memories/invalidated/reapply"),
         "delete_bank": ("DELETE", "/v1/banks"),
     }
+    DIRECT_ACTION_PATHS = {
+        "create_bank": ("POST", "/v1/banks"),
+        "import_bank": ("POST", "/v1/migrations/import"),
+        "migrate_bank": ("POST", "/v1/migrations/apply"),
+        "reload_profile": ("POST", "/v1/profiles/reload"),
+        "replace_canonical_bank": ("POST", "/v1/migrations/replace"),
+        "report_unmanaged": ("POST", "/v1/unmanaged/report"),
+    }
     PAGE_LIMIT = 1000
     SECRET_KEY_PARTS = frozenset(
         {"access", "authorization", "bearer", "credential", "key", "password", "secret", "token"}
     )
 
     def __init__(self, *, inventory: Inventory, profile_id: str, token_resolver: Callable[[], str],
+                 artifact_resolver: Callable[[Any], Mapping[str, Any]] | None = None,
                  timeout: float = 5.0, max_json_bytes: int = 1_048_576) -> None:
         if not isinstance(inventory, Inventory):
             raise AdapterError("validated inventory is required")
@@ -55,6 +65,7 @@ class HttpAdapter:
         self.endpoint = inventory_endpoint(inventory, profile_id)
         self._inventory = inventory
         self._token_resolver = token_resolver
+        self._artifact_resolver = artifact_resolver
         self.timeout = min(max(float(timeout), 0.1), 30.0)
         self.max_json_bytes = min(max(int(max_json_bytes), 1), 8_388_608)
         self.recordings: list[dict[str, Any]] = []
@@ -426,28 +437,26 @@ class HttpAdapter:
     def delete_bank(self, value): return self._mutate("delete_bank", value)
 
     def apply_action(self, action) -> None:
-        mapping = {
-            "configure_bank": self.patch_config, "configure_profile": self.patch_config,
-            "set_auto_consolidation": self.patch_config, "set_memory_defense": self.patch_config,
-            "install_model": self.upsert_model, "activate_model": self.upsert_model,
-            "upsert_model": self.upsert_model, "upsert_directive": self.upsert_directive,
-        }
-        direct = {
-            "create_bank": ("POST", "/v1/banks"),
-            "reload_profile": ("POST", "/v1/profiles/reload"),
-            "report_unmanaged": ("POST", "/v1/unmanaged/report"),
-            "import_bank": ("POST", "/v1/migrations/import"),
-            "migrate_bank": ("POST", "/v1/migrations/apply"),
-            "replace_canonical_bank": ("POST", "/v1/migrations/replace"),
-        }
-        try:
-            if action.kind in direct:
-                method, path = direct[action.kind]
-                self._request(method, path, dict(action.details))
-            else:
-                mapping[action.kind](dict(action.details))
-        except KeyError:
-            raise AdapterError(f"unsupported apply action: {action.kind}") from None
+        if action.kind in self.DIRECT_ACTION_PATHS:
+            method, path = self.DIRECT_ACTION_PATHS[action.kind]
+            self._request(method, path, dict(action.details))
+            return
+        method_name = ACTION_METHODS.get(action.kind)
+        if method_name is None:
+            raise AdapterError(f"unsupported apply action: {action.kind}")
+        details = dict(action.details)
+        if action.kind in ARTIFACT_ACTION_KINDS:
+            expected = details.pop("artifact_digest", None)
+            if self._artifact_resolver is None:
+                raise AdapterError("desired artifact resolver is required")
+            try:
+                desired = self._artifact_resolver(action)
+            except Exception:
+                raise AdapterError("desired artifact resolution failed") from None
+            if not isinstance(desired, Mapping) or digest(desired) != expected:
+                raise AdapterError("resolved desired artifact digest does not match")
+            details["desired"] = dict(desired)
+        getattr(self, method_name)(details)
 
     def verify_postcondition(self, action) -> bool:
         result = self._request("POST", "/v1/postconditions/verify", {"action_id": action.id})

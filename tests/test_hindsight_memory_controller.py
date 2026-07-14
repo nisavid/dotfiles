@@ -1,4 +1,5 @@
 import hashlib
+from io import StringIO
 import json
 import os
 from pathlib import Path
@@ -7,6 +8,7 @@ import stat
 import subprocess
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from unittest.mock import patch
 
 
@@ -20,10 +22,13 @@ from hindsight_memory_control_plane import (
     OperationSnapshot,
     PlanError,
     build_plan,
+    build_mutation_plan,
     canonical_bytes,
     load_inventory,
     verify_plan,
 )
+from hindsight_memory_control_plane.canonical import digest
+from hindsight_memory_control_plane.adapters import FakeAdapter
 from hindsight_memory_control_plane.ledger import LedgerError, append_record
 
 
@@ -110,6 +115,141 @@ class ControllerCliTest(unittest.TestCase):
             json.dumps(value, indent=2 if pretty else None, ensure_ascii=False),
             encoding="utf-8",
         )
+
+    def test_canonical_json_rejects_non_finite_numbers(self):
+        for value in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                canonical_bytes({"value": value})
+
+    def test_rollback_archive_overlap_detects_path_and_inode_aliases(self):
+        module = runpy.run_path(str(CLI))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            incoming = root / "incoming.zip"
+            incoming.write_bytes(b"archive")
+            hardlink = root / "hardlink.zip"
+            os.link(incoming, hardlink)
+            self.assertTrue(module["_paths_overlap"](incoming, [incoming]))
+            self.assertTrue(module["_paths_overlap"](hardlink, [incoming]))
+            self.assertFalse(module["_paths_overlap"](root / "rollback.tar", [incoming]))
+
+    def test_apply_cli_uses_selected_inventory_plan_and_fresh_rollback(self):
+        module = runpy.run_path(str(CLI))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            inventory_path = root / "inventory.json"
+            plan_path = root / "plan.json"
+            self.write_json(inventory_path, inventory())
+            desired = load_inventory(inventory_path)
+            endpoint = {
+                "profile_id": "core", "scheme": "http", "host": "127.0.0.1",
+                "port": 7979, "tenant": "default",
+            }
+            state = {"banks": []}
+            plan = build_plan(
+                desired,
+                {"profile_id": "core", "endpoint": endpoint, "state": state, "compatibility": []},
+                {"idle": True, "active": []},
+            )
+            self.write_json(plan_path, plan.to_dict())
+            adapter = FakeAdapter(endpoint=endpoint, state=state)
+            args = module["argparse"].Namespace(
+                inventory=str(inventory_path),
+                profile="core",
+                plan=str(plan_path),
+                approval_digest=plan.plan_digest,
+                token_env="HINDSIGHT_TEST_TOKEN",
+                completion_marker=None,
+            )
+            output = StringIO()
+            with (
+                patch.dict(os.environ, {"HINDSIGHT_TEST_TOKEN": "local-test-token"}),
+                patch.dict(module["apply_command"].__globals__, {"HttpAdapter": lambda **_kwargs: adapter}),
+                redirect_stdout(output),
+            ):
+                self.assertEqual(module["apply_command"](args), 0)
+            result = json.loads(output.getvalue())
+            self.assertEqual(result["status"], "applied")
+            self.assertEqual(
+                result["applied_action_ids"],
+                ["01-create-bank-engineering", "02-configure-bank-engineering"],
+            )
+            self.assertIn("create_rollback_bundle", [call["method"] for call in adapter.calls])
+            methods = [call["method"] for call in adapter.calls]
+            self.assertLess(methods.index("create_rollback_bundle"), methods.index("create_bank"))
+
+    def test_apply_cli_routes_mutation_through_digest_selected_admin_archive(self):
+        module = runpy.run_path(str(CLI))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            inventory_path = root / "inventory.json"
+            plan_path = root / "plan.json"
+            marker = root / "artifacts" / "distillation-complete.marker"
+            proposal = root / "proposal.md"
+            value = inventory()
+            value["migration"] = {"artifact_dir": str(marker.parent), "proposal_log": str(proposal)}
+            self.write_json(inventory_path, value)
+            desired = load_inventory(inventory_path)
+            endpoint = {"profile_id": "core", "scheme": "http", "host": "127.0.0.1", "port": 7979, "tenant": "default"}
+            state = {"banks": []}
+            base = build_plan(
+                desired, {"profile_id": "core", "endpoint": endpoint, "state": state, "compatibility": []},
+                {"idle": True, "active": []},
+            )
+            archive = root / "approved-bank.zip"
+            archive.write_bytes(b"approved migration archive")
+            archive_digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+            rollback_payload = b"verified pre-state rollback archive"
+            rollback_digest = hashlib.sha256(rollback_payload).hexdigest()
+            rollback_archive = root / "pre-state-backup.tar"
+            migration_digest = "3" * 64
+            plan = build_mutation_plan(
+                base, migration_run_id="run-1", migration_artifact_digest=migration_digest,
+                rollback_archive_digest=rollback_digest,
+                actions=[{
+                    "id": "migrate-1", "kind": "migrate_bank",
+                    "artifact_digest": migration_digest, "archive_digest": archive_digest,
+                }],
+            )
+            self.write_json(plan_path, plan.to_dict())
+            marker.parent.mkdir()
+            marker.write_text(f"run=run-1\nartifact={migration_digest}\n", encoding="utf-8")
+            proposal.write_text(
+                f"## Migration complete\nrun=run-1\nartifact={migration_digest}\n", encoding="utf-8",
+            )
+            evidence_path = root / "restore-evidence.json"
+            self.write_json(evidence_path, {archive_digest: {
+                "disposable": True, "restore_verified": True, "artifact_digest": archive_digest,
+            }, rollback_digest: {
+                "disposable": True, "restore_verified": True, "artifact_digest": rollback_digest,
+            }})
+            adapter = FakeAdapter(endpoint=endpoint, state=state)
+            args = module["argparse"].Namespace(
+                inventory=str(inventory_path), profile="core", plan=str(plan_path),
+                approval_digest=plan.plan_digest, token_env="HINDSIGHT_TEST_TOKEN",
+                completion_marker=str(marker), migration_archive=[str(archive)],
+                restore_evidence=str(evidence_path), admin_version="1",
+                rollback_archive=str(rollback_archive),
+            )
+            admin_calls = []
+
+            def run_admin(argv, **_kwargs):
+                admin_calls.append(argv)
+                if argv[1] == "backup":
+                    rollback_archive.write_bytes(rollback_payload)
+                return subprocess.CompletedProcess(argv, 0, "{}", "")
+
+            with (
+                patch.dict(os.environ, {"HINDSIGHT_TEST_TOKEN": "local-test-token"}),
+                patch.dict(module["apply_command"].__globals__, {"HttpAdapter": lambda **_kwargs: adapter}),
+                patch.object(module["subprocess"], "run", side_effect=run_admin),
+                redirect_stdout(StringIO()),
+            ):
+                self.assertEqual(module["apply_command"](args), 0)
+            self.assertEqual(admin_calls[0][0:2], ["hindsight-admin", "backup"])
+            self.assertEqual(admin_calls[1][0:2], ["hindsight-admin", "import-bank"])
+            self.assertIn(str(archive), admin_calls[1])
+            self.assertIn(archive_digest, admin_calls[1])
 
     def test_broker_pid_read_is_bounded_and_disappearance_is_invalid(self):
         module = runpy.run_path(str(CLI))
@@ -484,10 +624,6 @@ class ControllerCliTest(unittest.TestCase):
                     },
                     "state": {"banks": []},
                     "compatibility": [{"check": "provider-contract", "compatible": True}],
-                    "actions": [
-                        {"id": "01-create-engineering", "kind": "create_bank", "bank": {"profile_id": "core", "bank_id": "engineering"}},
-                        {"id": "02-configure-engineering", "kind": "configure_bank", "bank": {"profile_id": "core", "bank_id": "engineering"}},
-                    ],
                 },
             )
             self.write_json(operations, {"idle": True, "active": []})
@@ -513,7 +649,20 @@ class ControllerCliTest(unittest.TestCase):
             )
             self.assertEqual(value["target_endpoint"]["port"], 7979)
             self.assertEqual(value["operations"], {"active": [], "idle": True})
-            self.assertEqual([a["id"] for a in value["actions"]], ["01-create-engineering", "02-configure-engineering"])
+            self.assertEqual(
+                [a["id"] for a in value["actions"]],
+                ["01-create-bank-engineering", "02-configure-bank-engineering"],
+            )
+            self.assertEqual(
+                value["actions"][1]["artifact_digest"],
+                hashlib.sha256(
+                    json.dumps(
+                        inventory()["banks"][0],
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode()
+                ).hexdigest(),
+            )
             self.assertFalse(value["destructive"])
             body = dict(value)
             plan_digest = body.pop("plan_digest")
@@ -535,7 +684,7 @@ class ControllerCliTest(unittest.TestCase):
                 {"desired_agrees": True, "live_agrees": True, "plan_agrees": True},
             )
 
-    def test_plan_rejects_destructive_kinds_even_when_the_flag_is_missing_or_false(self):
+    def test_plan_rejects_caller_supplied_actions(self):
         with tempfile.TemporaryDirectory() as directory:
             tmp = Path(directory)
             fixture = tmp / "inventory.json"
@@ -556,7 +705,89 @@ class ControllerCliTest(unittest.TestCase):
                 )
                 result = self.run_cli(tmp, "plan", "--inventory", fixture, "--live-state", live, "--operations", operations)
                 self.assertNotEqual(result.returncode, 0)
-                self.assertIn("destructive action kind", result.stderr)
+                self.assertIn("cannot supply proposed actions", result.stderr)
+
+    def test_plan_derives_semantic_actions_from_desired_and_observed_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tmp = Path(directory)
+            fixture = tmp / "inventory.json"
+            value = inventory()
+            value["banks"][0].update(
+                {
+                    "enable_auto_consolidation": False,
+                    "memory_defense": True,
+                    "models": [{"id": "summary", "revision": "v2"}],
+                    "directives": [{"id": "grounded", "text": "Use live truth."}],
+                }
+            )
+            self.write_json(fixture, value)
+            desired = load_inventory(fixture)
+            live = {
+                "profile_id": "core",
+                "endpoint": {
+                    "profile_id": "core", "scheme": "http",
+                    "host": "127.0.0.1", "port": 7979, "tenant": "default",
+                },
+                "state": {
+                    "banks": [
+                        {
+                            "id": "engineering",
+                            "artifact_digest": "0" * 64,
+                            "enable_auto_consolidation": True,
+                            "memory_defense": False,
+                            "models": [{"id": "summary", "revision": "v1", "artifact_digest": "1" * 64}],
+                            "directives": [],
+                        },
+                        {"id": "unmanaged"},
+                    ]
+                },
+                "compatibility": [],
+            }
+            plan = build_plan(desired, live, {"idle": True, "active": []})
+            self.assertEqual(
+                [action.kind for action in plan.actions],
+                [
+                    "configure_bank", "set_auto_consolidation",
+                    "set_memory_defense", "upsert_model",
+                    "upsert_directive", "report_unmanaged",
+                ],
+            )
+            for action in plan.actions:
+                if "bank" in action.details:
+                    self.assertEqual(action.details["bank"]["profile_id"], "core")
+                else:
+                    self.assertEqual(action.details["profile_id"], "core")
+
+            bank = value["banks"][0]
+            matching = {
+                **live,
+                "state": {
+                    "banks": [
+                        {
+                            "id": "engineering",
+                            "artifact_digest": digest(bank.get("config", bank)),
+                            "enable_auto_consolidation": False,
+                            "memory_defense": True,
+                            "models": [
+                                {
+                                    "id": "summary", "revision": "v2",
+                                    "artifact_digest": digest(bank["models"][0]),
+                                }
+                            ],
+                            "directives": [
+                                {
+                                    "id": "grounded",
+                                    "artifact_digest": digest(bank["directives"][0]),
+                                }
+                            ],
+                        }
+                    ]
+                },
+            }
+            self.assertEqual(
+                build_plan(desired, matching, {"idle": True, "active": []}).actions,
+                (),
+            )
 
     def test_plan_artifacts_reject_private_and_payload_carriers(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -568,15 +799,14 @@ class ControllerCliTest(unittest.TestCase):
             base_live = {
                 "profile_id": "core",
                 "endpoint": {"profile_id": "core", "scheme": "http", "host": "127.0.0.1", "port": 7979, "tenant": "default"},
-                "state": {},
+                "state": {"banks": []},
                 "compatibility": [{"check": "provider-contract", "compatible": True}],
-                "actions": [{"id": "create-1", "kind": "create_bank", "bank": {"profile_id": "core", "bank_id": "engineering"}}],
             }
             adversarial = [
                 ({"idle": False, "active": [{"id": "op-1", "kind": "retain", "status": "running", "token": "private"}]}, base_live, "operations"),
                 ({"idle": True, "active": []}, {**base_live, "compatibility": [{"check": "provider-contract", "compatible": True, "api_key": "private"}]}, "compatibility"),
-                ({"idle": True, "active": []}, {**base_live, "actions": [{"id": "create-1", "kind": "create_bank", "bank": {"profile_id": "core", "bank_id": "engineering"}, "control_key": "private"}]}, "action"),
-                ({"idle": True, "active": []}, {**base_live, "actions": [{"id": "create-1", "kind": "create_bank", "bank": {"profile_id": "core", "bank_id": "engineering"}, "metadata": {"note": "innocuous nested payload"}}]}, "action"),
+                ({"idle": True, "active": []}, {**base_live, "actions": [{"id": "create-1", "kind": "create_bank", "control_key": "private"}]}, "cannot supply proposed actions"),
+                ({"idle": True, "active": []}, {**base_live, "actions": [{"id": "create-1", "kind": "create_bank", "metadata": {"note": "innocuous nested payload"}}]}, "cannot supply proposed actions"),
             ]
             for index, (operation_value, live_value, message) in enumerate(adversarial):
                 self.write_json(operations, operation_value)
@@ -602,16 +832,15 @@ class ControllerCliTest(unittest.TestCase):
             live = {
                 "profile_id": "core",
                 "endpoint": {"profile_id": "core", "scheme": "http", "host": "127.0.0.1", "port": 7979, "tenant": "default"},
-                "state": {},
+                "state": {"banks": []},
                 "compatibility": [{"check": "provider-contract", "compatible": True}],
-                "actions": [{"id": "create-1", "kind": "create_bank", "bank": {"profile_id": "core", "bank_id": "engineering"}}],
             }
             operations = {"idle": False, "active": [{"id": "op-1", "kind": "retain", "status": "running", "profile_id": "core"}]}
             plan = build_plan(desired, live, operations)
             before = canonical_bytes(plan.to_dict())
 
             live["compatibility"][0]["compatible"] = False
-            live["actions"][0]["bank"]["bank_id"] = "personal"
+            live["state"]["banks"].append({"id": "personal"})
             operations["active"][0]["status"] = "failed"
             with self.assertRaises(TypeError):
                 plan.compatibility[0]["compatible"] = False
@@ -633,7 +862,7 @@ class ControllerCliTest(unittest.TestCase):
             operations = tmp / "operations.json"
             self.write_json(fixture, inventory())
             self.write_json(operations, {"idle": True, "active": []})
-            self.write_json(live, {"profile_id": "core", "endpoint": {"profile_id": "core", "scheme": "http", "host": "127.0.0.1", "port": 7980, "tenant": "default"}, "state": {}, "compatibility": [], "actions": []})
+            self.write_json(live, {"profile_id": "core", "endpoint": {"profile_id": "core", "scheme": "http", "host": "127.0.0.1", "port": 7980, "tenant": "default"}, "state": {"banks": []}, "compatibility": []})
             result = self.run_cli(tmp, "plan", "--inventory", fixture, "--live-state", live, "--operations", operations)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("endpoint identity does not match inventory", result.stderr)
@@ -647,7 +876,7 @@ class ControllerCliTest(unittest.TestCase):
             plan = tmp / "plan.json"
             self.write_json(fixture, inventory())
             self.write_json(operations, {"idle": True, "active": []})
-            self.write_json(live, {"profile_id": "core", "endpoint": {"profile_id": "core", "scheme": "http", "host": "127.0.0.1", "port": 7979, "tenant": "default"}, "state": {}, "compatibility": [], "actions": []})
+            self.write_json(live, {"profile_id": "core", "endpoint": {"profile_id": "core", "scheme": "http", "host": "127.0.0.1", "port": 7979, "tenant": "default"}, "state": {"banks": []}, "compatibility": []})
             self.assertEqual(self.run_cli(tmp, "plan", "--inventory", fixture, "--live-state", live, "--operations", operations, "--output", plan).returncode, 0)
 
             value = json.loads(plan.read_text())

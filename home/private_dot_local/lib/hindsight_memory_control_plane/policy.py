@@ -950,6 +950,25 @@ def _contextual_selection(
     return None
 
 
+def _validate_session_home(
+    policy: PolicyArtifact,
+    home: str,
+    *,
+    personal_session: bool,
+) -> None:
+    kind = policy.bank(home).kind
+    if kind == "airlock":
+        raise PolicyError("ordinary sessions cannot route into an isolated airlock")
+    if kind == "personal" and not personal_session:
+        raise PolicyError(
+            "a personal home bank requires an explicitly personal session"
+        )
+    if personal_session and kind != "personal":
+        raise PolicyError(
+            "an explicitly personal session requires a personal route"
+        )
+
+
 def resolve_session_route(
     policy: PolicyArtifact,
     *,
@@ -965,19 +984,6 @@ def resolve_session_route(
         if explicit_home_bank not in bank_ids:
             raise PolicyError("explicit home bank is not declared")
         home = explicit_home_bank
-        if policy.bank(home).kind == "airlock":
-            raise PolicyError(
-                "ordinary sessions cannot route into an isolated airlock"
-            )
-        if policy.bank(home).kind == "personal" and not personal_session:
-            raise PolicyError(
-                "personal home-bank override requires an explicitly "
-                "personal session"
-            )
-        if personal_session and policy.bank(home).kind != "personal":
-            raise PolicyError(
-                "an explicitly personal session requires a personal route"
-            )
     else:
         matches = [
             value
@@ -996,19 +1002,12 @@ def resolve_session_route(
             home = winners[0].bank_id
         else:
             home = policy.machine_default
-        if policy.bank(home).kind == "airlock":
-            raise PolicyError(
-                "ordinary sessions cannot route into an isolated airlock"
-            )
-        if policy.bank(home).kind == "personal" and not personal_session:
-            raise PolicyError(
-                "personal routing requires an explicitly personal session"
-            )
-        if personal_session and policy.bank(home).kind != "personal":
-            raise PolicyError(
-                "explicitly personal session requires an explicit "
-                "personal route"
-            )
+
+    _validate_session_home(
+        policy,
+        home,
+        personal_session=personal_session,
+    )
 
     allowed = policy.allowed_companions[home]
     requested = tuple(requested_companions)

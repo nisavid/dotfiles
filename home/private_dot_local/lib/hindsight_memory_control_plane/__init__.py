@@ -5,7 +5,7 @@ from .adapters import Adapter, AdapterError, AuthenticationError, FakeAdapter, R
 from .http_adapter import HttpAdapter
 from .inventory import InventoryError, load_inventory
 from .ledger import LedgerError, append_record
-from .migration_adapter import AdminMigrationAdapter, MigrationAdapterError
+from .migration_adapter import AdminMigrationAdapter, MigrationAdapterError, MigrationApplyAdapter
 from .migration import (
     MigrationDiscovery,
     MigrationError,
@@ -16,9 +16,9 @@ from .migration import (
 from .model import Action, BankRef, EndpointIdentity, Inventory, OperationSnapshot, Plan
 from .planning import PlanError, build_plan, inventory_endpoint, plan_from_dict, verify_plan
 from .reconcile import (
-    ApplyError, ApplyResult, MutationPlan, apply_plan, build_mutation_plan,
-    create_rollback_bundle, mutation_plan_from_dict, parse_migration_gate,
-    verify_mutation_plan,
+    ApplyError, ApplyResult, MigrationGateDescriptor, MutationPlan, apply_plan,
+    build_mutation_plan, capture_migration_gate, create_rollback_bundle,
+    mutation_plan_from_dict, parse_migration_gate, verify_mutation_plan,
 )
 
 __all__ = [
@@ -37,8 +37,10 @@ __all__ = [
     "OperationSnapshot",
     "MutationPlan",
     "MigrationAdapterError",
+    "MigrationApplyAdapter",
     "MigrationDiscovery",
     "MigrationError",
+    "MigrationGateDescriptor",
     "Plan",
     "PlanError",
     "RollbackBundle",
@@ -49,6 +51,7 @@ __all__ = [
     "append_record",
     "build_plan",
     "build_mutation_plan",
+    "capture_migration_gate",
     "canonical_bytes",
     "digest",
     "discover_migration_state",

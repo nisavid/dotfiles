@@ -3,6 +3,7 @@ from io import BytesIO
 from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import HTTPError
+import tempfile
 import threading
 import time
 import unittest
@@ -12,16 +13,23 @@ import sys
 
 
 ROOT = Path(__file__).resolve().parents[1]
+MIGRATION_ARTIFACT_DIGEST = "3" * 64
 LIB = ROOT / "home/private_dot_local/lib"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
 from hindsight_memory_control_plane.adapters import AdapterError, AuthenticationError, FakeAdapter, RollbackBundle
 from hindsight_memory_control_plane.http_adapter import HttpAdapter
-from hindsight_memory_control_plane.migration_adapter import AdminMigrationAdapter, MigrationAdapterError
+from hindsight_memory_control_plane.migration_adapter import AdminMigrationAdapter, MigrationAdapterError, MigrationApplyAdapter
 from hindsight_memory_control_plane.canonical import digest
 from hindsight_memory_control_plane.model import Action, BankRef, EndpointIdentity, Inventory, OperationSnapshot, Plan
-from hindsight_memory_control_plane.reconcile import ApplyError, apply_plan, create_rollback_bundle, parse_migration_gate
+from hindsight_memory_control_plane.reconcile import (
+    ApplyError,
+    apply_plan,
+    capture_migration_gate,
+    create_rollback_bundle,
+    parse_migration_gate,
+)
 
 
 def plan_for(state, *actions):
@@ -46,6 +54,19 @@ def inventory_for(port, *, scheme="http", host="127.0.0.1", approved_tls=False):
     }
     artifact = {key: raw[key] for key in ("schema_version", "archetype", "profiles", "providers", "banks", "harnesses", "policy")}
     return Inventory(1, raw["machine"], raw["archetype"], tuple(raw["profiles"]), (), (), (), raw["migration"], raw["policy"], digest(raw), digest(artifact))
+
+
+def write_migration_gate(root, run_id, artifact_digest):
+    artifact_dir = root / "artifacts"
+    artifact_dir.mkdir(parents=True)
+    marker = artifact_dir / "distillation-complete.marker"
+    proposal = root / "proposal-log.md"
+    marker.write_text(f"run={run_id}\nartifact={artifact_digest}\n", encoding="utf-8")
+    proposal.write_text(
+        f"# Migration proposals\n\n## Migration complete\nrun={run_id}\nartifact={artifact_digest}\n",
+        encoding="utf-8",
+    )
+    return capture_migration_gate(marker, proposal), marker, proposal
 
 
 def start_http_server(test_case, handler):
@@ -373,6 +394,38 @@ class HttpAdapterContractTest(AdapterContractMixin, unittest.TestCase):
 
 
 class HttpAdapterSecurityTest(unittest.TestCase):
+    def test_artifact_action_resolves_and_verifies_desired_payload(self):
+        desired = {"mode": "active", "limits": {"recall": 10}}
+        action = Action(
+            "configure-core", "configure_profile",
+            {"profile_id": "core", "artifact_digest": digest(desired)},
+        )
+        adapter = HttpAdapter(
+            inventory=inventory_for(7979), profile_id="core",
+            token_resolver=lambda: "token", artifact_resolver=lambda _action: desired,
+        )
+        with patch.object(adapter, "patch_config", return_value={}) as mutate:
+            adapter.apply_action(action)
+        mutate.assert_called_once_with({"profile_id": "core", "desired": desired})
+
+    def test_artifact_action_refuses_missing_or_mismatched_resolution(self):
+        desired = {"mode": "active"}
+        action = Action(
+            "configure-core", "configure_profile",
+            {"profile_id": "core", "artifact_digest": digest(desired)},
+        )
+        adapter = HttpAdapter(
+            inventory=inventory_for(7979), profile_id="core", token_resolver=lambda: "token",
+        )
+        with self.assertRaisesRegex(AdapterError, "resolver is required"):
+            adapter.apply_action(action)
+        mismatched = HttpAdapter(
+            inventory=inventory_for(7979), profile_id="core", token_resolver=lambda: "token",
+            artifact_resolver=lambda _action: {"mode": "different"},
+        )
+        with self.assertRaisesRegex(AdapterError, "digest does not match"):
+            mismatched.apply_action(action)
+
     def test_http_error_response_is_closed_after_authentication_failure(self):
         adapter = HttpAdapter(
             inventory=inventory_for(7979),
@@ -561,6 +614,98 @@ class HttpAdapterSecurityTest(unittest.TestCase):
 
 
 class AdminMigrationAdapterContractTest(unittest.TestCase):
+    def test_mutation_apply_adapter_imports_the_digest_selected_archive(self):
+        archive_digest = "a" * 64
+        evidence = {"disposable": True, "restore_verified": True, "artifact_digest": archive_digest}
+        admin = AdminMigrationAdapter(
+            admin_version="1",
+            argv_factory=lambda operation, archive, sha: [
+                "hindsight-admin", operation, "--archive", archive, "--sha256", sha,
+            ],
+            runner=lambda _argv: {"returncode": 0, "stdout": "{}"},
+        )
+        data_plane = FakeAdapter(
+            endpoint={"profile_id": "core", "scheme": "http", "host": "127.0.0.1", "port": 7979, "tenant": "default"},
+        )
+        adapter = MigrationApplyAdapter(
+            data_plane=data_plane, admin=admin,
+            archives={archive_digest: "/tmp/approved-bank.zip"},
+            restore_evidence={archive_digest: evidence},
+            rollback_archive="/tmp/pre-state-backup.tar",
+            rollback_archive_digest=archive_digest,
+            archive_verifier=lambda _path, _digest: True,
+        )
+        action = Action(
+            "migrate", "migrate_bank",
+            {"artifact_digest": "b" * 64, "archive_digest": archive_digest},
+        )
+
+        adapter.apply_action(action)
+
+        self.assertEqual(admin.calls, [{"operation": "import-bank", "archive_digest": archive_digest}])
+        self.assertNotIn("migrate_bank", [call["method"] for call in data_plane.calls])
+        missing = MigrationApplyAdapter(
+            data_plane=data_plane, admin=admin, archives={}, restore_evidence={},
+            rollback_archive="/tmp/pre-state-backup.tar",
+            rollback_archive_digest=archive_digest,
+            archive_verifier=lambda _path, _digest: True,
+        )
+        with self.assertRaisesRegex(MigrationAdapterError, "unavailable"):
+            missing.apply_action(action)
+
+    def test_mutation_apply_adapter_creates_and_uses_admin_rollback(self):
+        from hindsight_memory_control_plane.reconcile import build_mutation_plan
+
+        incoming_digest = "4" * 64
+        rollback_digest = "5" * 64
+        evidence = {
+            incoming_digest: {"disposable": True, "restore_verified": True, "artifact_digest": incoming_digest},
+            rollback_digest: {"disposable": True, "restore_verified": True, "artifact_digest": rollback_digest},
+        }
+        operations = []
+        admin = AdminMigrationAdapter(
+            admin_version="1",
+            argv_factory=lambda operation, archive, sha: [
+                "hindsight-admin", operation, "--archive", archive, "--sha256", sha,
+            ],
+            runner=lambda argv: operations.append(argv[1]) or {"returncode": 0, "stdout": "{}"},
+        )
+        data_plane = FakeAdapter(
+            endpoint={"profile_id": "core", "scheme": "http", "host": "127.0.0.1", "port": 7979, "tenant": "default"},
+        )
+        data_plane.fail_postcondition_for = "migrate"
+        adapter = MigrationApplyAdapter(
+            data_plane=data_plane, admin=admin,
+            archives={incoming_digest: "/tmp/incoming-bank.zip"},
+            restore_evidence=evidence,
+            rollback_archive="/tmp/pre-state-backup.tar",
+            rollback_archive_digest=rollback_digest,
+            archive_verifier=lambda _path, _digest: True,
+        )
+        base = plan_for({})
+        plan = build_mutation_plan(
+            base, migration_run_id="run-1",
+            migration_artifact_digest=MIGRATION_ARTIFACT_DIGEST,
+            rollback_archive_digest=rollback_digest,
+            actions=[{
+                "id": "migrate", "kind": "migrate_bank",
+                "artifact_digest": MIGRATION_ARTIFACT_DIGEST,
+                "archive_digest": incoming_digest,
+            }],
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            descriptor, _, _ = write_migration_gate(
+                Path(temporary), "run-1", MIGRATION_ARTIFACT_DIGEST,
+            )
+            rollback = create_rollback_bundle(plan, adapter)
+            result = apply_plan(
+                plan, adapter, plan.plan_digest,
+                {"rollback_bundle": rollback, "migration_gate": descriptor},
+            )
+
+        self.assertEqual(result.status, "rolled_back")
+        self.assertEqual(operations, ["backup", "import-bank", "restore"])
+
     def test_accepts_only_digest_bound_argv_and_requires_restore_evidence(self):
         calls = []
         archive_digest = "a" * 64
@@ -597,13 +742,30 @@ class AdminMigrationAdapterContractTest(unittest.TestCase):
             runner=lambda argv: calls.append(argv) or {"returncode": 0, "stdout": "{}"},
         )
         adapter.export_bank("/tmp/bank.tar", artifact)
-        adapter.backup("/tmp/bank.tar", artifact)
+        adapter.backup("/tmp/postgres-bank.tar", artifact)
         adapter.import_bank("/tmp/bank.tar", artifact, evidence)
         adapter.restore("/tmp/bank.tar", artifact, evidence)
         self.assertEqual([argv[1] for argv in calls], ["export-bank", "backup", "import-bank", "restore"])
 
 
 class GuardedApplyTest(unittest.TestCase):
+    def test_apply_refuses_unsatisfied_compatibility_results(self):
+        base = plan_for({})
+        compatibility = ({"check": "provider-contract", "compatible": False, "status": "blocked"},)
+        body = base.body()
+        body["compatibility"] = [dict(value) for value in compatibility]
+        plan = replace(base, compatibility=compatibility, plan_digest=digest(body))
+        adapter = self.adapter()
+        rollback = create_rollback_bundle(plan, adapter)
+        result = apply_plan(
+            plan,
+            adapter,
+            plan.plan_digest,
+            {"rollback_bundle": rollback},
+        )
+        self.assertEqual(result.reason, "compatibility_not_satisfied")
+        self.assertNotIn("create_bank", [call["method"] for call in adapter.calls])
+
     def test_adapter_attested_stale_prestate_bundle_is_refused_before_mutation(self):
         plan = plan_for({"version": "fresh"})
         adapter = self.adapter(state={"version": "stale"})
@@ -630,30 +792,28 @@ class GuardedApplyTest(unittest.TestCase):
     def test_fake_applies_digest_verified_migration_only_with_matching_gate(self):
         from hindsight_memory_control_plane.reconcile import build_mutation_plan
 
-        adapter = self.adapter()
-        base = plan_for({})
-        mutation = build_mutation_plan(
-            base,
-            migration_run_id="run-1",
-            actions=[{"id": "migrate-1", "kind": "migrate_bank", "artifact_digest": base.artifact_digest}],
-        )
-        rollback = create_rollback_bundle(mutation, adapter)
-        matching = {
-            "rollback_bundle": rollback,
-            "migration_gate": {
-                "export": {"run_id": "run-1", "artifact_digest": base.artifact_digest},
-                "import": {"run_id": "run-1", "artifact_digest": base.artifact_digest},
-            },
-        }
+        with tempfile.TemporaryDirectory() as temporary:
+            adapter = self.adapter()
+            base = plan_for({})
+            mutation = build_mutation_plan(
+                base,
+                migration_run_id="run-1",
+                migration_artifact_digest=MIGRATION_ARTIFACT_DIGEST,
+                rollback_archive_digest="5" * 64,
+                actions=[{"id": "migrate-1", "kind": "migrate_bank", "artifact_digest": MIGRATION_ARTIFACT_DIGEST, "archive_digest": "4" * 64}],
+            )
+            rollback = create_rollback_bundle(mutation, adapter)
+            descriptor, _, _ = write_migration_gate(Path(temporary), "run-1", MIGRATION_ARTIFACT_DIGEST)
+            matching = {"rollback_bundle": rollback, "migration_gate": descriptor}
 
-        self.assertEqual(apply_plan(mutation, adapter, mutation.plan_digest, matching).status, "applied")
-        self.assertEqual(apply_plan(mutation, adapter, mutation.plan_digest, {"rollback_bundle": rollback}).reason, "migration_gate_required")
+            self.assertEqual(apply_plan(mutation, adapter, mutation.plan_digest, matching).status, "applied")
+            self.assertEqual(apply_plan(mutation, adapter, mutation.plan_digest, {"rollback_bundle": rollback}).reason, "migration_gate_required")
 
     def test_mutation_plan_deserialization_is_closed_and_digest_verified(self):
         from hindsight_memory_control_plane.reconcile import build_mutation_plan, mutation_plan_from_dict
         base = plan_for({})
-        mutation = build_mutation_plan(base, migration_run_id="run-1", actions=[
-            {"id": "migrate-1", "kind": "migrate_bank", "artifact_digest": base.artifact_digest},
+        mutation = build_mutation_plan(base, migration_run_id="run-1", migration_artifact_digest=MIGRATION_ARTIFACT_DIGEST, rollback_archive_digest="5" * 64, actions=[
+            {"id": "migrate-1", "kind": "migrate_bank", "artifact_digest": MIGRATION_ARTIFACT_DIGEST, "archive_digest": "4" * 64},
         ])
         self.assertEqual(mutation_plan_from_dict(mutation.to_dict()), mutation)
         unknown = {**mutation.to_dict(), "payload": "forbidden"}
@@ -667,44 +827,43 @@ class GuardedApplyTest(unittest.TestCase):
         from hindsight_memory_control_plane.reconcile import build_mutation_plan
         base = plan_for({})
         with self.assertRaisesRegex(ApplyError, "action id"):
-            build_mutation_plan(base, migration_run_id="run-1", actions=[
-                {"id": "a" * 129, "kind": "migrate_bank", "artifact_digest": base.artifact_digest},
+            build_mutation_plan(base, migration_run_id="run-1", migration_artifact_digest=MIGRATION_ARTIFACT_DIGEST, rollback_archive_digest="5" * 64, actions=[
+                {"id": "a" * 129, "kind": "migrate_bank", "artifact_digest": base.artifact_digest, "archive_digest": "4" * 64},
             ])
 
     def test_mutation_action_id_rejects_payload_like_identifier(self):
         from hindsight_memory_control_plane.reconcile import build_mutation_plan
         base = plan_for({})
         with self.assertRaisesRegex(ApplyError, "action id"):
-            build_mutation_plan(base, migration_run_id="run-1", actions=[
-                {"id": "payload={secret}", "kind": "migrate_bank", "artifact_digest": base.artifact_digest},
+            build_mutation_plan(base, migration_run_id="run-1", migration_artifact_digest=MIGRATION_ARTIFACT_DIGEST, rollback_archive_digest="5" * 64, actions=[
+                {"id": "payload={secret}", "kind": "migrate_bank", "artifact_digest": base.artifact_digest, "archive_digest": "4" * 64},
             ])
 
     def test_mutation_action_id_rejects_control_characters(self):
         from hindsight_memory_control_plane.reconcile import build_mutation_plan
         base = plan_for({})
         with self.assertRaisesRegex(ApplyError, "action id"):
-            build_mutation_plan(base, migration_run_id="run-1", actions=[
-                {"id": "migration\nprivate", "kind": "migrate_bank", "artifact_digest": base.artifact_digest},
+            build_mutation_plan(base, migration_run_id="run-1", migration_artifact_digest=MIGRATION_ARTIFACT_DIGEST, rollback_archive_digest="5" * 64, actions=[
+                {"id": "migration\nprivate", "kind": "migrate_bank", "artifact_digest": base.artifact_digest, "archive_digest": "4" * 64},
             ])
 
     def test_valid_mutation_action_id_remains_ledger_safe(self):
         from hindsight_memory_control_plane.reconcile import build_mutation_plan
-        base = plan_for({})
-        adapter = self.adapter()
-        mutation = build_mutation_plan(base, migration_run_id="run-1", actions=[
-            {"id": "migration-01.safe", "kind": "migrate_bank", "artifact_digest": base.artifact_digest},
-        ])
-        rollback = create_rollback_bundle(mutation, adapter)
-        gate = {"rollback_bundle": rollback, "migration_gate": {
-            "export": {"run_id": "run-1", "artifact_digest": base.artifact_digest},
-            "import": {"run_id": "run-1", "artifact_digest": base.artifact_digest},
-        }}
-        result = apply_plan(mutation, adapter, mutation.plan_digest, gate)
-        self.assertEqual(result.status, "applied")
-        self.assertEqual(result.ledger, (
-            {"action_id": "migration-01.safe", "status": "applied"},
-            {"action_id": "migration-01.safe", "status": "verified"},
-        ))
+        with tempfile.TemporaryDirectory() as temporary:
+            base = plan_for({})
+            adapter = self.adapter()
+            mutation = build_mutation_plan(base, migration_run_id="run-1", migration_artifact_digest=MIGRATION_ARTIFACT_DIGEST, rollback_archive_digest="5" * 64, actions=[
+                {"id": "migration-01.safe", "kind": "migrate_bank", "artifact_digest": base.artifact_digest, "archive_digest": "4" * 64},
+            ])
+            rollback = create_rollback_bundle(mutation, adapter)
+            descriptor, _, _ = write_migration_gate(Path(temporary), "run-1", MIGRATION_ARTIFACT_DIGEST)
+            gate = {"rollback_bundle": rollback, "migration_gate": descriptor}
+            result = apply_plan(mutation, adapter, mutation.plan_digest, gate)
+            self.assertEqual(result.status, "applied")
+            self.assertEqual(result.ledger, (
+                {"action_id": "migration-01.safe", "status": "applied"},
+                {"action_id": "migration-01.safe", "status": "verified"},
+            ))
     def adapter(self, state=None, **kwargs):
         return FakeAdapter(
             endpoint={"profile_id": "core", "scheme": "http", "host": "127.0.0.1", "port": 7979, "tenant": "default"},
@@ -774,17 +933,139 @@ class GuardedApplyTest(unittest.TestCase):
         self.assertEqual(result.applied_action_ids, ("01", "02"))
         self.assertEqual([entry["status"] for entry in result.ledger], ["applied", "verified", "applied", "rollback_started", "rollback_succeeded"])
 
-    def test_migration_gate_halves_must_match_run_and_artifact(self):
+    def test_migration_gate_reads_matching_external_marker_and_proposal(self):
         artifact = "a" * 64
-        self.assertEqual(parse_migration_gate({
-            "export": {"run_id": "run-1", "artifact_digest": artifact},
-            "import": {"run_id": "run-1", "artifact_digest": artifact},
-        }), ("run-1", artifact))
-        with self.assertRaisesRegex(ApplyError, "do not match"):
-            parse_migration_gate({
-                "export": {"run_id": "run-1", "artifact_digest": artifact},
-                "import": {"run_id": "run-2", "artifact_digest": artifact},
-            })
+        with tempfile.TemporaryDirectory() as temporary:
+            descriptor, _, _ = write_migration_gate(Path(temporary), "run-1", artifact)
+            self.assertEqual(parse_migration_gate(descriptor), ("run-1", artifact))
+
+    def test_migration_gate_requires_present_well_formed_files(self):
+        artifact = "a" * 64
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            artifact_dir = root / "artifacts"
+            artifact_dir.mkdir()
+            proposal = root / "proposal-log.md"
+            proposal.write_text(
+                f"## Migration complete\nrun=run-1\nartifact={artifact}\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ApplyError, "completion marker"):
+                capture_migration_gate(artifact_dir / "distillation-complete.marker", proposal)
+
+            marker = artifact_dir / "distillation-complete.marker"
+            marker.write_text("not a gate\n", encoding="utf-8")
+            with self.assertRaisesRegex(ApplyError, "completion marker"):
+                capture_migration_gate(marker, proposal)
+
+            marker.write_text(f"run=run-1\nartifact={artifact}\n", encoding="utf-8")
+            proposal.write_text("## Migration complete\nrun=run-1\n", encoding="utf-8")
+            with self.assertRaisesRegex(ApplyError, "proposal log"):
+                capture_migration_gate(marker, proposal)
+
+    def test_migration_gate_rejects_mismatched_run_or_artifact(self):
+        artifact = "a" * 64
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            descriptor, _, proposal = write_migration_gate(root, "run-1", artifact)
+            self.assertEqual(parse_migration_gate(descriptor), ("run-1", artifact))
+            proposal.write_text(
+                f"## Migration complete\nrun=run-2\nartifact={artifact}\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ApplyError, "changed"):
+                parse_migration_gate(descriptor)
+            with self.assertRaisesRegex(ApplyError, "do not match"):
+                capture_migration_gate(root / "artifacts/distillation-complete.marker", proposal)
+
+            proposal.write_text(
+                f"## Migration complete\nrun=run-1\nartifact={'b' * 64}\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ApplyError, "do not match"):
+                capture_migration_gate(root / "artifacts/distillation-complete.marker", proposal)
+
+    def test_migration_gate_rejects_symlink_and_non_regular_sources(self):
+        artifact = "a" * 64
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            artifact_dir = root / "artifacts"
+            artifact_dir.mkdir()
+            real_marker = root / "real.marker"
+            real_marker.write_text(f"run=run-1\nartifact={artifact}\n", encoding="utf-8")
+            (artifact_dir / "distillation-complete.marker").symlink_to(real_marker)
+            proposal = root / "proposal-log.md"
+            proposal.write_text(
+                f"## Migration complete\nrun=run-1\nartifact={artifact}\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ApplyError, "symlink"):
+                capture_migration_gate(artifact_dir / "distillation-complete.marker", proposal)
+
+            (artifact_dir / "distillation-complete.marker").unlink()
+            (artifact_dir / "distillation-complete.marker").mkdir()
+            with self.assertRaisesRegex(ApplyError, "regular file"):
+                capture_migration_gate(artifact_dir / "distillation-complete.marker", proposal)
+
+    def test_apply_rechecks_gate_files_and_refuses_absent_or_changed_evidence(self):
+        from hindsight_memory_control_plane.reconcile import build_mutation_plan
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            base = plan_for({})
+            adapter = self.adapter()
+            mutation = build_mutation_plan(base, migration_run_id="run-1", migration_artifact_digest=MIGRATION_ARTIFACT_DIGEST, rollback_archive_digest="5" * 64, actions=[
+                {"id": "migrate-1", "kind": "migrate_bank", "artifact_digest": base.artifact_digest, "archive_digest": "4" * 64},
+            ])
+            rollback = create_rollback_bundle(mutation, adapter)
+            descriptor, marker, proposal = write_migration_gate(root, "run-1", MIGRATION_ARTIFACT_DIGEST)
+            gate = {"rollback_bundle": rollback, "migration_gate": descriptor}
+
+            proposal.write_text(proposal.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+            self.assertEqual(
+                apply_plan(mutation, adapter, mutation.plan_digest, gate).reason,
+                "migration_gate_mismatch",
+            )
+            self.assertNotIn("migrate_bank", [call["method"] for call in adapter.calls])
+
+            descriptor, marker, _ = write_migration_gate(root / "second", "run-1", MIGRATION_ARTIFACT_DIGEST)
+            marker.unlink()
+            missing_gate = {"rollback_bundle": rollback, "migration_gate": descriptor}
+            self.assertEqual(
+                apply_plan(mutation, adapter, mutation.plan_digest, missing_gate).reason,
+                "migration_gate_mismatch",
+            )
+
+    def test_apply_rechecks_gate_again_immediately_before_mutation(self):
+        from hindsight_memory_control_plane.reconcile import build_mutation_plan
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            base = plan_for({})
+            descriptor, _, proposal = write_migration_gate(root, "run-1", MIGRATION_ARTIFACT_DIGEST)
+
+            class GateChangingAdapter(FakeAdapter):
+                def verify_rollback_bundle(self, rollback):
+                    verified = super().verify_rollback_bundle(rollback)
+                    proposal.write_text(
+                        proposal.read_text(encoding="utf-8") + "\n",
+                        encoding="utf-8",
+                    )
+                    return verified
+
+            adapter = GateChangingAdapter(
+                endpoint={"profile_id": "core", "scheme": "http", "host": "127.0.0.1", "port": 7979, "tenant": "default"},
+            )
+            mutation = build_mutation_plan(base, migration_run_id="run-1", migration_artifact_digest=MIGRATION_ARTIFACT_DIGEST, rollback_archive_digest="5" * 64, actions=[
+                {"id": "migrate-1", "kind": "migrate_bank", "artifact_digest": base.artifact_digest, "archive_digest": "4" * 64},
+            ])
+            rollback = create_rollback_bundle(mutation, adapter)
+            gate = {"rollback_bundle": rollback, "migration_gate": descriptor}
+
+            result = apply_plan(mutation, adapter, mutation.plan_digest, gate)
+
+            self.assertEqual(result.reason, "migration_gate_mismatch")
+            self.assertNotIn("migrate_bank", [call["method"] for call in adapter.calls])
 
     def test_refuses_an_ordinary_plan_marked_destructive(self):
         adapter = self.adapter()
@@ -796,8 +1077,8 @@ class GuardedApplyTest(unittest.TestCase):
         from hindsight_memory_control_plane.reconcile import build_mutation_plan
         adapter = self.adapter()
         base = plan_for({})
-        mutation = build_mutation_plan(base, migration_run_id="run-1", actions=[
-            {"id": "migrate-1", "kind": "migrate_bank", "artifact_digest": base.artifact_digest},
+        mutation = build_mutation_plan(base, migration_run_id="run-1", migration_artifact_digest=MIGRATION_ARTIFACT_DIGEST, rollback_archive_digest="5" * 64, actions=[
+            {"id": "migrate-1", "kind": "migrate_bank", "artifact_digest": base.artifact_digest, "archive_digest": "4" * 64},
         ])
         rollback = create_rollback_bundle(mutation, adapter)
         gate = {
