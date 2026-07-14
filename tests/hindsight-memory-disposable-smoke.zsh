@@ -44,6 +44,7 @@ typeset -r IMPORT_BANK=smoke-imported
 typeset -r API_KEY=$($OPENSSL rand -hex 32)
 typeset -r DB_PASSWORD=$($OPENSSL rand -hex 24)
 typeset -r EXPORT_PASSPHRASE_FILE="$SMOKE_ROOT/export.passphrase"
+typeset -r CURL_AUTH_CONFIG="$SMOKE_ROOT/curl-auth.conf"
 typeset -a API_PIDS=()
 typeset -a PG_NAMES=()
 typeset CURRENT_PHASE=bootstrap
@@ -51,6 +52,8 @@ typeset CLEANED_UP=0
 
 mkdir -p "$SMOKE_HOME" "$SOURCE_DATA" "$IMPORT_DATA" "$RESTORE_DATA"
 $OPENSSL rand -out "$EXPORT_PASSPHRASE_FILE" 48
+print -r -- "header = \"Authorization: Bearer $API_KEY\"" >"$CURL_AUTH_CONFIG"
+chmod 600 "$CURL_AUTH_CONFIG"
 
 cleanup() {
   emulate -L zsh
@@ -203,7 +206,7 @@ authenticated_get() {
   local path=$2
   local output=$3
   "$CURL" --silent --show-error --fail --max-time 30 \
-    -H "Authorization: Bearer $API_KEY" \
+    --config "$CURL_AUTH_CONFIG" \
     "$api_url$path" >"$output"
 }
 
@@ -339,7 +342,7 @@ typeset -r MEMORY_ID=$(
 CURRENT_PHASE=curation
 "$CURL" --silent --show-error --fail --max-time 30 \
   -X PATCH \
-  -H "Authorization: Bearer $API_KEY" \
+  --config "$CURL_AUTH_CONFIG" \
   -H 'Content-Type: application/json' \
   --data '{"state":"invalidated","reason":"disposable contract smoke"}' \
   "$SOURCE_API_URL/v1/default/banks/$SOURCE_BANK/memories/$MEMORY_ID" \

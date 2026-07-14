@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import socket
+import stat
 import threading
 from typing import Any, Mapping
 
@@ -24,6 +25,7 @@ RPC_METHODS = {
     "reflect": "reflect",
     "session_status": "session_status",
 }
+SOCKET_LIFECYCLE_LOCK = threading.RLock()
 
 
 class UnixJsonRpcServer:
@@ -34,27 +36,47 @@ class UnixJsonRpcServer:
         self._socket: socket.socket | None = None
         self._thread: threading.Thread | None = None
         self._closing = threading.Event()
+        self._bound_identity: tuple[int, int] | None = None
 
     def start(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            self.path.unlink()
-        except FileNotFoundError:
-            pass
-        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        listener.bind(str(self.path))
-        os.chmod(self.path, 0o600)
-        listener.listen(16)
-        listener.settimeout(0.1)
-        self._socket = listener
-        self._thread = threading.Thread(target=self._serve, name="hindsight-json-rpc", daemon=True)
-        self._thread.start()
+        with SOCKET_LIFECYCLE_LOCK:
+            if self._socket is not None or self._thread is not None or self._bound_identity is not None:
+                raise RuntimeError("Unix JSON-RPC server is already started")
+            self._closing.clear()
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            bound_identity: tuple[int, int] | None = None
+            try:
+                previous_umask = os.umask(0o177)
+                try:
+                    listener.bind(str(self.path))
+                finally:
+                    os.umask(previous_umask)
+                metadata = self.path.lstat()
+                bound_identity = (metadata.st_dev, metadata.st_ino)
+                os.chmod(self.path, 0o600)
+                listener.listen(16)
+                listener.settimeout(0.1)
+                thread = threading.Thread(
+                    target=self._serve,
+                    args=(listener,),
+                    name="hindsight-json-rpc",
+                    daemon=True,
+                )
+                thread.start()
+            except Exception:
+                listener.close()
+                self._unlink_bound_path(bound_identity)
+                self._bound_identity = None
+                raise
+            self._socket = listener
+            self._thread = thread
+            self._bound_identity = bound_identity
 
-    def _serve(self) -> None:
-        assert self._socket is not None
+    def _serve(self, listener: socket.socket) -> None:
         while not self._closing.is_set():
             try:
-                connection, _ = self._socket.accept()
+                connection, _ = listener.accept()
             except TimeoutError:
                 continue
             except OSError:
@@ -100,15 +122,30 @@ class UnixJsonRpcServer:
         return {"jsonrpc": "2.0", "id": identifier, "error": {"code": number, "message": code}}
 
     def close(self) -> None:
-        self._closing.set()
-        if self._socket is not None:
-            self._socket.close()
-        if self._thread is not None:
-            self._thread.join(timeout=1)
-        try:
-            self.path.unlink()
-        except FileNotFoundError:
-            pass
+        with SOCKET_LIFECYCLE_LOCK:
+            self._closing.set()
+            if self._socket is not None:
+                self._socket.close()
+            if self._thread is not None:
+                self._thread.join(timeout=1)
+            self._unlink_bound_path(self._bound_identity)
+            self._socket = None
+            self._thread = None
+            self._bound_identity = None
+
+    def _unlink_bound_path(self, identity: tuple[int, int] | None) -> None:
+        with SOCKET_LIFECYCLE_LOCK:
+            if identity is None:
+                return
+            try:
+                metadata = self.path.lstat()
+                if (
+                    stat.S_ISSOCK(metadata.st_mode)
+                    and identity == (metadata.st_dev, metadata.st_ino)
+                ):
+                    self.path.unlink()
+            except OSError:
+                return
 
 
 class JsonRpcClient:

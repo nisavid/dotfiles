@@ -108,6 +108,9 @@ done
 broker_state="$tmp_dir/broker-state"
 broker_socket="$broker_state/broker.sock"
 broker_log="$tmp_dir/broker.log"
+mkdir -m 700 "$broker_state"
+print -r -- '{"pid":999999999,"start_time":"stale-process"}' >"$broker_state/broker.pid"
+chmod 600 "$broker_state/broker.pid"
 python3 "$repo_dir/home/private_dot_local/bin/executable_hindsight-memory" \
   --state-dir "$broker_state" broker serve \
   --socket "$broker_socket" --profile example >"$broker_log" 2>&1 &
@@ -121,6 +124,12 @@ kill -0 "$broker_pid" >/dev/null 2>&1 || {
   sed -n '1,120p' "$broker_log" >&2
   fail "inactive broker exited during startup"
 }
+identity_pid="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="ascii"))["pid"])' \
+  "$broker_state/broker.pid")"
+identity_start="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="ascii"))["start_time"])' \
+  "$broker_state/broker.pid")"
+[[ "$identity_pid" == "$broker_pid" ]] || fail "broker PID identity was not rewritten"
+[[ "$identity_start" != "stale-process" ]] || fail "broker start identity remained stale"
 python3 "$repo_dir/home/private_dot_local/bin/executable_hindsight-memory" \
   --state-dir "$broker_state" broker status --socket "$broker_socket" >/dev/null
 [[ "$(stat -f '%Lp' "$broker_socket")" == "600" ]] || fail "broker socket is not mode 0600"
@@ -129,6 +138,7 @@ python3 "$repo_dir/home/private_dot_local/bin/executable_hindsight-memory" \
 wait "$broker_pid"
 broker_pid=""
 [[ ! -e "$broker_socket" ]] || fail "broker socket remains after bounded stop"
+[[ ! -e "$broker_state/broker.pid" ]] || fail "broker PID remains after bounded stop"
 
 fake_stack="$tmp_dir/fake-stack.zsh"
 cat > "$fake_stack" <<'ZSH'
@@ -156,15 +166,34 @@ HINDSIGHT_TEST_SECRET="credential-sentinel" \
 HINDSIGHT_TEST_PAYLOAD="payload-sentinel" \
 zsh "$repo_dir/home/private_dot_local/bin/executable_hindsight-embed-supervisor" &
 supervisor_pid=$!
+supervisor_log="$supervisor_state/logs/supervisor.log"
+start_log=""
 for _ in {1..100}; do
-  [[ -s "$supervisor_state/logs/supervisor.log" ]] && break
+  if [[ -s "$supervisor_log" ]]; then
+    start_log="$(rg --max-count 1 \
+      "^supervisor started .*profile=test-profile.*broker_socket=$supervisor_state/broker.sock" \
+      "$supervisor_log" || true)"
+    [[ -n "$start_log" ]] && break
+  fi
   sleep 0.05
 done
+[[ -n "$start_log" ]] || fail "supervisor startup record did not become ready"
 kill -TERM "$supervisor_pid"
+for _ in {1..100}; do
+  kill -0 "$supervisor_pid" >/dev/null 2>&1 || break
+  sleep 0.05
+done
+if kill -0 "$supervisor_pid" >/dev/null 2>&1; then
+  kill -KILL "$supervisor_pid" >/dev/null 2>&1 || true
+  wait "$supervisor_pid" >/dev/null 2>&1 || true
+  supervisor_pid=""
+  sed -n '1,120p' "$supervisor_log" >&2
+  fail "supervisor did not stop within the bounded timeout"
+fi
 wait "$supervisor_pid"
 supervisor_pid=""
-supervisor_log="$supervisor_state/logs/supervisor.log"
-rg -q 'supervisor started .*profile=test-profile.*broker_socket=' "$supervisor_log" ||
+[[ "$start_log" == *"profile=test-profile"* &&
+  "$start_log" == *"broker_socket=$supervisor_state/broker.sock"* ]] ||
   fail "supervisor log omits content-free broker identity"
 if rg -qi '(credential-sentinel|payload-sentinel|authorization:|bearer[[:space:]]|api[_-]?key)' "$supervisor_log"; then
   fail "supervisor log contains a credential or payload"

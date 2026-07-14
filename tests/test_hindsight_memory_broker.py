@@ -9,7 +9,7 @@ import tempfile
 import threading
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -90,6 +90,79 @@ class BrokerSocketTest(unittest.TestCase):
         self.assertRegex(response["action_digest"], r"^[0-9a-f]{64}$")
         self.assertEqual(response["policy_digest"], DIGEST_A)
         self.assertEqual(response["artifact_digest"], DIGEST_B)
+
+    def test_server_refuses_to_replace_an_existing_socket_path(self):
+        self.stop()
+        self.socket_path.write_text("preserve", encoding="utf-8")
+        replacement = UnixJsonRpcServer(self.socket_path, self.broker)
+        with self.assertRaises(OSError):
+            replacement.start()
+        self.assertEqual(self.socket_path.read_text(encoding="utf-8"), "preserve")
+        self.server = replacement
+
+    def test_server_close_preserves_a_replacement_path(self):
+        self.socket_path.unlink()
+        self.socket_path.write_text("replacement", encoding="utf-8")
+        self.server.close()
+        self.assertEqual(self.socket_path.read_text(encoding="utf-8"), "replacement")
+
+    def test_server_start_failure_removes_its_bound_socket_path(self):
+        self.stop()
+        replacement = UnixJsonRpcServer(self.socket_path, self.broker)
+        with patch(
+            "hindsight_memory_control_plane.server.os.chmod",
+            side_effect=OSError("chmod failed"),
+        ):
+            with self.assertRaisesRegex(OSError, "chmod failed"):
+                replacement.start()
+        self.assertFalse(self.socket_path.exists())
+        self.server = replacement
+
+    def test_server_restores_restrictive_bind_umask_after_bind_failure(self):
+        self.stop()
+        self.socket_path.write_text("preserve", encoding="utf-8")
+        replacement = UnixJsonRpcServer(self.socket_path, self.broker)
+        with patch(
+            "hindsight_memory_control_plane.server.os.umask",
+            side_effect=(0o022, 0o177),
+        ) as umask:
+            with self.assertRaises(OSError):
+                replacement.start()
+        self.assertEqual(
+            umask.call_args_list,
+            [call(0o177), call(0o022)],
+        )
+        self.server = replacement
+
+    def test_server_start_is_rollback_safe_and_restartable(self):
+        self.stop()
+        replacement = UnixJsonRpcServer(self.socket_path, self.broker)
+        with patch(
+            "hindsight_memory_control_plane.server.threading.Thread.start",
+            side_effect=RuntimeError("thread start failed"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "thread start failed"):
+                replacement.start()
+        self.assertFalse(self.socket_path.exists())
+        self.assertIsNone(replacement._socket)
+        self.assertIsNone(replacement._thread)
+        self.assertIsNone(replacement._bound_identity)
+
+        replacement.start()
+        replacement.close()
+        self.assertFalse(self.socket_path.exists())
+        replacement.start()
+        self.assertTrue(self.socket_path.is_socket())
+        self.server = replacement
+
+    def test_server_double_start_preserves_the_live_listener(self):
+        identity = self.server._bound_identity
+        with self.assertRaisesRegex(RuntimeError, "already started"):
+            self.server.start()
+        self.assertEqual(self.server._bound_identity, identity)
+        self.assertTrue(self.socket_path.is_socket())
+        self.assertIsNotNone(self.server._thread)
+        self.assertTrue(self.server._thread.is_alive())
 
     def raw_rpc(self, method, params):
         request = {"jsonrpc": "2.0", "id": 91, "method": method, "params": params}
