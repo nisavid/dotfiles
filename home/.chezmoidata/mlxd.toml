@@ -1,0 +1,24 @@
+[mlxd]
+# Personal deployment values for the mlxctl deployment contract.
+label = "io.nisavid.mlxd"
+sourceDir = "src/nisavid/systools/tools/mlxctl"
+binDir = ".local/bin"
+configDir = ".config/mlxd"
+stateDir = ".local/state/mlxd"
+logDir = "Library/Logs/mlxd"
+launchctlBin = "/bin/launchctl"
+
+[mlxd.config]
+schemaVersion = 1
+metricsRetentionDays = 7
+
+[mlxd.config.models.llama-3b]
+reference = "mlx-community/Llama-3.2-3B-Instruct-4bit"
+
+[mlxd.config.models.qwen-7b]
+reference = "mlx-community/Qwen2.5-7B-Instruct-4bit"
+
+[mlxd.config.servers.mlx]
+type = "mlx_lm"
+model = "llama-3b"
+port = 8765
