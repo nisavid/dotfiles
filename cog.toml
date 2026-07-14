@@ -3,3 +3,6 @@ path = ".hooks/commit-msg.sh"
 
 [git_hooks.pre-push]
 path = ".hooks/pre-push.sh"
+
+[commit_types]
+hindsight = { changelog_title = "Hindsight" }
