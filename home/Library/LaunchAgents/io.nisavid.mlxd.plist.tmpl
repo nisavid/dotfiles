@@ -1,0 +1,45 @@
+{{- if eq .chezmoi.os "darwin" -}}
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>{{ .mlxd.label | html }}</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>{{ joinPath .chezmoi.homeDir .mlxd.binDir "mlxd" | html }}</string>
+  </array>
+
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>KeepAlive</key>
+  <false/>
+
+  <key>WorkingDirectory</key>
+  <string>{{ .chezmoi.homeDir | html }}</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>{{ joinPath .chezmoi.homeDir .mlxd.binDir | html }}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>MLXD_CONFIG_DIR</key>
+    <string>{{ joinPath .chezmoi.homeDir .mlxd.configDir | html }}</string>
+    <key>MLXD_STATE_DIR</key>
+    <string>{{ joinPath .chezmoi.homeDir .mlxd.stateDir | html }}</string>
+    <key>MLXD_LOG_DIR</key>
+    <string>{{ joinPath .chezmoi.homeDir .mlxd.logDir | html }}</string>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>{{ joinPath .chezmoi.homeDir .mlxd.logDir "mlxd.log" | html }}</string>
+  <key>StandardErrorPath</key>
+  <string>{{ joinPath .chezmoi.homeDir .mlxd.logDir "mlxd.log" | html }}</string>
+
+  <key>Umask</key>
+  <integer>63</integer>
+</dict>
+</plist>
+{{- end -}}
