@@ -341,7 +341,7 @@
 
   Extend the supervisor to own the broker and enabled profiles, preserve bounded shutdown, and report endpoint/profile/broker health. Keep existing profile runtime current; no provider/model switch belongs to this tranche.
 
-- [ ] **Step 3: Run the complete repository test matrix**
+- [x] **Step 3: Run the complete repository test matrix**
 
   Run: `python3 -m unittest discover -s tests -p 'test_hindsight_memory*.py' -v`
 
