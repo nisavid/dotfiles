@@ -25,6 +25,7 @@ source_stack_lib() {
   for required_function in \
     hindsight_stack_load_config \
     hindsight_stack_log \
+    hindsight_stack_broker_status \
     hindsight_stack_reconcile_once \
     hindsight_stack_require_current_user \
     hindsight_stack_require_runtime_helpers \
@@ -67,7 +68,7 @@ main() {
 
   trap shutdown INT TERM
 
-  hindsight_stack_log "supervisor started pid=$$ profile=${HINDSIGHT_EMBED_PROFILE} control_port=${HINDSIGHT_EMBED_CONTROL_PORT} api_port=${HINDSIGHT_EMBED_API_PORT} ui_port=${HINDSIGHT_EMBED_UI_PORT}"
+  hindsight_stack_log "supervisor started pid=$$ profile=${HINDSIGHT_EMBED_PROFILE} broker_socket=${HINDSIGHT_MEMORY_BROKER_SOCKET} control_port=${HINDSIGHT_EMBED_CONTROL_PORT} api_port=${HINDSIGHT_EMBED_API_PORT} ui_port=${HINDSIGHT_EMBED_UI_PORT}"
 
   while true; do
     hindsight_stack_reconcile_once || true
