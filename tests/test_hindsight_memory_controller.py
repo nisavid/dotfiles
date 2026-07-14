@@ -2,9 +2,12 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import runpy
+import stat
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -107,6 +110,254 @@ class ControllerCliTest(unittest.TestCase):
             json.dumps(value, indent=2 if pretty else None, ensure_ascii=False),
             encoding="utf-8",
         )
+
+    def test_broker_pid_read_is_bounded_and_disappearance_is_invalid(self):
+        module = runpy.run_path(str(CLI))
+        read_broker_pid = module["_read_broker_pid"]
+        broker_error = module["BrokerError"]
+        with tempfile.TemporaryDirectory() as directory:
+            pid_path = Path(directory) / "broker.pid"
+            pid_path.write_bytes(b"9" * (1024 * 1024))
+            os.chmod(pid_path, 0o600)
+            with patch.object(module["os"], "read", wraps=os.read) as read:
+                with self.assertRaisesRegex(broker_error, "BROKER_PID_INVALID"):
+                    read_broker_pid(pid_path)
+            self.assertFalse(read.called)
+            pid_path.write_bytes(b"not-a-pid")
+            with patch.object(module["os"], "read", wraps=os.read) as read:
+                with self.assertRaisesRegex(broker_error, "BROKER_PID_INVALID"):
+                    read_broker_pid(pid_path)
+            self.assertTrue(read.called)
+            self.assertTrue(all(call.args[1] <= 257 for call in read.call_args_list))
+
+        class DisappearingPath:
+            def __fspath__(self):
+                return "/definitely/missing/broker.pid"
+
+            def lstat(self):
+                return type("Metadata", (), {"st_mode": stat.S_IFREG | 0o600, "st_size": 3})()
+
+        with self.assertRaisesRegex(broker_error, "BROKER_PID_INVALID"):
+            read_broker_pid(DisappearingPath())
+
+    def test_failed_broker_pid_write_removes_the_partial_file(self):
+        module = runpy.run_path(str(CLI))
+        with tempfile.TemporaryDirectory() as directory:
+            pid_path = Path(directory) / "broker.pid"
+            with patch.object(module["os"], "write", return_value=0):
+                with self.assertRaises(OSError):
+                    module["_write_broker_pid"](pid_path)
+            self.assertFalse(pid_path.exists())
+
+            def replace_pid(_descriptor, _body):
+                pid_path.unlink()
+                pid_path.write_text("replacement", encoding="utf-8")
+                return 0
+
+            with patch.object(module["os"], "write", side_effect=replace_pid):
+                with self.assertRaises(OSError):
+                    module["_write_broker_pid"](pid_path)
+            self.assertEqual(pid_path.read_text(encoding="utf-8"), "replacement")
+
+    def test_failed_private_artifact_write_removes_only_its_partial_file(self):
+        module = runpy.run_path(str(CLI))
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "plan.json"
+            with patch.object(module["os"], "write", return_value=0):
+                with self.assertRaises(OSError):
+                    module["write_private"](target, {"schema_version": 1})
+            self.assertFalse(target.exists())
+
+            target.write_text("previous", encoding="utf-8")
+            with patch.object(module["os"], "write", return_value=0):
+                with self.assertRaises(OSError):
+                    module["write_private"](target, {"schema_version": 1})
+            self.assertEqual(target.read_text(encoding="utf-8"), "previous")
+
+            def replace_target(_descriptor, _body):
+                target.unlink()
+                target.write_text("replacement", encoding="utf-8")
+                return 0
+
+            with patch.object(module["os"], "write", side_effect=replace_target):
+                with self.assertRaises(OSError):
+                    module["write_private"](target, {"schema_version": 1})
+            self.assertEqual(target.read_text(encoding="utf-8"), "replacement")
+
+    def test_broker_serve_refuses_a_live_pid_when_the_probe_is_unhealthy(self):
+        module = runpy.run_path(str(CLI))
+        broker_error = module["BrokerError"]
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "state"
+            state.mkdir(mode=0o700)
+            pid_path = state / "broker.pid"
+            pid_path.write_text(
+                json.dumps({"pid": 12345, "start_time": "process-start"}),
+                encoding="ascii",
+            )
+            os.chmod(pid_path, 0o600)
+            args = module["argparse"].Namespace(
+                state_dir=str(state),
+                socket=str(state / "broker.sock"),
+                profile=["example"],
+                shutdown_timeout=1.0,
+            )
+            with patch.dict(
+                module["broker_serve_command"].__globals__,
+                {
+                    "_process_running": lambda _pid: True,
+                    "_process_start_time": lambda _pid: "process-start",
+                    "_broker_probe": lambda _path, timeout=1.0: False,
+                },
+            ):
+                with self.assertRaisesRegex(broker_error, "BROKER_ALREADY_RUNNING"):
+                    module["broker_serve_command"](args)
+            self.assertIn("process-start", pid_path.read_text(encoding="ascii"))
+
+    def test_broker_stop_rejects_a_reused_pid_without_signaling(self):
+        module = runpy.run_path(str(CLI))
+        broker_error = module["BrokerError"]
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "state"
+            state.mkdir(mode=0o700)
+            pid_path = state / "broker.pid"
+            pid_path.write_text(
+                json.dumps({"pid": 12345, "start_time": "original-start"}),
+                encoding="ascii",
+            )
+            os.chmod(pid_path, 0o600)
+            args = module["argparse"].Namespace(
+                state_dir=str(state),
+                socket=str(state / "broker.sock"),
+                timeout=0.0,
+            )
+            with (
+                patch.dict(
+                    module["broker_stop_command"].__globals__,
+                    {
+                        "_process_running": lambda _pid: True,
+                        "_process_start_time": lambda _pid: "replacement-start",
+                    },
+                ),
+                patch.object(module["os"], "kill") as kill,
+            ):
+                with self.assertRaisesRegex(broker_error, "BROKER_PID_IDENTITY_INVALID"):
+                    module["broker_stop_command"](args)
+            kill.assert_not_called()
+            self.assertTrue(pid_path.exists())
+
+    def test_broker_stop_removes_a_stale_pid_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "state"
+            state.mkdir(mode=0o700)
+            pid_path = state / "broker.pid"
+            pid_path.write_text("999999999", encoding="ascii")
+            os.chmod(pid_path, 0o600)
+            result = self.run_cli(
+                state,
+                "broker", "stop",
+                "--socket", state / "broker.sock",
+                "--timeout", "0.1",
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(pid_path.exists())
+
+    def test_broker_stop_normalizes_a_late_signal_permission_failure(self):
+        module = runpy.run_path(str(CLI))
+        broker_error = module["BrokerError"]
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "state"
+            state.mkdir(mode=0o700)
+            pid_path = state / "broker.pid"
+            pid_path.write_text(
+                json.dumps({"pid": 12345, "start_time": "process-start"}),
+                encoding="ascii",
+            )
+            os.chmod(pid_path, 0o600)
+
+            def kill(_pid, signal_number):
+                if signal_number == 0:
+                    return None
+                raise PermissionError("signal denied")
+
+            args = module["argparse"].Namespace(
+                state_dir=str(state),
+                socket=str(state / "broker.sock"),
+                timeout=0.0,
+            )
+            with (
+                patch.dict(
+                    module["broker_stop_command"].__globals__,
+                    {"_process_start_time": lambda _pid: "process-start"},
+                ),
+                patch.object(module["os"], "kill", side_effect=kill),
+            ):
+                with self.assertRaisesRegex(broker_error, "BROKER_STOP_TIMEOUT"):
+                    module["broker_stop_command"](args)
+
+    def test_broker_stop_refuses_state_outside_a_private_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "state"
+            state.mkdir(mode=0o755)
+            socket_path = state / "broker.sock"
+            socket_path.write_text("preserve", encoding="utf-8")
+            result = self.run_cli(
+                state,
+                "broker", "stop",
+                "--socket", socket_path,
+                "--timeout", "0.1",
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(socket_path.read_text(encoding="utf-8"), "preserve")
+
+    def test_broker_stop_refuses_non_socket_cleanup_paths(self):
+        for path_kind in ("regular", "symlink"):
+            with self.subTest(path_kind=path_kind), tempfile.TemporaryDirectory() as directory:
+                state = Path(directory) / "state"
+                state.mkdir(mode=0o700)
+                socket_path = state / "broker.sock"
+                protected = state / "protected"
+                if path_kind == "regular":
+                    socket_path.write_text("preserve", encoding="utf-8")
+                else:
+                    protected.write_text("preserve", encoding="utf-8")
+                    socket_path.symlink_to(protected)
+                result = self.run_cli(
+                    state,
+                    "broker", "stop",
+                    "--socket", socket_path,
+                    "--timeout", "0.1",
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("BROKER_PATH_INVALID", result.stderr)
+                if path_kind == "regular":
+                    self.assertEqual(socket_path.read_text(encoding="utf-8"), "preserve")
+                else:
+                    self.assertTrue(socket_path.is_symlink())
+                    self.assertEqual(protected.read_text(encoding="utf-8"), "preserve")
+
+    def test_private_artifact_writes_refuse_symlink_destinations(self):
+        module = runpy.run_path(str(CLI))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            protected = root / "protected.json"
+            protected.write_text("preserve", encoding="utf-8")
+            destination = root / "plan.json"
+            destination.symlink_to(protected)
+            with self.assertRaises(OSError):
+                module["write_private"](destination, {"schema_version": 1})
+            self.assertEqual(protected.read_text(encoding="utf-8"), "preserve")
+
+            real_parent = root / "real-parent"
+            real_parent.mkdir()
+            linked_parent = root / "linked-parent"
+            linked_parent.symlink_to(real_parent, target_is_directory=True)
+            with self.assertRaises(OSError):
+                module["write_private"](
+                    linked_parent / "plan.json",
+                    {"schema_version": 1},
+                )
+            self.assertFalse((real_parent / "plan.json").exists())
 
     def test_validate_is_closed_and_reports_a_known_canonical_digest(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -438,6 +689,56 @@ class ControllerCliTest(unittest.TestCase):
             append_record(ledger, record)
             self.assertEqual(ledger.read_bytes(), json.dumps(record, sort_keys=True, separators=(",", ":")).encode() + b"\n")
             self.assertEqual(os.stat(ledger).st_mode & 0o777, 0o600)
+
+            before = ledger.read_bytes()
+            real_write = os.write
+            writes = 0
+
+            def partial_then_fail(descriptor, body):
+                nonlocal writes
+                writes += 1
+                if writes == 1:
+                    chunk = body[:max(1, len(body) // 2)]
+                    return real_write(descriptor, chunk)
+                raise OSError("append failed")
+
+            with patch(
+                "hindsight_memory_control_plane.ledger.os.write",
+                side_effect=partial_then_fail,
+            ):
+                with self.assertRaisesRegex(OSError, "append failed"):
+                    append_record(ledger, record)
+            self.assertEqual(ledger.read_bytes(), before)
+
+            protected = Path(directory) / "protected.jsonl"
+            protected.write_text("preserve", encoding="utf-8")
+            linked_ledger = Path(directory) / "linked.jsonl"
+            linked_ledger.symlink_to(protected)
+            with self.assertRaises(OSError):
+                append_record(linked_ledger, record)
+            self.assertEqual(protected.read_text(encoding="utf-8"), "preserve")
+
+            real_parent = Path(directory) / "real-ledger-parent"
+            nested_parent = real_parent / "nested"
+            nested_parent.mkdir(parents=True)
+            linked_parent = Path(directory) / "linked-ledger-parent"
+            linked_parent.symlink_to(real_parent, target_is_directory=True)
+            with self.assertRaises(OSError):
+                append_record(linked_parent / "nested" / "controller.jsonl", record)
+            self.assertFalse((nested_parent / "controller.jsonl").exists())
+
+            fifo = Path(directory) / "ledger.fifo"
+            os.mkfifo(fifo, 0o600)
+            with self.assertRaises(OSError):
+                append_record(fifo, record)
+
+            hardlink_source = Path(directory) / "hardlink-source.jsonl"
+            hardlink_source.write_text("preserve", encoding="utf-8")
+            hardlink_ledger = Path(directory) / "hardlink-ledger.jsonl"
+            os.link(hardlink_source, hardlink_ledger)
+            with self.assertRaises(OSError):
+                append_record(hardlink_ledger, record)
+            self.assertEqual(hardlink_source.read_text(encoding="utf-8"), "preserve")
 
             for key in ("token", "api_key", "control_key", "signing_key", "secret"):
                 contaminated = dict(record)

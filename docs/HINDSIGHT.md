@@ -54,8 +54,8 @@ path that keeps credentials out of process arguments. Do not replace it with
 configured profile to exist, retires the legacy service label when present,
 loads the LaunchAgent, and waits for the memory broker, control service, API,
 and UI to become healthy. It prints each bounded wait as it proceeds. The
-LaunchAgent starts the stack again at each login and reconciles the broker, API,
-and UI if any component stops.
+LaunchAgent starts the stack again at each login and reconciles the broker,
+control service, API, and UI if any component stops.
 
 The broker starts in inactive mode on
 `~/.local/state/hindsight-memory/broker.sock`. It owns its signing material in

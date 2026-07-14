@@ -1,8 +1,12 @@
 """Closed-schema, content-free append-only controller decision ledger."""
 
+import fcntl
 import os
 from pathlib import Path
 import re
+import stat
+import sys
+import time
 from typing import Any, Mapping
 
 from .canonical import canonical_bytes
@@ -85,13 +89,86 @@ def validate_record(record: Mapping[str, Any]) -> None:
         _identifier(reversible, "reversible_record_id")
 
 
+def _open_ledger_parent(path: Path) -> int:
+    if not hasattr(os, "O_DIRECTORY") or not hasattr(os, "O_NOFOLLOW"):
+        raise OSError("symlink-safe directory access is unavailable")
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    absolute = Path(os.path.abspath(path))
+    if sys.platform == "darwin" and len(absolute.parts) > 1:
+        aliases = {"var": ("private", "var"), "tmp": ("private", "tmp"), "etc": ("private", "etc")}
+        replacement = aliases.get(absolute.parts[1])
+        if replacement is not None:
+            absolute = Path("/").joinpath(*replacement, *absolute.parts[2:])
+    descriptor = os.open("/", flags)
+    try:
+        for component in absolute.parts[1:]:
+            try:
+                child = os.open(component, flags, dir_fd=descriptor)
+            except FileNotFoundError:
+                try:
+                    os.mkdir(component, 0o700, dir_fd=descriptor)
+                except FileExistsError:
+                    pass
+                else:
+                    os.fsync(descriptor)
+                child = os.open(component, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+        return descriptor
+    except Exception:
+        os.close(descriptor)
+        raise
+
+
 def append_record(path: str | Path, record: Mapping[str, Any]) -> None:
     validate_record(record)
     target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    descriptor = os.open(target, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    if target.name in {"", ".", ".."}:
+        raise OSError("ledger destination name is invalid")
+    directory = _open_ledger_parent(target.parent)
+    flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NONBLOCK | os.O_NOFOLLOW
     try:
+        descriptor = os.open(target.name, flags, 0o600, dir_fd=directory)
+    except Exception:
+        os.close(directory)
+        raise
+    original_size: int | None = None
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            raise OSError("ledger destination must be a regular file")
         os.fchmod(descriptor, 0o600)
-        os.write(descriptor, canonical_bytes(record) + b"\n")
+        deadline = time.monotonic() + 2.0
+        while True:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("ledger lock acquisition timed out")
+                time.sleep(0.01)
+        original_size = os.lseek(descriptor, 0, os.SEEK_END)
+        body = canonical_bytes(record) + b"\n"
+        offset = 0
+        while offset < len(body):
+            written = os.write(descriptor, body[offset:])
+            if written <= 0 or written > len(body) - offset:
+                raise OSError("short ledger write")
+            offset += written
+        os.fsync(descriptor)
+        os.fsync(directory)
+    except Exception as error:
+        if original_size is not None:
+            try:
+                os.ftruncate(descriptor, original_size)
+                os.fsync(descriptor)
+            except OSError as rollback_error:
+                raise OSError("ledger append rollback failed") from error
+        raise
     finally:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+        except OSError:
+            pass
         os.close(descriptor)
+        os.close(directory)

@@ -2,7 +2,10 @@
 """Validate and inspect Hindsight memory desired-state plans."""
 
 import argparse
+from contextlib import contextmanager
+import ctypes
 from datetime import datetime, timezone
+import fcntl
 import hmac
 import json
 import os
@@ -12,10 +15,11 @@ import secrets
 import signal
 import socket
 import stat
+import subprocess
 import sys
 import threading
 import time
-from typing import Any
+from typing import Any, NamedTuple
 
 
 LIB = Path(__file__).resolve().parents[1] / "lib"
@@ -44,19 +48,165 @@ from hindsight_memory_control_plane.server import UnixJsonRpcServer  # noqa: E40
 BROKER_REQUEST = b'{"id":"health","jsonrpc":"2.0","method":"session_status","params":{}}\n'
 
 
+class BrokerProcessIdentity(NamedTuple):
+    pid: int
+    start_time: str | None
+
+
 def read_json(path: str | Path) -> Any:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
+def _open_private_parent(path: Path) -> int:
+    if not hasattr(os, "O_DIRECTORY") or not hasattr(os, "O_NOFOLLOW"):
+        raise OSError("symlink-safe directory access is unavailable")
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    absolute = Path(os.path.abspath(path))
+    if sys.platform == "darwin" and len(absolute.parts) > 1:
+        aliases = {"var": ("private", "var"), "tmp": ("private", "tmp"), "etc": ("private", "etc")}
+        replacement = aliases.get(absolute.parts[1])
+        if replacement is not None:
+            absolute = Path("/").joinpath(*replacement, *absolute.parts[2:])
+    descriptor = os.open("/", flags)
+    try:
+        for component in absolute.parts[1:]:
+            try:
+                child = os.open(component, flags, dir_fd=descriptor)
+            except FileNotFoundError:
+                try:
+                    os.mkdir(component, 0o700, dir_fd=descriptor)
+                except FileExistsError:
+                    pass
+                else:
+                    os.fsync(descriptor)
+                child = os.open(component, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+        return descriptor
+    except Exception:
+        os.close(descriptor)
+        raise
+
+
+def _directory_entry_identity(directory: int, name: str) -> tuple[int, int] | None:
+    try:
+        metadata = os.stat(name, dir_fd=directory, follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+    if not stat.S_ISREG(metadata.st_mode):
+        raise OSError("private artifact destination must be a regular file")
+    return metadata.st_dev, metadata.st_ino
+
+
+def _atomic_rename(directory: int, source: str, target: str, flag: int) -> None:
+    library = ctypes.CDLL(None, use_errno=True)
+    function_name = "renameatx_np" if sys.platform == "darwin" else "renameat2"
+    try:
+        rename = getattr(library, function_name)
+    except AttributeError as error:
+        raise OSError("atomic conditional rename is unavailable") from error
+    rename.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    rename.restype = ctypes.c_int
+    if rename(
+        directory,
+        os.fsencode(source),
+        directory,
+        os.fsencode(target),
+        flag,
+    ) != 0:
+        error_number = ctypes.get_errno()
+        raise OSError(error_number, os.strerror(error_number), target)
+
+
+def _commit_private_artifact(
+    directory: int,
+    temporary_name: str,
+    target_name: str,
+    expected_identity: tuple[int, int] | None,
+) -> None:
+    exclusive = 0x00000004 if sys.platform == "darwin" else 0x00000001
+    exchange = 0x00000002
+    if expected_identity is None:
+        _atomic_rename(directory, temporary_name, target_name, exclusive)
+        return
+
+    _atomic_rename(directory, temporary_name, target_name, exchange)
+    try:
+        displaced_identity = _directory_entry_identity(directory, temporary_name)
+    except Exception:
+        _atomic_rename(directory, temporary_name, target_name, exchange)
+        raise
+    if displaced_identity != expected_identity:
+        _atomic_rename(directory, temporary_name, target_name, exchange)
+        raise OSError("private artifact destination changed during write")
+    os.unlink(temporary_name, dir_fd=directory)
+
+
 def write_private(path: str | Path, value: Any) -> None:
     target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    if target.name in {"", ".", ".."}:
+        raise OSError("private artifact destination name is invalid")
+    directory = _open_private_parent(target.parent)
+    descriptor = -1
+    temporary_name: str | None = None
     try:
+        expected_identity = _directory_entry_identity(directory, target.name)
+        temporary_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+        for _attempt in range(16):
+            candidate = f".{target.name}.{secrets.token_hex(16)}.tmp"
+            try:
+                descriptor = os.open(
+                    candidate,
+                    temporary_flags,
+                    0o600,
+                    dir_fd=directory,
+                )
+            except FileExistsError:
+                continue
+            temporary_name = candidate
+            break
+        if temporary_name is None:
+            raise OSError("unable to allocate private temporary artifact")
+
         os.fchmod(descriptor, 0o600)
-        os.write(descriptor, canonical_bytes(value) + b"\n")
-    finally:
+        body = canonical_bytes(value) + b"\n"
+        offset = 0
+        while offset < len(body):
+            written = os.write(descriptor, body[offset:])
+            if written <= 0 or written > len(body) - offset:
+                raise OSError("short private artifact write")
+            offset += written
+        os.fsync(descriptor)
         os.close(descriptor)
+        descriptor = -1
+        _commit_private_artifact(
+            directory,
+            temporary_name,
+            target.name,
+            expected_identity,
+        )
+        temporary_name = None
+        os.fsync(directory)
+    except Exception:
+        if descriptor >= 0:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        if temporary_name is not None:
+            try:
+                os.unlink(temporary_name, dir_fd=directory)
+            except OSError:
+                pass
+        raise
+    finally:
+        os.close(directory)
 
 
 def validate_command(args: argparse.Namespace) -> int:
@@ -148,10 +298,48 @@ def _broker_paths(args: argparse.Namespace) -> tuple[Path, Path, Path]:
     return state_dir, socket_path, state_dir / "broker.pid"
 
 
-def _private_broker_state(state_dir: Path) -> None:
+@contextmanager
+def _broker_lifecycle_lock(state_dir: Path):
+    lock_path = state_dir / "broker.lock"
+    flags = os.O_RDWR | os.O_CREAT
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(lock_path, flags, 0o600)
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise BrokerError("BROKER_LOCK_INVALID")
+        os.fchmod(descriptor, 0o600)
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+        except OSError:
+            pass
+        os.close(descriptor)
+
+
+def _remove_broker_socket(socket_path: Path) -> None:
+    try:
+        metadata = socket_path.lstat()
+    except FileNotFoundError:
+        return
+    if not stat.S_ISSOCK(metadata.st_mode):
+        raise BrokerError("BROKER_PATH_INVALID")
+    identity = metadata.st_dev, metadata.st_ino
+    current = socket_path.lstat()
+    if not stat.S_ISSOCK(current.st_mode) or identity != (current.st_dev, current.st_ino):
+        raise BrokerError("BROKER_PATH_INVALID")
+    socket_path.unlink()
+
+
+def _private_broker_state(state_dir: Path, *, create: bool = True) -> bool:
     try:
         metadata = state_dir.lstat()
     except FileNotFoundError:
+        if not create:
+            return False
         if not state_dir.parent.is_dir():
             raise BrokerError("BROKER_PATH_INVALID")
         state_dir.mkdir(mode=0o700)
@@ -160,6 +348,7 @@ def _private_broker_state(state_dir: Path) -> None:
         raise BrokerError("BROKER_PATH_INVALID")
     if stat.S_IMODE(metadata.st_mode) != 0o700:
         raise BrokerError("BROKER_STATE_MODE_INVALID")
+    return True
 
 
 def _read_private(path: Path, expected_bytes: int, code: str) -> bytes:
@@ -231,17 +420,51 @@ def _broker_probe(socket_path: Path, timeout: float = 1.0) -> bool:
         return False
 
 
-def _read_broker_pid(path: Path) -> int | None:
-    if not path.exists():
-        return None
-    raw = _read_private(path, path.stat().st_size, "BROKER_PID_INVALID")
+def _read_broker_pid(path: Path) -> BrokerProcessIdentity | None:
     try:
-        value = int(raw.decode("ascii"))
-    except (UnicodeDecodeError, ValueError) as error:
-        raise BrokerError("BROKER_PID_INVALID") from error
-    if value <= 1:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return None
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or stat.S_IMODE(metadata.st_mode) != 0o600
+        or metadata.st_size < 1
+        or metadata.st_size > 256
+    ):
         raise BrokerError("BROKER_PID_INVALID")
-    return value
+    raw = _read_private(path, metadata.st_size, "BROKER_PID_INVALID")
+    try:
+        text = raw.decode("ascii")
+    except UnicodeDecodeError as error:
+        raise BrokerError("BROKER_PID_INVALID") from error
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError:
+        try:
+            legacy_pid = int(text)
+        except ValueError as error:
+            raise BrokerError("BROKER_PID_INVALID") from error
+        if legacy_pid <= 1:
+            raise BrokerError("BROKER_PID_INVALID")
+        return BrokerProcessIdentity(legacy_pid, None)
+    if type(value) is int:
+        if value <= 1:
+            raise BrokerError("BROKER_PID_INVALID")
+        return BrokerProcessIdentity(value, None)
+    if not isinstance(value, dict) or set(value) != {"pid", "start_time"}:
+        raise BrokerError("BROKER_PID_INVALID")
+    pid = value["pid"]
+    start_time = value["start_time"]
+    if type(pid) is not int or pid <= 1:
+        raise BrokerError("BROKER_PID_INVALID")
+    if (
+        not isinstance(start_time, str)
+        or not start_time
+        or len(start_time) > 128
+        or start_time != " ".join(start_time.split())
+    ):
+        raise BrokerError("BROKER_PID_INVALID")
+    return BrokerProcessIdentity(pid, start_time)
 
 
 def _process_running(pid: int) -> bool:
@@ -254,33 +477,137 @@ def _process_running(pid: int) -> bool:
         return True
 
 
-def _write_broker_pid(path: Path) -> None:
+def _process_start_time(pid: int) -> str | None:
+    if sys.platform == "darwin":
+        class ProcBsdInfo(ctypes.Structure):
+            _fields_ = [
+                ("pbi_flags", ctypes.c_uint32),
+                ("pbi_status", ctypes.c_uint32),
+                ("pbi_xstatus", ctypes.c_uint32),
+                ("pbi_pid", ctypes.c_uint32),
+                ("pbi_ppid", ctypes.c_uint32),
+                ("pbi_uid", ctypes.c_uint32),
+                ("pbi_gid", ctypes.c_uint32),
+                ("pbi_ruid", ctypes.c_uint32),
+                ("pbi_rgid", ctypes.c_uint32),
+                ("pbi_svuid", ctypes.c_uint32),
+                ("pbi_svgid", ctypes.c_uint32),
+                ("pbi_rfu_1", ctypes.c_uint32),
+                ("pbi_comm", ctypes.c_char * 16),
+                ("pbi_name", ctypes.c_char * 32),
+                ("pbi_nfiles", ctypes.c_uint32),
+                ("pbi_pgid", ctypes.c_uint32),
+                ("pbi_pjobc", ctypes.c_uint32),
+                ("e_tdev", ctypes.c_uint32),
+                ("e_tpgid", ctypes.c_uint32),
+                ("pbi_nice", ctypes.c_int32),
+                ("pbi_start_tvsec", ctypes.c_uint64),
+                ("pbi_start_tvusec", ctypes.c_uint64),
+            ]
+
+        try:
+            libproc = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+            proc_pidinfo = libproc.proc_pidinfo
+            proc_pidinfo.argtypes = [
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_uint64,
+                ctypes.c_void_p,
+                ctypes.c_int,
+            ]
+            proc_pidinfo.restype = ctypes.c_int
+            info = ProcBsdInfo()
+            result = proc_pidinfo(
+                pid,
+                3,  # PROC_PIDTBSDINFO
+                0,
+                ctypes.byref(info),
+                ctypes.sizeof(info),
+            )
+        except (AttributeError, OSError):
+            pass
+        else:
+            if result == ctypes.sizeof(info):
+                return f"darwin:{info.pbi_start_tvsec}:{info.pbi_start_tvusec}"
+
+    proc_stat = Path(f"/proc/{pid}/stat")
+    try:
+        raw_stat = proc_stat.read_text(encoding="ascii")
+        fields = raw_stat.rsplit(")", 1)[1].split()
+        start_ticks = fields[19]
+    except (FileNotFoundError, IndexError, OSError, UnicodeDecodeError):
+        pass
+    else:
+        return f"linux:{start_ticks}"
+
+    try:
+        result = subprocess.run(
+            ["/bin/ps", "-o", "lstart=", "-p", str(pid)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=1.0,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    value = " ".join(result.stdout.split())
+    if not value or len(value) > 128:
+        return None
+    return value
+
+
+def _process_identity_matches(identity: BrokerProcessIdentity) -> bool:
+    if identity.start_time is None or not _process_running(identity.pid):
+        return False
+    current = _process_start_time(identity.pid)
+    return current is not None and hmac.compare_digest(current, identity.start_time)
+
+
+def _write_broker_pid(path: Path) -> BrokerProcessIdentity:
+    process_identity = BrokerProcessIdentity(os.getpid(), _process_start_time(os.getpid()))
+    if process_identity.start_time is None:
+        raise BrokerError("BROKER_PROCESS_IDENTITY_UNAVAILABLE")
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
     descriptor = os.open(path, flags, 0o600)
+    identity: tuple[int, int] | None = None
     try:
+        metadata = os.fstat(descriptor)
+        identity = (metadata.st_dev, metadata.st_ino)
         os.fchmod(descriptor, 0o600)
-        os.write(descriptor, str(os.getpid()).encode("ascii"))
+        value = canonical_bytes(
+            {"pid": process_identity.pid, "start_time": process_identity.start_time}
+        )
+        offset = 0
+        while offset < len(value):
+            written = os.write(descriptor, value[offset:])
+            if written <= 0 or written > len(value) - offset:
+                raise OSError("short broker PID write")
+            offset += written
         os.fsync(descriptor)
-    finally:
+    except Exception:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+        try:
+            metadata = path.lstat()
+            if identity is not None and identity == (metadata.st_dev, metadata.st_ino):
+                path.unlink()
+        except OSError:
+            pass
+        raise
+    else:
         os.close(descriptor)
+    return process_identity
 
 
 def broker_serve_command(args: argparse.Namespace) -> int:
     state_dir, socket_path, pid_path = _broker_paths(args)
     _private_broker_state(state_dir)
-    existing_pid = _read_broker_pid(pid_path)
-    if existing_pid is not None and _process_running(existing_pid):
-        raise BrokerError("BROKER_ALREADY_RUNNING")
-    pid_path.unlink(missing_ok=True)
-    if socket_path.exists() or socket_path.is_symlink():
-        if _broker_probe(socket_path):
-            raise BrokerError("BROKER_ALREADY_RUNNING")
-        metadata = socket_path.lstat()
-        if not stat.S_ISSOCK(metadata.st_mode):
-            raise BrokerError("BROKER_PATH_INVALID")
-        socket_path.unlink()
     key = _broker_signing_key(state_dir)
     policy_digest = digest({"mode": "inactive", "profiles": sorted(set(args.profile))})
     artifact_digest = digest({"broker_schema_version": 1, "routes": []})
@@ -299,20 +626,36 @@ def broker_serve_command(args: argparse.Namespace) -> int:
         stopped.set()
 
     previous = {signum: signal.signal(signum, stop) for signum in (signal.SIGINT, signal.SIGTERM)}
+    broker_identity: BrokerProcessIdentity | None = None
     try:
-        server.start()
-        _write_broker_pid(pid_path)
+        with _broker_lifecycle_lock(state_dir):
+            existing_identity = _read_broker_pid(pid_path)
+            if existing_identity is not None:
+                if _process_running(existing_identity.pid):
+                    if _process_identity_matches(existing_identity):
+                        raise BrokerError("BROKER_ALREADY_RUNNING")
+                    if _process_running(existing_identity.pid):
+                        raise BrokerError("BROKER_PID_IDENTITY_INVALID")
+                if _read_broker_pid(pid_path) == existing_identity:
+                    pid_path.unlink()
+            if socket_path.exists() or socket_path.is_symlink():
+                if _broker_probe(socket_path):
+                    raise BrokerError("BROKER_ALREADY_RUNNING")
+                _remove_broker_socket(socket_path)
+            server.start()
+            broker_identity = _write_broker_pid(pid_path)
         print(json.dumps({"broker": "ready", "mode": "inactive", "profiles": sorted(set(args.profile))}, sort_keys=True), flush=True)
         while not stopped.wait(0.25):
             pass
     finally:
-        server.close()
-        shutdown = broker.shutdown(timeout_seconds=args.shutdown_timeout)
-        try:
-            if _read_broker_pid(pid_path) == os.getpid():
-                pid_path.unlink(missing_ok=True)
-        except BrokerError:
-            pass
+        with _broker_lifecycle_lock(state_dir):
+            server.close()
+            shutdown = broker.shutdown(timeout_seconds=args.shutdown_timeout)
+            try:
+                if broker_identity is not None and _read_broker_pid(pid_path) == broker_identity:
+                    pid_path.unlink(missing_ok=True)
+            except BrokerError:
+                pass
         for signum, handler in previous.items():
             signal.signal(signum, handler)
     if shutdown["undrained"] or shutdown["active_reads"] or shutdown["active_writes"]:
@@ -321,7 +664,9 @@ def broker_serve_command(args: argparse.Namespace) -> int:
 
 
 def broker_status_command(args: argparse.Namespace) -> int:
-    _state_dir, socket_path, _pid_path = _broker_paths(args)
+    state_dir, socket_path, _pid_path = _broker_paths(args)
+    if not _private_broker_state(state_dir, create=False):
+        raise BrokerError("BROKER_UNAVAILABLE")
     if not _broker_probe(socket_path):
         raise BrokerError("BROKER_UNAVAILABLE")
     print(json.dumps({"broker": "healthy", "mode": "inactive", "socket": str(socket_path)}, sort_keys=True))
@@ -329,19 +674,38 @@ def broker_status_command(args: argparse.Namespace) -> int:
 
 
 def broker_stop_command(args: argparse.Namespace) -> int:
-    _state_dir, socket_path, pid_path = _broker_paths(args)
-    pid = _read_broker_pid(pid_path)
-    if pid is None:
-        if _broker_probe(socket_path):
-            raise BrokerError("BROKER_PID_INVALID")
-        socket_path.unlink(missing_ok=True)
+    state_dir, socket_path, pid_path = _broker_paths(args)
+    if not _private_broker_state(state_dir, create=False):
         return 0
-    if _process_running(pid):
-        os.kill(pid, signal.SIGTERM)
-    deadline = time.monotonic() + args.timeout
-    while time.monotonic() < deadline:
-        if not _process_running(pid) and not _broker_probe(socket_path, timeout=0.1):
+    with _broker_lifecycle_lock(state_dir):
+        identity = _read_broker_pid(pid_path)
+        if identity is None:
+            if _broker_probe(socket_path):
+                raise BrokerError("BROKER_PID_INVALID")
+            _remove_broker_socket(socket_path)
+            pid_path.unlink(missing_ok=True)
             return 0
+        if _process_running(identity.pid):
+            if _process_identity_matches(identity):
+                try:
+                    os.kill(identity.pid, signal.SIGTERM)
+                except (ProcessLookupError, PermissionError):
+                    pass
+            elif _process_running(identity.pid):
+                raise BrokerError("BROKER_PID_IDENTITY_INVALID")
+    deadline = time.monotonic() + args.timeout
+    while True:
+        if not _process_identity_matches(identity) and not _broker_probe(socket_path, timeout=0.1):
+            with _broker_lifecycle_lock(state_dir):
+                if _process_identity_matches(identity) or _broker_probe(socket_path, timeout=0.1):
+                    continue
+                current_identity = _read_broker_pid(pid_path)
+                if current_identity == identity:
+                    _remove_broker_socket(socket_path)
+                    pid_path.unlink(missing_ok=True)
+                return 0
+        if time.monotonic() >= deadline:
+            break
         time.sleep(0.05)
     raise BrokerError("BROKER_STOP_TIMEOUT")
 

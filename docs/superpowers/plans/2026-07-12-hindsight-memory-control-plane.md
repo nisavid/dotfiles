@@ -332,7 +332,7 @@
 
 **Interfaces:**
 - Consumes: controller CLI/server, configured profile identity, and an inactive broker policy with no installed data routes.
-- Produces: machine-global broker lifecycle, additive profile/fleet status, stable existing five operator commands, and documented approval/rollback boundaries.
+- Produces: per-login-user broker lifecycle, additive profile/fleet status, stable existing five operator commands, and documented approval/rollback boundaries.
 
 - [x] **Step 1: Write red service acceptance tests**
 
