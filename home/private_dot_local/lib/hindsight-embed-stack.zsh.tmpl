@@ -10,17 +10,22 @@ hindsight_stack_load_config() {
 
   typeset -g HINDSIGHT_EMBED_UVX="${HINDSIGHT_EMBED_UVX:-$HOME/.local/bin/uvx}"
   typeset -g HINDSIGHT_EMBED_CONTROL_PORT="${HINDSIGHT_EMBED_CONTROL_PORT:-{{ .hindsight.controlPort }}}"
+  typeset -g HINDSIGHT_EMBED_CONTROL_HOSTNAME="${HINDSIGHT_EMBED_CONTROL_HOSTNAME:-127.0.0.1}"
   typeset -g HINDSIGHT_EMBED_PROFILE="${HINDSIGHT_EMBED_PROFILE:-{{ .hindsight.profile }}}"
   typeset -g HINDSIGHT_EMBED_API_PORT="${HINDSIGHT_EMBED_API_PORT:-{{ .hindsight.apiPort }}}"
   typeset -g HINDSIGHT_EMBED_UI_PORT="${HINDSIGHT_EMBED_UI_PORT:-{{ .hindsight.uiPort }}}"
   typeset -g HINDSIGHT_EMBED_UI_HOSTNAME="${HINDSIGHT_EMBED_UI_HOSTNAME:-{{ .hindsight.uiHostname }}}"
   typeset -g HINDSIGHT_EMBED_PYTHON="${HINDSIGHT_EMBED_PYTHON:-$HOME/.local/share/uv/tools/hindsight-embed/bin/python}"
   typeset -g HINDSIGHT_EMBED_STOP_HELPER="${HINDSIGHT_EMBED_STOP_HELPER:-$HOME/.local/libexec/hindsight-embed-stop-profile-services.py}"
+  typeset -g HINDSIGHT_MEMORY_CLI="${HINDSIGHT_MEMORY_CLI:-$HOME/.local/bin/hindsight-memory}"
+  typeset -g HINDSIGHT_MEMORY_STATE_DIR="${HINDSIGHT_MEMORY_STATE_DIR:-$HOME/.local/state/hindsight-memory}"
+  typeset -g HINDSIGHT_MEMORY_BROKER_SOCKET="${HINDSIGHT_MEMORY_BROKER_SOCKET:-$HINDSIGHT_MEMORY_STATE_DIR/broker.sock}"
   typeset -g HINDSIGHT_EMBED_AUTOSTART_DAEMON="${HINDSIGHT_EMBED_AUTOSTART_DAEMON:-{{ if .hindsight.autostartDaemon }}1{{ else }}0{{ end }}}"
   typeset -g HINDSIGHT_EMBED_AUTOSTART_UI="${HINDSIGHT_EMBED_AUTOSTART_UI:-{{ if .hindsight.autostartUi }}1{{ else }}0{{ end }}}"
   typeset -g HINDSIGHT_EMBED_CONTROL_WAIT_SECONDS="${HINDSIGHT_EMBED_CONTROL_WAIT_SECONDS:-30}"
   typeset -g HINDSIGHT_EMBED_DAEMON_WAIT_SECONDS="${HINDSIGHT_EMBED_DAEMON_WAIT_SECONDS:-120}"
   typeset -g HINDSIGHT_EMBED_UI_WAIT_SECONDS="${HINDSIGHT_EMBED_UI_WAIT_SECONDS:-60}"
+  typeset -g HINDSIGHT_MEMORY_BROKER_WAIT_SECONDS="${HINDSIGHT_MEMORY_BROKER_WAIT_SECONDS:-30}"
   typeset -g HINDSIGHT_EMBED_STOP_WAIT_SECONDS="${HINDSIGHT_EMBED_STOP_WAIT_SECONDS:-30}"
   typeset -g HINDSIGHT_EMBED_START_COOLDOWN_SECONDS="${HINDSIGHT_EMBED_START_COOLDOWN_SECONDS:-20}"
 }
@@ -55,6 +60,31 @@ hindsight_stack_require_tools() {
     print -ru2 -- "hindsight-embed-stack: missing /usr/bin/curl"
     return 1
   fi
+  if [[ ! -x "$HINDSIGHT_MEMORY_CLI" ]]; then
+    print -ru2 -- "hindsight-embed-stack: memory controller is not executable at ${HINDSIGHT_MEMORY_CLI}"
+    return 1
+  fi
+  hindsight_stack_require_loopback || return 1
+}
+
+hindsight_stack_require_loopback() {
+  emulate -L zsh
+  hindsight_stack_load_config
+
+  case "$HINDSIGHT_EMBED_CONTROL_HOSTNAME" in
+    127.0.0.1|::1) ;;
+    *)
+      print -ru2 -- "hindsight-embed-stack: control hostname must be a literal loopback address"
+      return 1
+      ;;
+  esac
+  case "$HINDSIGHT_EMBED_UI_HOSTNAME" in
+    127.0.0.1|::1) ;;
+    *)
+      print -ru2 -- "hindsight-embed-stack: UI hostname must be a literal loopback address"
+      return 1
+      ;;
+  esac
 }
 
 hindsight_stack_require_runtime_helpers() {
@@ -201,8 +231,23 @@ hindsight_stack_control_running() {
   hindsight_stack_load_config
 
   hindsight_stack_control_status ||
-    hindsight_stack_http_ok "http://127.0.0.1:${HINDSIGHT_EMBED_CONTROL_PORT}" ||
+    hindsight_stack_http_ok "http://${HINDSIGHT_EMBED_CONTROL_HOSTNAME}:${HINDSIGHT_EMBED_CONTROL_PORT}" ||
     hindsight_stack_port_listening "$HINDSIGHT_EMBED_CONTROL_PORT"
+}
+
+hindsight_stack_broker_status() {
+  emulate -L zsh
+  hindsight_stack_load_config
+
+  "$HINDSIGHT_MEMORY_CLI" --state-dir "$HINDSIGHT_MEMORY_STATE_DIR" \
+    broker status --socket "$HINDSIGHT_MEMORY_BROKER_SOCKET" >/dev/null 2>&1
+}
+
+hindsight_stack_broker_running() {
+  emulate -L zsh
+  hindsight_stack_load_config
+
+  hindsight_stack_broker_status || [[ -S "$HINDSIGHT_MEMORY_BROKER_SOCKET" ]]
 }
 
 hindsight_stack_daemon_status() {
@@ -249,6 +294,15 @@ hindsight_stack_control_start() {
     --port "$HINDSIGHT_EMBED_CONTROL_PORT" >/dev/null 2>&1
 }
 
+hindsight_stack_broker_start() {
+  emulate -L zsh
+  hindsight_stack_load_config
+
+  "$HINDSIGHT_MEMORY_CLI" --state-dir "$HINDSIGHT_MEMORY_STATE_DIR" \
+    broker serve --socket "$HINDSIGHT_MEMORY_BROKER_SOCKET" \
+    --profile "$HINDSIGHT_EMBED_PROFILE" &
+}
+
 hindsight_stack_daemon_start() {
   emulate -L zsh
   hindsight_stack_load_config
@@ -274,6 +328,15 @@ hindsight_stack_control_stop() {
   hindsight_stack_run_stop_helper \
     --mode stop-control \
     --control-port "$HINDSIGHT_EMBED_CONTROL_PORT"
+}
+
+hindsight_stack_broker_stop() {
+  emulate -L zsh
+  hindsight_stack_load_config
+
+  "$HINDSIGHT_MEMORY_CLI" --state-dir "$HINDSIGHT_MEMORY_STATE_DIR" \
+    broker stop --socket "$HINDSIGHT_MEMORY_BROKER_SOCKET" \
+    --timeout "$HINDSIGHT_EMBED_STOP_WAIT_SECONDS"
 }
 
 hindsight_stack_daemon_stop() {
@@ -326,6 +389,9 @@ hindsight_stack_wait_for() {
 
   while (( $(/bin/date +%s) <= deadline )); do
     case "$component" in
+      broker)
+        hindsight_stack_broker_status && return 0
+        ;;
       control)
         hindsight_stack_control_status && return 0
         ;;
@@ -352,6 +418,12 @@ hindsight_stack_wait_control() {
   hindsight_stack_wait_for control "$HINDSIGHT_EMBED_CONTROL_WAIT_SECONDS"
 }
 
+hindsight_stack_wait_broker() {
+  emulate -L zsh
+  hindsight_stack_load_config
+  hindsight_stack_wait_for broker "$HINDSIGHT_MEMORY_BROKER_WAIT_SECONDS"
+}
+
 hindsight_stack_wait_daemon() {
   emulate -L zsh
   hindsight_stack_load_config
@@ -375,6 +447,9 @@ hindsight_stack_wait_stopped_for() {
 
   while (( $(/bin/date +%s) <= deadline )); do
     case "$component" in
+      broker)
+        hindsight_stack_broker_running || return 0
+        ;;
       control)
         hindsight_stack_control_running || return 0
         ;;
@@ -413,6 +488,24 @@ hindsight_stack_reconcile_control() {
     return 1
   fi
   hindsight_stack_wait_control
+}
+
+hindsight_stack_reconcile_broker() {
+  emulate -L zsh
+
+  if hindsight_stack_broker_status; then
+    return 0
+  fi
+  if ! hindsight_stack_can_start broker; then
+    return 1
+  fi
+  hindsight_stack_mark_start broker
+  hindsight_stack_log "broker is not healthy; starting"
+  if ! hindsight_stack_broker_start; then
+    hindsight_stack_log "broker start command failed"
+    return 1
+  fi
+  hindsight_stack_wait_broker
 }
 
 hindsight_stack_reconcile_daemon() {
@@ -461,6 +554,10 @@ hindsight_stack_reconcile_once() {
 
   local ok=0
 
+  if ! hindsight_stack_reconcile_broker; then
+    ok=1
+  fi
+
   if ! hindsight_stack_reconcile_control; then
     ok=1
   fi
@@ -486,6 +583,9 @@ hindsight_stack_start_all() {
   hindsight_stack_require_tools || return 1
   hindsight_stack_require_runtime_helpers || return 1
 
+  hindsight_stack_broker_status || hindsight_stack_broker_start
+  hindsight_stack_wait_broker || return 1
+
   hindsight_stack_control_status || hindsight_stack_control_start
   hindsight_stack_wait_control || return 1
 
@@ -503,6 +603,9 @@ hindsight_stack_start_all() {
 hindsight_stack_wait_all() {
   emulate -L zsh
   hindsight_stack_load_config
+
+  print -r -- "waiting for broker at ${HINDSIGHT_MEMORY_BROKER_SOCKET} (up to ${HINDSIGHT_MEMORY_BROKER_WAIT_SECONDS}s)"
+  hindsight_stack_wait_broker || return 1
 
   print -r -- "waiting for control on port ${HINDSIGHT_EMBED_CONTROL_PORT} (up to ${HINDSIGHT_EMBED_CONTROL_WAIT_SECONDS}s)"
   hindsight_stack_wait_control || return 1
@@ -527,6 +630,8 @@ hindsight_stack_stop_all() {
   hindsight_stack_stop_profile_services "$HINDSIGHT_EMBED_PROFILE" || ok=1
   hindsight_stack_wait_stopped_for ui "$HINDSIGHT_EMBED_STOP_WAIT_SECONDS" || ok=1
   hindsight_stack_wait_stopped_for daemon "$HINDSIGHT_EMBED_STOP_WAIT_SECONDS" || ok=1
+  hindsight_stack_broker_stop || ok=1
+  hindsight_stack_wait_stopped_for broker "$HINDSIGHT_EMBED_STOP_WAIT_SECONDS" || ok=1
   hindsight_stack_control_stop || true
   hindsight_stack_wait_stopped_for control "$HINDSIGHT_EMBED_STOP_WAIT_SECONDS" || ok=1
   return "$ok"
@@ -537,6 +642,9 @@ hindsight_stack_status_word() {
   local component="$1"
 
   case "$component" in
+    broker)
+      hindsight_stack_broker_status && print -r -- "healthy" || print -r -- "down"
+      ;;
     control)
       hindsight_stack_control_status && print -r -- "healthy" || print -r -- "down"
       ;;
@@ -557,7 +665,8 @@ hindsight_stack_status_report() {
   emulate -L zsh
   hindsight_stack_load_config
 
-  print -r -- "control: $(hindsight_stack_status_word control) (http://localhost:${HINDSIGHT_EMBED_CONTROL_PORT})"
+  print -r -- "broker: $(hindsight_stack_status_word broker) (${HINDSIGHT_MEMORY_BROKER_SOCKET})"
+  print -r -- "control: $(hindsight_stack_status_word control) (http://${HINDSIGHT_EMBED_CONTROL_HOSTNAME}:${HINDSIGHT_EMBED_CONTROL_PORT})"
   print -r -- "daemon: $(hindsight_stack_status_word daemon) (${HINDSIGHT_EMBED_PROFILE}, http://127.0.0.1:${HINDSIGHT_EMBED_API_PORT})"
   print -r -- "ui: $(hindsight_stack_status_word ui) (${HINDSIGHT_EMBED_PROFILE}, $(hindsight_stack_ui_url))"
 }

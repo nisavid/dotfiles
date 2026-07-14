@@ -319,23 +319,25 @@
 ### Task 8: Service integration, disposable-stack validation, security review, and closeout publication
 
 **Files:**
+- Modify: `home/private_dot_local/bin/executable_hindsight-memory`
 - Modify: `home/private_dot_local/lib/hindsight-embed-stack.zsh.tmpl`
 - Modify: `home/private_dot_local/bin/executable_hindsight-embed-service`
 - Modify: `home/private_dot_local/bin/executable_hindsight-embed-supervisor`
 - Modify: `home/Library/LaunchAgents/com.hindsight.embed.stack.plist.tmpl`
-- Modify: `home/.chezmoidata/hindsight.toml`
+- Modify: `home/private_dot_config/hindsight-memory/benchmark-schema.json`
 - Modify: `docs/HINDSIGHT.md`
 - Create: `tests/hindsight-memory-controller.zsh`
+- Modify: `tests/test_hindsight_memory_migration.py`
 
 **Interfaces:**
-- Consumes: controller CLI/server and resolved inactive inventory.
+- Consumes: controller CLI/server, configured profile identity, and an inactive broker policy with no installed data routes.
 - Produces: machine-global broker lifecycle, additive profile/fleet status, stable existing five operator commands, and documented approval/rollback boundaries.
 
-- [ ] **Step 1: Write red service acceptance tests**
+- [x] **Step 1: Write red service acceptance tests**
 
   Assert existing `install/start/stop/status/logs` help remains stable, controller/broker status is additive, LaunchAgent binds control/UI to loopback, managed config contains no tokens, disabled harness render survives `chezmoi apply`, and supervisor logs contain no payloads or credentials.
 
-- [ ] **Step 2: Integrate the broker without activating harnesses**
+- [x] **Step 2: Integrate the broker without activating harnesses**
 
   Extend the supervisor to own the broker and enabled profiles, preserve bounded shutdown, and report endpoint/profile/broker health. Keep existing profile runtime current; no provider/model switch belongs to this tranche.
 

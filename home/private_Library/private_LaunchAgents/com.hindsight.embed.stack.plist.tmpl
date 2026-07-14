@@ -37,6 +37,8 @@
     <string>{{ joinPath .chezmoi.homeDir ".local/bin/uvx" }}</string>
     <key>HINDSIGHT_EMBED_CONTROL_PORT</key>
     <string>{{ .hindsight.controlPort }}</string>
+    <key>HINDSIGHT_EMBED_CONTROL_HOSTNAME</key>
+    <string>127.0.0.1</string>
     <key>HINDSIGHT_EMBED_PROFILE</key>
     <string>{{ .hindsight.profile }}</string>
     <key>HINDSIGHT_EMBED_API_PORT</key>
@@ -51,6 +53,14 @@
     <string>{{ if .hindsight.autostartUi }}1{{ else }}0{{ end }}</string>
     <key>HINDSIGHT_EMBED_POLL_SECONDS</key>
     <string>{{ .hindsight.pollSeconds }}</string>
+    <key>HINDSIGHT_MEMORY_CLI</key>
+    <string>{{ joinPath .chezmoi.homeDir ".local/bin/hindsight-memory" }}</string>
+    <key>HINDSIGHT_MEMORY_STATE_DIR</key>
+    <string>{{ joinPath .chezmoi.homeDir ".local/state/hindsight-memory" }}</string>
+    <key>HINDSIGHT_MEMORY_BROKER_SOCKET</key>
+    <string>{{ joinPath .chezmoi.homeDir ".local/state/hindsight-memory/broker.sock" }}</string>
+    <key>HINDSIGHT_MEMORY_BROKER_WAIT_SECONDS</key>
+    <string>30</string>
     <key>HINDSIGHT_EMBED_STATE_DIR</key>
     <string>{{ joinPath .chezmoi.homeDir ".local/state/hindsight-embed-launchd" }}</string>
   </dict>

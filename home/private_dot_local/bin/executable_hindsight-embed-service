@@ -47,6 +47,7 @@ load_stack_lib() {
   for required_function in \
     hindsight_stack_log \
     hindsight_stack_load_config \
+    hindsight_stack_broker_status \
     hindsight_stack_reconcile_once \
     hindsight_stack_require_current_user \
     hindsight_stack_profile_exists \
@@ -124,6 +125,7 @@ validate_installed_files() {
   [[ -x "$HINDSIGHT_EMBED_UVX" ]] || die "uvx is not executable at ${HINDSIGHT_EMBED_UVX}"
   hindsight_stack_require_runtime_helpers || die "Hindsight helper runtime failed validation"
   hindsight_stack_require_profile || die "configured Hindsight profile preflight failed"
+  [[ -x "$HINDSIGHT_MEMORY_CLI" ]] || die "memory controller is not executable at ${HINDSIGHT_MEMORY_CLI}"
   /usr/bin/plutil -lint "$PLIST" >/dev/null || die "plist failed lint: ${PLIST}"
 }
 
@@ -182,6 +184,13 @@ show_installed_file_checks() {
     print -r -- "  uvx: ok (${uvx})"
   else
     print -r -- "  uvx: missing or not executable (${uvx})"
+    ok=1
+  fi
+
+  if (( stack_loaded )) && [[ -x "$HINDSIGHT_MEMORY_CLI" ]]; then
+    print -r -- "  memory controller: ok (${HINDSIGHT_MEMORY_CLI})"
+  else
+    print -r -- "  memory controller: missing or not executable (${HINDSIGHT_MEMORY_CLI:-unknown})"
     ok=1
   fi
 
@@ -258,6 +267,7 @@ stop_service() {
   hindsight_stack_load_config
   if hindsight_stack_wait_stopped_for ui "$HINDSIGHT_EMBED_STOP_WAIT_SECONDS" &&
     hindsight_stack_wait_stopped_for daemon "$HINDSIGHT_EMBED_STOP_WAIT_SECONDS" &&
+    hindsight_stack_wait_stopped_for broker "$HINDSIGHT_EMBED_STOP_WAIT_SECONDS" &&
     hindsight_stack_wait_stopped_for control "$HINDSIGHT_EMBED_STOP_WAIT_SECONDS"; then
     return 0
   fi

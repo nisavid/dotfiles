@@ -8,7 +8,13 @@ import json
 import os
 from pathlib import Path
 import re
+import secrets
+import signal
+import socket
+import stat
 import sys
+import threading
+import time
 from typing import Any
 
 
@@ -31,6 +37,11 @@ from hindsight_memory_control_plane import (  # noqa: E402
     plan_from_dict,
     verify_plan,
 )
+from hindsight_memory_control_plane.broker import Broker, BrokerError  # noqa: E402
+from hindsight_memory_control_plane.server import UnixJsonRpcServer  # noqa: E402
+
+
+BROKER_REQUEST = b'{"id":"health","jsonrpc":"2.0","method":"session_status","params":{}}\n'
 
 
 def read_json(path: str | Path) -> Any:
@@ -127,6 +138,214 @@ def migration_discover_command(args: argparse.Namespace) -> int:
     return 0 if result.complete else 2
 
 
+def _broker_paths(args: argparse.Namespace) -> tuple[Path, Path, Path]:
+    state_dir = Path(args.state_dir).expanduser()
+    socket_path = Path(args.socket).expanduser()
+    if not state_dir.is_absolute() or not socket_path.is_absolute():
+        raise BrokerError("BROKER_PATH_INVALID")
+    if socket_path.parent != state_dir:
+        raise BrokerError("BROKER_PATH_INVALID")
+    return state_dir, socket_path, state_dir / "broker.pid"
+
+
+def _private_broker_state(state_dir: Path) -> None:
+    try:
+        metadata = state_dir.lstat()
+    except FileNotFoundError:
+        if not state_dir.parent.is_dir():
+            raise BrokerError("BROKER_PATH_INVALID")
+        state_dir.mkdir(mode=0o700)
+        metadata = state_dir.lstat()
+    if not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+        raise BrokerError("BROKER_PATH_INVALID")
+    if stat.S_IMODE(metadata.st_mode) != 0o700:
+        raise BrokerError("BROKER_STATE_MODE_INVALID")
+
+
+def _read_private(path: Path, expected_bytes: int, code: str) -> bytes:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as error:
+        raise BrokerError(code) from error
+    try:
+        metadata = os.fstat(descriptor)
+        value = os.read(descriptor, expected_bytes + 1)
+    finally:
+        os.close(descriptor)
+    if not stat.S_ISREG(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) != 0o600 or len(value) != expected_bytes:
+        raise BrokerError(code)
+    return value
+
+
+def _broker_signing_key(state_dir: Path) -> bytes:
+    path = state_dir / "broker.signing-key"
+    try:
+        return _read_private(path, 32, "SIGNING_KEY_INVALID")
+    except BrokerError:
+        if path.exists():
+            raise
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    value = secrets.token_bytes(32)
+    try:
+        descriptor = os.open(path, flags, 0o600)
+    except FileExistsError:
+        return _read_private(path, 32, "SIGNING_KEY_INVALID")
+    try:
+        os.fchmod(descriptor, 0o600)
+        if os.write(descriptor, value) != len(value):
+            raise OSError("short signing-key write")
+        os.fsync(descriptor)
+    except Exception:
+        os.close(descriptor)
+        path.unlink(missing_ok=True)
+        raise
+    else:
+        os.close(descriptor)
+    return value
+
+
+def _broker_probe(socket_path: Path, timeout: float = 1.0) -> bool:
+    try:
+        metadata = socket_path.lstat()
+        if not stat.S_ISSOCK(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) != 0o600:
+            return False
+        connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        connection.settimeout(timeout)
+        with connection:
+            connection.connect(str(socket_path))
+            connection.sendall(BROKER_REQUEST)
+            response = connection.makefile("rb").readline(4097)
+        value = json.loads(response)
+        return (
+            isinstance(value, dict)
+            and value.get("jsonrpc") == "2.0"
+            and value.get("id") == "health"
+            and set(value) in ({"jsonrpc", "id", "error"}, {"jsonrpc", "id", "result"})
+        )
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return False
+
+
+def _read_broker_pid(path: Path) -> int | None:
+    if not path.exists():
+        return None
+    raw = _read_private(path, path.stat().st_size, "BROKER_PID_INVALID")
+    try:
+        value = int(raw.decode("ascii"))
+    except (UnicodeDecodeError, ValueError) as error:
+        raise BrokerError("BROKER_PID_INVALID") from error
+    if value <= 1:
+        raise BrokerError("BROKER_PID_INVALID")
+    return value
+
+
+def _process_running(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+def _write_broker_pid(path: Path) -> None:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(path, flags, 0o600)
+    try:
+        os.fchmod(descriptor, 0o600)
+        os.write(descriptor, str(os.getpid()).encode("ascii"))
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def broker_serve_command(args: argparse.Namespace) -> int:
+    state_dir, socket_path, pid_path = _broker_paths(args)
+    _private_broker_state(state_dir)
+    existing_pid = _read_broker_pid(pid_path)
+    if existing_pid is not None and _process_running(existing_pid):
+        raise BrokerError("BROKER_ALREADY_RUNNING")
+    pid_path.unlink(missing_ok=True)
+    if socket_path.exists() or socket_path.is_symlink():
+        if _broker_probe(socket_path):
+            raise BrokerError("BROKER_ALREADY_RUNNING")
+        metadata = socket_path.lstat()
+        if not stat.S_ISSOCK(metadata.st_mode):
+            raise BrokerError("BROKER_PATH_INVALID")
+        socket_path.unlink()
+    key = _broker_signing_key(state_dir)
+    policy_digest = digest({"mode": "inactive", "profiles": sorted(set(args.profile))})
+    artifact_digest = digest({"broker_schema_version": 1, "routes": []})
+    broker = Broker(
+        state_dir=state_dir,
+        signing_key=key,
+        routes={},
+        policy_digest=policy_digest,
+        artifact_digest=artifact_digest,
+        mint_authorizer=lambda _control, _claims, _ttl: {},
+    )
+    server = UnixJsonRpcServer(socket_path, broker)
+    stopped = threading.Event()
+
+    def stop(_signum: int, _frame: Any) -> None:
+        stopped.set()
+
+    previous = {signum: signal.signal(signum, stop) for signum in (signal.SIGINT, signal.SIGTERM)}
+    try:
+        server.start()
+        _write_broker_pid(pid_path)
+        print(json.dumps({"broker": "ready", "mode": "inactive", "profiles": sorted(set(args.profile))}, sort_keys=True), flush=True)
+        while not stopped.wait(0.25):
+            pass
+    finally:
+        server.close()
+        shutdown = broker.shutdown(timeout_seconds=args.shutdown_timeout)
+        try:
+            if _read_broker_pid(pid_path) == os.getpid():
+                pid_path.unlink(missing_ok=True)
+        except BrokerError:
+            pass
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
+    if shutdown["undrained"] or shutdown["active_reads"] or shutdown["active_writes"]:
+        raise BrokerError("BROKER_SHUTDOWN_INCOMPLETE")
+    return 0
+
+
+def broker_status_command(args: argparse.Namespace) -> int:
+    _state_dir, socket_path, _pid_path = _broker_paths(args)
+    if not _broker_probe(socket_path):
+        raise BrokerError("BROKER_UNAVAILABLE")
+    print(json.dumps({"broker": "healthy", "mode": "inactive", "socket": str(socket_path)}, sort_keys=True))
+    return 0
+
+
+def broker_stop_command(args: argparse.Namespace) -> int:
+    _state_dir, socket_path, pid_path = _broker_paths(args)
+    pid = _read_broker_pid(pid_path)
+    if pid is None:
+        if _broker_probe(socket_path):
+            raise BrokerError("BROKER_PID_INVALID")
+        socket_path.unlink(missing_ok=True)
+        return 0
+    if _process_running(pid):
+        os.kill(pid, signal.SIGTERM)
+    deadline = time.monotonic() + args.timeout
+    while time.monotonic() < deadline:
+        if not _process_running(pid) and not _broker_probe(socket_path, timeout=0.1):
+            return 0
+        time.sleep(0.05)
+    raise BrokerError("BROKER_STOP_TIMEOUT")
+
+
 def parser() -> argparse.ArgumentParser:
     value = argparse.ArgumentParser(prog="hindsight-memory")
     value.add_argument("--state-dir", required=True)
@@ -165,6 +384,21 @@ def parser() -> argparse.ArgumentParser:
     discover.add_argument("--token-env", required=True)
     discover.add_argument("--timestamp", help=argparse.SUPPRESS)
     discover.set_defaults(run=migration_discover_command)
+
+    broker = commands.add_parser("broker")
+    broker_commands = broker.add_subparsers(dest="broker_command", required=True)
+    serve = broker_commands.add_parser("serve")
+    serve.add_argument("--socket", required=True)
+    serve.add_argument("--profile", action="append", required=True)
+    serve.add_argument("--shutdown-timeout", type=float, default=5.0)
+    serve.set_defaults(run=broker_serve_command)
+    broker_status = broker_commands.add_parser("status")
+    broker_status.add_argument("--socket", required=True)
+    broker_status.set_defaults(run=broker_status_command)
+    broker_stop = broker_commands.add_parser("stop")
+    broker_stop.add_argument("--socket", required=True)
+    broker_stop.add_argument("--timeout", type=float, default=5.0)
+    broker_stop.set_defaults(run=broker_stop_command)
     return value
 
 
@@ -172,7 +406,7 @@ def main() -> int:
     try:
         args = parser().parse_args()
         return args.run(args)
-    except (AdapterError, InventoryError, MigrationError, PlanError, OSError, json.JSONDecodeError) as error:
+    except (AdapterError, BrokerError, InventoryError, MigrationError, PlanError, OSError, json.JSONDecodeError) as error:
         print(f"hindsight-memory: {error}", file=sys.stderr)
         return 2
 
