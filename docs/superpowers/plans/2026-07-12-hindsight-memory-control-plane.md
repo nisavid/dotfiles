@@ -308,9 +308,11 @@
 
   Expected: PASS and fake adapter mutation-call count `0`.
 
-- [ ] **Step 5: Execute read-only live discovery**
+- [x] **Step 5: Execute read-only live discovery**
 
   Run the CLI with the live profile explicitly selected and `migration discover --read-only`. Bind the full read to one adapter generation or transaction snapshot, or require separately verified quiescence for the whole window. Before and after, snapshot the two completion-gate halves, bank stats, operation IDs, document high-water marks, and adapter watermarks. Require exact equality for all mutation-sensitive state as an additional drift check. Do not run `apply`, retain, consolidate, refresh, import, config patch, template import, curation reapply, or delete.
+
+  Evidence: inventory digest `4b960941e9b26c5295e19610b607b587fc59ce53c41ecc352e1c8db5cfcc7dc1`; unapproved shadow-plan digest `da264e373102a7fe1cea33af50a0cb9bb70d978eda430e6f0f427ff5088db5c7`; no blockers, active operations, completion marker, proposal completion entry, or live mutation.
 
 - [x] **Step 6: Commit code and tests, not generated migration artifacts**
 
@@ -367,6 +369,8 @@
 - [ ] **Step 5: Run security and broad code review until clean**
 
   Review authentication boundaries, capability replay/expiry, symlink and path traversal, file modes, canonical digest binding, TOCTOU/drift checks, rollback completeness, subprocess argv safety, HTTP size/time limits, secret/payload logging, template inactivity, and migration-gate enforcement. Fix every critical or important finding and rerun affected tests before declaring the cycle clean.
+
+  Deferred by the operator until the Codex security-scan harness issue is fixed. Do not claim this gate clean from tests or partial review evidence.
 
 - [ ] **Step 6: Create the final task-owned checkpoint**
 

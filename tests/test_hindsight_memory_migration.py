@@ -95,25 +95,12 @@ def migration_inventory():
 def package_manifest():
     value = {
         "schema_version": 1,
+        "approved_manifest_digest": SHA_E,
         "artifact_digest": SHA_E,
         "projection_digest": SHA_D,
         "tag_mapping_digest": SHA_C,
         "candidate_provenance_digest": SHA_A,
         "candidate_curation_digest": SHA_B,
-        "source_coverage": [{
-            "item_id": "source-1",
-            "content_digest": SHA_A,
-            "disposition": "retain",
-            "reason": "authoritative-source",
-            "semantic_scope": "repo:dotfiles",
-        }],
-        "candidate_coverage": [{
-            "item_id": "candidate-1",
-            "content_digest": SHA_B,
-            "disposition": "retain",
-            "reason": "accepted-candidate",
-            "semantic_scope": "repo:dotfiles",
-        }],
         "invalidation_dispositions": [
             {
                 "item_id": "invalid-source-1",
@@ -175,7 +162,7 @@ class MigrationDiscoveryContractTest(unittest.TestCase):
     ):
         manifest = copy.deepcopy(package or package_manifest())
         normalized_manifest = copy.deepcopy(manifest)
-        for key in ("source_coverage", "candidate_coverage", "invalidation_dispositions"):
+        for key in ("invalidation_dispositions",):
             if isinstance(normalized_manifest.get(key), list):
                 normalized_manifest[key].sort(key=lambda item: json.dumps(item, sort_keys=True))
         adapter = SequenceAdapter(inventories or [migration_inventory(), migration_inventory()])
@@ -193,7 +180,7 @@ class MigrationDiscoveryContractTest(unittest.TestCase):
             source_bank=SOURCE,
             candidate_bank=CANDIDATE,
             offline_package_manifest=manifest,
-            approved_offline_package_digest=approved_digest or digest(normalized_manifest),
+            approved_offline_package_digest=approved_digest or manifest["approved_manifest_digest"],
             migration_paths=write_gate_files(root),
             retain_watermark_reader=lambda: next(watermark_values),
             private_catalog_digests=catalog or {
@@ -284,8 +271,6 @@ class MigrationDiscoveryContractTest(unittest.TestCase):
         empty["hooks"] = []
         empty["schedules"] = []
         manifest = package_manifest()
-        manifest["source_coverage"] = []
-        manifest["candidate_coverage"] = []
         manifest["invalidation_dispositions"] = []
         with tempfile.TemporaryDirectory() as directory:
             _, result = self.discover(Path(directory), inventories=[empty, empty], package=manifest)
@@ -355,26 +340,38 @@ class MigrationDiscoveryContractTest(unittest.TestCase):
                 with self.assertRaises(MigrationError):
                     verify_shadow_plan(plan)
 
-    def test_missing_extra_duplicate_coverage_and_non_scalar_scope_fail_closed(self):
+    def test_legacy_package_coverage_and_invalid_curation_fail_closed(self):
         mutations = []
-        missing = package_manifest()
-        missing["source_coverage"] = []
-        mutations.append(missing)
-        extra = package_manifest()
-        extra["candidate_coverage"].append({**extra["candidate_coverage"][0], "item_id": "extra"})
-        mutations.append(extra)
+        legacy = package_manifest()
+        legacy["source_coverage"] = []
+        mutations.append(legacy)
         duplicate = package_manifest()
-        duplicate["source_coverage"].append(copy.deepcopy(duplicate["source_coverage"][0]))
+        duplicate["invalidation_dispositions"].append(
+            copy.deepcopy(duplicate["invalidation_dispositions"][0])
+        )
         mutations.append(duplicate)
-        multiple_scope = package_manifest()
-        multiple_scope["source_coverage"][0]["semantic_scope"] = ["repo:dotfiles", "scope:active"]
-        mutations.append(multiple_scope)
         for manifest in mutations:
             with self.subTest(manifest=manifest), tempfile.TemporaryDirectory() as directory:
                 _, result = self.discover(Path(directory), package=manifest)
                 self.assertFalse(result.complete)
                 self.assertTrue(result.blockers)
                 self.assertIsNone(result.run_dir)
+
+    def test_live_coverage_is_controller_derived_with_global_fallback(self):
+        snapshot = migration_inventory()
+        snapshot["banks"]["source"]["scopes"] = []
+        snapshot["banks"]["source"]["tags"] = []
+        snapshot["banks"]["source"]["documents"][0]["tags"] = []
+        with tempfile.TemporaryDirectory() as directory:
+            _, result = self.discover(
+                Path(directory), inventories=[snapshot, snapshot]
+            )
+            self.assertTrue(result.complete)
+            source = result.plan.to_dict()["coverage"]["source"]
+            self.assertEqual(source[0]["item_id"], "source-1")
+            self.assertEqual(source[0]["content_digest"], SHA_A)
+            self.assertEqual(source[0]["disposition"], "retain")
+            self.assertEqual(source[0]["semantic_scope"], "scope:active")
 
     def test_busy_operations_package_digest_mismatch_and_drift_block(self):
         busy = migration_inventory()
@@ -427,7 +424,7 @@ class MigrationDiscoveryContractTest(unittest.TestCase):
                     source_bank=SOURCE,
                     candidate_bank=CANDIDATE,
                     offline_package_manifest=manifest,
-                    approved_offline_package_digest=digest(manifest),
+                    approved_offline_package_digest=manifest["approved_manifest_digest"],
                     migration_paths=paths,
                     retain_watermark_reader=lambda: {"codex": {"epoch": 1}},
                     private_catalog_digests={"catalog": SHA_A},
@@ -449,7 +446,7 @@ class MigrationDiscoveryContractTest(unittest.TestCase):
                     source_bank=SOURCE,
                     candidate_bank=CANDIDATE,
                     offline_package_manifest=manifest,
-                    approved_offline_package_digest=digest(manifest),
+                    approved_offline_package_digest=manifest["approved_manifest_digest"],
                     migration_paths=paths,
                     retain_watermark_reader=lambda: {"codex": {"epoch": 1}},
                     private_catalog_digests={"catalog": SHA_A},
@@ -620,7 +617,7 @@ class MigrationCliContractTest(unittest.TestCase):
                 "--source-bank", "engineering",
                 "--candidate-bank", "historical-candidate",
                 "--offline-package-manifest", str(manifest_path),
-                "--approved-offline-package-digest", digest(manifest),
+                "--approved-offline-package-digest", manifest["approved_manifest_digest"],
                 "--private-catalog-digests", str(catalog_path),
                 "--retain-watermarks", str(watermark_path),
                 "--completion-marker", paths["completion_marker"],
