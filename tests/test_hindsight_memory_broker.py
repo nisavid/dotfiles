@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import socket
+import subprocess
 import sys
 import tempfile
 import threading
@@ -90,6 +91,78 @@ class BrokerSocketTest(unittest.TestCase):
         self.assertRegex(response["action_digest"], r"^[0-9a-f]{64}$")
         self.assertEqual(response["policy_digest"], DIGEST_A)
         self.assertEqual(response["artifact_digest"], DIGEST_B)
+
+    def run_cli(self, *arguments, env=None):
+        return subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "home/private_dot_local/bin/executable_hindsight-memory"),
+                "--state-dir",
+                str(self.state),
+                *map(str, arguments),
+            ],
+            cwd=ROOT,
+            env={**os.environ, **(env or {})},
+            text=True,
+            capture_output=True,
+        )
+
+    def test_stable_cli_clients_use_files_and_environment_for_private_inputs(self):
+        claims_path = self.root / "claims.json"
+        request_path = self.root / "request.json"
+        claims_path.write_text(json.dumps(claims()), encoding="utf-8")
+        request_path.write_text(json.dumps({"query": "deployment", "limit": 3}), encoding="utf-8")
+        os.chmod(claims_path, 0o600)
+        os.chmod(request_path, 0o600)
+
+        minted = self.run_cli(
+            "session", "mint", "--socket", self.socket_path,
+            "--claims", claims_path, "--ttl-seconds", "30",
+            env={"HINDSIGHT_MEMORY_CONTROL_CAPABILITY": "control"},
+        )
+        self.assertEqual(minted.returncode, 0, minted.stderr)
+        handle = json.loads(minted.stdout)["payload"]["handle"]
+        exchanged = self.run_cli(
+            "session", "exchange", "--socket", self.socket_path,
+            env={"HINDSIGHT_MEMORY_SESSION_HANDLE": handle},
+        )
+        self.assertEqual(exchanged.returncode, 0, exchanged.stderr)
+        capability = json.loads(exchanged.stdout)["payload"]["capability"]
+
+        recalled = self.run_cli(
+            "recall", "--socket", self.socket_path, "--sequence", "1",
+            "--action-id", "cli-recall", "--request", request_path,
+            env={"HINDSIGHT_MEMORY_SESSION_CAPABILITY": capability},
+        )
+        self.assertEqual(recalled.returncode, 0, recalled.stderr)
+        self.assertEqual(json.loads(recalled.stdout)["action_id"], "cli-recall")
+        status = self.run_cli(
+            "session_status", "--socket", self.socket_path, "--sequence", "2",
+            "--action-id", "cli-status",
+            env={"HINDSIGHT_MEMORY_SESSION_CAPABILITY": capability},
+        )
+        self.assertEqual(status.returncode, 0, status.stderr)
+        closed = self.run_cli(
+            "session", "close", "--socket", self.socket_path, "--sequence", "3",
+            "--action-id", "cli-close",
+            env={"HINDSIGHT_MEMORY_SESSION_CAPABILITY": capability},
+        )
+        self.assertEqual(closed.returncode, 0, closed.stderr)
+
+        for result in (minted, exchanged, recalled, status, closed):
+            self.assertFalse(any("control" in str(arg) for arg in result.args))
+            self.assertFalse(any(capability in str(arg) for arg in result.args))
+
+    def test_cli_clients_fail_closed_when_private_environment_is_missing(self):
+        claims_path = self.root / "claims.json"
+        claims_path.write_text(json.dumps(claims()), encoding="utf-8")
+        result = self.run_cli(
+            "session", "mint", "--socket", self.socket_path,
+            "--claims", claims_path,
+            env={"HINDSIGHT_MEMORY_CONTROL_CAPABILITY": ""},
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("CONTROL_CAPABILITY_UNAVAILABLE", result.stderr)
 
     def test_server_refuses_to_replace_an_existing_socket_path(self):
         self.stop()

@@ -46,6 +46,8 @@ required = {
     "HINDSIGHT_EMBED_CONTROL_HOSTNAME": "127.0.0.1",
     "HINDSIGHT_EMBED_UI_HOSTNAME": "127.0.0.1",
     "HINDSIGHT_MEMORY_BROKER_SOCKET": str(Path.home() / ".local/state/hindsight-memory/broker.sock"),
+    "HINDSIGHT_EMBED_FLEET_PROFILES": environment["HINDSIGHT_EMBED_PROFILE"],
+    "HINDSIGHT_MEMORY_BROKER_WAIT_SECONDS": "30",
 }
 for key, expected in required.items():
     if environment.get(key) != expected:
@@ -85,11 +87,20 @@ PY
 done
 
 (
+  export HOME="$tmp_dir/status-home"
+  export HINDSIGHT_EMBED_STATE_DIR="$tmp_dir/status-state"
+  export HINDSIGHT_EMBED_PROFILE="test-profile"
+  export HINDSIGHT_EMBED_FLEET_PROFILES="test-profile"
+  mkdir -p "$HOME/.hindsight/profiles"
+  touch "$HOME/.hindsight/profiles/test-profile.env"
   source "$rendered_stack_lib"
   for function_name in \
     hindsight_stack_broker_status \
     hindsight_stack_broker_start \
     hindsight_stack_broker_stop \
+    hindsight_stack_enabled_profiles \
+    hindsight_stack_select_profile \
+    hindsight_stack_validate_fleet \
     hindsight_stack_wait_broker; do
     (( ${+functions[$function_name]} )) || fail "stack library is missing ${function_name}"
   done
@@ -103,6 +114,10 @@ done
     fail "status report does not add broker health"
   print -r -- "$status_report" | rg -q '^daemon: healthy ' ||
     fail "status report lost profile health"
+  print -r -- "$status_report" | rg -q '^fleet: healthy \(1 enabled profile\)$' ||
+    fail "status report does not add fleet health"
+  print -r -- "$status_report" | rg -q '^profile .* slot=0 .*sidecars=none' ||
+    fail "status report does not expose stable profile slot and sidecar readiness"
 )
 
 broker_state="$tmp_dir/broker-state"
@@ -147,14 +162,18 @@ hindsight_stack_load_config() {
   typeset -g HINDSIGHT_EMBED_CONTROL_PORT="7878"
   typeset -g HINDSIGHT_EMBED_API_PORT="7979"
   typeset -g HINDSIGHT_EMBED_UI_PORT="17979"
+  typeset -g HINDSIGHT_EMBED_FLEET_PROFILES="test-profile,second-profile"
   typeset -g HINDSIGHT_MEMORY_BROKER_SOCKET="$HINDSIGHT_EMBED_STATE_DIR/broker.sock"
 }
 hindsight_stack_log() { print -r -- "$*" }
+hindsight_stack_enabled_profiles() { print -r -- test-profile; print -r -- second-profile }
+hindsight_stack_fleet_profiles_csv() { print -r -- test-profile,second-profile }
 hindsight_stack_broker_status() { return 0 }
 hindsight_stack_reconcile_once() { return 0 }
 hindsight_stack_require_current_user() { return 0 }
 hindsight_stack_require_runtime_helpers() { return 0 }
 hindsight_stack_require_tools() { return 0 }
+hindsight_stack_validate_fleet() { return 0 }
 hindsight_stack_stop_all() { return 0 }
 ZSH
 
@@ -171,7 +190,7 @@ start_log=""
 for _ in {1..100}; do
   if [[ -s "$supervisor_log" ]]; then
     start_log="$(rg --max-count 1 \
-      "^supervisor started .*profile=test-profile.*broker_socket=$supervisor_state/broker.sock" \
+      "^supervisor started .*profiles=test-profile,second-profile.*broker_socket=$supervisor_state/broker.sock" \
       "$supervisor_log" || true)"
     [[ -n "$start_log" ]] && break
   fi
@@ -192,7 +211,7 @@ if kill -0 "$supervisor_pid" >/dev/null 2>&1; then
 fi
 wait "$supervisor_pid"
 supervisor_pid=""
-[[ "$start_log" == *"profile=test-profile"* &&
+[[ "$start_log" == *"profiles=test-profile,second-profile"* &&
   "$start_log" == *"broker_socket=$supervisor_state/broker.sock"* ]] ||
   fail "supervisor log omits content-free broker identity"
 if rg -qi '(credential-sentinel|payload-sentinel|authorization:|bearer[[:space:]]|api[_-]?key)' "$supervisor_log"; then

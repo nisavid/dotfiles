@@ -14,6 +14,7 @@ then set the matching non-secret values in
 ```toml
 [hindsight]
 profile = "YOUR_PROFILE"
+profiles = ["YOUR_PROFILE"]
 bank = "YOUR_BANK_ID"
 apiPort = YOUR_API_PORT
 ```
@@ -55,7 +56,9 @@ configured profile to exist, retires the legacy service label when present,
 loads the LaunchAgent, and waits for the memory broker, control service, API,
 and UI to become healthy. It prints each bounded wait as it proceeds. The
 LaunchAgent starts the stack again at each login and reconciles the broker,
-control service, API, and UI if any component stops.
+control service, every profile in `HINDSIGHT_EMBED_FLEET_PROFILES`, and each declared local
+provider sidecar if any component stops. The first profile remains the primary
+profile used by the existing single-profile status lines.
 
 The broker starts in inactive mode on
 `~/.local/state/hindsight-memory/broker.sock`. It owns its signing material in
@@ -74,15 +77,23 @@ the profile's provider configuration without putting credentials in Git.
 
 ```zsh
 hindsight-embed-service status
+hindsight-embed-service status --profile "$profile"
 hindsight-embed-service start
 hindsight-embed-service stop
 hindsight-embed-service logs
 ```
 
 Use `status` after installation or a reboot. It reports the LaunchAgent, broker
-socket, configured profile endpoint, and each stack component. `start` reloads
+socket, fleet health, stable profile slots, endpoint readiness, and sidecar
+readiness. `status --profile NAME` selects one enabled profile. `start` reloads
 or restarts the LaunchAgent; `stop` unloads it and performs a bounded stop of
-the broker, control service, API, and UI.
+the broker, control service, every enabled API/UI pair, and declared sidecars.
+
+Each optional sidecar is declared under
+`~/.hindsight/profiles/PROFILE.sidecars/NAME/`. A declaration contains either
+`port` or `port-base`, may contain `health-path`, and may provide executable
+`start`, `status`, and `stop` hooks. Slot-derived ports and explicit overrides
+must be unique across the fleet.
 
 ## Configuration Changes
 
@@ -116,6 +127,21 @@ two-part completion gate and an independently approved immutable mutation plan.
 On activation failure, restore the recorded harness-owned values and leave the
 adapter disabled. On migration failure, keep profile writes frozen and use the
 verified rollback artifacts named by the approved plan.
+
+The completion marker is
+`MIGRATION_ARTIFACT_DIR/distillation-complete.marker` with exactly
+`run=RUN_ID` and `artifact=SHA256` lines. The proposal log must contain a
+`## Migration complete` section with the same two lines. `hindsight-memory
+apply` rereads both regular, non-symlinked files immediately before mutation,
+requires the approved plan digest, and resolves the data-plane token only from
+the named environment variable. The gate SHA-256 identifies the completed
+migration package, independently of the desired-state inventory digest. A
+mutation apply also requires each `--migration-archive` named by the plan's
+archive digest and a digest-keyed `--restore-evidence` JSON file; full-bank
+imports run only through the exact `hindsight-admin import-bank` argument
+vector. The plan separately binds the `--rollback-archive` digest; apply
+creates and verifies that full-schema backup before mutation and restores it
+through the exact admin adapter if a postcondition fails.
 
 `hindsight-embed-single-bank-cleanup` is a separate, destructive migration
 runbook. It is not part of normal installation; begin with its default dry run

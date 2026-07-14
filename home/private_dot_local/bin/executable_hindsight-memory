@@ -6,6 +6,7 @@ from contextlib import contextmanager
 import ctypes
 from datetime import datetime, timezone
 import fcntl
+import hashlib
 import hmac
 import json
 import os
@@ -28,24 +29,37 @@ sys.path.insert(0, str(LIB))
 from hindsight_memory_control_plane import (  # noqa: E402
     InventoryError,
     AdapterError,
+    ApplyError,
     BankRef,
     HttpAdapter,
+    AdminMigrationAdapter,
+    MigrationApplyAdapter,
     MigrationError,
     PlanError,
     build_plan,
     canonical_bytes,
+    capture_migration_gate,
+    create_rollback_bundle,
     digest,
     discover_migration_state,
     inventory_endpoint,
     load_inventory,
+    mutation_plan_from_dict,
+    apply_plan,
     plan_from_dict,
     verify_plan,
 )
 from hindsight_memory_control_plane.broker import Broker, BrokerError  # noqa: E402
-from hindsight_memory_control_plane.server import UnixJsonRpcServer  # noqa: E402
+from hindsight_memory_control_plane.model import deep_thaw  # noqa: E402
+from hindsight_memory_control_plane.file_evidence import (  # noqa: E402
+    FileEvidenceError,
+    reject_symlink_components,
+)
+from hindsight_memory_control_plane.server import JsonRpcClient, UnixJsonRpcServer  # noqa: E402
 
 
 BROKER_REQUEST = b'{"id":"health","jsonrpc":"2.0","method":"session_status","params":{}}\n'
+ENVIRONMENT_NAME = re.compile(r"[A-Z_][A-Z0-9_]{0,127}\Z")
 
 
 class BrokerProcessIdentity(NamedTuple):
@@ -55,6 +69,52 @@ class BrokerProcessIdentity(NamedTuple):
 
 def read_json(path: str | Path) -> Any:
     return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def _regular_file_digest(value: str | Path, label: str) -> str:
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        raise ApplyError(f"{label} path must be absolute")
+    try:
+        reject_symlink_components(path, label, allow_missing=False)
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(path, flags)
+        try:
+            before = os.fstat(descriptor)
+            if not stat.S_ISREG(before.st_mode):
+                raise ApplyError(f"{label} must be a regular file")
+            artifact_hash = hashlib.sha256()
+            while chunk := os.read(descriptor, 1024 * 1024):
+                artifact_hash.update(chunk)
+            after = os.fstat(descriptor)
+        finally:
+            os.close(descriptor)
+        current = path.lstat()
+    except FileEvidenceError as error:
+        raise ApplyError(str(error)) from None
+    except OSError:
+        raise ApplyError(f"{label} is unavailable") from None
+    identity = lambda item: (item.st_dev, item.st_ino, item.st_size, item.st_mtime_ns)
+    if identity(before) != identity(after) or (current.st_dev, current.st_ino) != (after.st_dev, after.st_ino):
+        raise ApplyError(f"{label} changed while being read")
+    return artifact_hash.hexdigest()
+
+
+def _paths_overlap(candidate: str | Path, protected: list[str | Path]) -> bool:
+    candidate_path = Path(candidate).expanduser()
+    if not candidate_path.is_absolute():
+        raise ApplyError("rollback archive path must be absolute")
+    candidate_resolved = candidate_path.resolve(strict=False)
+    for value in protected:
+        protected_path = Path(value).expanduser()
+        if candidate_resolved == protected_path.resolve(strict=False):
+            return True
+        try:
+            if candidate_path.exists() and protected_path.exists() and os.path.samefile(candidate_path, protected_path):
+                return True
+        except OSError:
+            raise ApplyError("migration archive identity is unavailable") from None
+    return False
 
 
 def _open_private_parent(path: Path) -> int:
@@ -238,6 +298,128 @@ def status_command(args: argparse.Namespace) -> int:
     live_agrees = hmac.compare_digest(plan.live_state_digest, current_live_digest)
     print(json.dumps({"desired_agrees": desired_agrees, "live_agrees": live_agrees, "plan_agrees": True, "inventory_digest": inventory.inventory_digest, "artifact_digest": inventory.artifact_digest, "live_state_digest": current_live_digest, "plan_digest": plan.plan_digest}, sort_keys=True))
     return 0
+
+
+def apply_command(args: argparse.Namespace) -> int:
+    if ENVIRONMENT_NAME.fullmatch(args.token_env) is None:
+        raise ApplyError("token environment locator is invalid")
+    if not os.environ.get(args.token_env):
+        raise ApplyError("data-plane token is unavailable")
+    inventory = load_inventory(args.inventory)
+    raw_plan = read_json(args.plan)
+    mutation = isinstance(raw_plan, dict) and "base_plan" in raw_plan
+    plan = mutation_plan_from_dict(raw_plan) if mutation else plan_from_dict(raw_plan)
+    base_plan = plan.base_plan if mutation else plan
+    if (
+        not hmac.compare_digest(base_plan.inventory_digest, inventory.inventory_digest)
+        or not hmac.compare_digest(base_plan.artifact_digest, inventory.artifact_digest)
+        or base_plan.target_profile != args.profile
+    ):
+        raise ApplyError("plan does not match the selected inventory and profile")
+    desired_artifacts: dict[str, Any] = {}
+    for profile in inventory.profiles:
+        payload = deep_thaw(profile.get("config", profile))
+        desired_artifacts[digest(payload)] = payload
+    for bank in inventory.banks:
+        payload = deep_thaw(bank.get("config", bank))
+        desired_artifacts[digest(payload)] = payload
+        for collection in ("models", "directives"):
+            for item in bank.get(collection, ()):
+                value = deep_thaw(item)
+                desired_artifacts[digest(value)] = value
+    for provider in inventory.providers:
+        for item in provider.get("models", ()):
+            value = deep_thaw(item)
+            desired_artifacts[digest(value)] = value
+
+    def resolve_desired_artifact(action: Any) -> Any:
+        artifact_digest = action.details.get("artifact_digest")
+        if artifact_digest not in desired_artifacts:
+            raise ApplyError("desired artifact is absent from the selected inventory")
+        return deep_thaw(desired_artifacts[artifact_digest])
+
+    data_plane = HttpAdapter(
+        inventory=inventory,
+        profile_id=args.profile,
+        token_resolver=lambda: os.environ.get(args.token_env, ""),
+        artifact_resolver=resolve_desired_artifact,
+    )
+    adapter: Any = data_plane
+    if mutation:
+        archive_paths = getattr(args, "migration_archive", None) or []
+        evidence_path = getattr(args, "restore_evidence", None)
+        if not archive_paths or not evidence_path:
+            raise ApplyError("mutation apply requires archives and disposable restore evidence")
+        archives: dict[str, str] = {}
+        for archive_value in archive_paths:
+            archive = Path(archive_value).expanduser()
+            archives[_regular_file_digest(archive, "migration archive")] = str(archive)
+        restore_evidence = read_json(evidence_path)
+        if not isinstance(restore_evidence, dict):
+            raise ApplyError("disposable restore evidence must be a digest-keyed object")
+        required_archive_digests = {action.details["archive_digest"] for action in plan.actions}
+        rollback_archive = getattr(args, "rollback_archive", None)
+        required_evidence = required_archive_digests | {plan.rollback_archive_digest}
+        if (
+            not rollback_archive
+            or not required_archive_digests <= set(archives)
+            or not required_evidence <= set(restore_evidence)
+        ):
+            raise ApplyError("approved mutation archive or restore evidence does not match the plan")
+        if _paths_overlap(rollback_archive, list(archives.values())):
+            raise ApplyError("rollback archive must be distinct from every migration archive")
+        admin = AdminMigrationAdapter(
+            admin_version=getattr(args, "admin_version", "1"),
+            argv_factory=lambda operation, archive, archive_digest: [
+                "hindsight-admin", operation, "--archive", archive, "--sha256", archive_digest,
+            ],
+            runner=lambda argv: subprocess.run(
+                argv, text=True, capture_output=True, timeout=300, check=False,
+            ),
+        )
+        adapter = MigrationApplyAdapter(
+            data_plane=data_plane, admin=admin, archives=archives,
+            restore_evidence=restore_evidence,
+            rollback_archive=str(Path(rollback_archive).expanduser()),
+            rollback_archive_digest=plan.rollback_archive_digest,
+            archive_verifier=lambda path, expected: hmac.compare_digest(
+                _regular_file_digest(path, "rollback archive"), expected,
+            ),
+        )
+    gate: dict[str, Any] = {
+        "rollback_bundle": create_rollback_bundle(plan, adapter),
+    }
+    if mutation:
+        migration = dict(inventory.migration)
+        artifact_dir = Path(
+            migration.get("artifact_dir", migration.get("artifact_path"))
+        )
+        proposal_log = migration.get(
+            "proposal_log", migration.get("proposal_path")
+        )
+        completion_marker = (
+            Path(args.completion_marker)
+            if args.completion_marker
+            else artifact_dir / "distillation-complete.marker"
+        )
+        gate["migration_gate"] = capture_migration_gate(
+            completion_marker, proposal_log
+        )
+    result = apply_plan(plan, adapter, args.approval_digest, gate)
+    print(
+        json.dumps(
+            {
+                "activation_enabled": result.activation_enabled,
+                "applied_action_ids": list(result.applied_action_ids),
+                "reason": result.reason,
+                "rollback_attempted": result.rollback_attempted,
+                "rollback_succeeded": result.rollback_succeeded,
+                "status": result.status,
+            },
+            sort_keys=True,
+        )
+    )
+    return 0 if result.status == "applied" else 2
 
 
 def migration_discover_command(args: argparse.Namespace) -> int:
@@ -710,6 +892,116 @@ def broker_stop_command(args: argparse.Namespace) -> int:
     raise BrokerError("BROKER_STOP_TIMEOUT")
 
 
+def _required_environment(name: str, code: str) -> str:
+    if not isinstance(name, str) or ENVIRONMENT_NAME.fullmatch(name) is None:
+        raise BrokerError(code)
+    value = os.environ.get(name)
+    if not value:
+        raise BrokerError(code)
+    return value
+
+
+def _request_object(path: str, label: str) -> dict[str, Any]:
+    value = read_json(path)
+    if not isinstance(value, dict):
+        raise BrokerError(f"{label}_INVALID")
+    return value
+
+
+def _print_result(value: Any) -> int:
+    if not isinstance(value, dict):
+        raise BrokerError("RESPONSE_INVALID")
+    print(json.dumps(value, sort_keys=True, separators=(",", ":")))
+    return 0
+
+
+def _json_rpc_client(args: argparse.Namespace) -> JsonRpcClient:
+    return JsonRpcClient(args.socket, timeout_seconds=args.timeout)
+
+
+def session_mint_command(args: argparse.Namespace) -> int:
+    return _print_result(
+        _json_rpc_client(args).session_mint(
+            _required_environment(
+                args.control_capability_env, "CONTROL_CAPABILITY_UNAVAILABLE"
+            ),
+            _request_object(args.claims, "CLAIMS"),
+            ttl_seconds=args.ttl_seconds,
+        )
+    )
+
+
+def session_exchange_command(args: argparse.Namespace) -> int:
+    return _print_result(
+        _json_rpc_client(args).session_exchange(
+            _required_environment(args.handle_env, "SESSION_HANDLE_UNAVAILABLE")
+        )
+    )
+
+
+def _session_capability(args: argparse.Namespace) -> str:
+    return _required_environment(
+        args.capability_env, "SESSION_CAPABILITY_UNAVAILABLE"
+    )
+
+
+def session_close_command(args: argparse.Namespace) -> int:
+    return _print_result(
+        _json_rpc_client(args).session_close(
+            _session_capability(args),
+            sequence=args.sequence,
+            action_id=args.action_id,
+            timeout_seconds=args.timeout,
+        )
+    )
+
+
+def broker_method_command(args: argparse.Namespace) -> int:
+    client = _json_rpc_client(args)
+    capability = _session_capability(args)
+    method = args.rpc_method
+    common = {
+        "sequence": args.sequence,
+        "action_id": args.action_id,
+    }
+    if method == "session_status":
+        result = client.session_status(
+            capability, timeout_seconds=args.timeout, **common
+        )
+    else:
+        request = _request_object(args.request, "REQUEST")
+        target = getattr(client, method)
+        if method in {"recall", "mental_model_fetch", "reflect"}:
+            result = target(
+                capability, request=request, timeout_seconds=args.timeout, **common
+            )
+        else:
+            result = target(capability, request=request, **common)
+    return _print_result(result)
+
+
+def _add_socket(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--socket", required=True)
+    parser.add_argument("--timeout", type=float, default=2.0)
+
+
+def _add_session_request(
+    parser: argparse.ArgumentParser,
+    *,
+    rpc_method: str,
+    request: bool = True,
+) -> None:
+    _add_socket(parser)
+    parser.add_argument(
+        "--capability-env", default="HINDSIGHT_MEMORY_SESSION_CAPABILITY"
+    )
+    parser.add_argument("--sequence", type=int, required=True)
+    parser.add_argument("--action-id", required=True)
+    if request:
+        parser.add_argument("--request", required=True)
+    parser.set_defaults(run=broker_method_command, rpc_method=rpc_method)
+
+
 def parser() -> argparse.ArgumentParser:
     value = argparse.ArgumentParser(prog="hindsight-memory")
     value.add_argument("--state-dir", required=True)
@@ -731,6 +1023,19 @@ def parser() -> argparse.ArgumentParser:
     status.add_argument("--live-state", required=True)
     status.add_argument("--plan", required=True)
     status.set_defaults(run=status_command)
+
+    apply = commands.add_parser("apply")
+    apply.add_argument("--inventory", required=True)
+    apply.add_argument("--profile", required=True)
+    apply.add_argument("--plan", required=True)
+    apply.add_argument("--approval-digest", required=True)
+    apply.add_argument("--token-env", required=True)
+    apply.add_argument("--completion-marker")
+    apply.add_argument("--migration-archive", action="append")
+    apply.add_argument("--restore-evidence")
+    apply.add_argument("--rollback-archive")
+    apply.add_argument("--admin-version", default="1")
+    apply.set_defaults(run=apply_command)
 
     migration = commands.add_parser("migration")
     migration_commands = migration.add_subparsers(dest="migration_command", required=True)
@@ -763,6 +1068,45 @@ def parser() -> argparse.ArgumentParser:
     broker_stop.add_argument("--socket", required=True)
     broker_stop.add_argument("--timeout", type=float, default=5.0)
     broker_stop.set_defaults(run=broker_stop_command)
+
+    session = commands.add_parser("session")
+    session_commands = session.add_subparsers(dest="session_command", required=True)
+    mint = session_commands.add_parser("mint")
+    _add_socket(mint)
+    mint.add_argument(
+        "--control-capability-env",
+        default="HINDSIGHT_MEMORY_CONTROL_CAPABILITY",
+    )
+    mint.add_argument("--claims", required=True)
+    mint.add_argument("--ttl-seconds", type=float, default=60.0)
+    mint.set_defaults(run=session_mint_command)
+    exchange = session_commands.add_parser("exchange")
+    _add_socket(exchange)
+    exchange.add_argument(
+        "--handle-env", default="HINDSIGHT_MEMORY_SESSION_HANDLE"
+    )
+    exchange.set_defaults(run=session_exchange_command)
+    close = session_commands.add_parser("close")
+    _add_socket(close)
+    close.add_argument(
+        "--capability-env", default="HINDSIGHT_MEMORY_SESSION_CAPABILITY"
+    )
+    close.add_argument("--sequence", type=int, required=True)
+    close.add_argument("--action-id", required=True)
+    close.set_defaults(run=session_close_command)
+
+    for name, rpc_method, needs_request in (
+        ("recall", "recall", True),
+        ("mental_model_fetch", "mental_model_fetch", True),
+        ("checkpoint", "transcript_checkpoint", True),
+        ("retain_outcome", "retain_outcome", True),
+        ("reflect", "reflect", True),
+        ("session_status", "session_status", False),
+    ):
+        method = commands.add_parser(name)
+        _add_session_request(
+            method, rpc_method=rpc_method, request=needs_request
+        )
     return value
 
 
@@ -770,7 +1114,7 @@ def main() -> int:
     try:
         args = parser().parse_args()
         return args.run(args)
-    except (AdapterError, BrokerError, InventoryError, MigrationError, PlanError, OSError, json.JSONDecodeError) as error:
+    except (AdapterError, ApplyError, BrokerError, InventoryError, MigrationError, PlanError, OSError, json.JSONDecodeError) as error:
         print(f"hindsight-memory: {error}", file=sys.stderr)
         return 2
 

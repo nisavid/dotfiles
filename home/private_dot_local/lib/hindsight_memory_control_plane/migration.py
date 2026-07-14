@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 import hmac
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -15,6 +14,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 from .adapters import AdapterError
 from .canonical import canonical_bytes, digest
+from .file_evidence import FileEvidenceError, read_file_evidence, reject_symlink_components
 from .model import BankRef, deep_freeze, deep_thaw
 
 
@@ -153,29 +153,20 @@ def _normalized(value: Any) -> Any:
 
 
 def _read_gate(path: str, label: str) -> dict[str, Any]:
-    target = Path(path).expanduser()
-    if not target.is_absolute():
-        raise MigrationError(f"{label} path must be absolute")
-    _reject_symlink_components(target, label)
-    if not target.exists():
+    try:
+        evidence = read_file_evidence(path, label, allow_missing=True)
+    except FileEvidenceError as error:
+        raise MigrationError(str(error)) from None
+    if evidence is None:
         return {"exists": False, "digest": None}
-    if not target.is_file():
-        raise MigrationError(f"{label} path must be a regular file")
-    return {"exists": True, "digest": hashlib.sha256(target.read_bytes()).hexdigest()}
+    return {"exists": True, "digest": evidence[1]}
 
 
 def _reject_symlink_components(path: Path, label: str) -> None:
-    current = Path(path.anchor)
-    for part in path.parts[1:]:
-        current /= part
-        try:
-            metadata = current.lstat()
-        except FileNotFoundError:
-            continue
-        if stat.S_ISLNK(metadata.st_mode) and not (
-            current.parent == Path("/") and metadata.st_uid == 0
-        ):
-            raise MigrationError(f"{label} path must not contain symlinks")
+    try:
+        reject_symlink_components(path, label, allow_missing=True)
+    except FileEvidenceError as error:
+        raise MigrationError(str(error)) from None
 
 
 def _gate_snapshot(paths: Mapping[str, Any]) -> dict[str, Any]:

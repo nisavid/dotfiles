@@ -9,7 +9,7 @@ import sys
 import time
 from typing import Any, Mapping
 
-from .canonical import canonical_bytes
+from .canonical import DIGEST, canonical_bytes
 
 
 LEDGER_KEYS = {
@@ -21,7 +21,6 @@ BANK_KEYS = {"profile_id", "bank_id", "endpoint"}
 ENDPOINT_KEYS = {"profile_id", "scheme", "host", "port", "tenant"}
 IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}\Z")
 REASON = re.compile(r"[A-Z][A-Z0-9_]{0,127}\Z")
-DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z\Z")
 DECISIONS = {"allow", "apply", "deny", "fail", "rollback", "skip"}
 
@@ -163,7 +162,7 @@ def append_record(path: str | Path, record: Mapping[str, Any]) -> None:
                 os.ftruncate(descriptor, original_size)
                 os.fsync(descriptor)
             except OSError as rollback_error:
-                raise OSError("ledger append rollback failed") from error
+                raise OSError("ledger append rollback failed") from rollback_error
         raise
     finally:
         try:

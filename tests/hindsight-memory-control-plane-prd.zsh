@@ -20,7 +20,12 @@ if /usr/bin/grep -Eq -- '`(repo|project|workflow):[[:alnum:]][^`]*`' "$prd"; the
   fail 'public PRD contains a concrete deployment tag'
 fi
 
-if chezmoi --source "$repo_root/home" managed | /usr/bin/grep -Fq -- '.private-prd-01.toml.age'; then
+catalog_source=$(mktemp -d)
+trap 'rm -rf -- "$catalog_source"' EXIT
+cp -- "$catalog" "$catalog_source/"
+managed_targets=$(chezmoi --source "$catalog_source" managed) || \
+  fail 'chezmoi managed listing failed'
+if print -r -- "$managed_targets" | /usr/bin/grep -Fq -- '.private-prd-01.toml.age'; then
   fail 'encrypted deployment catalog unexpectedly has a managed plaintext target'
 fi
 

@@ -21,7 +21,7 @@ An approved, immutable description of projected migration content and its covera
 _Avoid_: Shadow plan, live inventory
 
 **High-water coverage manifest**:
-A controller-authored disposition of every document observed in a stable live bank snapshot. It is derived during read-only discovery and is not part of the previously approved offline package.
+A controller-authored disposition of every document observed in a stable live bank snapshot. Read-only discovery derives it independently from the approved offline package.
 _Avoid_: Offline package manifest, curation manifest
 
 **Shadow plan**:

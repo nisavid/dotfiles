@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 import hmac
+import json
+from pathlib import Path
 import re
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
@@ -47,11 +49,34 @@ SECRET = re.compile(
     re.IGNORECASE,
 )
 DIGEST = re.compile(r"[0-9a-f]{64}\Z")
+HEADING = re.compile(r"^#{1,6}\s+(.+?)\s*$")
+DATE_HEADING = re.compile(r"\d{4}-\d{2}-\d{2}\Z")
+WIKI_RELATIONSHIP = re.compile(
+    r"\[\[((?:repo|workflow|item|person):[A-Za-z0-9][A-Za-z0-9._-]{0,127})\]\]"
+)
+PORTABLE_MARKER = re.compile(r"^\s*<!--\s*hindsight-memory:\s*(\{.*\})\s*-->\s*$")
+PORTABLE_KEYS = {
+    "id", "timestamp", "kind", "scope", "relationships", "disposition",
+    "reason",
+}
+PORTABLE_JSONL_KEYS = PORTABLE_KEYS | {"content"}
+MAX_SOURCE_BYTES = 4 * 1024 * 1024
 
 
 def _identifier(value: Any, label: str) -> str:
     if not isinstance(value, str) or not IDENTIFIER.fullmatch(value):
         raise ImportError(f"{label} must be a bounded identifier")
+    return value
+
+
+def _source_locator(value: Any) -> str:
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value.encode("utf-8")) > 4096
+        or any(ord(character) < 32 for character in value)
+    ):
+        raise ImportError("source locator must be a bounded path")
     return value
 
 
@@ -163,6 +188,248 @@ class ReconcileResult:
     reconciliation_digest: str
 
 
+def _read_lines(path: str | Path) -> tuple[Path, list[str]]:
+    try:
+        source = Path(path).expanduser().resolve(strict=True)
+        metadata = source.stat()
+        if not source.is_file() or metadata.st_size > MAX_SOURCE_BYTES:
+            raise ImportError("import source must be a bounded regular file")
+        text = source.read_text(encoding="utf-8")
+    except UnicodeDecodeError as error:
+        raise ImportError("import source must be UTF-8") from error
+    except OSError as error:
+        raise ImportError("import source is unavailable") from error
+    return source, text.splitlines()
+
+
+def _file_timestamp(path: Path, supplied: str | None) -> str:
+    if supplied is not None:
+        return _timestamp(supplied)
+    try:
+        value = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
+    except OSError as error:
+        raise ImportError("import source timestamp is unavailable") from error
+    return value.isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _slug(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+    if not slug or len(slug) > 200:
+        raise ImportError("markdown heading cannot form a stable source identity")
+    return slug
+
+
+def _trimmed_body(lines: Sequence[str], start: int, end: int) -> tuple[str, int, int] | None:
+    while start < end and not lines[start].strip():
+        start += 1
+    while end > start and not lines[end - 1].strip():
+        end -= 1
+    if start == end:
+        return None
+    return "\n".join(lines[start:end]), start + 1, end
+
+
+def _heading_timestamp(title: str) -> str | None:
+    value = title.strip()
+    if DATE_HEADING.fullmatch(value):
+        return _timestamp(f"{value}T00:00:00Z")
+    if "T" in value:
+        try:
+            return _timestamp(value)
+        except ImportError:
+            return None
+    return None
+
+
+def _curated_markdown_records(
+    path: str | Path,
+    *,
+    timestamp: str | None,
+) -> tuple[dict[str, Any], ...]:
+    source, lines = _read_lines(path)
+    source_timestamp = _file_timestamp(source, timestamp)
+    headings = [
+        (index, match.group(1))
+        for index, line in enumerate(lines)
+        if (match := HEADING.fullmatch(line)) is not None
+    ]
+    sections: list[tuple[str, int, int, str]] = []
+    if headings:
+        inherited_timestamp: str | None = None
+        for position, (heading_line, title) in enumerate(headings):
+            inherited_timestamp = _heading_timestamp(title) or inherited_timestamp
+            end = headings[position + 1][0] if position + 1 < len(headings) else len(lines)
+            body = _trimmed_body(lines, heading_line + 1, end)
+            if body is not None:
+                content, line_start, line_end = body
+                sections.append((title, line_start, line_end, inherited_timestamp or source_timestamp))
+    else:
+        body = _trimmed_body(lines, 0, len(lines))
+        if body is not None:
+            _content, line_start, line_end = body
+            sections.append((source.stem, line_start, line_end, source_timestamp))
+    if not sections:
+        raise ImportError("curated memory source contains no durable sections")
+
+    identities: set[str] = set()
+    records: list[dict[str, Any]] = []
+    for title, line_start, line_end, item_timestamp in sections:
+        native_id = _slug(title)
+        if native_id in identities:
+            raise ImportError("duplicate Markdown heading cannot form a stable source identity")
+        identities.add(native_id)
+        content = "\n".join(lines[line_start - 1 : line_end])
+        relationships = sorted(set(WIKI_RELATIONSHIP.findall(content)))
+        repository_scope = next(
+            (value for value in relationships if value.startswith("repo:")), None
+        )
+        workflow_scope = next(
+            (value for value in relationships if value.startswith("workflow:")), None
+        )
+        records.append(
+            {
+                "source_locator": str(source),
+                "source_native_id": native_id,
+                "timestamp": item_timestamp,
+                "line_start": line_start,
+                "line_end": line_end,
+                "content": content,
+                "kind": "reference",
+                "intended_scope": repository_scope or workflow_scope or "global",
+                "relationships": relationships,
+                "coverage_disposition": "proposed_novel",
+                "coverage_reason": "unreviewed-source-item",
+            }
+        )
+    return tuple(records)
+
+
+def parse_codex_memory(
+    path: str | Path, *, timestamp: str | None = None
+) -> tuple[dict[str, Any], ...]:
+    records = _curated_markdown_records(path, timestamp=timestamp)
+    inspect_items("codex", records)
+    return records
+
+
+def parse_claude_memory(
+    path: str | Path, *, timestamp: str | None = None
+) -> tuple[dict[str, Any], ...]:
+    records = _curated_markdown_records(path, timestamp=timestamp)
+    inspect_items("claude", records)
+    return records
+
+
+def _portable_record(
+    metadata: Any,
+    *,
+    content: Any,
+    source: Path,
+    line_start: int,
+    line_end: int,
+) -> dict[str, Any]:
+    if not isinstance(metadata, dict) or set(metadata) != PORTABLE_KEYS:
+        raise ImportError("portable manifest metadata keys are closed")
+    return {
+        "source_locator": str(source),
+        "source_native_id": metadata["id"],
+        "timestamp": metadata["timestamp"],
+        "line_start": line_start,
+        "line_end": line_end,
+        "content": content,
+        "kind": metadata["kind"],
+        "intended_scope": metadata["scope"],
+        "relationships": metadata["relationships"],
+        "coverage_disposition": metadata["disposition"],
+        "coverage_reason": metadata["reason"],
+    }
+
+
+def parse_portable_markdown(path: str | Path) -> tuple[dict[str, Any], ...]:
+    source, lines = _read_lines(path)
+    markers: list[tuple[int, dict[str, Any]]] = []
+    for index, line in enumerate(lines):
+        match = PORTABLE_MARKER.fullmatch(line)
+        if match is None:
+            continue
+        try:
+            metadata = json.loads(match.group(1))
+        except json.JSONDecodeError as error:
+            raise ImportError("portable Markdown metadata must be JSON") from error
+        markers.append((index, metadata))
+    if not markers or any(line.strip() for line in lines[: markers[0][0]]):
+        raise ImportError("portable Markdown requires explicit item metadata")
+    records = []
+    for position, (marker_line, metadata) in enumerate(markers):
+        end = markers[position + 1][0] if position + 1 < len(markers) else len(lines)
+        body = _trimmed_body(lines, marker_line + 1, end)
+        if body is None:
+            raise ImportError("portable Markdown item content is required")
+        content, line_start, line_end = body
+        records.append(
+            _portable_record(
+                metadata,
+                content=content,
+                source=source,
+                line_start=line_start,
+                line_end=line_end,
+            )
+        )
+    inspect_items("portable-markdown", records)
+    return tuple(records)
+
+
+def parse_portable_jsonl(path: str | Path) -> tuple[dict[str, Any], ...]:
+    source, lines = _read_lines(path)
+    records = []
+    for line_number, line in enumerate(lines, 1):
+        if not line.strip():
+            continue
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError as error:
+            raise ImportError("portable JSONL contains invalid JSON") from error
+        if not isinstance(value, dict) or set(value) != PORTABLE_JSONL_KEYS:
+            raise ImportError("portable JSONL record keys are closed")
+        metadata = {key: value[key] for key in PORTABLE_KEYS}
+        records.append(
+            _portable_record(
+                metadata,
+                content=value["content"],
+                source=source,
+                line_start=line_number,
+                line_end=line_number,
+            )
+        )
+    if not records:
+        raise ImportError("portable JSONL contains no records")
+    inspect_items("portable-jsonl", records)
+    return tuple(records)
+
+
+def inspect_source(
+    source_kind: str,
+    path: str | Path,
+    *,
+    timestamp: str | None = None,
+) -> tuple[ImportItem, ...]:
+    if source_kind == "codex":
+        records = parse_codex_memory(path, timestamp=timestamp)
+    elif source_kind == "claude":
+        records = parse_claude_memory(path, timestamp=timestamp)
+    elif source_kind == "portable-markdown":
+        if timestamp is not None:
+            raise ImportError("portable manifests carry their own timestamps")
+        records = parse_portable_markdown(path)
+    elif source_kind == "portable-jsonl":
+        if timestamp is not None:
+            raise ImportError("portable manifests carry their own timestamps")
+        records = parse_portable_jsonl(path)
+    else:
+        raise ImportError("source kind is not supported")
+    return inspect_items(source_kind, records)
+
+
 def inspect_items(source_kind: str, records: Sequence[Mapping[str, Any]]) -> tuple[ImportItem, ...]:
     if source_kind not in SOURCE_TAGS:
         raise ImportError("source kind is not supported")
@@ -173,7 +440,7 @@ def inspect_items(source_kind: str, records: Sequence[Mapping[str, Any]]) -> tup
     for raw in records:
         if not isinstance(raw, dict) or set(raw) != RECORD_KEYS:
             raise ImportError("source record keys are closed")
-        locator = _identifier(raw["source_locator"], "source locator")
+        locator = _source_locator(raw["source_locator"])
         native_id = _identifier(raw["source_native_id"], "source native identity")
         item_id = digest({"source_locator": locator, "source_native_id": native_id})
         if item_id in identities:
@@ -225,7 +492,9 @@ def inspect_items(source_kind: str, records: Sequence[Mapping[str, Any]]) -> tup
 
 
 def project_import(items: Iterable[ImportItem], *, resume_state: Mapping[str, str] | None = None) -> ImportProjection:
-    ordered = tuple(sorted(tuple(items), key=lambda item: item.item_id))
+    ordered = tuple(
+        sorted(tuple(items), key=lambda item: (item.timestamp, item.item_id))
+    )
     if len({item.item_id for item in ordered}) != len(ordered):
         raise ImportError("projection item identities must be unique")
     resume = dict(resume_state or {})

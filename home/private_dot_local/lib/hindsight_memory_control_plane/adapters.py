@@ -4,6 +4,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Mapping, Protocol, runtime_checkable
 
+from .action_contracts import ACTION_METHODS, DIRECT_ACTION_KINDS
 from .canonical import digest
 from .model import BankRef, EndpointIdentity, deep_thaw
 
@@ -207,7 +208,7 @@ class FakeAdapter:
 
     def read_invalidated_memories(self): return self._read("invalidated_memories", [])
 
-    # Friendly alias matching the brief's inventory vocabulary.
+    # The migration inventory contract names this read by its domain surface.
     def invalidated_memory_inventory(self): return self.read_invalidated_memories()
 
     def reapply_invalidated_memories(self, request):
@@ -220,19 +221,10 @@ class FakeAdapter:
 
     def apply_action(self, action) -> None:
         details = dict(action.details)
-        methods = {
-            "configure_bank": self.patch_config,
-            "configure_profile": self.patch_config,
-            "set_auto_consolidation": self.patch_config,
-            "set_memory_defense": self.patch_config,
-            "install_model": self.upsert_model,
-            "activate_model": self.upsert_model,
-            "upsert_model": self.upsert_model,
-            "upsert_directive": self.upsert_directive,
-        }
-        if action.kind in methods:
-            methods[action.kind](details)
-        elif action.kind in {"create_bank", "reload_profile", "report_unmanaged", "import_bank", "migrate_bank", "replace_canonical_bank"}:
+        method_name = ACTION_METHODS.get(action.kind)
+        if method_name is not None:
+            getattr(self, method_name)(details)
+        elif action.kind in DIRECT_ACTION_KINDS:
             self._record(action.kind, self._keys(details))
         else:
             raise AdapterError(f"unsupported apply action: {action.kind}")
