@@ -87,6 +87,22 @@ chmod 700 "$test_home/.local/bin/hindsight-embed-supervisor"
 runtime_helper="$tmp_dir/hindsight-embed-stop-profile-services.py"
 touch "$runtime_helper"
 
+(
+  export HOME="$test_home"
+  export HINDSIGHT_EMBED_AUTOSTART_UI=0
+  export HINDSIGHT_EMBED_UVX="/usr/bin/true"
+  export HINDSIGHT_EMBED_PYTHON="/usr/bin/true"
+  export HINDSIGHT_EMBED_STOP_HELPER="$runtime_helper"
+  export HINDSIGHT_EMBED_NPX="$tmp_dir/missing-npx"
+  export HINDSIGHT_EMBED_UI_COMPAT_HELPER="$tmp_dir/missing-ui-compat-helper"
+  source "$rendered_stack_lib"
+  hindsight_stack_require_tools
+  hindsight_stack_require_runtime_helpers
+) || {
+  print -ru2 -- "control/daemon-only stack unexpectedly required UI tooling"
+  exit 1
+}
+
 assert_missing_profile_blocks_mutation() {
   local command="$1"
   local mutation_marker="$tmp_dir/${command}.mutated"
@@ -99,6 +115,9 @@ assert_missing_profile_blocks_mutation() {
     export HINDSIGHT_EMBED_UVX="/usr/bin/true"
     export HINDSIGHT_EMBED_PYTHON="/usr/bin/true"
     export HINDSIGHT_EMBED_STOP_HELPER="$runtime_helper"
+    export HINDSIGHT_EMBED_UI_COMPAT_HELPER="$runtime_helper"
+    export HINDSIGHT_EMBED_NPX="/usr/bin/true"
+    export HINDSIGHT_EMBED_CURL="/usr/bin/true"
 
     source "$service_lib"
     load_stack_lib
@@ -209,5 +228,75 @@ if HOME="$test_home" \
 fi
 [[ ! -e "$failed_service_calls" ]] || {
   print -ru2 -- "auth refresh restarted the managed stack after a failed Codex login"
+  exit 1
+}
+
+ui_health_calls="$tmp_dir/ui-health-calls"
+mock_curl="$tmp_dir/curl"
+cat > "$mock_curl" <<'EOF'
+#!/usr/bin/env zsh
+set -euo pipefail
+print -r -- "$*" >> "$HINDSIGHT_TEST_CURL_CALLS"
+exit "${HINDSIGHT_TEST_CURL_EXIT:-0}"
+EOF
+chmod 700 "$mock_curl"
+
+mock_uvx="$tmp_dir/uvx"
+cat > "$mock_uvx" <<'EOF'
+#!/usr/bin/env zsh
+exit 0
+EOF
+chmod 700 "$mock_uvx"
+
+(
+  export HOME="$test_home"
+  export HINDSIGHT_EMBED_PROFILE="present-profile"
+  export HINDSIGHT_EMBED_UVX="$mock_uvx"
+  export HINDSIGHT_EMBED_CURL="$mock_curl"
+  export HINDSIGHT_TEST_CURL_CALLS="$ui_health_calls"
+  source "$rendered_stack_lib"
+  hindsight_stack_ui_status
+)
+
+ui_health_args="$(<"$ui_health_calls")"
+[[ "$ui_health_args" == *"--location"* && "$ui_health_args" == *"--max-redirs 8"* ]] || {
+  print -ru2 -- "UI health check did not follow a bounded number of redirects"
+  exit 1
+}
+
+if (
+  export HOME="$test_home"
+  export HINDSIGHT_EMBED_PROFILE="present-profile"
+  export HINDSIGHT_EMBED_UVX="$mock_uvx"
+  export HINDSIGHT_EMBED_CURL="$mock_curl"
+  export HINDSIGHT_TEST_CURL_CALLS="$ui_health_calls"
+  export HINDSIGHT_TEST_CURL_EXIT=47
+  source "$rendered_stack_lib"
+  hindsight_stack_ui_status
+); then
+  print -ru2 -- "UI health check accepted a redirect loop"
+  exit 1
+fi
+
+reconcile_calls="$tmp_dir/reconcile-calls"
+(
+  export HOME="$test_home"
+  export HINDSIGHT_EMBED_PROFILE="present-profile"
+  source "$rendered_stack_lib"
+  hindsight_stack_ui_status() { return 1 }
+  hindsight_stack_can_start() { return 0 }
+  hindsight_stack_mark_start() { print -r -- "mark" >> "$reconcile_calls" }
+  hindsight_stack_log() { : }
+  hindsight_stack_prepare_ui() { print -r -- "prepare" >> "$reconcile_calls" }
+  hindsight_stack_ui_running() { return 0 }
+  hindsight_stack_ui_stop() { print -r -- "stop" >> "$reconcile_calls" }
+  hindsight_stack_wait_stopped_for() { print -r -- "wait-stopped" >> "$reconcile_calls" }
+  hindsight_stack_ui_start_prepared() { print -r -- "start" >> "$reconcile_calls" }
+  hindsight_stack_wait_ui() { print -r -- "wait-healthy" >> "$reconcile_calls" }
+  hindsight_stack_reconcile_ui
+)
+
+[[ "$(<"$reconcile_calls")" == $'mark\nprepare\nstop\nwait-stopped\nstart\nwait-healthy' ]] || {
+  print -ru2 -- "UI reconciliation did not replace the running unhealthy process before restart"
   exit 1
 }

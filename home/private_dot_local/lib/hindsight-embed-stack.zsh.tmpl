@@ -16,6 +16,9 @@ hindsight_stack_load_config() {
   typeset -g HINDSIGHT_EMBED_UI_HOSTNAME="${HINDSIGHT_EMBED_UI_HOSTNAME:-{{ .hindsight.uiHostname }}}"
   typeset -g HINDSIGHT_EMBED_PYTHON="${HINDSIGHT_EMBED_PYTHON:-$HOME/.local/share/uv/tools/hindsight-embed/bin/python}"
   typeset -g HINDSIGHT_EMBED_STOP_HELPER="${HINDSIGHT_EMBED_STOP_HELPER:-$HOME/.local/libexec/hindsight-embed-stop-profile-services.py}"
+  typeset -g HINDSIGHT_EMBED_UI_COMPAT_HELPER="${HINDSIGHT_EMBED_UI_COMPAT_HELPER:-$HOME/.local/libexec/hindsight-ui-compat-patch.py}"
+  typeset -g HINDSIGHT_EMBED_CURL="${HINDSIGHT_EMBED_CURL:-/usr/bin/curl}"
+  typeset -g HINDSIGHT_EMBED_NPX="${HINDSIGHT_EMBED_NPX:-$(command -v npx 2>/dev/null || true)}"
   typeset -g HINDSIGHT_EMBED_AUTOSTART_DAEMON="${HINDSIGHT_EMBED_AUTOSTART_DAEMON:-{{ if .hindsight.autostartDaemon }}1{{ else }}0{{ end }}}"
   typeset -g HINDSIGHT_EMBED_AUTOSTART_UI="${HINDSIGHT_EMBED_AUTOSTART_UI:-{{ if .hindsight.autostartUi }}1{{ else }}0{{ end }}}"
   typeset -g HINDSIGHT_EMBED_CONTROL_WAIT_SECONDS="${HINDSIGHT_EMBED_CONTROL_WAIT_SECONDS:-30}"
@@ -51,8 +54,12 @@ hindsight_stack_require_tools() {
     print -ru2 -- "hindsight-embed-stack: uvx is not executable at ${HINDSIGHT_EMBED_UVX}"
     return 1
   fi
-  if ! command -v /usr/bin/curl >/dev/null 2>&1; then
-    print -ru2 -- "hindsight-embed-stack: missing /usr/bin/curl"
+  if [[ ! -x "$HINDSIGHT_EMBED_CURL" ]]; then
+    print -ru2 -- "hindsight-embed-stack: curl is not executable at ${HINDSIGHT_EMBED_CURL}"
+    return 1
+  fi
+  if hindsight_stack_enabled "$HINDSIGHT_EMBED_AUTOSTART_UI" && [[ ! -x "$HINDSIGHT_EMBED_NPX" ]]; then
+    print -ru2 -- "hindsight-embed-stack: npx is not executable at ${HINDSIGHT_EMBED_NPX:-<not found>}"
     return 1
   fi
 }
@@ -73,6 +80,16 @@ hindsight_stack_require_runtime_helpers() {
     print -ru2 -- "hindsight-embed-stack: stop helper failed import/preflight at ${HINDSIGHT_EMBED_STOP_HELPER}"
     return 1
   }
+  if hindsight_stack_enabled "$HINDSIGHT_EMBED_AUTOSTART_UI"; then
+    [[ -r "$HINDSIGHT_EMBED_UI_COMPAT_HELPER" ]] || {
+      print -ru2 -- "hindsight-embed-stack: missing UI compatibility helper at ${HINDSIGHT_EMBED_UI_COMPAT_HELPER}"
+      return 1
+    }
+    "$HINDSIGHT_EMBED_PYTHON" "$HINDSIGHT_EMBED_UI_COMPAT_HELPER" --help >/dev/null 2>&1 || {
+      print -ru2 -- "hindsight-embed-stack: UI compatibility helper failed preflight at ${HINDSIGHT_EMBED_UI_COMPAT_HELPER}"
+      return 1
+    }
+  fi
 }
 
 hindsight_stack_profile_exists() {
@@ -112,7 +129,93 @@ hindsight_stack_http_ok() {
   emulate -L zsh
   local url="$1"
 
-  /usr/bin/curl -fsS --max-time 2 "$url" >/dev/null 2>&1
+  "$HINDSIGHT_EMBED_CURL" -fsS --max-time 2 "$url" >/dev/null 2>&1
+}
+
+hindsight_stack_ui_http_ok() {
+  emulate -L zsh
+  hindsight_stack_load_config
+  local url="$1"
+
+  "$HINDSIGHT_EMBED_CURL" -fsS --max-time 5 --location --max-redirs 8 \
+    "$url" >/dev/null 2>&1
+}
+
+hindsight_stack_control_plane_version() {
+  emulate -L zsh
+  hindsight_stack_load_config
+
+  "$HINDSIGHT_EMBED_PYTHON" -c \
+    'import sys; from hindsight_embed.daemon_embed_manager import DaemonEmbedManager; print(DaemonEmbedManager()._component_version(sys.argv[1], "HINDSIGHT_EMBED_CP_VERSION"))' \
+    "$HINDSIGHT_EMBED_PROFILE"
+}
+
+hindsight_stack_control_plane_package_dir() {
+  emulate -L zsh
+  hindsight_stack_load_config
+
+  local version="$1"
+  local executable node_modules
+  executable="$(
+    cd "${TMPDIR:-/tmp}" &&
+      "$HINDSIGHT_EMBED_NPX" --yes \
+        --package="@vectorize-io/hindsight-control-plane@${version}" -- \
+        /usr/bin/which hindsight-control-plane
+  )" || return 1
+  [[ -x "$executable" ]] || return 1
+  node_modules="${executable:h:h}"
+  print -r -- "${node_modules}/@vectorize-io/hindsight-control-plane"
+}
+
+hindsight_stack_embed_version() {
+  emulate -L zsh
+  hindsight_stack_load_config
+
+  "$HINDSIGHT_EMBED_PYTHON" -c \
+    'from importlib.metadata import version; print(version("hindsight-embed"))'
+}
+
+hindsight_stack_embed_package_dir() {
+  emulate -L zsh
+  hindsight_stack_load_config
+
+  "$HINDSIGHT_EMBED_PYTHON" -c \
+    'from pathlib import Path; import hindsight_embed; print(Path(hindsight_embed.__file__).parent)'
+}
+
+hindsight_stack_prepare_embed_ui_health() {
+  emulate -L zsh
+  hindsight_stack_load_config
+
+  local version package_dir result
+  version="$(hindsight_stack_embed_version)" || return 1
+  package_dir="$(hindsight_stack_embed_package_dir)" || return 1
+  result="$(
+    "$HINDSIGHT_EMBED_PYTHON" "$HINDSIGHT_EMBED_UI_COMPAT_HELPER" embed \
+      --package-dir "$package_dir" \
+      --expected-version "$version"
+  )" || return 1
+  if [[ "$result" == patched ]]; then
+    hindsight_stack_log "patched Hindsight embed ${version} UI health semantics"
+  fi
+}
+
+hindsight_stack_prepare_ui() {
+  emulate -L zsh
+  hindsight_stack_load_config
+
+  local version package_dir result
+  hindsight_stack_prepare_embed_ui_health || return 1
+  version="$(hindsight_stack_control_plane_version)" || return 1
+  package_dir="$(hindsight_stack_control_plane_package_dir "$version")" || return 1
+  result="$(
+    "$HINDSIGHT_EMBED_PYTHON" "$HINDSIGHT_EMBED_UI_COMPAT_HELPER" control-plane \
+      --package-dir "$package_dir" \
+      --expected-version "$version"
+  )" || return 1
+  if [[ "$result" == patched ]]; then
+    hindsight_stack_log "patched Hindsight Control Plane ${version} locale routing"
+  fi
 }
 
 hindsight_stack_ui_url() {
@@ -228,7 +331,7 @@ hindsight_stack_ui_status() {
 
   "$HINDSIGHT_EMBED_UVX" hindsight-embed --profile "$HINDSIGHT_EMBED_PROFILE" ui status \
     --port "$HINDSIGHT_EMBED_UI_PORT" >/dev/null 2>&1 &&
-    hindsight_stack_http_ok "$(hindsight_stack_ui_url)"
+    hindsight_stack_ui_http_ok "$(hindsight_stack_ui_url)"
 }
 
 hindsight_stack_ui_running() {
@@ -245,6 +348,9 @@ hindsight_stack_control_start() {
   emulate -L zsh
   hindsight_stack_load_config
 
+  if hindsight_stack_enabled "$HINDSIGHT_EMBED_AUTOSTART_UI"; then
+    hindsight_stack_prepare_embed_ui_health || return 1
+  fi
   "$HINDSIGHT_EMBED_UVX" hindsight-embed control start --no-open \
     --port "$HINDSIGHT_EMBED_CONTROL_PORT" >/dev/null 2>&1
 }
@@ -257,7 +363,7 @@ hindsight_stack_daemon_start() {
   "$HINDSIGHT_EMBED_UVX" hindsight-embed --profile "$HINDSIGHT_EMBED_PROFILE" daemon start >/dev/null 2>&1
 }
 
-hindsight_stack_ui_start() {
+hindsight_stack_ui_start_prepared() {
   emulate -L zsh
   hindsight_stack_load_config
 
@@ -265,6 +371,13 @@ hindsight_stack_ui_start() {
   "$HINDSIGHT_EMBED_UVX" hindsight-embed --profile "$HINDSIGHT_EMBED_PROFILE" ui start \
     --port "$HINDSIGHT_EMBED_UI_PORT" \
     --hostname "$HINDSIGHT_EMBED_UI_HOSTNAME" >/dev/null 2>&1
+}
+
+hindsight_stack_ui_start() {
+  emulate -L zsh
+
+  hindsight_stack_prepare_ui || return 1
+  hindsight_stack_ui_start_prepared
 }
 
 hindsight_stack_control_stop() {
@@ -447,8 +560,20 @@ hindsight_stack_reconcile_ui() {
   fi
 
   hindsight_stack_mark_start ui
-  hindsight_stack_log "ui is not healthy; starting ${HINDSIGHT_EMBED_PROFILE}"
-  if ! hindsight_stack_ui_start; then
+  if ! hindsight_stack_prepare_ui; then
+    hindsight_stack_log "ui compatibility preflight failed"
+    return 1
+  fi
+  if hindsight_stack_ui_running; then
+    hindsight_stack_log "ui is running but unhealthy; restarting ${HINDSIGHT_EMBED_PROFILE}"
+    if ! hindsight_stack_ui_stop || ! hindsight_stack_wait_stopped_for ui "$HINDSIGHT_EMBED_STOP_WAIT_SECONDS"; then
+      hindsight_stack_log "ui stop before restart failed"
+      return 1
+    fi
+  else
+    hindsight_stack_log "ui is not healthy; starting ${HINDSIGHT_EMBED_PROFILE}"
+  fi
+  if ! hindsight_stack_ui_start_prepared; then
     hindsight_stack_log "ui start command failed"
     return 1
   fi
@@ -495,8 +620,7 @@ hindsight_stack_start_all() {
   fi
 
   if hindsight_stack_enabled "$HINDSIGHT_EMBED_AUTOSTART_UI"; then
-    hindsight_stack_ui_status || hindsight_stack_ui_start
-    hindsight_stack_wait_ui || return 1
+    hindsight_stack_reconcile_ui || return 1
   fi
 }
 
