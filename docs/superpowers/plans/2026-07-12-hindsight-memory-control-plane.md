@@ -312,7 +312,7 @@
 
   Run the CLI with the live profile explicitly selected and `migration discover --read-only`. Bind the full read to one adapter generation or transaction snapshot, or require separately verified quiescence for the whole window. Before and after, snapshot the two completion-gate halves, bank stats, operation IDs, document high-water marks, and adapter watermarks. Require exact equality for all mutation-sensitive state as an additional drift check. Do not run `apply`, retain, consolidate, refresh, import, config patch, template import, curation reapply, or delete.
 
-- [ ] **Step 6: Commit code and tests, not generated migration artifacts**
+- [x] **Step 6: Commit code and tests, not generated migration artifacts**
 
   Commit literal Task 7 repository paths with: `feat(hindsight/migration): add read-only shadow planning`
 
