@@ -1,0 +1,117 @@
+{{- if eq .chezmoi.os "darwin" -}}
+#!/usr/bin/env zsh
+set -euo pipefail
+
+main() {
+  emulate -L zsh
+  setopt ERR_EXIT NO_UNSET PIPE_FAIL
+  umask 077
+
+  if (( EUID == 0 )); then
+    print -u2 -r -- 'mlxctl: refusing to install a user LaunchAgent as root'
+    return 1
+  fi
+
+  local source_dir={{ joinPath .chezmoi.homeDir .mlxd.sourceDir | quote }}
+  local bin_dir={{ joinPath .chezmoi.homeDir .mlxd.binDir | quote }}
+  local config_dir={{ joinPath .chezmoi.homeDir .mlxd.configDir | quote }}
+  local state_dir={{ joinPath .chezmoi.homeDir .mlxd.stateDir | quote }}
+  local log_dir={{ joinPath .chezmoi.homeDir .mlxd.logDir | quote }}
+  local launchctl_bin={{ .mlxd.launchctlBin | quote }}
+  # The plist template filename is literal; keep it aligned with .mlxd.label when renaming the service.
+  local plist_path={{ joinPath .chezmoi.homeDir "Library" "LaunchAgents" (printf "%s.plist" .mlxd.label) | quote }}
+  local user_id
+  user_id=$(/usr/bin/id -u)
+  local user_domain="gui/$user_id"
+  local service_target="$user_domain/{{ .mlxd.label }}"
+  local -a deployment_dirs=("$config_dir" "$state_dir" "$log_dir")
+
+  mkdir -p -- "${deployment_dirs[@]}"
+  chmod 700 "${deployment_dirs[@]}"
+
+  if [[ ! -x "$launchctl_bin" ]]; then
+    print -u2 -r -- "mlxctl: launchctl is not executable at $launchctl_bin"
+    return 1
+  fi
+
+  if [[ ! -r "$plist_path" ]]; then
+    print -u2 -r -- "mlxctl: LaunchAgent plist not found at $plist_path"
+    return 1
+  fi
+
+  local registration=''
+  integer registered=0
+  if registration=$("$launchctl_bin" print "$service_target" 2>/dev/null); then
+    registered=1
+    if [[ "$registration" == *'state = running'* ]]; then
+      print -u2 -r -- "mlxctl: $service_target is running; stop it before updating the deployment"
+      return 1
+    fi
+  fi
+
+  if [[ ! -d "$source_dir" ]]; then
+    if (( registered )); then
+      "$launchctl_bin" bootout "$service_target"
+      print -u2 -r -- "mlxctl: source checkout not found at $source_dir; inactive LaunchAgent registration removed"
+    else
+      print -u2 -r -- "mlxctl: source checkout not found at $source_dir; LaunchAgent remains unregistered"
+    fi
+    return 0
+  elif [[ ! -r "$source_dir/pyproject.toml" ]]; then
+    if (( registered )); then
+      "$launchctl_bin" bootout "$service_target"
+      print -u2 -r -- "mlxctl: $source_dir is not installable yet; inactive LaunchAgent registration removed"
+    else
+      print -u2 -r -- "mlxctl: $source_dir is not installable yet; LaunchAgent remains unregistered"
+    fi
+    return 0
+  else
+    local uv_bin=''
+    if ! uv_bin=$(command -v uv); then
+      print -u2 -r -- 'mlxctl: uv is required; install it and re-run `chezmoi apply`'
+      return 1
+    fi
+
+    print -r -- "mlxctl: installing from $source_dir"
+    UV_TOOL_BIN_DIR="$bin_dir" "$uv_bin" tool install --force "$source_dir"
+  fi
+
+  local entrypoint=''
+  for entrypoint in mlxctl mlxd; do
+    if [[ ! -x "$bin_dir/$entrypoint" ]]; then
+      print -u2 -r -- "mlxctl: installation did not create $bin_dir/$entrypoint"
+      return 1
+    fi
+  done
+
+  print -r -- "mlxctl: installed $bin_dir/mlxctl and $bin_dir/mlxd"
+
+  integer reloaded=0
+  if registration=$("$launchctl_bin" print "$service_target" 2>/dev/null); then
+    if [[ "$registration" == *'state = running'* ]]; then
+      print -u2 -r -- "mlxctl: $service_target is running; stop it before reloading the LaunchAgent"
+      return 1
+    fi
+    "$launchctl_bin" bootout "$service_target"
+    reloaded=1
+  fi
+
+  "$launchctl_bin" bootstrap "$user_domain" "$plist_path"
+
+  if ! registration=$("$launchctl_bin" print "$service_target"); then
+    print -u2 -r -- "mlxctl: $service_target was not registered after bootstrap"
+    return 1
+  fi
+  if [[ "$registration" == *'state = running'* ]]; then
+    print -u2 -r -- "mlxctl: $service_target started during bootstrap"
+    return 1
+  fi
+  if (( reloaded )); then
+    print -r -- "mlxctl: reloaded $service_target without starting it"
+  else
+    print -r -- "mlxctl: registered $service_target without starting it"
+  fi
+}
+
+main "$@"
+{{- end -}}

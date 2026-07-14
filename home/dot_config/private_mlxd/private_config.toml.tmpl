@@ -1,0 +1,18 @@
+{{- if eq .chezmoi.os "darwin" }}
+schema_version = {{ .mlxd.config.schemaVersion }}
+
+[metrics]
+retention_days = {{ .mlxd.config.metricsRetentionDays }}
+
+{{ range $name, $model := .mlxd.config.models -}}
+[models.{{ $name | quote }}]
+reference = {{ $model.reference | quote }}
+
+{{ end -}}
+{{ range $name, $server := .mlxd.config.servers -}}
+[servers.{{ $name | quote }}]
+type = {{ $server.type | quote }}
+model = {{ $server.model | quote }}
+port = {{ $server.port }}
+{{ end -}}
+{{- end -}}
