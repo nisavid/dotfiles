@@ -6,6 +6,13 @@ from .http_adapter import HttpAdapter
 from .inventory import InventoryError, load_inventory
 from .ledger import LedgerError, append_record
 from .migration_adapter import AdminMigrationAdapter, MigrationAdapterError
+from .migration import (
+    MigrationDiscovery,
+    MigrationError,
+    ShadowPlan,
+    discover_migration_state,
+    verify_shadow_plan,
+)
 from .model import Action, BankRef, EndpointIdentity, Inventory, OperationSnapshot, Plan
 from .planning import PlanError, build_plan, inventory_endpoint, plan_from_dict, verify_plan
 from .reconcile import (
@@ -30,9 +37,12 @@ __all__ = [
     "OperationSnapshot",
     "MutationPlan",
     "MigrationAdapterError",
+    "MigrationDiscovery",
+    "MigrationError",
     "Plan",
     "PlanError",
     "RollbackBundle",
+    "ShadowPlan",
     "FakeAdapter",
     "HttpAdapter",
     "apply_plan",
@@ -41,6 +51,7 @@ __all__ = [
     "build_mutation_plan",
     "canonical_bytes",
     "digest",
+    "discover_migration_state",
     "load_inventory",
     "inventory_endpoint",
     "create_rollback_bundle",
@@ -49,4 +60,5 @@ __all__ = [
     "plan_from_dict",
     "verify_plan",
     "verify_mutation_plan",
+    "verify_shadow_plan",
 ]

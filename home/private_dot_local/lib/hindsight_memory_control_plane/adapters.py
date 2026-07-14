@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Protocol, runtime_checkable
 
 from .canonical import digest
-from .model import EndpointIdentity, deep_thaw
+from .model import BankRef, EndpointIdentity, deep_thaw
 
 
 RUNTIME_SCHEMAS = {
@@ -82,6 +82,7 @@ class Adapter(Protocol):
     def read_models(self) -> Any: ...
     def read_directives(self) -> Any: ...
     def read_operations(self) -> Mapping[str, Any]: ...
+    def read_migration_inventory(self, source_bank: BankRef, candidate_bank: BankRef) -> Mapping[str, Any]: ...
     def template_dry_run(self, template: Mapping[str, Any]) -> Mapping[str, Any]: ...
     def export_template(self) -> Mapping[str, Any]: ...
     def import_template(self, template: Mapping[str, Any]) -> Mapping[str, Any]: ...
@@ -158,6 +159,17 @@ class FakeAdapter:
     def read_operations(self) -> Mapping[str, Any]:
         self._record("read_operations")
         return deepcopy(self.operations)
+
+    def read_migration_inventory(self, source_bank: BankRef, candidate_bank: BankRef) -> Mapping[str, Any]:
+        if not isinstance(source_bank, BankRef) or not isinstance(candidate_bank, BankRef):
+            raise AdapterError("migration inventory requires explicit bank references")
+        if "migration_inventory" not in self.state:
+            raise AdapterError("migration inventory is unavailable")
+        self._record(
+            "read_migration_inventory",
+            {"source_bank": source_bank.to_dict(), "candidate_bank": candidate_bank.to_dict()},
+        )
+        return deepcopy(self.state["migration_inventory"])
 
     def template_dry_run(self, template):
         self._record("template_dry_run", self._keys(template))
