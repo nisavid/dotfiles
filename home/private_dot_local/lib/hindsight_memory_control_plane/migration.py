@@ -49,13 +49,12 @@ BANK_KEYS = {
 }
 PACKAGE_KEYS = {
     "schema_version",
+    "approved_manifest_digest",
     "artifact_digest",
     "projection_digest",
     "tag_mapping_digest",
     "candidate_provenance_digest",
     "candidate_curation_digest",
-    "source_coverage",
-    "candidate_coverage",
     "invalidation_dispositions",
 }
 COVERAGE_KEYS = {"item_id", "content_digest", "disposition", "reason", "semantic_scope"}
@@ -381,9 +380,10 @@ def _package_blockers(manifest: Any, approved_digest: Any) -> list[str]:
     blockers: list[str] = []
     if not isinstance(manifest, Mapping) or set(manifest) != PACKAGE_KEYS:
         return ["offline_package:invalid_manifest"]
-    if manifest["schema_version"] != 1:
+    if type(manifest["schema_version"]) is not int or manifest["schema_version"] != 1:
         blockers.append("offline_package:invalid_schema")
     for key in (
+        "approved_manifest_digest",
         "artifact_digest",
         "projection_digest",
         "tag_mapping_digest",
@@ -394,48 +394,53 @@ def _package_blockers(manifest: Any, approved_digest: Any) -> list[str]:
             _sha(manifest[key], f"offline package {key}")
         except MigrationError:
             blockers.append(f"offline_package:invalid_{key}")
-    if not isinstance(approved_digest, str) or DIGEST.fullmatch(approved_digest) is None or not hmac.compare_digest(digest(_normalized(manifest)), approved_digest):
+    if (
+        not isinstance(approved_digest, str)
+        or DIGEST.fullmatch(approved_digest) is None
+        or not hmac.compare_digest(manifest["approved_manifest_digest"], approved_digest)
+    ):
         blockers.append("offline_package:digest_mismatch")
-    for key in ("source_coverage", "candidate_coverage", "invalidation_dispositions"):
-        if not isinstance(manifest[key], list):
-            blockers.append(f"offline_package:invalid_{key}")
+    if not isinstance(manifest["invalidation_dispositions"], list):
+        blockers.append("offline_package:invalid_invalidation_dispositions")
     return sorted(set(blockers))
+
+
+def _coverage_scope(bank: Mapping[str, Any], document: Mapping[str, Any]) -> str:
+    candidates: set[str] = set()
+    for values in (bank.get("scopes"), bank.get("tags"), document.get("tags")):
+        if not isinstance(values, list):
+            continue
+        candidates.update(
+            value
+            for value in values
+            if isinstance(value, str) and SEMANTIC_SCOPE.fullmatch(value) is not None
+        )
+    repositories = sorted(value for value in candidates if value.startswith("repo:"))
+    return repositories[0] if len(repositories) == 1 else "scope:active"
+
+
+def _live_coverage(snapshot: Mapping[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    result: dict[str, list[dict[str, Any]]] = {}
+    for role in ("source", "candidate"):
+        bank = snapshot["banks"][role]
+        result[role] = sorted(
+            (
+                {
+                    "item_id": document["document_id"],
+                    "content_digest": document["content_digest"],
+                    "disposition": "retain",
+                    "reason": "stable-live-document",
+                    "semantic_scope": _coverage_scope(bank, document),
+                }
+                for document in bank["documents"]
+            ),
+            key=lambda item: item["item_id"],
+        )
+    return result
 
 
 def _coverage_blockers(snapshot: Mapping[str, Any], manifest: Mapping[str, Any]) -> list[str]:
     blockers: list[str] = []
-    for role in ("source", "candidate"):
-        raw = manifest[f"{role}_coverage"]
-        if not isinstance(raw, list):
-            continue
-        records = []
-        for item in raw:
-            if not isinstance(item, Mapping) or set(item) != COVERAGE_KEYS:
-                blockers.append(f"coverage:{role}:invalid_record")
-                continue
-            records.append(item)
-            try:
-                _identifier(item["item_id"], "coverage item ID")
-                _sha(item["content_digest"], "coverage content digest")
-                _identifier(item["reason"], "coverage reason")
-            except MigrationError:
-                blockers.append(f"coverage:{role}:invalid_record")
-            if item["disposition"] not in {"retain", "omit", "duplicate", "supersede"}:
-                blockers.append(f"coverage:{role}:invalid_disposition")
-            if item["disposition"] == "retain":
-                if not isinstance(item["semantic_scope"], str) or SEMANTIC_SCOPE.fullmatch(item["semantic_scope"]) is None:
-                    blockers.append(f"coverage:{role}:invalid_semantic_scope")
-            elif item["semantic_scope"] is not None:
-                blockers.append(f"coverage:{role}:unexpected_semantic_scope")
-        observed = {item["document_id"]: item["content_digest"] for item in snapshot["banks"][role]["documents"]}
-        supplied = [item["item_id"] for item in records]
-        if len(supplied) != len(set(supplied)):
-            blockers.append(f"coverage:{role}:duplicate")
-        if set(supplied) != set(observed):
-            blockers.append(f"coverage:{role}:not_bijective")
-        for item in records:
-            if observed.get(item["item_id"]) != item["content_digest"]:
-                blockers.append(f"coverage:{role}:digest_mismatch")
     raw_dispositions = manifest["invalidation_dispositions"]
     if isinstance(raw_dispositions, list):
         records = []
@@ -500,10 +505,7 @@ def _shadow_plan(
     invalidations: Sequence[Mapping[str, Any]],
     private_catalog_digests: Mapping[str, str],
 ) -> ShadowPlan:
-    coverage = {
-        role: sorted((_normalized(item) for item in manifest[f"{role}_coverage"]), key=lambda item: item["item_id"])
-        for role in ("source", "candidate")
-    }
+    coverage = _live_coverage(snapshot)
     curation = sorted((_normalized(item) for item in manifest["invalidation_dispositions"]), key=lambda item: item["item_id"])
     body = {
         "schema_version": 1,
@@ -765,7 +767,7 @@ def discover_migration_state(
         "completion_gate_snapshot": before_gate,
     }
     inventory_digest = digest(inventory)
-    manifest_digest = digest(_normalized(offline_package_manifest))
+    manifest_digest = offline_package_manifest["approved_manifest_digest"]
     plan = _shadow_plan(
         normalized_snapshot,
         source_bank,

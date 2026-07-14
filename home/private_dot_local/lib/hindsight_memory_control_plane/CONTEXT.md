@@ -20,6 +20,10 @@ _Avoid_: Bank watermark, import checkpoint
 An approved, immutable description of projected migration content and its coverage, provenance, curation, and artifact digests. The manifest binds an external package without copying that package into Git.
 _Avoid_: Shadow plan, live inventory
 
+**High-water coverage manifest**:
+A controller-authored disposition of every document observed in a stable live bank snapshot. It is derived during read-only discovery and is not part of the previously approved offline package.
+_Avoid_: Offline package manifest, curation manifest
+
 **Shadow plan**:
 A digest-bound migration proposal assembled from validated inventory, stable live observations, adapter watermarks, and approved offline evidence. It is always unapproved and carries no mutation authority.
 _Avoid_: Apply plan, migration approval
