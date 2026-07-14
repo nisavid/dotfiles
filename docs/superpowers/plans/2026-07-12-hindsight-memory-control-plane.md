@@ -327,6 +327,7 @@
 - Modify: `home/private_dot_config/hindsight-memory/benchmark-schema.json`
 - Modify: `docs/HINDSIGHT.md`
 - Create: `tests/hindsight-memory-controller.zsh`
+- Create: `tests/hindsight-memory-disposable-smoke.zsh`
 - Modify: `tests/test_hindsight_memory_migration.py`
 
 **Interfaces:**
@@ -355,9 +356,13 @@
 
   Expected: PASS.
 
-- [ ] **Step 4: Run disposable Hindsight and PostgreSQL contract smoke tests**
+- [x] **Step 4: Run disposable Hindsight and PostgreSQL contract smoke tests**
 
   Start a disposable Hindsight 0.8.4 profile and database using task-local state and unique loopback ports. Verify authenticated schema/config/template/model/directive/document/operation/curation reads; execute mutations only against the disposable bank; create encrypted rollback exports; restore each data-bearing export into a fresh disposable bank; run `hindsight-admin` full-bank export/import and full-schema backup/restore; and verify invalidated-memory counts/digests survive. Destroy the disposable state after capturing content-free results. Do not point any smoke command at the live profile or migration banks.
+
+  Run: `zsh tests/hindsight-memory-disposable-smoke.zsh`
+
+  Hindsight 0.8.4 intentionally excludes `invalidated_memory_units` from portable bank exports. Verify the supported live bank payload in a fresh database, then require the independent full-schema restore to preserve the invalidated-memory count and canonical digest exactly.
 
 - [ ] **Step 5: Run security and broad code review until clean**
 
