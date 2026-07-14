@@ -1,15 +1,17 @@
 """Bounded, redacting HTTP implementation of the data-plane adapter contract."""
 
 import json
+import hashlib
 import re
 import socket
 from typing import Any, Callable, Mapping
 from urllib.error import HTTPError, URLError
+from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
 from .adapters import AdapterError, AuthenticationError, RollbackBundle, validate_runtime_request
 from .canonical import digest
-from .model import EndpointIdentity, Inventory
+from .model import BankRef, EndpointIdentity, Inventory
 from .planning import inventory_endpoint
 
 
@@ -37,6 +39,10 @@ class HttpAdapter:
         "reapply_invalidated_memories": ("POST", "/v1/memories/invalidated/reapply"),
         "delete_bank": ("DELETE", "/v1/banks"),
     }
+    PAGE_LIMIT = 1000
+    SECRET_KEY_PARTS = frozenset(
+        {"access", "authorization", "bearer", "credential", "key", "password", "secret", "token"}
+    )
 
     def __init__(self, *, inventory: Inventory, profile_id: str, token_resolver: Callable[[], str],
                  timeout: float = 5.0, max_json_bytes: int = 1_048_576) -> None:
@@ -164,6 +170,246 @@ class HttpAdapter:
     def read_operations(self): return self._read("read_operations")
     def read_invalidated_memories(self): return self._read("read_invalidated_memories")
     def invalidated_memory_inventory(self): return self.read_invalidated_memories()
+
+    def read_migration_inventory(self, source_bank: BankRef, candidate_bank: BankRef):
+        if not isinstance(source_bank, BankRef) or not isinstance(candidate_bank, BankRef):
+            raise AdapterError("migration inventory requires explicit bank references")
+        if source_bank.profile_id != self.endpoint.profile_id or candidate_bank.profile_id != self.endpoint.profile_id:
+            raise AdapterError("migration banks must use the selected profile")
+        version = self._request("GET", "/version")
+        banks: dict[str, Any] = {}
+        hooks: list[dict[str, Any]] = []
+        schedules: list[dict[str, Any]] = []
+        active_operations: list[dict[str, Any]] = []
+        for role, bank in (("source", source_bank), ("candidate", candidate_bank)):
+            bank_snapshot, bank_hooks, bank_schedules, bank_operations = self._read_migration_bank(role, bank)
+            banks[role] = bank_snapshot
+            hooks.extend(bank_hooks)
+            schedules.extend(bank_schedules)
+            active_operations.extend(bank_operations)
+        active_operations.sort(key=lambda item: (item["bank_role"], item["operation_id"]))
+        return {
+            "schema_version": 1,
+            "endpoint": self.endpoint.to_dict(),
+            "provider_identity": self._declared_provider_identity(),
+            "versions": {
+                "adapter": 1,
+                "hindsight": version.get("api_version"),
+                "features": version.get("features"),
+            },
+            "banks": banks,
+            "operations": {"idle": not active_operations, "active": active_operations},
+            "hooks": sorted(hooks, key=lambda item: (item["bank_role"], item["hook_id"])),
+            "schedules": sorted(schedules, key=lambda item: (item["bank_role"], item["model_id"])),
+        }
+
+    @classmethod
+    def _secret_config_key(cls, key: Any) -> bool:
+        parts = set(filter(None, re.split(r"[^a-z0-9]+", str(key).lower())))
+        return bool(parts & cls.SECRET_KEY_PARTS)
+
+    @classmethod
+    def _safe_config_value(cls, value: Any, path: str, redacted: list[str]) -> Any:
+        if isinstance(value, Mapping):
+            safe: dict[str, Any] = {}
+            for key, item in value.items():
+                name = str(key)
+                child_path = f"{path}.{name}" if path else name
+                if cls._secret_config_key(name):
+                    redacted.append(child_path)
+                else:
+                    safe[name] = cls._safe_config_value(item, child_path, redacted)
+            return safe
+        if isinstance(value, list):
+            return [cls._safe_config_value(item, f"{path}[{index}]", redacted) for index, item in enumerate(value)]
+        return value
+
+    @classmethod
+    def _safe_config(cls, value: Any) -> Mapping[str, Any]:
+        if not isinstance(value, Mapping) or set(value) != {"bank_id", "config", "overrides"}:
+            raise AdapterError("bank configuration response is invalid")
+        result: dict[str, Any] = {"bank_id": value["bank_id"]}
+        redacted: list[str] = []
+        for section in ("config", "overrides"):
+            raw = value[section]
+            if not isinstance(raw, Mapping):
+                raise AdapterError("bank configuration response is invalid")
+            result[section] = cls._safe_config_value(raw, section, redacted)
+        result["redacted_keys"] = sorted(redacted)
+        return result
+
+    def _declared_provider_identity(self) -> Mapping[str, Any]:
+        profiles = [profile for profile in self._inventory.profiles if profile.get("id") == self.endpoint.profile_id]
+        if len(profiles) != 1:
+            raise AdapterError("selected profile identity is unavailable")
+        roles = profiles[0].get("roles", profiles[0].get("provider_roles", {}))
+        if not isinstance(roles, Mapping):
+            raise AdapterError("selected profile provider roles are invalid")
+        providers = {provider.get("id"): provider for provider in self._inventory.providers}
+        result: dict[str, Any] = {}
+        for role, selected in sorted(roles.items()):
+            identifiers = selected if isinstance(selected, (list, tuple)) else [selected]
+            if not identifiers or any(identifier not in providers for identifier in identifiers):
+                raise AdapterError("selected provider identity is unavailable")
+            result[str(role)] = [
+                {"provider_id": identifier, "provider_record_digest": digest(providers[identifier])}
+                for identifier in identifiers
+            ]
+        return {
+            "inventory_digest": self._inventory.inventory_digest,
+            "profile_id": self.endpoint.profile_id,
+            "roles": result,
+        }
+
+    @staticmethod
+    def _bank_path(bank: BankRef, suffix: str = "") -> str:
+        return f"/v1/default/banks/{quote(bank.bank_id, safe='')}{suffix}"
+
+    def _read_items(
+        self,
+        path: str,
+        *,
+        collection: str = "items",
+        total_required: bool = True,
+        limit: int | None = None,
+    ) -> list[Any]:
+        page_limit = self.PAGE_LIMIT if limit is None else limit
+        items: list[Any] = []
+        offset = 0
+        while True:
+            separator = "&" if "?" in path else "?"
+            page_path = f"{path}{separator}{urlencode({'limit': page_limit, 'offset': offset})}"
+            page = self._request("GET", page_path)
+            page_items = page.get(collection)
+            if not isinstance(page_items, list):
+                raise AdapterError("paginated discovery response is invalid")
+            if page.get("offset", offset) != offset:
+                raise AdapterError("paginated discovery response offset drifted")
+            items.extend(page_items)
+            if total_required:
+                total = page.get("total")
+                if type(total) is not int or total < 0 or len(items) > total:
+                    raise AdapterError("paginated discovery response total is invalid")
+                if len(items) == total:
+                    return items
+                if not page_items:
+                    raise AdapterError("paginated discovery response is incomplete")
+            elif len(page_items) < page_limit:
+                return items
+            offset = len(items)
+
+    @staticmethod
+    def _migration_document(item: Any) -> Mapping[str, Any]:
+        if not isinstance(item, Mapping):
+            raise AdapterError("migration document response is invalid")
+        identifier = item.get("id")
+        updated_at = item.get("updated_at")
+        content_hash = item.get("content_hash")
+        if not isinstance(identifier, str) or not isinstance(updated_at, str) or not isinstance(content_hash, str):
+            raise AdapterError("migration document response is incomplete")
+        return {
+            "document_id": identifier,
+            "updated_at": updated_at,
+            "content_digest": content_hash,
+            "created_at": item.get("created_at"),
+            "text_length": item.get("text_length"),
+            "memory_unit_count": item.get("memory_unit_count"),
+            "tags": item.get("tags"),
+            "document_metadata": item.get("document_metadata"),
+            "retain_params": item.get("retain_params"),
+        }
+
+    @staticmethod
+    def _migration_invalidation(item: Any) -> Mapping[str, Any]:
+        if not isinstance(item, Mapping):
+            raise AdapterError("invalidated memory response is invalid")
+        identifier = item.get("id")
+        document_id = item.get("document_id")
+        content = item.get("text")
+        reason = item.get("invalidation_reason")
+        if not all(isinstance(value, str) and value for value in (identifier, document_id, content)):
+            raise AdapterError("invalidated memory response is incomplete")
+        if reason is None:
+            reason = ""
+        if not isinstance(reason, str):
+            raise AdapterError("invalidated memory response is invalid")
+        return {
+            "item_id": identifier,
+            "source_document_id": document_id,
+            "reason_digest": hashlib.sha256(reason.encode("utf-8")).hexdigest(),
+            "content_digest": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+        }
+
+    def _read_migration_bank(self, role: str, bank: BankRef):
+        base = self._bank_path(bank)
+        config = self._safe_config(self._request("GET", f"{base}/config"))
+        stats = self._request("GET", f"{base}/stats")
+        scopes_response = self._request("GET", f"{base}/observations/scopes")
+        tags = self._read_items(f"{base}/tags")
+        documents = [self._migration_document(item) for item in self._read_items(f"{base}/documents")]
+        models = self._read_items(f"{base}/mental-models?detail=full", total_required=False)
+        directives = self._read_items(
+            f"{base}/directives?active_only=false",
+            total_required=False,
+        )
+        webhooks_response = self._request("GET", f"{base}/webhooks")
+        invalidations = [
+            self._migration_invalidation(item)
+            for item in self._read_items(f"{base}/memories/list?state=invalidated")
+        ]
+        active: list[dict[str, Any]] = []
+        for status in ("pending", "processing"):
+            for operation in self._read_items(
+                f"{base}/operations?{urlencode({'status': status})}",
+                collection="operations",
+                limit=100,
+            ):
+                if not isinstance(operation, Mapping) or not isinstance(operation.get("id"), str):
+                    raise AdapterError("migration operation response is invalid")
+                active.append(
+                    {
+                        "bank_role": role,
+                        "operation_id": operation["id"],
+                        "status": operation.get("status"),
+                        "task_type": operation.get("task_type"),
+                        "updated_at": operation.get("updated_at"),
+                    }
+                )
+        if not isinstance(scopes_response.get("scopes"), list):
+            raise AdapterError("observation scope response is invalid")
+        if not isinstance(webhooks_response.get("items"), list):
+            raise AdapterError("webhook response is invalid")
+        hooks = []
+        for item in webhooks_response["items"]:
+            if not isinstance(item, Mapping) or not isinstance(item.get("id"), str):
+                raise AdapterError("webhook response is invalid")
+            hooks.append({"bank_role": role, "hook_id": item["id"], **dict(item)})
+        schedules = []
+        for item in models:
+            if not isinstance(item, Mapping) or not isinstance(item.get("id"), str):
+                raise AdapterError("mental model response is invalid")
+            trigger = item.get("trigger")
+            if trigger is not None:
+                if not isinstance(trigger, Mapping):
+                    raise AdapterError("mental model trigger is invalid")
+                schedules.append({"bank_role": role, "model_id": item["id"], "trigger": dict(trigger)})
+        return (
+            {
+                "bank_ref": bank.to_dict(),
+                "config": config,
+                "stats": stats,
+                "scopes": scopes_response["scopes"],
+                "tags": tags,
+                "documents": documents,
+                "models": models,
+                "directives": directives,
+                "invalidated_memories": invalidations,
+            },
+            hooks,
+            schedules,
+            active,
+        )
+
     def export_template(self): return self._request("GET", "/v1/templates/export")
 
     def _mutate(self, name: str, value: Mapping[str, Any]):

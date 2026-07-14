@@ -20,7 +20,7 @@ from hindsight_memory_control_plane.adapters import AdapterError, Authentication
 from hindsight_memory_control_plane.http_adapter import HttpAdapter
 from hindsight_memory_control_plane.migration_adapter import AdminMigrationAdapter, MigrationAdapterError
 from hindsight_memory_control_plane.canonical import digest
-from hindsight_memory_control_plane.model import Action, EndpointIdentity, Inventory, OperationSnapshot, Plan
+from hindsight_memory_control_plane.model import Action, BankRef, EndpointIdentity, Inventory, OperationSnapshot, Plan
 from hindsight_memory_control_plane.reconcile import ApplyError, apply_plan, create_rollback_bundle, parse_migration_gate
 
 
@@ -201,8 +201,22 @@ class FakeAdapterContractTest(AdapterContractMixin, unittest.TestCase):
             "scopes": {"scopes": ["s"]}, "documents": {"documents": [{"id": "d"}]},
             "models": {"models": [{"id": "m0"}]}, "directives": {"directives": [{"id": "r0"}]},
             "invalidated_memories": {"invalidated_memories": [{"id": "i"}]}, "template": {"template": "exported"},
+            "migration_inventory": {"schema_version": 1, "banks": ["engineering", "historical-candidate"]},
         }
         self.adapter = FakeAdapter(endpoint=self.endpoint.to_dict(), state=self.state, operations=self.operations)
+
+    def test_read_migration_inventory_is_bank_scoped_and_read_only(self):
+        source = BankRef("core", "engineering")
+        candidate = BankRef("core", "historical-candidate")
+        self.assertEqual(
+            self.adapter.read_migration_inventory(source, candidate),
+            {"schema_version": 1, "banks": ["engineering", "historical-candidate"]},
+        )
+        self.assertEqual(self.adapter.calls[-1]["method"], "read_migration_inventory")
+        self.assertEqual(
+            self.adapter.calls[-1]["metadata"],
+            {"source_bank": source.to_dict(), "candidate_bank": candidate.to_dict()},
+        )
 
     def assert_operation(self, method, path):
         expected = {
@@ -255,6 +269,42 @@ class HttpAdapterContractTest(AdapterContractMixin, unittest.TestCase):
             ("PUT", "/v1/runtime/outcome"): {"retained": True},
             ("PUT", "/v1/runtime/reflection"): {"accepted": True},
         }
+        responses[("GET", "/version")] = {"api_version": "0.8.4", "features": {"observations": True}}
+        for index, bank_id in enumerate(("engineering", "historical-candidate"), start=1):
+            base = f"/v1/default/banks/{bank_id}"
+            responses[("GET", f"{base}/config")] = {
+                "bank_id": bank_id,
+                "config": {
+                    "recall_max_tokens": 4096,
+                    "api_key": "top-secret",
+                    "provider": {"api_key": "nested-secret", "model": "safe-model"},
+                },
+                "overrides": {},
+            }
+            responses[("GET", f"{base}/stats")] = {"bank_id": bank_id, "total_documents": 1}
+            responses[("GET", f"{base}/observations/scopes")] = {"scopes": []}
+            responses[("GET", f"{base}/tags?limit=1000&offset=0")] = {
+                "items": [{"tag": "repo:dotfiles", "count": 1}], "total": 1, "limit": 1000, "offset": 0,
+            }
+            responses[("GET", f"{base}/documents?limit=1000&offset=0")] = {
+                "items": [{
+                    "id": f"document-{index}", "updated_at": "2026-07-13T12:00:00Z",
+                    "content_hash": str(index) * 64, "created_at": "2026-07-13T11:00:00Z",
+                    "text_length": 12, "memory_unit_count": 1, "tags": [],
+                    "document_metadata": {}, "retain_params": {},
+                }],
+                "total": 1, "limit": 1000, "offset": 0,
+            }
+            responses[("GET", f"{base}/mental-models?detail=full&limit=1000&offset=0")] = {"items": []}
+            responses[("GET", f"{base}/directives?active_only=false&limit=1000&offset=0")] = {"items": []}
+            responses[("GET", f"{base}/webhooks")] = {"items": []}
+            responses[("GET", f"{base}/memories/list?state=invalidated&limit=1000&offset=0")] = {
+                "items": [], "total": 0, "limit": 1000, "offset": 0,
+            }
+            for status in ("pending", "processing"):
+                responses[("GET", f"{base}/operations?status={status}&limit=100&offset=0")] = {
+                    "bank_id": bank_id, "operations": [], "total": 0, "limit": 100, "offset": 0,
+                }
 
         class Handler(BaseHTTPRequestHandler):
             def _serve(handler):
@@ -286,6 +336,29 @@ class HttpAdapterContractTest(AdapterContractMixin, unittest.TestCase):
         self.endpoint = EndpointIdentity("core", "http", "127.0.0.1", self.server.server_port, "default")
         self.state = state
         self.adapter = HttpAdapter(inventory=inventory_for(self.server.server_port), profile_id="core", token_resolver=lambda: "contract-token")
+
+    def test_read_migration_inventory_composes_documented_get_surfaces(self):
+        before = len(self.seen)
+        result = self.adapter.read_migration_inventory(
+            BankRef("core", "engineering"),
+            BankRef("core", "historical-candidate"),
+        )
+        self.assertEqual(result["schema_version"], 1)
+        self.assertTrue(result["operations"]["idle"])
+        self.assertEqual(result["versions"]["hindsight"], "0.8.4")
+        self.assertEqual(result["provider_identity"]["profile_id"], "core")
+        self.assertEqual(result["banks"]["source"]["bank_ref"]["bank_id"], "engineering")
+        self.assertEqual(result["banks"]["candidate"]["bank_ref"]["bank_id"], "historical-candidate")
+        self.assertEqual(result["banks"]["source"]["config"]["config"]["recall_max_tokens"], 4096)
+        self.assertNotIn("api_key", result["banks"]["source"]["config"]["config"])
+        self.assertNotIn("api_key", result["banks"]["source"]["config"]["config"]["provider"])
+        self.assertEqual(result["banks"]["source"]["config"]["config"]["provider"]["model"], "safe-model")
+        self.assertIn("config.provider.api_key", result["banks"]["source"]["config"]["redacted_keys"])
+        calls = self.seen[before:]
+        self.assertTrue(calls)
+        self.assertTrue(all(method == "GET" for method, _path, _auth, _body in calls))
+        self.assertFalse(any(path.startswith("/v1/migrations/") for _method, path, _auth, _body in calls))
+        self.assertTrue(all(auth == "Bearer contract-token" for _method, _path, auth, _body in calls))
 
     def assert_operation(self, method, path):
         self.assertEqual(self.seen[-1][:3], (method, path, "Bearer contract-token"))

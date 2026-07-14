@@ -274,7 +274,14 @@
 ### Task 7: Read-only migration discovery and immutable shadow plan
 
 **Files:**
+- Create: `CONTEXT-MAP.md`
+- Create: `home/private_dot_local/lib/hindsight_memory_control_plane/CONTEXT.md`
+- Modify: `home/private_dot_local/bin/executable_hindsight-memory`
+- Modify: `home/private_dot_local/lib/hindsight_memory_control_plane/__init__.py`
+- Modify: `home/private_dot_local/lib/hindsight_memory_control_plane/adapters.py`
+- Modify: `home/private_dot_local/lib/hindsight_memory_control_plane/http_adapter.py`
 - Create: `home/private_dot_local/lib/hindsight_memory_control_plane/migration.py`
+- Modify: `tests/test_hindsight_memory_adapters.py`
 - Create: `tests/test_hindsight_memory_migration.py`
 - Create at execution time outside Git: `<migration-artifact-directory>/controller-discovery-<UTC timestamp>/inventory.json`
 - Create at execution time outside Git: `<migration-artifact-directory>/controller-discovery-<UTC timestamp>/shadow-plan.json`
@@ -283,19 +290,19 @@
 - Consumes: read-only adapter, source/candidate bank references, approved offline package manifest, migration paths, adapter retain watermarks, and private catalog digests.
 - Produces: `discover_migration_state()`, high-water manifest, invalidation/candidate coverage records, redacted semantic diff, and a plan containing no approved mutation authority.
 
-- [ ] **Step 1: Write red discovery completeness tests**
+- [x] **Step 1: Write red discovery completeness tests**
 
   Using the fake adapter, require endpoint/provider identity, versions, config, stats, scopes, tags, documents, models, directives, operations, hooks, schedules, document IDs/update times/content digests, retain watermarks, and invalidated-memory item/source/reason/content digests. Missing required surfaces must make planning incomplete rather than silently empty.
 
-- [ ] **Step 2: Write red shadow-plan gate tests**
+- [x] **Step 2: Write red shadow-plan gate tests**
 
   Assert exact source/candidate coverage dispositions, one normalized semantic scope per retain, no legacy observations, invalidation disposition/reapplication, candidate provenance/curation digests, idle operations, rollback requirements, explicit cutover freeze/catch-up/restart-on-drift rules, separate closeout and archive-retirement actions, and `approved: false`.
 
-- [ ] **Step 3: Implement read-only discovery and proposed planning**
+- [x] **Step 3: Implement read-only discovery and proposed planning**
 
   Allow only adapter read methods. Require one adapter-provided generation or transaction snapshot to cover the full discovery window; if the adapter cannot provide one, require separately verified quiescence evidence and otherwise fail closed. Keep before/after drift comparison as an additional check, not the consistency primitive. Store content-bearing discovery under the external migration artifact directory with mode `0700` directories and `0600` files; plans contain digests and redacted counts, not memory content. Bind the approved offline package digest without copying the package into Git.
 
-- [ ] **Step 4: Run fake/disposable tests**
+- [x] **Step 4: Run fake/disposable tests**
 
   Run: `python3 -m unittest tests.test_hindsight_memory_migration -v`
 
