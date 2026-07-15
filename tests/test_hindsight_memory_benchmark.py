@@ -95,10 +95,10 @@ class BenchmarkTest(unittest.TestCase):
     ):
         schema_path = (
             ROOT
-            / "home/private_dot_config/hindsight-memory/benchmark-schema.json"
+            / "home/dot_config/private_hindsight-memory/benchmark-schema.json"
         )
         fixture_path = ROOT / (
-            "home/private_dot_config/hindsight-memory/synthetic-benchmark.jsonl"
+            "home/dot_config/private_hindsight-memory/synthetic-benchmark.jsonl"
         )
         schema = json.loads(schema_path.read_text(encoding="utf-8"))
         self.assertEqual(
@@ -139,7 +139,7 @@ class BenchmarkTest(unittest.TestCase):
 
     def test_loaded_cases_cannot_change_after_their_digest_is_bound(self):
         fixture_path = ROOT / (
-            "home/private_dot_config/hindsight-memory/synthetic-benchmark.jsonl"
+            "home/dot_config/private_hindsight-memory/synthetic-benchmark.jsonl"
         )
         dataset = load_cases(
             fixture_path, expected_digest=SYNTHETIC_DATASET_DIGEST
