@@ -83,6 +83,8 @@ class Adapter(Protocol):
     def read_models(self) -> Any: ...
     def read_directives(self) -> Any: ...
     def read_operations(self) -> Mapping[str, Any]: ...
+    # Opaque monotonic revision that changes on every committed live-bank mutation.
+    def read_migration_generation(self) -> str: ...
     def read_migration_inventory(self, source_bank: BankRef, candidate_bank: BankRef) -> Mapping[str, Any]: ...
     def template_dry_run(self, template: Mapping[str, Any]) -> Mapping[str, Any]: ...
     def export_template(self) -> Mapping[str, Any]: ...
@@ -125,9 +127,19 @@ class FakeAdapter:
         self.activation_enabled = True
         self._rollbacks: dict[str, dict[str, Any]] = {}
         self._runtime_results: dict[str, tuple[str, Mapping[str, Any]]] = {}
+        self._migration_generation_seed = self.state.get("migration_generation")
+        self._migration_generation_index = 0
 
     def _record(self, method: str, metadata: Mapping[str, Any] | None = None) -> None:
         self.calls.append({"method": method, "metadata": dict(metadata or {})})
+
+    def _advance_migration_generation(self) -> None:
+        if not isinstance(self._migration_generation_seed, str):
+            return
+        self._migration_generation_index += 1
+        self.state["migration_generation"] = (
+            f"{self._migration_generation_seed}:{self._migration_generation_index}"
+        )
 
     @staticmethod
     def _keys(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -161,6 +173,13 @@ class FakeAdapter:
         self._record("read_operations")
         return deepcopy(self.operations)
 
+    def read_migration_generation(self) -> str:
+        self._record("read_migration_generation")
+        value = self.state.get("migration_generation")
+        if not isinstance(value, str) or not value:
+            raise AdapterError("migration generation is unavailable")
+        return value
+
     def read_migration_inventory(self, source_bank: BankRef, candidate_bank: BankRef) -> Mapping[str, Any]:
         if not isinstance(source_bank, BankRef) or not isinstance(candidate_bank, BankRef):
             raise AdapterError("migration inventory requires explicit bank references")
@@ -183,11 +202,13 @@ class FakeAdapter:
     def import_template(self, template):
         self._record("import_template", self._keys(template))
         self.state["template"] = deep_thaw(template)
+        self._advance_migration_generation()
         return {"imported": True}
 
     def patch_config(self, patch):
         self._record("patch_config", self._keys(patch))
         self.state.setdefault("config", {}).update(deep_thaw(patch))
+        self._advance_migration_generation()
         return deepcopy(self.state["config"])
 
     def _upsert(self, collection: str, value: Mapping[str, Any]):
@@ -197,6 +218,7 @@ class FakeAdapter:
         items = stored.setdefault(collection, []) if isinstance(stored, dict) else stored
         items[:] = [item for item in items if item.get("id", item.get(f"{collection[:-1]}_id")) != identifier]
         items.append(deep_thaw(value))
+        self._advance_migration_generation()
         return {"upserted": identifier}
 
     def upsert_model(self, model): return self._upsert("models", model)
@@ -204,6 +226,7 @@ class FakeAdapter:
 
     def transfer_documents(self, transfer):
         self._record("transfer_documents", self._keys(transfer))
+        self._advance_migration_generation()
         return {"transferred": transfer.get("count", 0)}
 
     def read_invalidated_memories(self): return self._read("invalidated_memories", [])
@@ -213,10 +236,12 @@ class FakeAdapter:
 
     def reapply_invalidated_memories(self, request):
         self._record("reapply_invalidated_memories", self._keys(request))
+        self._advance_migration_generation()
         return {"reapplied": request.get("count", 0)}
 
     def delete_bank(self, bank):
         self._record("delete_bank", self._keys(bank))
+        self._advance_migration_generation()
         return {"deleted": True}
 
     def apply_action(self, action) -> None:
@@ -226,6 +251,7 @@ class FakeAdapter:
             getattr(self, method_name)(details)
         elif action.kind in DIRECT_ACTION_KINDS:
             self._record(action.kind, self._keys(details))
+            self._advance_migration_generation()
         else:
             raise AdapterError(f"unsupported apply action: {action.kind}")
 
@@ -267,6 +293,7 @@ class FakeAdapter:
         if not record or record["bundle"] != rollback:
             raise AdapterError("rollback attestation is unknown")
         self.state = deepcopy(record["state"])
+        self._advance_migration_generation()
 
     def disable_activation(self) -> None:
         self._record("disable_activation")
@@ -300,6 +327,7 @@ class FakeAdapter:
             return deepcopy(stored_result)
         self._record(method, self._keys(request))
         self._runtime_results[key] = (request_digest, deepcopy(result))
+        self._advance_migration_generation()
         return deepcopy(result)
 
     def transcript_checkpoint(self, request):

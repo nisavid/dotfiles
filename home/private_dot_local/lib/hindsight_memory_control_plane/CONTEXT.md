@@ -13,8 +13,12 @@ A complete read-only observation of a named source and candidate bank through do
 _Avoid_: Inventory, migration export
 
 **Adapter watermark snapshot**:
-A read-only observation of adapter retain progress captured independently before and after live bank discovery. Equality proves discovery did not race an adapter write.
+A read-only observation of adapter retain progress captured independently before and after live bank discovery. Equality detects observed watermark drift but is not the atomic consistency boundary.
 _Avoid_: Bank watermark, import checkpoint
+
+**Adapter discovery generation**:
+An opaque, monotonic adapter revision captured before and after every live-bank discovery read. It changes for every committed live-bank mutation, so equality proves that the multi-read snapshot did not span a committed write; discovery fails closed when the adapter cannot provide it.
+_Avoid_: Inventory digest, adapter watermark
 
 **Offline package manifest**:
 An approved, immutable description of projected migration content and its coverage, provenance, curation, and artifact digests. The manifest binds an external package without copying that package into Git.

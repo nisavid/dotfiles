@@ -1,6 +1,6 @@
 """Desired-state primitives for the Hindsight memory control plane."""
 
-from .canonical import canonical_bytes, digest
+from .canonical import StrictJsonError, canonical_bytes, digest, strict_json_loads
 from .adapters import Adapter, AdapterError, AuthenticationError, FakeAdapter, RollbackBundle
 from .http_adapter import HttpAdapter
 from .inventory import InventoryError, load_inventory
@@ -50,6 +50,7 @@ __all__ = [
     "PlanError",
     "RollbackBundle",
     "ShadowPlan",
+    "StrictJsonError",
     "FakeAdapter",
     "HttpAdapter",
     "hindsight_admin_argv",
@@ -60,6 +61,7 @@ __all__ = [
     "capture_migration_gate",
     "canonical_bytes",
     "digest",
+    "strict_json_loads",
     "discover_migration_state",
     "load_inventory",
     "inventory_endpoint",

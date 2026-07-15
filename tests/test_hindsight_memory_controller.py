@@ -6,6 +6,7 @@ from pathlib import Path
 import runpy
 import stat
 import subprocess
+import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -27,7 +28,7 @@ from hindsight_memory_control_plane import (
     load_inventory,
     verify_plan,
 )
-from hindsight_memory_control_plane.canonical import digest
+from hindsight_memory_control_plane.canonical import digest, strict_json_loads
 from hindsight_memory_control_plane.adapters import FakeAdapter
 from hindsight_memory_control_plane.ledger import LedgerError, append_record
 
@@ -121,6 +122,50 @@ class ControllerCliTest(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 canonical_bytes({"value": value})
 
+    def test_strict_json_rejects_duplicate_object_keys(self):
+        with self.assertRaisesRegex(ValueError, "duplicate JSON object key: value"):
+            strict_json_loads('{"value":1,"value":2}')
+
+    def test_strict_json_rejects_non_finite_constants(self):
+        for value in ("NaN", "Infinity", "-Infinity"):
+            with self.subTest(value=value), self.assertRaisesRegex(
+                ValueError, f"non-finite JSON constant: {value}",
+            ):
+                strict_json_loads(f'{{"value":{value}}}')
+
+    def test_strict_json_rejects_floating_point_overflow(self):
+        for value in ("1e309", "-1e309"):
+            with self.subTest(value=value), self.assertRaisesRegex(
+                ValueError, f"non-finite JSON number: {value}",
+            ):
+                strict_json_loads(f'{{"value":{value}}}')
+
+    def test_cli_rejects_ambiguous_inventory_json_before_digesting(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tmp = Path(directory)
+            encoded = json.dumps(inventory())
+            cases = {
+                "duplicate": encoded.replace(
+                    '"schema_version": 1',
+                    '"schema_version": 1, "schema_version": 1',
+                    1,
+                ),
+                "nan": encoded.replace('"base_port": 7979', '"base_port": NaN', 1),
+                "infinity": encoded.replace(
+                    '"base_port": 7979', '"base_port": Infinity', 1,
+                ),
+                "negative-infinity": encoded.replace(
+                    '"base_port": 7979', '"base_port": -Infinity', 1,
+                ),
+            }
+            for name, raw in cases.items():
+                with self.subTest(name=name):
+                    fixture = tmp / f"{name}.json"
+                    fixture.write_text(raw, encoding="utf-8")
+                    result = self.run_cli(tmp, "validate", "--inventory", fixture)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("cannot load inventory", result.stderr)
+
     def test_rollback_archive_overlap_detects_path_and_inode_aliases(self):
         module = runpy.run_path(str(CLI))
         with tempfile.TemporaryDirectory() as directory:
@@ -204,6 +249,12 @@ class ControllerCliTest(unittest.TestCase):
             rollback_payload = b"verified pre-state rollback archive"
             rollback_digest = hashlib.sha256(rollback_payload).hexdigest()
             rollback_archive = root / "pre-state-backup.zip"
+            admin_executable = root / "hindsight-admin"
+            admin_executable.write_text(
+                f"#!{sys.executable}\nraise SystemExit('test seam only')\n",
+                encoding="utf-8",
+            )
+            admin_executable.chmod(0o700)
             migration_digest = "3" * 64
             evidence_path = root / "restore-evidence.json"
             incoming_evidence = {
@@ -251,6 +302,7 @@ class ControllerCliTest(unittest.TestCase):
                 completion_marker=str(marker), migration_archive=[],
                 restore_evidence=str(evidence_path),
                 rollback_archive=str(rollback_archive),
+                admin_executable=str(admin_executable),
             )
             for candidates in (
                 (archive, decoy_archive),
@@ -260,9 +312,13 @@ class ControllerCliTest(unittest.TestCase):
                     adapter = FakeAdapter(endpoint=endpoint, state=state)
                     args.migration_archive = [str(path) for path in candidates]
                     admin_calls = []
+                    process_contexts = []
                     observed_import = {}
 
                     def run_admin(argv, **_kwargs):
+                        process_contexts.append(_kwargs)
+                        if "importlib.metadata" in argv[-1]:
+                            return subprocess.CompletedProcess(argv, 0, "0.8.4\n", "")
                         admin_calls.append(argv)
                         if argv[1] == "backup":
                             Path(argv[2]).write_bytes(rollback_payload)
@@ -278,18 +334,22 @@ class ControllerCliTest(unittest.TestCase):
                         return subprocess.CompletedProcess(argv, 0, "{}", "")
 
                     with (
-                        patch.dict(os.environ, {"HINDSIGHT_TEST_TOKEN": "local-test-token"}),
+                        patch.dict(os.environ, {
+                            "HINDSIGHT_TEST_TOKEN": "local-test-token",
+                            "HINDSIGHT_API_DATABASE_URL": "postgresql://approved",
+                            "PYTHONPATH": "/attacker/python",
+                        }),
                         patch.dict(module["apply_command"].__globals__, {"HttpAdapter": lambda **_kwargs: adapter}),
                         patch.object(module["subprocess"], "run", side_effect=run_admin),
                         redirect_stdout(StringIO()),
                     ):
                         self.assertEqual(module["apply_command"](args), 0)
                     self.assertEqual(admin_calls[0], [
-                        "hindsight-admin", "backup", str(rollback_archive),
+                        str(admin_executable), "backup", str(rollback_archive),
                         "--schema", "public",
                     ])
                     self.assertEqual(admin_calls[1], [
-                        "hindsight-admin", "import-bank",
+                        str(admin_executable), "import-bank",
                         "--archive", str(observed_import["path"]),
                         "--target-bank", "engineering",
                     ])
@@ -305,6 +365,13 @@ class ControllerCliTest(unittest.TestCase):
                         decoy_archive.read_bytes(), b"decoy migration archive",
                     )
                     self.assertNotIn(archive_digest, admin_calls[1])
+                    self.assertTrue(process_contexts)
+                    self.assertTrue(all(context["cwd"] == "/" for context in process_contexts))
+                    self.assertTrue(all("PYTHONPATH" not in context["env"] for context in process_contexts))
+                    self.assertTrue(all(
+                        context["env"].get("HINDSIGHT_API_DATABASE_URL") == "postgresql://approved"
+                        for context in process_contexts
+                    ))
 
             evidence_path.write_bytes(b"\xff")
             evidence_path.chmod(0o600)
@@ -341,6 +408,8 @@ class ControllerCliTest(unittest.TestCase):
             mismatched_backup_calls = []
 
             def run_mismatched_backup(argv, **_kwargs):
+                if "importlib.metadata" in argv[-1]:
+                    return subprocess.CompletedProcess(argv, 0, "0.8.4\n", "")
                 mismatched_backup_calls.append(argv)
                 Path(argv[2]).write_bytes(b"mismatched rollback archive")
                 return subprocess.CompletedProcess(argv, 0, "Complete", "")
@@ -365,7 +434,7 @@ class ControllerCliTest(unittest.TestCase):
                 ):
                     module["apply_command"](args)
             self.assertEqual(mismatched_backup_calls, [[
-                "hindsight-admin", "backup", str(rollback_archive),
+                str(admin_executable), "backup", str(rollback_archive),
                 "--schema", "public",
             ]])
             self.assertEqual(adapter.calls, adapter_calls_before)

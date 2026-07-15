@@ -4,16 +4,28 @@ import json
 import hashlib
 import re
 import socket
+import ssl
 from typing import Any, Callable, Mapping
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
-from urllib.request import Request, urlopen
+from urllib.request import (
+    HTTPRedirectHandler,
+    HTTPSHandler,
+    ProxyHandler,
+    Request,
+    build_opener,
+)
 
 from .action_contracts import ACTION_METHODS, ARTIFACT_ACTION_KINDS
 from .adapters import AdapterError, AuthenticationError, RollbackBundle, validate_runtime_request
-from .canonical import digest
+from .canonical import StrictJsonError, digest, strict_json_loads
 from .model import BankRef, EndpointIdentity, Inventory
 from .planning import inventory_endpoint
+
+
+class _RejectRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(self, request, file_pointer, code, message, headers, new_url):
+        return None
 
 
 class HttpAdapter:
@@ -71,6 +83,16 @@ class HttpAdapter:
         self.recordings: list[dict[str, Any]] = []
         self._runtime_results: dict[str, tuple[str, Mapping[str, Any]]] = {}
         self._validate_endpoint()
+        self._tls_context = ssl.create_default_context(purpose=ssl.Purpose.SERVER_AUTH)
+        self._tls_context.check_hostname = True
+        self._tls_context.verify_mode = ssl.CERT_REQUIRED
+        if hasattr(ssl, "TLSVersion"):
+            self._tls_context.minimum_version = ssl.TLSVersion.TLSv1_2
+        self._opener = build_opener(
+            ProxyHandler({}),
+            _RejectRedirectHandler(),
+            HTTPSHandler(context=self._tls_context),
+        )
 
     def __repr__(self) -> str:
         return f"HttpAdapter(endpoint={self.endpoint!r}, timeout={self.timeout!r}, max_json_bytes={self.max_json_bytes!r})"
@@ -124,7 +146,7 @@ class HttpAdapter:
         })
         self.recordings.append({"method": method, "path": path, "payload_keys": sorted(payload) if payload else []})
         try:
-            with urlopen(request, timeout=self.timeout) as response:
+            with self._opener.open(request, timeout=self.timeout) as response:
                 content_length = response.headers.get("Content-Length")
                 if content_length:
                     try:
@@ -140,14 +162,16 @@ class HttpAdapter:
             try:
                 if error.code == 401:
                     raise AuthenticationError("endpoint authentication failed (HTTP 401)") from None
+                if 300 <= error.code < 400:
+                    raise AdapterError("endpoint redirect is not permitted") from None
                 raise AdapterError(f"endpoint request failed (HTTP {error.code})") from None
             finally:
                 error.close()
         except (URLError, socket.timeout, TimeoutError, OSError):
             raise AdapterError("endpoint request failed") from None
         try:
-            value = json.loads(raw)
-        except (UnicodeDecodeError, json.JSONDecodeError):
+            value = strict_json_loads(raw)
+        except (StrictJsonError, UnicodeDecodeError, json.JSONDecodeError):
             raise AdapterError("endpoint returned invalid JSON") from None
         if not isinstance(value, dict):
             raise AdapterError("endpoint returned non-object JSON")
@@ -181,6 +205,24 @@ class HttpAdapter:
     def read_operations(self): return self._read("read_operations")
     def read_invalidated_memories(self): return self._read("read_invalidated_memories")
     def invalidated_memory_inventory(self): return self.read_invalidated_memories()
+
+    def read_migration_generation(self) -> str:
+        value = self._request("GET", "/v1/migration/generation")
+        if not isinstance(value, Mapping) or set(value) != {"generation"}:
+            raise AdapterError("migration generation response is invalid")
+        generation = value["generation"]
+        try:
+            encoded_generation = generation.encode("utf-8")
+        except (AttributeError, UnicodeEncodeError):
+            raise AdapterError("migration generation response is invalid") from None
+        if (
+            not isinstance(generation, str)
+            or not generation
+            or len(encoded_generation) > 256
+            or not generation.isprintable()
+        ):
+            raise AdapterError("migration generation response is invalid")
+        return generation
 
     def read_migration_inventory(self, source_bank: BankRef, candidate_bank: BankRef):
         if not isinstance(source_bank, BankRef) or not isinstance(candidate_bank, BankRef):

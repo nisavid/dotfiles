@@ -141,12 +141,23 @@ def write_gate_files(root: Path):
 
 
 class SequenceAdapter(FakeAdapter):
-    def __init__(self, inventories):
+    def __init__(self, inventories, generations=None):
         super().__init__(
             endpoint=migration_inventory()["endpoint"],
             state={"migration_inventory": copy.deepcopy(inventories[0])},
         )
         self.inventories = [copy.deepcopy(value) for value in inventories]
+        self.generations = list(
+            ["generation-1", "generation-1"]
+            if generations is None
+            else generations
+        )
+
+    def read_migration_generation(self):
+        self._record("read_migration_generation")
+        if not self.generations:
+            raise AdapterError("migration generation is unavailable")
+        return self.generations.pop(0)
 
     def read_migration_inventory(self, source_bank, candidate_bank):
         self._record(
@@ -168,13 +179,18 @@ class MigrationDiscoveryContractTest(unittest.TestCase):
         approved_digest=None,
         catalog=None,
         watermarks=None,
+        generations=None,
+        adapter=None,
     ):
         manifest = copy.deepcopy(package or package_manifest())
         normalized_manifest = copy.deepcopy(manifest)
         for key in ("invalidation_dispositions",):
             if isinstance(normalized_manifest.get(key), list):
                 normalized_manifest[key].sort(key=lambda item: json.dumps(item, sort_keys=True))
-        adapter = SequenceAdapter(inventories or [migration_inventory(), migration_inventory()])
+        adapter = adapter or SequenceAdapter(
+            inventories or [migration_inventory(), migration_inventory()],
+            generations=generations,
+        )
         watermark_values = iter(
             copy.deepcopy(
                 watermarks
@@ -208,7 +224,12 @@ class MigrationDiscoveryContractTest(unittest.TestCase):
             self.assertEqual(result.blockers, ())
             self.assertEqual(
                 [call["method"] for call in adapter.calls],
-                ["read_migration_inventory", "read_migration_inventory"],
+                [
+                    "read_migration_generation",
+                    "read_migration_inventory",
+                    "read_migration_inventory",
+                    "read_migration_generation",
+                ],
             )
             run_dir = Path(result.run_dir)
             inventory_path = run_dir / "inventory.json"
@@ -231,6 +252,7 @@ class MigrationDiscoveryContractTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             _, result = self.discover(Path(directory))
             inventory = json.loads((Path(result.run_dir) / "inventory.json").read_text())
+            self.assertEqual(inventory["adapter_generation"], "generation-1")
             self.assertEqual(
                 inventory["high_water_manifest"],
                 [
@@ -404,6 +426,30 @@ class MigrationDiscoveryContractTest(unittest.TestCase):
             self.assertFalse(result.complete)
             self.assertIn("drift:bank_stats", result.blockers)
 
+    def test_generation_drift_blocks_transient_or_reverted_live_writes(self):
+        stable = migration_inventory()
+        with tempfile.TemporaryDirectory() as directory:
+            _, result = self.discover(
+                Path(directory),
+                inventories=[stable, stable],
+                generations=["generation-before", "generation-after"],
+            )
+            self.assertFalse(result.complete)
+            self.assertIn("drift:adapter_generation", result.blockers)
+            self.assertIsNone(result.run_dir)
+
+    def test_missing_adapter_generation_contract_fails_closed(self):
+        adapter = SequenceAdapter([migration_inventory(), migration_inventory()])
+        adapter.read_migration_generation = None
+        with tempfile.TemporaryDirectory() as directory:
+            _, result = self.discover(Path(directory), adapter=adapter)
+            self.assertFalse(result.complete)
+            self.assertEqual(
+                result.blockers,
+                ("adapter:migration_generation_unavailable",),
+            )
+            self.assertIsNone(result.run_dir)
+
     def test_offline_package_digest_binds_every_manifest_body_field(self):
         approved = package_manifest()
         with tempfile.TemporaryDirectory() as directory:
@@ -541,6 +587,8 @@ class MigrationCliContractTest(unittest.TestCase):
                 parsed = urlparse(raw_path)
                 if parsed.path == "/version":
                     return {"api_version": "0.8.4", "features": {"observations": True}}
+                if parsed.path == "/v1/migration/generation":
+                    return {"generation": "commit-42"}
                 parts = parsed.path.split("/")
                 bank_id = parts[4]
                 suffix = "/" + "/".join(parts[5:])

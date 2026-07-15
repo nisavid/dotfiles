@@ -2,22 +2,79 @@
 
 from pathlib import Path
 import hmac
+import os
 import re
+import subprocess
 from typing import Any, Callable, Mapping, Sequence
 
 from .canonical import DIGEST, digest
-from .file_evidence import FileEvidenceError, verified_file_snapshot
+from .file_evidence import (
+    FileEvidenceError,
+    file_identity,
+    reject_symlink_components,
+    validate_trusted_regular_file,
+    verified_file_snapshot,
+)
 
 OPERATIONS = {"export-bank", "import-bank", "backup", "restore"}
 BANK_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
+ADMIN_ENVIRONMENT_ALLOWLIST = frozenset(
+    {
+        "HINDSIGHT_API_DATABASE_URL",
+        "LANG",
+        "LC_ALL",
+        "SSL_CERT_DIR",
+        "SSL_CERT_FILE",
+        "TZ",
+    }
+)
+VERSION_PROBE = (
+    "import importlib.metadata as metadata; "
+    "print(metadata.version('hindsight-api'))"
+)
 
 
 class MigrationAdapterError(RuntimeError):
     pass
 
 
+def _trusted_admin_executable(value: str | Path) -> tuple[str, tuple[int, ...], str]:
+    path = Path(value)
+    if not path.is_absolute():
+        raise MigrationAdapterError("hindsight-admin executable path must be absolute")
+    try:
+        reject_symlink_components(path, "hindsight-admin executable", allow_missing=False)
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(path, flags)
+        try:
+            before = os.fstat(descriptor)
+            validate_trusted_regular_file(before, "hindsight-admin executable")
+            if not before.st_mode & 0o111:
+                raise FileEvidenceError("hindsight-admin executable must be executable")
+            first_line = os.read(descriptor, 4096).splitlines()[0]
+            after = os.fstat(descriptor)
+        finally:
+            os.close(descriptor)
+        current = path.lstat()
+    except (FileEvidenceError, OSError, IndexError) as error:
+        message = str(error) if isinstance(error, FileEvidenceError) else "hindsight-admin executable is unavailable"
+        raise MigrationAdapterError(message) from None
+    identity = file_identity(before)
+    if identity != file_identity(after) or identity != file_identity(current):
+        raise MigrationAdapterError("hindsight-admin executable identity changed")
+    if not first_line.startswith(b"#!"):
+        raise MigrationAdapterError("hindsight-admin executable interpreter is invalid")
+    try:
+        interpreter = first_line[2:].decode("utf-8")
+    except UnicodeDecodeError:
+        raise MigrationAdapterError("hindsight-admin executable interpreter is invalid") from None
+    if not interpreter or any(character.isspace() for character in interpreter) or not Path(interpreter).is_absolute():
+        raise MigrationAdapterError("hindsight-admin executable interpreter is invalid")
+    return str(path), identity, interpreter
+
+
 def hindsight_admin_argv(
-    operation: str, archive: str, bank_id: str | None
+    executable: str, operation: str, archive: str, bank_id: str | None
 ) -> list[str]:
     if operation in {"export-bank", "import-bank"} and (
         not isinstance(bank_id, str) or BANK_ID.fullmatch(bank_id) is None
@@ -27,32 +84,83 @@ def hindsight_admin_argv(
         raise MigrationAdapterError("bank ID is not permitted for schema operation")
     if operation == "export-bank":
         return [
-            "hindsight-admin", operation, "--bank", bank_id,
+            executable, operation, "--bank", bank_id,
             "--output", archive,
         ]
     if operation == "import-bank":
         return [
-            "hindsight-admin", operation, "--archive", archive,
+            executable, operation, "--archive", archive,
             "--target-bank", bank_id,
         ]
     if operation == "backup":
-        return ["hindsight-admin", operation, archive, "--schema", "public"]
+        return [executable, operation, archive, "--schema", "public"]
     if operation == "restore":
         return [
-            "hindsight-admin", operation, archive, "--schema", "public", "--yes",
+            executable, operation, archive, "--schema", "public", "--yes",
         ]
     raise MigrationAdapterError("unsupported hindsight-admin operation")
 
 
 class AdminMigrationAdapter:
-    def __init__(self, *, admin_version: str, argv_factory: Callable[[str, str, str | None], Sequence[str]],
-                 runner: Callable[[Sequence[str]], Any], supported_versions: frozenset[str] = frozenset({"0.8.4"})) -> None:
-        if admin_version not in supported_versions:
-            raise MigrationAdapterError("unsupported hindsight-admin version")
-        self.admin_version = admin_version
+    WORKING_DIRECTORY = "/"
+
+    def __init__(self, *, admin_executable: str,
+                 argv_factory: Callable[[str, str, str, str | None], Sequence[str]],
+                 runner: Callable[..., Any], environment: Mapping[str, str] | None = None,
+                 supported_versions: frozenset[str] = frozenset({"0.8.4"})) -> None:
+        executable, identity, interpreter = _trusted_admin_executable(admin_executable)
+        if not callable(argv_factory) or not callable(runner):
+            raise MigrationAdapterError("hindsight-admin process seams are required")
+        source_environment = dict(environment or {})
+        if any(not isinstance(key, str) or not isinstance(value, str) for key, value in source_environment.items()):
+            raise MigrationAdapterError("hindsight-admin environment is invalid")
+        self.admin_executable = executable
+        self._executable_identity = identity
+        self._interpreter = interpreter
+        self._environment = {
+            key: source_environment[key]
+            for key in sorted(ADMIN_ENVIRONMENT_ALLOWLIST & source_environment.keys())
+        }
         self.argv_factory = argv_factory
         self.runner = runner
         self.calls: list[dict[str, Any]] = []
+        probe = self._invoke([interpreter, "-I", "-c", VERSION_PROBE], timeout=30)
+        self._require_executable_identity()
+        version = self._result_field(probe, "stdout")
+        if self._result_field(probe, "returncode") != 0 or not isinstance(version, str):
+            raise MigrationAdapterError("hindsight-admin version probe failed")
+        self.admin_version = version.strip()
+        if self.admin_version not in supported_versions:
+            raise MigrationAdapterError("unsupported hindsight-admin version")
+
+    @staticmethod
+    def _result_field(result: Any, field: str) -> Any:
+        return result.get(field) if isinstance(result, Mapping) else getattr(result, field, None)
+
+    def _invoke(self, argv: Sequence[str], *, timeout: int) -> Any:
+        try:
+            return self.runner(
+                list(argv),
+                cwd=self.WORKING_DIRECTORY,
+                env=dict(self._environment),
+                text=True,
+                capture_output=True,
+                timeout=timeout,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            raise MigrationAdapterError("hindsight-admin operation timed out") from None
+        except Exception:
+            raise MigrationAdapterError("hindsight-admin operation failed") from None
+
+    def _require_executable_identity(self) -> None:
+        executable, identity, interpreter = _trusted_admin_executable(self.admin_executable)
+        if (
+            executable != self.admin_executable
+            or identity != self._executable_identity
+            or interpreter != self._interpreter
+        ):
+            raise MigrationAdapterError("hindsight-admin executable identity changed")
 
     @staticmethod
     def _restore_evidence(
@@ -97,10 +205,11 @@ class AdminMigrationAdapter:
             self._restore_evidence(
                 evidence, archive_digest, str(expected_evidence_digest)
             )
-        argv = self.argv_factory(operation, archive, bank_id)
+        self._require_executable_identity()
+        argv = self.argv_factory(self.admin_executable, operation, archive, bank_id)
         if isinstance(argv, (str, bytes)) or not isinstance(argv, Sequence) or not all(isinstance(arg, str) for arg in argv):
             raise MigrationAdapterError("argv factory must return an argument vector, not a shell string")
-        expected = hindsight_admin_argv(operation, archive, bank_id)
+        expected = hindsight_admin_argv(self.admin_executable, operation, archive, bank_id)
         if list(argv) != expected:
             raise MigrationAdapterError("hindsight-admin argv shape is not permitted")
         self.calls.append({
@@ -108,8 +217,9 @@ class AdminMigrationAdapter:
             "archive_digest": archive_digest,
             **({"bank_id": bank_id} if bank_id is not None else {}),
         })
-        result = self.runner(list(argv))
-        returncode = result.get("returncode") if isinstance(result, Mapping) else getattr(result, "returncode", None)
+        result = self._invoke(list(argv), timeout=300)
+        self._require_executable_identity()
+        returncode = self._result_field(result, "returncode")
         if returncode != 0:
             raise MigrationAdapterError("hindsight-admin operation failed")
         return {"completed": True}

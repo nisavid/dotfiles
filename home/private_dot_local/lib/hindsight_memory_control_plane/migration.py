@@ -200,6 +200,28 @@ def _retain_watermark_snapshot(reader: Callable[[], Mapping[str, Any]]) -> dict[
     return _normalized(value)
 
 
+def _adapter_generation_snapshot(adapter: Any) -> str:
+    reader = getattr(adapter, "read_migration_generation", None)
+    if not callable(reader):
+        raise MigrationError("adapter migration generation is unavailable")
+    try:
+        value = reader()
+    except Exception:
+        raise MigrationError("adapter migration generation is unavailable") from None
+    try:
+        encoded_value = value.encode("utf-8")
+    except (AttributeError, UnicodeEncodeError):
+        raise MigrationError("adapter migration generation is unavailable") from None
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(encoded_value) > 256
+        or not value.isprintable()
+    ):
+        raise MigrationError("adapter migration generation is unavailable")
+    return value
+
+
 def _with_retain_watermarks(snapshot: Any, watermarks: Mapping[str, Any]) -> Any:
     if not isinstance(snapshot, Mapping):
         return snapshot
@@ -735,6 +757,12 @@ def discover_migration_state(
         _identifier(key, "private catalog digest name")
         _sha(value, "private catalog digest")
 
+    try:
+        before_generation = _adapter_generation_snapshot(adapter)
+    except MigrationError:
+        return MigrationDiscovery(
+            False, ("adapter:migration_generation_unavailable",)
+        )
     before_gate = _gate_snapshot(migration_paths)
     before_watermarks = _retain_watermark_snapshot(retain_watermark_reader)
     package_blockers = _package_blockers(offline_package_manifest, approved_offline_package_digest)
@@ -750,11 +778,21 @@ def discover_migration_state(
     except AdapterError:
         return MigrationDiscovery(False, ("adapter:migration_inventory_unavailable",))
     after_gate = _gate_snapshot(migration_paths)
+    try:
+        after_generation = _adapter_generation_snapshot(adapter)
+    except MigrationError:
+        return MigrationDiscovery(
+            False, ("adapter:migration_generation_unavailable",)
+        )
 
     blockers = _snapshot_blockers(before, source_bank, candidate_bank)
     blockers.extend(_snapshot_blockers(after, source_bank, candidate_bank))
     blockers.extend(package_blockers)
     if not blockers:
+        if not hmac.compare_digest(
+            before_generation.encode("utf-8"), after_generation.encode("utf-8")
+        ):
+            blockers.append("drift:adapter_generation")
         blockers.extend(_drift_blockers(before, after, before_gate, after_gate))
         blockers.extend(_coverage_blockers(before, offline_package_manifest))
     blockers = sorted(set(blockers))
@@ -766,6 +804,7 @@ def discover_migration_state(
     invalidations = _invalidations(normalized_snapshot)
     inventory = {
         "schema_version": 1,
+        "adapter_generation": before_generation,
         "snapshot": normalized_snapshot,
         "high_water_manifest": high_water,
         "invalidation_manifest": invalidations,

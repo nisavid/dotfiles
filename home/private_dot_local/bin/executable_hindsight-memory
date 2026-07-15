@@ -37,6 +37,7 @@ from hindsight_memory_control_plane import (  # noqa: E402
     MigrationApplyAdapter,
     MigrationError,
     PlanError,
+    StrictJsonError,
     build_plan,
     canonical_bytes,
     capture_migration_gate,
@@ -49,9 +50,13 @@ from hindsight_memory_control_plane import (  # noqa: E402
     mutation_plan_from_dict,
     apply_plan,
     plan_from_dict,
+    strict_json_loads,
     verify_plan,
 )
 from hindsight_memory_control_plane.broker import Broker, BrokerError  # noqa: E402
+from hindsight_memory_control_plane.migration_adapter import (  # noqa: E402
+    ADMIN_ENVIRONMENT_ALLOWLIST,
+)
 from hindsight_memory_control_plane.model import deep_thaw  # noqa: E402
 from hindsight_memory_control_plane.file_evidence import (  # noqa: E402
     FileEvidenceError,
@@ -73,7 +78,7 @@ class BrokerProcessIdentity(NamedTuple):
 
 
 def read_json(path: str | Path) -> Any:
-    return json.loads(Path(path).read_text(encoding="utf-8"))
+    return strict_json_loads(Path(path).read_text(encoding="utf-8"))
 
 
 def _regular_file_digest(value: str | Path, label: str) -> str:
@@ -364,8 +369,13 @@ def apply_command(args: argparse.Namespace) -> int:
                 evidence_path, "disposable restore evidence"
             )
             assert evidence_record is not None
-            restore_evidence = json.loads(evidence_record[0])
-        except (FileEvidenceError, UnicodeDecodeError, json.JSONDecodeError):
+            restore_evidence = strict_json_loads(evidence_record[0])
+        except (
+            FileEvidenceError,
+            StrictJsonError,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+        ):
             raise ApplyError("disposable restore evidence is unavailable") from None
         if not isinstance(restore_evidence, dict):
             raise ApplyError("disposable restore evidence must be a digest-keyed object")
@@ -380,12 +390,18 @@ def apply_command(args: argparse.Namespace) -> int:
             raise ApplyError("approved mutation archive or restore evidence does not match the plan")
         if _paths_overlap(rollback_archive, list(archives.values())):
             raise ApplyError("rollback archive must be distinct from every migration archive")
+        admin_value = getattr(args, "admin_executable", None)
+        if not isinstance(admin_value, str) or not Path(admin_value).is_absolute():
+            raise ApplyError("mutation apply requires an absolute hindsight-admin executable")
         admin = AdminMigrationAdapter(
-            admin_version=getattr(args, "admin_version", "0.8.4"),
+            admin_executable=admin_value,
             argv_factory=hindsight_admin_argv,
-            runner=lambda argv: subprocess.run(
-                argv, text=True, capture_output=True, timeout=300, check=False,
-            ),
+            runner=subprocess.run,
+            environment={
+                key: os.environ[key]
+                for key in sorted(ADMIN_ENVIRONMENT_ALLOWLIST)
+                if key in os.environ
+            },
         )
         adapter = MigrationApplyAdapter(
             data_plane=data_plane, admin=admin, archives=archives,
@@ -1049,7 +1065,7 @@ def parser() -> argparse.ArgumentParser:
     apply.add_argument("--migration-archive", action="append")
     apply.add_argument("--restore-evidence")
     apply.add_argument("--rollback-archive")
-    apply.add_argument("--admin-version", default="0.8.4")
+    apply.add_argument("--admin-executable")
     apply.set_defaults(run=apply_command)
 
     migration = commands.add_parser("migration")
@@ -1129,7 +1145,19 @@ def main() -> int:
     try:
         args = parser().parse_args()
         return args.run(args)
-    except (AdapterError, ApplyError, BrokerError, InventoryError, MigrationError, PlanError, OSError, json.JSONDecodeError) as error:
+    except (
+        AdapterError,
+        ApplyError,
+        BrokerError,
+        InventoryError,
+        MigrationAdapterError,
+        MigrationError,
+        PlanError,
+        StrictJsonError,
+        UnicodeDecodeError,
+        OSError,
+        json.JSONDecodeError,
+    ) as error:
         print(f"hindsight-memory: {error}", file=sys.stderr)
         return 2
 
