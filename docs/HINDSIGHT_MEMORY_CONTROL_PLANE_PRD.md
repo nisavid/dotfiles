@@ -401,7 +401,8 @@ raw Hindsight bank selection remains an implementation detail.
   this resolution is exactly `operator-profile`, `engineering-principles`, and
   `review-pr-playbook`; a private target must also be declared in
   `contextual_models`. Every target resolves in that combined roster before
-  cutover, and every private successor ID is disclosure-guarded.
+  cutover, and every migration source ID and private successor ID is
+  disclosure-guarded through `privacy.public_forbidden_literals`.
 - `repository_catalog` has exactly `canonical`, `aliases`, and `drop_aliases`.
   Canonical values match `repo:<canonical-slug>` and are unique. Mapped aliases
   target a canonical value; drop aliases remove the repository tag; the mapped
@@ -409,8 +410,9 @@ raw Hindsight bank selection remains an implementation detail.
   set. `workflow_catalog` has exactly one duplicate-free `controlled` list whose
   values match `workflow:<canonical-slug>`.
 - `privacy` has exactly `public_forbidden_literals`. That duplicate-free list
-  covers every private model ID, selector, source-filter tag, repository value,
-  mapped or dropped alias, and controlled workflow value. Keyed validation
+  covers every private model ID, every migration source ID and private successor
+  ID, selector, source-filter tag, repository value, mapped or dropped alias,
+  and controlled workflow value. Keyed validation
   rejects any listed literal in the public PRD. Publication validation scans
   every newly reachable public blob across every range commit tree, including
   merge results and type changes, rather than only ordinary per-parent diffs or
