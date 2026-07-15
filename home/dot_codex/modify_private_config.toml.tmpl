@@ -19,6 +19,11 @@ export HOMEDIR={{ .chezmoi.homeDir | quote }}
 export EDITOR_TARGET={{ $editorTarget | quote }}
 export GIT_BRANCH_PREFIX={{ if or (eq $identityName "systalyze") (eq $identityName "stlz-bcs") }}"ivan/"{{ else }}"nisavid/"{{ end }}
 export WORK_TOML_B64={{ include ".private-codex-work.toml.age" | decrypt | b64enc | quote }}
+export MLX_OPTIQ_ENABLED={{ if and (eq .chezmoi.os "darwin") (eq .chezmoi.hostname .mlxd.optiq.targetHostname) }}1{{ else }}0{{ end }}
+export MLX_OPTIQ_BASE_URL={{ .mlxd.optiq.clients.baseUrl | quote }}
+export MLX_OPTIQ_MODEL={{ joinPath .chezmoi.homeDir .mlxd.optiq.modelDir | quote }}
+export MLX_OPTIQ_PROVIDER={{ .mlxd.optiq.clients.codexProvider | quote }}
+export MLX_OPTIQ_CONTEXT_WINDOW={{ .mlxd.optiq.clients.contextWindow | quote }}
 
 # python3 reads the script via process substitution; the live config arrives on stdin.
 uv run --quiet --with tomlkit python3 <(cat <<'PYEOF'
@@ -35,6 +40,16 @@ def ensure_table(parent, key):
     if key not in parent:
         parent[key] = tomlkit.table()
     return parent[key]
+
+if os.environ["MLX_OPTIQ_ENABLED"] == "1":
+    provider_id = os.environ["MLX_OPTIQ_PROVIDER"]
+    doc["model"] = os.environ["MLX_OPTIQ_MODEL"]
+    doc["model_provider"] = provider_id
+    doc["model_context_window"] = int(os.environ["MLX_OPTIQ_CONTEXT_WINDOW"])
+    provider = ensure_table(ensure_table(doc, "model_providers"), provider_id)
+    provider["name"] = "Local mlxctl OptiQ"
+    provider["base_url"] = os.environ["MLX_OPTIQ_BASE_URL"]
+    provider["wire_api"] = "responses"
 
 ensure_table(doc, "tui")["theme"] = "catppuccin-mocha"
 desk = ensure_table(doc, "desktop")

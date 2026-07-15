@@ -28,6 +28,7 @@ launchctl_log=$test_dir/launchctl.log
 fake_bin=$test_dir/bin
 fake_uv=$fake_bin/uv
 uv_log=$test_dir/uv.log
+hindsight_log=$test_dir/hindsight.log
 source_dir=$fixture_home/src/nisavid/systools/tools/mlxctl
 mkdir -p -- "$fake_bin" "$source_dir"
 print -r -- '[project]' > "$source_dir/pyproject.toml"
@@ -59,15 +60,36 @@ chmod +x "$fake_launchctl"
   print -r -- 'set -eu'
   print -r -- 'print -r -- "$*" >> "$MLXD_TEST_UV_LOG"'
   print -r -- '[[ $UV_TOOL_BIN_DIR == "$MLXD_TEST_BIN_DIR" ]] || exit 65'
-  print -r -- '[[ $* == "tool install --force $MLXD_TEST_SOURCE_DIR" ]] || exit 64'
-  print -r -- 'mkdir -p -- "$MLXD_TEST_BIN_DIR"'
-  print -r -- ': > "$MLXD_TEST_BIN_DIR/mlxctl"'
-  print -r -- ': > "$MLXD_TEST_BIN_DIR/mlxd"'
-  print -r -- 'chmod +x "$MLXD_TEST_BIN_DIR/mlxctl" "$MLXD_TEST_BIN_DIR/mlxd"'
+  print -r -- 'case "$*" in'
+  print -r -- '  "tool install --force $MLXD_TEST_SOURCE_DIR")'
+  print -r -- '    mkdir -p -- "$MLXD_TEST_BIN_DIR"'
+  print -r -- '    : > "$MLXD_TEST_BIN_DIR/mlxctl"'
+  print -r -- '    : > "$MLXD_TEST_BIN_DIR/mlxd"'
+  print -r -- '    chmod +x "$MLXD_TEST_BIN_DIR/mlxctl" "$MLXD_TEST_BIN_DIR/mlxd"'
+  print -r -- '    ;;'
+  print -r -- '  "tool install --force mlx-optiq==0.2.15")'
+  print -r -- '    : > "$MLXD_TEST_BIN_DIR/optiq"'
+  print -r -- '    chmod +x "$MLXD_TEST_BIN_DIR/optiq"'
+  print -r -- '    ;;'
+  print -r -- '  "tool run --from huggingface-hub==1.22.0 hf download mlx-community/Qwen3.6-35B-A3B-OptiQ-4bit --revision 70a3aa32c7feef511182bf16aa332f37e8d82014 --local-dir $MLXD_TEST_MODEL_DIR")'
+  print -r -- '    mkdir -p -- "$MLXD_TEST_MODEL_DIR"'
+  print -r -- '    print -r -- test-kv > "$MLXD_TEST_MODEL_DIR/kv_config.json"'
+  print -r -- '    ;;'
+  print -r -- '  *) exit 64 ;;'
+  print -r -- 'esac'
 } > "$fake_uv"
 chmod +x "$fake_uv"
+fake_hindsight=$fixture_home/.local/bin/hindsight-embed
+mkdir -p -- "${fake_hindsight:h}"
+{
+  print -r -- '#!/usr/bin/env zsh'
+  print -r -- 'set -eu'
+  print -r -- 'print -r -- "$*" >> "$MLXD_TEST_HINDSIGHT_LOG"'
+} > "$fake_hindsight"
+chmod +x "$fake_hindsight"
 
-darwin_data='{"chezmoi":{"os":"darwin","homeDir":"'${fixture_home}'","username":"ivan"},"mlxd":{"launchctlBin":"'${fake_launchctl}'"}}'
+darwin_data='{"chezmoi":{"os":"darwin","homeDir":"'${fixture_home}'","username":"ivan","hostname":"hatchery"},"mlxd":{"launchctlBin":"'${fake_launchctl}'","optiq":{"targetHostname":"hatchery","runtimePackage":"mlx-optiq==0.2.15","huggingFacePackage":"huggingface-hub==1.22.0","modelRepository":"mlx-community/Qwen3.6-35B-A3B-OptiQ-4bit","modelRevision":"70a3aa32c7feef511182bf16aa332f37e8d82014","modelDir":".local/share/mlxd/models/qwen36-optiq","kvConfig":"kv_config.json","kvSha256":"547d2156462f21d250fb7edba17880c43e1cfa006a17b16f9495a630fab2c8fa","clients":{"baseUrl":"http://127.0.0.1:8766/v1","contextWindow":32768,"codexProvider":"mlx-optiq","hindsightProvider":"lmstudio","hindsightProfile":"systalyze"}},"config":{"models":{"qwen36-optiq":{"localDir":".local/share/mlxd/models/qwen36-optiq","targetHostname":"hatchery"}},"servers":{"optiq":{"type":"optiq","model":"qwen36-optiq","port":8766,"targetHostname":"hatchery","options":{"kv_config":"kv_config.json","max_context":32768,"mtp":true,"temp":0.0}}}}}}'
+non_target_data=${darwin_data//\"hostname\":\"hatchery\"/\"hostname\":\"stlz-ivan-mbp\"}
 linux_data='{"chezmoi":{"os":"linux","homeDir":"'${fixture_home}'","username":"ivan"}}'
 xml_data='{"chezmoi":{"os":"darwin","homeDir":"/Users/tester/A&B","username":"ivan"},"mlxd":{"label":"io.nisavid.mlxd&test","launchctlBin":"'${fake_launchctl}'"}}'
 extended_data='{"mlxd":{"config":{"models":{"future":{"reference":"example/future"}},"servers":{"future":{"type":"mlx_lm","model":"future","port":9999}}}}}'
@@ -77,6 +99,8 @@ linux_hook=$test_dir/linux-hook.zsh
 linux_config=$test_dir/linux-config.toml
 xml_plist=$test_dir/xml-escaped.plist
 extended_config=$test_dir/extended-config.toml
+non_target_config=$test_dir/non-target-config.toml
+non_target_hook=$test_dir/non-target-hook.zsh
 
 chezmoi execute-template --override-data "$darwin_data" \
   < home/Library/LaunchAgents/io.nisavid.mlxd.plist.tmpl > "$plist"
@@ -94,10 +118,15 @@ chezmoi execute-template --override-data "$xml_data" \
   < home/Library/LaunchAgents/io.nisavid.mlxd.plist.tmpl > "$xml_plist"
 chezmoi execute-template --override-data "$extended_data" \
   < home/dot_config/private_mlxd/private_config.toml.tmpl > "$extended_config"
+chezmoi execute-template --override-data "$non_target_data" \
+  < home/dot_config/private_mlxd/private_config.toml.tmpl > "$non_target_config"
+chezmoi execute-template --override-data "$non_target_data" \
+  < home/run_after_install-mlxctl.sh.tmpl > "$non_target_hook"
 
 plutil -lint "$plist" >/dev/null
 plutil -lint "$xml_plist" >/dev/null
 zsh -n "$hook"
+zsh -n "$non_target_hook"
 chmod +x "$hook"
 [[ $(head -c 2 "$hook") == '#!' ]] || fail 'install hook shebang must start at byte zero'
 [[ $(/usr/libexec/PlistBuddy -c 'Print :Label' "$xml_plist") == 'io.nisavid.mlxd&test' ]] || \
@@ -116,10 +145,22 @@ yq -p=toml -o=json "$config" | jq -e '
     "metrics": {"retention_days": 7},
     "models": {
       "llama-3b": {"reference": "mlx-community/Llama-3.2-3B-Instruct-4bit"},
-      "qwen-7b": {"reference": "mlx-community/Qwen2.5-7B-Instruct-4bit"}
+      "qwen-7b": {"reference": "mlx-community/Qwen2.5-7B-Instruct-4bit"},
+      "qwen36-optiq": {"reference": "'"$fixture_home"'/.local/share/mlxd/models/qwen36-optiq"}
     },
     "servers": {
-      "mlx": {"type": "mlx_lm", "model": "llama-3b", "port": 8765}
+      "mlx": {"type": "mlx_lm", "model": "llama-3b", "port": 8765},
+      "optiq": {
+        "type": "optiq",
+        "model": "qwen36-optiq",
+        "port": 8766,
+        "options": {
+          "kv_config": "'"$fixture_home"'/.local/share/mlxd/models/qwen36-optiq/kv_config.json",
+          "max_context": 32768,
+          "mtp": true,
+          "temp": 0.0
+        }
+      }
     }
   }
 ' >/dev/null || fail 'rendered config does not match the approved personal values'
@@ -127,6 +168,11 @@ yq -p=toml -o=json "$extended_config" | jq -e '
   .models.future.reference == "example/future" and
   .servers.future == {"type": "mlx_lm", "model": "future", "port": 9999}
 ' >/dev/null || fail 'rendered config must include future registry entries from chezmoidata'
+yq -p=toml -o=json "$non_target_config" | jq -e '
+  (.models | has("qwen36-optiq") | not) and (.servers | has("optiq") | not)
+' >/dev/null || fail 'OptiQ model and Server Definition must remain hatchery-only'
+grep -q '^  local optiq_target=0$' "$non_target_hook" || \
+  fail 'non-target install hook must disable OptiQ deployment'
 
 plist_value() {
   /usr/libexec/PlistBuddy -c "Print :$1" "$plist"
@@ -158,7 +204,9 @@ if ! PATH="$fake_bin:$PATH" \
   ZDOTDIR=$test_dir \
   MLXD_TEST_BIN_DIR=$fixture_home/.local/bin \
   MLXD_TEST_SOURCE_DIR=$source_dir \
+  MLXD_TEST_MODEL_DIR=$fixture_home/.local/share/mlxd/models/qwen36-optiq \
   MLXD_TEST_UV_LOG=$uv_log \
+  MLXD_TEST_HINDSIGHT_LOG=$hindsight_log \
   MLXD_TEST_LAUNCHCTL_STATE=$launchctl_state \
   MLXD_TEST_LAUNCHCTL_LOG=$launchctl_log \
     "$hook" > "$test_dir/hook.stdout" 2> "$test_dir/hook.stderr"; then
@@ -170,8 +218,22 @@ fi
 [[ $(stat -f '%Lp' "$fixture_home/.config/mlxd") == 700 ]] || fail 'config dir must be private'
 [[ $(stat -f '%Lp' "$fixture_home/.local/state/mlxd") == 700 ]] || fail 'state dir must be private'
 [[ $(stat -f '%Lp' "$fixture_home/Library/Logs/mlxd") == 700 ]] || fail 'log dir must be private'
-[[ $(<"$uv_log") == "tool install --force $source_dir" ]] || \
+expected_uv_log="tool install --force $source_dir
+tool install --force mlx-optiq==0.2.15
+tool run --from huggingface-hub==1.22.0 hf download mlx-community/Qwen3.6-35B-A3B-OptiQ-4bit --revision 70a3aa32c7feef511182bf16aa332f37e8d82014 --local-dir $fixture_home/.local/share/mlxd/models/qwen36-optiq"
+[[ $(<"$uv_log") == "$expected_uv_log" ]] || \
   fail 'install hook used the wrong uv command'
+[[ -x "$fixture_home/.local/bin/optiq" ]] || fail 'install hook did not install optiq'
+[[ -f "$fixture_home/.local/share/mlxd/models/qwen36-optiq/kv_config.json" ]] || \
+  fail 'install hook did not download the pinned model snapshot'
+[[ $(wc -l < "$hindsight_log" | tr -d ' ') == 8 ]] || \
+  fail 'install hook did not configure all Hindsight sampling settings'
+grep -qx "profile set-env systalyze HINDSIGHT_API_LLM_PROVIDER lmstudio" "$hindsight_log" || \
+  fail 'install hook used the wrong Hindsight provider'
+grep -qx "profile set-env systalyze HINDSIGHT_API_LLM_BASE_URL http://127.0.0.1:8766/v1" "$hindsight_log" || \
+  fail 'install hook used the wrong Hindsight Client Endpoint'
+grep -qx "profile set-env systalyze HINDSIGHT_API_LLM_TEMPERATURE_REFLECT 0.9" "$hindsight_log" || \
+  fail 'install hook used the wrong Hindsight reflection temperature'
 [[ -f "$launchctl_state" ]] || fail 'install hook did not register the LaunchAgent'
 [[ $(<"$launchctl_log") == "bootstrap gui/$EUID $plist" ]] || \
   fail 'install hook used the wrong bootstrap target'
@@ -185,7 +247,9 @@ if PATH="$fake_bin:$PATH" \
   ZDOTDIR=$test_dir \
   MLXD_TEST_BIN_DIR=$fixture_home/.local/bin \
   MLXD_TEST_SOURCE_DIR=$source_dir \
+  MLXD_TEST_MODEL_DIR=$fixture_home/.local/share/mlxd/models/qwen36-optiq \
   MLXD_TEST_UV_LOG=$uv_log \
+  MLXD_TEST_HINDSIGHT_LOG=$hindsight_log \
   MLXD_TEST_LAUNCHCTL_STATE=$launchctl_state \
   MLXD_TEST_LAUNCHCTL_LOG=$launchctl_log \
     "$hook" > "$test_dir/hook-running.stdout" 2> "$test_dir/hook-running.stderr"; then
@@ -202,7 +266,9 @@ if ! PATH="$fake_bin:$PATH" \
   ZDOTDIR=$test_dir \
   MLXD_TEST_BIN_DIR=$fixture_home/.local/bin \
   MLXD_TEST_SOURCE_DIR=$source_dir \
+  MLXD_TEST_MODEL_DIR=$fixture_home/.local/share/mlxd/models/qwen36-optiq \
   MLXD_TEST_UV_LOG=$uv_log \
+  MLXD_TEST_HINDSIGHT_LOG=$hindsight_log \
   MLXD_TEST_LAUNCHCTL_STATE=$launchctl_state \
   MLXD_TEST_LAUNCHCTL_LOG=$launchctl_log \
     "$hook" > "$test_dir/hook-second.stdout" 2> "$test_dir/hook-second.stderr"; then
@@ -221,7 +287,9 @@ if ! PATH="$fake_bin:$PATH" \
   ZDOTDIR=$test_dir \
   MLXD_TEST_BIN_DIR=$fixture_home/.local/bin \
   MLXD_TEST_SOURCE_DIR=$source_dir \
+  MLXD_TEST_MODEL_DIR=$fixture_home/.local/share/mlxd/models/qwen36-optiq \
   MLXD_TEST_UV_LOG=$uv_log \
+  MLXD_TEST_HINDSIGHT_LOG=$hindsight_log \
   MLXD_TEST_LAUNCHCTL_STATE=$launchctl_state \
   MLXD_TEST_LAUNCHCTL_LOG=$launchctl_log \
     "$hook" > "$test_dir/hook-third.stdout" 2> "$test_dir/hook-third.stderr"; then

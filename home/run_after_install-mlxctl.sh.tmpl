@@ -18,6 +18,16 @@ main() {
   local state_dir={{ joinPath .chezmoi.homeDir .mlxd.stateDir | quote }}
   local log_dir={{ joinPath .chezmoi.homeDir .mlxd.logDir | quote }}
   local launchctl_bin={{ .mlxd.launchctlBin | quote }}
+  local optiq_runtime={{ .mlxd.optiq.runtimePackage | quote }}
+  local huggingface_package={{ .mlxd.optiq.huggingFacePackage | quote }}
+  local model_repository={{ .mlxd.optiq.modelRepository | quote }}
+  local model_revision={{ .mlxd.optiq.modelRevision | quote }}
+  local model_dir={{ joinPath .chezmoi.homeDir .mlxd.optiq.modelDir | quote }}
+  local kv_config="$model_dir/{{ .mlxd.optiq.kvConfig }}"
+  local kv_sha256={{ .mlxd.optiq.kvSha256 | quote }}
+  local optiq_target={{ if eq .chezmoi.hostname .mlxd.optiq.targetHostname }}1{{ else }}0{{ end }}
+  local hindsight_profile={{ .mlxd.optiq.clients.hindsightProfile | quote }}
+  local client_base_url={{ .mlxd.optiq.clients.baseUrl | quote }}
   # The plist template filename is literal; keep it aligned with .mlxd.label when renaming the service.
   local plist_path={{ joinPath .chezmoi.homeDir "Library" "LaunchAgents" (printf "%s.plist" .mlxd.label) | quote }}
   local user_id
@@ -25,6 +35,7 @@ main() {
   local user_domain="gui/$user_id"
   local service_target="$user_domain/{{ .mlxd.label }}"
   local -a deployment_dirs=("$config_dir" "$state_dir" "$log_dir")
+  (( optiq_target )) && deployment_dirs+=("$model_dir")
 
   mkdir -p -- "${deployment_dirs[@]}"
   chmod 700 "${deployment_dirs[@]}"
@@ -74,17 +85,63 @@ main() {
 
     print -r -- "mlxctl: installing from $source_dir"
     UV_TOOL_BIN_DIR="$bin_dir" "$uv_bin" tool install --force "$source_dir"
+    if (( optiq_target )); then
+      print -r -- "mlxctl: installing $optiq_runtime"
+      UV_TOOL_BIN_DIR="$bin_dir" "$uv_bin" tool install --force "$optiq_runtime"
+      print -r -- "mlxctl: downloading pinned model snapshot $model_repository@$model_revision"
+      UV_TOOL_BIN_DIR="$bin_dir" "$uv_bin" tool run --from "$huggingface_package" \
+        hf download "$model_repository" --revision "$model_revision" --local-dir "$model_dir"
+    fi
   fi
 
   local entrypoint=''
-  for entrypoint in mlxctl mlxd; do
+  local -a entrypoints=(mlxctl mlxd)
+  (( optiq_target )) && entrypoints+=(optiq)
+  for entrypoint in "${entrypoints[@]}"; do
     if [[ ! -x "$bin_dir/$entrypoint" ]]; then
       print -u2 -r -- "mlxctl: installation did not create $bin_dir/$entrypoint"
       return 1
     fi
   done
 
-  print -r -- "mlxctl: installed $bin_dir/mlxctl and $bin_dir/mlxd"
+  if (( optiq_target )) && [[ ! -r "$kv_config" ]]; then
+    print -u2 -r -- "mlxctl: pinned model snapshot did not provide $kv_config"
+    return 1
+  fi
+  if (( optiq_target )); then
+    local actual_kv_sha256
+    actual_kv_sha256=$(/usr/bin/shasum -a 256 "$kv_config" | /usr/bin/awk '{print $1}')
+    if [[ "$actual_kv_sha256" != "$kv_sha256" ]]; then
+      print -u2 -r -- "mlxctl: KV config checksum mismatch for $kv_config"
+      return 1
+    fi
+  fi
+
+  if (( optiq_target )); then
+    local hindsight_bin="$bin_dir/hindsight-embed"
+    if [[ ! -x "$hindsight_bin" ]]; then
+      print -u2 -r -- "mlxctl: Hindsight client not found at $hindsight_bin"
+      return 1
+    fi
+    local model_reference="$model_dir"
+    local key value
+    local -a hindsight_settings=(
+      HINDSIGHT_API_LLM_PROVIDER {{ .mlxd.optiq.clients.hindsightProvider | quote }}
+      HINDSIGHT_API_LLM_BASE_URL "$client_base_url"
+      HINDSIGHT_API_LLM_MODEL "$model_reference"
+      HINDSIGHT_API_LLM_MAX_CONCURRENT 1
+      HINDSIGHT_API_LLM_TEMPERATURE_VERIFICATION 0.0
+      HINDSIGHT_API_LLM_TEMPERATURE_RETAIN 0.1
+      HINDSIGHT_API_LLM_TEMPERATURE_REFLECT 0.9
+      HINDSIGHT_API_LLM_TEMPERATURE_CONSOLIDATION 0.0
+    )
+    for key value in "${(@)hindsight_settings}"; do
+      "$hindsight_bin" profile set-env "$hindsight_profile" "$key" "$value" >/dev/null
+    done
+    print -r -- "mlxctl: installed mlxctl, mlxd, optiq, the pinned model, and Hindsight client settings"
+  else
+    print -r -- "mlxctl: installed $bin_dir/mlxctl and $bin_dir/mlxd"
+  fi
 
   integer reloaded=0
   if registration=$("$launchctl_bin" print "$service_target" 2>/dev/null); then
