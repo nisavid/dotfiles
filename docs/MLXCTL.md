@@ -28,10 +28,15 @@ On macOS, chezmoi then:
 - installs the local `tools/mlxctl` project with `uv tool install --force`,
   which provides `~/.local/bin/mlxctl` and `~/.local/bin/mlxd`.
 
-On the `hatchery` host, the same hook also installs `mlx-optiq==0.2.15`,
-downloads the pinned Qwen3.6 OptiQ snapshot, verifies its published KV config,
-and configures the existing `systalyze` Hindsight profile. The snapshot is
-large; confirm memory and disk capacity before the first apply on that host.
+On the `hatchery` host, the same hook also installs `mlx-optiq==0.2.18` and
+checks that `optiq serve --help` advertises `--kv-config`, `--max-context`, and
+`--mtp` before downloading the pinned Qwen3.6 OptiQ snapshot. It then verifies
+the published KV config and configures the existing `systalyze` Hindsight
+profile.
+The snapshot is large; confirm memory and disk capacity before the first apply
+on that host. If the runtime lacks a required option, the hook stops before the
+download and removes an existing inactive LaunchAgent registration so launchd
+cannot activate the incompatible runtime.
 
 The install hook runs after every apply so the installed tool follows the local
 source checkout. Until that checkout contains an installable `pyproject.toml`,
@@ -59,7 +64,9 @@ mlxctl start <server>
 mlxctl stop <server>
 ```
 
-Remove the registration only when uninstalling the deployment:
+During normal operation, remove the registration only when uninstalling the
+deployment. The incompatible-runtime preflight described above is the safety
+exception: it removes an inactive registration before stopping the apply.
 
 ```zsh
 launchctl bootout gui/$(id -u)/io.nisavid.mlxd
@@ -113,14 +120,23 @@ mlxctl start optiq
 mlxctl models optiq
 curl --fail --show-error --silent http://127.0.0.1:8766/v1/models | jq .
 mlxctl metrics optiq
-mlxctl stop optiq
 ```
 
-Inspect the active OptiQ process and confirm that its arguments contain both
-`--kv-config` and `--mtp`. Exercise Codex with a representative engineering
-request and Hindsight with retain, recall, and reflect requests before treating
-the host as complete. Record startup time, token generation, memory pressure,
-logs, and clean shutdown during that target-host verification.
+Inspect the active OptiQ process and confirm that its arguments contain
+`--kv-config` with the resolved path to
+`~/.local/share/mlxd/models/qwen36-optiq/kv_config.json`, `--max-context 32768`,
+and `--mtp`. Exercise Codex with a representative engineering request and
+Hindsight with retain, recall, and reflect requests before treating the host as
+complete. Record startup time, token generation, memory pressure, logs, and
+clean shutdown during that target-host verification.
+After the live checks, stop OptiQ and confirm the clean shutdown:
+
+```zsh
+mlxctl stop optiq
+mlxctl status optiq
+```
+
+The final status must report `optiq` as stopped.
 
 ## Other operating systems
 
