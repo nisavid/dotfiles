@@ -959,6 +959,7 @@ class DurableWorkTest(unittest.TestCase):
 
     def test_inflight_dispatch_does_not_block_unrelated_transactions(self):
         release = threading.Event()
+        self.addCleanup(release.set)
         started = threading.Event()
 
         class FencedFake(FakeAdapter):
@@ -967,21 +968,6 @@ class DurableWorkTest(unittest.TestCase):
                 release.wait()
                 return super().retain_outcome(request)
 
-        self._stop()
-        self.adapter = FencedFake(endpoint=ENDPOINT)
-        self._start()
-        capability = self.exchange()
-        self.client.retain_outcome(
-            capability,
-            sequence=1,
-            action_id="responsive-fence",
-            request={
-                "document_id": "doc",
-                "epoch": 1,
-                "checkpoint": 1,
-                "outcome": "done",
-            },
-        )
         completed = threading.Event()
         results = []
         thread = None
@@ -997,6 +983,21 @@ class DurableWorkTest(unittest.TestCase):
             completed.set()
 
         try:
+            self._stop()
+            self.adapter = FencedFake(endpoint=ENDPOINT)
+            self._start()
+            capability = self.exchange()
+            self.client.retain_outcome(
+                capability,
+                sequence=1,
+                action_id="responsive-fence",
+                request={
+                    "document_id": "doc",
+                    "epoch": 1,
+                    "checkpoint": 1,
+                    "outcome": "done",
+                },
+            )
             self.assertTrue(started.wait(0.2))
             thread = threading.Thread(target=mint_unrelated_session)
             thread.start()
@@ -1009,14 +1010,15 @@ class DurableWorkTest(unittest.TestCase):
         self.assertIsNotNone(thread)
         self.assertFalse(thread.is_alive())
 
-    def test_shutdown_and_replacement_wait_for_inflight_generation_lease(self):
+    def test_shutdown_defers_retirement_while_replacement_waits_for_dispatch(self):
         release = threading.Event()
+        self.addCleanup(release.set)
         started = threading.Event()
         class FencedFake(FakeAdapter):
             def retain_outcome(self, request):
                 if not started.is_set():
                     started.set()
-                    release.wait(1)
+                    release.wait()
                 return super().retain_outcome(request)
         self._stop()
         self.adapter = FencedFake(endpoint=ENDPOINT)
@@ -1054,17 +1056,28 @@ class DurableWorkTest(unittest.TestCase):
         replacement_thread = threading.Thread(target=replace)
         shutdown_thread.start()
         replacement_thread.start()
-        self.assertTrue(shutdown_entered.wait(0.2))
-        self.assertTrue(replacement_entered.wait(0.2))
-        self.assertTrue(shutdown_thread.is_alive())
-        self.assertTrue(replacement_thread.is_alive())
-        release.set()
-        shutdown_thread.join(1)
-        replacement_thread.join(1)
+        try:
+            self.assertTrue(shutdown_entered.wait(0.2))
+            self.assertTrue(replacement_entered.wait(0.2))
+            shutdown_thread.join(0.2)
+            self.assertFalse(shutdown_thread.is_alive())
+            self.assertEqual(len(shutdown_results), 1)
+            self.assertTrue(
+                shutdown_results[0]["retirement_pending"]
+            )
+            repeated = retired_broker.shutdown(timeout_seconds=0)
+            self.assertGreaterEqual(repeated["active_writes"], 1)
+            self.assertTrue(repeated["retirement_pending"])
+            self.assertTrue(replacement_thread.is_alive())
+        finally:
+            release.set()
+            shutdown_thread.join(1)
+            replacement_thread.join(1)
         self.assertFalse(shutdown_thread.is_alive())
         self.assertFalse(replacement_thread.is_alive())
         self.assertEqual(len(shutdown_results), 1)
         self.assertEqual(len(replacements), 1)
+        self.wait_until(lambda: not retired_broker._retirement_pending)
 
         self.broker = replacements[0]
         self.server = UnixJsonRpcServer(self.socket_path, self.broker)
@@ -1072,6 +1085,47 @@ class DurableWorkTest(unittest.TestCase):
         self.client = JsonRpcClient(self.socket_path)
         self.assertEqual(self.work()["generation"], self.broker._generation)
         self.assertEqual(self.work()["queue"], [])
+
+    def test_deferred_retirement_stays_pending_after_unexpected_failure(self):
+        self.broker._retirement_pending = True
+        with (
+            patch.object(
+                self.broker,
+                "_retire_generation",
+                side_effect=BrokerError("STATE_INVALID"),
+            ),
+            self.assertLogs(
+                "hindsight_memory_control_plane.broker",
+                level="ERROR",
+            ) as broker_logs,
+        ):
+            self.broker._finish_deferred_retirement()
+        self.assertTrue(self.broker._retirement_pending)
+        self.assertIn("STATE_INVALID", broker_logs.output[0])
+
+        with (
+            patch.object(
+                self.broker,
+                "_retire_generation",
+                side_effect=OSError("private detail"),
+            ),
+            self.assertLogs(
+                "hindsight_memory_control_plane.broker",
+                level="ERROR",
+            ) as os_logs,
+        ):
+            self.broker._finish_deferred_retirement()
+        self.assertTrue(self.broker._retirement_pending)
+        self.assertIn("OS_ERROR", os_logs.output[0])
+        self.assertNotIn("private detail", os_logs.output[0])
+
+        with patch.object(
+            self.broker,
+            "_retire_generation",
+            side_effect=BrokerError("BROKER_RETIRED"),
+        ):
+            self.broker._finish_deferred_retirement()
+        self.assertFalse(self.broker._retirement_pending)
 
     def test_replacement_generation_fences_all_old_broker_state_transitions(self):
         capability = self.exchange()

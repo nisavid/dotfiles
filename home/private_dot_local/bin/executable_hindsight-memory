@@ -838,6 +838,7 @@ def broker_serve_command(args: argparse.Namespace) -> int:
         "active_reads": 0,
         "active_writes": 0,
         "retired": False,
+        "retirement_pending": False,
     }
     try:
         with _broker_lifecycle_lock(state_dir):
@@ -883,7 +884,13 @@ def broker_serve_command(args: argparse.Namespace) -> int:
                 pass
         for signum, handler in previous.items():
             signal.signal(signum, handler)
-    if shutdown["undrained"] or shutdown["active_reads"] or shutdown["active_writes"]:
+    if (
+        shutdown["undrained"]
+        or shutdown["active_reads"]
+        or shutdown["active_writes"]
+        or shutdown["retired"]
+        or shutdown["retirement_pending"]
+    ):
         raise BrokerError("BROKER_SHUTDOWN_INCOMPLETE")
     return 0
 

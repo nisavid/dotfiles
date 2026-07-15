@@ -10,6 +10,7 @@ import hashlib
 import hmac
 import fcntl
 import json
+import logging
 import math
 import os
 from pathlib import Path
@@ -22,6 +23,9 @@ from typing import Any, Callable, Mapping
 from .adapters import Adapter
 from .canonical import canonical_bytes
 from .ledger import append_record
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 CAPABILITY_METHODS = frozenset({
@@ -156,6 +160,7 @@ class Broker:
         self._read_futures: set[Future[Any]] = set()
         self._write_futures: set[Future[Any]] = set()
         self._shutdown_event = threading.Event()
+        self._retirement_pending = False
         self._used_path = self.state_dir / "used_nonces.json"
         self._revoked_path = self.state_dir / "revoked_nonces.json"
         self._work_path = self.state_dir / "durable_work.json"
@@ -169,14 +174,32 @@ class Broker:
         for item in tuple(self._work["queue"]):
             self._submit_write(item["queue_id"])
 
-    def shutdown(self, *, timeout_seconds: float = 2) -> dict[str, int]:
-        if self._closed:
-            return {"undrained": len(self._work["queue"]), "active_reads": 0, "active_writes": 0, "retired": False}
+    def shutdown(self, *, timeout_seconds: float = 2) -> dict[str, int | bool]:
+        with self._lock:
+            if self._closed:
+                return {
+                    "undrained": len(self._work["queue"]),
+                    "active_reads": sum(
+                        not future.done() for future in self._read_futures
+                    ),
+                    "active_writes": sum(
+                        not future.done() for future in self._write_futures
+                    ),
+                    "retired": False,
+                    "retirement_pending": self._retirement_pending,
+                }
         timeout = self._timeout(timeout_seconds)
+        deadline = time.monotonic() + timeout
         retired = False
         with self._lock:
             try:
-                self._retire_generation()
+                if not self._retire_generation(deadline=deadline):
+                    self._retirement_pending = True
+                    threading.Thread(
+                        target=self._finish_deferred_retirement,
+                        name="hindsight-generation-retire",
+                        daemon=True,
+                    ).start()
             except BrokerError as error:
                 if error.code != "BROKER_RETIRED":
                     raise
@@ -187,7 +210,6 @@ class Broker:
                 future.cancel()
             for future in self._write_futures:
                 future.cancel()
-        deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             with self._lock:
                 if not self._read_futures and not self._write_futures:
@@ -201,6 +223,7 @@ class Broker:
                 "active_reads": sum(not future.done() for future in self._read_futures),
                 "active_writes": sum(not future.done() for future in self._write_futures),
                 "retired": retired,
+                "retirement_pending": self._retirement_pending,
             }
 
     def _owns_generation(self) -> bool:
@@ -485,10 +508,15 @@ class Broker:
 
     def _install_generation(self) -> dict[str, Any]:
         generation_descriptor = self._generation_lease_descriptor()
-        descriptor = self._lease_descriptor()
+        descriptor: int | None = None
+        generation_locked = False
+        state_locked = False
         try:
+            descriptor = self._lease_descriptor()
             fcntl.flock(generation_descriptor, fcntl.LOCK_EX)
+            generation_locked = True
             fcntl.flock(descriptor, fcntl.LOCK_EX)
+            state_locked = True
             current = self._read_work()
             value = deepcopy(current)
             self._prune_expired_exchanges(value)
@@ -500,24 +528,71 @@ class Broker:
                 pass
             return value
         finally:
-            fcntl.flock(descriptor, fcntl.LOCK_UN)
-            os.close(descriptor)
-            fcntl.flock(generation_descriptor, fcntl.LOCK_UN)
+            if descriptor is not None:
+                if state_locked:
+                    fcntl.flock(descriptor, fcntl.LOCK_UN)
+                os.close(descriptor)
+            if generation_locked:
+                fcntl.flock(generation_descriptor, fcntl.LOCK_UN)
             os.close(generation_descriptor)
 
-    def _retire_generation(self) -> None:
+    def _retire_generation(self, *, deadline: float | None = None) -> bool:
         descriptor = self._generation_lease_descriptor()
+        locked = False
         try:
-            fcntl.flock(descriptor, fcntl.LOCK_EX)
-            self._transaction(
-                lambda work: work.__setitem__(
-                    "generation",
-                    f"stopped-{secrets.token_hex(24)}",
+            if deadline is None:
+                fcntl.flock(descriptor, fcntl.LOCK_EX)
+                locked = True
+            else:
+                while True:
+                    try:
+                        fcntl.flock(
+                            descriptor,
+                            fcntl.LOCK_EX | fcntl.LOCK_NB,
+                        )
+                        locked = True
+                        break
+                    except BlockingIOError:
+                        if time.monotonic() >= deadline:
+                            return False
+                        time.sleep(
+                            min(
+                                0.005,
+                                max(0.0, deadline - time.monotonic()),
+                            )
+                        )
+            with self._lock:
+                self._transaction(
+                    lambda work: work.__setitem__(
+                        "generation",
+                        f"stopped-{secrets.token_hex(24)}",
+                    )
                 )
-            )
+            return True
         finally:
-            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            if locked:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
             os.close(descriptor)
+
+    def _finish_deferred_retirement(self) -> None:
+        completed = False
+        try:
+            self._retire_generation()
+            completed = True
+        except BrokerError as error:
+            if error.code == "BROKER_RETIRED":
+                completed = True
+            else:
+                LOGGER.error(
+                    "deferred broker retirement failed: %s",
+                    error.code,
+                )
+        except OSError:
+            LOGGER.error("deferred broker retirement failed: OS_ERROR")
+        finally:
+            if completed:
+                with self._lock:
+                    self._retirement_pending = False
 
     def _transaction(self, mutation: Callable[[dict[str, Any]], Any]) -> Any:
         descriptor = self._lease_descriptor()
@@ -960,10 +1035,14 @@ class Broker:
         """Fence generation ownership across one external adapter invocation."""
         generation_descriptor = self._generation_lease_descriptor()
         descriptor: int | None = None
+        generation_locked = False
+        state_locked = False
         try:
             fcntl.flock(generation_descriptor, fcntl.LOCK_SH)
+            generation_locked = True
             descriptor = self._lease_descriptor()
             fcntl.flock(descriptor, fcntl.LOCK_EX)
+            state_locked = True
             current = self._read_work()
             if current.get("generation") != self._generation:
                 raise BrokerError("BROKER_RETIRED")
@@ -997,6 +1076,7 @@ class Broker:
             method = item["method"]
             adapter_request = deepcopy(item["adapter_request"])
             fcntl.flock(descriptor, fcntl.LOCK_UN)
+            state_locked = False
             os.close(descriptor)
             descriptor = None
             try:
@@ -1006,6 +1086,7 @@ class Broker:
                 failed_dispatch = True
             descriptor = self._lease_descriptor()
             fcntl.flock(descriptor, fcntl.LOCK_EX)
+            state_locked = True
             latest = self._read_work()
             if latest.get("generation") != self._generation:
                 raise BrokerError("BROKER_RETIRED")
@@ -1058,9 +1139,11 @@ class Broker:
             return "complete", 0.0
         finally:
             if descriptor is not None:
-                fcntl.flock(descriptor, fcntl.LOCK_UN)
+                if state_locked:
+                    fcntl.flock(descriptor, fcntl.LOCK_UN)
                 os.close(descriptor)
-            fcntl.flock(generation_descriptor, fcntl.LOCK_UN)
+            if generation_locked:
+                fcntl.flock(generation_descriptor, fcntl.LOCK_UN)
             os.close(generation_descriptor)
 
     def session_status(self, capability: str, *, sequence: int, action_id: str, timeout_seconds: float = 2) -> dict[str, Any]:
