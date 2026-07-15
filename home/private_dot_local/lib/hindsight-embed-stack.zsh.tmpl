@@ -193,10 +193,10 @@ hindsight_stack_profile_slot() {
 
   local slot_file="$HINDSIGHT_EMBED_PROFILE_SLOT_DIR/${profile}.slot"
   local lock_file="$HINDSIGHT_EMBED_PROFILE_SLOT_DIR/.allocation.lock"
-  [[ ! -e "$lock_file" || ( -f "$lock_file" && ! -L "$lock_file" ) ]] || {
+  if [[ -L "$lock_file" ]] || { [[ -e "$lock_file" ]] && [[ ! -f "$lock_file" ]]; }; then
     print -ru2 -- "hindsight-embed-stack: refusing unsafe profile slot allocation lock: ${lock_file}"
     return 1
-  }
+  fi
   if ! ( umask 077; : >> "$lock_file" ) || ! /bin/chmod 600 "$lock_file"; then
     print -ru2 -- "hindsight-embed-stack: could not prepare profile slot allocation lock"
     return 1
@@ -768,7 +768,7 @@ hindsight_stack_broker_start() {
   for profile in "${profiles[@]}"; do
     arguments+=(--profile "$profile")
   done
-  "$HINDSIGHT_MEMORY_CLI" "${arguments[@]}" &
+  "$HINDSIGHT_MEMORY_CLI" "${arguments[@]}" >/dev/null 2>&1 &
 }
 
 hindsight_stack_daemon_start() {

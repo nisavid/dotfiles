@@ -160,6 +160,7 @@ class Broker:
         self._revoked_path = self.state_dir / "revoked_nonces.json"
         self._work_path = self.state_dir / "durable_work.json"
         self._lease_path = self.state_dir / "broker.lease"
+        self._generation_lease_path = self.state_dir / "generation.lease"
         self._generation = secrets.token_hex(32)
         self._work = self._install_generation()
         self._used = set(self._work["used_nonces"])
@@ -175,7 +176,7 @@ class Broker:
         retired = False
         with self._lock:
             try:
-                self._transaction(lambda work: work.__setitem__("generation", f"stopped-{secrets.token_hex(24)}"))
+                self._retire_generation()
             except BrokerError as error:
                 if error.code != "BROKER_RETIRED":
                     raise
@@ -210,6 +211,15 @@ class Broker:
 
     def _lease_descriptor(self) -> int:
         descriptor = os.open(self._lease_path, os.O_RDWR | os.O_CREAT, 0o600)
+        os.fchmod(descriptor, 0o600)
+        return descriptor
+
+    def _generation_lease_descriptor(self) -> int:
+        descriptor = os.open(
+            self._generation_lease_path,
+            os.O_RDWR | os.O_CREAT,
+            0o600,
+        )
         os.fchmod(descriptor, 0o600)
         return descriptor
 
@@ -474,8 +484,10 @@ class Broker:
         _atomic_json(self._revoked_path, value["revoked_nonces"])
 
     def _install_generation(self) -> dict[str, Any]:
+        generation_descriptor = self._generation_lease_descriptor()
         descriptor = self._lease_descriptor()
         try:
+            fcntl.flock(generation_descriptor, fcntl.LOCK_EX)
             fcntl.flock(descriptor, fcntl.LOCK_EX)
             current = self._read_work()
             value = deepcopy(current)
@@ -487,6 +499,22 @@ class Broker:
             except OSError:
                 pass
             return value
+        finally:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            os.close(descriptor)
+            fcntl.flock(generation_descriptor, fcntl.LOCK_UN)
+            os.close(generation_descriptor)
+
+    def _retire_generation(self) -> None:
+        descriptor = self._generation_lease_descriptor()
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            self._transaction(
+                lambda work: work.__setitem__(
+                    "generation",
+                    f"stopped-{secrets.token_hex(24)}",
+                )
+            )
         finally:
             fcntl.flock(descriptor, fcntl.LOCK_UN)
             os.close(descriptor)
@@ -930,8 +958,11 @@ class Broker:
 
     def _dispatch_queued_item(self, queue_id: str) -> tuple[str, float]:
         """Fence generation ownership across one external adapter invocation."""
-        descriptor = self._lease_descriptor()
+        generation_descriptor = self._generation_lease_descriptor()
+        descriptor: int | None = None
         try:
+            fcntl.flock(generation_descriptor, fcntl.LOCK_SH)
+            descriptor = self._lease_descriptor()
             fcntl.flock(descriptor, fcntl.LOCK_EX)
             current = self._read_work()
             if current.get("generation") != self._generation:
@@ -962,12 +993,39 @@ class Broker:
             route = self.routes.get(item["route"])
             if route is None or not isinstance(route.get("adapter"), Adapter):
                 return "route-missing", 0.0
+            adapter = route["adapter"]
+            method = item["method"]
+            adapter_request = deepcopy(item["adapter_request"])
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            os.close(descriptor)
+            descriptor = None
             try:
-                getattr(route["adapter"], item["method"])(
-                    deepcopy(item["adapter_request"])
-                )
+                getattr(adapter, method)(adapter_request)
+                failed_dispatch = False
             except Exception:
-                value = deepcopy(current)
+                failed_dispatch = True
+            descriptor = self._lease_descriptor()
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            latest = self._read_work()
+            if latest.get("generation") != self._generation:
+                raise BrokerError("BROKER_RETIRED")
+            current_item = next(
+                (
+                    entry for entry in latest["queue"]
+                    if entry["queue_id"] == queue_id
+                ),
+                None,
+            )
+            if current_item is None:
+                return "missing", 0.0
+            if (
+                current_item["method"] != method
+                or current_item["adapter_request"] != item["adapter_request"]
+                or current_item["idempotency_key"] != item["idempotency_key"]
+            ):
+                raise BrokerError("STATE_INVALID")
+            value = deepcopy(latest)
+            if failed_dispatch:
                 failed = next(
                     entry for entry in value["queue"]
                     if entry["queue_id"] == queue_id
@@ -980,10 +1038,9 @@ class Broker:
                 )
                 jitter = 0.75 + (secrets.randbelow(501) / 1000)
                 delay = min(30.0, base_delay * jitter)
-                failed["next_retry"] = now + delay
+                failed["next_retry"] = self.clock() + delay
                 self._persist_locked_work(value)
                 return "retry", delay
-            value = deepcopy(current)
             completed = next(
                 entry for entry in value["queue"]
                 if entry["queue_id"] == queue_id
@@ -1000,8 +1057,11 @@ class Broker:
             self._persist_locked_work(value)
             return "complete", 0.0
         finally:
-            fcntl.flock(descriptor, fcntl.LOCK_UN)
-            os.close(descriptor)
+            if descriptor is not None:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+                os.close(descriptor)
+            fcntl.flock(generation_descriptor, fcntl.LOCK_UN)
+            os.close(generation_descriptor)
 
     def session_status(self, capability: str, *, sequence: int, action_id: str, timeout_seconds: float = 2) -> dict[str, Any]:
         timeout = self._timeout(timeout_seconds)
