@@ -1,0 +1,27 @@
+{{- $identityName := default "personal" (index .gitIdentity.defaultByHostname .chezmoi.hostname) -}}
+#!/usr/bin/env zsh
+
+function main {
+  emulate -L zsh
+  setopt err_return no_unset pipe_fail
+
+  local -r zshrc_dir={{ joinPath .chezmoi.homeDir ".config/zsh/zshrc.d" | quote }}
+  local -r source_fragment=$zshrc_dir/no-tracking.zsh
+  local -r local_fragment=$zshrc_dir/no-tracking.local.zsh
+  if [[ -e $local_fragment && ! -L $local_fragment ]]; then
+    print -ru2 -- "Cannot manage no-tracking: ${(q-)local_fragment} exists and is not a symbolic link."
+    return 1
+  fi
+
+  if {{ if or (eq $identityName "systalyze") (eq $identityName "stlz-bcs") }}true{{ else }}false{{ end }}; then
+    if [[ ! -r $source_fragment ]]; then
+      print -ru2 -- "Cannot enable no-tracking: ${(q-)source_fragment} is not readable."
+      return 1
+    fi
+    ln -sfn ${source_fragment:t} $local_fragment
+  else
+    rm -f -- $local_fragment
+  fi
+}
+
+main "$@"
