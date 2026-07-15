@@ -103,10 +103,13 @@ def validate_catalog(catalog: dict[str, Any]) -> ValidatedCatalog:
         for value in canonical
     ):
         reject("canonical_repository_form")
-    if not isinstance(aliases, dict) or not aliases:
+    if not isinstance(aliases, dict):
         reject("repository_aliases")
     if any(
-        not isinstance(source, str) or not isinstance(target, str)
+        not isinstance(source, str)
+        or not source
+        or not isinstance(target, str)
+        or not target
         for source, target in aliases.items()
     ):
         reject("repository_alias_form")
@@ -114,7 +117,6 @@ def validate_catalog(catalog: dict[str, Any]) -> ValidatedCatalog:
         reject("repository_alias_target")
     if (
         not isinstance(drop_aliases, list)
-        or not drop_aliases
         or any(not isinstance(value, str) or not value for value in drop_aliases)
     ):
         reject("repository_drop_aliases")
@@ -130,7 +132,7 @@ def validate_catalog(catalog: dict[str, Any]) -> ValidatedCatalog:
     if not isinstance(workflows, dict) or set(workflows) != {"controlled"}:
         reject("workflow_catalog_keys")
     controlled_workflows = workflows.get("controlled")
-    if not isinstance(controlled_workflows, list) or not controlled_workflows:
+    if not isinstance(controlled_workflows, list):
         reject("controlled_workflows")
     if len(controlled_workflows) != len(set(controlled_workflows)):
         reject("controlled_workflow_duplicates")
@@ -267,6 +269,18 @@ def expect_invalid(catalog: dict[str, Any], code: str) -> None:
 
 def validate_synthetic_migration_cases() -> None:
     expect_valid(synthetic_catalog())
+
+    empty_optional_catalogs = synthetic_catalog()
+    empty_optional_catalogs["repository_catalog"]["aliases"] = {}
+    empty_optional_catalogs["repository_catalog"]["drop_aliases"] = []
+    empty_optional_catalogs["workflow_catalog"]["controlled"] = []
+    expect_valid(empty_optional_catalogs)
+
+    empty_alias_source = synthetic_catalog()
+    empty_alias_source["repository_catalog"]["aliases"] = {
+        "": "repo:synthetic"
+    }
+    expect_invalid(empty_alias_source, "repository_alias_form")
 
     boolean_version = synthetic_catalog()
     boolean_version["schema_version"] = True

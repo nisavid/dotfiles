@@ -13,6 +13,7 @@ publication_base=${PUBLICATION_BASE_REF:-origin/main}
 phase=$(mktemp -d "${TMPDIR:-/tmp}/private-hindsight-prd-test.XXXXXX")
 plaintext=$phase/catalog.toml
 trap 'rm -rf -- "$phase"' EXIT HUP INT TERM
+chmod 700 "$phase"
 
 fail() {
   print -u2 -r -- "private hindsight memory control plane PRD: $*"
