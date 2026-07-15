@@ -28,6 +28,7 @@ launchctl_log=$test_dir/launchctl.log
 fake_bin=$test_dir/bin
 fake_uv=$fake_bin/uv
 uv_log=$test_dir/uv.log
+optiq_log=$test_dir/optiq.log
 hindsight_log=$test_dir/hindsight.log
 source_dir=$fixture_home/src/nisavid/systools/tools/mlxctl
 mkdir -p -- "$fake_bin" "$source_dir"
@@ -67,8 +68,20 @@ chmod +x "$fake_launchctl"
   print -r -- '    : > "$MLXD_TEST_BIN_DIR/mlxd"'
   print -r -- '    chmod +x "$MLXD_TEST_BIN_DIR/mlxctl" "$MLXD_TEST_BIN_DIR/mlxd"'
   print -r -- '    ;;'
-  print -r -- '  "tool install --force mlx-optiq==0.2.15")'
-  print -r -- '    : > "$MLXD_TEST_BIN_DIR/optiq"'
+  print -r -- '  "tool install --force mlx-optiq==0.2.18")'
+  print -r -- '    {'
+  print -r -- "      print -r -- '#!/usr/bin/env zsh'"
+  print -r -- "      print -r -- 'print -r -- \"\$*\" >> \"\$MLXD_TEST_OPTIQ_LOG\"'"
+  print -r -- "      print -r -- '[[ \"\$*\" == \"serve --help\" ]] || exit 64'"
+  print -r -- "      print -r -- 'print -r -- \"--kv-config\"'"
+  print -r -- "      print -r -- 'if [[ \"\${MLXD_TEST_OPTIQ_NEAR_MATCH:-0}\" == 1 ]]; then'"
+  print -r -- "      print -r -- '  print -r -- \"--max-contextual\"'"
+  print -r -- "      print -r -- '  print -r -- \"--mtp-mode\"'"
+  print -r -- "      print -r -- 'else'"
+  print -r -- "      print -r -- '  print -r -- \"--max-context\"'"
+  print -r -- "      print -r -- '  print -r -- \"--mtp\"'"
+  print -r -- "      print -r -- 'fi'"
+  print -r -- '    } > "$MLXD_TEST_BIN_DIR/optiq"'
   print -r -- '    chmod +x "$MLXD_TEST_BIN_DIR/optiq"'
   print -r -- '    ;;'
   print -r -- '  "tool run --from huggingface-hub==1.22.0 hf download mlx-community/Qwen3.6-35B-A3B-OptiQ-4bit --revision 70a3aa32c7feef511182bf16aa332f37e8d82014 --local-dir $MLXD_TEST_MODEL_DIR")'
@@ -88,7 +101,7 @@ mkdir -p -- "${fake_hindsight:h}"
 } > "$fake_hindsight"
 chmod +x "$fake_hindsight"
 
-darwin_data='{"chezmoi":{"os":"darwin","homeDir":"'${fixture_home}'","username":"ivan","hostname":"hatchery"},"mlxd":{"launchctlBin":"'${fake_launchctl}'","optiq":{"targetHostname":"hatchery","runtimePackage":"mlx-optiq==0.2.15","huggingFacePackage":"huggingface-hub==1.22.0","modelRepository":"mlx-community/Qwen3.6-35B-A3B-OptiQ-4bit","modelRevision":"70a3aa32c7feef511182bf16aa332f37e8d82014","modelDir":".local/share/mlxd/models/qwen36-optiq","kvConfig":"kv_config.json","kvSha256":"547d2156462f21d250fb7edba17880c43e1cfa006a17b16f9495a630fab2c8fa","clients":{"baseUrl":"http://127.0.0.1:8766/v1","contextWindow":32768,"codexProvider":"mlx-optiq","hindsightProvider":"lmstudio","hindsightProfile":"systalyze"}},"config":{"models":{"qwen36-optiq":{"localDir":".local/share/mlxd/models/qwen36-optiq","targetHostname":"hatchery"}},"servers":{"optiq":{"type":"optiq","model":"qwen36-optiq","port":8766,"targetHostname":"hatchery","options":{"kv_config":"kv_config.json","max_context":32768,"mtp":true,"temp":0.0}}}}}}'
+darwin_data='{"chezmoi":{"os":"darwin","homeDir":"'${fixture_home}'","username":"ivan","hostname":"hatchery"},"mlxd":{"launchctlBin":"'${fake_launchctl}'","optiq":{"targetHostname":"hatchery","runtimePackage":"mlx-optiq==0.2.18","huggingFacePackage":"huggingface-hub==1.22.0","modelRepository":"mlx-community/Qwen3.6-35B-A3B-OptiQ-4bit","modelRevision":"70a3aa32c7feef511182bf16aa332f37e8d82014","modelDir":".local/share/mlxd/models/qwen36-optiq","kvConfig":"kv_config.json","kvSha256":"547d2156462f21d250fb7edba17880c43e1cfa006a17b16f9495a630fab2c8fa","clients":{"baseUrl":"http://127.0.0.1:8766/v1","contextWindow":32768,"codexProvider":"mlx-optiq","hindsightProvider":"lmstudio","hindsightProfile":"systalyze"}},"config":{"models":{"qwen36-optiq":{"localDir":".local/share/mlxd/models/qwen36-optiq","targetHostname":"hatchery"}},"servers":{"optiq":{"type":"optiq","model":"qwen36-optiq","port":8766,"targetHostname":"hatchery","options":{"kv_config":"kv_config.json","max_context":32768,"mtp":true,"temp":0.0}}}}}}'
 non_target_data=${darwin_data//\"hostname\":\"hatchery\"/\"hostname\":\"stlz-ivan-mbp\"}
 linux_data='{"chezmoi":{"os":"linux","homeDir":"'${fixture_home}'","username":"ivan"}}'
 xml_data='{"chezmoi":{"os":"darwin","homeDir":"/Users/tester/A&B","username":"ivan"},"mlxd":{"label":"io.nisavid.mlxd&test","launchctlBin":"'${fake_launchctl}'"}}'
@@ -206,6 +219,7 @@ if ! PATH="$fake_bin:$PATH" \
   MLXD_TEST_SOURCE_DIR=$source_dir \
   MLXD_TEST_MODEL_DIR=$fixture_home/.local/share/mlxd/models/qwen36-optiq \
   MLXD_TEST_UV_LOG=$uv_log \
+  MLXD_TEST_OPTIQ_LOG=$optiq_log \
   MLXD_TEST_HINDSIGHT_LOG=$hindsight_log \
   MLXD_TEST_LAUNCHCTL_STATE=$launchctl_state \
   MLXD_TEST_LAUNCHCTL_LOG=$launchctl_log \
@@ -219,11 +233,13 @@ fi
 [[ $(stat -f '%Lp' "$fixture_home/.local/state/mlxd") == 700 ]] || fail 'state dir must be private'
 [[ $(stat -f '%Lp' "$fixture_home/Library/Logs/mlxd") == 700 ]] || fail 'log dir must be private'
 expected_uv_log="tool install --force $source_dir
-tool install --force mlx-optiq==0.2.15
+tool install --force mlx-optiq==0.2.18
 tool run --from huggingface-hub==1.22.0 hf download mlx-community/Qwen3.6-35B-A3B-OptiQ-4bit --revision 70a3aa32c7feef511182bf16aa332f37e8d82014 --local-dir $fixture_home/.local/share/mlxd/models/qwen36-optiq"
 [[ $(<"$uv_log") == "$expected_uv_log" ]] || \
   fail 'install hook used the wrong uv command'
 [[ -x "$fixture_home/.local/bin/optiq" ]] || fail 'install hook did not install optiq'
+[[ $(<"$optiq_log") == 'serve --help' ]] || \
+  fail 'install hook did not validate the installed OptiQ serve capabilities'
 [[ -f "$fixture_home/.local/share/mlxd/models/qwen36-optiq/kv_config.json" ]] || \
   fail 'install hook did not download the pinned model snapshot'
 [[ $(wc -l < "$hindsight_log" | tr -d ' ') == 8 ]] || \
@@ -240,6 +256,40 @@ grep -qx "profile set-env systalyze HINDSIGHT_API_LLM_TEMPERATURE_REFLECT 0.9" "
 ! grep -q kickstart "$launchctl_log" || fail 'install hook must not start the service'
 grep -q 'installing from' "$test_dir/hook.stdout" || fail 'source install result must be explicit'
 
+near_match_uv_before=$(<"$uv_log")
+near_match_hindsight_before=$(<"$hindsight_log")
+near_match_launchctl_before=$(<"$launchctl_log")
+if PATH="$fake_bin:$PATH" \
+  ZDOTDIR=$test_dir \
+  MLXD_TEST_BIN_DIR=$fixture_home/.local/bin \
+  MLXD_TEST_SOURCE_DIR=$source_dir \
+  MLXD_TEST_MODEL_DIR=$fixture_home/.local/share/mlxd/models/qwen36-optiq \
+  MLXD_TEST_UV_LOG=$uv_log \
+  MLXD_TEST_OPTIQ_LOG=$optiq_log \
+  MLXD_TEST_OPTIQ_NEAR_MATCH=1 \
+  MLXD_TEST_HINDSIGHT_LOG=$hindsight_log \
+  MLXD_TEST_LAUNCHCTL_STATE=$launchctl_state \
+  MLXD_TEST_LAUNCHCTL_LOG=$launchctl_log \
+    "$hook" > "$test_dir/hook-near-match.stdout" 2> "$test_dir/hook-near-match.stderr"; then
+  fail 'install hook accepted a near-match for a required OptiQ serve option'
+fi
+expected_near_match_uv_log="$near_match_uv_before
+tool install --force $source_dir
+tool install --force mlx-optiq==0.2.18"
+[[ $(<"$uv_log") == "$expected_near_match_uv_log" ]] || \
+  fail 'OptiQ capability refusal must precede the pinned model download'
+[[ $(<"$hindsight_log") == "$near_match_hindsight_before" ]] || \
+  fail 'OptiQ capability refusal must precede Hindsight configuration'
+expected_near_match_launchctl_log="$near_match_launchctl_before
+bootout gui/$EUID/io.nisavid.mlxd"
+[[ $(<"$launchctl_log") == "$expected_near_match_launchctl_log" ]] || \
+  fail 'OptiQ capability refusal must unload the stale LaunchAgent registration'
+[[ ! -f "$launchctl_state" ]] || \
+  fail 'OptiQ capability refusal left the stale LaunchAgent registered'
+grep -q 'does not support required serve options: --max-context, --mtp' \
+  "$test_dir/hook-near-match.stderr" || \
+  fail 'OptiQ capability refusal must identify the unsupported option'
+
 uv_before=$(<"$uv_log")
 launchctl_before=$(<"$launchctl_log")
 print -r -- running > "$launchctl_state"
@@ -249,6 +299,7 @@ if PATH="$fake_bin:$PATH" \
   MLXD_TEST_SOURCE_DIR=$source_dir \
   MLXD_TEST_MODEL_DIR=$fixture_home/.local/share/mlxd/models/qwen36-optiq \
   MLXD_TEST_UV_LOG=$uv_log \
+  MLXD_TEST_OPTIQ_LOG=$optiq_log \
   MLXD_TEST_HINDSIGHT_LOG=$hindsight_log \
   MLXD_TEST_LAUNCHCTL_STATE=$launchctl_state \
   MLXD_TEST_LAUNCHCTL_LOG=$launchctl_log \
@@ -268,6 +319,7 @@ if ! PATH="$fake_bin:$PATH" \
   MLXD_TEST_SOURCE_DIR=$source_dir \
   MLXD_TEST_MODEL_DIR=$fixture_home/.local/share/mlxd/models/qwen36-optiq \
   MLXD_TEST_UV_LOG=$uv_log \
+  MLXD_TEST_OPTIQ_LOG=$optiq_log \
   MLXD_TEST_HINDSIGHT_LOG=$hindsight_log \
   MLXD_TEST_LAUNCHCTL_STATE=$launchctl_state \
   MLXD_TEST_LAUNCHCTL_LOG=$launchctl_log \
@@ -289,6 +341,7 @@ if ! PATH="$fake_bin:$PATH" \
   MLXD_TEST_SOURCE_DIR=$source_dir \
   MLXD_TEST_MODEL_DIR=$fixture_home/.local/share/mlxd/models/qwen36-optiq \
   MLXD_TEST_UV_LOG=$uv_log \
+  MLXD_TEST_OPTIQ_LOG=$optiq_log \
   MLXD_TEST_HINDSIGHT_LOG=$hindsight_log \
   MLXD_TEST_LAUNCHCTL_STATE=$launchctl_state \
   MLXD_TEST_LAUNCHCTL_LOG=$launchctl_log \
@@ -299,7 +352,7 @@ bootstrap_count=$(grep -c '^bootstrap ' "$launchctl_log" || true)
 [[ $bootstrap_count == 2 ]] || \
   fail "missing source changed bootstrap count to $bootstrap_count"
 bootout_count=$(grep -c '^bootout ' "$launchctl_log" || true)
-[[ $bootout_count == 2 ]] || fail "missing source produced $bootout_count bootouts"
+[[ $bootout_count == 3 ]] || fail "missing source produced $bootout_count bootouts"
 [[ ! -f "$launchctl_state" ]] || fail 'missing source left stale LaunchAgent registered'
 grep -q 'source checkout not found' "$test_dir/hook-third.stderr" || \
   fail 'missing-source result must be explicit'

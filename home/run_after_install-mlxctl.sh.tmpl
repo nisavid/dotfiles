@@ -88,6 +88,32 @@ main() {
     if (( optiq_target )); then
       print -r -- "mlxctl: installing $optiq_runtime"
       UV_TOOL_BIN_DIR="$bin_dir" "$uv_bin" tool install --force "$optiq_runtime"
+      local optiq_help=''
+      local optiq_capability_error=''
+      if ! optiq_help=$("$bin_dir/optiq" serve --help 2>&1); then
+        optiq_capability_error='installed OptiQ runtime could not report its serve capabilities'
+      else
+        local required_optiq_flag
+        local -a missing_optiq_flags=()
+        for required_optiq_flag in --kv-config --max-context --mtp; do
+          if ! /usr/bin/grep -Eq -- \
+            "(^|[[:space:]])${required_optiq_flag}([=[:space:],]|$)" <<< "$optiq_help"; then
+            missing_optiq_flags+=("$required_optiq_flag")
+          fi
+        done
+        if (( ${#missing_optiq_flags} )); then
+          optiq_capability_error="installed OptiQ runtime does not support required serve options: ${(j:, :)missing_optiq_flags}"
+        fi
+      fi
+      if [[ -n "$optiq_capability_error" ]]; then
+        print -u2 -r -- "mlxctl: $optiq_capability_error"
+        if (( registered )); then
+          "$launchctl_bin" bootout "$service_target"
+          print -u2 -r -- 'mlxctl: inactive LaunchAgent registration removed after incompatible runtime installation'
+        fi
+        return 1
+      fi
+
       print -r -- "mlxctl: downloading pinned model snapshot $model_repository@$model_revision"
       UV_TOOL_BIN_DIR="$bin_dir" "$uv_bin" tool run --from "$huggingface_package" \
         hf download "$model_repository" --revision "$model_revision" --local-dir "$model_dir"
