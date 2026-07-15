@@ -19,7 +19,9 @@ fixture_home=${fixture_home:A}
 source_dir=$fixture_home/src/nisavid/systools/tools/mlxctl
 fake_bin=$test_dir/bin
 fake_uv=$fake_bin/uv
+fake_launchctl=$fake_bin/launchctl
 uv_log=$test_dir/uv.log
+launchctl_log=$test_dir/launchctl.log
 hook=$test_dir/install-mlxctl.zsh
 linux_hook=$test_dir/linux-hook.zsh
 
@@ -38,6 +40,23 @@ print -r -- '[project]' > "$source_dir/pyproject.toml"
   print -r -- 'chmod +x "$MLXCTL_TEST_BIN_DIR/mlxctl"'
 } > "$fake_uv"
 chmod +x "$fake_uv"
+
+{
+  print -r -- '#!/usr/bin/env zsh'
+  print -r -- 'set -eu'
+  print -r -- 'print -r -- "$*" >> "$MLXCTL_TEST_LAUNCHCTL_LOG"'
+  print -r -- '[[ $1 == print && $2 == gui/$EUID/io.nisavid.mlxd ]] || exit 64'
+  print -r -- 'case ${MLXCTL_TEST_LAUNCHCTL_STATE:-inactive} in'
+  print -r -- '  unregistered) exit 113 ;;'
+  print -r -- '  running) print -r -- $'"'"'\tstate = running'"'"' ;;'
+  print -r -- '  inactive) print -r -- $'"'"'\tstate = waiting\n\tstatus = state = running\n\tstate = running-later'"'"' ;;'
+  print -r -- '  *) exit 65 ;;'
+  print -r -- 'esac'
+} > "$fake_launchctl"
+chmod +x "$fake_launchctl"
+export MLXCTL_TEST_LAUNCHCTL_BIN=$fake_launchctl
+export MLXCTL_TEST_LAUNCHCTL_LOG=$launchctl_log
+export MLXCTL_TEST_LAUNCHCTL_STATE=inactive
 
 darwin_data='{"chezmoi":{"os":"darwin","homeDir":"'${fixture_home}'"},"mlxctl":{"sourceDir":"src/nisavid/systools/tools/mlxctl","binDir":".local/bin"}}'
 linux_data='{"chezmoi":{"os":"linux","homeDir":"'${fixture_home}'"},"mlxctl":{"sourceDir":"src/nisavid/systools/tools/mlxctl","binDir":".local/bin"}}'
@@ -84,6 +103,29 @@ grep -q 'installed .*mlxctl' "$test_dir/hook.stdout" || fail 'install result mus
 [[ $(<"$legacy_state") == 'legacy state' ]] || fail 'install changed legacy state'
 [[ $(<"$legacy_log") == 'legacy log' ]] || fail 'install changed legacy logs'
 [[ $(<"$legacy_model") == 'legacy model' ]] || fail 'install changed legacy model data'
+
+uv_before=$(<"$uv_log")
+running_status=0
+MLXCTL_TEST_LAUNCHCTL_STATE=running \
+  PATH="$fake_bin:$PATH" \
+  ZDOTDIR=$test_dir \
+  MLXCTL_TEST_BIN_DIR=$fixture_home/.local/bin \
+  MLXCTL_TEST_SOURCE_DIR=$source_dir \
+  MLXCTL_TEST_UV_LOG=$uv_log \
+    "$hook" > "$test_dir/running.stdout" 2> "$test_dir/running.stderr" || \
+  running_status=$?
+[[ $running_status == 1 ]] || \
+  fail "running legacy daemon hook exited $running_status instead of 1"
+[[ $(<"$uv_log") == "$uv_before" ]] || \
+  fail 'running legacy daemon refusal must precede uv'
+grep -q 'legacy LaunchAgent .* is running; stop it before updating mlxctl' \
+  "$test_dir/running.stderr" || \
+  fail 'running legacy daemon refusal must explain the migration prerequisite'
+[[ $(<"$legacy_plist") == 'legacy plist' ]] || fail 'running refusal changed the legacy LaunchAgent'
+[[ $(<"$legacy_config") == 'legacy config' ]] || fail 'running refusal changed legacy config'
+[[ $(<"$legacy_state") == 'legacy state' ]] || fail 'running refusal changed legacy state'
+[[ $(<"$legacy_log") == 'legacy log' ]] || fail 'running refusal changed legacy logs'
+[[ $(<"$legacy_model") == 'legacy model' ]] || fail 'running refusal changed legacy model data'
 
 rm -rf -- "$source_dir"
 uv_before=$(<"$uv_log")
@@ -135,7 +177,8 @@ grep -q 'uv is required' "$test_dir/missing-uv.stderr" || \
   fail 'missing-uv scenario unexpectedly installed mlxctl'
 
 missing_binary_status=0
-PATH="$fake_bin:$PATH" \
+MLXCTL_TEST_LAUNCHCTL_STATE=unregistered \
+  PATH="$fake_bin:$PATH" \
   ZDOTDIR=$test_dir \
   MLXCTL_TEST_BIN_DIR=$fixture_home/.local/bin \
   MLXCTL_TEST_SOURCE_DIR=$source_dir \
@@ -166,8 +209,14 @@ data=$(chezmoi execute-template '{{ .mlxctl.sourceDir }}|{{ .mlxctl.binDir }}')
   fail 'dotfiles must not manage legacy mlxd configuration'
 [[ ! -e home/.chezmoidata/mlxd.toml ]] || \
   fail 'obsolete mlxd deployment data must be removed'
-! rg -n -i 'launchctl|mlx-optiq|huggingface|hf download|hindsight|\.config/mlxd|\.local/state/mlxd|Library/Logs/mlxd' \
+! rg -n -i 'mlx-optiq|huggingface|hf download|hindsight|\.config/mlxd|\.local/state/mlxd|Library/Logs/mlxd' \
   home/run_after_install-mlxctl.sh.tmpl home/.chezmoidata/mlxctl.toml >/dev/null || \
   fail 'mlxctl installation sources exceed the tool-install boundary'
+! rg -n -i '\b(bootstrap|bootout|kickstart|kill|enable|disable)\b' \
+  home/run_after_install-mlxctl.sh.tmpl >/dev/null || \
+  fail 'mlxctl install hook must not mutate the legacy LaunchAgent'
+[[ $(grep -c '^print gui/.*/io\.nisavid\.mlxd$' "$launchctl_log" || true) -eq \
+  $(wc -l < "$launchctl_log" | tr -d ' ') ]] || \
+  fail 'mlxctl install hook used launchctl for more than read-only legacy inspection'
 
 print -r -- 'mlxctl installation checks passed'
