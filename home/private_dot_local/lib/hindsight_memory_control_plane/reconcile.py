@@ -131,6 +131,22 @@ def build_mutation_plan(base_plan: Plan, *, migration_run_id: str, migration_art
     ):
         raise ApplyError("rollback restore evidence digest is invalid")
     normalized = _mutation_actions(actions, base_plan.target_profile)
+    for action in normalized:
+        if action.details["artifact_digest"] != migration_artifact_digest:
+            raise ApplyError(
+                "mutation action must match the migration artifact digest"
+            )
+        if action.details["archive_digest"] == rollback_archive_digest:
+            raise ApplyError(
+                "mutation archive must be distinct from the rollback archive"
+            )
+        if (
+            action.details["restore_evidence_digest"]
+            == rollback_restore_evidence_digest
+        ):
+            raise ApplyError(
+                "mutation restore evidence must be distinct from rollback evidence"
+            )
     body = {
         "base_plan": base_plan.to_dict(), "plan_kind": "migration", "migration_run_id": migration_run_id,
         "migration_artifact_digest": migration_artifact_digest,

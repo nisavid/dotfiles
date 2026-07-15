@@ -6,6 +6,7 @@ import re
 from typing import Any, Callable, Mapping, Sequence
 
 from .canonical import DIGEST, digest
+from .file_evidence import FileEvidenceError, verified_file_snapshot
 
 OPERATIONS = {"export-bank", "import-bank", "backup", "restore"}
 BANK_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
@@ -192,10 +193,18 @@ class MigrationApplyAdapter:
         if not isinstance(target_bank, Mapping):
             raise MigrationAdapterError("migration target bank is unavailable")
         self._require_archive_digest(archive, archive_digest)
-        self.admin.import_bank(
-            archive, archive_digest, target_bank.get("bank_id"),
-            action.details.get("restore_evidence_digest"), evidence,
-        )
+        try:
+            with verified_file_snapshot(
+                archive, "migration archive", archive_digest,
+            ) as snapshot:
+                self.admin.import_bank(
+                    snapshot, archive_digest, target_bank.get("bank_id"),
+                    action.details.get("restore_evidence_digest"), evidence,
+                )
+        except FileEvidenceError:
+            raise MigrationAdapterError(
+                "migration archive snapshot verification failed"
+            ) from None
 
     def create_rollback_bundle(self, plan_digest: str, action_ids: tuple[str, ...]) -> Any:
         self.admin.backup(self.rollback_archive, self.rollback_archive_digest)
@@ -227,10 +236,20 @@ class MigrationApplyAdapter:
         self._require_archive_digest(
             self.rollback_archive, self.rollback_archive_digest,
         )
-        self.admin.restore(
-            self.rollback_archive,
-            self.rollback_archive_digest,
-            self.rollback_restore_evidence_digest,
-            evidence,
-        )
+        try:
+            with verified_file_snapshot(
+                self.rollback_archive,
+                "rollback archive",
+                self.rollback_archive_digest,
+            ) as snapshot:
+                self.admin.restore(
+                    snapshot,
+                    self.rollback_archive_digest,
+                    self.rollback_restore_evidence_digest,
+                    evidence,
+                )
+        except FileEvidenceError:
+            raise MigrationAdapterError(
+                "rollback archive snapshot verification failed"
+            ) from None
         self.data_plane.restore(rollback)

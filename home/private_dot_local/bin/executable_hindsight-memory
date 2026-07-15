@@ -77,7 +77,7 @@ def read_json(path: str | Path) -> Any:
 
 
 def _regular_file_digest(value: str | Path, label: str) -> str:
-    path = Path(value).expanduser()
+    path = Path(value)
     if not path.is_absolute():
         raise ApplyError(f"{label} path must be absolute")
     try:
@@ -106,12 +106,12 @@ def _regular_file_digest(value: str | Path, label: str) -> str:
 
 
 def _paths_overlap(candidate: str | Path, protected: list[str | Path]) -> bool:
-    candidate_path = Path(candidate).expanduser()
+    candidate_path = Path(candidate)
     if not candidate_path.is_absolute():
         raise ApplyError("rollback archive path must be absolute")
     candidate_resolved = candidate_path.resolve(strict=False)
     for value in protected:
-        protected_path = Path(value).expanduser()
+        protected_path = Path(value)
         if candidate_resolved == protected_path.resolve(strict=False):
             return True
         try:
@@ -357,7 +357,7 @@ def apply_command(args: argparse.Namespace) -> int:
             raise ApplyError("mutation apply requires archives and disposable restore evidence")
         archives: dict[str, str] = {}
         for archive_value in archive_paths:
-            archive = Path(archive_value).expanduser()
+            archive = Path(archive_value)
             archives[_regular_file_digest(archive, "migration archive")] = str(archive)
         try:
             evidence_record = read_file_evidence(
@@ -390,7 +390,7 @@ def apply_command(args: argparse.Namespace) -> int:
         adapter = MigrationApplyAdapter(
             data_plane=data_plane, admin=admin, archives=archives,
             restore_evidence=restore_evidence,
-            rollback_archive=str(Path(rollback_archive).expanduser()),
+            rollback_archive=str(Path(rollback_archive)),
             rollback_archive_digest=plan.rollback_archive_digest,
             rollback_restore_evidence_digest=plan.rollback_restore_evidence_digest,
             archive_verifier=lambda path, expected: hmac.compare_digest(

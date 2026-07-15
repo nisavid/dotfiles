@@ -366,13 +366,19 @@
 
   Hindsight 0.8.4 intentionally excludes `invalidated_memory_units` from portable bank exports. Verify the supported live bank payload in a fresh database, then require the independent full-schema restore to preserve the invalidated-memory count and canonical digest exactly.
 
-- [ ] **Step 5: Run security and broad code review until clean**
+- [x] **Step 5: Run security and broad code review until clean**
 
   Review authentication boundaries, capability replay/expiry, symlink and path traversal, file modes, canonical digest binding, TOCTOU/drift checks, rollback completeness, subprocess argv safety, HTTP size/time limits, secret/payload logging, template inactivity, and migration-gate enforcement. Fix every critical or important finding and rerun affected tests before declaring the cycle clean.
 
   Non-security broad review completed on 2026-07-14 across independent standards and PRD/specification axes. The clean review covers semantic desired-state planning, production artifact resolution, distinct migration and rollback digest binding, automatic full-schema admin rollback, curated import adapters, and multi-profile fleet supervision. The Python controller suite and public shell contract suites pass after the review fixes.
 
-  Deferred by the operator until the Codex security-scan harness issue is fixed. Do not claim this gate clean from tests or partial review evidence.
+  Codex Security diff scan `7e172c2f-01e1-4f22-8f9e-149335da2280`
+  completed on 2026-07-15. Its reportable offline-package digest-binding
+  finding is fixed and covered by mutation regressions. The review also aligned
+  the admin adapter with Hindsight 0.8.4, bound source/target banks and restore
+  evidence into mutation plans, hardened trusted-file provenance, and passes
+  verified private snapshots to import and restore commands. CodeRabbit's final
+  follow-up review completed with zero issues.
 
 - [ ] **Step 6: Create the final task-owned checkpoint**
 
