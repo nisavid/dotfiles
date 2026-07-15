@@ -32,8 +32,10 @@ has an independently verified home, and Ivan separately approves retirement.
 
 Build a migration controller and private migration ledger around a canonical
 workload inventory. The controller exposes read-only `inventory`, `plan`, and
-`status` operations plus explicitly authorized `snapshot`, `export`, `canary`,
-`cutover`, `rollback`, and `retire` operations.
+`status` operations; evidence-only `verify`; and explicitly authorized
+`discovery-start`, `snapshot`, `export`, `canary`, `accept`, `cutover`,
+`rollback`, and `retire` operations. Source start, acceptance, and retirement
+are separate exact-plan transitions and never share approval authority.
 
 Read-only discovery first inventories host-visible Podman configuration,
 machine and source-disk metadata, declarative workload sources, and connection
@@ -61,7 +63,9 @@ Stateful workloads use application-consistent export and restore where
 available. Raw filesystem transfer is permitted only when the workload
 documents its quiescence, ownership, permission, extended-attribute, and restore
 contracts. Every artifact receives a digest, provenance record, and restore
-test.
+test. Retained content-bearing snapshots, exports, backups, and rollback
+artifacts are encrypted at rest and are restore-tested beginning from their
+retained ciphertext.
 
 Canaries run without production port ownership and against copied data. Cutover
 is workload-specific and operator-approved. Source state remains frozen as
@@ -133,7 +137,7 @@ migration acceptance.
     that an archive is not considered usable merely because it exists.
 26. As an operator, I want source and target capacity checked before copying
     data, so that migration cannot exhaust local storage.
-27. As Ivan, I want each workload canaried independently, so that one
+27. As Ivan, I want each workload canary-tested independently, so that one
     incompatible workload does not block unrelated migrations.
 28. As an operator, I want canaries to use copied data and non-production
     endpoints, so that verification cannot corrupt source state or steal live
@@ -194,7 +198,12 @@ migration acceptance.
 - Inventory payloads, exported data, secret metadata, logs, snapshots, and
   workload evidence remain in private machine-local state and out of Git. Git
   may contain schemas, controller code, synthetic fixtures, and non-sensitive
-  documentation.
+  documentation. Every retained content-bearing snapshot, export, backup, and
+  rollback artifact is encrypted at rest. Plans and ledgers bind only a
+  non-secret key locator resolved through an approved machine-local key
+  provider; key material never enters plans, logs, fixtures, or Git. Restore
+  proof begins from the retained ciphertext and covers controlled key
+  resolution, decryption, digest verification, and the workload restore test.
 - Initial inventory is non-mutating. It may inspect installed binaries,
   Docker/Podman connection metadata, machine metadata, declarative sources, disk
   metadata, and pre-existing offline disk copies. It must not create a large
@@ -210,6 +219,13 @@ migration acceptance.
   expected outputs, and mandatory stop verification.
 - Approval to start Podman is scoped to the exact discovery or export plan. It
   does not authorize workload mutation, cutover, or retirement.
+- Every approval binds an authenticated approver identity, operation kind,
+  workload or migration identity, exact immutable plan digest, issuance time,
+  expiry time, and unique nonce. Approval redemption atomically checks and
+  consumes the nonce before the transition. Expired, replayed, already consumed,
+  mismatched, or cross-operation approvals fail closed. Source start,
+  acceptance, and retirement each require a separately issued approval; only
+  Ivan may approve acceptance or retirement.
 - Standard workloads target OrbStack's Docker-compatible engine. Workloads
   needing systemd, a separate Linux userspace and lifecycle, or incompatible
   container semantics target a declared OrbStack Linux machine. That target is
@@ -238,17 +254,21 @@ migration acceptance.
   ownership, modes, links, extended attributes, and required filesystem
   semantics.
 - Each backup artifact records source workload identity, source state watermark,
-  format, size, digest, creation method, encryption status, and restore-test
-  result.
+  format, size, ciphertext digest, creation method, non-secret key locator, and
+  restore-test result beginning from the retained ciphertext.
 - A workload canary uses isolated names, networks, volumes, and non-production
   ports. It must not write to source data or own production endpoints.
 - Canary verification covers startup, health, dependency resolution,
   representative behavior, data counts or checksums, secret resolution,
   permissions, network reachability, port exposure, logs, shutdown, restart, and
   resource use.
-- Cutover plans bind the accepted canary artifact, target definitions, source
-  watermark, backup digest, target endpoint, expected port changes, downtime
-  procedure, rollback trigger, and post-cutover observation checks.
+- Cutover plans bind the inventory digest, target-definition and profile digest,
+  runtime and architecture facts, expected live-state digest, idle operations
+  snapshot, accepted canary artifact, source watermark, encrypted backup digest,
+  target endpoint, expected port changes, downtime procedure, rollback trigger,
+  and post-cutover observation checks. Any execution-time mismatch against a
+  bound value invalidates the immutable plan and requires replanning and fresh
+  approval.
 - Stateful cutover establishes one source of truth. The source remains frozen
   after target writes begin. Rollback after that point requires a declared
   reverse export, replay, or accepted data-loss bound.

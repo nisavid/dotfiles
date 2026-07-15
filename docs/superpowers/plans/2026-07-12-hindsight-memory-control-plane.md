@@ -49,7 +49,7 @@
 
 - [ ] **Step 3: Implement canonicalization, closed-schema validation, domain records, and planning**
 
-  Use `json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()` as the sole canonical encoding. Define frozen dataclasses for `BankRef`, `EndpointIdentity`, `OperationSnapshot`, `Action`, `Plan`, and `Inventory`. Validate exact root keys, integer `schema_version == 1` without accepting booleans, unique IDs, bank references, provider role references, profile authority, one authoritative engineering write bank when engineering memory is enabled, derived/overridden port collisions, provider placement/data-class compatibility, and migration artifact/proposal paths. Serialize plans without `plan_digest`, hash that body, then add `plan_digest`; verification recomputes it and uses `hmac.compare_digest`.
+  Use `json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode()` as the sole canonical encoding. Parse every digest-bearing JSON input with duplicate-key rejection and non-finite-number rejection. Define frozen dataclasses for `BankRef`, `EndpointIdentity`, `OperationSnapshot`, `Action`, `Plan`, and `Inventory`. Validate exact root keys, integer `schema_version == 1` without accepting booleans, unique IDs, bank references, provider role references, profile authority, one authoritative engineering write bank when engineering memory is enabled, derived/overridden port collisions, provider placement/data-class compatibility, and migration artifact/proposal paths. Serialize plans without `plan_digest`, hash that body, then add `plan_digest`; verification recomputes it and uses `hmac.compare_digest`. The executable bootstraps the managed sibling `lib` directory before importing the package so direct `python3` invocation is self-contained.
 
 - [ ] **Step 4: Implement content-free ledger and CLI acceptance seam**
 
@@ -90,11 +90,11 @@
 
 - [ ] **Step 3: Implement the adapter protocol and fakes**
 
-  Keep read and mutation methods explicit. `FakeAdapter` records method names and redacted metadata only. `HttpAdapter` uses `urllib.request`, loopback or inventory-approved TLS endpoints, a bearer-token resolver callback, bounded timeouts, strict JSON size limits, and exception redaction. It never accepts a token in its constructor serialization or a plan.
+  Keep read and mutation methods explicit. `FakeAdapter` records method names and redacted metadata only. `HttpAdapter` uses a dedicated `urllib.request` opener with ambient proxy use disabled, redirects rejected before credentials can reach another hop, and an explicit default TLS context with certificate and hostname verification. It accepts only loopback or inventory-approved TLS endpoints, a bearer-token resolver callback, bounded timeouts, strict JSON size limits, and exception redaction. It never accepts a token in its constructor serialization or a plan. Cover proxy, redirect, and TLS verification failures.
 
 - [ ] **Step 4: Implement the compatibility-gated admin adapter**
 
-  Accept an argv factory and runner seam. Permit only exact `hindsight-admin export-bank`, `import-bank`, `backup`, and `restore` argv shapes; reject shell strings, unknown versions, missing archive digests, and absent disposable restore evidence. Never accept direct SQL or database credentials.
+  Accept a trusted absolute `hindsight-admin` executable, immutable file-identity binding, argv factory, and runner seam. Execute a version/identity probe before use, then revalidate the binary identity before every operation. Run from a fixed trusted working directory with a minimal allowlisted environment. Permit only exact `export-bank`, `import-bank`, `backup`, and `restore` argv shapes rooted at that executable; reject shell strings, relative or replaced binaries, unknown versions, missing archive digests, and absent disposable restore evidence. Never accept direct SQL or database credentials.
 
 - [ ] **Step 5: Implement guarded apply and automatic rollback**
 
@@ -123,7 +123,7 @@
 
 - [ ] **Step 1: Write red broker contract tests**
 
-  Through a temporary Unix socket, assert socket mode `0600`, bounded one-use envelope expiry, atomic staged-handle deletion, signed capability binding, monotonic sequence enforcement, action-ID replay rejection, idempotent writes, digest/revocation/method/route checks, fixed home bank, no caller-supplied raw endpoint/token/bank destination, and payload-free diagnostics.
+  Through a temporary Unix socket, assert socket mode `0600`, bounded one-use envelope expiry, atomic staged-handle deletion, concurrent exchanges redeem one handle once and return the same stored capability, signed capability binding, monotonic sequence enforcement, action-ID replay rejection, idempotent writes, digest/revocation/method/route checks, fixed home bank, no caller-supplied raw endpoint/token/bank destination, and payload-free diagnostics.
 
 - [ ] **Step 2: Write red availability and retain-ordering tests**
 
@@ -131,7 +131,7 @@
 
 - [ ] **Step 3: Implement HMAC-signed opaque envelopes and capabilities**
 
-  Use random 256-bit nonces and keys, canonical JSON claims, HMAC-SHA256, constant-time verification, wall-clock expiry, persisted used/revoked nonce digests, and atomic `os.replace` state updates under mode `0600`. Signing material never leaves the broker.
+  Use random 256-bit nonces and keys, canonical JSON claims, HMAC-SHA256, constant-time verification, wall-clock expiry, and persisted used/revoked nonce digests. Serialize one-use check-and-mark across processes with a shared lock and commit it through mode-`0600` atomic replacement plus file and containing-directory `fsync` before returning a capability. Signing material never leaves the broker.
 
 - [ ] **Step 4: Implement versioned JSON-RPC routing**
 
@@ -293,7 +293,7 @@
 
 - [ ] **Step 3: Implement read-only discovery and proposed planning**
 
-  Allow only adapter read methods. Store content-bearing discovery under the external migration artifact directory with mode `0700` directories and `0600` files; plans contain digests and redacted counts, not memory content. Bind the approved offline package digest without copying the package into Git.
+  Allow only adapter read methods. Require one adapter-provided generation or transaction snapshot to cover the full discovery window; if the adapter cannot provide one, require separately verified quiescence evidence and otherwise fail closed. Keep before/after drift comparison as an additional check, not the consistency primitive. Store content-bearing discovery under the external migration artifact directory with mode `0700` directories and `0600` files; plans contain digests and redacted counts, not memory content. Bind the approved offline package digest without copying the package into Git.
 
 - [ ] **Step 4: Run fake/disposable tests**
 
@@ -303,7 +303,7 @@
 
 - [ ] **Step 5: Execute read-only live discovery**
 
-  Run the CLI with the live profile explicitly selected and `migration discover --read-only`. Before and after, snapshot the two completion-gate halves, bank stats, operation IDs, document high-water marks, and adapter watermarks. Require exact equality for all mutation-sensitive state. Do not run `apply`, retain, consolidate, refresh, import, config patch, template import, curation reapply, or delete.
+  Run the CLI with the live profile explicitly selected and `migration discover --read-only`. Bind the full read to one adapter generation or transaction snapshot, or require separately verified quiescence for the whole window. Before and after, snapshot the two completion-gate halves, bank stats, operation IDs, document high-water marks, and adapter watermarks. Require exact equality for all mutation-sensitive state as an additional drift check. Do not run `apply`, retain, consolidate, refresh, import, config patch, template import, curation reapply, or delete.
 
 - [ ] **Step 6: Commit code and tests, not generated migration artifacts**
 
