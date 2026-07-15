@@ -308,7 +308,7 @@ show_status() {
 
   print -r -- ""
   if (( install_ok == 0 && HINDSIGHT_EMBED_STACK_LIB_LOADED )); then
-    hindsight_stack_status_report "$selected_profile"
+    hindsight_stack_status_report "$selected_profile" || install_ok=1
   else
     print -r -- "stack health: unavailable (install or runtime checks failed)"
   fi

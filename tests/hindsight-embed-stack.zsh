@@ -356,6 +356,20 @@ assert_missing_profile_blocks_mutation() {
 assert_missing_profile_blocks_mutation start
 assert_missing_profile_blocks_mutation install
 
+(
+  source "$service_lib"
+  is_loaded() { return 1 }
+  service_name() { print -r -- "$1" }
+  has_disabled_override() { return 1 }
+  show_installed_file_checks() { return 0 }
+  hindsight_stack_status_report() { return 23 }
+  typeset -g HINDSIGHT_EMBED_STACK_LIB_LOADED=1
+  if show_status >/dev/null 2>&1; then
+    print -ru2 -- "status ignored a stack status-report failure"
+    exit 1
+  fi
+)
+
 help_output="$(zsh "$repo_dir/home/private_dot_local/bin/executable_hindsight-embed-service" --help)"
 print -r -- "$help_output" | rg -F -q 'status [--profile <name>]' || {
   print -ru2 -- "service help does not expose additive profile selection"
