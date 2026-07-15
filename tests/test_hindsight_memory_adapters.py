@@ -4,7 +4,9 @@ from io import BytesIO
 from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import os
+import ssl
 import stat
+import subprocess
 from urllib.error import HTTPError
 import tempfile
 import threading
@@ -81,21 +83,21 @@ def restore_evidence(artifact_digest, receipt_digest="7" * 64):
     }
 
 
-def admin_argv(operation, archive, bank_id):
+def admin_argv(executable, operation, archive, bank_id):
     return {
         "export-bank": [
-            "hindsight-admin", "export-bank", "--bank", bank_id,
+            executable, "export-bank", "--bank", bank_id,
             "--output", archive,
         ],
         "import-bank": [
-            "hindsight-admin", "import-bank", "--archive", archive,
+            executable, "import-bank", "--archive", archive,
             "--target-bank", bank_id,
         ],
         "backup": [
-            "hindsight-admin", "backup", archive, "--schema", "public",
+            executable, "backup", archive, "--schema", "public",
         ],
         "restore": [
-            "hindsight-admin", "restore", archive, "--schema", "public", "--yes",
+            executable, "restore", archive, "--schema", "public", "--yes",
         ],
     }[operation]
 
@@ -295,6 +297,61 @@ class FakeAdapterContractTest(AdapterContractMixin, unittest.TestCase):
             {"source_bank": source.to_dict(), "candidate_bank": candidate.to_dict()},
         )
 
+    def test_committed_mutations_advance_migration_generation(self):
+        adapter = FakeAdapter(
+            endpoint=self.endpoint.to_dict(),
+            state={"migration_generation": "generation-1"},
+        )
+        generations = [adapter.read_migration_generation()]
+        mutations = (
+            lambda: adapter.import_template({"template": "value"}),
+            lambda: adapter.patch_config({"mode": "active"}),
+            lambda: adapter.upsert_model({"id": "model-1"}),
+            lambda: adapter.upsert_directive({"id": "directive-1"}),
+            lambda: adapter.transfer_documents({"count": 1}),
+            lambda: adapter.reapply_invalidated_memories({"count": 1}),
+            lambda: adapter.delete_bank({"bank_id": "retired"}),
+        )
+        for mutate in mutations:
+            mutate()
+            generations.append(adapter.read_migration_generation())
+
+        runtime_writes = (
+            (
+                adapter.transcript_checkpoint,
+                {
+                    "document_id": "document-1",
+                    "epoch": 1,
+                    "checkpoint": 1,
+                    "idempotency_key": "a" * 64,
+                },
+            ),
+            (
+                adapter.retain_outcome,
+                {
+                    "document_id": "document-1",
+                    "epoch": 1,
+                    "checkpoint": 1,
+                    "outcome": "done",
+                    "idempotency_key": "b" * 64,
+                },
+            ),
+            (
+                adapter.reflect,
+                {"reflection": "note", "idempotency_key": "c" * 64},
+            ),
+        )
+        for mutate, request in runtime_writes:
+            mutate(request)
+            committed_generation = adapter.read_migration_generation()
+            generations.append(committed_generation)
+            mutate(request)
+            self.assertEqual(
+                adapter.read_migration_generation(), committed_generation
+            )
+
+        self.assertEqual(len(generations), len(set(generations)))
+
     def assert_operation(self, method, path):
         expected = {
             "/v1/schema": "schema_version", "/v1/identity": "endpoint_identity", "/v1/config": "read_config" if method == "GET" else "patch_config",
@@ -347,6 +404,7 @@ class HttpAdapterContractTest(AdapterContractMixin, unittest.TestCase):
             ("PUT", "/v1/runtime/reflection"): {"accepted": True},
         }
         responses[("GET", "/version")] = {"api_version": "0.8.4", "features": {"observations": True}}
+        responses[("GET", "/v1/migration/generation")] = {"generation": "commit-42"}
         for index, bank_id in enumerate(("engineering", "historical-candidate"), start=1):
             base = f"/v1/default/banks/{bank_id}"
             responses[("GET", f"{base}/config")] = {
@@ -437,6 +495,10 @@ class HttpAdapterContractTest(AdapterContractMixin, unittest.TestCase):
         self.assertFalse(any(path.startswith("/v1/migrations/") for _method, path, _auth, _body in calls))
         self.assertTrue(all(auth == "Bearer contract-token" for _method, _path, auth, _body in calls))
 
+    def test_migration_generation_is_read_from_the_server(self):
+        self.assertEqual(self.adapter.read_migration_generation(), "commit-42")
+        self.assert_operation("GET", "/v1/migration/generation")
+
     def assert_operation(self, method, path):
         self.assertEqual(self.seen[-1][:3], (method, path, "Bearer contract-token"))
 
@@ -450,6 +512,134 @@ class HttpAdapterContractTest(AdapterContractMixin, unittest.TestCase):
 
 
 class HttpAdapterSecurityTest(unittest.TestCase):
+    def test_ambient_http_proxy_is_ignored(self):
+        direct_requests = []
+        proxy_requests = []
+
+        class DirectHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                direct_requests.append(self.path)
+                body = b'{"mode":"direct"}'
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            def log_message(self, *_args): pass
+
+        class ProxyHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                proxy_requests.append(self.path)
+                body = b'{"mode":"proxied"}'
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            def log_message(self, *_args): pass
+
+        direct = start_http_server(self, DirectHandler)
+        proxy = start_http_server(self, ProxyHandler)
+        proxy_url = f"http://127.0.0.1:{proxy.server_port}"
+        with patch.dict(
+            os.environ,
+            {"HTTP_PROXY": proxy_url, "http_proxy": proxy_url, "NO_PROXY": "", "no_proxy": ""},
+            clear=False,
+        ):
+            adapter = HttpAdapter(
+                inventory=inventory_for(direct.server_port), profile_id="core",
+                token_resolver=lambda: "token",
+            )
+            self.assertEqual(adapter.read_config(), {"mode": "direct"})
+        self.assertEqual(direct_requests, ["/v1/config"])
+        self.assertEqual(proxy_requests, [])
+
+    def test_redirect_is_rejected_before_bearer_token_reaches_another_hop(self):
+        redirected_headers = []
+
+        class TargetHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                redirected_headers.append(self.headers.get("Authorization"))
+                body = b"{}"
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            def log_message(self, *_args): pass
+
+        target = start_http_server(self, TargetHandler)
+
+        class RedirectHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(302)
+                self.send_header("Location", f"http://127.0.0.1:{target.server_port}/redirected")
+                self.end_headers()
+            def log_message(self, *_args): pass
+
+        source = start_http_server(self, RedirectHandler)
+        adapter = HttpAdapter(
+            inventory=inventory_for(source.server_port), profile_id="core",
+            token_resolver=lambda: "do-not-forward",
+        )
+        with self.assertRaisesRegex(AdapterError, "redirect"):
+            adapter.read_config()
+        self.assertEqual(redirected_headers, [])
+
+    def test_http_response_json_rejects_duplicate_keys_and_non_finite_numbers(self):
+        bodies = iter((b'{"mode":"safe","mode":"changed"}', b'{"value":NaN}'))
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                body = next(bodies)
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            def log_message(self, *_args): pass
+
+        server = start_http_server(self, Handler)
+        adapter = HttpAdapter(
+            inventory=inventory_for(server.server_port), profile_id="core",
+            token_resolver=lambda: "token",
+        )
+        for _ in range(2):
+            with self.assertRaisesRegex(AdapterError, "invalid JSON"):
+                adapter.read_config()
+
+    def test_dedicated_tls_context_requires_certificate_and_hostname_validation(self):
+        adapter = HttpAdapter(
+            inventory=inventory_for(443, scheme="https", host="example.com", approved_tls=True),
+            profile_id="core", token_resolver=lambda: "token",
+        )
+        context = adapter._tls_context
+        self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
+        self.assertTrue(context.check_hostname)
+
+    def test_migration_generation_rejects_missing_or_malformed_server_tokens(self):
+        responses = iter((
+            b"{}",
+            b'{"generation":""}',
+            b'{"generation":"ok","extra":1}',
+            b'{"generation":"\\ud800"}',
+            b'{"generation":"control\\u001f"}',
+        ))
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                body = next(responses)
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            def log_message(self, *_args): pass
+
+        server = start_http_server(self, Handler)
+        adapter = HttpAdapter(
+            inventory=inventory_for(server.server_port), profile_id="core",
+            token_resolver=lambda: "token",
+        )
+        for _ in range(5):
+            with self.assertRaisesRegex(AdapterError, "migration generation"):
+                adapter.read_migration_generation()
+
     def test_artifact_action_resolves_and_verifies_desired_payload(self):
         desired = {"mode": "active", "limits": {"recall": 10}}
         action = Action(
@@ -496,7 +686,7 @@ class HttpAdapterSecurityTest(unittest.TestCase):
             {},
             response_body,
         )
-        with patch("hindsight_memory_control_plane.http_adapter.urlopen", side_effect=failure):
+        with patch.object(adapter._opener, "open", side_effect=failure):
             with self.assertRaises(AuthenticationError):
                 adapter.schema_version()
         self.assertTrue(response_body.closed)
@@ -670,6 +860,129 @@ class HttpAdapterSecurityTest(unittest.TestCase):
 
 
 class AdminMigrationAdapterContractTest(unittest.TestCase):
+    def trusted_admin(self, root):
+        executable = Path(root) / "hindsight-admin"
+        executable.write_text(
+            f"#!{sys.executable}\nraise SystemExit('test seam only')\n",
+            encoding="utf-8",
+        )
+        executable.chmod(0o700)
+        return executable
+
+    @staticmethod
+    def versioned_runner(calls, *, version="0.8.4", operation=None):
+        def run(argv, **kwargs):
+            calls.append((list(argv), kwargs))
+            if "importlib.metadata" in argv[-1]:
+                return subprocess.CompletedProcess(argv, 0, version + "\n", "")
+            if operation is not None:
+                operation(argv)
+            return subprocess.CompletedProcess(argv, 0, "Complete", "")
+        return run
+
+    def make_admin(self, runner, *, argv_factory=admin_argv, version="0.8.4"):
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        executable = self.trusted_admin(root)
+
+        def routed(argv, **_kwargs):
+            if "importlib.metadata" in argv[-1]:
+                return subprocess.CompletedProcess(argv, 0, version + "\n", "")
+            return runner(argv)
+
+        return AdminMigrationAdapter(
+            admin_executable=str(executable),
+            argv_factory=argv_factory,
+            runner=routed,
+        ), str(executable)
+
+    def test_binds_trusted_executable_probes_version_and_sanitizes_process_context(self):
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        executable = self.trusted_admin(root)
+        calls = []
+        adapter = AdminMigrationAdapter(
+            admin_executable=str(executable),
+            argv_factory=hindsight_admin_argv,
+            runner=self.versioned_runner(calls),
+            environment={
+                "HINDSIGHT_API_DATABASE_URL": "postgresql://approved",
+                "PATH": "/attacker/bin",
+                "PYTHONPATH": "/attacker/python",
+                "UNRELATED_SECRET": "must-not-flow",
+            },
+        )
+        adapter.backup("/tmp/bank.zip", "a" * 64)
+
+        self.assertEqual(adapter.admin_version, "0.8.4")
+        self.assertEqual(len(calls), 2)
+        operation_argv, operation_kwargs = calls[1]
+        self.assertEqual(operation_argv[0], str(executable))
+        self.assertEqual(operation_argv[1:], ["backup", "/tmp/bank.zip", "--schema", "public"])
+        for _argv, kwargs in calls:
+            self.assertEqual(kwargs["cwd"], "/")
+            self.assertEqual(
+                kwargs["env"],
+                {"HINDSIGHT_API_DATABASE_URL": "postgresql://approved"},
+            )
+
+    def test_revalidates_executable_identity_before_each_operation(self):
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        executable = self.trusted_admin(root)
+        calls = []
+        adapter = AdminMigrationAdapter(
+            admin_executable=str(executable), argv_factory=hindsight_admin_argv,
+            runner=self.versioned_runner(calls),
+        )
+        replacement = root / "replacement"
+        replacement.write_text(
+            f"#!{sys.executable}\nraise SystemExit('replacement')\n",
+            encoding="utf-8",
+        )
+        replacement.chmod(0o700)
+        os.replace(replacement, executable)
+
+        with self.assertRaisesRegex(MigrationAdapterError, "identity changed"):
+            adapter.backup("/tmp/bank.zip", "a" * 64)
+        self.assertEqual(len(calls), 1)
+
+    def test_reports_admin_operation_timeout_without_process_output(self):
+        def timeout(_argv):
+            raise subprocess.TimeoutExpired(
+                cmd=["hindsight-admin"], timeout=300, output="private output"
+            )
+
+        adapter, _ = self.make_admin(timeout)
+        with self.assertRaisesRegex(MigrationAdapterError, "operation timed out"):
+            adapter.backup("/tmp/bank.zip", "a" * 64)
+
+    def test_rejects_relative_symlink_untrusted_and_unknown_version_executables(self):
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        executable = self.trusted_admin(root)
+        runner = self.versioned_runner([])
+        with self.assertRaisesRegex(MigrationAdapterError, "absolute"):
+            AdminMigrationAdapter(
+                admin_executable="hindsight-admin", argv_factory=hindsight_admin_argv,
+                runner=runner,
+            )
+        symlink = root / "admin-link"
+        symlink.symlink_to(executable)
+        with self.assertRaisesRegex(MigrationAdapterError, "symlink"):
+            AdminMigrationAdapter(
+                admin_executable=str(symlink), argv_factory=hindsight_admin_argv,
+                runner=runner,
+            )
+        executable.chmod(0o722)
+        with self.assertRaisesRegex(MigrationAdapterError, "writable"):
+            AdminMigrationAdapter(
+                admin_executable=str(executable), argv_factory=hindsight_admin_argv,
+                runner=runner,
+            )
+        executable.chmod(0o700)
+        with self.assertRaisesRegex(MigrationAdapterError, "unsupported"):
+            AdminMigrationAdapter(
+                admin_executable=str(executable), argv_factory=hindsight_admin_argv,
+                runner=self.versioned_runner([], version="0.9.0"),
+            )
+
     def test_mutation_apply_adapter_imports_the_digest_selected_archive(self):
         root = Path(self.enterContext(tempfile.TemporaryDirectory()))
         approved_archive = root / "approved-bank.zip"
@@ -692,11 +1005,7 @@ class AdminMigrationAdapterContractTest(unittest.TestCase):
             })
             return {"returncode": 0, "stdout": "Import complete"}
 
-        admin = AdminMigrationAdapter(
-            admin_version="0.8.4",
-            argv_factory=admin_argv,
-            runner=run_admin,
-        )
+        admin, _ = self.make_admin(run_admin)
         data_plane = FakeAdapter(
             endpoint={"profile_id": "core", "scheme": "http", "host": "127.0.0.1", "port": 7979, "tenant": "default"},
         )
@@ -779,11 +1088,7 @@ class AdminMigrationAdapterContractTest(unittest.TestCase):
                 Path(argv[2]).chmod(0o600)
             return {"returncode": 0, "stdout": "Complete"}
 
-        admin = AdminMigrationAdapter(
-            admin_version="0.8.4",
-            argv_factory=admin_argv,
-            runner=run_admin,
-        )
+        admin, _ = self.make_admin(run_admin)
         data_plane = FakeAdapter(
             endpoint={"profile_id": "core", "scheme": "http", "host": "127.0.0.1", "port": 7979, "tenant": "default"},
         )
@@ -845,14 +1150,12 @@ class AdminMigrationAdapterContractTest(unittest.TestCase):
     def test_accepts_only_digest_bound_argv_and_requires_restore_evidence(self):
         calls = []
         archive_digest = "a" * 64
-        adapter = AdminMigrationAdapter(
-            admin_version="0.8.4",
-            argv_factory=admin_argv,
-            runner=lambda argv: calls.append(argv) or {"returncode": 0, "stdout": "Complete"},
+        adapter, executable = self.make_admin(
+            lambda argv: calls.append(argv) or {"returncode": 0, "stdout": "Complete"},
         )
 
         adapter.backup("/tmp/bank.zip", archive_digest)
-        self.assertEqual(calls[0][:2], ["hindsight-admin", "backup"])
+        self.assertEqual(calls[0][:2], [executable, "backup"])
         with self.assertRaisesRegex(MigrationAdapterError, "disposable restore evidence"):
             adapter.restore(
                 "/tmp/bank.zip",
@@ -865,10 +1168,8 @@ class AdminMigrationAdapterContractTest(unittest.TestCase):
         evidence = restore_evidence(rollback_digest)
         checks = iter((True, False))
         calls = []
-        admin = AdminMigrationAdapter(
-            admin_version="0.8.4",
-            argv_factory=admin_argv,
-            runner=lambda argv: calls.append(argv[1])
+        admin, _ = self.make_admin(
+            lambda argv: calls.append(argv[1])
             or {"returncode": 0, "stdout": "Complete"},
         )
         adapter = MigrationApplyAdapter(
@@ -895,28 +1196,34 @@ class AdminMigrationAdapterContractTest(unittest.TestCase):
 
     def test_rejects_unknown_versions_shell_strings_missing_digests_and_bad_argv(self):
         with self.assertRaisesRegex(MigrationAdapterError, "unsupported"):
-            AdminMigrationAdapter(admin_version="0.9.0", argv_factory=lambda *_: [], runner=lambda _: None)
-        adapter = AdminMigrationAdapter(admin_version="0.8.4", argv_factory=lambda *_: "hindsight-admin backup", runner=lambda _: None)
+            self.make_admin(lambda _argv: None, version="0.9.0")
+        adapter, _ = self.make_admin(
+            lambda _argv: None, argv_factory=lambda *_: "hindsight-admin backup",
+        )
         with self.assertRaisesRegex(MigrationAdapterError, "argument vector"):
             adapter.backup("/tmp/bank.zip", "a" * 64)
-        adapter = AdminMigrationAdapter(admin_version="0.8.4", argv_factory=lambda op, path, bank: [*admin_argv(op, path, bank), "--database-url", "secret"], runner=lambda _: None)
+        adapter, _ = self.make_admin(
+            lambda _argv: None,
+            argv_factory=lambda executable, op, path, bank: [
+                *admin_argv(executable, op, path, bank),
+                "--database-url", "secret",
+            ],
+        )
         with self.assertRaisesRegex(MigrationAdapterError, "argv shape"):
             adapter.backup("/tmp/bank.zip", "a" * 64)
         with self.assertRaisesRegex(MigrationAdapterError, "digest"):
             adapter.backup("/tmp/bank.zip", "")
         with self.assertRaisesRegex(MigrationAdapterError, "bank ID"):
-            hindsight_admin_argv("import-bank", "/tmp/bank.zip", None)
+            hindsight_admin_argv("/trusted/hindsight-admin", "import-bank", "/tmp/bank.zip", None)
         with self.assertRaisesRegex(MigrationAdapterError, "bank ID"):
-            hindsight_admin_argv("export-bank", "/tmp/bank.zip", "bad bank")
+            hindsight_admin_argv("/trusted/hindsight-admin", "export-bank", "/tmp/bank.zip", "bad bank")
 
     def test_permits_all_four_exact_operations_with_verified_restore_evidence(self):
         calls = []
         artifact = "b" * 64
         evidence = restore_evidence(artifact)
-        adapter = AdminMigrationAdapter(
-            admin_version="0.8.4",
-            argv_factory=admin_argv,
-            runner=lambda argv: calls.append(argv) or {"returncode": 0, "stdout": "Complete"},
+        adapter, executable = self.make_admin(
+            lambda argv: calls.append(argv) or {"returncode": 0, "stdout": "Complete"},
         )
         adapter.export_bank("/tmp/bank.zip", artifact, "historical-candidate")
         adapter.backup("/tmp/postgres-bank.zip", artifact)
@@ -928,10 +1235,10 @@ class AdminMigrationAdapterContractTest(unittest.TestCase):
         )
         self.assertEqual([argv[1] for argv in calls], ["export-bank", "backup", "import-bank", "restore"])
         self.assertEqual(calls, [
-            ["hindsight-admin", "export-bank", "--bank", "historical-candidate", "--output", "/tmp/bank.zip"],
-            ["hindsight-admin", "backup", "/tmp/postgres-bank.zip", "--schema", "public"],
-            ["hindsight-admin", "import-bank", "--archive", "/tmp/bank.zip", "--target-bank", "engineering"],
-            ["hindsight-admin", "restore", "/tmp/postgres-bank.zip", "--schema", "public", "--yes"],
+            [executable, "export-bank", "--bank", "historical-candidate", "--output", "/tmp/bank.zip"],
+            [executable, "backup", "/tmp/postgres-bank.zip", "--schema", "public"],
+            [executable, "import-bank", "--archive", "/tmp/bank.zip", "--target-bank", "engineering"],
+            [executable, "restore", "/tmp/postgres-bank.zip", "--schema", "public", "--yes"],
         ])
         changed = {**evidence, "verification_receipt_digest": "8" * 64}
         with self.assertRaisesRegex(MigrationAdapterError, "evidence digest"):

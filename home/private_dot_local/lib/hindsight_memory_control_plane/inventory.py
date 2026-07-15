@@ -1,10 +1,9 @@
 """Closed-schema inventory loading and cross-reference validation."""
 
-import json
 from pathlib import Path
 from typing import Any, Mapping
 
-from .canonical import digest
+from .canonical import digest, strict_json_loads
 from .model import Inventory
 
 
@@ -237,7 +236,7 @@ def _validate(raw: dict[str, Any]) -> Inventory:
 
 def load_inventory(path: str | Path) -> Inventory:
     try:
-        raw = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
+        raw = strict_json_loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
         raise InventoryError(f"cannot load inventory: {error}") from error
     return _validate(_mapping(raw, "inventory"))

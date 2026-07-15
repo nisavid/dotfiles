@@ -300,7 +300,7 @@
 
 - [x] **Step 3: Implement read-only discovery and proposed planning**
 
-  Allow only adapter read methods. Require one adapter-provided generation or transaction snapshot to cover the full discovery window; if the adapter cannot provide one, require separately verified quiescence evidence and otherwise fail closed. Keep before/after drift comparison as an additional check, not the consistency primitive. Store content-bearing discovery under the external migration artifact directory with mode `0700` directories and `0600` files; plans contain digests and redacted counts, not memory content. Bind the approved offline package digest without copying the package into Git.
+  Allow only adapter read methods. Require one server-backed monotonic adapter generation to cover the full discovery window and fail closed when the adapter cannot provide it. Keep before/after drift comparison as an additional check, not the consistency primitive. Store content-bearing discovery under the external migration artifact directory with mode `0700` directories and `0600` files; plans contain digests and redacted counts, not memory content. Bind the approved offline package digest without copying the package into Git.
 
 - [x] **Step 4: Run fake/disposable tests**
 
@@ -308,11 +308,14 @@
 
   Expected: PASS and fake adapter mutation-call count `0`.
 
-- [x] **Step 5: Execute read-only live discovery**
+- [ ] **Step 5: Execute read-only live discovery**
 
-  Run the CLI with the live profile explicitly selected and `migration discover --read-only`. Bind the full read to one adapter generation or transaction snapshot, or require separately verified quiescence for the whole window. Before and after, snapshot the two completion-gate halves, bank stats, operation IDs, document high-water marks, and adapter watermarks. Require exact equality for all mutation-sensitive state as an additional drift check. Do not run `apply`, retain, consolidate, refresh, import, config patch, template import, curation reapply, or delete.
+  Run the CLI with the live profile explicitly selected and `migration discover --read-only`. The selected adapter must expose a server-backed monotonic generation that covers the full read window. Before and after, snapshot the two completion-gate halves, bank stats, operation IDs, document high-water marks, and adapter watermarks. Require exact equality for all mutation-sensitive state as an additional drift check. Do not run `apply`, retain, consolidate, refresh, import, config patch, template import, curation reapply, or delete.
 
-  Evidence: inventory digest `4b960941e9b26c5295e19610b607b587fc59ce53c41ecc352e1c8db5cfcc7dc1`; unapproved shadow-plan digest `da264e373102a7fe1cea33af50a0cb9bb70d978eda430e6f0f427ff5088db5c7`; no blockers, active operations, completion marker, proposal completion entry, or live mutation.
+  Prior evidence used before/after equality without the required server-backed
+  generation token and does not complete this step. Rerun only after the selected
+  adapter exposes a server-backed monotonic generation for the full discovery
+  window.
 
 - [x] **Step 6: Commit code and tests, not generated migration artifacts**
 

@@ -349,6 +349,36 @@ class BrokerSocketTest(unittest.TestCase):
             self.assertTrue(all(len(value) == 64 for value in json.loads(path.read_text())))
             self.assertNotIn("k" * 32, path.read_text())
 
+    def test_concurrent_handle_exchange_returns_one_capability_and_marks_one_nonce(self):
+        minted = self.client.session_mint("control", claims(), ttl_seconds=30)
+        handle = minted["payload"]["handle"]
+        ready = threading.Barrier(3)
+        capabilities = []
+        failures = []
+
+        def exchange():
+            ready.wait()
+            try:
+                response = self.broker.session_exchange(handle)
+                capabilities.append(response["payload"]["capability"])
+            except Exception as error:
+                failures.append(error)
+
+        threads = [threading.Thread(target=exchange) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        ready.wait()
+        for thread in threads:
+            thread.join(timeout=1)
+            self.assertFalse(thread.is_alive())
+
+        self.assertEqual(failures, [])
+        self.assertEqual(len(capabilities), 2)
+        self.assertEqual(len(set(capabilities)), 1)
+        work = json.loads((self.state / "durable_work.json").read_text())
+        self.assertEqual(len(work["used_nonces"]), 1)
+        self.assertEqual(len(work["exchanges"]), 1)
+
     def test_read_and_model_timeouts_discard_late_payload_and_shutdown_drains(self):
         class SlowFake(FakeAdapter):
             def recall(self, request):
