@@ -634,6 +634,14 @@ def main() -> int:
         validate_age_suffix_adversaries()
         validate_publication_metadata_adversaries()
         validate_worktree_path_adversaries()
+    except (OSError, subprocess.SubprocessError) as error:
+        print(
+            "private hindsight memory control plane PRD: "
+            f"self-test harness failure ({error})",
+            file=sys.stderr,
+        )
+        return 1
+    try:
         with catalog_path.open("rb") as handle:
             catalog = tomllib.load(handle)
         validated = validate_catalog(catalog)
