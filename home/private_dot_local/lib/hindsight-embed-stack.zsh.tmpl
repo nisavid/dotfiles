@@ -192,16 +192,24 @@ hindsight_stack_profile_slot() {
   /bin/chmod 700 "$HINDSIGHT_EMBED_PROFILE_SLOT_DIR" || return 1
 
   local slot_file="$HINDSIGHT_EMBED_PROFILE_SLOT_DIR/${profile}.slot"
-  local lock_dir="$HINDSIGHT_EMBED_PROFILE_SLOT_DIR/.allocation.lock"
-  integer lock_attempt=0
-  until /bin/mkdir "$lock_dir" 2>/dev/null; do
-    (( lock_attempt += 1 ))
-    (( lock_attempt < 200 )) || {
-      print -ru2 -- "hindsight-embed-stack: timed out acquiring profile slot allocation lock"
-      return 1
-    }
-    sleep 0.05
-  done
+  local lock_file="$HINDSIGHT_EMBED_PROFILE_SLOT_DIR/.allocation.lock"
+  [[ ! -e "$lock_file" || ( -f "$lock_file" && ! -L "$lock_file" ) ]] || {
+    print -ru2 -- "hindsight-embed-stack: refusing unsafe profile slot allocation lock: ${lock_file}"
+    return 1
+  }
+  if ! ( umask 077; : >> "$lock_file" ) || ! /bin/chmod 600 "$lock_file"; then
+    print -ru2 -- "hindsight-embed-stack: could not prepare profile slot allocation lock"
+    return 1
+  fi
+  zmodload zsh/system || {
+    print -ru2 -- "hindsight-embed-stack: zsh/system is required for profile slot allocation locking"
+    return 1
+  }
+  integer lock_descriptor
+  zsystem flock -f lock_descriptor -t 10 "$lock_file" || {
+    print -ru2 -- "hindsight-embed-stack: timed out acquiring profile slot allocation lock"
+    return 1
+  }
 
   local result=0 slot temporary existing value
   typeset -A used
@@ -236,7 +244,7 @@ hindsight_stack_profile_slot() {
       result=1
     fi
   fi
-  /bin/rmdir "$lock_dir" || result=1
+  zsystem flock -u "$lock_descriptor" || result=1
   (( result == 0 )) && print -r -- "$slot"
   return "$result"
 }
@@ -478,6 +486,13 @@ hindsight_stack_sidecar_status() {
   fi
 }
 
+hindsight_stack_sidecar_running() {
+  emulate -L zsh
+  local sidecar="$1"
+  local port="$(hindsight_stack_sidecar_port "$sidecar")" || return 1
+  hindsight_stack_port_listening "$port"
+}
+
 hindsight_stack_sidecars_status() {
   emulate -L zsh
   local sidecar count=0
@@ -513,7 +528,7 @@ hindsight_stack_wait_sidecars_stopped() {
   while (( $(/bin/date +%s) <= deadline )); do
     running=0
     for sidecar in "${sidecars[@]}"; do
-      hindsight_stack_sidecar_status "$sidecar" && running=1
+      hindsight_stack_sidecar_running "$sidecar" && running=1
     done
     (( running == 0 )) && return 0
     sleep 2
@@ -548,7 +563,6 @@ hindsight_stack_stop_sidecars() {
   sidecars=("${(@)sidecars:#}")
   local sidecar ok=0
   for sidecar in "${(@Oa)sidecars}"; do
-    hindsight_stack_sidecar_status "$sidecar" || continue
     hindsight_stack_sidecar_command "$sidecar" stop >/dev/null 2>&1 || ok=1
   done
   return "$ok"

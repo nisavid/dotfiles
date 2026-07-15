@@ -172,6 +172,13 @@ class SequenceAdapter(FakeAdapter):
 
 
 class MigrationDiscoveryContractTest(unittest.TestCase):
+    def test_conflicting_repository_scopes_are_rejected(self):
+        with self.assertRaisesRegex(MigrationError, "conflicting repository scopes"):
+            migration_module._coverage_scope(
+                {"scopes": ["repo:one", "repo:two"], "tags": []},
+                {"tags": []},
+            )
+
     def discover(
         self,
         root: Path,
@@ -366,6 +373,7 @@ class MigrationDiscoveryContractTest(unittest.TestCase):
             lambda plan: plan["semantic_diff"].update({"proposed_retains": 0}),
             lambda plan: plan.update({"schema_version": True}),
             lambda plan: plan["semantic_diff"].update({"source_items": True}),
+            lambda plan: plan["invalidation_dispositions"].reverse(),
         )
         for mutate in mutations:
             with self.subTest(mutate=mutate):

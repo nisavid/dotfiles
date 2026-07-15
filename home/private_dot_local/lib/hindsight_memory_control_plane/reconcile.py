@@ -11,7 +11,7 @@ from .adapters import Adapter, RollbackBundle
 from .canonical import digest
 from .file_evidence import FileEvidenceError, read_file_evidence
 from .model import Action, EndpointIdentity, OperationSnapshot, Plan, deep_freeze, deep_thaw
-from .planning import PlanError, plan_from_dict, verify_plan
+from .planning import PlanError, _compatibility, plan_from_dict, verify_plan
 
 
 DIGEST = re.compile(r"[0-9a-f]{64}\Z")
@@ -309,6 +309,38 @@ def _refused(reason: str) -> ApplyResult:
     return ApplyResult("refused", reason)
 
 
+def _closed_compatibility(value: Any) -> tuple[Mapping[str, Any], ...] | None:
+    try:
+        return _compatibility(deep_thaw(value))
+    except (PlanError, TypeError, AttributeError):
+        return None
+
+
+def _compatibility_satisfied(
+    compatibility: tuple[Mapping[str, Any], ...],
+) -> bool:
+    return not any(
+        result.get("compatible") is not True
+        or result.get("status")
+        in {"fail", "blocked", "unknown", "degraded"}
+        for result in compatibility
+    )
+
+
+def _compatibility_identity(
+    compatibility: tuple[Mapping[str, Any], ...],
+) -> tuple[Mapping[str, Any], ...]:
+    outcome_keys = {"compatible", "reason_code", "status"}
+    return tuple(
+        {
+            key: deep_thaw(value)
+            for key, value in result.items()
+            if key not in outcome_keys
+        }
+        for result in compatibility
+    )
+
+
 def apply_plan(plan: Plan | MutationPlan, adapter: Adapter, approval_digest: str,
                gate: Mapping[str, Any] | None) -> ApplyResult:
     migration_gate: MigrationGateDescriptor | None = None
@@ -323,10 +355,10 @@ def apply_plan(plan: Plan | MutationPlan, adapter: Adapter, approval_digest: str
         if isinstance(plan, MutationPlan)
         else plan.compatibility
     )
-    if any(
-        result.get("compatible") is not True
-        or result.get("status") in {"fail", "blocked", "unknown", "degraded"}
-        for result in compatibility
+    planned_compatibility = _closed_compatibility(compatibility)
+    if (
+        planned_compatibility is None
+        or not _compatibility_satisfied(planned_compatibility)
     ):
         return _refused("compatibility_not_satisfied")
     if isinstance(plan, MutationPlan):
@@ -352,6 +384,20 @@ def apply_plan(plan: Plan | MutationPlan, adapter: Adapter, approval_digest: str
         fresh = adapter.snapshot()
     except Exception:
         return _refused("fresh_state_unavailable")
+    if not isinstance(fresh, Mapping):
+        return _refused("fresh_state_unavailable")
+    fresh_compatibility = _closed_compatibility(
+        fresh.get("compatibility")
+    )
+    if fresh_compatibility is None:
+        return _refused("fresh_compatibility_unavailable")
+    if not _compatibility_satisfied(fresh_compatibility):
+        return _refused("compatibility_not_satisfied")
+    if not hmac.compare_digest(
+        digest(_compatibility_identity(fresh_compatibility)),
+        digest(_compatibility_identity(planned_compatibility)),
+    ):
+        return _refused("fresh_compatibility_changed")
     if fresh.get("endpoint") != plan.target_endpoint.to_dict():
         return _refused("endpoint_identity_drift")
     fresh_state_digest = digest(fresh.get("state"))

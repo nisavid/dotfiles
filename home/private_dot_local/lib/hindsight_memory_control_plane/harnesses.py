@@ -375,8 +375,11 @@ def apply_activation(
             prestate=current,
         )
         configuration = deep_thaw(rolled_back.configuration)
-        contained = configuration.get("active") is True
-        if contained:
+        rollback_succeeded = (
+            rolled_back.status == "rolled_back"
+            and hmac.compare_digest(digest(configuration), digest(current))
+        )
+        if not rollback_succeeded and configuration.get("active") is True:
             configuration["active"] = False
         return ActivationOutcome(
             "rolled_back",
@@ -385,7 +388,7 @@ def apply_activation(
             _state(configuration),
             plan.plan_digest,
             True,
-            rolled_back.status == "rolled_back" and not contained,
+            rollback_succeeded,
         )
     return _outcome("activated", "ok", activated, plan)
 

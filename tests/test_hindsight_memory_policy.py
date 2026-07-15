@@ -277,12 +277,9 @@ class BankPolicyTest(unittest.TestCase):
 
     def test_public_serialization_discloses_no_private_catalog_literals(self):
         rendered = json.dumps(self.policy.to_dict(), sort_keys=True)
-        for private_literal in (
-            "private-review-model",
-            "private-repository-model",
-            "workflow:synthetic-review",
-            "repo:synthetic-repository",
-        ):
+        for private_literal in self.catalog["privacy"][
+            "public_forbidden_literals"
+        ]:
             self.assertNotIn(private_literal, rendered)
         self.assertEqual(
             self.policy.to_dict()["private_catalog_digest"],
@@ -298,6 +295,22 @@ class BankPolicyTest(unittest.TestCase):
                 for ref in self.policy.to_dict()["contextual_model_refs"]
             )
         )
+
+    def test_privacy_guard_covers_every_migration_source_id(self):
+        catalog = private_catalog()
+        catalog["contextual_model_migrations"][0] = {
+            "source_id": "legacy-private-review-model",
+            "disposition": "supersede",
+            "target_id": "private-review-model",
+        }
+
+        with self.assertRaisesRegex(PolicyError, "privacy guard"):
+            resolve_policy(
+                public_policy(),
+                catalog,
+                digest(catalog),
+                private_catalog_ciphertext_digest=CIPHERTEXT_DIGEST,
+            )
 
     def test_policy_digest_binds_every_public_semantic_field(self):
         body = self.policy.to_dict()
@@ -939,6 +952,18 @@ class ProviderCompatibilityTest(unittest.TestCase):
         ):
             self.validate(providers=providers)
 
+        providers = list(self.providers)
+        providers[3] = provider(
+            "jina-mlx-live",
+            "reranking",
+            artifact_id="unexpected-current-reranker",
+        )
+        with self.assertRaisesRegex(
+            ProviderCompatibilityError,
+            "current reranker",
+        ):
+            self.validate(providers=providers)
+
     def test_incompatible_reranker_without_fallback_is_visibly_disabled(self):
         providers = list(self.providers)
         providers[3] = {
@@ -956,6 +981,33 @@ class ProviderCompatibilityTest(unittest.TestCase):
             {
                 "state": "disabled",
                 "provider_id": None,
+                "visible_degradation": True,
+            },
+        )
+
+    def test_unbound_declared_reranker_fallback_is_evaluated(self):
+        providers = [
+            *self.providers,
+            provider(
+                "alternate-reranker",
+                "reranking",
+                artifact_id="alternate-reranker-artifact",
+                state="fallback",
+            ),
+        ]
+        providers[4] = {
+            **providers[4],
+            "fallback": "alternate-reranker",
+        }
+
+        report = self.validate(providers=providers)
+
+        self.assertTrue(report.result("alternate-reranker").activatable)
+        self.assertEqual(
+            report.reranking_disposition,
+            {
+                "state": "fallback",
+                "provider_id": "alternate-reranker",
                 "visible_degradation": True,
             },
         )

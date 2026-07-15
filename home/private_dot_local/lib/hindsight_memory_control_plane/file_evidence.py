@@ -69,10 +69,15 @@ def verified_file_snapshot(
     if not source.is_absolute():
         raise FileEvidenceError(f"{label} path must be absolute")
     reject_symlink_components(source, label, allow_missing=False)
+    try:
+        validate_trusted_regular_file(source.lstat(), label)
+    except OSError:
+        raise FileEvidenceError(f"{label} is unavailable") from None
     source_flags = (
         os.O_RDONLY
         | getattr(os, "O_CLOEXEC", 0)
         | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0)
     )
     try:
         source_descriptor = os.open(source, source_flags)
@@ -211,7 +216,20 @@ def read_file_evidence(
     if not path.is_absolute():
         raise FileEvidenceError(f"{label} path must be absolute")
     reject_symlink_components(path, label, allow_missing=allow_missing)
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        validate_trusted_regular_file(path.lstat(), label)
+    except FileNotFoundError:
+        if allow_missing:
+            return None
+        raise FileEvidenceError(f"{label} is unavailable") from None
+    except OSError:
+        raise FileEvidenceError(f"{label} is unavailable") from None
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
     try:
         descriptor = os.open(path, flags)
     except FileNotFoundError:

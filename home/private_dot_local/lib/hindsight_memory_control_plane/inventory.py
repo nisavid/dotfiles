@@ -20,10 +20,26 @@ ROOT_KEYS = {
 }
 ROLES = {"llm", "embedding", "reranking"}
 PLACEMENTS = {"local", "third-party-hosted", "private-remote"}
+RECORD_KEYS = {
+    "machine": {"id", "base_port", "engineering_memory_enabled"},
+    "archetype": {"id"},
+    "profiles": {"id", "slot", "port", "enabled", "host", "tenant", "roles", "provider_roles", "data_classes"},
+    "providers": {"id", "role", "placement", "data_classes"},
+    "banks": {"id", "profile_id", "profile", "data_class", "kind", "authority", "writable", "enable_auto_consolidation", "memory_defense", "models", "directives"},
+    "harnesses": {"id", "profile_id", "profile", "home_bank", "write_bank", "bank"},
+    "migration": {"artifact_dir", "artifact_path", "proposal_log", "proposal_path"},
+    "policy": {"engineering_memory_enabled", "allowed_placements", "provider_placements", "approved_tls_endpoints"},
+}
 
 
 class InventoryError(ValueError):
     pass
+
+
+def _closed(value: Mapping[str, Any], allowed: set[str], label: str) -> None:
+    unknown = set(value) - allowed
+    if unknown:
+        raise InventoryError(f"{label} keys are closed (unknown={sorted(unknown)})")
 
 
 def _mapping(value: Any, label: str) -> dict[str, Any]:
@@ -49,6 +65,7 @@ def _records(value: Any, label: str) -> list[dict[str, Any]]:
 
 def _reference(value: Any, label: str) -> tuple[str, str]:
     record = _mapping(value, label)
+    _closed(record, {"profile_id", "profile", "bank_id", "bank"}, label)
     profile_id = record.get("profile_id", record.get("profile"))
     bank_id = record.get("bank_id", record.get("bank"))
     if not isinstance(profile_id, str) or not isinstance(bank_id, str):
@@ -115,7 +132,17 @@ def _validate(raw: dict[str, Any]) -> Inventory:
     providers = _records(raw["providers"], "providers")
     banks = _records(raw["banks"], "banks")
     harnesses = _records(raw["harnesses"], "harnesses")
+    for label, record in (("machine", machine), ("archetype", archetype), ("migration", migration), ("policy", policy)):
+        _closed(record, RECORD_KEYS[label], label)
+    for label, records in (("profiles", profiles), ("providers", providers), ("banks", banks), ("harnesses", harnesses)):
+        for record in records:
+            _closed(record, RECORD_KEYS[label], f"{label} entry")
     _validate_migration(migration)
+
+    if "id" in machine and (not isinstance(machine["id"], str) or not machine["id"]):
+        raise InventoryError("machine id must be a non-empty string")
+    if "id" in archetype and (not isinstance(archetype["id"], str) or not archetype["id"]):
+        raise InventoryError("archetype id must be a non-empty string")
 
     profile_by_id = {record["id"]: record for record in profiles}
     provider_by_id = {record["id"]: record for record in providers}
@@ -154,6 +181,10 @@ def _validate(raw: dict[str, Any]) -> Inventory:
         unknown_roles = set(roles) - ROLES
         if unknown_roles:
             raise InventoryError(f"profile {profile['id']} has unknown provider roles: {sorted(unknown_roles)}")
+        for role, selected in roles.items():
+            selected_ids = selected if isinstance(selected, list) else [selected]
+            if not selected_ids or any(not isinstance(item, str) or not item for item in selected_ids):
+                raise InventoryError(f"profile {profile['id']} role {role} must name providers")
         data_classes = profile.get("data_classes", [])
         if not isinstance(data_classes, list) or not all(isinstance(item, str) for item in data_classes):
             raise InventoryError(f"profile {profile['id']} data_classes must be an array of strings")
@@ -190,6 +221,19 @@ def _validate(raw: dict[str, Any]) -> Inventory:
         writable = bank.get("writable", True)
         if not isinstance(writable, bool):
             raise InventoryError(f"bank {bank['id']} writable must be boolean")
+        for flag in ("enable_auto_consolidation", "memory_defense"):
+            if flag in bank and not isinstance(bank[flag], bool):
+                raise InventoryError(f"bank {bank['id']} {flag} must be boolean")
+        models = bank.get("models", [])
+        directives = bank.get("directives", [])
+        if not isinstance(models, list) or not isinstance(directives, list):
+            raise InventoryError(f"bank {bank['id']} models and directives must be arrays")
+        for model in models:
+            if not isinstance(model, dict) or set(model) != {"id", "revision"} or not all(isinstance(model[key], str) and model[key] for key in model):
+                raise InventoryError(f"bank {bank['id']} model schema is invalid")
+        for directive in directives:
+            if not isinstance(directive, dict) or set(directive) != {"id", "text"} or not all(isinstance(directive[key], str) and directive[key] for key in directive):
+                raise InventoryError(f"bank {bank['id']} directive schema is invalid")
         data_class = bank.get("data_class", bank.get("kind"))
         if data_class == "engineering" and authority == "authoritative" and writable:
             engineering_authorities += 1
@@ -199,6 +243,14 @@ def _validate(raw: dict[str, Any]) -> Inventory:
         raise InventoryError("engineering_memory_enabled must be boolean")
     if engineering_enabled and engineering_authorities != 1:
         raise InventoryError("engineering memory requires exactly one authoritative write bank")
+    endpoints = policy.get("approved_tls_endpoints", [])
+    if not isinstance(endpoints, list):
+        raise InventoryError("approved_tls_endpoints must be an array")
+    for endpoint in endpoints:
+        if not isinstance(endpoint, dict) or set(endpoint) != {"profile_id", "scheme", "host", "port", "tenant"}:
+            raise InventoryError("approved TLS endpoint keys are closed")
+        if endpoint["scheme"] != "https" or not isinstance(endpoint["host"], str) or type(endpoint["port"]) is not int:
+            raise InventoryError("approved TLS endpoint is invalid")
 
     for harness in harnesses:
         profile_id = harness.get("profile_id", harness.get("profile"))

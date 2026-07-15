@@ -74,6 +74,13 @@ class OnboardingTest(unittest.TestCase):
         session = OnboardingSession()
         with self.assertRaises(OnboardingError):
             session.record("unknown", rationale_code="manual")
+        advanced = session.record(
+            session.next_decision().choices[0].id,
+            rationale_code="manual",
+        )
+        future_choice = advanced.next_decision().choices[0].id
+        with self.assertRaises(OnboardingError):
+            session.record(future_choice, rationale_code="manual")
         with self.assertRaises(OnboardingError):
             session.record(session.next_decision().choices[0].id, rationale_code="contains secret gho_example")
 

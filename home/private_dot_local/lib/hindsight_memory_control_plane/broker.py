@@ -155,6 +155,7 @@ class Broker:
         self._write_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="hindsight-write")
         self._read_futures: set[Future[Any]] = set()
         self._write_futures: set[Future[Any]] = set()
+        self._shutdown_event = threading.Event()
         self._used_path = self.state_dir / "used_nonces.json"
         self._revoked_path = self.state_dir / "revoked_nonces.json"
         self._work_path = self.state_dir / "durable_work.json"
@@ -180,6 +181,7 @@ class Broker:
                     raise
                 retired = True
             self._closed = True
+            self._shutdown_event.set()
             for future in self._read_futures:
                 future.cancel()
             for future in self._write_futures:
@@ -499,18 +501,22 @@ class Broker:
             value = deepcopy(current)
             self._prune_expired_exchanges(value)
             result = mutation(value)
-            _atomic_json(self._work_path, value)
-            self._work = value
-            self._used = set(value["used_nonces"])
-            self._revoked = set(value["revoked_nonces"])
-            try:
-                self._sync_digest_mirrors(value)
-            except OSError:
-                pass
+            self._persist_locked_work(value)
             return result
         finally:
             fcntl.flock(descriptor, fcntl.LOCK_UN)
             os.close(descriptor)
+
+    def _persist_locked_work(self, value: dict[str, Any]) -> None:
+        """Publish canonical work while the caller owns the generation lease."""
+        _atomic_json(self._work_path, value)
+        self._work = value
+        self._used = set(value["used_nonces"])
+        self._revoked = set(value["revoked_nonces"])
+        try:
+            self._sync_digest_mirrors(value)
+        except OSError:
+            pass
 
     def _prune_expired_exchanges(self, work: dict[str, Any]) -> None:
         now = self.clock()
@@ -911,54 +917,91 @@ class Broker:
         if item is None:
             return
         while not self._closed:
-            wait_for_older = False
-            retry_delay = 0.0
             with work_lock:
-                with self._lock:
-                    item = next((entry for entry in self._work["queue"] if entry["queue_id"] == queue_id), None)
-                if item is None:
-                    return
-                with self._lock:
-                    same_key = [entry for entry in self._work["queue"] if entry["state_key"] == item["state_key"]]
-                if item["watermark"] != min((entry["watermark"] for entry in same_key), key=tuple):
-                    wait_for_older = True
-                if wait_for_older:
-                    pass
-                else:
-                    route = self.routes.get(item["route"])
-                    if route is None or not isinstance(route.get("adapter"), Adapter):
+                try:
+                    disposition, delay = self._dispatch_queued_item(queue_id)
+                except BrokerError as error:
+                    if error.code == "BROKER_RETIRED":
                         return
-                    try:
-                        getattr(route["adapter"], item["method"])(deepcopy(item["adapter_request"]))
-                    except Exception:
-                        retry_delay = min(0.1, 0.01 * (2 ** min(item["attempts"], 4)))
-                        with self._lock:
-                            def fail(work):
-                                current = next(entry for entry in work["queue"] if entry["queue_id"] == queue_id)
-                                current["attempts"] += 1
-                                current["last_error"] = "ADAPTER_UNAVAILABLE"
-                                current["next_retry"] = self.clock() + retry_delay
-                            try:
-                                self._transaction(fail)
-                            except (BrokerError, StopIteration):
-                                return
-                    else:
-                        if self._closed:
-                            return
-                        with self._lock:
-                            def complete(work):
-                                current = next(entry for entry in work["queue"] if entry["queue_id"] == queue_id)
-                                work["queue"] = [entry for entry in work["queue"] if entry["queue_id"] != queue_id]
-                                work["completed"][current["state_key"]] = {
-                                    "watermark": current["watermark"], "request_digest": current["request_digest"],
-                                    "idempotency_key": current["idempotency_key"],
-                                }
-                            try:
-                                self._transaction(complete)
-                            except (BrokerError, StopIteration):
-                                return
-                        return
-            time.sleep(0.005 if wait_for_older else retry_delay)
+                    raise
+            if disposition in {"missing", "complete", "route-missing"}:
+                return
+            self._shutdown_event.wait(delay)
+
+    def _dispatch_queued_item(self, queue_id: str) -> tuple[str, float]:
+        """Fence generation ownership across one external adapter invocation."""
+        descriptor = self._lease_descriptor()
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            current = self._read_work()
+            if current.get("generation") != self._generation:
+                raise BrokerError("BROKER_RETIRED")
+            item = next(
+                (
+                    entry for entry in current["queue"]
+                    if entry["queue_id"] == queue_id
+                ),
+                None,
+            )
+            if item is None:
+                return "missing", 0.0
+            same_key = [
+                entry for entry in current["queue"]
+                if entry["state_key"] == item["state_key"]
+            ]
+            oldest = min(
+                same_key,
+                key=lambda entry: tuple(entry["watermark"]),
+            )
+            if oldest["queue_id"] != queue_id:
+                return "older", 0.005
+            retry_at = item["next_retry"]
+            now = self.clock()
+            if retry_at is not None and retry_at > now:
+                return "retry", min(30.0, retry_at - now)
+            route = self.routes.get(item["route"])
+            if route is None or not isinstance(route.get("adapter"), Adapter):
+                return "route-missing", 0.0
+            try:
+                getattr(route["adapter"], item["method"])(
+                    deepcopy(item["adapter_request"])
+                )
+            except Exception:
+                value = deepcopy(current)
+                failed = next(
+                    entry for entry in value["queue"]
+                    if entry["queue_id"] == queue_id
+                )
+                failed["attempts"] += 1
+                failed["last_error"] = "ADAPTER_UNAVAILABLE"
+                base_delay = min(
+                    30.0,
+                    0.25 * (2 ** min(failed["attempts"] - 1, 7)),
+                )
+                jitter = 0.75 + (secrets.randbelow(501) / 1000)
+                delay = min(30.0, base_delay * jitter)
+                failed["next_retry"] = now + delay
+                self._persist_locked_work(value)
+                return "retry", delay
+            value = deepcopy(current)
+            completed = next(
+                entry for entry in value["queue"]
+                if entry["queue_id"] == queue_id
+            )
+            value["queue"] = [
+                entry for entry in value["queue"]
+                if entry["queue_id"] != queue_id
+            ]
+            value["completed"][completed["state_key"]] = {
+                "watermark": completed["watermark"],
+                "request_digest": completed["request_digest"],
+                "idempotency_key": completed["idempotency_key"],
+            }
+            self._persist_locked_work(value)
+            return "complete", 0.0
+        finally:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            os.close(descriptor)
 
     def session_status(self, capability: str, *, sequence: int, action_id: str, timeout_seconds: float = 2) -> dict[str, Any]:
         timeout = self._timeout(timeout_seconds)

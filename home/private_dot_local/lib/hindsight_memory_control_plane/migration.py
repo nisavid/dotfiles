@@ -300,7 +300,7 @@ def _snapshot_blockers(snapshot: Any, source_bank: BankRef, candidate_bank: Bank
         return blockers
     if set(snapshot) != SNAPSHOT_KEYS:
         blockers.append("invalid:snapshot_keys")
-    if snapshot["schema_version"] != 1:
+    if type(snapshot["schema_version"]) is not int or snapshot["schema_version"] != 1:
         blockers.append("invalid:schema_version")
     for key in ("endpoint", "provider_identity", "versions", "banks", "operations", "retain_watermarks"):
         _mapping(snapshot[key], key, blockers)
@@ -448,7 +448,9 @@ def _coverage_scope(bank: Mapping[str, Any], document: Mapping[str, Any]) -> str
             if isinstance(value, str) and SEMANTIC_SCOPE.fullmatch(value) is not None
         )
     repositories = sorted(value for value in candidates if value.startswith("repo:"))
-    return repositories[0] if len(repositories) == 1 else "scope:active"
+    if len(repositories) > 1:
+        raise MigrationError("migration item has conflicting repository scopes")
+    return repositories[0] if repositories else "scope:active"
 
 
 def _live_coverage(snapshot: Mapping[str, Any]) -> dict[str, list[dict[str, Any]]]:
@@ -635,6 +637,8 @@ def verify_shadow_plan(value: Any) -> None:
                 raise MigrationError("shadow plan semantic scope is invalid")
         if len(identifiers) != len(set(identifiers)):
             raise MigrationError("shadow plan coverage contains duplicates")
+        if identifiers != sorted(identifiers):
+            raise MigrationError("shadow plan coverage must be canonically ordered")
         if not hmac.compare_digest(digest(coverage[role]), bindings[f"{role}_coverage_digest"]):
             raise MigrationError("shadow plan coverage digest does not match")
     curation = value["invalidation_dispositions"]
@@ -654,6 +658,8 @@ def verify_shadow_plan(value: Any) -> None:
             raise MigrationError("shadow plan invalidation disposition is invalid")
     if len(invalidation_ids) != len(set(invalidation_ids)):
         raise MigrationError("shadow plan invalidation dispositions contain duplicates")
+    if invalidation_ids != sorted(invalidation_ids):
+        raise MigrationError("shadow plan invalidation dispositions must be canonically ordered")
     if not hmac.compare_digest(digest(curation), bindings["invalidation_disposition_digest"]):
         raise MigrationError("shadow plan invalidation disposition digest does not match")
     semantic = value["semantic_diff"]

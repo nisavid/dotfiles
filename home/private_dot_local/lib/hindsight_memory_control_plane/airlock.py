@@ -450,7 +450,7 @@ def validate_airlock_plan(
     testable, and plan construction cannot launch a machine.
     """
 
-    candidate = _mapping(candidate, TOP_LEVEL_KEYS, "airlock plan")
+    candidate = deep_thaw(_mapping(candidate, TOP_LEVEL_KEYS, "airlock plan"))
     if (
         type(candidate["schema_version"]) is not int
         or candidate["schema_version"] != 1
@@ -469,13 +469,14 @@ def validate_airlock_plan(
     probe_method = getattr(runner, "probe", None)
     if not callable(probe_method):
         raise AirlockPlanError("OrbStack runner must provide the probe seam")
+    plan = AirlockLaunchPlan(candidate)
     for probe in PREFLIGHT_PROBES:
         outcome = probe_method(probe)
         if type(outcome) is not bool:
             raise AirlockPlanError(f"probe {probe} must return a boolean")
         if not outcome:
             raise AirlockPlanError(f"required airlock probe failed: {probe}")
-    return AirlockLaunchPlan(candidate)
+    return plan
 
 
 def validate_airlock_closeout(

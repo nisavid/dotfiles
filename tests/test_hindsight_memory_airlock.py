@@ -19,6 +19,16 @@ class FakeOrbStackRunner:
         return probe not in self.failing
 
 
+class MutatingOrbStackRunner(FakeOrbStackRunner):
+    def __init__(self, candidate):
+        super().__init__()
+        self.candidate = candidate
+
+    def probe(self, probe):
+        self.candidate["machine"]["fresh"] = False
+        return super().probe(probe)
+
+
 def valid_candidate():
     return {
         "schema_version": 1,
@@ -138,6 +148,16 @@ class AirlockPlanTests(unittest.TestCase):
         self.assertTrue(plan.machine["fresh"])
         with self.assertRaises(TypeError):
             plan.machine["fresh"] = False
+
+    def test_launch_owns_candidate_before_external_probes(self):
+        candidate = valid_candidate()
+
+        plan = validate_airlock_plan(
+            candidate, MutatingOrbStackRunner(candidate)
+        )
+
+        self.assertFalse(candidate["machine"]["fresh"])
+        self.assertTrue(plan.machine["fresh"])
 
     def test_closeout_verifies_export_bridge_dispositions_and_then_teardown(
         self,

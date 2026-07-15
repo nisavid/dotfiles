@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
+TRUSTED_TEST_PYTHON = "/usr/bin/python3"
 CLI = ROOT / "home/private_dot_local/bin/executable_hindsight-memory"
 LIB = ROOT / "home/private_dot_local/lib"
 if str(LIB) not in __import__("sys").path:
@@ -30,7 +31,7 @@ from hindsight_memory_control_plane import (
 )
 from hindsight_memory_control_plane.canonical import digest, strict_json_loads
 from hindsight_memory_control_plane.adapters import FakeAdapter
-from hindsight_memory_control_plane.ledger import LedgerError, append_record
+from hindsight_memory_control_plane.ledger import LedgerError, append_record, validate_record
 
 
 def inventory():
@@ -103,9 +104,40 @@ def inventory():
 
 
 class ControllerCliTest(unittest.TestCase):
+    def test_inventory_nested_schemas_are_closed_and_typed(self):
+        for mutate in (
+            lambda value: value["profiles"][0].update({"private_token": "secret"}),
+            lambda value: value["harnesses"][0]["home_bank"].update({"extra": True}),
+            lambda value: value["banks"][0].update({"models": [{"id": "m", "revision": 1}]}),
+        ):
+            with self.subTest(mutate=mutate), tempfile.TemporaryDirectory() as directory:
+                value = inventory()
+                mutate(value)
+                path = Path(directory) / "inventory.json"
+                self.write_json(path, value)
+                with self.assertRaises(Exception):
+                    load_inventory(path)
+
+    def test_ledger_timestamp_must_name_a_real_instant(self):
+        value = {
+            "schema_version": 1,
+            "action_id": "retain-1",
+            "correlation_id": "session-1",
+            "source_bank": {"profile_id": "core", "bank_id": "engineering", "endpoint": {"profile_id": "core", "scheme": "http", "host": "127.0.0.1", "port": 7979, "tenant": "default"}},
+            "target_bank": {"profile_id": "core", "bank_id": "personal", "endpoint": {"profile_id": "core", "scheme": "http", "host": "127.0.0.1", "port": 7979, "tenant": "default"}},
+            "policy_digest": "1" * 64,
+            "artifact_digest": "2" * 64,
+            "decision": "deny",
+            "reason_code": "POLICY_DENY",
+            "timestamp": "2026-02-30T12:00:00Z",
+            "reversible_record_id": None,
+        }
+        with self.assertRaisesRegex(LedgerError, "real UTC"):
+            validate_record(value)
+
     def run_cli(self, state_dir, *args):
         return subprocess.run(
-            ["python3", str(CLI), "--state-dir", str(state_dir), *map(str, args)],
+            [sys.executable, str(CLI), "--state-dir", str(state_dir), *map(str, args)],
             cwd=ROOT,
             text=True,
             capture_output=True,
@@ -251,7 +283,7 @@ class ControllerCliTest(unittest.TestCase):
             rollback_archive = root / "pre-state-backup.zip"
             admin_executable = root / "hindsight-admin"
             admin_executable.write_text(
-                f"#!{sys.executable}\nraise SystemExit('test seam only')\n",
+                f"#!{TRUSTED_TEST_PYTHON}\nraise SystemExit('test seam only')\n",
                 encoding="utf-8",
             )
             admin_executable.chmod(0o700)
@@ -317,9 +349,16 @@ class ControllerCliTest(unittest.TestCase):
 
                     def run_admin(argv, **_kwargs):
                         process_contexts.append(_kwargs)
+                        if "HINDSIGHT_RUNTIME_MANIFEST_V1" in argv[-1]:
+                            return subprocess.CompletedProcess(
+                                argv,
+                                0,
+                                json.dumps({"files": [str(Path(__file__).resolve())]}),
+                                "",
+                            )
                         if "importlib.metadata" in argv[-1]:
                             return subprocess.CompletedProcess(argv, 0, "0.8.4\n", "")
-                        self.assertEqual(argv[0], sys.executable)
+                        self.assertEqual(argv[0], TRUSTED_TEST_PYTHON)
                         self.assertRegex(argv[1], r"^/dev/fd/[0-9]+$")
                         self.assertEqual(
                             _kwargs.get("pass_fds"), (int(argv[1].rsplit("/", 1)[1]),)
@@ -418,9 +457,16 @@ class ControllerCliTest(unittest.TestCase):
             mismatched_backup_calls = []
 
             def run_mismatched_backup(argv, **_kwargs):
+                if "HINDSIGHT_RUNTIME_MANIFEST_V1" in argv[-1]:
+                    return subprocess.CompletedProcess(
+                        argv,
+                        0,
+                        json.dumps({"files": [str(Path(__file__).resolve())]}),
+                        "",
+                    )
                 if "importlib.metadata" in argv[-1]:
                     return subprocess.CompletedProcess(argv, 0, "0.8.4\n", "")
-                self.assertEqual(argv[0], sys.executable)
+                self.assertEqual(argv[0], TRUSTED_TEST_PYTHON)
                 self.assertRegex(argv[1], r"^/dev/fd/[0-9]+$")
                 self.assertEqual(
                     _kwargs.get("pass_fds"), (int(argv[1].rsplit("/", 1)[1]),)
@@ -995,6 +1041,57 @@ class ControllerCliTest(unittest.TestCase):
             self.assertEqual(
                 build_plan(desired, matching, {"idle": True, "active": []}).actions,
                 (),
+            )
+
+    def test_generated_action_and_reason_ids_are_bounded_and_stable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory) / "inventory.json"
+            value = inventory()
+            desired_bank_id = "b" * 128
+            desired_model_id = "m" * 128
+            unmanaged_bank_id = "u" * 128
+            value["banks"][0]["id"] = desired_bank_id
+            value["harnesses"][0]["home_bank"]["bank_id"] = desired_bank_id
+            value["banks"][0]["models"] = [
+                {"id": desired_model_id, "revision": "v1"}
+            ]
+            self.write_json(fixture, value)
+            desired = load_inventory(fixture)
+            live = {
+                "profile_id": "core",
+                "endpoint": {
+                    "profile_id": "core",
+                    "scheme": "http",
+                    "host": "127.0.0.1",
+                    "port": 7979,
+                    "tenant": "default",
+                },
+                "state": {"banks": [{"id": unmanaged_bank_id}]},
+                "compatibility": [],
+            }
+
+            first = build_plan(
+                desired, live, {"idle": True, "active": []}
+            )
+            second = build_plan(
+                desired, live, {"idle": True, "active": []}
+            )
+
+            self.assertEqual(
+                [action.id for action in first.actions],
+                [action.id for action in second.actions],
+            )
+            self.assertTrue(
+                all(len(action.id) <= 128 for action in first.actions)
+            )
+            unmanaged = next(
+                action
+                for action in first.actions
+                if action.kind == "report_unmanaged"
+            )
+            self.assertLessEqual(len(unmanaged.details["reason_code"]), 128)
+            self.assertEqual(
+                unmanaged.details["profile_id"], "core"
             )
 
     def test_plan_artifacts_reject_private_and_payload_carriers(self):

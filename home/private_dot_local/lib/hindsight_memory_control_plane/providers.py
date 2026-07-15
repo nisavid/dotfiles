@@ -522,6 +522,12 @@ def validate_provider_compatibility(
             raise ProviderCompatibilityError(
                 "llm_failover must reference declared LLM providers"
             )
+    for provider in tuple(selected):
+        fallback_id = provider["fallback"]
+        if fallback_id is not None:
+            fallback = provider_by_id[fallback_id]
+            if fallback not in selected:
+                selected.append(fallback)
     for role in ("llm", "reranking"):
         if "desired" not in normalized_bindings[role]:
             raise ProviderCompatibilityError(

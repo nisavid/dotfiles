@@ -230,7 +230,7 @@ class HarnessActivationTest(unittest.TestCase):
         )
         self.assertEqual((outcome.status, outcome.reason), ("refused", "plan_not_approved"))
 
-    def test_failed_postcheck_never_restores_an_active_adapter(self):
+    def test_failed_postcheck_restores_an_exact_active_prestate(self):
         original = {
             "schemaVersion": None,
             "active": True,
@@ -265,14 +265,10 @@ class HarnessActivationTest(unittest.TestCase):
         )
 
         self.assertEqual((outcome.status, outcome.reason), ("rolled_back", "postcheck_failed"))
-        self.assertEqual(outcome.activation_state, "inactive")
+        self.assertEqual(outcome.activation_state, "active")
         self.assertTrue(outcome.rollback_attempted)
-        self.assertFalse(outcome.rollback_succeeded)
-        self.assertIs(outcome.configuration["active"], False)
-        self.assertIsNone(outcome.configuration["schemaVersion"])
-        self.assertNotIn("broker", outcome.configuration)
-        self.assertNotIn("adapter", outcome.configuration)
-        self.assertEqual(outcome.configuration["unknown"], {"registration": "keep"})
+        self.assertTrue(outcome.rollback_succeeded)
+        self.assertEqual(outcome.configuration, original)
 
     def test_rollback_restores_missing_and_explicit_null_without_unknown_changes(self):
         prestate = render_harness(
@@ -409,7 +405,11 @@ class HarnessTemplateTest(unittest.TestCase):
                             "path": expected_socket,
                             "scope": "user",
                         },
-                        "adapter": harness_id,
+                        "adapter": (
+                            "hindsight-codex"
+                            if harness_id == "codex"
+                            else harness_id
+                        ),
                         "active": False,
                     },
                 )
