@@ -957,6 +957,58 @@ class DurableWorkTest(unittest.TestCase):
         self.assertEqual(closed["disposition"], "closed")
         self.assertGreaterEqual(closed["payload"]["undrained"], 1)
 
+    def test_inflight_dispatch_does_not_block_unrelated_transactions(self):
+        release = threading.Event()
+        started = threading.Event()
+
+        class FencedFake(FakeAdapter):
+            def retain_outcome(self, request):
+                started.set()
+                release.wait()
+                return super().retain_outcome(request)
+
+        self._stop()
+        self.adapter = FencedFake(endpoint=ENDPOINT)
+        self._start()
+        capability = self.exchange()
+        self.client.retain_outcome(
+            capability,
+            sequence=1,
+            action_id="responsive-fence",
+            request={
+                "document_id": "doc",
+                "epoch": 1,
+                "checkpoint": 1,
+                "outcome": "done",
+            },
+        )
+        completed = threading.Event()
+        results = []
+        thread = None
+
+        def mint_unrelated_session():
+            results.append(
+                self.broker.session_mint(
+                    "control",
+                    claims(session_id="parallel-session"),
+                    ttl_seconds=30,
+                )
+            )
+            completed.set()
+
+        try:
+            self.assertTrue(started.wait(0.2))
+            thread = threading.Thread(target=mint_unrelated_session)
+            thread.start()
+            self.assertTrue(completed.wait(0.2))
+            self.assertEqual(results[0]["disposition"], "ok")
+        finally:
+            release.set()
+            if thread is not None:
+                thread.join(1)
+        self.assertIsNotNone(thread)
+        self.assertFalse(thread.is_alive())
+
     def test_shutdown_and_replacement_wait_for_inflight_generation_lease(self):
         release = threading.Event()
         started = threading.Event()

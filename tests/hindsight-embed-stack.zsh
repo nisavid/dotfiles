@@ -98,6 +98,26 @@ fleet_state="$tmp_dir/fleet-state"
   }
 )
 
+unsafe_lock_state="$tmp_dir/unsafe-lock-state"
+dangling_lock_target="$tmp_dir/dangling-lock-target"
+mkdir -p "$unsafe_lock_state/profile-slots"
+ln -s "$dangling_lock_target" "$unsafe_lock_state/profile-slots/.allocation.lock"
+if (
+  export HOME="$test_home"
+  export HINDSIGHT_EMBED_STATE_DIR="$unsafe_lock_state"
+  export HINDSIGHT_EMBED_PROFILE="present-profile"
+  export HINDSIGHT_EMBED_FLEET_PROFILES="present-profile,second-profile"
+  source "$rendered_stack_lib"
+  hindsight_stack_profile_slot present-profile
+) >/dev/null 2>&1; then
+  print -ru2 -- "profile slot allocation accepted a dangling lock symlink"
+  exit 1
+fi
+[[ ! -e "$dangling_lock_target" ]] || {
+  print -ru2 -- "profile slot allocation followed a dangling lock symlink"
+  exit 1
+}
+
 filtered_status="$tmp_dir/filtered-status.out"
 (
   export HOME="$test_home"
@@ -229,9 +249,11 @@ fake_memory_cli="$tmp_dir/fake-hindsight-memory"
 cat > "$fake_memory_cli" <<'ZSH'
 #!/usr/bin/env zsh
 print -r -- "$@" > "$HINDSIGHT_TEST_BROKER_ARGS"
+print -ru2 -- "broker output must be detached"
 ZSH
 chmod 700 "$fake_memory_cli"
 broker_args="$tmp_dir/broker-args"
+broker_output="$tmp_dir/broker-output"
 (
   unsetopt BG_NICE
   export HOME="$test_home"
@@ -241,9 +263,13 @@ broker_args="$tmp_dir/broker-args"
   export HINDSIGHT_MEMORY_CLI="$fake_memory_cli"
   export HINDSIGHT_TEST_BROKER_ARGS="$broker_args"
   source "$rendered_stack_lib"
-  hindsight_stack_broker_start 2>/dev/null
+  hindsight_stack_broker_start >"$broker_output" 2>&1
   wait
 )
+[[ ! -s "$broker_output" ]] || {
+  print -ru2 -- "broker start inherited caller output descriptors"
+  exit 1
+}
 broker_command="$(<"$broker_args")"
 [[ "$broker_command" == *'broker serve'* &&
   "$broker_command" == *'--profile present-profile --profile second-profile'* ]] || {
