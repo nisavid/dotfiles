@@ -21,6 +21,7 @@ from .adapters import AdapterError, AuthenticationError, RollbackBundle, validat
 from .canonical import StrictJsonError, digest, strict_json_loads
 from .model import BankRef, EndpointIdentity, Inventory
 from .planning import inventory_endpoint
+from .planning import PlanError, _compatibility
 
 
 class _RejectRedirectHandler(HTTPRedirectHandler):
@@ -41,6 +42,7 @@ class HttpAdapter:
         "read_directives": "/v1/directives",
         "read_operations": "/v1/operations",
         "read_invalidated_memories": "/v1/memories/invalidated",
+        "read_compatibility": "/v1/compatibility",
     }
     MUTATION_PATHS = {
         "template_dry_run": ("POST", "/v1/templates/dry-run"),
@@ -61,6 +63,12 @@ class HttpAdapter:
         "report_unmanaged": ("POST", "/v1/unmanaged/report"),
     }
     PAGE_LIMIT = 1000
+    MAX_DISCOVERY_ITEMS = 10_000
+    SAFE_CONFIG_FIELDS = frozenset({
+        "model", "provider", "recall_max_tokens", "retain_mission", "mission",
+        "enable_observations", "entity_types", "max_tokens", "temperature",
+        "top_p", "base_url", "host", "port", "revision", "dimensions",
+    })
     SECRET_KEY_PARTS = frozenset(
         {"access", "authorization", "bearer", "credential", "key", "password", "secret", "token"}
     )
@@ -192,7 +200,19 @@ class HttpAdapter:
             raise AdapterError("endpoint identity is invalid") from None
 
     def snapshot(self) -> Mapping[str, Any]:
-        return {"endpoint": self.endpoint_identity().to_dict(), "state": self._request("GET", "/v1/state"), "operations": self.read_operations()}
+        raw_compatibility = self._request("GET", self.READ_PATHS["read_compatibility"])
+        if not isinstance(raw_compatibility, Mapping) or set(raw_compatibility) != {"compatibility"}:
+            raise AdapterError("compatibility response keys are closed")
+        try:
+            compatibility = [dict(item) for item in _compatibility(raw_compatibility["compatibility"])]
+        except PlanError:
+            raise AdapterError("compatibility response is invalid") from None
+        return {
+            "endpoint": self.endpoint_identity().to_dict(),
+            "state": self._request("GET", "/v1/state"),
+            "operations": self.read_operations(),
+            "compatibility": compatibility,
+        }
 
     def _read(self, name: str): return self._request("GET", self.READ_PATHS[name])
     def read_config(self): return self._read("read_config")
@@ -270,6 +290,8 @@ class HttpAdapter:
                 child_path = f"{path}.{name}" if path else name
                 if cls._secret_config_key(name):
                     redacted.append(child_path)
+                elif name not in cls.SAFE_CONFIG_FIELDS:
+                    redacted.append(child_path)
                 else:
                     safe[name] = cls._safe_config_value(item, child_path, redacted)
             return safe
@@ -327,8 +349,11 @@ class HttpAdapter:
         limit: int | None = None,
     ) -> list[Any]:
         page_limit = self.PAGE_LIMIT if limit is None else limit
+        if type(page_limit) is not int or not 1 <= page_limit <= self.PAGE_LIMIT:
+            raise AdapterError("pagination limit is invalid")
         items: list[Any] = []
         offset = 0
+        expected_total: int | None = None
         while True:
             separator = "&" if "?" in path else "?"
             page_path = f"{path}{separator}{urlencode({'limit': page_limit, 'offset': offset})}"
@@ -338,11 +363,22 @@ class HttpAdapter:
                 raise AdapterError("paginated discovery response is invalid")
             if page.get("offset", offset) != offset:
                 raise AdapterError("paginated discovery response offset drifted")
+            if "limit" in page and (
+                type(page["limit"]) is not int
+                or not len(page_items) <= page["limit"] <= self.PAGE_LIMIT
+            ):
+                raise AdapterError("paginated discovery response limit is invalid")
             items.extend(page_items)
+            if len(items) > self.MAX_DISCOVERY_ITEMS:
+                raise AdapterError("paginated discovery response exceeds item limit")
             if total_required:
                 total = page.get("total")
-                if type(total) is not int or total < 0 or len(items) > total:
+                if type(total) is not int or total < 0 or total > self.MAX_DISCOVERY_ITEMS or len(items) > total:
                     raise AdapterError("paginated discovery response total is invalid")
+                if expected_total is None:
+                    expected_total = total
+                elif total != expected_total:
+                    raise AdapterError("paginated discovery response total drifted")
                 if len(items) == total:
                     return items
                 if not page_items:

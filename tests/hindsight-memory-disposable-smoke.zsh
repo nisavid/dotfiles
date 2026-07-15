@@ -274,6 +274,28 @@ print(pg.start().uri)
 '
 }
 
+typeset STARTED_PG_PORT=
+typeset STARTED_PG_NAME=
+start_postgres_on_free_port() {
+  local role=$1
+  local data_dir=$2
+  local password=$3
+  local output_file=$4
+  local attempt port name
+  for attempt in {1..10}; do
+    port=$(free_port)
+    name="hindsight-smoke-${role}-${port}"
+    if start_postgres "$name" "$port" "$data_dir" "$role" "$password" \
+      >"$output_file" 2>"${output_file}.log"; then
+      STARTED_PG_PORT=$port
+      STARTED_PG_NAME=$name
+      return 0
+    fi
+  done
+  print -u2 -- "disposable PostgreSQL could not bind a selected loopback port"
+  return 1
+}
+
 typeset STARTED_API_PID=
 start_api() {
   local database_url=$1
@@ -326,6 +348,27 @@ wait_for_api() {
     sleep 0.5
   done
   print -u2 -- "disposable Hindsight API did not become healthy"
+  return 1
+}
+
+typeset STARTED_API_PORT=
+start_api_on_free_port() {
+  local database_url=$1
+  local role=$2
+  local log_file=$3
+  local attempt port pid
+  for attempt in {1..10}; do
+    port=$(free_port)
+    start_api "$database_url" "$role" "$port" "$log_file"
+    pid=$STARTED_API_PID
+    if wait_for_api "$port" "$pid"; then
+      STARTED_API_PORT=$port
+      return 0
+    fi
+    kill -TERM "$pid" >/dev/null 2>&1 || true
+    wait "$pid" >/dev/null 2>&1 || true
+  done
+  print -u2 -- "disposable Hindsight API could not bind a selected loopback port"
   return 1
 }
 
@@ -471,26 +514,20 @@ unseal_export() {
   [[ "$actual_digest" == "$expected_digest" ]]
 }
 
-typeset -r SOURCE_PG_PORT=$(free_port)
-typeset -r SOURCE_API_PORT=$(free_port)
-typeset -r IMPORT_PG_PORT=$(free_port)
-typeset -r RESTORE_PG_PORT=$(free_port)
-typeset -r SOURCE_PG_NAME="hindsight-smoke-source-${SOURCE_PG_PORT}"
-typeset -r IMPORT_PG_NAME="hindsight-smoke-import-${IMPORT_PG_PORT}"
-typeset -r RESTORE_PG_NAME="hindsight-smoke-restore-${RESTORE_PG_PORT}"
-start_postgres "$SOURCE_PG_NAME" "$SOURCE_PG_PORT" "$SOURCE_DATA" source \
-  "$SOURCE_DB_PASSWORD" >"$SMOKE_ROOT/source-db-url"
+start_postgres_on_free_port source "$SOURCE_DATA" "$SOURCE_DB_PASSWORD" \
+  "$SMOKE_ROOT/source-db-url"
+typeset -r SOURCE_PG_PORT=$STARTED_PG_PORT
+typeset -r SOURCE_PG_NAME=$STARTED_PG_NAME
 typeset -r SOURCE_DB_URL=$(<"$SMOKE_ROOT/source-db-url")
 [[ -n "$SOURCE_DB_URL" ]]
 install_disposable_target_guard "$SOURCE_DB_URL" source || {
   print -u2 -- "failed to install the source disposable-target guard"
   exit 1
 }
-typeset -r SOURCE_API_URL="http://127.0.0.1:$SOURCE_API_PORT"
-
-start_api "$SOURCE_DB_URL" source "$SOURCE_API_PORT" "$SMOKE_ROOT/source-api.log"
+start_api_on_free_port "$SOURCE_DB_URL" source "$SMOKE_ROOT/source-api.log"
+typeset -r SOURCE_API_PORT=$STARTED_API_PORT
 typeset -r SOURCE_API_PID=$STARTED_API_PID
-wait_for_api "$SOURCE_API_PORT" "$SOURCE_API_PID"
+typeset -r SOURCE_API_URL="http://127.0.0.1:$SOURCE_API_PORT"
 
 CURRENT_PHASE=authentication
 typeset -r UNAUTHORIZED_STATUS=$(
@@ -560,8 +597,10 @@ hindsight_admin "$SOURCE_DB_URL" source export-bank --bank "$SOURCE_BANK" \
   --output "$SMOKE_ROOT/bank.zip" >"$SMOKE_ROOT/export-bank.log" 2>&1
 typeset -r BANK_PLAIN_DIGEST=$(seal_export "$SMOKE_ROOT/bank.zip" "$SMOKE_ROOT/bank.zip.enc")
 unseal_export "$SMOKE_ROOT/bank.zip.enc" "$SMOKE_ROOT/bank.restore.zip" "$BANK_PLAIN_DIGEST"
-start_postgres "$IMPORT_PG_NAME" "$IMPORT_PG_PORT" "$IMPORT_DATA" import \
-  "$IMPORT_DB_PASSWORD" >"$SMOKE_ROOT/import-db-url"
+start_postgres_on_free_port import "$IMPORT_DATA" "$IMPORT_DB_PASSWORD" \
+  "$SMOKE_ROOT/import-db-url"
+typeset -r IMPORT_PG_PORT=$STARTED_PG_PORT
+typeset -r IMPORT_PG_NAME=$STARTED_PG_NAME
 typeset -r IMPORT_DB_URL=$(<"$SMOKE_ROOT/import-db-url")
 [[ -n "$IMPORT_DB_URL" ]]
 install_disposable_target_guard "$IMPORT_DB_URL" import || {
@@ -614,8 +653,10 @@ hindsight_admin "$SOURCE_DB_URL" source backup "$SMOKE_ROOT/schema.zip" --schema
 typeset -r SCHEMA_PLAIN_DIGEST=$(seal_export "$SMOKE_ROOT/schema.zip" "$SMOKE_ROOT/schema.zip.enc")
 unseal_export "$SMOKE_ROOT/schema.zip.enc" "$SMOKE_ROOT/schema.restore.zip" "$SCHEMA_PLAIN_DIGEST"
 
-start_postgres "$RESTORE_PG_NAME" "$RESTORE_PG_PORT" "$RESTORE_DATA" restore \
-  "$RESTORE_DB_PASSWORD" >"$SMOKE_ROOT/restore-db-url"
+start_postgres_on_free_port restore "$RESTORE_DATA" "$RESTORE_DB_PASSWORD" \
+  "$SMOKE_ROOT/restore-db-url"
+typeset -r RESTORE_PG_PORT=$STARTED_PG_PORT
+typeset -r RESTORE_PG_NAME=$STARTED_PG_NAME
 typeset -r RESTORE_DB_URL=$(<"$SMOKE_ROOT/restore-db-url")
 [[ -n "$RESTORE_DB_URL" ]]
 install_disposable_target_guard "$RESTORE_DB_URL" restore || {

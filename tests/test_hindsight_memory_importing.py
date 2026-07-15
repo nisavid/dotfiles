@@ -26,6 +26,7 @@ from hindsight_memory_control_plane.importing import (
     validate_projection,
 )
 from hindsight_memory_control_plane.import_runner import run_import_inspection
+from hindsight_memory_control_plane.model import Action, FrozenDict, deep_freeze
 
 
 def record(native_id="m1", content="Prefer exact lease pushes.", **overrides):
@@ -47,6 +48,14 @@ def record(native_id="m1", content="Prefer exact lease pushes.", **overrides):
 
 
 class ImportProjectionTest(unittest.TestCase):
+    def test_nested_frozen_dicts_are_recopied_and_action_identity_is_reserved(self):
+        nested = FrozenDict({"value": []})
+        frozen = deep_freeze(nested)
+        nested["value"].append("changed")
+        self.assertEqual(frozen["value"], ())
+        with self.assertRaisesRegex(ValueError, "action identity"):
+            Action("real-id", "retain", {"id": "spoofed"})
+
     def test_curated_codex_and_claude_markdown_adapters_emit_stable_records(self):
         timestamp = "2026-07-01T12:34:56Z"
         with tempfile.TemporaryDirectory() as directory:
@@ -343,6 +352,37 @@ class ImportProjectionTest(unittest.TestCase):
         result = apply_import_plan(plan, approved_plan_digest=plan.plan_digest, controller_apply=calls.append)
         self.assertEqual(result, plan.plan_digest)
         self.assertEqual(calls, [plan.to_dict()])
+
+        object.__setattr__(plan, "actions", ())
+        with self.assertRaisesRegex(ImportError, "does not match its body"):
+            apply_import_plan(plan, approved_plan_digest=result, controller_apply=calls.append)
+
+    def test_timestamps_are_canonicalized_to_utc(self):
+        item = inspect_items(
+            "codex", [record(timestamp="2026-07-01T14:34:56+02:00")]
+        )[0]
+        self.assertEqual(item.timestamp, "2026-07-01T12:34:56Z")
+
+    def test_projection_validation_rejects_structurally_inconsistent_membership(self):
+        projection = project_import(inspect_items("codex", [record()]))
+        object.__setattr__(projection, "pending_items", ())
+        with self.assertRaisesRegex(ImportError, "skipped items"):
+            validate_projection(projection)
+
+    def test_portable_json_rejects_duplicate_keys_and_non_finite_values(self):
+        with tempfile.TemporaryDirectory() as directory:
+            duplicate = Path(directory) / "duplicate.jsonl"
+            duplicate.write_text(
+                '{"id":"a","id":"b","timestamp":"2026-07-01T00:00:00Z","kind":"rule","scope":"global","relationships":[],"disposition":"proposed_novel","reason":"new","content":"safe"}\n',
+                encoding="utf-8",
+            )
+            with self.assertRaises(ImportError):
+                parse_portable_jsonl(duplicate)
+
+            non_finite = Path(directory) / "non-finite.jsonl"
+            non_finite.write_text('{"value":NaN}\n', encoding="utf-8")
+            with self.assertRaises(ImportError):
+                parse_portable_jsonl(non_finite)
 
     def test_reconcile_is_complete_only_for_exact_item_and_digest_receipts(self):
         projection = project_import(inspect_items("codex", [record(), record("m2", "Use current evidence.")]))

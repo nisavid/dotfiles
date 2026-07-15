@@ -7,8 +7,16 @@ tmp_dir="$(mktemp -d)"
 broker_pid=""
 supervisor_pid=""
 trap '
-  [[ -z "$broker_pid" ]] || kill "$broker_pid" >/dev/null 2>&1 || true
-  [[ -z "$supervisor_pid" ]] || kill "$supervisor_pid" >/dev/null 2>&1 || true
+  for pid in "$broker_pid" "$supervisor_pid"; do
+    [[ -z "$pid" ]] && continue
+    kill -TERM "$pid" >/dev/null 2>&1 || true
+    for _ in {1..20}; do
+      kill -0 "$pid" >/dev/null 2>&1 || break
+      sleep 0.05
+    done
+    kill -KILL "$pid" >/dev/null 2>&1 || true
+    wait "$pid" >/dev/null 2>&1 || true
+  done
   rm -rf -- "$tmp_dir"
 ' EXIT
 
@@ -70,16 +78,23 @@ chezmoi --source "$apply_source" --destination "$apply_home" \
 
 for template in codex claude-code cursor; do
   applied="$apply_home/.hindsight/${template}.json"
-  python3 - "$applied" <<'PY'
+  python3 - "$applied" "$template" <<'PY'
 import json
 import sys
 from pathlib import Path
 
 value = json.loads(Path(sys.argv[1]).read_text())
+expected_adapters = {
+    "codex": "hindsight-codex",
+    "claude-code": "claude-code",
+    "cursor": "cursor",
+}
 if value.get("active") is not False:
     raise SystemExit("managed harness rendered active")
 if value.get("broker", {}).get("transport") != "unix":
     raise SystemExit("managed harness lost its private broker transport")
+if value.get("adapter") != expected_adapters[sys.argv[2]]:
+    raise SystemExit("managed harness lost its registered adapter identity")
 for forbidden in ("url", "token", "credential", "bank_id"):
     if forbidden in json.dumps(value).lower():
         raise SystemExit(f"managed harness contains {forbidden}")
@@ -118,6 +133,52 @@ done
     fail "status report does not add fleet health"
   print -r -- "$status_report" | rg -q '^profile .* slot=0 .*sidecars=none' ||
     fail "status report does not expose stable profile slot and sidecar readiness"
+)
+
+(
+  export HOME="$tmp_dir/lifecycle-home"
+  export HINDSIGHT_EMBED_STATE_DIR="$tmp_dir/lifecycle-state"
+  export HINDSIGHT_EMBED_PROFILE_SLOT_DIR="$HINDSIGHT_EMBED_STATE_DIR/profile-slots"
+  export HINDSIGHT_EMBED_PROFILE="crash-profile"
+  export HINDSIGHT_EMBED_FLEET_PROFILES="crash-profile"
+  mkdir -p "$HOME/.hindsight/profiles" "$HINDSIGHT_EMBED_PROFILE_SLOT_DIR"
+  touch "$HOME/.hindsight/profiles/crash-profile.env"
+  lock_file="$HINDSIGHT_EMBED_PROFILE_SLOT_DIR/.allocation.lock"
+  lock_ready="$tmp_dir/profile-lock-ready"
+  : >"$lock_file"
+  zsh -c '
+    zmodload zsh/system
+    zsystem flock -f descriptor "$1"
+    touch "$2"
+    sleep 60
+  ' -- "$lock_file" "$lock_ready" &
+  lock_holder_pid=$!
+  for _ in {1..100}; do
+    [[ -e "$lock_ready" ]] && break
+    kill -0 "$lock_holder_pid" >/dev/null 2>&1 || break
+    sleep 0.01
+  done
+  [[ -e "$lock_ready" ]] || fail "profile lock holder did not become ready"
+  kill -KILL "$lock_holder_pid"
+  wait "$lock_holder_pid" >/dev/null 2>&1 || true
+
+  source "$rendered_stack_lib"
+  [[ "$(hindsight_stack_profile_slot crash-profile)" == 0 ]] ||
+    fail "profile slot lock was not released after holder crash"
+
+  sidecar_stop="$tmp_dir/sidecar-stop"
+  hindsight_stack_sidecar_names() { print -r -- unhealthy-sidecar }
+  hindsight_stack_sidecar_port() { print -r -- 18180 }
+  hindsight_stack_sidecar_status() { return 1 }
+  hindsight_stack_port_listening() { return 0 }
+  hindsight_stack_sidecar_command() {
+    [[ "$2" == stop ]] && print -r -- "$1" >"$sidecar_stop"
+  }
+  hindsight_stack_sidecar_running unhealthy-sidecar ||
+    fail "sidecar liveness incorrectly followed health readiness"
+  hindsight_stack_stop_sidecars
+  [[ "$(<"$sidecar_stop")" == unhealthy-sidecar ]] ||
+    fail "unhealthy sidecar did not receive a stop command"
 )
 
 broker_state="$tmp_dir/broker-state"

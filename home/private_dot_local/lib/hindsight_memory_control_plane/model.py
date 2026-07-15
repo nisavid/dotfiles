@@ -23,7 +23,8 @@ class FrozenDict(dict):
 
 def deep_freeze(value: Any) -> Any:
     if isinstance(value, FrozenDict):
-        return value
+        # Do not trust callers to have constructed FrozenDict recursively.
+        return FrozenDict({key: deep_freeze(item) for key, item in value.items()})
     if isinstance(value, Mapping):
         return FrozenDict({key: deep_freeze(item) for key, item in value.items()})
     if isinstance(value, (list, tuple)):
@@ -89,6 +90,8 @@ class Action:
     details: Mapping[str, Any]
 
     def __post_init__(self) -> None:
+        if not isinstance(self.details, Mapping) or {"id", "kind"} & set(self.details):
+            raise ValueError("action details cannot override action identity")
         object.__setattr__(self, "details", deep_freeze(self.details))
 
     def to_dict(self) -> dict[str, Any]:

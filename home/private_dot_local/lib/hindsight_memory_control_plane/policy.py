@@ -829,6 +829,7 @@ def resolve_policy(
         )
     required_private = (
         model_ids
+        | migration_sources
         | selectors
         | set(repository_tags)
         | set(workflow_tags)

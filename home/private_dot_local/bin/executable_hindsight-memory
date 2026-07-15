@@ -824,15 +824,6 @@ def broker_serve_command(args: argparse.Namespace) -> int:
     key = _broker_signing_key(state_dir)
     policy_digest = digest({"mode": "inactive", "profiles": sorted(set(args.profile))})
     artifact_digest = digest({"broker_schema_version": 1, "routes": []})
-    broker = Broker(
-        state_dir=state_dir,
-        signing_key=key,
-        routes={},
-        policy_digest=policy_digest,
-        artifact_digest=artifact_digest,
-        mint_authorizer=lambda _control, _claims, _ttl: {},
-    )
-    server = UnixJsonRpcServer(socket_path, broker)
     stopped = threading.Event()
 
     def stop(_signum: int, _frame: Any) -> None:
@@ -840,6 +831,14 @@ def broker_serve_command(args: argparse.Namespace) -> int:
 
     previous = {signum: signal.signal(signum, stop) for signum in (signal.SIGINT, signal.SIGTERM)}
     broker_identity: BrokerProcessIdentity | None = None
+    broker: Broker | None = None
+    server: UnixJsonRpcServer | None = None
+    shutdown = {
+        "undrained": 0,
+        "active_reads": 0,
+        "active_writes": 0,
+        "retired": False,
+    }
     try:
         with _broker_lifecycle_lock(state_dir):
             existing_identity = _read_broker_pid(pid_path)
@@ -855,6 +854,15 @@ def broker_serve_command(args: argparse.Namespace) -> int:
                 if _broker_probe(socket_path):
                     raise BrokerError("BROKER_ALREADY_RUNNING")
                 _remove_broker_socket(socket_path)
+            broker = Broker(
+                state_dir=state_dir,
+                signing_key=key,
+                routes={},
+                policy_digest=policy_digest,
+                artifact_digest=artifact_digest,
+                mint_authorizer=lambda _control, _claims, _ttl: {},
+            )
+            server = UnixJsonRpcServer(socket_path, broker)
             server.start()
             broker_identity = _write_broker_pid(pid_path)
         print(json.dumps({"broker": "ready", "mode": "inactive", "profiles": sorted(set(args.profile))}, sort_keys=True), flush=True)
@@ -862,8 +870,12 @@ def broker_serve_command(args: argparse.Namespace) -> int:
             pass
     finally:
         with _broker_lifecycle_lock(state_dir):
-            server.close()
-            shutdown = broker.shutdown(timeout_seconds=args.shutdown_timeout)
+            if server is not None:
+                server.close()
+            if broker is not None:
+                shutdown = broker.shutdown(
+                    timeout_seconds=args.shutdown_timeout
+                )
             try:
                 if broker_identity is not None and _read_broker_pid(pid_path) == broker_identity:
                     pid_path.unlink(missing_ok=True)

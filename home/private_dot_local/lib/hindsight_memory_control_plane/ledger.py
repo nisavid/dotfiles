@@ -1,6 +1,7 @@
 """Closed-schema, content-free append-only controller decision ledger."""
 
 import fcntl
+from datetime import datetime
 import os
 from pathlib import Path
 import re
@@ -83,6 +84,10 @@ def validate_record(record: Mapping[str, Any]) -> None:
         raise LedgerError("reason_code must be an uppercase enum")
     if not isinstance(record["timestamp"], str) or not TIMESTAMP.fullmatch(record["timestamp"]):
         raise LedgerError("timestamp must be a UTC RFC 3339 timestamp")
+    try:
+        datetime.fromisoformat(record["timestamp"].replace("Z", "+00:00"))
+    except ValueError:
+        raise LedgerError("timestamp must be a real UTC RFC 3339 instant") from None
     reversible = record["reversible_record_id"]
     if reversible is not None:
         _identifier(reversible, "reversible_record_id")

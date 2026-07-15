@@ -254,7 +254,12 @@ class ControlServerTest(unittest.TestCase):
         self.assertEqual(body, {"error": "REQUEST_TOO_LARGE"})
         self.assertEqual(self.session_calls, [])
 
-        self.server.status_provider = lambda: {"state": "x" * 2048}
+        self.server.status_provider = lambda: {
+            "schema_version": 1,
+            "state": "x" * 128,
+            "policy_digest": DIGEST,
+            "active_sessions": int("9" * 900),
+        }
         status, _, body = self.request("GET", "/v1/status", headers=self.auth())
         self.assertEqual(status, 500)
         self.assertEqual(body, {"error": "RESPONSE_INVALID"})

@@ -19,6 +19,7 @@ import sys
 
 
 ROOT = Path(__file__).resolve().parents[1]
+TRUSTED_TEST_PYTHON = "/usr/bin/python3"
 MIGRATION_ARTIFACT_DIGEST = "3" * 64
 SOURCE_BANK_REF = {"profile_id": "core", "bank_id": "historical-candidate"}
 TARGET_BANK_REF = {"profile_id": "core", "bank_id": "engineering"}
@@ -155,7 +156,15 @@ class AdapterContractMixin:
         self.assert_operation("GET", "/v1/identity")
 
     def test_snapshot(self):
-        self.assertEqual(self.adapter.snapshot(), {"endpoint": self.endpoint.to_dict(), "state": self.state, "operations": self.operations})
+        self.assertEqual(
+            self.adapter.snapshot(),
+            {
+                "endpoint": self.endpoint.to_dict(),
+                "state": self.state,
+                "operations": self.operations,
+                "compatibility": [],
+            },
+        )
 
     def test_read_config(self):
         self.assertEqual(self.adapter.read_config(), {"mode": "safe"})
@@ -387,6 +396,7 @@ class HttpAdapterContractTest(AdapterContractMixin, unittest.TestCase):
         }
         responses = {
             ("GET", "/v1/schema"): {"schema_version": 1}, ("GET", "/v1/state"): state,
+            ("GET", "/v1/compatibility"): {"compatibility": []},
             ("GET", "/v1/config"): state["config"], ("GET", "/v1/stats"): state["stats"],
             ("GET", "/v1/tags"): state["tags"], ("GET", "/v1/scopes"): state["scopes"],
             ("GET", "/v1/documents"): state["documents"], ("GET", "/v1/models"): state["models"],
@@ -513,6 +523,25 @@ class HttpAdapterContractTest(AdapterContractMixin, unittest.TestCase):
 
 
 class HttpAdapterSecurityTest(unittest.TestCase):
+    def test_safe_config_omits_fields_outside_closed_disclosure_schema(self):
+        safe = HttpAdapter._safe_config({
+            "bank_id": "engineering",
+            "config": {"model": "safe-model", "private_note": "do-not-disclose"},
+            "overrides": {},
+        })
+        self.assertEqual(safe["config"], {"model": "safe-model"})
+        self.assertIn("config.private_note", safe["redacted_keys"])
+
+    def test_unbounded_pagination_is_refused(self):
+        adapter = object.__new__(HttpAdapter)
+        adapter._request = lambda *_args: {
+            "items": [object()] * HttpAdapter.PAGE_LIMIT,
+            "offset": int(_args[1].rsplit("offset=", 1)[1]),
+            "limit": HttpAdapter.PAGE_LIMIT,
+        }
+        with self.assertRaisesRegex(AdapterError, "item limit"):
+            adapter._read_items("/items", total_required=False)
+
     def test_ambient_http_proxy_is_ignored(self):
         direct_requests = []
         proxy_requests = []
@@ -864,18 +893,34 @@ class AdminMigrationAdapterContractTest(unittest.TestCase):
     def trusted_admin(self, root):
         executable = Path(root) / "hindsight-admin"
         executable.write_text(
-            f"#!{sys.executable}\nraise SystemExit('test seam only')\n",
+            f"#!{TRUSTED_TEST_PYTHON}\nraise SystemExit('test seam only')\n",
             encoding="utf-8",
         )
         executable.chmod(0o700)
         return executable
 
     @staticmethod
+    def probe_response(argv, *, version="0.8.4"):
+        if "HINDSIGHT_RUNTIME_MANIFEST_V1" in argv[-1]:
+            return subprocess.CompletedProcess(
+                argv,
+                0,
+                json.dumps({"files": [str(Path(__file__).resolve())]}),
+                "",
+            )
+        if "importlib.metadata" in argv[-1]:
+            return subprocess.CompletedProcess(argv, 0, version + "\n", "")
+        return None
+
+    @staticmethod
     def versioned_runner(calls, *, version="0.8.4", operation=None):
         def run(argv, **kwargs):
             calls.append((list(argv), kwargs))
-            if "importlib.metadata" in argv[-1]:
-                return subprocess.CompletedProcess(argv, 0, version + "\n", "")
+            probe = AdminMigrationAdapterContractTest.probe_response(
+                argv, version=version
+            )
+            if probe is not None:
+                return probe
             if operation is not None:
                 operation(argv)
             return subprocess.CompletedProcess(argv, 0, "Complete", "")
@@ -886,8 +931,9 @@ class AdminMigrationAdapterContractTest(unittest.TestCase):
         executable = self.trusted_admin(root)
 
         def routed(argv, **_kwargs):
-            if "importlib.metadata" in argv[-1]:
-                return subprocess.CompletedProcess(argv, 0, version + "\n", "")
+            probe = self.probe_response(argv, version=version)
+            if probe is not None:
+                return probe
             return runner(argv)
 
         return AdminMigrationAdapter(
@@ -914,9 +960,9 @@ class AdminMigrationAdapterContractTest(unittest.TestCase):
         adapter.backup("/tmp/bank.zip", "a" * 64)
 
         self.assertEqual(adapter.admin_version, "0.8.4")
-        self.assertEqual(len(calls), 2)
-        operation_argv, operation_kwargs = calls[1]
-        self.assertEqual(operation_argv[0], sys.executable)
+        self.assertEqual(len(calls), 3)
+        operation_argv, operation_kwargs = calls[2]
+        self.assertEqual(operation_argv[0], TRUSTED_TEST_PYTHON)
         self.assertRegex(operation_argv[1], r"^/dev/fd/[0-9]+$")
         self.assertEqual(operation_argv[2:], ["backup", "/tmp/bank.zip", "--schema", "public"])
         for _argv, kwargs in calls:
@@ -936,7 +982,7 @@ class AdminMigrationAdapterContractTest(unittest.TestCase):
         )
         replacement = root / "replacement"
         replacement.write_text(
-            f"#!{sys.executable}\nraise SystemExit('replacement')\n",
+            f"#!{TRUSTED_TEST_PYTHON}\nraise SystemExit('replacement')\n",
             encoding="utf-8",
         )
         replacement.chmod(0o700)
@@ -944,7 +990,42 @@ class AdminMigrationAdapterContractTest(unittest.TestCase):
 
         with self.assertRaisesRegex(MigrationAdapterError, "identity changed"):
             adapter.backup("/tmp/bank.zip", "a" * 64)
-        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(calls), 2)
+
+    def test_revalidates_runtime_file_identity_before_each_operation(self):
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        executable = self.trusted_admin(root)
+        runtime_file = root / "runtime.py"
+        runtime_file.write_text("VALUE = 1\n", encoding="utf-8")
+        runtime_file.chmod(0o600)
+        calls = []
+
+        def runner(argv, **kwargs):
+            calls.append((list(argv), kwargs))
+            if "HINDSIGHT_RUNTIME_MANIFEST_V1" in argv[-1]:
+                return subprocess.CompletedProcess(
+                    argv,
+                    0,
+                    json.dumps({"files": [str(runtime_file)]}),
+                    "",
+                )
+            if "importlib.metadata" in argv[-1]:
+                return subprocess.CompletedProcess(argv, 0, "0.8.4\n", "")
+            raise AssertionError("mutated runtime must not execute")
+
+        adapter = AdminMigrationAdapter(
+            admin_executable=str(executable),
+            argv_factory=hindsight_admin_argv,
+            runner=runner,
+        )
+        replacement = root / "replacement-runtime.py"
+        replacement.write_text("VALUE = 2\n", encoding="utf-8")
+        replacement.chmod(0o600)
+        os.replace(replacement, runtime_file)
+
+        with self.assertRaisesRegex(MigrationAdapterError, "identity changed"):
+            adapter.backup("/tmp/bank.zip", "a" * 64)
+        self.assertEqual(len(calls), 2)
 
     def test_executes_through_the_validated_descriptor_binding(self):
         root = Path(self.enterContext(tempfile.TemporaryDirectory()))
@@ -953,11 +1034,12 @@ class AdminMigrationAdapterContractTest(unittest.TestCase):
         observed = {}
 
         def runner(argv, **kwargs):
-            if "importlib.metadata" in argv[-1]:
-                return subprocess.CompletedProcess(argv, 0, "0.8.4\n", "")
+            probe = self.probe_response(argv)
+            if probe is not None:
+                return probe
             replacement = root / "replacement"
             replacement.write_text(
-                f"#!{sys.executable}\nraise SystemExit('replacement')\n",
+                f"#!{TRUSTED_TEST_PYTHON}\nraise SystemExit('replacement')\n",
                 encoding="utf-8",
             )
             replacement.chmod(0o700)
@@ -975,7 +1057,7 @@ class AdminMigrationAdapterContractTest(unittest.TestCase):
         )
         adapter.backup("/tmp/bank.zip", "a" * 64)
 
-        self.assertEqual(observed["argv"][0], sys.executable)
+        self.assertEqual(observed["argv"][0], TRUSTED_TEST_PYTHON)
         self.assertEqual(observed["argv"][2], "backup")
         self.assertEqual(observed["payload"], original)
         self.assertEqual(
@@ -988,14 +1070,15 @@ class AdminMigrationAdapterContractTest(unittest.TestCase):
         root = Path(self.enterContext(tempfile.TemporaryDirectory()))
         executable = root / "hindsight-admin"
         executable.write_text(
-            f"#!{sys.executable}\nraise SystemExit(0)\n",
+            f"#!{TRUSTED_TEST_PYTHON}\nraise SystemExit(0)\n",
             encoding="utf-8",
         )
         executable.chmod(0o700)
 
         def runner(argv, **kwargs):
-            if "importlib.metadata" in argv[-1]:
-                return subprocess.CompletedProcess(argv, 0, "0.8.4\n", "")
+            probe = self.probe_response(argv)
+            if probe is not None:
+                return probe
             return subprocess.run(argv, **kwargs)
 
         adapter = AdminMigrationAdapter(
@@ -1014,8 +1097,9 @@ class AdminMigrationAdapterContractTest(unittest.TestCase):
         executable = self.trusted_admin(root)
 
         def runner(argv, **kwargs):
-            if "importlib.metadata" in argv[-1]:
-                return subprocess.CompletedProcess(argv, 0, "0.8.4\n", "")
+            probe = self.probe_response(argv)
+            if probe is not None:
+                return probe
             descriptor = kwargs["pass_fds"][0]
             with self.assertRaises(OSError):
                 os.write(descriptor, b"replacement")
@@ -1037,8 +1121,9 @@ class AdminMigrationAdapterContractTest(unittest.TestCase):
         executable = self.trusted_admin(root)
 
         def runner(argv, **_kwargs):
-            if "importlib.metadata" in argv[-1]:
-                return subprocess.CompletedProcess(argv, 0, "0.8.4\n", "")
+            probe = self.probe_response(argv)
+            if probe is not None:
+                return probe
             raise AssertionError("a mismatched snapshot must not execute")
 
         adapter = AdminMigrationAdapter(
@@ -1052,7 +1137,10 @@ class AdminMigrationAdapterContractTest(unittest.TestCase):
         def transient_pread(descriptor, size, offset):
             nonlocal reads_from_zero
             payload = original_pread(descriptor, size, offset)
-            if offset == 0:
+            if (
+                offset == 0
+                and os.fstat(descriptor).st_ino == executable.stat().st_ino
+            ):
                 reads_from_zero += 1
                 if reads_from_zero == 2 and payload:
                     return bytes([payload[0] ^ 1]) + payload[1:]
@@ -1275,7 +1363,7 @@ class AdminMigrationAdapterContractTest(unittest.TestCase):
         )
 
         adapter.backup("/tmp/bank.zip", archive_digest)
-        self.assertEqual(calls[0][0], sys.executable)
+        self.assertEqual(calls[0][0], TRUSTED_TEST_PYTHON)
         self.assertRegex(calls[0][1], r"^/dev/fd/[0-9]+$")
         self.assertEqual(calls[0][2], "backup")
         with self.assertRaisesRegex(MigrationAdapterError, "disposable restore evidence"):
@@ -1356,7 +1444,7 @@ class AdminMigrationAdapterContractTest(unittest.TestCase):
             "/tmp/postgres-bank.zip", artifact, digest(evidence), evidence,
         )
         self.assertEqual([argv[2] for argv in calls], ["export-bank", "backup", "import-bank", "restore"])
-        self.assertTrue(all(argv[0] == sys.executable for argv in calls))
+        self.assertTrue(all(argv[0] == TRUSTED_TEST_PYTHON for argv in calls))
         self.assertTrue(
             all(re.fullmatch(r"/dev/fd/[0-9]+", argv[1]) for argv in calls)
         )
@@ -1390,6 +1478,116 @@ class GuardedApplyTest(unittest.TestCase):
         )
         self.assertEqual(result.reason, "compatibility_not_satisfied")
         self.assertNotIn("create_bank", [call["method"] for call in adapter.calls])
+
+    def test_apply_refuses_fresh_blocked_or_malformed_compatibility(self):
+        plan = plan_for({})
+        for compatibility, reason in (
+            (
+                [
+                    {
+                        "check": "provider-contract",
+                        "compatible": False,
+                        "status": "blocked",
+                    }
+                ],
+                "compatibility_not_satisfied",
+            ),
+            ({"check": "not-an-array"}, "fresh_compatibility_unavailable"),
+            (
+                [
+                    {
+                        "check": "provider-contract",
+                        "compatible": True,
+                        "private_payload": "forbidden",
+                    }
+                ],
+                "fresh_compatibility_unavailable",
+            ),
+        ):
+            with self.subTest(reason=reason, compatibility=compatibility):
+                adapter = self.adapter()
+                adapter.compatibility = compatibility
+                bundle = create_rollback_bundle(plan, adapter)
+
+                result = apply_plan(
+                    plan,
+                    adapter,
+                    plan.plan_digest,
+                    {"rollback_bundle": bundle},
+                )
+
+                self.assertEqual(result.reason, reason)
+                self.assertNotIn(
+                    "create_bank", [call["method"] for call in adapter.calls]
+                )
+
+    def test_apply_binds_fresh_compatibility_check_identities(self):
+        base = plan_for({})
+        compatibility = (
+            {
+                "check": "provider-contract",
+                "provider_id": "provider-1",
+                "compatible": True,
+                "status": "pass",
+            },
+        )
+        body = base.body()
+        body["compatibility"] = [dict(value) for value in compatibility]
+        plan = replace(
+            base,
+            compatibility=compatibility,
+            plan_digest=digest(body),
+        )
+        for fresh in (
+            [],
+            [
+                {
+                    "check": "provider-contract",
+                    "provider_id": "provider-2",
+                    "compatible": True,
+                    "status": "pass",
+                }
+            ],
+        ):
+            with self.subTest(fresh=fresh):
+                adapter = self.adapter()
+                adapter.compatibility = fresh
+                bundle = create_rollback_bundle(plan, adapter)
+
+                result = apply_plan(
+                    plan,
+                    adapter,
+                    plan.plan_digest,
+                    {"rollback_bundle": bundle},
+                )
+
+                self.assertEqual(result.reason, "fresh_compatibility_changed")
+                self.assertNotIn(
+                    "create_bank", [call["method"] for call in adapter.calls]
+                )
+
+    def test_apply_refuses_non_mapping_fresh_snapshot(self):
+        class MalformedSnapshotAdapter(FakeAdapter):
+            def snapshot(self):
+                return []
+
+        plan = plan_for({})
+        adapter = MalformedSnapshotAdapter(
+            endpoint=plan.target_endpoint.to_dict()
+        )
+        bundle = create_rollback_bundle(plan, adapter)
+
+        result = apply_plan(
+            plan,
+            adapter,
+            plan.plan_digest,
+            {"rollback_bundle": bundle},
+        )
+
+        self.assertEqual(result.reason, "fresh_state_unavailable")
+        self.assertNotIn(
+            "create_bank", [call["method"] for call in adapter.calls]
+        )
 
     def test_adapter_attested_stale_prestate_bundle_is_refused_before_mutation(self):
         plan = plan_for({"version": "fresh"})

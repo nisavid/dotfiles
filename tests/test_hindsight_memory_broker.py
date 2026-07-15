@@ -675,6 +675,19 @@ class DurableWorkTest(unittest.TestCase):
     def work(self):
         return json.loads((self.state / "durable_work.json").read_text())
 
+    def wait_until(self, predicate, *, timeout=1):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if predicate():
+                return
+            threading.Event().wait(0.005)
+        self.fail("timed out waiting for broker state transition")
+
+    @staticmethod
+    def writes_drained(broker):
+        with broker._lock:
+            return not broker._write_futures
+
     def test_queue_and_watermark_are_one_atomic_private_state_before_ack(self):
         capability = self.exchange()
         response = self.client.retain_outcome(capability, sequence=1, action_id="retain", request={"document_id": "doc", "epoch": 1, "checkpoint": 1, "outcome": "done"})
@@ -773,7 +786,9 @@ class DurableWorkTest(unittest.TestCase):
         self.assertTrue(any(item["session_id"] == "close-after" for item in state["queue"]))
         self._stop()
         self._start()
-        time.sleep(0.05)
+        self.wait_until(lambda: not any(
+            item["session_id"] == "close-after" for item in self.work()["queue"]
+        ))
         self.assertFalse(any(item["session_id"] == "close-after" for item in self.work()["queue"]))
 
     @staticmethod
@@ -799,11 +814,11 @@ class DurableWorkTest(unittest.TestCase):
         capability = self.exchange()
         response = self.client.retain_outcome(capability, sequence=1, action_id="after-enqueue", request={"document_id": "doc", "epoch": 1, "checkpoint": 1, "outcome": "done"})
         key = response["action_digest"]
-        time.sleep(0.03)
+        self.wait_until(lambda: self.writes_drained(self.broker))
         self.assertEqual(self.work()["queue"][0]["idempotency_key"], key)
         self._stop()
         self._start()
-        time.sleep(0.03)
+        self.wait_until(lambda: self.work()["queue"] == [])
         self.assertEqual(self.work()["queue"], [])
         retain_calls = [entry for entry in self.adapter.calls if entry["method"] == "retain_outcome"]
         self.assertEqual(len(retain_calls), 1)
@@ -824,11 +839,11 @@ class DurableWorkTest(unittest.TestCase):
         self._start()
         capability = self.exchange()
         response = self.client.retain_outcome(capability, sequence=1, action_id="after-success", request={"document_id": "doc", "epoch": 1, "checkpoint": 1, "outcome": "done"})
-        time.sleep(0.03)
+        self.wait_until(lambda: self.writes_drained(self.broker))
         self.assertEqual(self.work()["queue"][0]["idempotency_key"], response["action_digest"])
         self._stop()
         self._start()
-        time.sleep(0.03)
+        self.wait_until(lambda: self.work()["queue"] == [])
         self.assertEqual(self.work()["queue"], [])
         self.assertEqual(len([entry for entry in self.adapter.calls if entry["method"] == "retain_outcome"]), 1)
 
@@ -845,10 +860,11 @@ class DurableWorkTest(unittest.TestCase):
             except BrokerError as error:
                 outcomes.append(error.code)
         threads = [threading.Thread(target=send, args=(1, "older", 1)), threading.Thread(target=send, args=(2, "newer", 2))]
-        for thread in threads: thread.start()
+        for thread in threads:
+            thread.start()
         barrier.wait()
-        for thread in threads: thread.join()
-        time.sleep(0.03)
+        for thread in threads:
+            thread.join()
         records = list(self.work()["completed"].values()) + self.work()["queue"]
         self.assertEqual(max(tuple(record["watermark"]) for record in records), (2, 1))
         self.assertFalse(any(tuple(record["watermark"]) > (2, 1) for record in records))
@@ -878,6 +894,55 @@ class DurableWorkTest(unittest.TestCase):
         again = self.client.session_exchange(handle)
         self.assertEqual(recovered["payload"]["capability"], again["payload"]["capability"])
 
+    def test_retry_backoff_is_exponential_jittered_and_persisted(self):
+        capability = self.exchange()
+        now = [100.0]
+        self.broker.clock = lambda: now[0]
+        with patch.object(self.broker, "_submit_write"):
+            response = self.client.retain_outcome(
+                capability,
+                sequence=1,
+                action_id="retry-backoff",
+                request={
+                    "document_id": "doc",
+                    "epoch": 1,
+                    "checkpoint": 1,
+                    "outcome": "done",
+                },
+            )
+        queue_id = response["payload"]["queue_id"]
+        with (
+            patch.object(
+                self.adapter,
+                "retain_outcome",
+                side_effect=RuntimeError("adapter unavailable"),
+            ),
+            patch(
+                "hindsight_memory_control_plane.broker.secrets.randbelow",
+                side_effect=(0, 500),
+            ),
+        ):
+            disposition, first_delay = self.broker._dispatch_queued_item(
+                queue_id
+            )
+            first = self.work()["queue"][0]
+            now[0] = first["next_retry"]
+            disposition_again, second_delay = (
+                self.broker._dispatch_queued_item(queue_id)
+            )
+
+        second = self.work()["queue"][0]
+        self.assertEqual((disposition, disposition_again), ("retry", "retry"))
+        self.assertEqual(first["attempts"], 1)
+        self.assertEqual(second["attempts"], 2)
+        self.assertAlmostEqual(first_delay, 0.25 * 0.75)
+        self.assertAlmostEqual(second_delay, 0.5 * 1.25)
+        self.assertAlmostEqual(first["next_retry"], 100.0 + first_delay)
+        self.assertAlmostEqual(
+            second["next_retry"], now[0] + second_delay
+        )
+        self.assertLessEqual(second_delay, 30.0)
+
     def test_close_reports_slow_undrained_durable_work(self):
         class SlowWriteFake(FakeAdapter):
             def retain_outcome(self, request):
@@ -892,7 +957,7 @@ class DurableWorkTest(unittest.TestCase):
         self.assertEqual(closed["disposition"], "closed")
         self.assertGreaterEqual(closed["payload"]["undrained"], 1)
 
-    def test_late_retired_worker_cannot_overwrite_replacement_generation(self):
+    def test_shutdown_and_replacement_wait_for_inflight_generation_lease(self):
         release = threading.Event()
         started = threading.Event()
         class FencedFake(FakeAdapter):
@@ -908,13 +973,53 @@ class DurableWorkTest(unittest.TestCase):
         self.client.retain_outcome(capability, sequence=1, action_id="fenced", request={"document_id": "doc", "epoch": 1, "checkpoint": 1, "outcome": "done"})
         self.assertTrue(started.wait(0.2))
         self.server.close()
-        stopped = self.broker.shutdown(timeout_seconds=0)
-        self.assertGreaterEqual(stopped["undrained"], 1)
-        self._start()
-        replacement_generation = self.work()["generation"]
+        retired_broker = self.broker
+        shutdown_entered = threading.Event()
+        replacement_entered = threading.Event()
+        shutdown_results = []
+        replacements = []
+
+        def shutdown():
+            shutdown_entered.set()
+            shutdown_results.append(
+                retired_broker.shutdown(timeout_seconds=0)
+            )
+
+        def replace():
+            replacement_entered.set()
+            replacements.append(Broker(
+                state_dir=self.state,
+                signing_key=b"z" * 32,
+                routes={
+                    "local-core": {"bank": BANK, "adapter": self.adapter}
+                },
+                policy_digest=DIGEST_A,
+                artifact_digest=DIGEST_B,
+                mint_authorizer=authorize_mint,
+            ))
+
+        shutdown_thread = threading.Thread(target=shutdown)
+        replacement_thread = threading.Thread(target=replace)
+        shutdown_thread.start()
+        replacement_thread.start()
+        self.assertTrue(shutdown_entered.wait(0.2))
+        self.assertTrue(replacement_entered.wait(0.2))
+        self.assertTrue(shutdown_thread.is_alive())
+        self.assertTrue(replacement_thread.is_alive())
         release.set()
-        time.sleep(0.05)
-        self.assertEqual(self.work()["generation"], replacement_generation)
+        shutdown_thread.join(1)
+        replacement_thread.join(1)
+        self.assertFalse(shutdown_thread.is_alive())
+        self.assertFalse(replacement_thread.is_alive())
+        self.assertEqual(len(shutdown_results), 1)
+        self.assertEqual(len(replacements), 1)
+
+        self.broker = replacements[0]
+        self.server = UnixJsonRpcServer(self.socket_path, self.broker)
+        self.server.start()
+        self.client = JsonRpcClient(self.socket_path)
+        self.assertEqual(self.work()["generation"], self.broker._generation)
+        self.assertEqual(self.work()["queue"], [])
 
     def test_replacement_generation_fences_all_old_broker_state_transitions(self):
         capability = self.exchange()
@@ -984,19 +1089,30 @@ class DurableWorkTest(unittest.TestCase):
             return original(path, value)
         minted = []
         replacements = []
+        replacement_entered = threading.Event()
+
+        def replace():
+            replacement_entered.set()
+            replacements.append(Broker(
+                state_dir=self.state,
+                signing_key=b"z" * 32,
+                routes={
+                    "local-core": {"bank": BANK, "adapter": self.adapter}
+                },
+                policy_digest=DIGEST_A,
+                artifact_digest=DIGEST_B,
+                mint_authorizer=authorize_mint,
+            ))
+
         with patch("hindsight_memory_control_plane.broker._atomic_json", side_effect=pause_handle):
             mint_thread = threading.Thread(target=lambda: minted.append(
                 self.broker.session_mint("control", claims(session_id="racing-mint"), ttl_seconds=30)
             ))
             mint_thread.start()
             self.assertTrue(entered.wait(0.2))
-            replacement_thread = threading.Thread(target=lambda: replacements.append(Broker(
-                state_dir=self.state, signing_key=b"z" * 32,
-                routes={"local-core": {"bank": BANK, "adapter": self.adapter}},
-                policy_digest=DIGEST_A, artifact_digest=DIGEST_B, mint_authorizer=authorize_mint,
-            )))
+            replacement_thread = threading.Thread(target=replace)
             replacement_thread.start()
-            time.sleep(0.02)
+            self.assertTrue(replacement_entered.wait(0.2))
             self.assertTrue(replacement_thread.is_alive())
             release.set()
             mint_thread.join()

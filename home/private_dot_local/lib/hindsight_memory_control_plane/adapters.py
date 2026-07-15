@@ -114,11 +114,16 @@ class FakeAdapter:
     """Adapter fake that records only operation names and bounded structural metadata."""
 
     def __init__(self, *, schema: int = 1, endpoint: Mapping[str, Any], state: Mapping[str, Any] | None = None,
-                 operations: Mapping[str, Any] | None = None, restore_proof_valid: bool = True) -> None:
+                 operations: Mapping[str, Any] | None = None,
+                 compatibility: Any = None,
+                 restore_proof_valid: bool = True) -> None:
         self.schema = schema
         self.endpoint = EndpointIdentity(**dict(endpoint))
         self.state = deepcopy(dict(state or {}))
         self.operations = deepcopy(dict(operations or {"idle": True, "active": []}))
+        self.compatibility = deepcopy(
+            [] if compatibility is None else compatibility
+        )
         self.restore_proof_valid = restore_proof_valid
         self.calls: list[dict[str, Any]] = []
         self.fail_postcondition_for: str | None = None
@@ -155,7 +160,12 @@ class FakeAdapter:
 
     def snapshot(self) -> Mapping[str, Any]:
         self._record("snapshot")
-        return {"endpoint": self.endpoint.to_dict(), "state": deepcopy(self.state), "operations": deepcopy(self.operations)}
+        return {
+            "endpoint": self.endpoint.to_dict(),
+            "state": deepcopy(self.state),
+            "operations": deepcopy(self.operations),
+            "compatibility": deepcopy(self.compatibility),
+        }
 
     def _read(self, name: str, default: Any) -> Any:
         self._record(f"read_{name}")

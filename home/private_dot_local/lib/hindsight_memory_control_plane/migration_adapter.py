@@ -3,9 +3,11 @@
 from contextlib import contextmanager
 import hashlib
 import hmac
+import json
 import os
 from pathlib import Path
 import re
+import stat
 import subprocess
 from typing import Any, Callable, Mapping, Sequence
 
@@ -34,11 +36,100 @@ VERSION_PROBE = (
     "import importlib.metadata as metadata; "
     "print(metadata.version('hindsight-api'))"
 )
+RUNTIME_FILES_PROBE = """
+import importlib.metadata as metadata
+import json
+from pathlib import Path
+
+# HINDSIGHT_RUNTIME_MANIFEST_V1
+distribution = metadata.distribution("hindsight-api")
+paths = {
+    Path(distribution.locate_file(item)).resolve()
+    for item in distribution.files or ()
+}
+top_level = distribution.read_text("top_level.txt") or ""
+package_names = [name.strip() for name in top_level.splitlines() if name.strip()]
+for name in package_names or ["hindsight_api"]:
+    root = Path(distribution.locate_file(name)).resolve()
+    if root.is_file():
+        paths.add(root)
+    elif root.is_dir():
+        paths.update(
+            path.resolve()
+            for path in root.rglob("*")
+            if path.is_file()
+            and "__pycache__" not in path.parts
+            and path.suffix not in {".pyc", ".pyo"}
+        )
+print(json.dumps({"files": sorted(str(path) for path in paths)}))
+"""
 ADMIN_SNAPSHOT_MAX_BYTES = 4096
+RUNTIME_FILE_MAX_BYTES = 128 * 1024 * 1024
 
 
 class MigrationAdapterError(RuntimeError):
     pass
+
+
+def _runtime_file_snapshot(
+    value: str | Path, label: str, *, allow_hardlinks: bool = False
+) -> tuple[str, tuple[int, ...], str]:
+    def validate(metadata: os.stat_result) -> None:
+        if not allow_hardlinks:
+            validate_trusted_regular_file(metadata, label)
+            return
+        if not stat.S_ISREG(metadata.st_mode):
+            raise FileEvidenceError(f"{label} must be a regular file")
+        if metadata.st_uid not in {0, os.geteuid()}:
+            raise FileEvidenceError(
+                f"{label} must be owned by the current user or root"
+            )
+        if stat.S_IMODE(metadata.st_mode) & 0o022:
+            raise FileEvidenceError(
+                f"{label} must not be group or world writable"
+            )
+
+    path = Path(value).resolve(strict=True)
+    reject_symlink_components(path, label, allow_missing=False)
+    validate(path.lstat())
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
+    descriptor = os.open(path, flags)
+    try:
+        before = os.fstat(descriptor)
+        validate(before)
+        if before.st_size > RUNTIME_FILE_MAX_BYTES:
+            raise FileEvidenceError(f"{label} is too large")
+        payload = hashlib.sha256()
+        offset = 0
+        while chunk := os.pread(descriptor, 65536, offset):
+            payload.update(chunk)
+            offset += len(chunk)
+        after = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    current = path.lstat()
+    if file_identity(before) != file_identity(after) or file_identity(after) != file_identity(current):
+        raise FileEvidenceError(f"{label} identity changed")
+    return str(path), file_identity(after), payload.hexdigest()
+
+
+def _trusted_interpreter(
+    value: str | Path,
+) -> tuple[str, tuple[int, ...], str, tuple[int, ...], str]:
+    path = Path(value)
+    if not path.is_absolute():
+        raise FileEvidenceError("hindsight-admin interpreter is invalid")
+    reject_symlink_components(path.parent, "hindsight-admin interpreter", allow_missing=False)
+    link_identity = file_identity(path.lstat())
+    resolved, identity, digest_value = _runtime_file_snapshot(
+        path, "hindsight-admin interpreter", allow_hardlinks=True
+    )
+    return str(path), link_identity, resolved, identity, digest_value
 
 
 def _trusted_admin_executable(value: str | Path) -> tuple[str, tuple[int, ...], str]:
@@ -47,7 +138,13 @@ def _trusted_admin_executable(value: str | Path) -> tuple[str, tuple[int, ...], 
         raise MigrationAdapterError("hindsight-admin executable path must be absolute")
     try:
         reject_symlink_components(path, "hindsight-admin executable", allow_missing=False)
-        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        validate_trusted_regular_file(path.lstat(), "hindsight-admin executable")
+        flags = (
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0)
+        )
         descriptor = os.open(path, flags)
         try:
             before = os.fstat(descriptor)
@@ -120,6 +217,15 @@ class AdminMigrationAdapter:
         self.admin_executable = executable
         self._executable_identity = identity
         self._interpreter = interpreter
+        try:
+            self._interpreter_binding = _trusted_interpreter(interpreter)
+        except (FileEvidenceError, OSError, RuntimeError):
+            raise MigrationAdapterError(
+                "hindsight-admin interpreter is unavailable"
+            ) from None
+        self._runtime_files: tuple[
+            tuple[str, tuple[int, ...], str], ...
+        ] = ()
         self._environment = {
             key: source_environment[key]
             for key in sorted(ADMIN_ENVIRONMENT_ALLOWLIST & source_environment.keys())
@@ -135,6 +241,41 @@ class AdminMigrationAdapter:
         self.admin_version = version.strip()
         if self.admin_version not in supported_versions:
             raise MigrationAdapterError("unsupported hindsight-admin version")
+        runtime_probe = self._invoke(
+            [interpreter, "-I", "-c", RUNTIME_FILES_PROBE], timeout=30
+        )
+        runtime_output = self._result_field(runtime_probe, "stdout")
+        if (
+            self._result_field(runtime_probe, "returncode") != 0
+            or not isinstance(runtime_output, str)
+        ):
+            raise MigrationAdapterError("hindsight-admin runtime probe failed")
+        try:
+            manifest = json.loads(runtime_output)
+            if not isinstance(manifest, dict) or set(manifest) != {"files"}:
+                raise ValueError("invalid runtime manifest")
+            files = manifest["files"]
+            if (
+                not isinstance(files, list)
+                or not files
+                or len(files) > 4096
+                or not all(isinstance(path, str) for path in files)
+                or len(files) != len(set(files))
+            ):
+                raise ValueError("invalid runtime manifest")
+            self._runtime_files = tuple(
+                sorted(
+                    _runtime_file_snapshot(
+                        path, "hindsight-api runtime file"
+                    )
+                    for path in files
+                )
+            )
+        except (FileEvidenceError, OSError, RuntimeError, ValueError, KeyError, json.JSONDecodeError):
+            raise MigrationAdapterError(
+                "hindsight-admin runtime probe failed"
+            ) from None
+        self._require_executable_identity()
 
     @staticmethod
     def _result_field(result: Any, field: str) -> Any:
@@ -175,17 +316,36 @@ class AdminMigrationAdapter:
             raise MigrationAdapterError("hindsight-admin operation failed") from None
 
     def _require_executable_identity(self) -> None:
-        executable, identity, interpreter = _trusted_admin_executable(self.admin_executable)
+        try:
+            executable, identity, interpreter = _trusted_admin_executable(self.admin_executable)
+            interpreter_binding = _trusted_interpreter(interpreter)
+            runtime_files = tuple(
+                sorted(
+                    _runtime_file_snapshot(
+                        path, "hindsight-api runtime file"
+                    )
+                    for path, _identity, _digest in self._runtime_files
+                )
+            )
+        except (FileEvidenceError, OSError, RuntimeError):
+            raise MigrationAdapterError(
+                "hindsight-admin runtime identity changed"
+            ) from None
         if (
             executable != self.admin_executable
             or identity != self._executable_identity
             or interpreter != self._interpreter
+            or interpreter_binding != self._interpreter_binding
+            or runtime_files != self._runtime_files
         ):
-            raise MigrationAdapterError("hindsight-admin executable identity changed")
+            raise MigrationAdapterError(
+                "hindsight-admin runtime identity changed"
+            )
 
     @contextmanager
     def _execution_binding(self):
         """Execute an immutable anonymous byte stream of the validated executable."""
+        self._require_executable_identity()
         source_descriptor: int | None = None
         snapshot_descriptor: int | None = None
         snapshot_writer: int | None = None
@@ -195,7 +355,15 @@ class AdminMigrationAdapter:
                 "hindsight-admin executable",
                 allow_missing=False,
             )
-            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            validate_trusted_regular_file(
+                Path(self.admin_executable).lstat(),
+                "hindsight-admin executable",
+            )
+            flags = (
+                os.O_RDONLY
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_NONBLOCK", 0)
+            )
             source_descriptor = os.open(self.admin_executable, flags)
             metadata = os.fstat(source_descriptor)
             validate_trusted_regular_file(metadata, "hindsight-admin executable")
@@ -237,6 +405,7 @@ class AdminMigrationAdapter:
                 written += count
             os.close(snapshot_writer)
             snapshot_writer = None
+            self._require_executable_identity()
             yield snapshot_descriptor
         except MigrationAdapterError:
             raise

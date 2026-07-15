@@ -41,6 +41,16 @@ def _digest(value: Any, label: str) -> str:
     return value
 
 
+def _generated_identifier(value: str, label: str) -> str:
+    """Keep a readable generated ID while bounding it with a stable suffix."""
+
+    if IDENTIFIER.fullmatch(value):
+        return value
+    suffix = digest({"label": label, "value": value})[:16]
+    prefix = value[: 128 - len(suffix) - 1].rstrip("._:/-")
+    return _identifier(f"{prefix}-{suffix}", label)
+
+
 def _exact_mapping(value: Any, keys: set[str], label: str, required: set[str] | None = None) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise PlanError(f"{label} must be an object")
@@ -340,11 +350,15 @@ def _derive_actions(
                 )
 
     for bank_id in sorted(set(observed) - desired_ids):
+        reason_code = _generated_identifier(
+            f"unmanaged-bank-{bank_id}",
+            "unmanaged bank reason code",
+        )
         proposed.append(
             {
                 "kind": "report_unmanaged",
                 "profile_id": target_profile,
-                "reason_code": f"unmanaged-bank-{bank_id}",
+                "reason_code": reason_code,
                 "_label": f"report-unmanaged-bank-{bank_id}",
             }
         )
@@ -352,7 +366,10 @@ def _derive_actions(
     records = []
     for index, proposal in enumerate(proposed, 1):
         label = proposal.pop("_label")
-        records.append({"id": f"{index:02d}-{label}", **proposal})
+        identifier = _generated_identifier(
+            f"{index:02d}-{label}", "generated action id"
+        )
+        records.append({"id": identifier, **proposal})
     return _actions(records)
 
 

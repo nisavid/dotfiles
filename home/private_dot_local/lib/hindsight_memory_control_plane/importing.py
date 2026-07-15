@@ -10,7 +10,7 @@ from pathlib import Path
 import re
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
-from .canonical import digest
+from .canonical import StrictJsonError, digest, strict_json_loads
 from .model import deep_freeze, deep_thaw
 
 
@@ -93,9 +93,9 @@ def _timestamp(value: Any) -> str:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError as exc:
         raise ImportError("timestamp must be ISO-8601 with timezone") from exc
-    if parsed.tzinfo is None:
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise ImportError("timestamp must include a timezone")
-    return value
+    return parsed.astimezone(timezone.utc).isoformat(timespec="microseconds").replace(".000000+00:00", "Z").replace("+00:00", "Z")
 
 
 @dataclass(frozen=True)
@@ -353,8 +353,8 @@ def parse_portable_markdown(path: str | Path) -> tuple[dict[str, Any], ...]:
         if match is None:
             continue
         try:
-            metadata = json.loads(match.group(1))
-        except json.JSONDecodeError as error:
+            metadata = strict_json_loads(match.group(1))
+        except (StrictJsonError, json.JSONDecodeError) as error:
             raise ImportError("portable Markdown metadata must be JSON") from error
         markers.append((index, metadata))
     if not markers or any(line.strip() for line in lines[: markers[0][0]]):
@@ -386,8 +386,8 @@ def parse_portable_jsonl(path: str | Path) -> tuple[dict[str, Any], ...]:
         if not line.strip():
             continue
         try:
-            value = json.loads(line)
-        except json.JSONDecodeError as error:
+            value = strict_json_loads(line)
+        except (StrictJsonError, json.JSONDecodeError) as error:
             raise ImportError("portable JSONL contains invalid JSON") from error
         if not isinstance(value, dict) or set(value) != PORTABLE_JSONL_KEYS:
             raise ImportError("portable JSONL record keys are closed")
@@ -515,8 +515,21 @@ def project_import(items: Iterable[ImportItem], *, resume_state: Mapping[str, st
 
 
 def validate_projection(projection: ImportProjection) -> None:
-    if projection.schema_version != 1:
+    if not isinstance(projection, ImportProjection) or type(projection.schema_version) is not int or projection.schema_version != 1:
         raise ImportError("projection schema_version must be integer 1")
+    if not all(isinstance(item, ImportItem) for item in projection.items):
+        raise ImportError("projection items are invalid")
+    expected_order = tuple(sorted(projection.items, key=lambda item: (item.timestamp, item.item_id)))
+    if projection.items != expected_order or len({item.item_id for item in projection.items}) != len(projection.items):
+        raise ImportError("projection items must be uniquely and canonically ordered")
+    by_id = {item.item_id: item for item in projection.items}
+    if any(by_id.get(item.item_id) != item for item in projection.pending_items):
+        raise ImportError("projection pending items must reference exact projection items")
+    pending_ids = tuple(item.item_id for item in projection.pending_items)
+    if len(set(pending_ids)) != len(pending_ids) or pending_ids != tuple(item.item_id for item in projection.items if item.item_id in set(pending_ids)):
+        raise ImportError("projection pending items must preserve canonical order")
+    if tuple(item.item_id for item in projection.items if item.item_id not in set(pending_ids)) != projection.skipped_item_ids:
+        raise ImportError("projection skipped items must exactly complement pending items")
     _sha(projection.projection_digest, "projection digest")
     if not hmac.compare_digest(digest(projection.body()), projection.projection_digest):
         raise ImportError("projection digest does not match projection body")
@@ -550,6 +563,12 @@ def apply_import_plan(
     approved_plan_digest: str | None,
     controller_apply: Callable[[dict[str, Any]], Any],
 ) -> str:
+    if not isinstance(plan, ImportPlan) or type(plan.schema_version) is not int or plan.schema_version != 1:
+        raise ImportError("import plan schema is invalid")
+    for key in ("projection_digest", "coverage_digest", "controller_plan_digest", "plan_digest"):
+        _sha(getattr(plan, key), f"import plan {key}")
+    if not hmac.compare_digest(digest(plan.body()), plan.plan_digest):
+        raise ImportError("import plan digest does not match its body")
     if approved_plan_digest is None or not hmac.compare_digest(approved_plan_digest, plan.plan_digest):
         raise ImportError("exact digest-bound import plan approval is required")
     controller_apply(plan.to_dict())
