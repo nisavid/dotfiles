@@ -1,5 +1,24 @@
-{{- $warpThemesPath := joinPath ".local" "share" "warp-terminal" "themes" -}}
+{{- $homePrefix := print .chezmoi.homeDir .chezmoi.pathSeparator -}}
+{{- $warpThemesPath := "" -}}
+{{- if eq .chezmoi.os "darwin" -}}
+{{- $warpThemesPath = joinPath ".warp" "themes" -}}
+{{- else if eq .chezmoi.os "linux" -}}
+{{- $xdgDataHome := env "XDG_DATA_HOME" -}}
+{{- if eq $xdgDataHome "" -}}
+{{- $warpThemesPath = joinPath ".local" "share" "warp-terminal" "themes" -}}
+{{- else -}}
+{{- $warpThemesPath = joinPath ($xdgDataHome | trimPrefix $homePrefix) "warp-terminal" "themes" -}}
+{{- end -}}
+{{- else if eq .chezmoi.os "windows" -}}
+{{- $appData := env "APPDATA" -}}
+{{- if eq $appData "" -}}
+{{- $warpThemesPath = joinPath "AppData" "Roaming" "warp" "Warp" "data" "themes" -}}
+{{- else -}}
+{{- $warpThemesPath = joinPath ($appData | trimPrefix $homePrefix) "warp" "Warp" "data" "themes" -}}
+{{- end -}}
+{{- end -}}
 {{- $refreshPeriod := .catppuccin.refreshPeriod -}}
+{{- if ne $warpThemesPath "" -}}
 {{- range $i, $flavor := .catppuccin.allFlavors -}}
 {{- $fileName := print "catppuccin_" $flavor ".yml" -}}
 {{- if ne $i 0 }}{{ "\n\n" }}{{ end -}}
@@ -7,4 +26,5 @@
 refreshPeriod = {{ $refreshPeriod | quote }}
 type = "file"
 url = "https://github.com/catppuccin/warp/raw/main/themes/{{ $fileName }}"
+{{- end }}
 {{- end }}

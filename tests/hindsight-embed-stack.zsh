@@ -79,7 +79,7 @@ rg -F -q 'configured profile: missing (missing-profile)' "$status_output" || {
 mkdir -p "$test_home/Library/LaunchAgents" "$test_home/.local/bin"
 (
   cd "$repo_dir"
-  chezmoi execute-template < home/Library/LaunchAgents/com.hindsight.embed.stack.plist.tmpl \
+  chezmoi execute-template < home/private_Library/private_LaunchAgents/com.hindsight.embed.stack.plist.tmpl \
     > "$test_home/Library/LaunchAgents/com.hindsight.embed.stack.plist"
 )
 touch "$test_home/.local/bin/hindsight-embed-supervisor"

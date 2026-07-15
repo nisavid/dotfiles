@@ -103,19 +103,19 @@ non_target_config=$test_dir/non-target-config.toml
 non_target_hook=$test_dir/non-target-hook.zsh
 
 chezmoi execute-template --override-data "$darwin_data" \
-  < home/Library/LaunchAgents/io.nisavid.mlxd.plist.tmpl > "$plist"
+  < home/private_Library/private_LaunchAgents/io.nisavid.mlxd.plist.tmpl > "$plist"
 chezmoi execute-template --override-data "$darwin_data" \
   < home/run_after_install-mlxctl.sh.tmpl > "$hook"
 chezmoi execute-template --override-data "$darwin_data" \
   < home/dot_config/private_mlxd/private_config.toml.tmpl > "$config"
 chezmoi execute-template --override-data "$linux_data" \
-  < home/Library/LaunchAgents/io.nisavid.mlxd.plist.tmpl > "$linux_plist"
+  < home/private_Library/private_LaunchAgents/io.nisavid.mlxd.plist.tmpl > "$linux_plist"
 chezmoi execute-template --override-data "$linux_data" \
   < home/run_after_install-mlxctl.sh.tmpl > "$linux_hook"
 chezmoi execute-template --override-data "$linux_data" \
   < home/dot_config/private_mlxd/private_config.toml.tmpl > "$linux_config"
 chezmoi execute-template --override-data "$xml_data" \
-  < home/Library/LaunchAgents/io.nisavid.mlxd.plist.tmpl > "$xml_plist"
+  < home/private_Library/private_LaunchAgents/io.nisavid.mlxd.plist.tmpl > "$xml_plist"
 chezmoi execute-template --override-data "$extended_data" \
   < home/dot_config/private_mlxd/private_config.toml.tmpl > "$extended_config"
 chezmoi execute-template --override-data "$non_target_data" \
