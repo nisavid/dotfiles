@@ -18,6 +18,7 @@ fixture_home=$test_dir/home
 fixture_home=${fixture_home:A}
 source_dir=$fixture_home/src/nisavid/systools/tools/mlxctl
 fake_bin=$test_dir/bin
+empty_bin=$test_dir/empty-bin
 fake_uv=$fake_bin/uv
 fake_launchctl=$fake_bin/launchctl
 uv_log=$test_dir/uv.log
@@ -25,7 +26,7 @@ launchctl_log=$test_dir/launchctl.log
 hook=$test_dir/install-mlxctl.zsh
 linux_hook=$test_dir/linux-hook.zsh
 
-mkdir -p -- "$fake_bin" "$source_dir"
+mkdir -p -- "$empty_bin" "$fake_bin" "$source_dir"
 print -r -- '[project]' > "$source_dir/pyproject.toml"
 
 {
@@ -161,7 +162,7 @@ grep -q 'installable project not found' "$test_dir/missing-project.stderr" || \
 
 print -r -- '[project]' > "$source_dir/pyproject.toml"
 missing_uv_status=0
-PATH='/usr/bin:/bin' \
+PATH="$empty_bin" \
   ZDOTDIR=$test_dir \
   MLXCTL_TEST_BIN_DIR=$fixture_home/.local/bin \
   MLXCTL_TEST_SOURCE_DIR=$source_dir \
