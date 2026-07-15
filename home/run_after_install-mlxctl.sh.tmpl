@@ -8,192 +8,35 @@ main() {
   umask 077
 
   if (( EUID == 0 )); then
-    print -u2 -r -- 'mlxctl: refusing to install a user LaunchAgent as root'
+    print -u2 -r -- 'mlxctl: refusing to install a user tool as root'
     return 1
   fi
 
-  local source_dir={{ joinPath .chezmoi.homeDir .mlxd.sourceDir | quote }}
-  local bin_dir={{ joinPath .chezmoi.homeDir .mlxd.binDir | quote }}
-  local config_dir={{ joinPath .chezmoi.homeDir .mlxd.configDir | quote }}
-  local state_dir={{ joinPath .chezmoi.homeDir .mlxd.stateDir | quote }}
-  local log_dir={{ joinPath .chezmoi.homeDir .mlxd.logDir | quote }}
-  local launchctl_bin={{ .mlxd.launchctlBin | quote }}
-  local optiq_runtime={{ .mlxd.optiq.runtimePackage | quote }}
-  local huggingface_package={{ .mlxd.optiq.huggingFacePackage | quote }}
-  local model_repository={{ .mlxd.optiq.modelRepository | quote }}
-  local model_revision={{ .mlxd.optiq.modelRevision | quote }}
-  local model_dir={{ joinPath .chezmoi.homeDir .mlxd.optiq.modelDir | quote }}
-  local kv_config="$model_dir/{{ .mlxd.optiq.kvConfig }}"
-  local kv_sha256={{ .mlxd.optiq.kvSha256 | quote }}
-  local optiq_target={{ if eq .chezmoi.hostname .mlxd.optiq.targetHostname }}1{{ else }}0{{ end }}
-  local hindsight_profile={{ .mlxd.optiq.clients.hindsightProfile | quote }}
-  local client_base_url={{ .mlxd.optiq.clients.baseUrl | quote }}
-  # The plist template filename is literal; keep it aligned with .mlxd.label when renaming the service.
-  local plist_path={{ joinPath .chezmoi.homeDir "Library" "LaunchAgents" (printf "%s.plist" .mlxd.label) | quote }}
-  local user_id
-  user_id=$(/usr/bin/id -u)
-  local user_domain="gui/$user_id"
-  local service_target="$user_domain/{{ .mlxd.label }}"
-  local -a deployment_dirs=("$config_dir" "$state_dir" "$log_dir")
-  (( optiq_target )) && deployment_dirs+=("$model_dir")
-
-  mkdir -p -- "${deployment_dirs[@]}"
-  chmod 700 "${deployment_dirs[@]}"
-
-  if [[ ! -x "$launchctl_bin" ]]; then
-    print -u2 -r -- "mlxctl: launchctl is not executable at $launchctl_bin"
-    return 1
-  fi
-
-  if [[ ! -r "$plist_path" ]]; then
-    print -u2 -r -- "mlxctl: LaunchAgent plist not found at $plist_path"
-    return 1
-  fi
-
-  local registration=''
-  integer registered=0
-  if registration=$("$launchctl_bin" print "$service_target" 2>/dev/null); then
-    registered=1
-    if [[ "$registration" == *'state = running'* ]]; then
-      print -u2 -r -- "mlxctl: $service_target is running; stop it before updating the deployment"
-      return 1
-    fi
-  fi
+  local source_dir={{ joinPath .chezmoi.homeDir .mlxctl.sourceDir | quote }}
+  local bin_dir={{ joinPath .chezmoi.homeDir .mlxctl.binDir | quote }}
 
   if [[ ! -d "$source_dir" ]]; then
-    if (( registered )); then
-      "$launchctl_bin" bootout "$service_target"
-      print -u2 -r -- "mlxctl: source checkout not found at $source_dir; inactive LaunchAgent registration removed"
-    else
-      print -u2 -r -- "mlxctl: source checkout not found at $source_dir; LaunchAgent remains unregistered"
-    fi
+    print -u2 -r -- "mlxctl: source checkout not found at $source_dir; installation skipped"
     return 0
-  elif [[ ! -r "$source_dir/pyproject.toml" ]]; then
-    if (( registered )); then
-      "$launchctl_bin" bootout "$service_target"
-      print -u2 -r -- "mlxctl: $source_dir is not installable yet; inactive LaunchAgent registration removed"
-    else
-      print -u2 -r -- "mlxctl: $source_dir is not installable yet; LaunchAgent remains unregistered"
-    fi
+  fi
+  if [[ ! -r "$source_dir/pyproject.toml" ]]; then
+    print -u2 -r -- "mlxctl: installable project not found at $source_dir; installation skipped"
     return 0
-  else
-    local uv_bin=''
-    if ! uv_bin=$(command -v uv); then
-      print -u2 -r -- 'mlxctl: uv is required; install it and re-run `chezmoi apply`'
-      return 1
-    fi
-
-    print -r -- "mlxctl: installing from $source_dir"
-    UV_TOOL_BIN_DIR="$bin_dir" "$uv_bin" tool install --force "$source_dir"
-    if (( optiq_target )); then
-      print -r -- "mlxctl: installing $optiq_runtime"
-      UV_TOOL_BIN_DIR="$bin_dir" "$uv_bin" tool install --force "$optiq_runtime"
-      local optiq_help=''
-      local optiq_capability_error=''
-      if ! optiq_help=$("$bin_dir/optiq" serve --help 2>&1); then
-        optiq_capability_error='installed OptiQ runtime could not report its serve capabilities'
-      else
-        local required_optiq_flag
-        local -a missing_optiq_flags=()
-        for required_optiq_flag in --kv-config --max-context --mtp; do
-          if ! /usr/bin/grep -Eq -- \
-            "(^|[[:space:]])${required_optiq_flag}([=[:space:],]|$)" <<< "$optiq_help"; then
-            missing_optiq_flags+=("$required_optiq_flag")
-          fi
-        done
-        if (( ${#missing_optiq_flags} )); then
-          optiq_capability_error="installed OptiQ runtime does not support required serve options: ${(j:, :)missing_optiq_flags}"
-        fi
-      fi
-      if [[ -n "$optiq_capability_error" ]]; then
-        print -u2 -r -- "mlxctl: $optiq_capability_error"
-        if (( registered )); then
-          "$launchctl_bin" bootout "$service_target"
-          print -u2 -r -- 'mlxctl: inactive LaunchAgent registration removed after incompatible runtime installation'
-        fi
-        return 1
-      fi
-
-      print -r -- "mlxctl: downloading pinned model snapshot $model_repository@$model_revision"
-      UV_TOOL_BIN_DIR="$bin_dir" "$uv_bin" tool run --from "$huggingface_package" \
-        hf download "$model_repository" --revision "$model_revision" --local-dir "$model_dir"
-    fi
   fi
 
-  local entrypoint=''
-  local -a entrypoints=(mlxctl mlxd)
-  (( optiq_target )) && entrypoints+=(optiq)
-  for entrypoint in "${entrypoints[@]}"; do
-    if [[ ! -x "$bin_dir/$entrypoint" ]]; then
-      print -u2 -r -- "mlxctl: installation did not create $bin_dir/$entrypoint"
-      return 1
-    fi
-  done
-
-  if (( optiq_target )) && [[ ! -r "$kv_config" ]]; then
-    print -u2 -r -- "mlxctl: pinned model snapshot did not provide $kv_config"
+  local uv_bin=''
+  if ! uv_bin=$(command -v uv); then
+    print -u2 -r -- 'mlxctl: uv is required; install it and re-run `chezmoi apply`'
     return 1
   fi
-  if (( optiq_target )); then
-    local actual_kv_sha256
-    actual_kv_sha256=$(/usr/bin/shasum -a 256 "$kv_config" | /usr/bin/awk '{print $1}')
-    if [[ "$actual_kv_sha256" != "$kv_sha256" ]]; then
-      print -u2 -r -- "mlxctl: KV config checksum mismatch for $kv_config"
-      return 1
-    fi
-  fi
 
-  if (( optiq_target )); then
-    local hindsight_bin="$bin_dir/hindsight-embed"
-    if [[ ! -x "$hindsight_bin" ]]; then
-      print -u2 -r -- "mlxctl: Hindsight client not found at $hindsight_bin"
-      return 1
-    fi
-    local model_reference="$model_dir"
-    local key value
-    local -a hindsight_settings=(
-      HINDSIGHT_API_LLM_PROVIDER {{ .mlxd.optiq.clients.hindsightProvider | quote }}
-      HINDSIGHT_API_LLM_BASE_URL "$client_base_url"
-      HINDSIGHT_API_LLM_MODEL "$model_reference"
-      HINDSIGHT_API_LLM_MAX_CONCURRENT 1
-      HINDSIGHT_API_LLM_TEMPERATURE_VERIFICATION 0.0
-      HINDSIGHT_API_LLM_TEMPERATURE_RETAIN 0.1
-      HINDSIGHT_API_LLM_TEMPERATURE_REFLECT 0.9
-      HINDSIGHT_API_LLM_TEMPERATURE_CONSOLIDATION 0.0
-    )
-    for key value in "${(@)hindsight_settings}"; do
-      "$hindsight_bin" profile set-env "$hindsight_profile" "$key" "$value" >/dev/null
-    done
-    print -r -- "mlxctl: installed mlxctl, mlxd, optiq, the pinned model, and Hindsight client settings"
-  else
-    print -r -- "mlxctl: installed $bin_dir/mlxctl and $bin_dir/mlxd"
-  fi
-
-  integer reloaded=0
-  if registration=$("$launchctl_bin" print "$service_target" 2>/dev/null); then
-    if [[ "$registration" == *'state = running'* ]]; then
-      print -u2 -r -- "mlxctl: $service_target is running; stop it before reloading the LaunchAgent"
-      return 1
-    fi
-    "$launchctl_bin" bootout "$service_target"
-    reloaded=1
-  fi
-
-  "$launchctl_bin" bootstrap "$user_domain" "$plist_path"
-
-  if ! registration=$("$launchctl_bin" print "$service_target"); then
-    print -u2 -r -- "mlxctl: $service_target was not registered after bootstrap"
+  print -r -- "mlxctl: installing from $source_dir"
+  UV_TOOL_BIN_DIR="$bin_dir" "$uv_bin" tool install --force "$source_dir"
+  if [[ ! -x "$bin_dir/mlxctl" ]]; then
+    print -u2 -r -- "mlxctl: installation did not create $bin_dir/mlxctl"
     return 1
   fi
-  if [[ "$registration" == *'state = running'* ]]; then
-    print -u2 -r -- "mlxctl: $service_target started during bootstrap"
-    return 1
-  fi
-  if (( reloaded )); then
-    print -r -- "mlxctl: reloaded $service_target without starting it"
-  else
-    print -r -- "mlxctl: registered $service_target without starting it"
-  fi
+  print -r -- "mlxctl: installed $bin_dir/mlxctl"
 }
 
 main "$@"
