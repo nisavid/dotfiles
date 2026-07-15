@@ -1,0 +1,3 @@
+[mlxctl]
+sourceDir = "src/nisavid/systools/tools/mlxctl"
+binDir = ".local/bin"

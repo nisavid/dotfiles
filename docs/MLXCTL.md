@@ -1,144 +1,71 @@
-# mlxctl deployment
+# mlxctl installation
 
-This repository owns the personal macOS deployment layer for the MLX service
-manager in `nisavid/systools`: the `mlxd` LaunchAgent, deployment values, and
-local-source install hook. The service manager implementation remains in the
-`systools` repository.
+This repository installs the `mlxctl` project from a local `systools` checkout.
+`mlxctl` owns its daemon, runtimes, models, services, gateway, and client
+integrations. Chezmoi does not configure or operate those resources.
 
-## First-time setup
+## Install or update mlxctl
 
 Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and clone
-`nisavid/systools` at `~/src/nisavid/systools`. The install source is its
-`tools/mlxctl` subproject at `~/src/nisavid/systools/tools/mlxctl`. Review the
-deployment values in [`home/.chezmoidata/mlxd.toml`](../home/.chezmoidata/mlxd.toml),
-then apply the dotfiles:
+`nisavid/systools` at `~/src/nisavid/systools`. The install source is
+`~/src/nisavid/systools/tools/mlxctl`.
+
+Apply the dotfiles:
 
 ```zsh
 chezmoi apply
 ```
 
-On macOS, chezmoi then:
-
-- renders and registers `~/Library/LaunchAgents/io.nisavid.mlxd.plist`
-  without starting it;
-- renders `~/.config/mlxd/config.toml` with the personal server and model
-  registry;
-- creates `~/.config/mlxd`, `~/.local/state/mlxd`, and
-  `~/Library/Logs/mlxd` with mode `0700`; and
-- installs the local `tools/mlxctl` project with `uv tool install --force`,
-  which provides `~/.local/bin/mlxctl` and `~/.local/bin/mlxd`.
-
-On the `hatchery` host, the same hook also installs `mlx-optiq==0.2.18` and
-checks that `optiq serve --help` advertises `--kv-config`, `--max-context`, and
-`--mtp` before downloading the pinned Qwen3.6 OptiQ snapshot. It then verifies
-the published KV config and configures the existing `systalyze` Hindsight
-profile.
-The snapshot is large; confirm memory and disk capacity before the first apply
-on that host. If the runtime lacks a required option, the hook stops before the
-download and removes an existing inactive LaunchAgent registration so launchd
-cannot activate the incompatible runtime.
-
-The install hook runs after every apply so the installed tool follows the local
-source checkout. Until that checkout contains an installable `pyproject.toml`,
-the hook creates the deployment directories, reports that installation is
-pending, removes any inactive stale LaunchAgent registration, and exits
-successfully. It refuses to update the tool environment while the supervisor is
-running.
-
-## Disabled by default
-
-The LaunchAgent is registered but inactive. Its `RunAtLoad` and `KeepAlive`
-values are both false, so bootstrap does not start it and launchd does not
-restart it automatically. Confirm registration without starting the service:
+On macOS, the after-install hook runs:
 
 ```zsh
-launchctl print gui/$(id -u)/io.nisavid.mlxd
+uv tool install --force ~/src/nisavid/systools/tools/mlxctl
 ```
 
-Start and stop configured inference servers through the CLI. When the control
-socket is absent, `mlxctl start` kickstarts the registered supervisor:
+If the checkout or its `pyproject.toml` is absent, the hook reports that
+installation was skipped and leaves the machine unchanged. It fails when `uv`
+is unavailable or the install does not produce `~/.local/bin/mlxctl`.
+
+Verify the installed entrypoint:
 
 ```zsh
-mlxctl status
-mlxctl start <server>
-mlxctl stop <server>
+mlxctl --help
 ```
 
-During normal operation, remove the registration only when uninstalling the
-deployment. The incompatible-runtime preflight described above is the safety
-exception: it removes an inactive registration before stopping the apply.
+Then use `mlxctl setup` or the guided TUI to configure the machine. Runtime
+installation, model discovery and adoption, service lifecycle, gateway setup,
+and Codex or Hindsight integration are all mlxctl operations.
 
-```zsh
-launchctl bootout gui/$(id -u)/io.nisavid.mlxd
-```
+## Migrate an earlier deployment
 
-## Managed paths
+Earlier versions of these dotfiles managed an `io.nisavid.mlxd` LaunchAgent,
+`~/.config/mlxd`, `~/.local/state/mlxd`, `~/Library/Logs/mlxd`, standalone
+OptiQ installation, model downloads, and MLX client fields. These paths may
+contain useful configuration, model weights, logs, or runtime evidence.
 
-The plist invokes `~/.local/bin/mlxd` and sets:
+Chezmoi now leaves those legacy targets untouched and unmanaged. It does not
+stop or remove the old LaunchAgent and does not delete, move, or rewrite any
+legacy data. Before configuring mlxctl, inspect and archive the old deployment,
+stop its running services, and use mlxctl's migration or adoption operations to
+bring forward the resources you intend to keep. Remove obsolete legacy targets
+only after the new deployment is verified.
 
-- `PATH`, including `~/.local/bin`;
-- `MLXD_CONFIG_DIR=~/.config/mlxd`;
-- `MLXD_STATE_DIR=~/.local/state/mlxd`; and
-- `MLXD_LOG_DIR=~/Library/Logs/mlxd`.
+## Ownership boundary
 
-Supervisor stdout and stderr both append to `~/Library/Logs/mlxd/mlxd.log`.
-The existing `mlx_lm` Client Endpoint named `mlx` remains on port 8765. On
-`hatchery`, the config additionally defines the `qwen36-optiq` Model Alias and
-an `optiq` Server Definition at `http://127.0.0.1:8766`. It serves the pinned
-`mlx-community/Qwen3.6-35B-A3B-OptiQ-4bit` snapshot with:
+Chezmoi owns only the local-source tool installation. In particular, it does
+not:
 
-- model revision `70a3aa32c7feef511182bf16aa332f37e8d82014`;
-- the repository's `kv_config.json`, verified as SHA-256
-  `34846a2678e2d390454af58e9296859b730beaa3dc6974644262e2d07110edc5`;
-- MTP enabled;
-- a 32,768-token server context; and
-- a deterministic default temperature of `0.0`.
+- render or register a LaunchAgent;
+- create or write mlxctl or mlxd configuration, state, log, runtime, or model
+  paths;
+- install OptiQ or download Hugging Face models; or
+- select a model provider or write MLX settings for Codex or Hindsight.
 
-Codex selects a host-scoped `mlx-optiq` Responses API provider at that Client
-Endpoint. Codex does not expose a temperature setting in its current config
-schema, so it inherits the deterministic server default. The Hindsight
-`systalyze` profile uses its `lmstudio` OpenAI-compatible provider against the
-same endpoint and sends task-specific temperatures: `0.0` for verification,
-`0.1` for retain, `0.9` for reflect, and `0.0` for consolidation. Hindsight is
-limited to one concurrent LLM request. Existing provider definitions and
-credentials are not deleted.
-
-Metrics are retained for seven days. Daemon timeouts, metrics cadence, and the
-loopback host inherit the v1 defaults. Keep model weights, API keys, runtime
-state, databases, and logs out of Git.
-
-## Verify the OptiQ deployment
-
-After applying on `hatchery`, restart Hindsight so its profile environment is
-reloaded, then verify the managed service without exposing either endpoint:
-
-```zsh
-setopt PIPE_FAIL
-optiq --version
-mlxctl status optiq
-mlxctl start optiq
-mlxctl models optiq
-curl --fail --show-error --silent http://127.0.0.1:8766/v1/models | jq .
-mlxctl metrics optiq
-```
-
-Inspect the active OptiQ process and confirm that its arguments contain
-`--kv-config` with the resolved path to
-`~/.local/share/mlxd/models/qwen36-optiq/kv_config.json`, `--max-context 32768`,
-and `--mtp`. Exercise Codex with a representative engineering request and
-Hindsight with retain, recall, and reflect requests before treating the host as
-complete. Record startup time, token generation, memory pressure, logs, and
-clean shutdown during that target-host verification.
-After the live checks, stop OptiQ and confirm the clean shutdown:
-
-```zsh
-mlxctl stop optiq
-mlxctl status optiq
-```
-
-The final status must report `optiq` as stopped.
+The source path is declared in
+[`home/.chezmoidata/mlxctl.toml`](../home/.chezmoidata/mlxctl.toml). Keep model
+weights, API keys, runtime state, databases, and logs out of Git.
 
 ## Other operating systems
 
-The LaunchAgent and install hook render only on macOS. The checked-in
-chezmoidata values are inert on other operating systems.
+The local-source install hook renders only on macOS. The checked-in source path
+is inert on other operating systems.
