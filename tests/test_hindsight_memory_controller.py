@@ -319,12 +319,22 @@ class ControllerCliTest(unittest.TestCase):
                         process_contexts.append(_kwargs)
                         if "importlib.metadata" in argv[-1]:
                             return subprocess.CompletedProcess(argv, 0, "0.8.4\n", "")
-                        admin_calls.append(argv)
-                        if argv[1] == "backup":
-                            Path(argv[2]).write_bytes(rollback_payload)
-                            Path(argv[2]).chmod(0o600)
-                        if argv[1] == "import-bank":
-                            snapshot = Path(argv[3])
+                        self.assertEqual(argv[0], sys.executable)
+                        self.assertRegex(argv[1], r"^/dev/fd/[0-9]+$")
+                        self.assertEqual(
+                            _kwargs.get("pass_fds"), (int(argv[1].rsplit("/", 1)[1]),)
+                        )
+                        self.assertEqual(
+                            Path(argv[1]).read_bytes(),
+                            admin_executable.read_bytes(),
+                        )
+                        admin_argv = argv[2:]
+                        admin_calls.append(admin_argv)
+                        if admin_argv[0] == "backup":
+                            Path(admin_argv[1]).write_bytes(rollback_payload)
+                            Path(admin_argv[1]).chmod(0o600)
+                        if admin_argv[0] == "import-bank":
+                            snapshot = Path(admin_argv[2])
                             observed_import.update({
                                 "path": snapshot,
                                 "payload": snapshot.read_bytes(),
@@ -345,11 +355,11 @@ class ControllerCliTest(unittest.TestCase):
                     ):
                         self.assertEqual(module["apply_command"](args), 0)
                     self.assertEqual(admin_calls[0], [
-                        str(admin_executable), "backup", str(rollback_archive),
+                        "backup", str(rollback_archive),
                         "--schema", "public",
                     ])
                     self.assertEqual(admin_calls[1], [
-                        str(admin_executable), "import-bank",
+                        "import-bank",
                         "--archive", str(observed_import["path"]),
                         "--target-bank", "engineering",
                     ])
@@ -410,8 +420,18 @@ class ControllerCliTest(unittest.TestCase):
             def run_mismatched_backup(argv, **_kwargs):
                 if "importlib.metadata" in argv[-1]:
                     return subprocess.CompletedProcess(argv, 0, "0.8.4\n", "")
-                mismatched_backup_calls.append(argv)
-                Path(argv[2]).write_bytes(b"mismatched rollback archive")
+                self.assertEqual(argv[0], sys.executable)
+                self.assertRegex(argv[1], r"^/dev/fd/[0-9]+$")
+                self.assertEqual(
+                    _kwargs.get("pass_fds"), (int(argv[1].rsplit("/", 1)[1]),)
+                )
+                self.assertEqual(
+                    Path(argv[1]).read_bytes(),
+                    admin_executable.read_bytes(),
+                )
+                admin_argv = argv[2:]
+                mismatched_backup_calls.append(admin_argv)
+                Path(admin_argv[1]).write_bytes(b"mismatched rollback archive")
                 return subprocess.CompletedProcess(argv, 0, "Complete", "")
 
             with (
@@ -434,7 +454,7 @@ class ControllerCliTest(unittest.TestCase):
                 ):
                     module["apply_command"](args)
             self.assertEqual(mismatched_backup_calls, [[
-                str(admin_executable), "backup", str(rollback_archive),
+                "backup", str(rollback_archive),
                 "--schema", "public",
             ]])
             self.assertEqual(adapter.calls, adapter_calls_before)

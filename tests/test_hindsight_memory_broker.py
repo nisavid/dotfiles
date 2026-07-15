@@ -1,4 +1,5 @@
 import base64
+from copy import deepcopy
 import hashlib
 import json
 import os
@@ -57,12 +58,13 @@ class BrokerSocketTest(unittest.TestCase):
         self.adapter = FakeAdapter(endpoint=ENDPOINT)
         self.start(self.adapter)
 
-    def start(self, adapter):
+    def start(self, adapter, *, clock=time.time):
         self.broker = Broker(
             state_dir=self.state, signing_key=b"k" * 32,
             routes={"local-core": {"bank": BANK, "adapter": adapter}},
             policy_digest=DIGEST_A, artifact_digest=DIGEST_B,
             mint_authorizer=authorize_mint,
+            clock=clock,
             max_payload_bytes=4096,
         )
         self.server = UnixJsonRpcServer(self.socket_path, self.broker)
@@ -378,6 +380,200 @@ class BrokerSocketTest(unittest.TestCase):
         work = json.loads((self.state / "durable_work.json").read_text())
         self.assertEqual(len(work["used_nonces"]), 1)
         self.assertEqual(len(work["exchanges"]), 1)
+
+    def test_exchange_result_survives_restart_and_is_removed_after_expiry(self):
+        self.stop()
+        now = [1000.0]
+        def clock():
+            return now[0]
+
+        self.start(self.adapter, clock=clock)
+        minted = self.broker.session_mint(
+            "control", claims(), ttl_seconds=30
+        )
+        handle = minted["payload"]["handle"]
+        first = self.broker.session_exchange(handle)
+
+        self.stop()
+        self.start(self.adapter, clock=clock)
+        recovered = self.broker.session_exchange(handle)
+        self.assertEqual(
+            recovered["payload"]["capability"],
+            first["payload"]["capability"],
+        )
+
+        long_lived = self.broker.session_mint(
+            "control", claims(session_id="long-lived"), ttl_seconds=60
+        )
+        long_lived_capability = self.broker.session_exchange(
+            long_lived["payload"]["handle"]
+        )["payload"]["capability"]
+        now[0] = 1031.0
+        self.broker.recall(
+            long_lived_capability,
+            sequence=1,
+            action_id="prune-expired-exchange",
+            request={"query": "q"},
+        )
+        work = json.loads((self.state / "durable_work.json").read_text())
+        self.assertNotIn(handle, work["exchanges"])
+
+        expiring = self.broker.session_mint(
+            "control", claims(session_id="restart-expiry"), ttl_seconds=30
+        )
+        expiring_handle = expiring["payload"]["handle"]
+        self.broker.session_exchange(expiring_handle)
+        self.stop()
+        now[0] = 1062.0
+        self.start(self.adapter, clock=clock)
+        work = json.loads((self.state / "durable_work.json").read_text())
+        self.assertNotIn(expiring_handle, work["exchanges"])
+
+    def test_legacy_exchange_result_is_migrated_to_a_signed_receipt(self):
+        minted = self.broker.session_mint("control", claims())
+        handle = minted["payload"]["handle"]
+        first = self.broker.session_exchange(handle)
+        self.stop()
+        work_path = self.state / "durable_work.json"
+        work = json.loads(work_path.read_text())
+        work.pop("schema_version")
+        work["exchanges"][handle].pop("receipt")
+        work_path.write_text(json.dumps(work), encoding="utf-8")
+
+        self.start(self.adapter)
+        recovered = self.broker.session_exchange(handle)
+        migrated = json.loads(work_path.read_text())
+        self.assertEqual(
+            recovered["payload"]["capability"],
+            first["payload"]["capability"],
+        )
+        self.assertEqual(migrated["schema_version"], 2)
+        self.assertIn("receipt", migrated["exchanges"][handle])
+
+    def test_malformed_exchange_ledger_is_rejected(self):
+        self.stop()
+        work_path = self.state / "durable_work.json"
+        work = json.loads(work_path.read_text())
+        work["exchanges"] = []
+        work_path.write_text(json.dumps(work), encoding="utf-8")
+        with self.assertRaisesRegex(BrokerError, "STATE_INVALID"):
+            self.start(self.adapter)
+
+    def test_nested_malformed_exchange_record_is_rejected(self):
+        self.stop()
+        work_path = self.state / "durable_work.json"
+        work = json.loads(work_path.read_text())
+        work["exchanges"] = {
+            "a" * 64: {"expires_at": 2000.0},
+        }
+        work_path.write_text(json.dumps(work), encoding="utf-8")
+        with self.assertRaisesRegex(BrokerError, "STATE_INVALID"):
+            self.start(self.adapter)
+
+    def test_malformed_exchange_state_containers_are_rejected_cleanly(self):
+        for key, malformed in (
+            ("sessions", []),
+            ("used_nonces", {}),
+            ("revoked_nonces", {}),
+            ("queue", {}),
+            ("completed", []),
+            ("generation", []),
+        ):
+            with self.subTest(key=key):
+                self.stop()
+                work_path = self.state / "durable_work.json"
+                work = json.loads(work_path.read_text())
+                original = work[key]
+                work[key] = malformed
+                work_path.write_text(json.dumps(work), encoding="utf-8")
+                with self.assertRaisesRegex(BrokerError, "STATE_INVALID"):
+                    self.start(self.adapter)
+                work[key] = original
+                work_path.write_text(json.dumps(work), encoding="utf-8")
+                self.start(self.adapter)
+
+    def test_malformed_queue_completed_and_session_records_are_rejected(self):
+        minted = self.broker.session_mint("control", claims())
+        self.broker.session_exchange(minted["payload"]["handle"])
+        self.stop()
+        work_path = self.state / "durable_work.json"
+        original = json.loads(work_path.read_text())
+        mutations = (
+            lambda work: work["queue"].append({}),
+            lambda work: work["completed"].update({"state": {}}),
+            lambda work: work["sessions"]["session-1"].update(
+                {"action_ids": ["duplicate", "duplicate"]}
+            ),
+        )
+        for mutate in mutations:
+            with self.subTest(mutate=mutate):
+                work = deepcopy(original)
+                mutate(work)
+                work_path.write_text(json.dumps(work), encoding="utf-8")
+                with self.assertRaisesRegex(BrokerError, "STATE_INVALID"):
+                    self.start(self.adapter)
+        work_path.write_text(json.dumps(original), encoding="utf-8")
+        self.start(self.adapter)
+
+    def test_invalidly_signed_persisted_exchange_is_rejected(self):
+        minted = self.broker.session_mint("control", claims())
+        handle = minted["payload"]["handle"]
+        self.broker.session_exchange(handle)
+        self.stop()
+        work_path = self.state / "durable_work.json"
+        work = json.loads(work_path.read_text())
+        work["exchanges"][handle]["capability"] = "invalid.signature"
+        work_path.write_text(json.dumps(work), encoding="utf-8")
+        with self.assertRaisesRegex(BrokerError, "STATE_INVALID"):
+            self.start(self.adapter)
+
+    def test_tampered_persisted_exchange_receipt_is_rejected(self):
+        minted = self.broker.session_mint("control", claims())
+        handle = minted["payload"]["handle"]
+        self.broker.session_exchange(handle)
+        self.stop()
+        work_path = self.state / "durable_work.json"
+        work = json.loads(work_path.read_text())
+        work["exchanges"][handle]["nonce_digest"] = "f" * 64
+        work_path.write_text(json.dumps(work), encoding="utf-8")
+        with self.assertRaisesRegex(BrokerError, "STATE_INVALID"):
+            self.start(self.adapter)
+
+    def test_invalidly_signed_persisted_exchange_receipt_is_rejected(self):
+        minted = self.broker.session_mint("control", claims())
+        handle = minted["payload"]["handle"]
+        self.broker.session_exchange(handle)
+        self.stop()
+        work_path = self.state / "durable_work.json"
+        work = json.loads(work_path.read_text())
+        work["exchanges"][handle]["receipt"] = "invalid.signature"
+        work_path.write_text(json.dumps(work), encoding="utf-8")
+        with self.assertRaisesRegex(BrokerError, "STATE_INVALID"):
+            self.start(self.adapter)
+
+    def test_persisted_exchange_receipt_cannot_be_transplanted_to_another_handle(self):
+        minted = self.broker.session_mint("control", claims())
+        handle = minted["payload"]["handle"]
+        self.broker.session_exchange(handle)
+        self.stop()
+        work_path = self.state / "durable_work.json"
+        work = json.loads(work_path.read_text())
+        work["exchanges"]["e" * 64] = dict(work["exchanges"][handle])
+        work_path.write_text(json.dumps(work), encoding="utf-8")
+        with self.assertRaisesRegex(BrokerError, "STATE_INVALID"):
+            self.start(self.adapter)
+
+    def test_persisted_exchange_requires_its_consumed_nonce_marker(self):
+        minted = self.broker.session_mint("control", claims())
+        handle = minted["payload"]["handle"]
+        self.broker.session_exchange(handle)
+        self.stop()
+        work_path = self.state / "durable_work.json"
+        work = json.loads(work_path.read_text())
+        work["used_nonces"].remove(work["exchanges"][handle]["nonce_digest"])
+        work_path.write_text(json.dumps(work), encoding="utf-8")
+        with self.assertRaisesRegex(BrokerError, "STATE_INVALID"):
+            self.start(self.adapter)
 
     def test_read_and_model_timeouts_discard_late_payload_and_shutdown_drains(self):
         class SlowFake(FakeAdapter):

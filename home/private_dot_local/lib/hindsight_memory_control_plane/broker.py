@@ -34,6 +34,9 @@ CLAIM_KEYS = frozenset({
 })
 ENVELOPE_KEYS = CLAIM_KEYS | {"kind", "issued_at", "expires_at", "nonce", "revocation_id", "broker_generation"}
 CAPABILITY_KEYS = CLAIM_KEYS | {"kind", "issued_at", "expires_at", "nonce", "revocation_id"}
+RECOVERY_RECEIPT_KEYS = frozenset({
+    "kind", "handle", "capability_digest", "nonce_digest", "session_id", "expires_at",
+})
 FORBIDDEN_KEYS = frozenset({
     "destination", "destination_bank", "target_bank", "home_bank", "bank", "bank_id",
     "endpoint", "url", "authorization", "bearer", "credential", "credentials", "token",
@@ -211,13 +214,257 @@ class Broker:
     @staticmethod
     def _empty_work() -> dict[str, Any]:
         return {
+            "schema_version": 2,
             "queue": [], "completed": {}, "sessions": {}, "used_nonces": [],
             "revoked_nonces": [], "exchanges": {}, "generation": "initial",
         }
 
+    def _migrate_work(self, value: Any) -> tuple[Any, bool]:
+        if not isinstance(value, dict) or "schema_version" in value:
+            return value, False
+        legacy_keys = set(self._empty_work()) - {"schema_version"}
+        if set(value) != legacy_keys:
+            return value, False
+        migrated = deepcopy(value)
+        migrated["schema_version"] = 2
+        exchanges = migrated.get("exchanges")
+        if isinstance(exchanges, dict):
+            migrated_exchanges = {}
+            for handle, result in exchanges.items():
+                receipt = self._legacy_exchange_receipt(
+                    handle, result, migrated
+                )
+                if receipt is not None:
+                    migrated_exchanges[handle] = {**result, "receipt": receipt}
+            migrated["exchanges"] = migrated_exchanges
+        return migrated, True
+
+    def _legacy_exchange_receipt(
+        self, handle: Any, result: Any, work: Mapping[str, Any]
+    ) -> str | None:
+        if (
+            not isinstance(handle, str)
+            or re.fullmatch(r"[0-9a-f]{64}", handle) is None
+            or not isinstance(result, dict)
+            or set(result)
+            != {"session_id", "capability", "expires_at", "nonce_digest"}
+            or not isinstance(result["session_id"], str)
+            or IDENTIFIER.fullmatch(result["session_id"]) is None
+            or not isinstance(result["capability"], str)
+            or type(result["expires_at"]) not in (int, float)
+            or not math.isfinite(result["expires_at"])
+            or not isinstance(result["nonce_digest"], str)
+            or DIGEST.fullmatch(result["nonce_digest"]) is None
+            or not isinstance(work.get("used_nonces"), list)
+            or result["nonce_digest"] not in work["used_nonces"]
+            or not isinstance(work.get("sessions"), dict)
+        ):
+            return None
+        try:
+            claims = self._verify(
+                result["capability"], "capability", allow_expired=True
+            )
+        except BrokerError:
+            return None
+        session = work["sessions"].get(result["session_id"])
+        if (
+            claims["session_id"] != result["session_id"]
+            or claims["expires_at"] != result["expires_at"]
+            or not isinstance(session, dict)
+            or session.get("nonce_digest") != _sha256_text(claims["nonce"])
+            or session.get("revocation_digest")
+            != _sha256_text(claims["revocation_id"])
+        ):
+            return None
+        return self._sign({
+            "kind": "exchange-recovery",
+            "handle": handle,
+            "capability_digest": _sha256_text(result["capability"]),
+            "nonce_digest": result["nonce_digest"],
+            "session_id": result["session_id"],
+            "expires_at": result["expires_at"],
+        })
+
+    def _read_work(self) -> dict[str, Any]:
+        value, migrated = self._migrate_work(
+            _read_json(self._work_path, self._empty_work())
+        )
+        validated = self._validate_work(value)
+        if migrated:
+            _atomic_json(self._work_path, validated)
+        return validated
+
     def _validate_work(self, value: Any) -> dict[str, Any]:
         if not isinstance(value, dict) or set(value) != set(self._empty_work()):
             raise BrokerError("STATE_INVALID")
+        if (
+            value["schema_version"] != 2
+            or not isinstance(value["exchanges"], dict)
+            or not isinstance(value["sessions"], dict)
+            or not isinstance(value["used_nonces"], list)
+            or not isinstance(value["revoked_nonces"], list)
+            or not isinstance(value["queue"], list)
+            or not isinstance(value["completed"], dict)
+            or not isinstance(value["generation"], str)
+            or IDENTIFIER.fullmatch(value["generation"]) is None
+            or not all(
+                isinstance(item, str) and DIGEST.fullmatch(item)
+                for item in value["used_nonces"]
+            )
+            or not all(
+                isinstance(item, str) and DIGEST.fullmatch(item)
+                for item in value["revoked_nonces"]
+            )
+            or len(value["used_nonces"]) != len(set(value["used_nonces"]))
+            or len(value["revoked_nonces"])
+            != len(set(value["revoked_nonces"]))
+        ):
+            raise BrokerError("STATE_INVALID")
+        for session_id, session in value["sessions"].items():
+            if (
+                not isinstance(session_id, str)
+                or IDENTIFIER.fullmatch(session_id) is None
+                or not isinstance(session, dict)
+                or set(session)
+                != {
+                    "nonce_digest", "revocation_digest", "sequence",
+                    "action_ids", "closed",
+                }
+                or not isinstance(session["nonce_digest"], str)
+                or DIGEST.fullmatch(session["nonce_digest"]) is None
+                or not isinstance(session["revocation_digest"], str)
+                or DIGEST.fullmatch(session["revocation_digest"]) is None
+                or type(session["sequence"]) is not int
+                or session["sequence"] < 0
+                or not isinstance(session["action_ids"], list)
+                or not all(
+                    isinstance(action_id, str)
+                    and IDENTIFIER.fullmatch(action_id)
+                    for action_id in session["action_ids"]
+                )
+                or len(session["action_ids"])
+                != len(set(session["action_ids"]))
+                or type(session["closed"]) is not bool
+            ):
+                raise BrokerError("STATE_INVALID")
+        for item in value["queue"]:
+            if (
+                not isinstance(item, dict)
+                or set(item)
+                != {
+                    "queue_id", "session_id", "route", "method", "state_key",
+                    "watermark", "request_digest", "idempotency_key",
+                    "adapter_request", "attempts", "last_error", "next_retry",
+                }
+                or not isinstance(item["queue_id"], str)
+                or re.fullmatch(r"[0-9a-f]{32}", item["queue_id"]) is None
+                or not isinstance(item["session_id"], str)
+                or IDENTIFIER.fullmatch(item["session_id"]) is None
+                or item["session_id"] not in value["sessions"]
+                or not isinstance(item["route"], str)
+                or IDENTIFIER.fullmatch(item["route"]) is None
+                or not isinstance(item["method"], str)
+                or item["method"]
+                not in ("transcript_checkpoint", "retain_outcome")
+                or not isinstance(item["state_key"], str)
+                or not item["state_key"]
+                or len(item["state_key"]) > 1024
+                or not isinstance(item["watermark"], list)
+                or len(item["watermark"]) != 2
+                or not all(type(part) is int and part >= 0 for part in item["watermark"])
+                or not isinstance(item["request_digest"], str)
+                or DIGEST.fullmatch(item["request_digest"]) is None
+                or not isinstance(item["idempotency_key"], str)
+                or DIGEST.fullmatch(item["idempotency_key"]) is None
+                or not isinstance(item["adapter_request"], dict)
+                or item["adapter_request"].get("idempotency_key")
+                != item["idempotency_key"]
+                or type(item["attempts"]) is not int
+                or item["attempts"] < 0
+                or item["last_error"] not in (None, "ADAPTER_UNAVAILABLE")
+                or (
+                    item["next_retry"] is not None
+                    and (
+                        type(item["next_retry"]) not in (int, float)
+                        or not math.isfinite(item["next_retry"])
+                    )
+                )
+            ):
+                raise BrokerError("STATE_INVALID")
+        for state_key, record in value["completed"].items():
+            if (
+                not isinstance(state_key, str)
+                or not state_key
+                or len(state_key) > 1024
+                or not isinstance(record, dict)
+                or set(record)
+                != {"watermark", "request_digest", "idempotency_key"}
+                or not isinstance(record["watermark"], list)
+                or len(record["watermark"]) != 2
+                or not all(
+                    type(part) is int and part >= 0
+                    for part in record["watermark"]
+                )
+                or not isinstance(record["request_digest"], str)
+                or DIGEST.fullmatch(record["request_digest"]) is None
+                or not isinstance(record["idempotency_key"], str)
+                or DIGEST.fullmatch(record["idempotency_key"]) is None
+            ):
+                raise BrokerError("STATE_INVALID")
+        for handle, result in value["exchanges"].items():
+            if (
+                not isinstance(handle, str)
+                or re.fullmatch(r"[0-9a-f]{64}", handle) is None
+                or not isinstance(result, dict)
+                or set(result)
+                != {"session_id", "capability", "expires_at", "nonce_digest", "receipt"}
+                or not isinstance(result["session_id"], str)
+                or IDENTIFIER.fullmatch(result["session_id"]) is None
+                or not isinstance(result["capability"], str)
+                or result["capability"].count(".") != 1
+                or type(result["expires_at"]) not in (int, float)
+                or not math.isfinite(result["expires_at"])
+                or not isinstance(result["nonce_digest"], str)
+                or DIGEST.fullmatch(result["nonce_digest"]) is None
+                or not isinstance(result["receipt"], str)
+                or result["receipt"].count(".") != 1
+            ):
+                raise BrokerError("STATE_INVALID")
+            try:
+                claims = self._verify(
+                    result["capability"], "capability", allow_expired=True
+                )
+                receipt = self._verify(
+                    result["receipt"], "exchange-recovery", allow_expired=True
+                )
+            except BrokerError:
+                raise BrokerError("STATE_INVALID") from None
+            if (
+                claims["session_id"] != result["session_id"]
+                or claims["expires_at"] != result["expires_at"]
+                or receipt["handle"] != handle
+                or receipt["capability_digest"] != _sha256_text(result["capability"])
+                or receipt["nonce_digest"] != result["nonce_digest"]
+                or receipt["session_id"] != result["session_id"]
+                or receipt["expires_at"] != result["expires_at"]
+                or result["nonce_digest"] not in value["used_nonces"]
+            ):
+                raise BrokerError("STATE_INVALID")
+            # Recovery receipts expire independently; a fully validated durable
+            # session may therefore remain after its recovery entry is pruned.
+            session = value["sessions"].get(result["session_id"])
+            if (
+                not isinstance(session, dict)
+                or set(session)
+                != {
+                    "nonce_digest", "revocation_digest", "sequence",
+                    "action_ids", "closed",
+                }
+                or session.get("nonce_digest") != _sha256_text(claims["nonce"])
+                or session.get("revocation_digest")
+                != _sha256_text(claims["revocation_id"])
+            ):
+                raise BrokerError("STATE_INVALID")
         return value
 
     def _sync_digest_mirrors(self, value: Mapping[str, Any]) -> None:
@@ -228,8 +475,9 @@ class Broker:
         descriptor = self._lease_descriptor()
         try:
             fcntl.flock(descriptor, fcntl.LOCK_EX)
-            current = self._validate_work(_read_json(self._work_path, self._empty_work()))
+            current = self._read_work()
             value = deepcopy(current)
+            self._prune_expired_exchanges(value)
             value["generation"] = self._generation
             _atomic_json(self._work_path, value)
             try:
@@ -245,10 +493,11 @@ class Broker:
         descriptor = self._lease_descriptor()
         try:
             fcntl.flock(descriptor, fcntl.LOCK_EX)
-            current = self._validate_work(_read_json(self._work_path, self._empty_work()))
+            current = self._read_work()
             if current.get("generation") != self._generation:
                 raise BrokerError("BROKER_RETIRED")
             value = deepcopy(current)
+            self._prune_expired_exchanges(value)
             result = mutation(value)
             _atomic_json(self._work_path, value)
             self._work = value
@@ -263,12 +512,24 @@ class Broker:
             fcntl.flock(descriptor, fcntl.LOCK_UN)
             os.close(descriptor)
 
+    def _prune_expired_exchanges(self, work: dict[str, Any]) -> None:
+        now = self.clock()
+        work["exchanges"] = {
+            handle: result
+            for handle, result in work["exchanges"].items()
+            if isinstance(result, Mapping)
+            and type(result.get("expires_at")) in (int, float)
+            and result["expires_at"] > now
+        }
+
     def _sign(self, claims: Mapping[str, Any]) -> str:
         body = canonical_bytes(claims)
         signature = hmac.new(self.__signing_key, body, hashlib.sha256).digest()
         return f"{_b64encode(body)}.{_b64encode(signature)}"
 
-    def _verify(self, token: str, kind: str) -> dict[str, Any]:
+    def _verify(
+        self, token: str, kind: str, *, allow_expired: bool = False
+    ) -> dict[str, Any]:
         if not isinstance(token, str) or token.count(".") != 1:
             raise BrokerError("CAPABILITY_INVALID")
         encoded, encoded_signature = token.split(".")
@@ -282,10 +543,18 @@ class Broker:
             raise BrokerError("CAPABILITY_INVALID") from error
         if not isinstance(claims, dict) or claims.get("kind") != kind:
             raise BrokerError("CAPABILITY_INVALID")
-        expected = ENVELOPE_KEYS if kind == "exchange" else CAPABILITY_KEYS
+        expected = {
+            "exchange": ENVELOPE_KEYS,
+            "capability": CAPABILITY_KEYS,
+            "exchange-recovery": RECOVERY_RECEIPT_KEYS,
+        }.get(kind)
+        if expected is None:
+            raise BrokerError("CAPABILITY_INVALID")
         if set(claims) != expected:
             raise BrokerError("CAPABILITY_INVALID")
-        if type(claims.get("expires_at")) not in (int, float) or self.clock() >= claims["expires_at"]:
+        if type(claims.get("expires_at")) not in (int, float) or (
+            not allow_expired and self.clock() >= claims["expires_at"]
+        ):
             raise BrokerError("EXPIRED")
         return claims
 
@@ -338,7 +607,7 @@ class Broker:
             descriptor = self._lease_descriptor()
             try:
                 fcntl.flock(descriptor, fcntl.LOCK_EX)
-                current = self._validate_work(_read_json(self._work_path, self._empty_work()))
+                current = self._read_work()
                 if current["generation"] != self._generation:
                     raise BrokerError("BROKER_RETIRED")
                 now = self.clock()
@@ -395,6 +664,14 @@ class Broker:
                     "session_id": claims["session_id"], "capability": capability,
                     "expires_at": claims["expires_at"], "nonce_digest": nonce_digest,
                 }
+                recovered["receipt"] = self._sign({
+                    "kind": "exchange-recovery",
+                    "handle": handle,
+                    "capability_digest": _sha256_text(capability),
+                    "nonce_digest": nonce_digest,
+                    "session_id": claims["session_id"],
+                    "expires_at": claims["expires_at"],
+                })
                 work["exchanges"][handle] = recovered
                 return deepcopy(recovered)
             recovered = self._transaction(exchange)

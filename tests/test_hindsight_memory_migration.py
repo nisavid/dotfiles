@@ -9,6 +9,7 @@ import threading
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
 
@@ -25,6 +26,7 @@ from hindsight_memory_control_plane.migration import (
     verify_shadow_plan,
 )
 from hindsight_memory_control_plane.model import BankRef
+import hindsight_memory_control_plane.migration as migration_module
 
 
 SHA_A = "a" * 64
@@ -235,8 +237,10 @@ class MigrationDiscoveryContractTest(unittest.TestCase):
             inventory_path = run_dir / "inventory.json"
             plan_path = run_dir / "shadow-plan.json"
             self.assertEqual(stat.S_IMODE(run_dir.stat().st_mode), 0o700)
+            self.assertEqual(run_dir.stat().st_uid, os.geteuid())
             self.assertEqual(stat.S_IMODE(inventory_path.stat().st_mode), 0o600)
             self.assertEqual(stat.S_IMODE(plan_path.stat().st_mode), 0o600)
+            self.assertEqual(list(run_dir.glob(".*.tmp")), [])
             inventory_text = inventory_path.read_text(encoding="utf-8")
             plan_text = plan_path.read_text(encoding="utf-8")
             self.assertIn(CONTENT_SENTINEL, inventory_text)
@@ -547,6 +551,177 @@ class MigrationDiscoveryContractTest(unittest.TestCase):
                     timestamp="20260713T120000Z",
                 )
             self.assertEqual(sentinel.read_text(), "do-not-overwrite")
+
+    def test_artifact_directory_inside_git_worktree_is_refused_before_write(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            paths = write_gate_files(root)
+            fake_worktree = root / "fake-worktree"
+            fake_worktree.mkdir()
+            (fake_worktree / ".git").mkdir()
+            forbidden = fake_worktree / "migration-artifacts-must-not-exist"
+            paths["artifact_dir"] = str(forbidden)
+            manifest = package_manifest()
+            adapter = SequenceAdapter(
+                [migration_inventory(), migration_inventory()]
+            )
+            with self.assertRaisesRegex(MigrationError, "outside a Git worktree"):
+                discover_migration_state(
+                    adapter,
+                    source_bank=SOURCE,
+                    candidate_bank=CANDIDATE,
+                    offline_package_manifest=manifest,
+                    approved_offline_package_digest=manifest[
+                        "approved_manifest_digest"
+                    ],
+                    migration_paths=paths,
+                    retain_watermark_reader=lambda: {
+                        "codex": {"epoch": 1}
+                    },
+                    private_catalog_digests={"catalog": SHA_A},
+                    timestamp="20260713T120000Z",
+                )
+            self.assertFalse(forbidden.exists())
+
+    def test_artifact_entry_replacement_is_rejected_without_deleting_replacement(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            directory_descriptor = os.open(root, os.O_RDONLY)
+            original_fsync = os.fsync
+            swapped = False
+
+            def replace_after_file_sync(descriptor):
+                nonlocal swapped
+                original_fsync(descriptor)
+                if descriptor != directory_descriptor and not swapped:
+                    swapped = True
+                    os.unlink("inventory.json", dir_fd=directory_descriptor)
+                    replacement = os.open(
+                        "inventory.json",
+                        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                        0o600,
+                        dir_fd=directory_descriptor,
+                    )
+                    try:
+                        os.write(replacement, b"replacement")
+                        original_fsync(replacement)
+                    finally:
+                        os.close(replacement)
+
+            try:
+                with patch.object(
+                    migration_module.os,
+                    "fsync",
+                    side_effect=replace_after_file_sync,
+                ):
+                    with self.assertRaisesRegex(MigrationError, "identity changed"):
+                        migration_module._write_exclusive(
+                            directory_descriptor,
+                            "inventory.json",
+                            {"trusted": True},
+                        )
+                self.assertEqual(
+                    (root / "inventory.json").read_bytes(), b"replacement"
+                )
+            finally:
+                os.close(directory_descriptor)
+
+    def test_failed_discovery_cleanup_preserves_replaced_artifact_entry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            original_write = migration_module._write_exclusive
+            writes = 0
+
+            def replace_first_then_fail(directory_descriptor, name, value):
+                nonlocal writes
+                writes += 1
+                if writes == 1:
+                    identity = original_write(directory_descriptor, name, value)
+                    os.unlink(name, dir_fd=directory_descriptor)
+                    replacement = os.open(
+                        name,
+                        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                        0o600,
+                        dir_fd=directory_descriptor,
+                    )
+                    try:
+                        os.write(replacement, b"replacement")
+                    finally:
+                        os.close(replacement)
+                    return identity
+                raise MigrationError("injected second artifact failure")
+
+            with patch.object(
+                migration_module,
+                "_write_exclusive",
+                side_effect=replace_first_then_fail,
+            ):
+                with self.assertRaisesRegex(
+                    MigrationError, "injected second artifact failure"
+                ):
+                    self.discover(root)
+            artifact_root = root / "artifacts"
+            run = artifact_root / "controller-discovery-20260713T120000Z"
+            self.assertFalse(run.exists())
+            staging = list(
+                artifact_root.glob(
+                    ".controller-discovery-20260713T120000Z.*.tmp"
+                )
+            )
+            self.assertEqual(len(staging), 1)
+            self.assertEqual(
+                (staging[0] / "inventory.json").read_bytes(), b"replacement"
+            )
+
+    def test_ancestor_swap_after_validation_cannot_redirect_artifact_writes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            configured_parent = root / "configured"
+            configured_parent.mkdir()
+            redirected = root / "redirected"
+            redirected.mkdir()
+            artifact_dir = configured_parent / "artifacts"
+            paths = write_gate_files(root)
+            paths["artifact_dir"] = str(artifact_dir)
+            manifest = package_manifest()
+            adapter = SequenceAdapter(
+                [migration_inventory(), migration_inventory()]
+            )
+            original_reject = migration_module._reject_symlink_components
+            swapped = False
+
+            def swap_after_validation(path, label):
+                nonlocal swapped
+                original_reject(path, label)
+                if not swapped:
+                    swapped = True
+                    configured_parent.rename(root / "validated-original")
+                    configured_parent.symlink_to(
+                        redirected, target_is_directory=True
+                    )
+
+            with patch.object(
+                migration_module,
+                "_reject_symlink_components",
+                side_effect=swap_after_validation,
+            ):
+                with self.assertRaises(MigrationError):
+                    discover_migration_state(
+                        adapter,
+                        source_bank=SOURCE,
+                        candidate_bank=CANDIDATE,
+                        offline_package_manifest=manifest,
+                        approved_offline_package_digest=manifest[
+                            "approved_manifest_digest"
+                        ],
+                        migration_paths=paths,
+                        retain_watermark_reader=lambda: {
+                            "codex": {"epoch": 1}
+                        },
+                        private_catalog_digests={"catalog": SHA_A},
+                        timestamp="20260713T120000Z",
+                    )
+            self.assertFalse((redirected / "artifacts").exists())
 
 
 class MigrationCliContractTest(unittest.TestCase):

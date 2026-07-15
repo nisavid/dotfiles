@@ -34,8 +34,9 @@ Build a migration controller and private migration ledger around a canonical
 workload inventory. The controller exposes read-only `inventory`, `plan`, and
 `status` operations; evidence-only `verify`; and explicitly authorized
 `discovery-start`, `snapshot`, `export`, `canary`, `accept`, `cutover`,
-`rollback`, and `retire` operations. Source start, acceptance, and retirement
-are separate exact-plan transitions and never share approval authority.
+`rollback`, `retirement-approve`, and `retire` operations. Source start,
+acceptance, and retirement are separate exact-plan transitions and never share
+approval authority.
 
 Read-only discovery first inventories host-visible Podman configuration,
 machine and source-disk metadata, declarative workload sources, and connection
@@ -182,6 +183,43 @@ migration acceptance.
 - The canonical workflow states are `discovered`, `inventoried`, `planned`,
   `canary-ready`, `verified`, `accepted`, `cut-over`, `retirement-approved`, and
   `retired`. State transitions are append-only and digest-bound.
+- The operation transition matrix is:
+  - `discovery-start`: `discovered` to `inventoried` after the bounded start,
+    capture, stop, and stop verification complete.
+  - `snapshot`: from `discovered` or `inventoried`, retaining the predecessor
+    state while appending the verified snapshot artifact.
+  - `export`: from `inventoried` or `planned`, retaining the predecessor state
+    while appending the verified export artifact.
+  - `canary`: `planned` to `canary-ready` after isolated target creation.
+  - `verify`: `canary-ready` to `verified` after every declared compatibility,
+    data-integrity, isolation, and rollback check succeeds against the bound
+    canary artifacts.
+  - `accept`: `verified` to `accepted` only after Ivan authorizes the exact
+    immutable acceptance plan; the authenticated identity, operation scope,
+    expiry, nonce, and bound-state checks must all pass at execution.
+  - `cutover`: `accepted` to `cut-over` after the approved freeze, final catch-up,
+    target activation, source stop, and post-cutover verification complete.
+  - `rollback`: from `cut-over` to `planned` for a new attempt after the declared
+    reverse export, replay, or data-loss bound is satisfied; the prior cutover
+    and rollback outcome remain in the append-only history.
+  - `retirement-approve`: `cut-over` to `retirement-approved` only after the
+    complete retirement predicate passes and Ivan authorizes the exact immutable
+    retirement plan under the same identity, scope, expiry, nonce, and
+    bound-state guards.
+  - `retire`: `retirement-approved` to `retired` after every deletion and final
+    postcondition succeeds.
+  Every mutating operation in the matrix requires an authenticated identity,
+  exact operation and workload scope, an unexpired single-use nonce, the exact
+  immutable digest-bound plan, and execution-time equality for every bound state
+  value. This applies to discovery-start, snapshot, export, canary, verify,
+  accept, cutover, rollback, `retirement-approve`, and retire. Replay after
+  nonce consumption is rejected without side effects or a new transition.
+  `status` is a non-consuming read of current workflow and operation state;
+  repeated reads remain valid and create no ledger record or transition. A
+  separate read-only operation-result lookup retrieves the recorded result for
+  a committed request by operation ID. A failed or incomplete mutating attempt
+  cannot reuse its approval; retry requires fresh observed state, a new
+  digest-bound plan, and a new approval.
 - A workload identity remains stable across source containers, target
   containers, retries, and rollback artifacts.
 - The private workload inventory records source definitions, image identity,
@@ -282,6 +320,18 @@ migration acceptance.
   duplicate, or undisposed item remains; and every accepted target still passes
   its checks. The plan then lists each deletion or configuration change and
   every retained item explicitly.
+- Every source lifecycle mutator, including source start, mount, unmount, and
+  write paths, and every retirement deletion path acquires the same OS-backed
+  exclusive source-lifecycle lock. Retirement holds that lock continuously from
+  the final atomic verification that Podman is stopped, the source disk is
+  unmounted and unwritten, and the observed source digest matches the approved
+  plan through all deletions. Any failed check, competing mutator, or source
+  change aborts retirement before deletion and requires a new plan and approval.
+  The exclusion must also stop non-controller Podman, VM, mount, and direct disk
+  mutations through an OS-enforced source freeze or equivalent exclusive
+  mechanism. Where the platform cannot provide that mechanism, execution
+  is unavailable: observation or continuous revalidation alone never
+  authorizes a destructive step.
 - Removing the Podman machine, disk, images, volumes, connections, binaries, or
   PATH preference requires retirement approval.
 - The existing Podman PATH injection remains until retirement. The final
@@ -302,16 +352,27 @@ migration acceptance.
 ## Testing Decisions
 
 - The primary acceptance seam is the migration controller interface. Tests
-  invoke inventory, plan, status, snapshot, export, canary, verify, accept,
-  cutover, rollback, and retire against disposable source and target adapters
-  and assert observable plans, artifacts, gates, and state transitions.
+  invoke inventory, discovery-start, plan, status, snapshot, export, canary,
+  verify, accept, cutover, rollback, `retirement-approve`, and retire against
+  disposable source and target adapters and assert observable plans, artifacts,
+  gates, and state transitions. `retirement-approve` separately exercises the
+  `cut-over` to `retirement-approved` transition before `retire`.
 - Tests describe operator-visible behavior rather than internal function calls.
 - Read-only inventory tests prove that default discovery does not start Podman,
   contact workload endpoints, mount live storage read-write, or modify
   connection state.
-- Authorization tests prove that snapshot creation, source start, data export
-  requiring activation, canary creation, cutover, rollback, and retirement each
-  reject missing, stale, mismatched, or already-consumed plan digests.
+- Authorization tests cover discovery-start, snapshot, export, canary, verify,
+  accept, cutover, rollback, `retirement-approve`, and retire. Every operation
+  rejects missing, stale, or mismatched plan digests; unauthenticated or
+  unauthorized identities; wrong operation, workload, or migration scope;
+  expired approvals; consumed or replayed nonces; and execution-time drift from
+  any bound state. `retirement-approve` has its own identity, migration-scope,
+  nonce, plan-digest, expiry, replay, and execution-time drift cases before the
+  existing retire authorization cases. Acceptance and `retirement-approve`
+  additionally reject every approver except Ivan.
+- Status tests prove repeated reads remain valid and create no side effect,
+  ledger record, nonce consumption, or state transition. Operation-result tests
+  prove committed results remain retrievable by operation ID.
 - Inventory fixtures cover standalone containers, pods, Compose workloads,
   systemd-managed containers, local images, named volumes, bind mounts, secrets,
   custom networks, restart policies, and unknown state.
@@ -332,8 +393,12 @@ migration acceptance.
   logs, fixtures, or Git-rendered artifacts.
 - Network tests assert exact intended reachability and prove that undeclared
   host, peer-workload, and external exposure is rejected.
-- Data tests create logical and filesystem backups, corrupt or truncate copies
-  deliberately, and prove digest and restore verification catches them.
+- Data tests create logical and filesystem backups and prove a positive restore
+  round trip begins with retained ciphertext, resolves only an approved
+  machine-local key provider, verifies the ciphertext digest, decrypts, and
+  restores the workload. Negative cases reject retained plaintext, unapproved
+  key providers, wrong keys, and corrupted or truncated ciphertext before
+  restore.
 - Database fixtures verify application-consistent export, restored
   schema/version, record counts, representative queries, and restart behavior.
 - Canary tests prove isolated names, networks, volumes, and ports and verify that
@@ -347,7 +412,14 @@ migration acceptance.
   acceptance.
 - Retirement tests prove that no deletion, machine removal, disk removal,
   connection removal, binary removal, or PATH change occurs unless the complete
-  retirement predicate passes and Ivan separately approves the exact plan.
+  retirement predicate passes and Ivan separately approves the exact plan. They
+  also prove execution rechecks source quiescence atomically under the lifecycle
+  lock and rejects a running Podman process, mounted or newly written source
+  disk, digest drift, and any restart, mount, or write race before deletion.
+  Failure to acquire or prove the OS-enforced freeze causes zero deletion;
+  losing the freeze aborts before the next destructive action and requires a
+  new plan and approval. Non-controller restart, mount, and write attempts
+  cannot race retirement while the freeze is held.
 - Chezmoi tests prove ordinary apply cannot start either runtime or execute
   migration operations.
 - A local opt-in compatibility smoke test may use disposable Podman and OrbStack

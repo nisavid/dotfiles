@@ -94,7 +94,7 @@
 
 - [x] **Step 4: Implement the compatibility-gated admin adapter**
 
-  Accept a trusted absolute `hindsight-admin` executable, immutable file-identity binding, argv factory, and runner seam. Execute a version/identity probe before use, then revalidate the binary identity before every operation. Run from a fixed trusted working directory with a minimal allowlisted environment. Permit only exact `export-bank`, `import-bank`, `backup`, and `restore` argv shapes rooted at that executable; reject shell strings, relative or replaced binaries, unknown versions, missing archive digests, and absent disposable restore evidence. Never accept direct SQL or database credentials.
+  Accept a trusted absolute `hindsight-admin` executable, immutable file-identity binding, argv factory, and runner seam. Execute a version/identity probe before use, then open and validate the executable once per operation and execute through that same descriptor binding so pathname replacement cannot change the invoked program. Run from a fixed trusted working directory with a minimal allowlisted environment. Permit only exact `export-bank`, `import-bank`, `backup`, and `restore` argv shapes rooted at that executable; reject shell strings, relative or replaced binaries, unknown versions, missing archive digests, and absent disposable restore evidence. Never accept direct SQL or database credentials.
 
 - [x] **Step 5: Implement guarded apply and automatic rollback**
 
@@ -131,7 +131,7 @@
 
 - [x] **Step 3: Implement HMAC-signed opaque envelopes and capabilities**
 
-  Use random 256-bit nonces and keys, canonical JSON claims, HMAC-SHA256, constant-time verification, wall-clock expiry, and persisted used/revoked nonce digests. Serialize one-use check-and-mark across processes with a shared lock and commit it through mode-`0600` atomic replacement plus file and containing-directory `fsync` before returning a capability. Signing material never leaves the broker.
+  Use random 256-bit nonces and keys, canonical JSON claims, HMAC-SHA256, constant-time verification, wall-clock expiry, and persisted used/revoked nonce digests. Serialize one-use check-and-mark across processes with a shared lock and atomically persist the consumed marker together with the exact short-lived capability result through mode-`0600` replacement plus file and containing-directory `fsync` before returning it. Retries and concurrent exchanges, including after restart, return that stored result; remove it after expiry. Signing material never leaves the broker.
 
 - [x] **Step 4: Implement versioned JSON-RPC routing**
 
@@ -300,7 +300,7 @@
 
 - [x] **Step 3: Implement read-only discovery and proposed planning**
 
-  Allow only adapter read methods. Require one server-backed monotonic adapter generation to cover the full discovery window and fail closed when the adapter cannot provide it. Keep before/after drift comparison as an additional check, not the consistency primitive. Store content-bearing discovery under the external migration artifact directory with mode `0700` directories and `0600` files; plans contain digests and redacted counts, not memory content. Bind the approved offline package digest without copying the package into Git.
+  Allow only adapter read methods. Require one server-backed monotonic adapter generation to cover the full discovery window and fail closed when the adapter cannot provide it. Keep before/after drift comparison as an additional check, not the consistency primitive. Before writing, canonicalize the configured migration-artifact directory, prove its real path is outside every repository worktree, require current-user ownership and mode `0700`, and reject symlinked path components. Create content-bearing inventory and shadow-plan files atomically through directory-bound, no-follow operations with mode `0600`; plans contain digests and redacted counts, not memory content. Bind the approved offline package digest without copying the package into Git.
 
 - [x] **Step 4: Run fake/disposable tests**
 
@@ -363,7 +363,7 @@
 
 - [x] **Step 4: Run disposable Hindsight and PostgreSQL contract smoke tests**
 
-  Start a disposable Hindsight 0.8.4 profile and database using task-local state and unique loopback ports. Verify authenticated schema/config/template/model/directive/document/operation/curation reads; execute mutations only against the disposable bank; create encrypted rollback exports; restore each data-bearing export into a fresh disposable bank; run `hindsight-admin` full-bank export/import and full-schema backup/restore; and verify invalidated-memory counts/digests survive. Destroy the disposable state after capturing content-free results. Do not point any smoke command at the live profile or migration banks.
+  Start a disposable Hindsight 0.8.4 profile and database using task-local state, a unique run marker, and unique loopback ports. Install an independently checked disposable-target identity in each fresh database and profile. The smoke runner must reject live and migration identities and revalidate the exact unique target immediately before every export, import, backup, restore, or other mutation. Verify authenticated schema/config/template/model/directive/document/operation/curation reads; execute mutations only against the disposable bank; create encrypted rollback exports; restore each data-bearing export into a fresh disposable bank; run `hindsight-admin` full-bank export/import and full-schema backup/restore; and verify invalidated-memory counts/digests survive. Destroy the disposable state after capturing content-free results.
 
   Run: `zsh tests/hindsight-memory-disposable-smoke.zsh`
 
