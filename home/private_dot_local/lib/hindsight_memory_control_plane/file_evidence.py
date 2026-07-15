@@ -2,14 +2,23 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import hashlib
+import hmac
 import os
 from pathlib import Path
+import re
 import stat
+import tempfile
+from typing import Iterator
 
 
 class FileEvidenceError(ValueError):
     pass
+
+
+DIGEST = re.compile(r"[0-9a-f]{64}\Z")
+MAX_VERIFIED_SNAPSHOT_BYTES = 8 * 1024 * 1024 * 1024
 
 
 def _unsafe_directory(metadata: os.stat_result) -> bool:
@@ -42,6 +51,98 @@ def file_identity(metadata: os.stat_result) -> tuple[int, ...]:
         metadata.st_mtime_ns,
         metadata.st_ctime_ns,
     )
+
+
+@contextmanager
+def verified_file_snapshot(
+    value: str | Path,
+    label: str,
+    expected_digest: str,
+    *,
+    max_bytes: int = MAX_VERIFIED_SNAPSHOT_BYTES,
+) -> Iterator[str]:
+    if not isinstance(expected_digest, str) or DIGEST.fullmatch(expected_digest) is None:
+        raise FileEvidenceError(f"{label} digest is invalid")
+    if not isinstance(max_bytes, int) or isinstance(max_bytes, bool) or max_bytes <= 0:
+        raise FileEvidenceError(f"{label} size limit is invalid")
+    source = Path(value)
+    if not source.is_absolute():
+        raise FileEvidenceError(f"{label} path must be absolute")
+    reject_symlink_components(source, label, allow_missing=False)
+    source_flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    try:
+        source_descriptor = os.open(source, source_flags)
+    except OSError:
+        raise FileEvidenceError(f"{label} is unavailable") from None
+    yield_started = False
+    try:
+        before = os.fstat(source_descriptor)
+        validate_trusted_regular_file(before, label)
+        if before.st_size > max_bytes:
+            raise FileEvidenceError(f"{label} is too large")
+        suffix = ".zip" if source.suffix == ".zip" else ".archive"
+        with tempfile.TemporaryDirectory(
+            prefix="hindsight-memory-verified-archive-"
+        ) as temporary:
+            snapshot_directory = Path(temporary)
+            snapshot_directory.chmod(0o700)
+            snapshot = snapshot_directory / f"archive{suffix}"
+            snapshot_flags = (
+                os.O_WRONLY
+                | os.O_CREAT
+                | os.O_EXCL
+                | getattr(os, "O_CLOEXEC", 0)
+                | getattr(os, "O_NOFOLLOW", 0)
+            )
+            snapshot_descriptor = os.open(snapshot, snapshot_flags, 0o400)
+            artifact_hash = hashlib.sha256()
+            size = 0
+            try:
+                while chunk := os.read(source_descriptor, 1024 * 1024):
+                    size += len(chunk)
+                    if size > max_bytes:
+                        raise FileEvidenceError(f"{label} is too large")
+                    artifact_hash.update(chunk)
+                    remaining = memoryview(chunk)
+                    while remaining:
+                        written = os.write(snapshot_descriptor, remaining)
+                        if written <= 0:
+                            raise OSError("snapshot write failed")
+                        remaining = remaining[written:]
+                os.fsync(snapshot_descriptor)
+                os.fchmod(snapshot_descriptor, 0o400)
+                snapshot_metadata = os.fstat(snapshot_descriptor)
+            finally:
+                os.close(snapshot_descriptor)
+            after = os.fstat(source_descriptor)
+            current = source.lstat()
+            if file_identity(before) != file_identity(after) or (
+                current.st_dev, current.st_ino
+            ) != (after.st_dev, after.st_ino):
+                raise FileEvidenceError(f"{label} changed while being snapshotted")
+            if not hmac.compare_digest(artifact_hash.hexdigest(), expected_digest):
+                raise FileEvidenceError(f"{label} digest does not match plan")
+            validate_trusted_regular_file(snapshot_metadata, label)
+            current_snapshot = snapshot.lstat()
+            if file_identity(snapshot_metadata) != file_identity(current_snapshot):
+                raise FileEvidenceError(f"{label} snapshot identity changed")
+            yield_started = True
+            yield str(snapshot)
+    except FileEvidenceError:
+        raise
+    except OSError:
+        if yield_started:
+            raise
+        raise FileEvidenceError(f"{label} is unavailable") from None
+    finally:
+        try:
+            os.close(source_descriptor)
+        except OSError:
+            pass
 
 
 def reject_symlink_components(path: Path, label: str, *, allow_missing: bool) -> None:
@@ -106,7 +207,7 @@ def read_file_evidence(
 ) -> tuple[bytes, str] | None:
     if not isinstance(value, (str, Path)):
         raise FileEvidenceError(f"{label} path must be absolute")
-    path = Path(value).expanduser()
+    path = Path(value)
     if not path.is_absolute():
         raise FileEvidenceError(f"{label} path must be absolute")
     reject_symlink_components(path, label, allow_missing=allow_missing)

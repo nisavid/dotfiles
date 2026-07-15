@@ -141,20 +141,24 @@ through a non-sticky writable directory. The gate SHA-256 identifies the
 completed migration package, independently of the desired-state inventory
 digest.
 
-A mutation action binds distinct source and target bank references, its
-`--migration-archive` digest, and the canonical digest of its disposable
-restore-evidence record. That record contains only `schema_version`, the
-archive's `artifact_digest`, and the digest of an independently reviewed
-disposable-restore verification receipt. Full-bank imports run through the
-Hindsight 0.8.4 vector `hindsight-admin import-bank --archive ARCHIVE
---target-bank BANK`; archive digests remain out-of-band approval inputs and
-are not passed to the CLI.
+A mutation action binds distinct source and target bank references, the
+completion-gate artifact digest, its `--migration-archive` digest, and the
+canonical digest of its disposable restore-evidence record. The migration
+archive and evidence bindings must be distinct from the rollback bindings.
+The evidence record contains only `schema_version`, the archive's
+`artifact_digest`, and the digest of an independently reviewed disposable-
+restore verification receipt. Apply copies verified archive bytes into a
+private mode-`0400` snapshot below a mode-`0700` directory, passes only that
+snapshot to the Hindsight 0.8.4 vector `hindsight-admin import-bank --archive
+ARCHIVE --target-bank BANK`, and removes it after the command. Snapshot creation
+rejects archives larger than 8 GiB. Archive digests remain out-of-band approval
+inputs and are not passed to the CLI.
 
 The plan separately binds the `--rollback-archive` digest and its
 restore-evidence record digest. Apply runs `hindsight-admin backup ARCHIVE
 --schema public`, verifies the resulting archive digest before mutation, and
-uses `hindsight-admin restore ARCHIVE --schema public --yes` if a postcondition
-fails.
+uses a fresh verified private snapshot with `hindsight-admin restore ARCHIVE
+--schema public --yes` if a postcondition fails.
 
 `hindsight-embed-single-bank-cleanup` is a separate, destructive migration
 runbook. It is not part of normal installation; begin with its default dry run

@@ -1,4 +1,5 @@
 import json
+import hashlib
 from io import BytesIO
 from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -27,6 +28,7 @@ from hindsight_memory_control_plane.http_adapter import HttpAdapter
 from hindsight_memory_control_plane.file_evidence import (
     FileEvidenceError,
     reject_symlink_components,
+    verified_file_snapshot,
 )
 from hindsight_memory_control_plane.migration_adapter import (
     AdminMigrationAdapter,
@@ -669,23 +671,42 @@ class HttpAdapterSecurityTest(unittest.TestCase):
 
 class AdminMigrationAdapterContractTest(unittest.TestCase):
     def test_mutation_apply_adapter_imports_the_digest_selected_archive(self):
-        archive_digest = "a" * 64
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        approved_archive = root / "approved-bank.zip"
+        approved_payload = b"approved migration archive"
+        approved_archive.write_bytes(approved_payload)
+        approved_archive.chmod(0o600)
+        archive_digest = hashlib.sha256(approved_payload).hexdigest()
         evidence = restore_evidence(archive_digest)
+        rollback_digest = "f" * 64
+        rollback_evidence = restore_evidence(rollback_digest, "8" * 64)
+        observed = {}
+
+        def run_admin(argv):
+            snapshot = Path(argv[3])
+            observed.update({
+                "path": snapshot,
+                "payload": snapshot.read_bytes(),
+                "mode": snapshot.stat().st_mode & 0o777,
+                "parent_mode": snapshot.parent.stat().st_mode & 0o777,
+            })
+            return {"returncode": 0, "stdout": "Import complete"}
+
         admin = AdminMigrationAdapter(
             admin_version="0.8.4",
             argv_factory=admin_argv,
-            runner=lambda _argv: {"returncode": 0, "stdout": "Import complete"},
+            runner=run_admin,
         )
         data_plane = FakeAdapter(
             endpoint={"profile_id": "core", "scheme": "http", "host": "127.0.0.1", "port": 7979, "tenant": "default"},
         )
         adapter = MigrationApplyAdapter(
             data_plane=data_plane, admin=admin,
-            archives={archive_digest: "/tmp/approved-bank.zip"},
+            archives={archive_digest: str(approved_archive)},
             restore_evidence={archive_digest: evidence},
-            rollback_archive="/tmp/pre-state-backup.tar",
-            rollback_archive_digest=archive_digest,
-            rollback_restore_evidence_digest=digest(evidence),
+            rollback_archive=str(root / "pre-state-backup.zip"),
+            rollback_archive_digest=rollback_digest,
+            rollback_restore_evidence_digest=digest(rollback_evidence),
             archive_verifier=lambda _path, _digest: True,
         )
         action = Action(
@@ -706,12 +727,17 @@ class AdminMigrationAdapterContractTest(unittest.TestCase):
             "archive_digest": archive_digest,
             "bank_id": "engineering",
         }])
+        self.assertNotEqual(observed["path"], approved_archive)
+        self.assertEqual(observed["payload"], approved_payload)
+        self.assertEqual(observed["mode"], 0o400)
+        self.assertEqual(observed["parent_mode"], 0o700)
+        self.assertFalse(observed["path"].exists())
         self.assertNotIn("migrate_bank", [call["method"] for call in data_plane.calls])
         missing = MigrationApplyAdapter(
             data_plane=data_plane, admin=admin, archives={}, restore_evidence={},
-            rollback_archive="/tmp/pre-state-backup.tar",
-            rollback_archive_digest=archive_digest,
-            rollback_restore_evidence_digest=digest(evidence),
+            rollback_archive=str(root / "pre-state-backup.zip"),
+            rollback_archive_digest=rollback_digest,
+            rollback_restore_evidence_digest=digest(rollback_evidence),
             archive_verifier=lambda _path, _digest: True,
         )
         with self.assertRaisesRegex(MigrationAdapterError, "unavailable"):
@@ -719,11 +745,11 @@ class AdminMigrationAdapterContractTest(unittest.TestCase):
 
         unverified = MigrationApplyAdapter(
             data_plane=data_plane, admin=admin,
-            archives={archive_digest: "/tmp/approved-bank.zip"},
+            archives={archive_digest: str(approved_archive)},
             restore_evidence={archive_digest: evidence},
-            rollback_archive="/tmp/pre-state-backup.tar",
-            rollback_archive_digest=archive_digest,
-            rollback_restore_evidence_digest=digest(evidence),
+            rollback_archive=str(root / "pre-state-backup.zip"),
+            rollback_archive_digest=rollback_digest,
+            rollback_restore_evidence_digest=digest(rollback_evidence),
             archive_verifier=lambda _path, _digest: False,
         )
         with self.assertRaisesRegex(MigrationAdapterError, "archive digest"):
@@ -732,17 +758,31 @@ class AdminMigrationAdapterContractTest(unittest.TestCase):
     def test_mutation_apply_adapter_creates_and_uses_admin_rollback(self):
         from hindsight_memory_control_plane.reconcile import build_mutation_plan
 
-        incoming_digest = "4" * 64
-        rollback_digest = "5" * 64
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        incoming_archive = root / "incoming-bank.zip"
+        incoming_payload = b"incoming migration archive"
+        incoming_archive.write_bytes(incoming_payload)
+        incoming_archive.chmod(0o600)
+        rollback_archive = root / "pre-state-backup.zip"
+        rollback_payload = b"rollback schema archive"
+        incoming_digest = hashlib.sha256(incoming_payload).hexdigest()
+        rollback_digest = hashlib.sha256(rollback_payload).hexdigest()
         evidence = {
             incoming_digest: restore_evidence(incoming_digest),
             rollback_digest: restore_evidence(rollback_digest),
         }
         operations = []
+        def run_admin(argv):
+            operations.append(argv[1])
+            if argv[1] == "backup":
+                Path(argv[2]).write_bytes(rollback_payload)
+                Path(argv[2]).chmod(0o600)
+            return {"returncode": 0, "stdout": "Complete"}
+
         admin = AdminMigrationAdapter(
             admin_version="0.8.4",
             argv_factory=admin_argv,
-            runner=lambda argv: operations.append(argv[1]) or {"returncode": 0, "stdout": "Complete"},
+            runner=run_admin,
         )
         data_plane = FakeAdapter(
             endpoint={"profile_id": "core", "scheme": "http", "host": "127.0.0.1", "port": 7979, "tenant": "default"},
@@ -750,9 +790,9 @@ class AdminMigrationAdapterContractTest(unittest.TestCase):
         data_plane.fail_postcondition_for = "migrate"
         adapter = MigrationApplyAdapter(
             data_plane=data_plane, admin=admin,
-            archives={incoming_digest: "/tmp/incoming-bank.zip"},
+            archives={incoming_digest: str(incoming_archive)},
             restore_evidence=evidence,
-            rollback_archive="/tmp/pre-state-backup.tar",
+            rollback_archive=str(rollback_archive),
             rollback_archive_digest=rollback_digest,
             rollback_restore_evidence_digest=digest(evidence[rollback_digest]),
             archive_verifier=lambda _path, _digest: True,
@@ -790,9 +830,9 @@ class AdminMigrationAdapterContractTest(unittest.TestCase):
                 },
             ),
             admin=admin,
-            archives={incoming_digest: "/tmp/incoming-bank.zip"},
+            archives={incoming_digest: str(incoming_archive)},
             restore_evidence=changed_evidence,
-            rollback_archive="/tmp/pre-state-backup.tar",
+            rollback_archive=str(rollback_archive),
             rollback_archive_digest=rollback_digest,
             rollback_restore_evidence_digest=digest(evidence[rollback_digest]),
             archive_verifier=lambda _path, _digest: True,
@@ -1036,6 +1076,49 @@ class GuardedApplyTest(unittest.TestCase):
                 actions=[missing_evidence],
             )
 
+        wrong_artifact = mutation_action()
+        wrong_artifact["artifact_digest"] = "2" * 64
+        with self.assertRaisesRegex(ApplyError, "migration artifact"):
+            build_mutation_plan(
+                base,
+                migration_run_id="run-1",
+                migration_artifact_digest=MIGRATION_ARTIFACT_DIGEST,
+                rollback_archive_digest="5" * 64,
+                rollback_restore_evidence_digest=digest(
+                    restore_evidence("5" * 64)
+                ),
+                actions=[wrong_artifact],
+            )
+
+        rollback_collision = mutation_action(archive_digest="5" * 64)
+        with self.assertRaisesRegex(ApplyError, "rollback archive"):
+            build_mutation_plan(
+                base,
+                migration_run_id="run-1",
+                migration_artifact_digest=MIGRATION_ARTIFACT_DIGEST,
+                rollback_archive_digest="5" * 64,
+                rollback_restore_evidence_digest=digest(
+                    restore_evidence("5" * 64)
+                ),
+                actions=[rollback_collision],
+            )
+
+        evidence_collision = mutation_action()
+        evidence_collision["restore_evidence_digest"] = digest(
+            restore_evidence("5" * 64)
+        )
+        with self.assertRaisesRegex(ApplyError, "rollback evidence"):
+            build_mutation_plan(
+                base,
+                migration_run_id="run-1",
+                migration_artifact_digest=MIGRATION_ARTIFACT_DIGEST,
+                rollback_archive_digest="5" * 64,
+                rollback_restore_evidence_digest=digest(
+                    restore_evidence("5" * 64)
+                ),
+                actions=[evidence_collision],
+            )
+
     def test_mutation_action_id_rejects_payload_like_identifier(self):
         from hindsight_memory_control_plane.reconcile import build_mutation_plan
         base = plan_for({})
@@ -1058,7 +1141,7 @@ class GuardedApplyTest(unittest.TestCase):
             base = plan_for({})
             adapter = self.adapter()
             mutation = build_mutation_plan(base, migration_run_id="run-1", migration_artifact_digest=MIGRATION_ARTIFACT_DIGEST, rollback_archive_digest="5" * 64, rollback_restore_evidence_digest=digest(restore_evidence("5" * 64)), actions=[
-                mutation_action("migration-01.safe", artifact_digest=base.artifact_digest),
+                mutation_action("migration-01.safe"),
             ])
             rollback = create_rollback_bundle(mutation, adapter)
             descriptor, _, _ = write_migration_gate(Path(temporary), "run-1", MIGRATION_ARTIFACT_DIGEST)
@@ -1247,6 +1330,51 @@ class GuardedApplyTest(unittest.TestCase):
             with self.assertRaisesRegex(ApplyError, "writable ancestor"):
                 capture_migration_gate(marker, proposal)
 
+    def test_verified_file_snapshot_binds_bytes_in_a_private_path(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "approved-bank.zip"
+            approved = b"approved migration archive"
+            source.write_bytes(approved)
+            source.chmod(0o600)
+            expected = hashlib.sha256(approved).hexdigest()
+
+            with verified_file_snapshot(
+                source, "migration archive", expected,
+            ) as snapshot_value:
+                snapshot = Path(snapshot_value)
+                self.assertNotEqual(snapshot, source)
+                self.assertEqual(snapshot.read_bytes(), approved)
+                self.assertEqual(snapshot.stat().st_mode & 0o777, 0o400)
+                self.assertEqual(snapshot.parent.stat().st_mode & 0o777, 0o700)
+                source.write_bytes(b"changed after verification")
+                self.assertEqual(snapshot.read_bytes(), approved)
+
+            self.assertFalse(snapshot.exists())
+            source.write_bytes(approved)
+            source.chmod(0o600)
+            with self.assertRaisesRegex(OSError, "consumer failure"):
+                with verified_file_snapshot(
+                    source, "migration archive", expected,
+                ) as failed_snapshot_value:
+                    failed_snapshot = Path(failed_snapshot_value)
+                    raise OSError("consumer failure")
+            self.assertFalse(failed_snapshot.exists())
+
+            with self.assertRaisesRegex(FileEvidenceError, "absolute"):
+                with verified_file_snapshot(
+                    "~/approved-bank.zip", "migration archive", expected,
+                ):
+                    pass
+
+            with self.assertRaisesRegex(FileEvidenceError, "too large"):
+                with verified_file_snapshot(
+                    source,
+                    "migration archive",
+                    expected,
+                    max_bytes=len(approved) - 1,
+                ):
+                    pass
+
     def test_root_owned_root_symlink_checks_resolved_target_ancestors(self):
         original_lstat = Path.lstat
         original_resolve = Path.resolve
@@ -1373,7 +1501,7 @@ class GuardedApplyTest(unittest.TestCase):
             base = plan_for({})
             adapter = self.adapter()
             mutation = build_mutation_plan(base, migration_run_id="run-1", migration_artifact_digest=MIGRATION_ARTIFACT_DIGEST, rollback_archive_digest="5" * 64, rollback_restore_evidence_digest=digest(restore_evidence("5" * 64)), actions=[
-                mutation_action(artifact_digest=base.artifact_digest),
+                mutation_action(),
             ])
             rollback = create_rollback_bundle(mutation, adapter)
             descriptor, marker, proposal = write_migration_gate(root, "run-1", MIGRATION_ARTIFACT_DIGEST)
@@ -1415,7 +1543,7 @@ class GuardedApplyTest(unittest.TestCase):
                 endpoint={"profile_id": "core", "scheme": "http", "host": "127.0.0.1", "port": 7979, "tenant": "default"},
             )
             mutation = build_mutation_plan(base, migration_run_id="run-1", migration_artifact_digest=MIGRATION_ARTIFACT_DIGEST, rollback_archive_digest="5" * 64, rollback_restore_evidence_digest=digest(restore_evidence("5" * 64)), actions=[
-                mutation_action(artifact_digest=base.artifact_digest),
+                mutation_action(),
             ])
             rollback = create_rollback_bundle(mutation, adapter)
             gate = {"rollback_bundle": rollback, "migration_gate": descriptor}
@@ -1436,7 +1564,7 @@ class GuardedApplyTest(unittest.TestCase):
         adapter = self.adapter()
         base = plan_for({})
         mutation = build_mutation_plan(base, migration_run_id="run-1", migration_artifact_digest=MIGRATION_ARTIFACT_DIGEST, rollback_archive_digest="5" * 64, rollback_restore_evidence_digest=digest(restore_evidence("5" * 64)), actions=[
-            mutation_action(artifact_digest=base.artifact_digest),
+            mutation_action(),
         ])
         rollback = create_rollback_bundle(mutation, adapter)
         gate = {

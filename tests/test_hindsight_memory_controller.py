@@ -199,6 +199,8 @@ class ControllerCliTest(unittest.TestCase):
             archive = root / "approved-bank.zip"
             archive.write_bytes(b"approved migration archive")
             archive_digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+            decoy_archive = root / "decoy-bank.zip"
+            decoy_archive.write_bytes(b"decoy migration archive")
             rollback_payload = b"verified pre-state rollback archive"
             rollback_digest = hashlib.sha256(rollback_payload).hexdigest()
             rollback_archive = root / "pre-state-backup.zip"
@@ -243,39 +245,66 @@ class ControllerCliTest(unittest.TestCase):
             proposal.write_text(
                 f"## Migration complete\nrun=run-1\nartifact={migration_digest}\n", encoding="utf-8",
             )
-            adapter = FakeAdapter(endpoint=endpoint, state=state)
             args = module["argparse"].Namespace(
                 inventory=str(inventory_path), profile="core", plan=str(plan_path),
                 approval_digest=plan.plan_digest, token_env="HINDSIGHT_TEST_TOKEN",
-                completion_marker=str(marker), migration_archive=[str(archive)],
+                completion_marker=str(marker), migration_archive=[],
                 restore_evidence=str(evidence_path),
                 rollback_archive=str(rollback_archive),
             )
-            admin_calls = []
-
-            def run_admin(argv, **_kwargs):
-                admin_calls.append(argv)
-                if argv[1] == "backup":
-                    Path(argv[2]).write_bytes(rollback_payload)
-                return subprocess.CompletedProcess(argv, 0, "{}", "")
-
-            with (
-                patch.dict(os.environ, {"HINDSIGHT_TEST_TOKEN": "local-test-token"}),
-                patch.dict(module["apply_command"].__globals__, {"HttpAdapter": lambda **_kwargs: adapter}),
-                patch.object(module["subprocess"], "run", side_effect=run_admin),
-                redirect_stdout(StringIO()),
+            for candidates in (
+                (archive, decoy_archive),
+                (decoy_archive, archive),
             ):
-                self.assertEqual(module["apply_command"](args), 0)
-            self.assertEqual(admin_calls[0], [
-                "hindsight-admin", "backup", str(rollback_archive),
-                "--schema", "public",
-            ])
-            self.assertEqual(admin_calls[1], [
-                "hindsight-admin", "import-bank",
-                "--archive", str(archive),
-                "--target-bank", "engineering",
-            ])
-            self.assertNotIn(archive_digest, admin_calls[1])
+                with self.subTest(candidates=[path.name for path in candidates]):
+                    adapter = FakeAdapter(endpoint=endpoint, state=state)
+                    args.migration_archive = [str(path) for path in candidates]
+                    admin_calls = []
+                    observed_import = {}
+
+                    def run_admin(argv, **_kwargs):
+                        admin_calls.append(argv)
+                        if argv[1] == "backup":
+                            Path(argv[2]).write_bytes(rollback_payload)
+                            Path(argv[2]).chmod(0o600)
+                        if argv[1] == "import-bank":
+                            snapshot = Path(argv[3])
+                            observed_import.update({
+                                "path": snapshot,
+                                "payload": snapshot.read_bytes(),
+                                "mode": snapshot.stat().st_mode & 0o777,
+                                "parent_mode": snapshot.parent.stat().st_mode & 0o777,
+                            })
+                        return subprocess.CompletedProcess(argv, 0, "{}", "")
+
+                    with (
+                        patch.dict(os.environ, {"HINDSIGHT_TEST_TOKEN": "local-test-token"}),
+                        patch.dict(module["apply_command"].__globals__, {"HttpAdapter": lambda **_kwargs: adapter}),
+                        patch.object(module["subprocess"], "run", side_effect=run_admin),
+                        redirect_stdout(StringIO()),
+                    ):
+                        self.assertEqual(module["apply_command"](args), 0)
+                    self.assertEqual(admin_calls[0], [
+                        "hindsight-admin", "backup", str(rollback_archive),
+                        "--schema", "public",
+                    ])
+                    self.assertEqual(admin_calls[1], [
+                        "hindsight-admin", "import-bank",
+                        "--archive", str(observed_import["path"]),
+                        "--target-bank", "engineering",
+                    ])
+                    self.assertNotIn(observed_import["path"], candidates)
+                    self.assertEqual(observed_import["payload"], archive.read_bytes())
+                    self.assertEqual(observed_import["mode"], 0o400)
+                    self.assertEqual(observed_import["parent_mode"], 0o700)
+                    self.assertFalse(observed_import["path"].exists())
+                    self.assertEqual(
+                        archive.read_bytes(), b"approved migration archive",
+                    )
+                    self.assertEqual(
+                        decoy_archive.read_bytes(), b"decoy migration archive",
+                    )
+                    self.assertNotIn(archive_digest, admin_calls[1])
 
             evidence_path.write_bytes(b"\xff")
             evidence_path.chmod(0o600)
