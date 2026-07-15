@@ -389,6 +389,11 @@
   stack contracts, the disposable Hindsight 0.8.4/PostgreSQL backup-and-restore
   smoke with cleanup verified, and the zero-issue CodeRabbit follow-up review.
 
-- [ ] **Step 7: Publish with exact CAS and hand back**
+- [x] **Step 7: Publish with exact CAS and hand back**
 
   Use `checkpointing-and-publishing-git-work`'s planner, exact immutable source SHA, explicit full ref, and exact lease. Post-verify the remote SHA and PR state. Hand back the read-only inventory and proposed shadow-plan digests, all unresolved compatibility/credential/catalog decisions, and the exact later approval needed for the completion signal and live mutation. Do not create either completion-gate half and do not mutate live Hindsight.
+
+  The publication planner verified the exact endpoint and
+  `refs/heads/ivan/hindsight-memory-controller` at
+  `ab737b082f77af3a4a20d88ca8ac8696efbc5786` after the exact-lease push. No
+  completion-gate artifact or live Hindsight mutation was created.
