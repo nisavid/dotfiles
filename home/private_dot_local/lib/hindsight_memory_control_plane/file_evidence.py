@@ -12,6 +12,38 @@ class FileEvidenceError(ValueError):
     pass
 
 
+def _unsafe_directory(metadata: os.stat_result) -> bool:
+    mode = stat.S_IMODE(metadata.st_mode)
+    return metadata.st_uid not in {0, os.geteuid()} or bool(
+        mode & 0o022 and not mode & stat.S_ISVTX
+    )
+
+
+def validate_trusted_regular_file(metadata: os.stat_result, label: str) -> None:
+    if not stat.S_ISREG(metadata.st_mode):
+        raise FileEvidenceError(f"{label} must be a regular file")
+    if metadata.st_uid not in {0, os.geteuid()}:
+        raise FileEvidenceError(f"{label} must be owned by the current user or root")
+    if stat.S_IMODE(metadata.st_mode) & 0o022:
+        raise FileEvidenceError(f"{label} must not be group or world writable")
+    if metadata.st_nlink != 1:
+        raise FileEvidenceError(f"{label} must not have hard links")
+
+
+def file_identity(metadata: os.stat_result) -> tuple[int, ...]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_uid,
+        metadata.st_gid,
+        metadata.st_nlink,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
+
+
 def reject_symlink_components(path: Path, label: str, *, allow_missing: bool) -> None:
     current = Path(path.anchor)
     for part in path.parts[1:]:
@@ -24,10 +56,45 @@ def reject_symlink_components(path: Path, label: str, *, allow_missing: bool) ->
             raise FileEvidenceError(f"{label} is unavailable") from None
         except OSError:
             raise FileEvidenceError(f"{label} is unavailable") from None
-        if stat.S_ISLNK(metadata.st_mode) and not (
-            current.parent == Path("/") and metadata.st_uid == 0
-        ):
+        if stat.S_ISLNK(metadata.st_mode):
+            if current.parent == Path("/") and metadata.st_uid == 0:
+                try:
+                    resolved_target = current.resolve(strict=True)
+                except FileNotFoundError:
+                    if allow_missing:
+                        return
+                    raise FileEvidenceError(f"{label} is unavailable") from None
+                except RuntimeError:
+                    raise FileEvidenceError(
+                        f"{label} path must not contain a symlink cycle"
+                    ) from None
+                except OSError:
+                    raise FileEvidenceError(f"{label} is unavailable") from None
+                if resolved_target == current:
+                    raise FileEvidenceError(
+                        f"{label} path must not contain a symlink cycle"
+                    )
+                reject_symlink_components(
+                    resolved_target, label, allow_missing=False,
+                )
+                try:
+                    target_metadata = resolved_target.lstat()
+                except OSError:
+                    raise FileEvidenceError(f"{label} is unavailable") from None
+                if (
+                    stat.S_ISDIR(target_metadata.st_mode)
+                    and _unsafe_directory(target_metadata)
+                ):
+                    raise FileEvidenceError(
+                        f"{label} path must not contain an untrusted or writable ancestor"
+                    )
+                continue
             raise FileEvidenceError(f"{label} path must not contain symlinks")
+        if current != path and stat.S_ISDIR(metadata.st_mode):
+            if _unsafe_directory(metadata):
+                raise FileEvidenceError(
+                    f"{label} path must not contain an untrusted or writable ancestor"
+                )
 
 
 def read_file_evidence(
@@ -54,8 +121,7 @@ def read_file_evidence(
         raise FileEvidenceError(f"{label} is unavailable") from None
     try:
         before = os.fstat(descriptor)
-        if not stat.S_ISREG(before.st_mode):
-            raise FileEvidenceError(f"{label} must be a regular file")
+        validate_trusted_regular_file(before, label)
         if before.st_size > max_bytes:
             raise FileEvidenceError(f"{label} is too large")
         chunks: list[bytes] = []
@@ -82,8 +148,9 @@ def read_file_evidence(
         current = path.lstat()
     except OSError:
         raise FileEvidenceError(f"{label} changed while being read") from None
-    identity = lambda item: (item.st_dev, item.st_ino, item.st_size, item.st_mtime_ns)
-    if identity(before) != identity(after) or (current.st_dev, current.st_ino) != (after.st_dev, after.st_ino):
+    if file_identity(before) != file_identity(after) or (
+        current.st_dev, current.st_ino
+    ) != (after.st_dev, after.st_ino):
         raise FileEvidenceError(f"{label} changed while being read")
     raw = b"".join(chunks)
     return raw, hashlib.sha256(raw).hexdigest()

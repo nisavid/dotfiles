@@ -201,14 +201,40 @@ class ControllerCliTest(unittest.TestCase):
             archive_digest = hashlib.sha256(archive.read_bytes()).hexdigest()
             rollback_payload = b"verified pre-state rollback archive"
             rollback_digest = hashlib.sha256(rollback_payload).hexdigest()
-            rollback_archive = root / "pre-state-backup.tar"
+            rollback_archive = root / "pre-state-backup.zip"
             migration_digest = "3" * 64
+            evidence_path = root / "restore-evidence.json"
+            incoming_evidence = {
+                "schema_version": 1,
+                "artifact_digest": archive_digest,
+                "verification_receipt_digest": "7" * 64,
+            }
+            rollback_evidence = {
+                "schema_version": 1,
+                "artifact_digest": rollback_digest,
+                "verification_receipt_digest": "8" * 64,
+            }
+            self.write_json(evidence_path, {
+                archive_digest: incoming_evidence,
+                rollback_digest: rollback_evidence,
+            })
+            evidence_path.chmod(0o600)
+            self.assertEqual(evidence_path.stat().st_mode & 0o777, 0o600)
             plan = build_mutation_plan(
                 base, migration_run_id="run-1", migration_artifact_digest=migration_digest,
                 rollback_archive_digest=rollback_digest,
+                rollback_restore_evidence_digest=digest(rollback_evidence),
                 actions=[{
                     "id": "migrate-1", "kind": "migrate_bank",
-                    "artifact_digest": migration_digest, "archive_digest": archive_digest,
+                    "artifact_digest": migration_digest,
+                    "archive_digest": archive_digest,
+                    "restore_evidence_digest": digest(incoming_evidence),
+                    "source_bank": {
+                        "profile_id": "core", "bank_id": "historical-candidate",
+                    },
+                    "target_bank": {
+                        "profile_id": "core", "bank_id": "engineering",
+                    },
                 }],
             )
             self.write_json(plan_path, plan.to_dict())
@@ -217,18 +243,12 @@ class ControllerCliTest(unittest.TestCase):
             proposal.write_text(
                 f"## Migration complete\nrun=run-1\nartifact={migration_digest}\n", encoding="utf-8",
             )
-            evidence_path = root / "restore-evidence.json"
-            self.write_json(evidence_path, {archive_digest: {
-                "disposable": True, "restore_verified": True, "artifact_digest": archive_digest,
-            }, rollback_digest: {
-                "disposable": True, "restore_verified": True, "artifact_digest": rollback_digest,
-            }})
             adapter = FakeAdapter(endpoint=endpoint, state=state)
             args = module["argparse"].Namespace(
                 inventory=str(inventory_path), profile="core", plan=str(plan_path),
                 approval_digest=plan.plan_digest, token_env="HINDSIGHT_TEST_TOKEN",
                 completion_marker=str(marker), migration_archive=[str(archive)],
-                restore_evidence=str(evidence_path), admin_version="1",
+                restore_evidence=str(evidence_path),
                 rollback_archive=str(rollback_archive),
             )
             admin_calls = []
@@ -236,7 +256,7 @@ class ControllerCliTest(unittest.TestCase):
             def run_admin(argv, **_kwargs):
                 admin_calls.append(argv)
                 if argv[1] == "backup":
-                    rollback_archive.write_bytes(rollback_payload)
+                    Path(argv[2]).write_bytes(rollback_payload)
                 return subprocess.CompletedProcess(argv, 0, "{}", "")
 
             with (
@@ -246,10 +266,80 @@ class ControllerCliTest(unittest.TestCase):
                 redirect_stdout(StringIO()),
             ):
                 self.assertEqual(module["apply_command"](args), 0)
-            self.assertEqual(admin_calls[0][0:2], ["hindsight-admin", "backup"])
-            self.assertEqual(admin_calls[1][0:2], ["hindsight-admin", "import-bank"])
-            self.assertIn(str(archive), admin_calls[1])
-            self.assertIn(archive_digest, admin_calls[1])
+            self.assertEqual(admin_calls[0], [
+                "hindsight-admin", "backup", str(rollback_archive),
+                "--schema", "public",
+            ])
+            self.assertEqual(admin_calls[1], [
+                "hindsight-admin", "import-bank",
+                "--archive", str(archive),
+                "--target-bank", "engineering",
+            ])
+            self.assertNotIn(archive_digest, admin_calls[1])
+
+            evidence_path.write_bytes(b"\xff")
+            evidence_path.chmod(0o600)
+            adapter_calls_before = list(adapter.calls)
+            with (
+                patch.dict(
+                    os.environ,
+                    {"HINDSIGHT_TEST_TOKEN": "local-test-token"},
+                ),
+                patch.dict(
+                    module["apply_command"].__globals__,
+                    {"HttpAdapter": lambda **_kwargs: adapter},
+                ),
+                patch.object(
+                    module["subprocess"],
+                    "run",
+                    side_effect=AssertionError(
+                        "admin command must not run for invalid evidence"
+                    ),
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    module["ApplyError"],
+                    "disposable restore evidence is unavailable",
+                ):
+                    module["apply_command"](args)
+            self.assertEqual(adapter.calls, adapter_calls_before)
+
+            self.write_json(evidence_path, {
+                archive_digest: incoming_evidence,
+                rollback_digest: rollback_evidence,
+            })
+            evidence_path.chmod(0o600)
+            mismatched_backup_calls = []
+
+            def run_mismatched_backup(argv, **_kwargs):
+                mismatched_backup_calls.append(argv)
+                Path(argv[2]).write_bytes(b"mismatched rollback archive")
+                return subprocess.CompletedProcess(argv, 0, "Complete", "")
+
+            with (
+                patch.dict(
+                    os.environ,
+                    {"HINDSIGHT_TEST_TOKEN": "local-test-token"},
+                ),
+                patch.dict(
+                    module["apply_command"].__globals__,
+                    {"HttpAdapter": lambda **_kwargs: adapter},
+                ),
+                patch.object(
+                    module["subprocess"],
+                    "run",
+                    side_effect=run_mismatched_backup,
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    module["ApplyError"], "rollback archive.*digest",
+                ):
+                    module["apply_command"](args)
+            self.assertEqual(mismatched_backup_calls, [[
+                "hindsight-admin", "backup", str(rollback_archive),
+                "--schema", "public",
+            ]])
+            self.assertEqual(adapter.calls, adapter_calls_before)
 
     def test_broker_pid_read_is_bounded_and_disappearance_is_invalid(self):
         module = runpy.run_path(str(CLI))

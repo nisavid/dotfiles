@@ -132,16 +132,29 @@ The completion marker is
 `MIGRATION_ARTIFACT_DIR/distillation-complete.marker` with exactly
 `run=RUN_ID` and `artifact=SHA256` lines. The proposal log must contain a
 `## Migration complete` section with the same two lines. `hindsight-memory
-apply` rereads both regular, non-symlinked files immediately before mutation,
-requires the approved plan digest, and resolves the data-plane token only from
-the named environment variable. The gate SHA-256 identifies the completed
-migration package, independently of the desired-state inventory digest. A
-mutation apply also requires each `--migration-archive` named by the plan's
-archive digest and a digest-keyed `--restore-evidence` JSON file; full-bank
-imports run only through the exact `hindsight-admin import-bank` argument
-vector. The plan separately binds the `--rollback-archive` digest; apply
-creates and verifies that full-schema backup before mutation and restores it
-through the exact admin adapter if a postcondition fails.
+apply` rereads both trusted regular files immediately before mutation, requires
+the approved plan digest, and resolves the data-plane token only from the named
+environment variable. Trusted gate and restore-evidence files and every
+directory ancestor must be owned by the current user or root. Files must have
+one hard link and must not be group or world writable; paths must not descend
+through a non-sticky writable directory. The gate SHA-256 identifies the
+completed migration package, independently of the desired-state inventory
+digest.
+
+A mutation action binds distinct source and target bank references, its
+`--migration-archive` digest, and the canonical digest of its disposable
+restore-evidence record. That record contains only `schema_version`, the
+archive's `artifact_digest`, and the digest of an independently reviewed
+disposable-restore verification receipt. Full-bank imports run through the
+Hindsight 0.8.4 vector `hindsight-admin import-bank --archive ARCHIVE
+--target-bank BANK`; archive digests remain out-of-band approval inputs and
+are not passed to the CLI.
+
+The plan separately binds the `--rollback-archive` digest and its
+restore-evidence record digest. Apply runs `hindsight-admin backup ARCHIVE
+--schema public`, verifies the resulting archive digest before mutation, and
+uses `hindsight-admin restore ARCHIVE --schema public --yes` if a postcondition
+fails.
 
 `hindsight-embed-single-bank-cleanup` is a separate, destructive migration
 runbook. It is not part of normal installation; begin with its default dry run

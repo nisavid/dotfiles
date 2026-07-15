@@ -5,7 +5,12 @@ from .adapters import Adapter, AdapterError, AuthenticationError, FakeAdapter, R
 from .http_adapter import HttpAdapter
 from .inventory import InventoryError, load_inventory
 from .ledger import LedgerError, append_record
-from .migration_adapter import AdminMigrationAdapter, MigrationAdapterError, MigrationApplyAdapter
+from .migration_adapter import (
+    AdminMigrationAdapter,
+    MigrationAdapterError,
+    MigrationApplyAdapter,
+    hindsight_admin_argv,
+)
 from .migration import (
     MigrationDiscovery,
     MigrationError,
@@ -47,6 +52,7 @@ __all__ = [
     "ShadowPlan",
     "FakeAdapter",
     "HttpAdapter",
+    "hindsight_admin_argv",
     "apply_plan",
     "append_record",
     "build_plan",

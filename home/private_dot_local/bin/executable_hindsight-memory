@@ -33,6 +33,7 @@ from hindsight_memory_control_plane import (  # noqa: E402
     BankRef,
     HttpAdapter,
     AdminMigrationAdapter,
+    MigrationAdapterError,
     MigrationApplyAdapter,
     MigrationError,
     PlanError,
@@ -42,6 +43,7 @@ from hindsight_memory_control_plane import (  # noqa: E402
     create_rollback_bundle,
     digest,
     discover_migration_state,
+    hindsight_admin_argv,
     inventory_endpoint,
     load_inventory,
     mutation_plan_from_dict,
@@ -53,7 +55,10 @@ from hindsight_memory_control_plane.broker import Broker, BrokerError  # noqa: E
 from hindsight_memory_control_plane.model import deep_thaw  # noqa: E402
 from hindsight_memory_control_plane.file_evidence import (  # noqa: E402
     FileEvidenceError,
+    file_identity,
+    read_file_evidence,
     reject_symlink_components,
+    validate_trusted_regular_file,
 )
 from hindsight_memory_control_plane.server import JsonRpcClient, UnixJsonRpcServer  # noqa: E402
 
@@ -81,8 +86,7 @@ def _regular_file_digest(value: str | Path, label: str) -> str:
         descriptor = os.open(path, flags)
         try:
             before = os.fstat(descriptor)
-            if not stat.S_ISREG(before.st_mode):
-                raise ApplyError(f"{label} must be a regular file")
+            validate_trusted_regular_file(before, label)
             artifact_hash = hashlib.sha256()
             while chunk := os.read(descriptor, 1024 * 1024):
                 artifact_hash.update(chunk)
@@ -94,8 +98,9 @@ def _regular_file_digest(value: str | Path, label: str) -> str:
         raise ApplyError(str(error)) from None
     except OSError:
         raise ApplyError(f"{label} is unavailable") from None
-    identity = lambda item: (item.st_dev, item.st_ino, item.st_size, item.st_mtime_ns)
-    if identity(before) != identity(after) or (current.st_dev, current.st_ino) != (after.st_dev, after.st_ino):
+    if file_identity(before) != file_identity(after) or (
+        current.st_dev, current.st_ino
+    ) != (after.st_dev, after.st_ino):
         raise ApplyError(f"{label} changed while being read")
     return artifact_hash.hexdigest()
 
@@ -354,7 +359,14 @@ def apply_command(args: argparse.Namespace) -> int:
         for archive_value in archive_paths:
             archive = Path(archive_value).expanduser()
             archives[_regular_file_digest(archive, "migration archive")] = str(archive)
-        restore_evidence = read_json(evidence_path)
+        try:
+            evidence_record = read_file_evidence(
+                evidence_path, "disposable restore evidence"
+            )
+            assert evidence_record is not None
+            restore_evidence = json.loads(evidence_record[0])
+        except (FileEvidenceError, UnicodeDecodeError, json.JSONDecodeError):
+            raise ApplyError("disposable restore evidence is unavailable") from None
         if not isinstance(restore_evidence, dict):
             raise ApplyError("disposable restore evidence must be a digest-keyed object")
         required_archive_digests = {action.details["archive_digest"] for action in plan.actions}
@@ -369,10 +381,8 @@ def apply_command(args: argparse.Namespace) -> int:
         if _paths_overlap(rollback_archive, list(archives.values())):
             raise ApplyError("rollback archive must be distinct from every migration archive")
         admin = AdminMigrationAdapter(
-            admin_version=getattr(args, "admin_version", "1"),
-            argv_factory=lambda operation, archive, archive_digest: [
-                "hindsight-admin", operation, "--archive", archive, "--sha256", archive_digest,
-            ],
+            admin_version=getattr(args, "admin_version", "0.8.4"),
+            argv_factory=hindsight_admin_argv,
             runner=lambda argv: subprocess.run(
                 argv, text=True, capture_output=True, timeout=300, check=False,
             ),
@@ -382,13 +392,18 @@ def apply_command(args: argparse.Namespace) -> int:
             restore_evidence=restore_evidence,
             rollback_archive=str(Path(rollback_archive).expanduser()),
             rollback_archive_digest=plan.rollback_archive_digest,
+            rollback_restore_evidence_digest=plan.rollback_restore_evidence_digest,
             archive_verifier=lambda path, expected: hmac.compare_digest(
                 _regular_file_digest(path, "rollback archive"), expected,
             ),
         )
-    gate: dict[str, Any] = {
-        "rollback_bundle": create_rollback_bundle(plan, adapter),
-    }
+    try:
+        rollback_bundle = create_rollback_bundle(plan, adapter)
+    except MigrationAdapterError:
+        raise ApplyError(
+            "rollback archive creation or digest verification failed"
+        ) from None
+    gate: dict[str, Any] = {"rollback_bundle": rollback_bundle}
     if mutation:
         migration = dict(inventory.migration)
         artifact_dir = Path(
@@ -1034,7 +1049,7 @@ def parser() -> argparse.ArgumentParser:
     apply.add_argument("--migration-archive", action="append")
     apply.add_argument("--restore-evidence")
     apply.add_argument("--rollback-archive")
-    apply.add_argument("--admin-version", default="1")
+    apply.add_argument("--admin-version", default="0.8.4")
     apply.set_defaults(run=apply_command)
 
     migration = commands.add_parser("migration")

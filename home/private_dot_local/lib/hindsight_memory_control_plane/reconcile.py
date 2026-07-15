@@ -40,6 +40,7 @@ class MutationPlan:
     migration_run_id: str
     migration_artifact_digest: str
     rollback_archive_digest: str
+    rollback_restore_evidence_digest: str
     actions: tuple[Action, ...]
     plan_digest: str
 
@@ -54,6 +55,7 @@ class MutationPlan:
             "migration_run_id": self.migration_run_id,
             "migration_artifact_digest": self.migration_artifact_digest,
             "rollback_archive_digest": self.rollback_archive_digest,
+            "rollback_restore_evidence_digest": self.rollback_restore_evidence_digest,
             "actions": [action.to_dict() for action in self.actions], "destructive": True,
         }
 
@@ -72,13 +74,13 @@ class ApplyResult:
     ledger: tuple[Mapping[str, str], ...] = ()
 
 
-def _mutation_actions(values: Any) -> tuple[Action, ...]:
+def _mutation_actions(values: Any, target_profile: str) -> tuple[Action, ...]:
     if not isinstance(values, (list, tuple)) or not values:
         raise ApplyError("mutation actions must be a non-empty array")
     result = []
     seen = set()
     for value in values:
-        if not isinstance(value, Mapping) or set(value) - {"id", "kind", "artifact_digest", "archive_digest", "source_bank", "target_bank"}:
+        if not isinstance(value, Mapping) or set(value) - {"id", "kind", "artifact_digest", "archive_digest", "restore_evidence_digest", "source_bank", "target_bank"}:
             raise ApplyError("mutation action schema is closed")
         identifier, kind = value.get("id"), value.get("kind")
         if not isinstance(identifier, str) or SAFE_IDENTIFIER.fullmatch(identifier) is None or identifier in seen:
@@ -91,18 +93,31 @@ def _mutation_actions(values: Any) -> tuple[Action, ...]:
         details = {key: deep_thaw(item) for key, item in value.items() if key not in {"id", "kind"}}
         if not isinstance(details.get("archive_digest"), str) or DIGEST.fullmatch(details["archive_digest"]) is None:
             raise ApplyError("mutation archive digest is required")
+        if not isinstance(details.get("restore_evidence_digest"), str) or DIGEST.fullmatch(details["restore_evidence_digest"]) is None:
+            raise ApplyError("mutation restore evidence digest is required")
+        if not all(bank_key in details for bank_key in ("source_bank", "target_bank")):
+            raise ApplyError("mutation source and target bank references are required")
         for bank_key in ("source_bank", "target_bank"):
             if bank_key in details and (not isinstance(details[bank_key], dict) or set(details[bank_key]) != {"profile_id", "bank_id"}):
                 raise ApplyError("mutation bank reference is closed")
-            if bank_key in details and not all(isinstance(item, str) and item for item in details[bank_key].values()):
+            if bank_key in details and not all(
+                isinstance(item, str) and SAFE_IDENTIFIER.fullmatch(item) is not None
+                for item in details[bank_key].values()
+            ):
                 raise ApplyError("mutation bank reference is invalid")
+            if details[bank_key]["profile_id"] != target_profile:
+                raise ApplyError("mutation bank reference must match the target profile")
+        if details["source_bank"] == details["target_bank"]:
+            raise ApplyError("mutation source and target banks must be distinct")
         result.append(Action(identifier, kind, deep_freeze(details)))
         seen.add(identifier)
     return tuple(result)
 
 
 def build_mutation_plan(base_plan: Plan, *, migration_run_id: str, migration_artifact_digest: str,
-                        rollback_archive_digest: str, actions: Any) -> MutationPlan:
+                        rollback_archive_digest: str,
+                        rollback_restore_evidence_digest: str,
+                        actions: Any) -> MutationPlan:
     verify_plan(base_plan)
     if not isinstance(migration_run_id, str) or SAFE_IDENTIFIER.fullmatch(migration_run_id) is None:
         raise ApplyError("migration run ID is invalid")
@@ -110,16 +125,23 @@ def build_mutation_plan(base_plan: Plan, *, migration_run_id: str, migration_art
         raise ApplyError("migration artifact digest is invalid")
     if not isinstance(rollback_archive_digest, str) or DIGEST.fullmatch(rollback_archive_digest) is None:
         raise ApplyError("rollback archive digest is invalid")
-    normalized = _mutation_actions(actions)
+    if (
+        not isinstance(rollback_restore_evidence_digest, str)
+        or DIGEST.fullmatch(rollback_restore_evidence_digest) is None
+    ):
+        raise ApplyError("rollback restore evidence digest is invalid")
+    normalized = _mutation_actions(actions, base_plan.target_profile)
     body = {
         "base_plan": base_plan.to_dict(), "plan_kind": "migration", "migration_run_id": migration_run_id,
         "migration_artifact_digest": migration_artifact_digest,
         "rollback_archive_digest": rollback_archive_digest,
+        "rollback_restore_evidence_digest": rollback_restore_evidence_digest,
         "actions": [action.to_dict() for action in normalized], "destructive": True,
     }
     return MutationPlan(
         base_plan, "migration", migration_run_id, migration_artifact_digest,
-        rollback_archive_digest, normalized, digest(body),
+        rollback_archive_digest, rollback_restore_evidence_digest,
+        normalized, digest(body),
     )
 
 
@@ -129,13 +151,14 @@ def verify_mutation_plan(plan: MutationPlan) -> None:
     rebuilt = build_mutation_plan(plan.base_plan, migration_run_id=plan.migration_run_id,
                                   migration_artifact_digest=plan.migration_artifact_digest,
                                   rollback_archive_digest=plan.rollback_archive_digest,
+                                  rollback_restore_evidence_digest=plan.rollback_restore_evidence_digest,
                                   actions=[action.to_dict() for action in plan.actions])
     if not hmac.compare_digest(rebuilt.plan_digest, plan.plan_digest):
         raise ApplyError("mutation plan digest does not match")
 
 
 def mutation_plan_from_dict(value: Any) -> MutationPlan:
-    keys = {"base_plan", "plan_kind", "migration_run_id", "migration_artifact_digest", "rollback_archive_digest", "actions", "destructive", "plan_digest"}
+    keys = {"base_plan", "plan_kind", "migration_run_id", "migration_artifact_digest", "rollback_archive_digest", "rollback_restore_evidence_digest", "actions", "destructive", "plan_digest"}
     if not isinstance(value, dict) or set(value) != keys:
         raise ApplyError("mutation plan schema is closed")
     if value["plan_kind"] != "migration" or value["destructive"] is not True:
@@ -148,6 +171,7 @@ def mutation_plan_from_dict(value: Any) -> MutationPlan:
         base, migration_run_id=value["migration_run_id"],
         migration_artifact_digest=value["migration_artifact_digest"],
         rollback_archive_digest=value["rollback_archive_digest"],
+        rollback_restore_evidence_digest=value["rollback_restore_evidence_digest"],
         actions=value["actions"],
     )
     if not isinstance(value["plan_digest"], str) or not hmac.compare_digest(plan.plan_digest, value["plan_digest"]):

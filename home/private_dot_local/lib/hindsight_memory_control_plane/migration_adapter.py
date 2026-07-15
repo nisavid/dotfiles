@@ -1,21 +1,51 @@
 """Compatibility-gated subprocess seam for the narrow hindsight-admin surface."""
 
-import json
 from pathlib import Path
+import hmac
+import re
 from typing import Any, Callable, Mapping, Sequence
 
-from .canonical import DIGEST
+from .canonical import DIGEST, digest
 
 OPERATIONS = {"export-bank", "import-bank", "backup", "restore"}
+BANK_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 
 
 class MigrationAdapterError(RuntimeError):
     pass
 
 
+def hindsight_admin_argv(
+    operation: str, archive: str, bank_id: str | None
+) -> list[str]:
+    if operation in {"export-bank", "import-bank"} and (
+        not isinstance(bank_id, str) or BANK_ID.fullmatch(bank_id) is None
+    ):
+        raise MigrationAdapterError("bank ID is required")
+    if operation in {"backup", "restore"} and bank_id is not None:
+        raise MigrationAdapterError("bank ID is not permitted for schema operation")
+    if operation == "export-bank":
+        return [
+            "hindsight-admin", operation, "--bank", bank_id,
+            "--output", archive,
+        ]
+    if operation == "import-bank":
+        return [
+            "hindsight-admin", operation, "--archive", archive,
+            "--target-bank", bank_id,
+        ]
+    if operation == "backup":
+        return ["hindsight-admin", operation, archive, "--schema", "public"]
+    if operation == "restore":
+        return [
+            "hindsight-admin", operation, archive, "--schema", "public", "--yes",
+        ]
+    raise MigrationAdapterError("unsupported hindsight-admin operation")
+
+
 class AdminMigrationAdapter:
-    def __init__(self, *, admin_version: str, argv_factory: Callable[[str, str, str], Sequence[str]],
-                 runner: Callable[[Sequence[str]], Any], supported_versions: frozenset[str] = frozenset({"1"})) -> None:
+    def __init__(self, *, admin_version: str, argv_factory: Callable[[str, str, str | None], Sequence[str]],
+                 runner: Callable[[Sequence[str]], Any], supported_versions: frozenset[str] = frozenset({"0.8.4"})) -> None:
         if admin_version not in supported_versions:
             raise MigrationAdapterError("unsupported hindsight-admin version")
         self.admin_version = admin_version
@@ -24,15 +54,32 @@ class AdminMigrationAdapter:
         self.calls: list[dict[str, Any]] = []
 
     @staticmethod
-    def _restore_evidence(evidence: Mapping[str, Any] | None, archive_digest: str) -> None:
-        if not isinstance(evidence, Mapping) or set(evidence) != {"disposable", "restore_verified", "artifact_digest"}:
+    def _restore_evidence(
+        evidence: Mapping[str, Any] | None,
+        archive_digest: str,
+        expected_evidence_digest: str,
+    ) -> None:
+        if not isinstance(evidence, Mapping) or set(evidence) != {
+            "schema_version", "artifact_digest", "verification_receipt_digest",
+        }:
             raise MigrationAdapterError("disposable restore evidence is required")
-        if evidence["disposable"] is not True or evidence["restore_verified"] is not True:
+        if evidence["schema_version"] != 1:
             raise MigrationAdapterError("disposable restore evidence is not verified")
         if evidence["artifact_digest"] != archive_digest:
             raise MigrationAdapterError("disposable restore evidence digest does not match archive")
+        receipt_digest = evidence["verification_receipt_digest"]
+        if not isinstance(receipt_digest, str) or DIGEST.fullmatch(receipt_digest) is None:
+            raise MigrationAdapterError("disposable restore evidence receipt is invalid")
+        if (
+            not isinstance(expected_evidence_digest, str)
+            or DIGEST.fullmatch(expected_evidence_digest) is None
+            or not hmac.compare_digest(digest(dict(evidence)), expected_evidence_digest)
+        ):
+            raise MigrationAdapterError("disposable restore evidence digest does not match plan")
 
     def _run(self, operation: str, archive: str, archive_digest: str,
+             bank_id: str | None = None,
+             expected_evidence_digest: str | None = None,
              evidence: Mapping[str, Any] | None = None) -> Mapping[str, Any]:
         if operation not in OPERATIONS:
             raise MigrationAdapterError("unsupported hindsight-admin operation")
@@ -40,32 +87,49 @@ class AdminMigrationAdapter:
             raise MigrationAdapterError("archive path must be absolute")
         if not isinstance(archive_digest, str) or not DIGEST.fullmatch(archive_digest):
             raise MigrationAdapterError("archive digest is required")
+        if operation in {"export-bank", "import-bank"}:
+            if not isinstance(bank_id, str) or BANK_ID.fullmatch(bank_id) is None:
+                raise MigrationAdapterError("bank ID is required")
+        elif bank_id is not None:
+            raise MigrationAdapterError("bank ID is not permitted for schema operation")
         if operation in {"import-bank", "restore"}:
-            self._restore_evidence(evidence, archive_digest)
-        argv = self.argv_factory(operation, archive, archive_digest)
+            self._restore_evidence(
+                evidence, archive_digest, str(expected_evidence_digest)
+            )
+        argv = self.argv_factory(operation, archive, bank_id)
         if isinstance(argv, (str, bytes)) or not isinstance(argv, Sequence) or not all(isinstance(arg, str) for arg in argv):
             raise MigrationAdapterError("argv factory must return an argument vector, not a shell string")
-        expected = ["hindsight-admin", operation, "--archive", archive, "--sha256", archive_digest]
+        expected = hindsight_admin_argv(operation, archive, bank_id)
         if list(argv) != expected:
             raise MigrationAdapterError("hindsight-admin argv shape is not permitted")
-        self.calls.append({"operation": operation, "archive_digest": archive_digest})
+        self.calls.append({
+            "operation": operation,
+            "archive_digest": archive_digest,
+            **({"bank_id": bank_id} if bank_id is not None else {}),
+        })
         result = self.runner(list(argv))
         returncode = result.get("returncode") if isinstance(result, Mapping) else getattr(result, "returncode", None)
         if returncode != 0:
             raise MigrationAdapterError("hindsight-admin operation failed")
-        stdout = result.get("stdout", "{}") if isinstance(result, Mapping) else getattr(result, "stdout", "{}")
-        try:
-            value = json.loads(stdout or "{}")
-        except json.JSONDecodeError:
-            raise MigrationAdapterError("hindsight-admin returned invalid JSON") from None
-        return value if isinstance(value, dict) else {"result": value}
+        return {"completed": True}
 
-    def export_bank(self, archive: str, archive_digest: str): return self._run("export-bank", archive, archive_digest)
+    def export_bank(self, archive: str, archive_digest: str, source_bank: str):
+        return self._run("export-bank", archive, archive_digest, source_bank)
     def backup(self, archive: str, archive_digest: str): return self._run("backup", archive, archive_digest)
-    def import_bank(self, archive: str, archive_digest: str, disposable_restore_evidence=None):
-        return self._run("import-bank", archive, archive_digest, disposable_restore_evidence)
-    def restore(self, archive: str, archive_digest: str, disposable_restore_evidence=None):
-        return self._run("restore", archive, archive_digest, disposable_restore_evidence)
+    def import_bank(self, archive: str, archive_digest: str, target_bank: str,
+                    expected_evidence_digest: str,
+                    disposable_restore_evidence=None):
+        return self._run(
+            "import-bank", archive, archive_digest, target_bank,
+            expected_evidence_digest, disposable_restore_evidence,
+        )
+    def restore(self, archive: str, archive_digest: str,
+                expected_evidence_digest: str, disposable_restore_evidence=None):
+        return self._run(
+            "restore", archive, archive_digest,
+            expected_evidence_digest=expected_evidence_digest,
+            evidence=disposable_restore_evidence,
+        )
 
 
 class MigrationApplyAdapter:
@@ -76,6 +140,7 @@ class MigrationApplyAdapter:
     def __init__(self, *, data_plane: Any, admin: AdminMigrationAdapter,
                  archives: Mapping[str, str], restore_evidence: Mapping[str, Mapping[str, Any]],
                  rollback_archive: str, rollback_archive_digest: str,
+                 rollback_restore_evidence_digest: str,
                  archive_verifier: Callable[[str, str], bool]) -> None:
         if not isinstance(admin, AdminMigrationAdapter):
             raise MigrationAdapterError("admin migration adapter is required")
@@ -83,16 +148,33 @@ class MigrationApplyAdapter:
             raise MigrationAdapterError("migration archive inputs are invalid")
         if not Path(rollback_archive).is_absolute() or not DIGEST.fullmatch(rollback_archive_digest):
             raise MigrationAdapterError("rollback archive binding is invalid")
+        if (
+            not isinstance(rollback_restore_evidence_digest, str)
+            or DIGEST.fullmatch(rollback_restore_evidence_digest) is None
+        ):
+            raise MigrationAdapterError("rollback restore evidence binding is invalid")
         if not callable(archive_verifier):
             raise MigrationAdapterError("rollback archive verifier is required")
         self.data_plane = data_plane
         self.admin = admin
         self.archives = dict(archives)
-        self.restore_evidence = dict(restore_evidence)
+        self.restore_evidence = {
+            key: dict(value) if isinstance(value, Mapping) else value
+            for key, value in restore_evidence.items()
+        }
         self.rollback_archive = rollback_archive
         self.rollback_archive_digest = rollback_archive_digest
+        self.rollback_restore_evidence_digest = rollback_restore_evidence_digest
         self.archive_verifier = archive_verifier
         self._rollback_ids: set[str] = set()
+
+    def _require_archive_digest(self, archive: str, archive_digest: str) -> None:
+        try:
+            verified = self.archive_verifier(archive, archive_digest)
+        except Exception:
+            verified = False
+        if verified is not True:
+            raise MigrationAdapterError("archive digest does not match plan")
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self.data_plane, name)
@@ -106,12 +188,20 @@ class MigrationApplyAdapter:
         evidence = self.restore_evidence.get(archive_digest)
         if archive is None or evidence is None:
             raise MigrationAdapterError("approved migration archive or restore evidence is unavailable")
-        self.admin.import_bank(archive, archive_digest, evidence)
+        target_bank = action.details.get("target_bank")
+        if not isinstance(target_bank, Mapping):
+            raise MigrationAdapterError("migration target bank is unavailable")
+        self._require_archive_digest(archive, archive_digest)
+        self.admin.import_bank(
+            archive, archive_digest, target_bank.get("bank_id"),
+            action.details.get("restore_evidence_digest"), evidence,
+        )
 
     def create_rollback_bundle(self, plan_digest: str, action_ids: tuple[str, ...]) -> Any:
         self.admin.backup(self.rollback_archive, self.rollback_archive_digest)
-        if self.archive_verifier(self.rollback_archive, self.rollback_archive_digest) is not True:
-            raise MigrationAdapterError("created rollback archive digest does not match")
+        self._require_archive_digest(
+            self.rollback_archive, self.rollback_archive_digest,
+        )
         bundle = self.data_plane.create_rollback_bundle(plan_digest, action_ids)
         self._rollback_ids.add(bundle.rollback_id)
         return bundle
@@ -121,7 +211,11 @@ class MigrationApplyAdapter:
             return False
         evidence = self.restore_evidence.get(self.rollback_archive_digest)
         try:
-            AdminMigrationAdapter._restore_evidence(evidence, self.rollback_archive_digest)
+            AdminMigrationAdapter._restore_evidence(
+                evidence,
+                self.rollback_archive_digest,
+                self.rollback_restore_evidence_digest,
+            )
         except MigrationAdapterError:
             return False
         return self.data_plane.verify_rollback_bundle(rollback)
@@ -130,7 +224,13 @@ class MigrationApplyAdapter:
         if rollback.rollback_id not in self._rollback_ids:
             raise MigrationAdapterError("rollback bundle is not bound to the migration adapter")
         evidence = self.restore_evidence.get(self.rollback_archive_digest)
+        self._require_archive_digest(
+            self.rollback_archive, self.rollback_archive_digest,
+        )
         self.admin.restore(
-            self.rollback_archive, self.rollback_archive_digest, evidence,
+            self.rollback_archive,
+            self.rollback_archive_digest,
+            self.rollback_restore_evidence_digest,
+            evidence,
         )
         self.data_plane.restore(rollback)
