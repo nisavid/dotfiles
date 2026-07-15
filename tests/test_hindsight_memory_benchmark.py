@@ -216,6 +216,8 @@ class BenchmarkTest(unittest.TestCase):
             [{**CASES[0], "case_id": "   "}],
             [{**CASES[0], "query": "\t"}],
             [{**CASES[0], "relevance": {" ": 1}}],
+            [{**CASES[0], "must_recall": ["\t"]}],
+            [{**CASES[0], "must_not_return": [" "]}],
         ]
         messages = [
             "schema_version",
@@ -227,6 +229,8 @@ class BenchmarkTest(unittest.TestCase):
             "case_id",
             "query",
             "relevance document ID",
+            "must_recall must be a list of non-empty strings",
+            "must_not_return must be a list of non-empty strings",
         ]
         with tempfile.TemporaryDirectory() as directory:
             for index, (cases, message) in enumerate(
