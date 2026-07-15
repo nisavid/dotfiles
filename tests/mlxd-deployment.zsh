@@ -9,6 +9,8 @@ fail() {
   return 1
 }
 
+command -v rg >/dev/null || fail 'rg is required to validate the install boundary'
+
 test_dir=$(mktemp -d "${TMPDIR:-/tmp}/mlxctl-install.XXXXXX")
 trap 'rm -rf -- "$test_dir"' EXIT
 
@@ -30,6 +32,7 @@ print -r -- '[project]' > "$source_dir/pyproject.toml"
   print -r -- 'print -r -- "$*" >> "$MLXCTL_TEST_UV_LOG"'
   print -r -- '[[ $UV_TOOL_BIN_DIR == "$MLXCTL_TEST_BIN_DIR" ]] || exit 65'
   print -r -- '[[ "$*" == "tool install --force $MLXCTL_TEST_SOURCE_DIR" ]] || exit 64'
+  print -r -- '[[ ${MLXCTL_TEST_UV_SKIP_BINARY:-0} == 1 ]] && exit 0'
   print -r -- 'mkdir -p -- "$MLXCTL_TEST_BIN_DIR"'
   print -r -- ': > "$MLXCTL_TEST_BIN_DIR/mlxctl"'
   print -r -- 'chmod +x "$MLXCTL_TEST_BIN_DIR/mlxctl"'
@@ -96,6 +99,62 @@ fi
 grep -q 'source checkout not found' "$test_dir/missing.stderr" || \
   fail 'missing-source result must be explicit'
 [[ $(<"$legacy_plist") == 'legacy plist' ]] || fail 'missing source changed the legacy LaunchAgent'
+
+rm -f -- "$fixture_home/.local/bin/mlxctl"
+mkdir -p -- "$source_dir"
+uv_before=$(<"$uv_log")
+if ! PATH="$fake_bin:$PATH" \
+  ZDOTDIR=$test_dir \
+  MLXCTL_TEST_BIN_DIR=$fixture_home/.local/bin \
+  MLXCTL_TEST_SOURCE_DIR=$source_dir \
+  MLXCTL_TEST_UV_LOG=$uv_log \
+    "$hook" > "$test_dir/missing-project.stdout" 2> "$test_dir/missing-project.stderr"; then
+  fail "missing-project hook failed: $(<"$test_dir/missing-project.stderr")"
+fi
+[[ $(<"$uv_log") == "$uv_before" ]] || fail 'missing project must not run uv'
+grep -q 'installable project not found' "$test_dir/missing-project.stderr" || \
+  fail 'missing-project result must be explicit'
+[[ ! -e "$fixture_home/.local/bin/mlxctl" ]] || \
+  fail 'missing-project scenario unexpectedly installed mlxctl'
+
+print -r -- '[project]' > "$source_dir/pyproject.toml"
+missing_uv_status=0
+PATH='/usr/bin:/bin' \
+  ZDOTDIR=$test_dir \
+  MLXCTL_TEST_BIN_DIR=$fixture_home/.local/bin \
+  MLXCTL_TEST_SOURCE_DIR=$source_dir \
+  MLXCTL_TEST_UV_LOG=$uv_log \
+    /bin/zsh "$hook" > "$test_dir/missing-uv.stdout" 2> "$test_dir/missing-uv.stderr" || \
+  missing_uv_status=$?
+[[ $missing_uv_status == 1 ]] || \
+  fail "missing-uv hook exited $missing_uv_status instead of 1"
+grep -q 'uv is required' "$test_dir/missing-uv.stderr" || \
+  fail 'missing-uv result must be explicit'
+[[ $(<"$uv_log") == "$uv_before" ]] || fail 'missing uv must not run an installer'
+[[ ! -e "$fixture_home/.local/bin/mlxctl" ]] || \
+  fail 'missing-uv scenario unexpectedly installed mlxctl'
+
+missing_binary_status=0
+PATH="$fake_bin:$PATH" \
+  ZDOTDIR=$test_dir \
+  MLXCTL_TEST_BIN_DIR=$fixture_home/.local/bin \
+  MLXCTL_TEST_SOURCE_DIR=$source_dir \
+  MLXCTL_TEST_UV_LOG=$uv_log \
+  MLXCTL_TEST_UV_SKIP_BINARY=1 \
+    "$hook" > "$test_dir/missing-binary.stdout" 2> "$test_dir/missing-binary.stderr" || \
+  missing_binary_status=$?
+[[ $missing_binary_status == 1 ]] || \
+  fail "missing-binary hook exited $missing_binary_status instead of 1"
+grep -q 'installation did not create' "$test_dir/missing-binary.stderr" || \
+  fail 'missing-binary result must be explicit'
+[[ ! -e "$fixture_home/.local/bin/mlxctl" ]] || \
+  fail 'missing-binary scenario unexpectedly installed mlxctl'
+
+[[ $(<"$legacy_plist") == 'legacy plist' ]] || fail 'failure cases changed the legacy LaunchAgent'
+[[ $(<"$legacy_config") == 'legacy config' ]] || fail 'failure cases changed legacy config'
+[[ $(<"$legacy_state") == 'legacy state' ]] || fail 'failure cases changed legacy state'
+[[ $(<"$legacy_log") == 'legacy log' ]] || fail 'failure cases changed legacy logs'
+[[ $(<"$legacy_model") == 'legacy model' ]] || fail 'failure cases changed legacy model data'
 
 data=$(chezmoi execute-template '{{ .mlxctl.sourceDir }}|{{ .mlxctl.binDir }}')
 [[ $data == 'src/nisavid/systools/tools/mlxctl|.local/bin' ]] || \
