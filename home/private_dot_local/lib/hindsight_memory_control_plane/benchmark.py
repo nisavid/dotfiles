@@ -94,7 +94,7 @@ def _require_nonempty_string(value: Any, label: str) -> str:
 
 def _validate_string_list(value: Any, label: str) -> list[str]:
     if not isinstance(value, (list, tuple)) or any(
-        not isinstance(item, str) or not item for item in value
+        not isinstance(item, str) or not item.strip() for item in value
     ):
         raise BenchmarkError(f"{label} must be a list of non-empty strings")
     if len(set(value)) != len(value):
