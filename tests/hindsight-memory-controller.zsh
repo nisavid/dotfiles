@@ -22,7 +22,7 @@ rendered_plist="$tmp_dir/com.hindsight.embed.stack.plist"
 (
   cd "$repo_dir"
   chezmoi --source "$repo_dir/home" execute-template < home/private_dot_local/lib/hindsight-embed-stack.zsh.tmpl > "$rendered_stack_lib"
-  chezmoi --source "$repo_dir/home" execute-template < home/Library/LaunchAgents/com.hindsight.embed.stack.plist.tmpl > "$rendered_plist"
+  chezmoi --source "$repo_dir/home" execute-template < home/private_Library/private_LaunchAgents/com.hindsight.embed.stack.plist.tmpl > "$rendered_plist"
 )
 
 help_output="$(zsh "$repo_dir/home/private_dot_local/bin/executable_hindsight-embed-service" --help)"
