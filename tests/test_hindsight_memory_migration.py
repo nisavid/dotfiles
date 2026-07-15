@@ -95,7 +95,6 @@ def migration_inventory():
 def package_manifest():
     value = {
         "schema_version": 1,
-        "approved_manifest_digest": SHA_E,
         "artifact_digest": SHA_E,
         "projection_digest": SHA_D,
         "tag_mapping_digest": SHA_C,
@@ -116,6 +115,16 @@ def package_manifest():
             },
         ],
     }
+    return bind_package_manifest(value)
+
+
+def bind_package_manifest(value):
+    body = copy.deepcopy(value)
+    body.pop("approved_manifest_digest", None)
+    body["invalidation_dispositions"].sort(
+        key=lambda item: json.dumps(item, sort_keys=True)
+    )
+    value["approved_manifest_digest"] = digest(body)
     return value
 
 
@@ -272,6 +281,7 @@ class MigrationDiscoveryContractTest(unittest.TestCase):
         empty["schedules"] = []
         manifest = package_manifest()
         manifest["invalidation_dispositions"] = []
+        bind_package_manifest(manifest)
         with tempfile.TemporaryDirectory() as directory:
             _, result = self.discover(Path(directory), inventories=[empty, empty], package=manifest)
             self.assertTrue(result.complete)
@@ -393,6 +403,44 @@ class MigrationDiscoveryContractTest(unittest.TestCase):
             _, result = self.discover(Path(directory), inventories=[before, after])
             self.assertFalse(result.complete)
             self.assertIn("drift:bank_stats", result.blockers)
+
+    def test_offline_package_digest_binds_every_manifest_body_field(self):
+        approved = package_manifest()
+        with tempfile.TemporaryDirectory() as directory:
+            _, result = self.discover(Path(directory), package=approved)
+            self.assertTrue(result.complete)
+            self.assertEqual(
+                result.plan.to_dict()["bindings"]["offline_package_manifest_digest"],
+                approved["approved_manifest_digest"],
+            )
+
+        mutations = {
+            "schema_version": lambda value: value.update({"schema_version": 2}),
+            "artifact_digest": lambda value: value.update({"artifact_digest": SHA_A}),
+            "projection_digest": lambda value: value.update({"projection_digest": SHA_A}),
+            "tag_mapping_digest": lambda value: value.update({"tag_mapping_digest": SHA_A}),
+            "candidate_provenance_digest": lambda value: value.update(
+                {"candidate_provenance_digest": SHA_B}
+            ),
+            "candidate_curation_digest": lambda value: value.update(
+                {"candidate_curation_digest": SHA_A}
+            ),
+            "invalidation_dispositions": lambda value: value[
+                "invalidation_dispositions"
+            ][0].update({"reason": "changed-after-approval"}),
+        }
+        for field, mutate in mutations.items():
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as directory:
+                changed = copy.deepcopy(approved)
+                mutate(changed)
+                _, result = self.discover(
+                    Path(directory),
+                    package=changed,
+                    approved_digest=approved["approved_manifest_digest"],
+                )
+                self.assertFalse(result.complete)
+                self.assertIn("offline_package:digest_mismatch", result.blockers)
+                self.assertIsNone(result.run_dir)
 
     def test_equivalent_reordering_produces_the_same_semantic_digests(self):
         first = migration_inventory()

@@ -152,6 +152,15 @@ def _normalized(value: Any) -> Any:
     return value
 
 
+def _offline_package_digest(manifest: Mapping[str, Any]) -> str:
+    body = {
+        key: value
+        for key, value in _normalized(manifest).items()
+        if key != "approved_manifest_digest"
+    }
+    return digest(body)
+
+
 def _read_gate(path: str, label: str) -> dict[str, Any]:
     try:
         evidence = read_file_evidence(path, label, allow_missing=True)
@@ -385,10 +394,15 @@ def _package_blockers(manifest: Any, approved_digest: Any) -> list[str]:
             _sha(manifest[key], f"offline package {key}")
         except MigrationError:
             blockers.append(f"offline_package:invalid_{key}")
+    actual_digest = _offline_package_digest(manifest)
     if (
         not isinstance(approved_digest, str)
         or DIGEST.fullmatch(approved_digest) is None
-        or not hmac.compare_digest(manifest["approved_manifest_digest"], approved_digest)
+        or not isinstance(manifest["approved_manifest_digest"], str)
+        or not hmac.compare_digest(actual_digest, approved_digest)
+        or not hmac.compare_digest(
+            manifest["approved_manifest_digest"], actual_digest
+        )
     ):
         blockers.append("offline_package:digest_mismatch")
     if not isinstance(manifest["invalidation_dispositions"], list):
@@ -758,7 +772,7 @@ def discover_migration_state(
         "completion_gate_snapshot": before_gate,
     }
     inventory_digest = digest(inventory)
-    manifest_digest = offline_package_manifest["approved_manifest_digest"]
+    manifest_digest = _offline_package_digest(offline_package_manifest)
     plan = _shadow_plan(
         normalized_snapshot,
         source_bank,
