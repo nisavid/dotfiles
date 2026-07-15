@@ -1,8 +1,10 @@
 """Compatibility-gated subprocess seam for the narrow hindsight-admin surface."""
 
-from pathlib import Path
+from contextlib import contextmanager
+import hashlib
 import hmac
 import os
+from pathlib import Path
 import re
 import subprocess
 from typing import Any, Callable, Mapping, Sequence
@@ -32,6 +34,7 @@ VERSION_PROBE = (
     "import importlib.metadata as metadata; "
     "print(metadata.version('hindsight-api'))"
 )
+ADMIN_SNAPSHOT_MAX_BYTES = 4096
 
 
 class MigrationAdapterError(RuntimeError):
@@ -137,16 +140,34 @@ class AdminMigrationAdapter:
     def _result_field(result: Any, field: str) -> Any:
         return result.get(field) if isinstance(result, Mapping) else getattr(result, field, None)
 
-    def _invoke(self, argv: Sequence[str], *, timeout: int) -> Any:
+    def _invoke(
+        self,
+        argv: Sequence[str],
+        *,
+        timeout: int,
+        execution_descriptor: int | None = None,
+    ) -> Any:
+        invocation = list(argv)
+        execution_options: dict[str, Any] = {}
+        if execution_descriptor is not None:
+            invocation = [
+                self._interpreter,
+                f"/dev/fd/{execution_descriptor}",
+                *argv[1:],
+            ]
+            execution_options = {
+                "pass_fds": (execution_descriptor,),
+            }
         try:
             return self.runner(
-                list(argv),
+                invocation,
                 cwd=self.WORKING_DIRECTORY,
                 env=dict(self._environment),
                 text=True,
                 capture_output=True,
                 timeout=timeout,
                 check=False,
+                **execution_options,
             )
         except subprocess.TimeoutExpired:
             raise MigrationAdapterError("hindsight-admin operation timed out") from None
@@ -161,6 +182,95 @@ class AdminMigrationAdapter:
             or interpreter != self._interpreter
         ):
             raise MigrationAdapterError("hindsight-admin executable identity changed")
+
+    @contextmanager
+    def _execution_binding(self):
+        """Execute an immutable anonymous byte stream of the validated executable."""
+        source_descriptor: int | None = None
+        snapshot_descriptor: int | None = None
+        snapshot_writer: int | None = None
+        try:
+            reject_symlink_components(
+                Path(self.admin_executable),
+                "hindsight-admin executable",
+                allow_missing=False,
+            )
+            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            source_descriptor = os.open(self.admin_executable, flags)
+            metadata = os.fstat(source_descriptor)
+            validate_trusted_regular_file(metadata, "hindsight-admin executable")
+            if not metadata.st_mode & 0o111:
+                raise FileEvidenceError(
+                    "hindsight-admin executable must be executable"
+                )
+            if file_identity(metadata) != self._executable_identity:
+                raise MigrationAdapterError(
+                    "hindsight-admin executable identity changed"
+                )
+            current = Path(self.admin_executable).lstat()
+            if (current.st_dev, current.st_ino) != (
+                metadata.st_dev,
+                metadata.st_ino,
+            ):
+                raise MigrationAdapterError(
+                    "hindsight-admin executable identity changed"
+                )
+            source_identity = file_identity(metadata)
+            source_digest = self._descriptor_digest(source_descriptor)
+            snapshot = self._descriptor_bytes(source_descriptor)
+            snapshot_digest = hashlib.sha256(snapshot).digest()
+            if (
+                len(snapshot) > ADMIN_SNAPSHOT_MAX_BYTES
+                or file_identity(os.fstat(source_descriptor)) != source_identity
+                or self._descriptor_digest(source_descriptor) != source_digest
+                or not hmac.compare_digest(snapshot_digest, source_digest)
+            ):
+                raise MigrationAdapterError(
+                    "hindsight-admin executable snapshot changed"
+                )
+            snapshot_descriptor, snapshot_writer = os.pipe()
+            written = 0
+            while written < len(snapshot):
+                count = os.write(snapshot_writer, snapshot[written:])
+                if count <= 0:
+                    raise OSError("hindsight-admin snapshot write failed")
+                written += count
+            os.close(snapshot_writer)
+            snapshot_writer = None
+            yield snapshot_descriptor
+        except MigrationAdapterError:
+            raise
+        except (FileEvidenceError, OSError):
+            raise MigrationAdapterError(
+                "hindsight-admin executable identity changed"
+            ) from None
+        finally:
+            if snapshot_writer is not None:
+                os.close(snapshot_writer)
+            if snapshot_descriptor is not None:
+                os.close(snapshot_descriptor)
+            if source_descriptor is not None:
+                os.close(source_descriptor)
+
+    @staticmethod
+    def _descriptor_digest(descriptor: int) -> bytes:
+        payload = hashlib.sha256()
+        offset = 0
+        while chunk := os.pread(descriptor, 65536, offset):
+            payload.update(chunk)
+            offset += len(chunk)
+        return payload.digest()
+
+    @staticmethod
+    def _descriptor_bytes(descriptor: int) -> bytes:
+        payload = bytearray()
+        offset = 0
+        while chunk := os.pread(descriptor, 65536, offset):
+            payload.extend(chunk)
+            offset += len(chunk)
+            if len(payload) > ADMIN_SNAPSHOT_MAX_BYTES:
+                break
+        return bytes(payload)
 
     @staticmethod
     def _restore_evidence(
@@ -205,7 +315,6 @@ class AdminMigrationAdapter:
             self._restore_evidence(
                 evidence, archive_digest, str(expected_evidence_digest)
             )
-        self._require_executable_identity()
         argv = self.argv_factory(self.admin_executable, operation, archive, bank_id)
         if isinstance(argv, (str, bytes)) or not isinstance(argv, Sequence) or not all(isinstance(arg, str) for arg in argv):
             raise MigrationAdapterError("argv factory must return an argument vector, not a shell string")
@@ -217,8 +326,10 @@ class AdminMigrationAdapter:
             "archive_digest": archive_digest,
             **({"bank_id": bank_id} if bank_id is not None else {}),
         })
-        result = self._invoke(list(argv), timeout=300)
-        self._require_executable_identity()
+        with self._execution_binding() as descriptor:
+            result = self._invoke(
+                list(argv), timeout=300, execution_descriptor=descriptor
+            )
         returncode = self._result_field(result, "returncode")
         if returncode != 0:
             raise MigrationAdapterError("hindsight-admin operation failed")

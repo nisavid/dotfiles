@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+import ctypes
 from dataclasses import dataclass
 from datetime import datetime
+import errno
 import hmac
 import json
 import os
 from pathlib import Path
 import re
+import secrets
 import stat
+import sys
 from typing import Any, Callable, Mapping, Sequence
 
 from .adapters import AdapterError
@@ -677,62 +682,348 @@ def verify_shadow_plan(value: Any) -> None:
         raise MigrationError("shadow plan digest does not match its body")
 
 
-def _private_directory(path: Path) -> None:
+def _validate_private_directory(metadata: os.stat_result) -> None:
+    if not stat.S_ISDIR(metadata.st_mode):
+        raise MigrationError("migration artifact path must be a directory")
+    if metadata.st_uid != os.geteuid():
+        raise MigrationError(
+            "migration artifact directory must be owned by the current user"
+        )
+    if stat.S_IMODE(metadata.st_mode) != 0o700:
+        raise MigrationError("migration artifact directory must have mode 0700")
+
+
+def _reject_git_worktree_descriptor(descriptor: int) -> None:
+    try:
+        os.stat(".git", dir_fd=descriptor, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    except OSError:
+        raise MigrationError(
+            "migration artifact Git-worktree boundary is unavailable"
+        ) from None
+    raise MigrationError(
+        "migration artifact directory must be outside a Git worktree"
+    )
+
+
+DIRECTORY_FLAGS = (
+    os.O_RDONLY
+    | getattr(os, "O_DIRECTORY", 0)
+    | getattr(os, "O_NOFOLLOW", 0)
+    | getattr(os, "O_CLOEXEC", 0)
+)
+
+
+def _verify_directory_entry(
+    parent_descriptor: int,
+    name: str,
+    descriptor: int,
+    label: str,
+) -> None:
+    try:
+        entry = os.stat(
+            name, dir_fd=parent_descriptor, follow_symlinks=False
+        )
+        opened = os.fstat(descriptor)
+    except OSError:
+        raise MigrationError(f"{label} identity changed") from None
+    if (
+        not stat.S_ISDIR(entry.st_mode)
+        or (entry.st_dev, entry.st_ino) != (opened.st_dev, opened.st_ino)
+    ):
+        raise MigrationError(f"{label} identity changed")
+
+
+@contextmanager
+def _directory_chain(path: Path):
+    """Open every absolute-path component without following symlinks."""
+    if not path.is_absolute():
+        raise MigrationError("migration artifact directory must be absolute")
+    descriptors: list[int] = []
+    links: list[tuple[int, str, int]] = []
+    try:
+        descriptors.append(os.open(path.anchor, DIRECTORY_FLAGS))
+        _reject_git_worktree_descriptor(descriptors[-1])
+        for component in path.parts[1:]:
+            parent_descriptor = descriptors[-1]
+            descriptor = os.open(
+                component, DIRECTORY_FLAGS, dir_fd=parent_descriptor
+            )
+            descriptors.append(descriptor)
+            _verify_directory_entry(
+                parent_descriptor,
+                component,
+                descriptor,
+                "migration artifact directory ancestor",
+            )
+            _reject_git_worktree_descriptor(descriptor)
+            links.append((parent_descriptor, component, descriptor))
+    except OSError:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+        raise MigrationError("migration artifact directory is unavailable") from None
+    except MigrationError:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+        raise
+    try:
+        yield descriptors[-1]
+        for descriptor in descriptors:
+            _reject_git_worktree_descriptor(descriptor)
+        for parent_descriptor, component, descriptor in links:
+            _verify_directory_entry(
+                parent_descriptor,
+                component,
+                descriptor,
+                "migration artifact directory ancestor",
+            )
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
+@contextmanager
+def _private_directory(path: Path):
     if not path.is_absolute():
         raise MigrationError("migration artifact directory must be absolute")
     _reject_symlink_components(path, "migration artifact directory")
-    if path.exists():
-        if not path.is_dir():
-            raise MigrationError("migration artifact path must be a directory")
-        if stat.S_IMODE(path.stat().st_mode) != 0o700:
-            raise MigrationError("migration artifact directory must have mode 0700")
-        return
-    if not path.parent.is_dir():
-        raise MigrationError("migration artifact directory parent must already exist")
-    path.mkdir(mode=0o700)
-    os.chmod(path, 0o700)
-
-
-def _write_exclusive(path: Path, value: Any) -> None:
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-    descriptor = os.open(path, flags, 0o600)
     try:
-        os.fchmod(descriptor, 0o600)
+        canonical = Path(os.path.abspath(os.fspath(path)))
+        if len(canonical.parts) > 1:
+            top_level = Path(canonical.anchor) / canonical.parts[1]
+            if top_level.is_symlink():
+                canonical = top_level.resolve(strict=True).joinpath(
+                    *canonical.parts[2:]
+                )
+    except (OSError, RuntimeError):
+        raise MigrationError("migration artifact directory is unavailable") from None
+    with _directory_chain(canonical.parent) as parent_descriptor:
+        directory_name = canonical.name
+        created = False
+        try:
+            descriptor = os.open(
+                directory_name, DIRECTORY_FLAGS, dir_fd=parent_descriptor
+            )
+        except FileNotFoundError:
+            try:
+                os.mkdir(directory_name, 0o700, dir_fd=parent_descriptor)
+                created = True
+                os.fsync(parent_descriptor)
+                descriptor = os.open(
+                    directory_name, DIRECTORY_FLAGS, dir_fd=parent_descriptor
+                )
+            except OSError:
+                if created:
+                    try:
+                        os.rmdir(directory_name, dir_fd=parent_descriptor)
+                        os.fsync(parent_descriptor)
+                    except OSError:
+                        pass
+                raise MigrationError(
+                    "migration artifact directory is unavailable"
+                ) from None
+        except OSError:
+            raise MigrationError(
+                "migration artifact directory is unavailable"
+            ) from None
+        try:
+            _verify_directory_entry(
+                parent_descriptor,
+                directory_name,
+                descriptor,
+                "migration artifact directory",
+            )
+            _reject_git_worktree_descriptor(descriptor)
+            _validate_private_directory(os.fstat(descriptor))
+            yield canonical, descriptor
+            _verify_directory_entry(
+                parent_descriptor,
+                directory_name,
+                descriptor,
+                "migration artifact directory",
+            )
+            _reject_git_worktree_descriptor(descriptor)
+            _validate_private_directory(os.fstat(descriptor))
+        finally:
+            os.close(descriptor)
+
+
+def _write_exclusive(
+    directory_descriptor: int, name: str, value: Any
+) -> tuple[int, int]:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(
+        name, flags, 0o600, dir_fd=directory_descriptor
+    )
+    identity = os.fstat(descriptor)
+    published = False
+
+    def entry_is_owned() -> bool:
+        try:
+            entry = os.stat(
+                name, dir_fd=directory_descriptor, follow_symlinks=False
+            )
+        except FileNotFoundError:
+            return False
+        return (
+            stat.S_ISREG(entry.st_mode)
+            and (entry.st_dev, entry.st_ino) == (identity.st_dev, identity.st_ino)
+        )
+
+    try:
         data = canonical_bytes(value) + b"\n"
         written = 0
         while written < len(data):
-            written += os.write(descriptor, data[written:])
+            count = os.write(descriptor, data[written:])
+            if count <= 0:
+                raise OSError("migration artifact write made no progress")
+            written += count
+        os.fchmod(descriptor, 0o600)
         os.fsync(descriptor)
-    except Exception:
-        os.close(descriptor)
-        path.unlink(missing_ok=True)
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+            or (metadata.st_dev, metadata.st_ino)
+            != (identity.st_dev, identity.st_ino)
+        ):
+            raise MigrationError("migration artifact file is not private")
+        if not entry_is_owned():
+            raise MigrationError("migration artifact file identity changed")
+        os.fsync(directory_descriptor)
+        if not entry_is_owned():
+            raise MigrationError("migration artifact file identity changed")
+        published = True
+    except BaseException:
+        if entry_is_owned():
+            try:
+                os.unlink(name, dir_fd=directory_descriptor)
+                os.fsync(directory_descriptor)
+            except FileNotFoundError:
+                pass
         raise
-    else:
+    finally:
         os.close(descriptor)
+    if not published:
+        raise MigrationError("migration artifact file was not published")
+    return identity.st_dev, identity.st_ino
+
+
+def _rename_directory_no_replace(
+    directory_descriptor: int, source: str, destination: str
+) -> None:
+    library = ctypes.CDLL(None, use_errno=True)
+    source_bytes = os.fsencode(source)
+    destination_bytes = os.fsencode(destination)
+    if sys.platform == "darwin" and hasattr(library, "renameatx_np"):
+        result = library.renameatx_np(
+            directory_descriptor,
+            source_bytes,
+            directory_descriptor,
+            destination_bytes,
+            0x00000004,  # RENAME_EXCL
+        )
+    elif hasattr(library, "renameat2"):
+        result = library.renameat2(
+            directory_descriptor,
+            source_bytes,
+            directory_descriptor,
+            destination_bytes,
+            0x00000001,  # RENAME_NOREPLACE
+        )
+    else:
+        raise MigrationError("atomic no-replace publication is unavailable")
+    if result != 0:
+        error_number = ctypes.get_errno()
+        if error_number == errno.EEXIST:
+            raise MigrationError("migration discovery run already exists")
+        raise MigrationError("migration discovery run publication failed")
 
 
 def _write_artifacts(root: Path, timestamp: str, inventory: Mapping[str, Any], plan: ShadowPlan) -> Path:
-    _private_directory(root)
-    run_dir = root / f"controller-discovery-{timestamp}"
-    try:
-        os.mkdir(run_dir, 0o700)
-    except FileExistsError as error:
-        raise MigrationError("migration discovery run already exists") from error
-    os.chmod(run_dir, 0o700)
-    written: list[Path] = []
-    try:
-        for name, value in (("inventory.json", inventory), ("shadow-plan.json", plan.to_dict())):
-            target = run_dir / name
-            written.append(target)
-            _write_exclusive(target, value)
-    except Exception:
-        for target in reversed(written):
-            target.unlink(missing_ok=True)
-        run_dir.rmdir()
-        raise
-    return run_dir
+    run_name = f"controller-discovery-{timestamp}"
+    staging_name = f".{run_name}.{secrets.token_hex(8)}.tmp"
+    with _private_directory(root) as (canonical_root, root_descriptor):
+        try:
+            os.mkdir(staging_name, 0o700, dir_fd=root_descriptor)
+            os.fsync(root_descriptor)
+        except OSError as error:
+            raise MigrationError(
+                "migration discovery staging directory is unavailable"
+            ) from error
+        try:
+            run_descriptor = os.open(
+                staging_name, DIRECTORY_FLAGS, dir_fd=root_descriptor
+            )
+        except BaseException:
+            os.rmdir(staging_name, dir_fd=root_descriptor)
+            os.fsync(root_descriptor)
+            raise
+        written: list[tuple[str, tuple[int, int]]] = []
+        published = False
+        try:
+            _verify_directory_entry(
+                root_descriptor,
+                staging_name,
+                run_descriptor,
+                "migration discovery staging directory",
+            )
+            _validate_private_directory(os.fstat(run_descriptor))
+            for name, value in (
+                ("inventory.json", inventory),
+                ("shadow-plan.json", plan.to_dict()),
+            ):
+                identity = _write_exclusive(run_descriptor, name, value)
+                written.append((name, identity))
+            os.fsync(run_descriptor)
+            _rename_directory_no_replace(
+                root_descriptor, staging_name, run_name
+            )
+            published = True
+            os.fsync(root_descriptor)
+            _verify_directory_entry(
+                root_descriptor,
+                run_name,
+                run_descriptor,
+                "migration discovery run directory",
+            )
+            _validate_private_directory(os.fstat(run_descriptor))
+        except BaseException:
+            for name, identity in reversed(written):
+                try:
+                    entry = os.stat(
+                        name, dir_fd=run_descriptor, follow_symlinks=False
+                    )
+                    if (entry.st_dev, entry.st_ino) == identity:
+                        os.unlink(name, dir_fd=run_descriptor)
+                except (FileNotFoundError, OSError):
+                    pass
+            run_entry_is_current = True
+            current_name = run_name if published else staging_name
+            try:
+                _verify_directory_entry(
+                    root_descriptor,
+                    current_name,
+                    run_descriptor,
+                    "migration discovery run directory",
+                )
+            except MigrationError:
+                run_entry_is_current = False
+            os.close(run_descriptor)
+            if run_entry_is_current:
+                try:
+                    os.rmdir(current_name, dir_fd=root_descriptor)
+                except OSError:
+                    pass
+                else:
+                    os.fsync(root_descriptor)
+            raise
+        else:
+            os.close(run_descriptor)
+        return canonical_root / run_name
 
 
 def discover_migration_state(

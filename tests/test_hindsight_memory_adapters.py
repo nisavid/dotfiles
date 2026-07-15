@@ -4,6 +4,7 @@ from io import BytesIO
 from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import os
+import re
 import ssl
 import stat
 import subprocess
@@ -915,8 +916,9 @@ class AdminMigrationAdapterContractTest(unittest.TestCase):
         self.assertEqual(adapter.admin_version, "0.8.4")
         self.assertEqual(len(calls), 2)
         operation_argv, operation_kwargs = calls[1]
-        self.assertEqual(operation_argv[0], str(executable))
-        self.assertEqual(operation_argv[1:], ["backup", "/tmp/bank.zip", "--schema", "public"])
+        self.assertEqual(operation_argv[0], sys.executable)
+        self.assertRegex(operation_argv[1], r"^/dev/fd/[0-9]+$")
+        self.assertEqual(operation_argv[2:], ["backup", "/tmp/bank.zip", "--schema", "public"])
         for _argv, kwargs in calls:
             self.assertEqual(kwargs["cwd"], "/")
             self.assertEqual(
@@ -943,6 +945,124 @@ class AdminMigrationAdapterContractTest(unittest.TestCase):
         with self.assertRaisesRegex(MigrationAdapterError, "identity changed"):
             adapter.backup("/tmp/bank.zip", "a" * 64)
         self.assertEqual(len(calls), 1)
+
+    def test_executes_through_the_validated_descriptor_binding(self):
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        executable = self.trusted_admin(root)
+        original = executable.read_bytes()
+        observed = {}
+
+        def runner(argv, **kwargs):
+            if "importlib.metadata" in argv[-1]:
+                return subprocess.CompletedProcess(argv, 0, "0.8.4\n", "")
+            replacement = root / "replacement"
+            replacement.write_text(
+                f"#!{sys.executable}\nraise SystemExit('replacement')\n",
+                encoding="utf-8",
+            )
+            replacement.chmod(0o700)
+            os.replace(replacement, executable)
+            observed["argv"] = list(argv)
+            observed["binding"] = argv[1]
+            observed["pass_fds"] = kwargs["pass_fds"]
+            observed["payload"] = Path(argv[1]).read_bytes()
+            return subprocess.CompletedProcess(argv, 0, "Complete", "")
+
+        adapter = AdminMigrationAdapter(
+            admin_executable=str(executable),
+            argv_factory=hindsight_admin_argv,
+            runner=runner,
+        )
+        adapter.backup("/tmp/bank.zip", "a" * 64)
+
+        self.assertEqual(observed["argv"][0], sys.executable)
+        self.assertEqual(observed["argv"][2], "backup")
+        self.assertEqual(observed["payload"], original)
+        self.assertEqual(
+            observed["binding"], f"/dev/fd/{observed['pass_fds'][0]}"
+        )
+        with self.assertRaisesRegex(MigrationAdapterError, "identity changed"):
+            adapter.backup("/tmp/bank.zip", "a" * 64)
+
+    def test_descriptor_binding_executes_with_the_real_subprocess_runner(self):
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        executable = root / "hindsight-admin"
+        executable.write_text(
+            f"#!{sys.executable}\nraise SystemExit(0)\n",
+            encoding="utf-8",
+        )
+        executable.chmod(0o700)
+
+        def runner(argv, **kwargs):
+            if "importlib.metadata" in argv[-1]:
+                return subprocess.CompletedProcess(argv, 0, "0.8.4\n", "")
+            return subprocess.run(argv, **kwargs)
+
+        adapter = AdminMigrationAdapter(
+            admin_executable=str(executable),
+            argv_factory=hindsight_admin_argv,
+            runner=runner,
+        )
+
+        self.assertEqual(
+            adapter.backup("/tmp/bank.zip", "a" * 64),
+            {"completed": True},
+        )
+
+    def test_execution_snapshot_descriptor_is_not_writable(self):
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        executable = self.trusted_admin(root)
+
+        def runner(argv, **kwargs):
+            if "importlib.metadata" in argv[-1]:
+                return subprocess.CompletedProcess(argv, 0, "0.8.4\n", "")
+            descriptor = kwargs["pass_fds"][0]
+            with self.assertRaises(OSError):
+                os.write(descriptor, b"replacement")
+            self.assertEqual(Path(argv[1]).read_bytes(), executable.read_bytes())
+            return subprocess.CompletedProcess(argv, 0, "Complete", "")
+
+        adapter = AdminMigrationAdapter(
+            admin_executable=str(executable),
+            argv_factory=hindsight_admin_argv,
+            runner=runner,
+        )
+        self.assertEqual(
+            adapter.backup("/tmp/bank.zip", "a" * 64),
+            {"completed": True},
+        )
+
+    def test_transient_source_mutation_cannot_enter_the_execution_snapshot(self):
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        executable = self.trusted_admin(root)
+
+        def runner(argv, **_kwargs):
+            if "importlib.metadata" in argv[-1]:
+                return subprocess.CompletedProcess(argv, 0, "0.8.4\n", "")
+            raise AssertionError("a mismatched snapshot must not execute")
+
+        adapter = AdminMigrationAdapter(
+            admin_executable=str(executable),
+            argv_factory=hindsight_admin_argv,
+            runner=runner,
+        )
+        original_pread = os.pread
+        reads_from_zero = 0
+
+        def transient_pread(descriptor, size, offset):
+            nonlocal reads_from_zero
+            payload = original_pread(descriptor, size, offset)
+            if offset == 0:
+                reads_from_zero += 1
+                if reads_from_zero == 2 and payload:
+                    return bytes([payload[0] ^ 1]) + payload[1:]
+            return payload
+
+        with patch.object(os, "pread", side_effect=transient_pread):
+            with self.assertRaisesRegex(
+                MigrationAdapterError, "snapshot changed"
+            ):
+                adapter.backup("/tmp/bank.zip", "a" * 64)
 
     def test_reports_admin_operation_timeout_without_process_output(self):
         def timeout(_argv):
@@ -996,7 +1116,7 @@ class AdminMigrationAdapterContractTest(unittest.TestCase):
         observed = {}
 
         def run_admin(argv):
-            snapshot = Path(argv[3])
+            snapshot = Path(argv[4])
             observed.update({
                 "path": snapshot,
                 "payload": snapshot.read_bytes(),
@@ -1082,10 +1202,10 @@ class AdminMigrationAdapterContractTest(unittest.TestCase):
         }
         operations = []
         def run_admin(argv):
-            operations.append(argv[1])
-            if argv[1] == "backup":
-                Path(argv[2]).write_bytes(rollback_payload)
-                Path(argv[2]).chmod(0o600)
+            operations.append(argv[2])
+            if argv[2] == "backup":
+                Path(argv[3]).write_bytes(rollback_payload)
+                Path(argv[3]).chmod(0o600)
             return {"returncode": 0, "stdout": "Complete"}
 
         admin, _ = self.make_admin(run_admin)
@@ -1150,12 +1270,14 @@ class AdminMigrationAdapterContractTest(unittest.TestCase):
     def test_accepts_only_digest_bound_argv_and_requires_restore_evidence(self):
         calls = []
         archive_digest = "a" * 64
-        adapter, executable = self.make_admin(
+        adapter, _ = self.make_admin(
             lambda argv: calls.append(argv) or {"returncode": 0, "stdout": "Complete"},
         )
 
         adapter.backup("/tmp/bank.zip", archive_digest)
-        self.assertEqual(calls[0][:2], [executable, "backup"])
+        self.assertEqual(calls[0][0], sys.executable)
+        self.assertRegex(calls[0][1], r"^/dev/fd/[0-9]+$")
+        self.assertEqual(calls[0][2], "backup")
         with self.assertRaisesRegex(MigrationAdapterError, "disposable restore evidence"):
             adapter.restore(
                 "/tmp/bank.zip",
@@ -1169,7 +1291,7 @@ class AdminMigrationAdapterContractTest(unittest.TestCase):
         checks = iter((True, False))
         calls = []
         admin, _ = self.make_admin(
-            lambda argv: calls.append(argv[1])
+            lambda argv: calls.append(argv[2])
             or {"returncode": 0, "stdout": "Complete"},
         )
         adapter = MigrationApplyAdapter(
@@ -1222,7 +1344,7 @@ class AdminMigrationAdapterContractTest(unittest.TestCase):
         calls = []
         artifact = "b" * 64
         evidence = restore_evidence(artifact)
-        adapter, executable = self.make_admin(
+        adapter, _ = self.make_admin(
             lambda argv: calls.append(argv) or {"returncode": 0, "stdout": "Complete"},
         )
         adapter.export_bank("/tmp/bank.zip", artifact, "historical-candidate")
@@ -1233,12 +1355,16 @@ class AdminMigrationAdapterContractTest(unittest.TestCase):
         adapter.restore(
             "/tmp/postgres-bank.zip", artifact, digest(evidence), evidence,
         )
-        self.assertEqual([argv[1] for argv in calls], ["export-bank", "backup", "import-bank", "restore"])
-        self.assertEqual(calls, [
-            [executable, "export-bank", "--bank", "historical-candidate", "--output", "/tmp/bank.zip"],
-            [executable, "backup", "/tmp/postgres-bank.zip", "--schema", "public"],
-            [executable, "import-bank", "--archive", "/tmp/bank.zip", "--target-bank", "engineering"],
-            [executable, "restore", "/tmp/postgres-bank.zip", "--schema", "public", "--yes"],
+        self.assertEqual([argv[2] for argv in calls], ["export-bank", "backup", "import-bank", "restore"])
+        self.assertTrue(all(argv[0] == sys.executable for argv in calls))
+        self.assertTrue(
+            all(re.fullmatch(r"/dev/fd/[0-9]+", argv[1]) for argv in calls)
+        )
+        self.assertEqual([argv[2:] for argv in calls], [
+            ["export-bank", "--bank", "historical-candidate", "--output", "/tmp/bank.zip"],
+            ["backup", "/tmp/postgres-bank.zip", "--schema", "public"],
+            ["import-bank", "--archive", "/tmp/bank.zip", "--target-bank", "engineering"],
+            ["restore", "/tmp/postgres-bank.zip", "--schema", "public", "--yes"],
         ])
         changed = {**evidence, "verification_receipt_digest": "8" * 64}
         with self.assertRaisesRegex(MigrationAdapterError, "evidence digest"):

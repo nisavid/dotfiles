@@ -36,13 +36,17 @@ typeset -r CLI_VERSION=$(
 typeset -r SMOKE_PARENT=${TMPDIR:-/private/tmp}
 typeset -r SMOKE_ROOT=$(mktemp -d "${SMOKE_PARENT%/}/hindsight-memory-smoke.XXXXXX")
 typeset -r SMOKE_HOME="$SMOKE_ROOT/home"
+typeset -r SMOKE_RUN_ID=$($OPENSSL rand -hex 16)
+typeset -r SMOKE_PROFILE_MARKER="$SMOKE_ROOT/disposable-profile.marker"
 typeset -r SOURCE_DATA="$SMOKE_ROOT/postgres-source"
 typeset -r IMPORT_DATA="$SMOKE_ROOT/postgres-import"
 typeset -r RESTORE_DATA="$SMOKE_ROOT/postgres-restore"
 typeset -r SOURCE_BANK=smoke-source
 typeset -r IMPORT_BANK=smoke-imported
 typeset -r API_KEY=$($OPENSSL rand -hex 32)
-typeset -r DB_PASSWORD=$($OPENSSL rand -hex 24)
+typeset -r SOURCE_DB_PASSWORD=$($OPENSSL rand -hex 24)
+typeset -r IMPORT_DB_PASSWORD=$($OPENSSL rand -hex 24)
+typeset -r RESTORE_DB_PASSWORD=$($OPENSSL rand -hex 24)
 typeset -r EXPORT_PASSPHRASE_FILE="$SMOKE_ROOT/export.passphrase"
 typeset -r CURL_AUTH_CONFIG="$SMOKE_ROOT/curl-auth.conf"
 typeset -a API_PIDS=()
@@ -51,6 +55,8 @@ typeset CURRENT_PHASE=bootstrap
 typeset CLEANED_UP=0
 
 mkdir -p "$SMOKE_HOME" "$SOURCE_DATA" "$IMPORT_DATA" "$RESTORE_DATA"
+/usr/bin/install -m 600 /dev/null "$SMOKE_PROFILE_MARKER"
+print -r -- "$SMOKE_RUN_ID" >"$SMOKE_PROFILE_MARKER"
 $OPENSSL rand -out "$EXPORT_PASSPHRASE_FILE" 48
 print -r -- "header = \"Authorization: Bearer $API_KEY\"" >"$CURL_AUTH_CONFIG"
 chmod 600 "$CURL_AUTH_CONFIG"
@@ -99,22 +105,168 @@ free_port() {
     'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'
 }
 
+require_disposable_profile() {
+  [[ -f "$SMOKE_PROFILE_MARKER" && ! -L "$SMOKE_PROFILE_MARKER" ]] || return 1
+  [[ $(stat -f '%Lp' "$SMOKE_PROFILE_MARKER") == 600 ]] || return 1
+  [[ $(stat -f '%u' "$SMOKE_PROFILE_MARKER") == $EUID ]] || return 1
+  [[ $(<"$SMOKE_PROFILE_MARKER") == "$SMOKE_RUN_ID" ]] || return 1
+  case "$SMOKE_ROOT" in
+    "${SMOKE_PARENT%/}"/hindsight-memory-smoke.*) ;;
+    *) return 1 ;;
+  esac
+  return 0
+}
+
+install_disposable_target_guard() {
+  local database_url=$1
+  local role=$2
+  require_disposable_profile || {
+    print -u2 -- "refusing to install a guard for an invalid disposable profile"
+    return 1
+  }
+  HINDSIGHT_SMOKE_DB_URL="$database_url" \
+    HINDSIGHT_SMOKE_RUN_ID="$SMOKE_RUN_ID" \
+    HINDSIGHT_SMOKE_TARGET_ROLE="$role" "$HINDSIGHT_PYTHON" -c '
+import asyncio
+import ipaddress
+import os
+import re
+
+import asyncpg
+
+async def main():
+    run_id = os.environ["HINDSIGHT_SMOKE_RUN_ID"]
+    role = os.environ["HINDSIGHT_SMOKE_TARGET_ROLE"]
+    if re.fullmatch(r"[0-9a-f]{32}", run_id) is None:
+        raise SystemExit("invalid disposable run marker")
+    if role not in {"source", "import", "restore"}:
+        raise SystemExit("invalid disposable target role")
+    connection = await asyncpg.connect(
+        os.environ["HINDSIGHT_SMOKE_DB_URL"], timeout=5
+    )
+    try:
+        address = await connection.fetchval("SELECT inet_server_addr()::text")
+        database = await connection.fetchval("SELECT current_database()")
+        database_user = await connection.fetchval("SELECT current_user")
+        system_identifier = await connection.fetchval(
+            "SELECT system_identifier::text FROM pg_control_system()"
+        )
+        expected_identity = f"hindsight_{role}_{run_id}"
+        if (
+            address is None
+            or database != expected_identity
+            or database_user != expected_identity
+            or not system_identifier
+            or not ipaddress.ip_interface(address).ip.is_loopback
+        ):
+            raise SystemExit("target is not a disposable database")
+        if await connection.fetchval(
+            "SELECT to_regclass($1)", "hindsight_smoke_guard.target_identity"
+        ) is not None:
+            raise SystemExit("disposable target guard already exists")
+        await connection.execute("CREATE SCHEMA hindsight_smoke_guard")
+        await connection.execute(
+            "CREATE TABLE hindsight_smoke_guard.target_identity "
+            "(run_id text PRIMARY KEY, target_role text NOT NULL, "
+            "system_identifier text NOT NULL, database_name text NOT NULL, "
+            "database_user text NOT NULL)"
+        )
+        await connection.execute(
+            "INSERT INTO hindsight_smoke_guard.target_identity "
+            "VALUES ($1, $2, $3, $4, $5)",
+            run_id,
+            role,
+            system_identifier,
+            database,
+            database_user,
+        )
+    finally:
+        await connection.close()
+
+asyncio.run(main())
+' || return 1
+  return 0
+}
+
+require_disposable_target() {
+  local database_url=$1
+  local role=$2
+  require_disposable_profile || {
+    print -u2 -- "refusing mutation for an invalid disposable profile"
+    return 1
+  }
+  HINDSIGHT_SMOKE_DB_URL="$database_url" \
+    HINDSIGHT_SMOKE_RUN_ID="$SMOKE_RUN_ID" \
+    HINDSIGHT_SMOKE_TARGET_ROLE="$role" "$HINDSIGHT_PYTHON" -c '
+import asyncio
+import ipaddress
+import os
+
+import asyncpg
+
+async def main():
+    connection = await asyncpg.connect(
+        os.environ["HINDSIGHT_SMOKE_DB_URL"], timeout=5
+    )
+    try:
+        row = await connection.fetchrow(
+            "SELECT run_id, target_role, system_identifier, database_name, "
+            "database_user "
+            "FROM hindsight_smoke_guard.target_identity"
+        )
+        address = await connection.fetchval("SELECT inet_server_addr()::text")
+        database = await connection.fetchval("SELECT current_database()")
+        database_user = await connection.fetchval("SELECT current_user")
+        system_identifier = await connection.fetchval(
+            "SELECT system_identifier::text FROM pg_control_system()"
+        )
+        expected_identity = "hindsight_{}_{}".format(
+            os.environ["HINDSIGHT_SMOKE_TARGET_ROLE"],
+            os.environ["HINDSIGHT_SMOKE_RUN_ID"],
+        )
+        if (
+            row is None
+            or address is None
+            or row["run_id"] != os.environ["HINDSIGHT_SMOKE_RUN_ID"]
+            or row["target_role"] != os.environ["HINDSIGHT_SMOKE_TARGET_ROLE"]
+            or row["system_identifier"] != system_identifier
+            or row["database_name"] != database
+            or row["database_user"] != database_user
+            or database != expected_identity
+            or database_user != expected_identity
+            or not ipaddress.ip_interface(address).ip.is_loopback
+        ):
+            raise SystemExit("target is not the selected disposable database")
+    finally:
+        await connection.close()
+
+asyncio.run(main())
+' || return 1
+  return 0
+}
+
 start_postgres() {
   local name=$1
   local port=$2
   local data_dir=$3
+  local role=$4
+  local password=$5
   PG_NAMES+=("$name")
   PG0_NAME="$name" PG0_PORT="$port" PG0_DATA_DIR="$data_dir" \
-    PG0_PASSWORD="$DB_PASSWORD" "$HINDSIGHT_PYTHON" -c '
+    PG0_ROLE="$role" PG0_RUN_ID="$SMOKE_RUN_ID" PG0_PASSWORD="$password" \
+    "$HINDSIGHT_PYTHON" -c '
 import os
 from pg0 import Pg0
 
+identity = "hindsight_{}_{}".format(
+    os.environ["PG0_ROLE"], os.environ["PG0_RUN_ID"]
+)
 pg = Pg0(
     name=os.environ["PG0_NAME"],
     port=int(os.environ["PG0_PORT"]),
-    username="hindsight_smoke",
+    username=identity,
     password=os.environ["PG0_PASSWORD"],
-    database="hindsight_smoke",
+    database=identity,
     data_dir=os.environ["PG0_DATA_DIR"],
     config={"listen_addresses": "127.0.0.1"},
 )
@@ -125,8 +277,13 @@ print(pg.start().uri)
 typeset STARTED_API_PID=
 start_api() {
   local database_url=$1
-  local port=$2
-  local log_file=$3
+  local role=$2
+  local port=$3
+  local log_file=$4
+  require_disposable_target "$database_url" "$role" || {
+    print -u2 -- "refusing to start an API for a non-disposable target"
+    return 1
+  }
   env \
     HOME="$SMOKE_HOME" \
     HF_HOME="$HOST_HF_HOME" \
@@ -179,9 +336,30 @@ hindsight_cli() {
     "$HINDSIGHT_CLI" "$@"
 }
 
+hindsight_cli_mutate() {
+  local database_url=$1
+  local role=$2
+  local api_url=$3
+  shift 3
+  require_disposable_target "$database_url" "$role" || {
+    print -u2 -- "refusing non-disposable Hindsight API mutation target"
+    return 1
+  }
+  [[ "$role" == source && "$api_url" == "$SOURCE_API_URL" ]] || {
+    print -u2 -- "refusing non-disposable Hindsight API mutation target"
+    return 1
+  }
+  hindsight_cli "$api_url" "$@"
+}
+
 hindsight_admin() {
   local database_url=$1
-  shift
+  local role=$2
+  shift 2
+  require_disposable_target "$database_url" "$role" || {
+    print -u2 -- "refusing non-disposable hindsight-admin mutation target"
+    return 1
+  }
   env \
     HOME="$SMOKE_HOME" \
     HF_HOME="$HOST_HF_HOME" \
@@ -300,12 +478,17 @@ typeset -r RESTORE_PG_PORT=$(free_port)
 typeset -r SOURCE_PG_NAME="hindsight-smoke-source-${SOURCE_PG_PORT}"
 typeset -r IMPORT_PG_NAME="hindsight-smoke-import-${IMPORT_PG_PORT}"
 typeset -r RESTORE_PG_NAME="hindsight-smoke-restore-${RESTORE_PG_PORT}"
-start_postgres "$SOURCE_PG_NAME" "$SOURCE_PG_PORT" "$SOURCE_DATA" >"$SMOKE_ROOT/source-db-url"
+start_postgres "$SOURCE_PG_NAME" "$SOURCE_PG_PORT" "$SOURCE_DATA" source \
+  "$SOURCE_DB_PASSWORD" >"$SMOKE_ROOT/source-db-url"
 typeset -r SOURCE_DB_URL=$(<"$SMOKE_ROOT/source-db-url")
 [[ -n "$SOURCE_DB_URL" ]]
+install_disposable_target_guard "$SOURCE_DB_URL" source || {
+  print -u2 -- "failed to install the source disposable-target guard"
+  exit 1
+}
 typeset -r SOURCE_API_URL="http://127.0.0.1:$SOURCE_API_PORT"
 
-start_api "$SOURCE_DB_URL" "$SOURCE_API_PORT" "$SMOKE_ROOT/source-api.log"
+start_api "$SOURCE_DB_URL" source "$SOURCE_API_PORT" "$SMOKE_ROOT/source-api.log"
 typeset -r SOURCE_API_PID=$STARTED_API_PID
 wait_for_api "$SOURCE_API_PORT" "$SOURCE_API_PID"
 
@@ -317,16 +500,20 @@ typeset -r UNAUTHORIZED_STATUS=$(
 [[ "$UNAUTHORIZED_STATUS" == 401 ]]
 
 CURRENT_PHASE=create-bank
-hindsight_cli "$SOURCE_API_URL" bank create "$SOURCE_BANK" --name "Disposable smoke" -o json \
+hindsight_cli_mutate "$SOURCE_DB_URL" source "$SOURCE_API_URL" \
+  bank create "$SOURCE_BANK" --name "Disposable smoke" -o json \
   >"$SMOKE_ROOT/bank-create.json"
 CURRENT_PHASE=create-directive
-hindsight_cli "$SOURCE_API_URL" directive create "$SOURCE_BANK" smoke-directive \
+hindsight_cli_mutate "$SOURCE_DB_URL" source "$SOURCE_API_URL" \
+  directive create "$SOURCE_BANK" smoke-directive \
   "Use only disposable smoke data." -o json >"$SMOKE_ROOT/directive-create.json"
 CURRENT_PHASE=retain
-hindsight_cli "$SOURCE_API_URL" memory retain "$SOURCE_BANK" \
+hindsight_cli_mutate "$SOURCE_DB_URL" source "$SOURCE_API_URL" \
+  memory retain "$SOURCE_BANK" \
   "Disposable contract smoke memory." --doc-id smoke-document -o json \
   >"$SMOKE_ROOT/retain.json"
-hindsight_cli "$SOURCE_API_URL" memory retain "$SOURCE_BANK" \
+hindsight_cli_mutate "$SOURCE_DB_URL" source "$SOURCE_API_URL" \
+  memory retain "$SOURCE_BANK" \
   "Disposable live transfer memory." --doc-id smoke-live-document -o json \
   >"$SMOKE_ROOT/retain-live.json"
 
@@ -340,6 +527,10 @@ typeset -r MEMORY_ID=$(
 )
 
 CURRENT_PHASE=curation
+require_disposable_target "$SOURCE_DB_URL" source || {
+  print -u2 -- "refusing non-disposable curation target"
+  exit 1
+}
 "$CURL" --silent --show-error --fail --max-time 30 \
   -X PATCH \
   --config "$CURL_AUTH_CONFIG" \
@@ -365,18 +556,50 @@ typeset -r SOURCE_FINGERPRINT=$(invalidated_fingerprint "$SOURCE_DB_URL" "$SOURC
 typeset -r SOURCE_TRANSFER_COUNTS=$(bank_transfer_counts "$SOURCE_DB_URL" "$SOURCE_BANK")
 
 CURRENT_PHASE=bank-export
-hindsight_admin "$SOURCE_DB_URL" export-bank --bank "$SOURCE_BANK" \
+hindsight_admin "$SOURCE_DB_URL" source export-bank --bank "$SOURCE_BANK" \
   --output "$SMOKE_ROOT/bank.zip" >"$SMOKE_ROOT/export-bank.log" 2>&1
 typeset -r BANK_PLAIN_DIGEST=$(seal_export "$SMOKE_ROOT/bank.zip" "$SMOKE_ROOT/bank.zip.enc")
 unseal_export "$SMOKE_ROOT/bank.zip.enc" "$SMOKE_ROOT/bank.restore.zip" "$BANK_PLAIN_DIGEST"
-start_postgres "$IMPORT_PG_NAME" "$IMPORT_PG_PORT" "$IMPORT_DATA" >"$SMOKE_ROOT/import-db-url"
+start_postgres "$IMPORT_PG_NAME" "$IMPORT_PG_PORT" "$IMPORT_DATA" import \
+  "$IMPORT_DB_PASSWORD" >"$SMOKE_ROOT/import-db-url"
 typeset -r IMPORT_DB_URL=$(<"$SMOKE_ROOT/import-db-url")
 [[ -n "$IMPORT_DB_URL" ]]
+install_disposable_target_guard "$IMPORT_DB_URL" import || {
+  print -u2 -- "failed to install the import disposable-target guard"
+  exit 1
+}
+typeset -r WRONG_TARGET_DB_URL=$(
+  WRONG_SOURCE_DB_URL="$SOURCE_DB_URL" WRONG_IMPORT_PG_PORT="$IMPORT_PG_PORT" \
+    "$HINDSIGHT_PYTHON" -c '
+import os
+from urllib.parse import urlsplit, urlunsplit
+
+value = urlsplit(os.environ["WRONG_SOURCE_DB_URL"])
+host = value.hostname or "127.0.0.1"
+credentials = ""
+if value.username:
+    credentials = value.username
+    if value.password:
+        credentials += f":{value.password}"
+    credentials += "@"
+print(urlunsplit((
+    value.scheme,
+    f"{credentials}{host}:" + os.environ["WRONG_IMPORT_PG_PORT"],
+    value.path,
+    value.query,
+    value.fragment,
+)))
+'
+)
+if require_disposable_target "$WRONG_TARGET_DB_URL" source >/dev/null 2>&1; then
+  print -u2 -- "wrong-target disposable credentials were accepted"
+  exit 1
+fi
 CURRENT_PHASE=bank-import-migration
-hindsight_admin "$IMPORT_DB_URL" run-db-migration --schema public \
+hindsight_admin "$IMPORT_DB_URL" import run-db-migration --schema public \
   >"$SMOKE_ROOT/import-migration.log" 2>&1
 CURRENT_PHASE=bank-import
-hindsight_admin "$IMPORT_DB_URL" import-bank --archive "$SMOKE_ROOT/bank.restore.zip" \
+hindsight_admin "$IMPORT_DB_URL" import import-bank --archive "$SMOKE_ROOT/bank.restore.zip" \
   --target-bank "$IMPORT_BANK" >"$SMOKE_ROOT/import-bank.log" 2>&1
 rm -f -- "$SMOKE_ROOT/bank.restore.zip"
 
@@ -386,24 +609,54 @@ typeset -r IMPORT_TRANSFER_COUNTS=$(bank_transfer_counts "$IMPORT_DB_URL" "$IMPO
 [[ "$IMPORT_TRANSFER_COUNTS" == "$SOURCE_TRANSFER_COUNTS" ]]
 
 CURRENT_PHASE=schema-backup
-hindsight_admin "$SOURCE_DB_URL" backup "$SMOKE_ROOT/schema.zip" --schema public \
+hindsight_admin "$SOURCE_DB_URL" source backup "$SMOKE_ROOT/schema.zip" --schema public \
   >"$SMOKE_ROOT/backup-schema.log" 2>&1
 typeset -r SCHEMA_PLAIN_DIGEST=$(seal_export "$SMOKE_ROOT/schema.zip" "$SMOKE_ROOT/schema.zip.enc")
 unseal_export "$SMOKE_ROOT/schema.zip.enc" "$SMOKE_ROOT/schema.restore.zip" "$SCHEMA_PLAIN_DIGEST"
 
-start_postgres "$RESTORE_PG_NAME" "$RESTORE_PG_PORT" "$RESTORE_DATA" >"$SMOKE_ROOT/restore-db-url"
+start_postgres "$RESTORE_PG_NAME" "$RESTORE_PG_PORT" "$RESTORE_DATA" restore \
+  "$RESTORE_DB_PASSWORD" >"$SMOKE_ROOT/restore-db-url"
 typeset -r RESTORE_DB_URL=$(<"$SMOKE_ROOT/restore-db-url")
 [[ -n "$RESTORE_DB_URL" ]]
+install_disposable_target_guard "$RESTORE_DB_URL" restore || {
+  print -u2 -- "failed to install the restore disposable-target guard"
+  exit 1
+}
 CURRENT_PHASE=schema-restore-migration
-hindsight_admin "$RESTORE_DB_URL" run-db-migration --schema public \
+hindsight_admin "$RESTORE_DB_URL" restore run-db-migration --schema public \
   >"$SMOKE_ROOT/restore-migration.log" 2>&1
 CURRENT_PHASE=schema-restore
-hindsight_admin "$RESTORE_DB_URL" restore "$SMOKE_ROOT/schema.restore.zip" \
+hindsight_admin "$RESTORE_DB_URL" restore restore "$SMOKE_ROOT/schema.restore.zip" \
   --schema public --yes >"$SMOKE_ROOT/restore-schema.log" 2>&1
 rm -f -- "$SMOKE_ROOT/schema.restore.zip"
 
 typeset -r RESTORE_FINGERPRINT=$(invalidated_fingerprint "$RESTORE_DB_URL" "$SOURCE_BANK")
 [[ "$RESTORE_FINGERPRINT" == "$SOURCE_FINGERPRINT" ]]
+
+CURRENT_PHASE=target-identity-negative-check
+SMOKE_DB_URL="$RESTORE_DB_URL" "$HINDSIGHT_PYTHON" -c '
+import asyncio
+import os
+
+import asyncpg
+
+async def main():
+    connection = await asyncpg.connect(os.environ["SMOKE_DB_URL"], timeout=5)
+    try:
+        await connection.execute(
+            "UPDATE hindsight_smoke_guard.target_identity "
+            "SET system_identifier = $1",
+            "tampered",
+        )
+    finally:
+        await connection.close()
+
+asyncio.run(main())
+'
+if require_disposable_target "$RESTORE_DB_URL" restore >/dev/null 2>&1; then
+  print -u2 -- "tampered disposable server identity was accepted"
+  exit 1
+fi
 
 CURRENT_PHASE=content-free-report
 typeset -r POSTGRES_VERSION=$(
