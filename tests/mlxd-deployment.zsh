@@ -101,7 +101,7 @@ mkdir -p -- "${fake_hindsight:h}"
 } > "$fake_hindsight"
 chmod +x "$fake_hindsight"
 
-darwin_data='{"chezmoi":{"os":"darwin","homeDir":"'${fixture_home}'","username":"ivan","hostname":"hatchery"},"mlxd":{"launchctlBin":"'${fake_launchctl}'","optiq":{"targetHostname":"hatchery","runtimePackage":"mlx-optiq==0.2.18","huggingFacePackage":"huggingface-hub==1.22.0","modelRepository":"mlx-community/Qwen3.6-35B-A3B-OptiQ-4bit","modelRevision":"70a3aa32c7feef511182bf16aa332f37e8d82014","modelDir":".local/share/mlxd/models/qwen36-optiq","kvConfig":"kv_config.json","kvSha256":"547d2156462f21d250fb7edba17880c43e1cfa006a17b16f9495a630fab2c8fa","clients":{"baseUrl":"http://127.0.0.1:8766/v1","contextWindow":32768,"codexProvider":"mlx-optiq","hindsightProvider":"lmstudio","hindsightProfile":"systalyze"}},"config":{"models":{"qwen36-optiq":{"localDir":".local/share/mlxd/models/qwen36-optiq","targetHostname":"hatchery"}},"servers":{"optiq":{"type":"optiq","model":"qwen36-optiq","port":8766,"targetHostname":"hatchery","options":{"kv_config":"kv_config.json","max_context":32768,"mtp":true,"temp":0.0}}}}}}'
+darwin_data='{"chezmoi":{"os":"darwin","homeDir":"'${fixture_home}'","username":"ivan","hostname":"hatchery"},"mlxd":{"launchctlBin":"'${fake_launchctl}'","optiq":{"targetHostname":"hatchery","runtimePackage":"mlx-optiq==0.2.18","huggingFacePackage":"huggingface-hub==1.22.0","modelRepository":"mlx-community/Qwen3.6-35B-A3B-OptiQ-4bit","modelRevision":"70a3aa32c7feef511182bf16aa332f37e8d82014","modelDir":".local/share/mlxd/models/qwen36-optiq","kvConfig":"kv_config.json","kvSha256":"547d2156462f21d250fb7edba17880c43e1cfa006a17b16f9495a630fab2c8fa","clients":{"baseUrl":"http://127.0.0.1:8766/v1","contextWindow":32768,"codexProvider":"mlx-optiq","hindsightProvider":"lmstudio","hindsightProfile":"stlz-bcs"}},"config":{"models":{"qwen36-optiq":{"localDir":".local/share/mlxd/models/qwen36-optiq","targetHostname":"hatchery"}},"servers":{"optiq":{"type":"optiq","model":"qwen36-optiq","port":8766,"targetHostname":"hatchery","options":{"kv_config":"kv_config.json","max_context":32768,"mtp":true,"temp":0.0}}}}}}'
 non_target_data=${darwin_data//\"hostname\":\"hatchery\"/\"hostname\":\"stlz-ivan-mbp\"}
 linux_data='{"chezmoi":{"os":"linux","homeDir":"'${fixture_home}'","username":"ivan"}}'
 xml_data='{"chezmoi":{"os":"darwin","homeDir":"/Users/tester/A&B","username":"ivan"},"mlxd":{"label":"io.nisavid.mlxd&test","launchctlBin":"'${fake_launchctl}'"}}'
@@ -244,11 +244,11 @@ tool run --from huggingface-hub==1.22.0 hf download mlx-community/Qwen3.6-35B-A3
   fail 'install hook did not download the pinned model snapshot'
 [[ $(wc -l < "$hindsight_log" | tr -d ' ') == 8 ]] || \
   fail 'install hook did not configure all Hindsight sampling settings'
-grep -qx "profile set-env systalyze HINDSIGHT_API_LLM_PROVIDER lmstudio" "$hindsight_log" || \
+grep -qx "profile set-env stlz-bcs HINDSIGHT_API_LLM_PROVIDER lmstudio" "$hindsight_log" || \
   fail 'install hook used the wrong Hindsight provider'
-grep -qx "profile set-env systalyze HINDSIGHT_API_LLM_BASE_URL http://127.0.0.1:8766/v1" "$hindsight_log" || \
+grep -qx "profile set-env stlz-bcs HINDSIGHT_API_LLM_BASE_URL http://127.0.0.1:8766/v1" "$hindsight_log" || \
   fail 'install hook used the wrong Hindsight Client Endpoint'
-grep -qx "profile set-env systalyze HINDSIGHT_API_LLM_TEMPERATURE_REFLECT 0.9" "$hindsight_log" || \
+grep -qx "profile set-env stlz-bcs HINDSIGHT_API_LLM_TEMPERATURE_REFLECT 0.9" "$hindsight_log" || \
   fail 'install hook used the wrong Hindsight reflection temperature'
 [[ -f "$launchctl_state" ]] || fail 'install hook did not register the LaunchAgent'
 [[ $(<"$launchctl_log") == "bootstrap gui/$EUID $plist" ]] || \

@@ -23,7 +23,7 @@ baseUrl = "http://127.0.0.1:8766/v1"
 contextWindow = 32768
 codexProvider = "mlx-optiq"
 hindsightProvider = "lmstudio"
-hindsightProfile = "systalyze"
+hindsightProfile = "stlz-bcs"
 
 [mlxd.config]
 schemaVersion = 1
