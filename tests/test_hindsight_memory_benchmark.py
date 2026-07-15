@@ -116,6 +116,14 @@ class BenchmarkTest(unittest.TestCase):
                 "must_not_return",
             ],
         )
+        self.assertEqual(schema["properties"]["case_id"]["pattern"], ".*\\S.*")
+        self.assertEqual(schema["properties"]["query"]["pattern"], ".*\\S.*")
+        self.assertEqual(
+            schema["properties"]["relevance"]["propertyNames"]["pattern"],
+            ".*\\S.*",
+        )
+        self.assertIn("must_recall", schema["$comment"])
+        self.assertIn("must_not_return", schema["$comment"])
 
         with self.assertRaises(TypeError):
             load_cases(fixture_path)
@@ -204,6 +212,10 @@ class BenchmarkTest(unittest.TestCase):
             [CASES[0], CASES[0]],
             [{**CASES[0], "surprise": True}],
             [{**CASES[0], "must_recall": ["unjudged"]}],
+            [{**CASES[0], "must_not_return": ["decision-primary"]}],
+            [{**CASES[0], "case_id": "   "}],
+            [{**CASES[0], "query": "\t"}],
+            [{**CASES[0], "relevance": {" ": 1}}],
         ]
         messages = [
             "schema_version",
@@ -211,6 +223,10 @@ class BenchmarkTest(unittest.TestCase):
             "duplicate case_id",
             "keys",
             "must_recall",
+            "must_not_return",
+            "case_id",
+            "query",
+            "relevance document ID",
         ]
         with tempfile.TemporaryDirectory() as directory:
             for index, (cases, message) in enumerate(
