@@ -24,6 +24,18 @@ main() {
     return 0
   fi
 
+  local launchctl_bin=${MLXCTL_TEST_LAUNCHCTL_BIN:-/bin/launchctl}
+  local legacy_target="gui/$EUID/io.nisavid.mlxd"
+  local legacy_registration=''
+  if legacy_registration=$("$launchctl_bin" print "$legacy_target" 2>/dev/null) &&
+    /usr/bin/grep -Eq \
+      '^[[:space:]]*state[[:space:]]*=[[:space:]]*running[[:space:]]*$' \
+      <<< "$legacy_registration"; then
+    print -u2 -r -- \
+      "mlxctl: legacy LaunchAgent $legacy_target is running; stop it before updating mlxctl, then re-run chezmoi apply and migrate with mlxctl"
+    return 1
+  fi
+
   local uv_bin=''
   if ! uv_bin=$(command -v uv); then
     print -u2 -r -- 'mlxctl: uv is required; install it and re-run `chezmoi apply`'
