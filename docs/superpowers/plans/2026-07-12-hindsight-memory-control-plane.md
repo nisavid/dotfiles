@@ -380,9 +380,14 @@
   verified private snapshots to import and restore commands. CodeRabbit's final
   follow-up review completed with zero issues.
 
-- [ ] **Step 6: Create the final task-owned checkpoint**
+- [x] **Step 6: Create the final task-owned checkpoint**
 
   Audit the index and worktree, commit only Task 8 paths and any review fixes with `feat(hindsight): integrate memory control plane`, and rerun the full test/review gate against the immutable commit.
+
+  Immutable checkpoint `20bf9d0b2a40df2e438bfa29fb5f8d57554863f3`
+  passes 266 Python tests, the controller, public PRD, private catalog, and embed
+  stack contracts, the disposable Hindsight 0.8.4/PostgreSQL backup-and-restore
+  smoke with cleanup verified, and the zero-issue CodeRabbit follow-up review.
 
 - [ ] **Step 7: Publish with exact CAS and hand back**
 
