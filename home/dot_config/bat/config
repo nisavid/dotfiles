@@ -4,4 +4,5 @@
 --nonprintable-notation=unicode
 --tabs=4
 --terminal-width=-2
---theme=catppuccin-mocha
+--theme-dark=catppuccin-mocha
+--theme-light=catppuccin-latte
