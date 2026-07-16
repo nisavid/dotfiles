@@ -33,7 +33,8 @@ print -r -- 'unrelated = "preserved"' > "$seed"
 {
   print -r -- 'model = "mlx-community/Qwen3.6-35B-A3B-OptiQ-4bit"'
   print -r -- 'model_provider = "mlx-optiq"'
-  print -r -- 'model_context_window = 32768'
+  print -r -- 'model_context_window = 131072'
+  print -r -- 'model_catalog_json = "/tmp/mlxctl-owned-model-catalog.json"'
   cat "$baseline"
   print -r -- '[model_providers.mlx-optiq]'
   print -r -- 'name = "Local mlxctl gateway"'
@@ -45,7 +46,7 @@ cmp -s "$input" "$output" || \
   fail 'Codex modifier must pass through configured mlxctl clients exactly'
 
 ! rg -n -i \
-  'MLX_OPTIQ|mlx-optiq|HINDSIGHT_API_LLM|127\.0\.0\.1:8766|model_context_window' \
+  'MLX_OPTIQ|mlx-optiq|HINDSIGHT_API_LLM|127\.0\.0\.1:8766|model_context_window|model_catalog_json' \
   "$rendered" home/dot_codex/modify_private_config.toml.tmpl \
   home/run_after_install-mlxctl.sh.tmpl >/dev/null || \
   fail 'dotfiles must not configure mlxctl clients'
