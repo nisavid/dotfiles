@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import functools
 import os
 import re
@@ -14,6 +15,11 @@ from pathlib import Path
 PROFILE_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 COMPONENTS = frozenset({"daemon", "ui"})
 STATES = frozenset({"running", "stopped"})
+HATCHERY_PROVIDER_ID = "hatchery"
+HATCHERY_RUNTIME_PROVIDER = "lmstudio"
+HATCHERY_LABEL = "hatchery"
+HATCHERY_BASE_URL = "http://hatchery.komodo-vector.ts.net:13305/v1"
+HATCHERY_MODEL = "Qwen3.6-35B-A3B-MTP-GGUF-UD-Q4_K_XL"
 
 
 def normalize_profile(profile: str) -> str:
@@ -105,12 +111,95 @@ def install_provider_catalog(providers) -> None:
         additions.append(providers.ProviderInfo("openai-codex", "OpenAI Codex (subscription)", False))
     if "claude-code" not in existing:
         additions.append(providers.ProviderInfo("claude-code", "Claude Code (subscription)", False))
+    if HATCHERY_PROVIDER_ID not in existing:
+        additions.append(
+            providers.ProviderInfo(
+                HATCHERY_PROVIDER_ID,
+                HATCHERY_LABEL,
+                False,
+                HATCHERY_BASE_URL,
+            )
+        )
     providers.PROVIDER_CATALOG = (*providers.PROVIDER_CATALOG, *additions)
+
+
+def _is_hatchery_config(config) -> bool:
+    return (
+        config.provider == HATCHERY_RUNTIME_PROVIDER
+        and config.model == HATCHERY_MODEL
+        and config.base_url == HATCHERY_BASE_URL
+    )
+
+
+def install_provider_alias(service) -> None:
+    original_get_profile_config = service.get_profile_config
+    original_list_profiles = service.list_profiles
+    original_save_llm_config = service.save_llm_config
+
+    def display_config(config):
+        if _is_hatchery_config(config):
+            return replace(config, provider=HATCHERY_PROVIDER_ID)
+        return config
+
+    def get_profile_config(name: str):
+        return display_config(original_get_profile_config(name))
+
+    def list_profiles():
+        summaries = []
+        for summary in original_list_profiles():
+            config = get_profile_config(summary.name)
+            if config.provider == HATCHERY_PROVIDER_ID:
+                summary = replace(
+                    summary,
+                    provider=HATCHERY_PROVIDER_ID,
+                    model=HATCHERY_MODEL,
+                )
+            summaries.append(summary)
+        return summaries
+
+    def save_llm_config(
+        name: str,
+        provider: str,
+        api_key: str | None,
+        model: str | None,
+        base_url: str | None,
+        api_port: str | None = None,
+        ui_port: str | None = None,
+        api_version: str | None = None,
+        cp_version: str | None = None,
+    ):
+        current = original_get_profile_config(name)
+        if provider == HATCHERY_PROVIDER_ID:
+            provider = HATCHERY_RUNTIME_PROVIDER
+            api_key = ""
+            model = HATCHERY_MODEL
+            base_url = HATCHERY_BASE_URL
+        elif base_url is None and _is_hatchery_config(current):
+            base_url = ""
+
+        return display_config(
+            original_save_llm_config(
+                name=name,
+                provider=provider,
+                api_key=api_key,
+                model=model,
+                base_url=base_url,
+                api_port=api_port,
+                ui_port=ui_port,
+                api_version=api_version,
+                cp_version=cp_version,
+            )
+        )
+
+    service.get_profile_config = get_profile_config
+    service.list_profiles = list_profiles
+    service.save_llm_config = save_llm_config
 
 
 def install_hooks(service, providers, desired_state_dir: Path) -> None:
     install_lifecycle_hooks(service, desired_state_dir)
     install_provider_catalog(providers)
+    install_provider_alias(service)
 
 
 def serve(port: int, desired_state_dir: Path) -> int:

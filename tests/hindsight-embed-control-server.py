@@ -45,6 +45,21 @@ class UiResult:
     running: bool
 
 
+@dataclass(frozen=True)
+class ProfileConfig:
+    name: str
+    provider: str
+    model: str
+    base_url: str | None
+
+
+@dataclass(frozen=True)
+class ProfileSummary:
+    name: str
+    provider: str
+    model: str
+
+
 class ControlServerHooksTest(unittest.TestCase):
     def setUp(self) -> None:
         self.module = load_module()
@@ -55,6 +70,24 @@ class ControlServerHooksTest(unittest.TestCase):
             ProviderInfo=ProviderInfo,
             PROVIDER_CATALOG=(ProviderInfo("openai", "OpenAI", True),),
         )
+        self.profile_config = ProfileConfig(
+            name="systalyze",
+            provider="claude-code",
+            model="claude-sonnet-5",
+            base_url=None,
+        )
+        self.saved_configs: list[dict] = []
+
+        def save_llm_config(**kwargs):
+            self.saved_configs.append(kwargs)
+            self.profile_config = ProfileConfig(
+                name=kwargs["name"],
+                provider=kwargs["provider"],
+                model=kwargs["model"],
+                base_url=kwargs["base_url"] or None,
+            )
+            return self.profile_config
+
         self.service = SimpleNamespace(
             start_daemon=lambda _name: DaemonResult(ok=True, running=True),
             restart_daemon=lambda _name: DaemonResult(ok=True, running=True),
@@ -62,6 +95,15 @@ class ControlServerHooksTest(unittest.TestCase):
             start_ui=lambda _name: UiResult(running=True),
             restart_ui=lambda _name: UiResult(running=True),
             stop_ui=lambda _name: UiResult(running=False),
+            get_profile_config=lambda _name: self.profile_config,
+            list_profiles=lambda: [
+                ProfileSummary(
+                    name=self.profile_config.name,
+                    provider=self.profile_config.provider,
+                    model=self.profile_config.model,
+                )
+            ],
+            save_llm_config=save_llm_config,
         )
         self.module.install_hooks(self.service, self.providers, self.state_dir)
 
@@ -72,6 +114,57 @@ class ControlServerHooksTest(unittest.TestCase):
         providers = {provider.id: provider for provider in self.providers.PROVIDER_CATALOG}
         self.assertFalse(providers["openai-codex"].needs_api_key)
         self.assertFalse(providers["claude-code"].needs_api_key)
+        self.assertEqual(providers["hatchery"].label, "hatchery")
+        self.assertFalse(providers["hatchery"].needs_api_key)
+        self.assertEqual(
+            providers["hatchery"].default_base_url,
+            "http://hatchery.komodo-vector.ts.net:13305/v1",
+        )
+
+    def test_hatchery_alias_saves_openai_compatible_runtime_config(self) -> None:
+        result = self.service.save_llm_config(
+            name="systalyze",
+            provider="hatchery",
+            api_key=None,
+            model="ignored",
+            base_url=None,
+        )
+
+        self.assertEqual(result.provider, "hatchery")
+        self.assertEqual(
+            self.saved_configs[-1],
+            {
+                "name": "systalyze",
+                "provider": "lmstudio",
+                "api_key": "",
+                "model": "Qwen3.6-35B-A3B-MTP-GGUF-UD-Q4_K_XL",
+                "base_url": "http://hatchery.komodo-vector.ts.net:13305/v1",
+                "api_port": None,
+                "ui_port": None,
+                "api_version": None,
+                "cp_version": None,
+            },
+        )
+        self.assertEqual(self.service.list_profiles()[0].provider, "hatchery")
+
+    def test_switching_from_hatchery_clears_its_base_url(self) -> None:
+        self.service.save_llm_config(
+            name="systalyze",
+            provider="hatchery",
+            api_key=None,
+            model=None,
+            base_url=None,
+        )
+        self.service.save_llm_config(
+            name="systalyze",
+            provider="claude-code",
+            api_key=None,
+            model="claude-sonnet-5",
+            base_url=None,
+        )
+
+        self.assertEqual(self.saved_configs[-1]["provider"], "claude-code")
+        self.assertEqual(self.saved_configs[-1]["base_url"], "")
 
     def test_daemon_stop_persists_intent_and_start_clears_it(self) -> None:
         self.service.stop_daemon("systalyze")
