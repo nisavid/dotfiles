@@ -57,8 +57,12 @@ loads the LaunchAgent, and waits for the memory broker, control service, API,
 and UI to become healthy. It prints each bounded wait as it proceeds. The
 LaunchAgent starts the stack again at each login and reconciles the broker,
 control service, every profile in `HINDSIGHT_EMBED_FLEET_PROFILES`, and each declared local
-provider sidecar if any component stops. The first profile remains the primary
-profile used by the existing single-profile status lines.
+provider sidecar if a desired-running component stops. An API or UI stopped in
+the Embed Control Center remains stopped for the current login session; starting it in
+the Control Center restores crash recovery. An explicit service start or
+restart and a new login restore the configured autostart policy. The first
+profile remains the primary profile used by the existing single-profile status
+lines.
 
 The broker starts in inactive mode on
 `~/.local/state/hindsight-memory/broker.sock`. It owns its signing material in
@@ -79,6 +83,7 @@ the profile's provider configuration without putting credentials in Git.
 hindsight-embed-service status
 hindsight-embed-service status --profile "$profile"
 hindsight-embed-service start
+hindsight-embed-service restart
 hindsight-embed-service stop
 hindsight-embed-service logs
 ```
@@ -86,8 +91,15 @@ hindsight-embed-service logs
 Use `status` after installation or a reboot. It reports the LaunchAgent, broker
 socket, fleet health, stable profile slots, endpoint readiness, and sidecar
 readiness. `status --profile NAME` selects one enabled profile. `start` reloads
-or restarts the LaunchAgent; `stop` unloads it and performs a bounded stop of
-the broker, control service, every enabled API/UI pair, and declared sidecars.
+or starts the LaunchAgent. `restart` performs a validated clean stop/start so
+profile changes replace the running daemon. `stop` unloads the LaunchAgent and
+performs a bounded stop of the broker, control service, every enabled API/UI
+pair, and declared sidecars.
+
+The managed Control Center adds `OpenAI Codex (subscription)` and `Claude Code
+(subscription)` to Hindsight Embed's provider catalog. These provider entries
+use the corresponding local OAuth subscription state and do not require an API
+key in the profile.
 
 Each optional sidecar is declared under
 `~/.hindsight/profiles/PROFILE.sidecars/NAME/`. A declaration contains either
@@ -105,7 +117,7 @@ the managed stack:
 
 ```zsh
 chezmoi apply
-hindsight-embed-service start
+hindsight-embed-service restart
 hindsight-embed-service status
 ```
 

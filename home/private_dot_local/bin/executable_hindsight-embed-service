@@ -18,6 +18,7 @@ Usage: hindsight-embed-service <command> [options]
 Commands:
   install   Validate, retire legacy launchd state, and load the LaunchAgent
   start     Load or restart the LaunchAgent for this user
+  restart   Cleanly stop and start the LaunchAgent and managed stack
   stop      Unload the LaunchAgent and stop control, API, and UI
   status [--profile <name>]  Show fleet or selected-profile health
   logs      Tail the supervisor log
@@ -51,6 +52,7 @@ load_stack_lib() {
     hindsight_stack_enabled_profiles \
     hindsight_stack_fleet_profiles_csv \
     hindsight_stack_reconcile_once \
+    hindsight_stack_reset_desired_state \
     hindsight_stack_require_current_user \
     hindsight_stack_require_fleet_profiles \
     hindsight_stack_profile_exists \
@@ -257,6 +259,7 @@ start_launchd_service() {
   emulate -L zsh
 
   preflight_launchd_service
+  hindsight_stack_reset_desired_state || die "failed to reset desired component state"
   load_launchd_service
 }
 
@@ -265,8 +268,19 @@ install_service() {
 
   preflight_launchd_service
   bootout_if_loaded "$LEGACY_LABEL" || die "failed to unload ${LEGACY_LABEL}"
+  hindsight_stack_reset_desired_state || die "failed to reset desired component state"
   load_launchd_service
   retire_legacy_plist
+}
+
+restart_service() {
+  emulate -L zsh
+
+  preflight_launchd_service
+  bootout_if_loaded "$STACK_LABEL" || die "failed to unload ${STACK_LABEL}"
+  hindsight_stack_stop_all || die "failed to stop Hindsight stack"
+  hindsight_stack_reset_desired_state || die "failed to reset desired component state"
+  load_launchd_service
 }
 
 stop_service() {
@@ -338,6 +352,10 @@ main() {
     start)
       load_stack_lib || exit 1
       start_launchd_service
+      ;;
+    restart)
+      load_stack_lib || exit 1
+      restart_service
       ;;
     stop)
       stop_service

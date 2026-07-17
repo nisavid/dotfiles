@@ -21,11 +21,13 @@ hindsight_stack_load_config() {
   typeset -g HINDSIGHT_EMBED_UI_HOSTNAME="${HINDSIGHT_EMBED_UI_HOSTNAME:-{{ .hindsight.uiHostname }}}"
   typeset -g HINDSIGHT_EMBED_PYTHON="${HINDSIGHT_EMBED_PYTHON:-$HOME/.local/share/uv/tools/hindsight-embed/bin/python}"
   typeset -g HINDSIGHT_EMBED_STOP_HELPER="${HINDSIGHT_EMBED_STOP_HELPER:-$HOME/.local/libexec/hindsight-embed-stop-profile-services.py}"
+  typeset -g HINDSIGHT_EMBED_CONTROL_SERVER="${HINDSIGHT_EMBED_CONTROL_SERVER:-$HOME/.local/libexec/hindsight-embed-control-server.py}"
   typeset -g HINDSIGHT_MEMORY_CLI="${HINDSIGHT_MEMORY_CLI:-$HOME/.local/bin/hindsight-memory}"
   typeset -g HINDSIGHT_MEMORY_STATE_DIR="${HINDSIGHT_MEMORY_STATE_DIR:-$HOME/.local/state/hindsight-memory}"
   typeset -g HINDSIGHT_MEMORY_BROKER_SOCKET="${HINDSIGHT_MEMORY_BROKER_SOCKET:-$HINDSIGHT_MEMORY_STATE_DIR/broker.sock}"
   typeset -g HINDSIGHT_EMBED_STATE_DIR="${HINDSIGHT_EMBED_STATE_DIR:-$HOME/.local/state/hindsight-embed-launchd}"
   typeset -g HINDSIGHT_EMBED_PROFILE_SLOT_DIR="${HINDSIGHT_EMBED_PROFILE_SLOT_DIR:-$HINDSIGHT_EMBED_STATE_DIR/profile-slots}"
+  typeset -g HINDSIGHT_EMBED_DESIRED_STATE_DIR="${HINDSIGHT_EMBED_DESIRED_STATE_DIR:-$HINDSIGHT_EMBED_STATE_DIR/desired}"
   typeset -g HINDSIGHT_EMBED_AUTOSTART_DAEMON="${HINDSIGHT_EMBED_AUTOSTART_DAEMON:-{{ if .hindsight.autostartDaemon }}1{{ else }}0{{ end }}}"
   typeset -g HINDSIGHT_EMBED_AUTOSTART_UI="${HINDSIGHT_EMBED_AUTOSTART_UI:-{{ if .hindsight.autostartUi }}1{{ else }}0{{ end }}}"
   typeset -g HINDSIGHT_EMBED_CONTROL_WAIT_SECONDS="${HINDSIGHT_EMBED_CONTROL_WAIT_SECONDS:-30}"
@@ -106,10 +108,159 @@ hindsight_stack_require_runtime_helpers() {
     print -ru2 -- "hindsight-embed-stack: missing stop helper at ${HINDSIGHT_EMBED_STOP_HELPER}"
     return 1
   }
+  [[ -r "$HINDSIGHT_EMBED_CONTROL_SERVER" ]] || {
+    print -ru2 -- "hindsight-embed-stack: missing control server wrapper at ${HINDSIGHT_EMBED_CONTROL_SERVER}"
+    return 1
+  }
   "$HINDSIGHT_EMBED_PYTHON" "$HINDSIGHT_EMBED_STOP_HELPER" --help >/dev/null 2>&1 || {
     print -ru2 -- "hindsight-embed-stack: stop helper failed import/preflight at ${HINDSIGHT_EMBED_STOP_HELPER}"
     return 1
   }
+}
+
+hindsight_stack_desired_state_path() {
+  emulate -L zsh
+  hindsight_stack_load_config
+
+  local component="$1"
+  local profile="${2:-$HINDSIGHT_EMBED_PROFILE}"
+  hindsight_stack_valid_profile_name "$profile" || return 1
+  case "$component" in
+    daemon|ui) ;;
+    *)
+      print -ru2 -- "hindsight-embed-stack: invalid desired-state component: ${component}"
+      return 1
+      ;;
+  esac
+  print -r -- "$HINDSIGHT_EMBED_DESIRED_STATE_DIR/profiles/${profile}/${component}"
+}
+
+hindsight_stack_prepare_desired_state_dir() {
+  emulate -L zsh
+  hindsight_stack_load_config
+
+  [[ ! -L "$HINDSIGHT_EMBED_DESIRED_STATE_DIR" ]] || return 1
+  /bin/mkdir -p "$HINDSIGHT_EMBED_DESIRED_STATE_DIR" || return 1
+  [[ -d "$HINDSIGHT_EMBED_DESIRED_STATE_DIR" && ! -L "$HINDSIGHT_EMBED_DESIRED_STATE_DIR" ]] || return 1
+  [[ ! -L "$HINDSIGHT_EMBED_DESIRED_STATE_DIR/profiles" ]] || return 1
+  /bin/mkdir -p "$HINDSIGHT_EMBED_DESIRED_STATE_DIR/profiles" || return 1
+  [[ -d "$HINDSIGHT_EMBED_DESIRED_STATE_DIR/profiles" && ! -L "$HINDSIGHT_EMBED_DESIRED_STATE_DIR/profiles" ]] || return 1
+  /bin/chmod 700 "$HINDSIGHT_EMBED_DESIRED_STATE_DIR" "$HINDSIGHT_EMBED_DESIRED_STATE_DIR/profiles"
+}
+
+hindsight_stack_write_private_state() {
+  emulate -L zsh
+  local path="$1" value="$2"
+  local parent="${path:h}"
+
+  [[ ! -L "$parent" ]] || return 1
+  /bin/mkdir -p "$parent" || return 1
+  [[ -d "$parent" && ! -L "$parent" ]] || return 1
+  /bin/chmod 700 "$parent" || return 1
+  [[ ! -L "$path" ]] || return 1
+  local temporary="${path}.$$.$RANDOM"
+  if ! ( umask 077; print -r -- "$value" > "$temporary" ); then
+    return 1
+  fi
+  /bin/chmod 600 "$temporary" || {
+    /bin/rm -f "$temporary"
+    return 1
+  }
+  /bin/mv "$temporary" "$path"
+}
+
+hindsight_stack_set_desired_state() {
+  emulate -L zsh
+  hindsight_stack_prepare_desired_state_dir || return 1
+
+  local component="$1" desired="$2"
+  local profile="${3:-$HINDSIGHT_EMBED_PROFILE}"
+  case "$desired" in
+    running|stopped) ;;
+    *)
+      print -ru2 -- "hindsight-embed-stack: invalid desired state: ${desired}"
+      return 1
+      ;;
+  esac
+  local path="$(hindsight_stack_desired_state_path "$component" "$profile")" || return 1
+  hindsight_stack_write_private_state "$path" "$desired"
+}
+
+hindsight_stack_desired_state() {
+  emulate -L zsh
+  hindsight_stack_load_config
+
+  local component="$1"
+  local profile="${2:-$HINDSIGHT_EMBED_PROFILE}"
+  local path="$(hindsight_stack_desired_state_path "$component" "$profile")" || return 1
+  if [[ ! -e "$path" ]]; then
+    case "$component" in
+      daemon)
+        hindsight_stack_enabled "$HINDSIGHT_EMBED_AUTOSTART_DAEMON" && print -r -- running || print -r -- stopped
+        ;;
+      ui)
+        hindsight_stack_enabled "$HINDSIGHT_EMBED_AUTOSTART_UI" && print -r -- running || print -r -- stopped
+        ;;
+    esac
+    return 0
+  fi
+  [[ -f "$path" && ! -L "$path" ]] || return 1
+  local desired="$(<"$path")"
+  case "$desired" in
+    running|stopped) print -r -- "$desired" ;;
+    *) return 1 ;;
+  esac
+}
+
+hindsight_stack_reset_profile_desired_state() {
+  emulate -L zsh
+  local profile="$1"
+  local daemon_state=stopped ui_state=stopped
+  hindsight_stack_enabled "$HINDSIGHT_EMBED_AUTOSTART_DAEMON" && daemon_state=running
+  hindsight_stack_enabled "$HINDSIGHT_EMBED_AUTOSTART_UI" && ui_state=running
+  hindsight_stack_set_desired_state daemon "$daemon_state" "$profile" || return 1
+  hindsight_stack_set_desired_state ui "$ui_state" "$profile"
+}
+
+hindsight_stack_reset_desired_state() {
+  emulate -L zsh
+  hindsight_stack_load_config
+  hindsight_stack_for_each_profile hindsight_stack_reset_profile_desired_state ""
+}
+
+hindsight_stack_startup_id() {
+  emulate -L zsh
+
+  local audit_session
+  audit_session="$(
+    /bin/launchctl print "gui/${UID}" 2>/dev/null |
+      /usr/bin/awk '/^[[:space:]]*asid = / && !found { print $3; found=1 } END { if (!found) exit 1 }'
+  )" || audit_session=""
+  if [[ -n "$audit_session" ]]; then
+    print -r -- "asid:${audit_session}"
+    return 0
+  fi
+
+  local boot_time
+  boot_time="$(/usr/sbin/sysctl -n kern.boottime 2>/dev/null)" || return 1
+  [[ -n "$boot_time" ]] || return 1
+  print -r -- "boot:${boot_time}"
+}
+
+hindsight_stack_initialize_desired_state() {
+  emulate -L zsh
+  hindsight_stack_prepare_desired_state_dir || return 1
+
+  local startup_id="$(hindsight_stack_startup_id)" || return 1
+  local startup_file="$HINDSIGHT_EMBED_DESIRED_STATE_DIR/startup-id"
+  local previous=""
+  if [[ -f "$startup_file" && ! -L "$startup_file" ]]; then
+    previous="$(<"$startup_file")"
+  fi
+  if [[ "$previous" != "$startup_id" ]]; then
+    hindsight_stack_reset_desired_state || return 1
+    hindsight_stack_write_private_state "$startup_file" "$startup_id" || return 1
+  fi
 }
 
 hindsight_stack_valid_profile_name() {
@@ -749,12 +900,14 @@ hindsight_stack_control_start() {
   emulate -L zsh
   hindsight_stack_load_config
 
-  "$HINDSIGHT_EMBED_UVX" hindsight-embed control start --no-open \
-    --port "$HINDSIGHT_EMBED_CONTROL_PORT" >/dev/null 2>&1
+  "$HINDSIGHT_EMBED_PYTHON" "$HINDSIGHT_EMBED_CONTROL_SERVER" start \
+    --port "$HINDSIGHT_EMBED_CONTROL_PORT" \
+    --desired-state-dir "$HINDSIGHT_EMBED_DESIRED_STATE_DIR" >/dev/null 2>&1
 }
 
 hindsight_stack_broker_start() {
   emulate -L zsh
+  unsetopt BG_NICE
   hindsight_stack_load_config
 
   local -a arguments
@@ -981,6 +1134,8 @@ hindsight_stack_reconcile_daemon() {
 
   local component="daemon:${HINDSIGHT_EMBED_PROFILE}"
 
+  [[ "$(hindsight_stack_desired_state daemon)" == running ]] || return 0
+
   if hindsight_stack_daemon_status; then
     return 0
   fi
@@ -1002,6 +1157,8 @@ hindsight_stack_reconcile_ui() {
   emulate -L zsh
 
   local component="ui:${HINDSIGHT_EMBED_PROFILE}"
+
+  [[ "$(hindsight_stack_desired_state ui)" == running ]] || return 0
 
   if hindsight_stack_ui_status; then
     return 0
@@ -1056,11 +1213,13 @@ hindsight_stack_start_profile() {
   emulate -L zsh
   local ok=0
   hindsight_stack_reconcile_sidecars || ok=1
-  if hindsight_stack_enabled "$HINDSIGHT_EMBED_AUTOSTART_DAEMON"; then
+  if hindsight_stack_enabled "$HINDSIGHT_EMBED_AUTOSTART_DAEMON" &&
+    [[ "$(hindsight_stack_desired_state daemon)" == running ]]; then
     hindsight_stack_daemon_status || hindsight_stack_daemon_start
     hindsight_stack_wait_daemon || ok=1
   fi
-  if hindsight_stack_enabled "$HINDSIGHT_EMBED_AUTOSTART_UI"; then
+  if hindsight_stack_enabled "$HINDSIGHT_EMBED_AUTOSTART_UI" &&
+    [[ "$(hindsight_stack_desired_state ui)" == running ]]; then
     hindsight_stack_ui_status || hindsight_stack_ui_start
     hindsight_stack_wait_ui || ok=1
   fi
@@ -1154,10 +1313,22 @@ hindsight_stack_status_word() {
       hindsight_stack_control_status && print -r -- "healthy" || print -r -- "down"
       ;;
     daemon)
-      hindsight_stack_daemon_status && print -r -- "healthy" || print -r -- "down"
+      if hindsight_stack_daemon_status; then
+        print -r -- "healthy"
+      elif [[ "$(hindsight_stack_desired_state daemon)" == stopped ]]; then
+        print -r -- "stopped"
+      else
+        print -r -- "down"
+      fi
       ;;
     ui)
-      hindsight_stack_ui_status && print -r -- "healthy" || print -r -- "down"
+      if hindsight_stack_ui_status; then
+        print -r -- "healthy"
+      elif [[ "$(hindsight_stack_desired_state ui)" == stopped ]]; then
+        print -r -- "stopped"
+      else
+        print -r -- "down"
+      fi
       ;;
     *)
       print -r -- "unknown"
@@ -1172,8 +1343,8 @@ hindsight_stack_status_profile() {
   [[ -z "$requested" || "$requested" == "$profile" ]] || return 0
   daemon_health="$(hindsight_stack_status_word daemon)"
   ui_health="$(hindsight_stack_status_word ui)"
-  [[ "$daemon_health" == healthy ]] || fleet_health=degraded
-  [[ "$ui_health" == healthy ]] || fleet_health=degraded
+  [[ "$daemon_health" == healthy || "$daemon_health" == stopped ]] || fleet_health=degraded
+  [[ "$ui_health" == healthy || "$ui_health" == stopped ]] || fleet_health=degraded
   sidecar_records=()
   local -a sidecars
   sidecars=("${(@f)$(hindsight_stack_sidecar_names)}") || {

@@ -40,7 +40,9 @@ touch "$test_home/.hindsight/profiles/present-profile.env"
 
 touch "$test_home/.hindsight/profiles/second-profile.env"
 mkdir -p "$test_home/.hindsight/profiles/present-profile.sidecars/reranker"
-print -r -- "18180" > "$test_home/.hindsight/profiles/present-profile.sidecars/reranker/port-base"
+sidecar_test_port="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"
+export HINDSIGHT_TEST_SIDECAR_PORT="$sidecar_test_port"
+print -r -- "$sidecar_test_port" > "$test_home/.hindsight/profiles/present-profile.sidecars/reranker/port-base"
 print -r -- "/healthz" > "$test_home/.hindsight/profiles/present-profile.sidecars/reranker/health-path"
 
 fleet_state="$tmp_dir/fleet-state"
@@ -65,15 +67,15 @@ fleet_state="$tmp_dir/fleet-state"
   [[ "$HINDSIGHT_EMBED_PROFILE_SLOT" == 0 ]] || exit 1
   [[ "$HINDSIGHT_EMBED_API_PORT" == 7979 ]] || exit 1
   [[ "$HINDSIGHT_EMBED_UI_PORT" == 17979 ]] || exit 1
-  [[ "$(hindsight_stack_sidecar_port reranker)" == 18180 ]] || exit 1
-  [[ "$(hindsight_stack_sidecar_health_url reranker)" == "http://127.0.0.1:18180/healthz" ]] || exit 1
+  [[ "$(hindsight_stack_sidecar_port reranker)" == "$HINDSIGHT_TEST_SIDECAR_PORT" ]] || exit 1
+  [[ "$(hindsight_stack_sidecar_health_url reranker)" == "http://127.0.0.1:${HINDSIGHT_TEST_SIDECAR_PORT}/healthz" ]] || exit 1
   sidecar_probe="$tmp_dir/sidecar-probe"
   hindsight_stack_http_ok() {
     print -r -- "$1" > "$sidecar_probe"
     return 0
   }
   hindsight_stack_sidecars_status
-  [[ "$(<"$sidecar_probe")" == "http://127.0.0.1:18180/healthz" ]] || {
+  [[ "$(<"$sidecar_probe")" == "http://127.0.0.1:${HINDSIGHT_TEST_SIDECAR_PORT}/healthz" ]] || {
     print -ru2 -- "sidecar readiness did not probe the slot-derived endpoint"
     exit 1
   }
@@ -189,7 +191,7 @@ sidecar_start="$tmp_dir/sidecar-start"
   source "$rendered_stack_lib"
   hindsight_stack_select_profile present-profile
   hindsight_stack_reconcile_sidecars >/dev/null
-  [[ "$(<"$sidecar_start")" == "present-profile:0:reranker:18180" ]] || exit 1
+  [[ "$(<"$sidecar_start")" == "present-profile:0:reranker:${HINDSIGHT_TEST_SIDECAR_PORT}" ]] || exit 1
   hindsight_stack_sidecars_status
   hindsight_stack_stop_sidecars
   hindsight_stack_wait_sidecars_stopped
@@ -331,6 +333,8 @@ touch "$test_home/.local/bin/hindsight-embed-supervisor"
 chmod 700 "$test_home/.local/bin/hindsight-embed-supervisor"
 runtime_helper="$tmp_dir/hindsight-embed-stop-profile-services.py"
 touch "$runtime_helper"
+control_server="$tmp_dir/hindsight-embed-control-server.py"
+touch "$control_server"
 
 assert_missing_profile_blocks_mutation() {
   local command="$1"
@@ -344,6 +348,7 @@ assert_missing_profile_blocks_mutation() {
     export HINDSIGHT_EMBED_UVX="/usr/bin/true"
     export HINDSIGHT_EMBED_PYTHON="/usr/bin/true"
     export HINDSIGHT_EMBED_STOP_HELPER="$runtime_helper"
+    export HINDSIGHT_EMBED_CONTROL_SERVER="$control_server"
 
     source "$service_lib"
     load_stack_lib

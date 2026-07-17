@@ -104,9 +104,15 @@ def owns_hindsight_control(pid: int, port: int) -> bool:
     argv = process_args(pid)
     if not argv:
         return False
-    has_control_marker = any(arg == "hindsight_embed.control_center.server" for arg in argv)
+    managed_wrapper = str(
+        Path.home() / ".local/libexec/hindsight-embed-control-server.py"
+    )
+    has_upstream_marker = any(
+        arg == "hindsight_embed.control_center.server" for arg in argv
+    )
+    has_managed_marker = managed_wrapper in argv and "serve" in argv
     has_port_marker = has_arg_value(argv, "--port", str(port))
-    return has_control_marker and has_port_marker
+    return (has_upstream_marker or has_managed_marker) and has_port_marker
 
 
 def fail_unverified(kind: str, port: int, pid: int) -> None:
