@@ -1,5 +1,5 @@
 [hindsight]
-profile = "stlz-bcs"
+profile = "systalyze"
 bank = "engineering"
 clientApiUrl = "http://localhost:7979"
 controlPort = 7878
