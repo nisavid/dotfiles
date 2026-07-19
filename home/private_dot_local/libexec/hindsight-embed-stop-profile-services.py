@@ -153,22 +153,33 @@ def find_control_target(manager: DaemonEmbedManager, port: int) -> list[Target]:
     return [Target("control", port, pid, pid_path)]
 
 
-def stop_targets(manager: DaemonEmbedManager, targets: list[Target]) -> None:
+def stop_targets(
+    manager: DaemonEmbedManager,
+    targets: list[Target],
+    *,
+    timeout_seconds: float,
+) -> None:
     killed: set[int] = set()
     for target in targets:
         if target.pid in killed:
             continue
-        if not manager._kill_process(target.pid):
-            raise StopError(f"failed to stop {target.kind} process on port {target.port} (pid {target.pid})")
+        # Upstream returns False after waiting five seconds, even when the
+        # process accepted SIGTERM and is still completing a clean shutdown.
+        # The observable lifecycle contract is port convergence, not this
+        # intermediate timeout.
+        manager._kill_process(target.pid)
         killed.add(target.pid)
 
     ports = {target.port for target in targets}
-    for _ in range(30):
+    deadline = time.monotonic() + timeout_seconds
+    while True:
         if not any(manager._is_port_in_use(port) for port in ports):
             for target in targets:
                 if target.cleanup_path is not None:
                     target.cleanup_path.unlink(missing_ok=True)
             return
+        if time.monotonic() >= deadline:
+            break
         time.sleep(0.1)
 
     busy = [str(port) for port in sorted(ports) if manager._is_port_in_use(port)]
@@ -252,6 +263,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--desired-api-port", type=int)
     parser.add_argument("--desired-ui-port", type=int)
     parser.add_argument("--control-port", type=int)
+    parser.add_argument("--timeout", type=float, default=30)
     parser.add_argument("--require-profile", action="store_true")
     parser.add_argument("--allow-unregistered-profile", action="store_true")
     return parser.parse_args(argv)
@@ -262,7 +274,9 @@ def main(argv: list[str]) -> int:
         args = parse_args(argv)
         manager = DaemonEmbedManager()
         targets = resolve_targets(manager, args)
-        stop_targets(manager, targets)
+        if args.timeout <= 0:
+            raise StopError("timeout must be greater than zero")
+        stop_targets(manager, targets, timeout_seconds=args.timeout)
     except StopError as exc:
         print(f"hindsight-embed-stop-profile-services: {exc}", file=sys.stderr)
         return 1

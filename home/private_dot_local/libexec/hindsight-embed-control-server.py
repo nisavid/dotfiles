@@ -6,6 +6,7 @@ from dataclasses import replace
 import functools
 import os
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -35,6 +36,121 @@ CODEX_PROVIDER_HOMES = {
     CODEX_NISAVID_PROVIDER_ID: CODEX_NISAVID_HOME,
     CODEX_SYSTALYZE_PROVIDER_ID: CODEX_SYSTALYZE_HOME,
 }
+CONTROL_STOP_HELPER = Path.home() / ".local/libexec/hindsight-embed-stop-profile-services.py"
+
+
+def process_command(pid: int) -> str:
+    try:
+        result = subprocess.run(
+            ["/bin/ps", "-p", str(pid), "-o", "command="],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    if result.returncode != 0:
+        return ""
+    return result.stdout.strip()
+
+
+def process_args(pid: int) -> list[str]:
+    command = process_command(pid)
+    if not command:
+        return []
+    try:
+        return shlex.split(command)
+    except ValueError:
+        return []
+
+
+def has_arg_value(argv: list[str], name: str, value: str) -> bool:
+    for index, arg in enumerate(argv):
+        if arg == name and index + 1 < len(argv) and argv[index + 1] == value:
+            return True
+        if arg == f"{name}={value}":
+            return True
+    return False
+
+
+def owns_hindsight_control(pid: int, port: int) -> bool:
+    argv = process_args(pid)
+    if not argv:
+        return False
+    managed_wrapper = str(Path.home() / ".local/libexec/hindsight-embed-control-server.py")
+    has_upstream_marker = any(
+        arg == "hindsight_embed.control_center.server" for arg in argv
+    )
+    has_managed_marker = managed_wrapper in argv and "serve" in argv
+    has_port_marker = has_arg_value(argv, "--port", str(port))
+    return (has_upstream_marker or has_managed_marker) and has_port_marker
+
+
+def listener_pid(port: int) -> int | None:
+    try:
+        result = subprocess.run(
+            ["/usr/sbin/lsof", "-nP", "-t", f"-iTCP:{port}", "-sTCP:LISTEN"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    pids = {int(line) for line in result.stdout.splitlines() if line.isdigit()}
+    if len(pids) != 1:
+        return None
+    return pids.pop()
+
+
+def managed_control_status(lifecycle, port: int) -> bool:
+    if not lifecycle.control_status(port).running:
+        return False
+    pid_path = lifecycle.pid_file()
+    if pid_path.is_symlink() or not pid_path.is_file():
+        return False
+    try:
+        recorded_pid = int(pid_path.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return False
+    actual_pid = listener_pid(port)
+    return (
+        actual_pid is not None
+        and recorded_pid == actual_pid
+        and owns_hindsight_control(actual_pid, port)
+    )
+
+
+def stop_existing_control(port: int) -> bool:
+    try:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(CONTROL_STOP_HELPER),
+                "--mode",
+                "stop-control",
+                "--control-port",
+                str(port),
+                "--timeout",
+                "30",
+            ],
+            timeout=40,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
+
+
+def prepare_control_start(lifecycle, port: int) -> bool:
+    if managed_control_status(lifecycle, port):
+        return False
+    if not stop_existing_control(port):
+        raise RuntimeError("could not safely stop inconsistent control listener")
+    return True
 
 
 def normalize_profile(profile: str) -> str:
@@ -110,9 +226,38 @@ def _stopping_action(action, root: Path, component: str):
     return wrapped
 
 
+def _converging_restart(action, start_action, is_running, timeout_seconds: float = 30):
+    @functools.wraps(action)
+    def wrapped(profile: str):
+        result = action(profile)
+        if getattr(result, "ok", True):
+            return result
+
+        # Hindsight's stop primitive reports failure after five seconds even
+        # when the daemon is still completing a clean shutdown. Finish the
+        # restart once that shutdown reaches its observable stopped state.
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            if not is_running(profile):
+                return start_action(profile)
+            time.sleep(0.25)
+        return result
+
+    return wrapped
+
+
 def install_lifecycle_hooks(service, desired_state_dir: Path) -> None:
-    service.start_daemon = _running_action(service.start_daemon, desired_state_dir, ("daemon",))
-    service.restart_daemon = _running_action(service.restart_daemon, desired_state_dir, ("daemon",))
+    start_daemon = service.start_daemon
+    restart_daemon = service.restart_daemon
+    daemon_client = getattr(service, "daemon_client", None)
+    if daemon_client is not None:
+        restart_daemon = _converging_restart(
+            restart_daemon,
+            start_daemon,
+            daemon_client.is_daemon_running,
+        )
+    service.start_daemon = _running_action(start_daemon, desired_state_dir, ("daemon",))
+    service.restart_daemon = _running_action(restart_daemon, desired_state_dir, ("daemon",))
     service.stop_daemon = _stopping_action(service.stop_daemon, desired_state_dir, "daemon")
     service.start_ui = _running_action(service.start_ui, desired_state_dir, ("daemon", "ui"))
     service.restart_ui = _running_action(service.restart_ui, desired_state_dir, ("daemon", "ui"))
@@ -287,7 +432,11 @@ def start(port: int, desired_state_dir: Path) -> int:
     from hindsight_embed.control_center import lifecycle
 
     lifecycle.get_or_create_token()
-    if lifecycle.control_status(port).running:
+    try:
+        should_start = prepare_control_start(lifecycle, port)
+    except RuntimeError:
+        return 1
+    if not should_start:
         return 0
 
     log = lifecycle.log_file()
@@ -315,7 +464,7 @@ def start(port: int, desired_state_dir: Path) -> int:
 
     deadline = time.monotonic() + 20
     while time.monotonic() < deadline:
-        if lifecycle.control_status(port).running:
+        if managed_control_status(lifecycle, port):
             return 0
         if process.poll() is not None:
             return 1
@@ -323,9 +472,15 @@ def start(port: int, desired_state_dir: Path) -> int:
     return 1
 
 
+def status(port: int) -> int:
+    from hindsight_embed.control_center import lifecycle
+
+    return 0 if managed_control_status(lifecycle, port) else 1
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the managed Hindsight Embed Control Center.")
-    parser.add_argument("command", choices=("start", "serve"))
+    parser.add_argument("command", choices=("start", "status", "serve"))
     parser.add_argument("--port", required=True, type=int)
     parser.add_argument("--desired-state-dir", required=True, type=Path)
     return parser.parse_args()
@@ -336,6 +491,8 @@ def main() -> int:
     desired_state_dir = Path(os.path.abspath(args.desired_state_dir.expanduser()))
     if args.command == "serve":
         return serve(args.port, desired_state_dir)
+    if args.command == "status":
+        return status(args.port)
     return start(args.port, desired_state_dir)
 
 

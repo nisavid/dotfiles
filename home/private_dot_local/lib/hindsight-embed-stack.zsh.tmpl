@@ -775,6 +775,7 @@ hindsight_stack_run_stop_helper() {
   hindsight_stack_require_runtime_helpers || return 1
 
   "$HINDSIGHT_EMBED_PYTHON" "$HINDSIGHT_EMBED_STOP_HELPER" \
+    --timeout "$HINDSIGHT_EMBED_STOP_WAIT_SECONDS" \
     "$@"
 }
 
@@ -832,8 +833,9 @@ hindsight_stack_control_status() {
   emulate -L zsh
   hindsight_stack_load_config
 
-  "$HINDSIGHT_EMBED_UVX" hindsight-embed control status \
-    --port "$HINDSIGHT_EMBED_CONTROL_PORT" >/dev/null 2>&1
+  "$HINDSIGHT_EMBED_PYTHON" "$HINDSIGHT_EMBED_CONTROL_SERVER" status \
+    --port "$HINDSIGHT_EMBED_CONTROL_PORT" \
+    --desired-state-dir "$HINDSIGHT_EMBED_DESIRED_STATE_DIR" >/dev/null 2>&1
 }
 
 hindsight_stack_control_running() {
@@ -1275,7 +1277,7 @@ hindsight_stack_wait_all() {
 hindsight_stack_stop_profile() {
   emulate -L zsh
   local profile="$1" ok=0
-  hindsight_stack_stop_profile_services "$profile" || ok=1
+  hindsight_stack_stop_profile_services "$profile" || true
   hindsight_stack_wait_stopped_for ui "$HINDSIGHT_EMBED_STOP_WAIT_SECONDS" || ok=1
   hindsight_stack_wait_stopped_for daemon "$HINDSIGHT_EMBED_STOP_WAIT_SECONDS" || ok=1
   hindsight_stack_stop_sidecars || ok=1
@@ -1291,7 +1293,7 @@ hindsight_stack_stop_all() {
   local ok=0
   hindsight_stack_for_each_profile hindsight_stack_stop_profile "" || ok=1
   if hindsight_stack_broker_running; then
-    hindsight_stack_broker_stop || ok=1
+    hindsight_stack_broker_stop || true
     hindsight_stack_wait_stopped_for broker "$HINDSIGHT_EMBED_STOP_WAIT_SECONDS" || ok=1
   fi
   if hindsight_stack_control_running; then

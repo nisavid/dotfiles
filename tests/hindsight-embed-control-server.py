@@ -338,5 +338,71 @@ class ControlServerHooksTest(unittest.TestCase):
         self.assertEqual(captured, [linked.absolute()])
 
 
+class ControlOwnershipLifecycleTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.module = load_module()
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.pid_file = Path(self.temporary.name) / "control.pid"
+        self.lifecycle = SimpleNamespace(
+            control_status=lambda _port: SimpleNamespace(running=True),
+            pid_file=lambda: self.pid_file,
+        )
+
+    def test_missing_pid_file_is_not_a_managed_healthy_control(self) -> None:
+        with mock.patch.object(self.module, "listener_pid", return_value=13238):
+            self.assertFalse(
+                self.module.managed_control_status(self.lifecycle, 7878)
+            )
+
+    def test_matching_owned_listener_is_a_managed_healthy_control(self) -> None:
+        self.pid_file.write_text("13238\n", encoding="utf-8")
+        with (
+            mock.patch.object(self.module, "listener_pid", return_value=13238),
+            mock.patch.object(self.module, "owns_hindsight_control", return_value=True),
+        ):
+            self.assertTrue(
+                self.module.managed_control_status(self.lifecycle, 7878)
+            )
+
+    def test_healthy_control_with_missing_metadata_is_safely_replaced(self) -> None:
+        with (
+            mock.patch.object(self.module, "managed_control_status", return_value=False),
+            mock.patch.object(self.module, "stop_existing_control", return_value=True) as stop,
+        ):
+            self.assertTrue(
+                self.module.prepare_control_start(self.lifecycle, 7878)
+            )
+        stop.assert_called_once_with(7878)
+
+
+class SlowRestartLifecycleTest(unittest.TestCase):
+    def test_daemon_restart_completes_after_provisional_stop_timeout(self) -> None:
+        module = load_module()
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        restart_result = DaemonResult(ok=False, running=True)
+        started_result = DaemonResult(ok=True, running=True)
+        start_daemon = mock.Mock(return_value=started_result)
+        service = SimpleNamespace(
+            restart_daemon=mock.Mock(return_value=restart_result),
+            start_daemon=start_daemon,
+            stop_daemon=lambda _name: DaemonResult(ok=True, running=False),
+            start_ui=lambda _name: UiResult(running=True),
+            restart_ui=lambda _name: UiResult(running=True),
+            stop_ui=lambda _name: UiResult(running=False),
+            daemon_client=SimpleNamespace(
+                is_daemon_running=mock.Mock(side_effect=[True, False]),
+            ),
+        )
+        module.install_lifecycle_hooks(service, Path(temporary.name))
+
+        with mock.patch.object(module.time, "sleep"):
+            result = service.restart_daemon("systalyze")
+
+        self.assertEqual(result, started_result)
+        start_daemon.assert_called_once_with("systalyze")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -183,6 +183,40 @@ restart_events="$tmp_dir/restart-events"
   exit 1
 }
 
+(
+  export HOME="$test_home"
+  export HINDSIGHT_EMBED_STATE_DIR="$desired_state_dir"
+  export HINDSIGHT_EMBED_PROFILE="present-profile"
+  export HINDSIGHT_EMBED_FLEET_PROFILES="present-profile"
+  source "$rendered_stack_lib"
+  hindsight_stack_stop_profile_services() { return 1 }
+  hindsight_stack_wait_stopped_for() { return 0 }
+  hindsight_stack_stop_sidecars() { return 0 }
+  hindsight_stack_wait_sidecars_stopped() { return 0 }
+  hindsight_stack_stop_profile present-profile
+) || {
+  print -ru2 -- "profile stop treated a transient stop-command timeout as a final failure"
+  exit 1
+}
+
+(
+  export HOME="$test_home"
+  export HINDSIGHT_EMBED_STATE_DIR="$desired_state_dir"
+  export HINDSIGHT_EMBED_PROFILE="present-profile"
+  export HINDSIGHT_EMBED_FLEET_PROFILES="present-profile"
+  source "$rendered_stack_lib"
+  hindsight_stack_require_current_user() { return 0 }
+  hindsight_stack_for_each_profile() { return 0 }
+  hindsight_stack_broker_running() { return 0 }
+  hindsight_stack_broker_stop() { return 1 }
+  hindsight_stack_wait_stopped_for() { return 0 }
+  hindsight_stack_control_running() { return 1 }
+  hindsight_stack_stop_all
+) || {
+  print -ru2 -- "stack stop treated a transient broker stop-command timeout as a final failure"
+  exit 1
+}
+
 help_output="$(zsh "$repo_dir/home/private_dot_local/bin/executable_hindsight-embed-service" --help)"
 print -r -- "$help_output" | rg -F -q 'restart' || {
   print -ru2 -- "service help does not expose restart"

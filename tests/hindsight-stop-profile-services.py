@@ -80,5 +80,24 @@ class ControlOwnershipTest(unittest.TestCase):
         )
 
 
+class StopConvergenceTest(unittest.TestCase):
+    def test_accepts_slow_shutdown_after_upstream_kill_timeout(self) -> None:
+        cleanup = mock.Mock()
+        manager = mock.Mock()
+        manager._kill_process.return_value = False
+        manager._is_port_in_use.side_effect = [True, False]
+        target = HELPER.Target("API", 7979, 20532, cleanup)
+
+        with mock.patch.object(HELPER.time, "sleep"):
+            HELPER.stop_targets(
+                manager,
+                [target],
+                timeout_seconds=30,
+            )
+
+        manager._kill_process.assert_called_once_with(20532)
+        cleanup.unlink.assert_called_once_with(missing_ok=True)
+
+
 if __name__ == "__main__":
     unittest.main()
