@@ -98,6 +98,18 @@ class StopConvergenceTest(unittest.TestCase):
         manager._kill_process.assert_called_once_with(20532)
         cleanup.unlink.assert_called_once_with(missing_ok=True)
 
+    def test_check_api_mode_never_stops_the_owned_target(self) -> None:
+        target = HELPER.Target("API", 7979, 20532)
+        with (
+            mock.patch.object(HELPER, "DaemonEmbedManager", return_value=mock.Mock()),
+            mock.patch.object(HELPER, "resolve_targets", return_value=[target]),
+            mock.patch.object(HELPER, "stop_targets") as stop,
+        ):
+            result = HELPER.main(["--mode", "check-api", "--profile", "systalyze"])
+
+        self.assertEqual(result, 0)
+        stop.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

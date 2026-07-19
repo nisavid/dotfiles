@@ -210,7 +210,7 @@ def resolve_targets(manager: DaemonEmbedManager, args: argparse.Namespace) -> li
     api_ports: set[int] = set()
     ui_ports: set[int] = set()
 
-    if args.mode in {"stop", "stop-api"}:
+    if args.mode in {"stop", "stop-api", "check-api"}:
         api_ports.add(paths.port)
         if args.desired_api_port is not None:
             api_ports.add(args.desired_api_port)
@@ -220,8 +220,11 @@ def resolve_targets(manager: DaemonEmbedManager, args: argparse.Namespace) -> li
             ui_ports.add(recorded_ui_port)
         if args.desired_ui_port is not None:
             ui_ports.add(args.desired_ui_port)
-    if args.mode in {"stop", "stop-api", "stop-ui"}:
-        return find_owned_targets(manager, paths, api_url, api_ports, ui_ports)
+    if args.mode in {"stop", "stop-api", "stop-ui", "check-api"}:
+        targets = find_owned_targets(manager, paths, api_url, api_ports, ui_ports)
+        if args.mode == "check-api" and not targets:
+            raise StopError("no owned API listener found")
+        return targets
 
     desired_api_port = args.desired_api_port
     desired_ui_port = args.desired_ui_port
@@ -258,7 +261,7 @@ def resolve_targets(manager: DaemonEmbedManager, args: argparse.Namespace) -> li
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Safely stop Hindsight profile services.")
-    parser.add_argument("--mode", choices=("normalize", "stop", "stop-api", "stop-ui", "stop-control"), required=True)
+    parser.add_argument("--mode", choices=("normalize", "check-api", "stop", "stop-api", "stop-ui", "stop-control"), required=True)
     parser.add_argument("--profile", default="")
     parser.add_argument("--desired-api-port", type=int)
     parser.add_argument("--desired-ui-port", type=int)
@@ -274,6 +277,8 @@ def main(argv: list[str]) -> int:
         args = parse_args(argv)
         manager = DaemonEmbedManager()
         targets = resolve_targets(manager, args)
+        if args.mode == "check-api":
+            return 0
         if args.timeout <= 0:
             raise StopError("timeout must be greater than zero")
         stop_targets(manager, targets, timeout_seconds=args.timeout)

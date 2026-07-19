@@ -881,6 +881,16 @@ hindsight_stack_daemon_running() {
     hindsight_stack_port_listening "$HINDSIGHT_EMBED_API_PORT"
 }
 
+hindsight_stack_daemon_present() {
+  emulate -L zsh
+  hindsight_stack_load_config
+
+  hindsight_stack_run_stop_helper \
+    --mode check-api \
+    --profile "$HINDSIGHT_EMBED_PROFILE" \
+    --desired-api-port "$HINDSIGHT_EMBED_API_PORT"
+}
+
 hindsight_stack_ui_status() {
   emulate -L zsh
   hindsight_stack_load_config
@@ -1169,11 +1179,11 @@ hindsight_stack_reconcile_daemon() {
   # A listening daemon may be overloaded and temporarily miss HTTP health.
   # Do not destroy live work; explicit restart remains available for a hung
   # process, while an absent listener still enters automatic recovery below.
-  if hindsight_stack_daemon_running; then
+  if hindsight_stack_daemon_present; then
     return 0
   fi
   hindsight_stack_health_failure_confirmed hindsight_stack_daemon_status || return 0
-  hindsight_stack_daemon_running && return 0
+  hindsight_stack_daemon_present && return 0
 
   if ! hindsight_stack_can_start "$component"; then
     return 1
@@ -1185,7 +1195,7 @@ hindsight_stack_reconcile_daemon() {
     hindsight_stack_log "daemon start command failed"
     return 1
   fi
-  hindsight_stack_wait_daemon
+  return 0
 }
 
 hindsight_stack_reconcile_ui() {
@@ -1224,7 +1234,7 @@ hindsight_stack_reconcile_profile() {
   if hindsight_stack_enabled "$HINDSIGHT_EMBED_AUTOSTART_DAEMON"; then
     hindsight_stack_reconcile_daemon || ok=1
   fi
-  if hindsight_stack_enabled "$HINDSIGHT_EMBED_AUTOSTART_UI" && hindsight_stack_daemon_status; then
+  if hindsight_stack_enabled "$HINDSIGHT_EMBED_AUTOSTART_UI" && hindsight_stack_daemon_present; then
     hindsight_stack_reconcile_ui || ok=1
   fi
   return "$ok"

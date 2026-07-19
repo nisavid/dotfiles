@@ -214,6 +214,7 @@ reconcile_events="$tmp_dir/reconcile-events"
   hindsight_stack_reconcile_sidecars() { print -r -- "sidecars:${HINDSIGHT_EMBED_PROFILE}" >> "$reconcile_events" }
   hindsight_stack_reconcile_daemon() { print -r -- "daemon:${HINDSIGHT_EMBED_PROFILE}:${HINDSIGHT_EMBED_API_PORT}" >> "$reconcile_events" }
   hindsight_stack_daemon_status() { return 0 }
+  hindsight_stack_daemon_present() { return 0 }
   hindsight_stack_reconcile_ui() { print -r -- "ui:${HINDSIGHT_EMBED_PROFILE}:${HINDSIGHT_EMBED_UI_PORT}" >> "$reconcile_events" }
   hindsight_stack_reconcile_once
 )

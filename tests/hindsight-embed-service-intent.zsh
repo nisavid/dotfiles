@@ -112,6 +112,7 @@ reconcile_start_marker="$tmp_dir/reconcile-started"
   }
   hindsight_stack_daemon_status() { return 1 }
   hindsight_stack_daemon_running() { return 1 }
+  hindsight_stack_daemon_present() { return 1 }
   hindsight_stack_daemon_start() { print -r -- daemon >> "$HINDSIGHT_TEST_RECONCILE_START_MARKER" }
   hindsight_stack_wait_daemon() { return 0 }
   hindsight_stack_ui_status() { return 1 }
@@ -155,6 +156,7 @@ transient_health_marker="$tmp_dir/transient-health-started"
     (( daemon_checks > 1 ))
   }
   hindsight_stack_daemon_running() { return 1 }
+  hindsight_stack_daemon_present() { return 1 }
   hindsight_stack_daemon_start() { touch "$HINDSIGHT_TEST_TRANSIENT_HEALTH_MARKER" }
   hindsight_stack_wait_daemon() { return 0 }
   hindsight_stack_set_desired_state daemon running
@@ -176,12 +178,60 @@ busy_listener_marker="$tmp_dir/busy-listener-started"
   source "$rendered_stack_lib"
   hindsight_stack_daemon_status() { return 1 }
   hindsight_stack_daemon_running() { return 0 }
+  hindsight_stack_daemon_present() { return 0 }
   hindsight_stack_daemon_start() { touch "$HINDSIGHT_TEST_BUSY_LISTENER_MARKER" }
   hindsight_stack_wait_daemon() { return 0 }
   hindsight_stack_set_desired_state daemon running
   hindsight_stack_reconcile_daemon
   [[ ! -e "$HINDSIGHT_TEST_BUSY_LISTENER_MARKER" ]] || {
     print -ru2 -- "an unresponsive but listening daemon triggered an automatic restart"
+    exit 1
+  }
+)
+
+reconcile_wait_marker="$tmp_dir/reconcile-waited"
+(
+  export HOME="$test_home"
+  export HINDSIGHT_EMBED_STATE_DIR="$desired_state_dir"
+  export HINDSIGHT_EMBED_PROFILE="present-profile"
+  export HINDSIGHT_EMBED_FLEET_PROFILES="present-profile"
+  export HINDSIGHT_EMBED_HEALTH_FAILURE_CONFIRMATIONS=1
+  export HINDSIGHT_TEST_RECONCILE_WAIT_MARKER="$reconcile_wait_marker"
+  source "$rendered_stack_lib"
+  hindsight_stack_daemon_status() { return 1 }
+  hindsight_stack_daemon_running() { return 1 }
+  hindsight_stack_daemon_present() { return 1 }
+  hindsight_stack_can_start() { return 0 }
+  hindsight_stack_mark_start() { return 0 }
+  hindsight_stack_daemon_start() { return 0 }
+  hindsight_stack_wait_daemon() { touch "$HINDSIGHT_TEST_RECONCILE_WAIT_MARKER" }
+  hindsight_stack_set_desired_state daemon running
+  hindsight_stack_reconcile_daemon
+  [[ ! -e "$HINDSIGHT_TEST_RECONCILE_WAIT_MARKER" ]] || {
+    print -ru2 -- "supervisor reconciliation blocked on daemon readiness"
+    exit 1
+  }
+)
+
+ui_dependency_marker="$tmp_dir/ui-dependency-started"
+(
+  export HOME="$test_home"
+  export HINDSIGHT_EMBED_STATE_DIR="$desired_state_dir"
+  export HINDSIGHT_EMBED_PROFILE="present-profile"
+  export HINDSIGHT_EMBED_FLEET_PROFILES="present-profile"
+  export HINDSIGHT_EMBED_AUTOSTART_DAEMON=1
+  export HINDSIGHT_EMBED_AUTOSTART_UI=1
+  export HINDSIGHT_TEST_UI_DEPENDENCY_MARKER="$ui_dependency_marker"
+  source "$rendered_stack_lib"
+  hindsight_stack_reconcile_sidecars() { return 0 }
+  hindsight_stack_reconcile_daemon() { return 0 }
+  hindsight_stack_daemon_status() { return 1 }
+  hindsight_stack_daemon_running() { return 0 }
+  hindsight_stack_daemon_present() { return 0 }
+  hindsight_stack_reconcile_ui() { touch "$HINDSIGHT_TEST_UI_DEPENDENCY_MARKER" }
+  hindsight_stack_reconcile_profile
+  [[ -e "$HINDSIGHT_TEST_UI_DEPENDENCY_MARKER" ]] || {
+    print -ru2 -- "a listening API did not unblock UI reconciliation"
     exit 1
   }
 )
