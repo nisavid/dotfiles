@@ -111,9 +111,11 @@ reconcile_start_marker="$tmp_dir/reconcile-started"
     exit 1
   }
   hindsight_stack_daemon_status() { return 1 }
+  hindsight_stack_daemon_running() { return 1 }
   hindsight_stack_daemon_start() { print -r -- daemon >> "$HINDSIGHT_TEST_RECONCILE_START_MARKER" }
   hindsight_stack_wait_daemon() { return 0 }
   hindsight_stack_ui_status() { return 1 }
+  hindsight_stack_ui_running() { return 1 }
   hindsight_stack_ui_start() { print -r -- ui >> "$HINDSIGHT_TEST_RECONCILE_START_MARKER" }
   hindsight_stack_wait_ui() { return 0 }
 
@@ -152,12 +154,34 @@ transient_health_marker="$tmp_dir/transient-health-started"
     (( daemon_checks += 1 ))
     (( daemon_checks > 1 ))
   }
+  hindsight_stack_daemon_running() { return 1 }
   hindsight_stack_daemon_start() { touch "$HINDSIGHT_TEST_TRANSIENT_HEALTH_MARKER" }
   hindsight_stack_wait_daemon() { return 0 }
   hindsight_stack_set_desired_state daemon running
   hindsight_stack_reconcile_daemon
   [[ ! -e "$HINDSIGHT_TEST_TRANSIENT_HEALTH_MARKER" ]] || {
     print -ru2 -- "one transient daemon health miss triggered a restart"
+    exit 1
+  }
+)
+
+busy_listener_marker="$tmp_dir/busy-listener-started"
+(
+  export HOME="$test_home"
+  export HINDSIGHT_EMBED_STATE_DIR="$desired_state_dir"
+  export HINDSIGHT_EMBED_PROFILE="present-profile"
+  export HINDSIGHT_EMBED_FLEET_PROFILES="present-profile"
+  export HINDSIGHT_EMBED_HEALTH_FAILURE_CONFIRMATIONS=1
+  export HINDSIGHT_TEST_BUSY_LISTENER_MARKER="$busy_listener_marker"
+  source "$rendered_stack_lib"
+  hindsight_stack_daemon_status() { return 1 }
+  hindsight_stack_daemon_running() { return 0 }
+  hindsight_stack_daemon_start() { touch "$HINDSIGHT_TEST_BUSY_LISTENER_MARKER" }
+  hindsight_stack_wait_daemon() { return 0 }
+  hindsight_stack_set_desired_state daemon running
+  hindsight_stack_reconcile_daemon
+  [[ ! -e "$HINDSIGHT_TEST_BUSY_LISTENER_MARKER" ]] || {
+    print -ru2 -- "an unresponsive but listening daemon triggered an automatic restart"
     exit 1
   }
 )

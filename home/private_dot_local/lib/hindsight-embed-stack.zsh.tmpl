@@ -1166,7 +1166,14 @@ hindsight_stack_reconcile_daemon() {
   if hindsight_stack_daemon_status; then
     return 0
   fi
+  # A listening daemon may be overloaded and temporarily miss HTTP health.
+  # Do not destroy live work; explicit restart remains available for a hung
+  # process, while an absent listener still enters automatic recovery below.
+  if hindsight_stack_daemon_running; then
+    return 0
+  fi
   hindsight_stack_health_failure_confirmed hindsight_stack_daemon_status || return 0
+  hindsight_stack_daemon_running && return 0
 
   if ! hindsight_stack_can_start "$component"; then
     return 1
@@ -1191,7 +1198,11 @@ hindsight_stack_reconcile_ui() {
   if hindsight_stack_ui_status; then
     return 0
   fi
+  if hindsight_stack_ui_running; then
+    return 0
+  fi
   hindsight_stack_health_failure_confirmed hindsight_stack_ui_status || return 0
+  hindsight_stack_ui_running && return 0
 
   if ! hindsight_stack_can_start "$component"; then
     return 1
