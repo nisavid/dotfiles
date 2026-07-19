@@ -20,6 +20,21 @@ HATCHERY_RUNTIME_PROVIDER = "lmstudio"
 HATCHERY_LABEL = "hatchery"
 HATCHERY_BASE_URL = "http://hatchery.komodo-vector.ts.net:13305/v1"
 HATCHERY_MODEL = "Qwen3.6-35B-A3B-MTP-GGUF-UD-Q4_K_XL"
+CODEX_PERSONAL_PROVIDER_ID = "codex-spark-personal"
+CODEX_PERSONAL_LABEL = "Codex Spark — personal (ivan@nisavid.io)"
+CODEX_WORK_PROVIDER_ID = "codex-spark-work"
+CODEX_WORK_LABEL = "Codex Spark — work (ivan@systalyze.com)"
+CODEX_RUNTIME_PROVIDER = "openai-codex"
+CODEX_MODEL = "gpt-5.3-codex-spark"
+CODEX_REASONING_EFFORT = "xhigh"
+CODEX_HOME_ENV = "CODEX_HOME"
+CODEX_REASONING_EFFORT_ENV = "HINDSIGHT_API_LLM_REASONING_EFFORT"
+CODEX_PERSONAL_HOME = Path.home() / ".hindsight/codex"
+CODEX_WORK_HOME = Path.home() / ".hindsight/codex-work"
+CODEX_PROVIDER_HOMES = {
+    CODEX_PERSONAL_PROVIDER_ID: CODEX_PERSONAL_HOME,
+    CODEX_WORK_PROVIDER_ID: CODEX_WORK_HOME,
+}
 
 
 def normalize_profile(profile: str) -> str:
@@ -105,10 +120,29 @@ def install_lifecycle_hooks(service, desired_state_dir: Path) -> None:
 
 
 def install_provider_catalog(providers) -> None:
-    existing = {provider.id for provider in providers.PROVIDER_CATALOG}
+    catalog = tuple(
+        provider
+        for provider in providers.PROVIDER_CATALOG
+        if provider.id != "openai-codex"
+    )
+    existing = {provider.id for provider in catalog}
     additions = []
-    if "openai-codex" not in existing:
-        additions.append(providers.ProviderInfo("openai-codex", "OpenAI Codex (subscription)", False))
+    if CODEX_PERSONAL_PROVIDER_ID not in existing:
+        additions.append(
+            providers.ProviderInfo(
+                CODEX_PERSONAL_PROVIDER_ID,
+                CODEX_PERSONAL_LABEL,
+                False,
+            )
+        )
+    if CODEX_WORK_PROVIDER_ID not in existing:
+        additions.append(
+            providers.ProviderInfo(
+                CODEX_WORK_PROVIDER_ID,
+                CODEX_WORK_LABEL,
+                False,
+            )
+        )
     if "claude-code" not in existing:
         additions.append(providers.ProviderInfo("claude-code", "Claude Code (subscription)", False))
     if HATCHERY_PROVIDER_ID not in existing:
@@ -120,7 +154,7 @@ def install_provider_catalog(providers) -> None:
                 HATCHERY_BASE_URL,
             )
         )
-    providers.PROVIDER_CATALOG = (*providers.PROVIDER_CATALOG, *additions)
+    providers.PROVIDER_CATALOG = (*catalog, *additions)
 
 
 def _is_hatchery_config(config) -> bool:
@@ -131,6 +165,21 @@ def _is_hatchery_config(config) -> bool:
     )
 
 
+def _codex_alias_for_config(config, env: dict[str, str]) -> str | None:
+    if not (
+        config.provider == CODEX_RUNTIME_PROVIDER
+        and config.model == CODEX_MODEL
+        and not config.base_url
+        and env.get(CODEX_REASONING_EFFORT_ENV) == CODEX_REASONING_EFFORT
+    ):
+        return None
+    codex_home = env.get(CODEX_HOME_ENV)
+    for provider_id, home in CODEX_PROVIDER_HOMES.items():
+        if codex_home == str(home):
+            return provider_id
+    return None
+
+
 def install_provider_alias(service) -> None:
     original_get_profile_config = service.get_profile_config
     original_list_profiles = service.list_profiles
@@ -139,6 +188,12 @@ def install_provider_alias(service) -> None:
     def display_config(config):
         if _is_hatchery_config(config):
             return replace(config, provider=HATCHERY_PROVIDER_ID)
+        codex_alias = _codex_alias_for_config(
+            config,
+            service._read_raw_env(config.name),
+        )
+        if codex_alias:
+            return replace(config, provider=codex_alias)
         return config
 
     def get_profile_config(name: str):
@@ -148,11 +203,11 @@ def install_provider_alias(service) -> None:
         summaries = []
         for summary in original_list_profiles():
             config = get_profile_config(summary.name)
-            if config.provider == HATCHERY_PROVIDER_ID:
+            if config.provider != summary.provider:
                 summary = replace(
                     summary,
-                    provider=HATCHERY_PROVIDER_ID,
-                    model=HATCHERY_MODEL,
+                    provider=config.provider,
+                    model=config.model,
                 )
             summaries.append(summary)
         return summaries
@@ -169,7 +224,16 @@ def install_provider_alias(service) -> None:
         cp_version: str | None = None,
     ):
         current = original_get_profile_config(name)
-        if provider == HATCHERY_PROVIDER_ID:
+        current_env = service._read_raw_env(name)
+        current_codex_alias = _codex_alias_for_config(current, current_env)
+        codex_home = None
+        if provider in CODEX_PROVIDER_HOMES:
+            codex_home = CODEX_PROVIDER_HOMES[provider]
+            provider = CODEX_RUNTIME_PROVIDER
+            api_key = ""
+            model = CODEX_MODEL
+            base_url = ""
+        elif provider == HATCHERY_PROVIDER_ID:
             provider = HATCHERY_RUNTIME_PROVIDER
             api_key = ""
             model = HATCHERY_MODEL
@@ -177,19 +241,28 @@ def install_provider_alias(service) -> None:
         elif base_url is None and _is_hatchery_config(current):
             base_url = ""
 
-        return display_config(
-            original_save_llm_config(
-                name=name,
-                provider=provider,
-                api_key=api_key,
-                model=model,
-                base_url=base_url,
-                api_port=api_port,
-                ui_port=ui_port,
-                api_version=api_version,
-                cp_version=cp_version,
-            )
+        original_save_llm_config(
+            name=name,
+            provider=provider,
+            api_key=api_key,
+            model=model,
+            base_url=base_url,
+            api_port=api_port,
+            ui_port=ui_port,
+            api_version=api_version,
+            cp_version=cp_version,
         )
+        if codex_home is not None:
+            env = service._read_raw_env(name)
+            env[CODEX_HOME_ENV] = str(codex_home)
+            env[CODEX_REASONING_EFFORT_ENV] = CODEX_REASONING_EFFORT
+            service._write_raw_env(name, env)
+        elif current_codex_alias:
+            env = service._read_raw_env(name)
+            env.pop(CODEX_HOME_ENV, None)
+            env.pop(CODEX_REASONING_EFFORT_ENV, None)
+            service._write_raw_env(name, env)
+        return display_config(original_get_profile_config(name))
 
     service.get_profile_config = get_profile_config
     service.list_profiles = list_profiles

@@ -96,10 +96,13 @@ profile changes replace the running daemon. `stop` unloads the LaunchAgent and
 performs a bounded stop of the broker, control service, every enabled API/UI
 pair, and declared sidecars.
 
-The managed Control Center adds `OpenAI Codex (subscription)` and `Claude Code
-(subscription)` to Hindsight Embed's provider catalog. These provider entries
-use the corresponding local OAuth subscription state and do not require an API
-key in the profile.
+The managed Control Center exposes personal and work Codex Spark subscription
+choices plus `Claude Code (subscription)`. The personal choice uses
+`~/.hindsight/codex`; the work choice uses `~/.hindsight/codex-work`. Both
+Codex choices save `openai-codex`, `gpt-5.3-codex-spark`, and `xhigh` into the
+runtime profile while keeping their OAuth state separate. Authenticate each
+Codex home once; switching choices does not copy credentials or require another
+login. These subscription choices do not require an API key in the profile.
 
 Each optional sidecar is declared under
 `~/.hindsight/profiles/PROFILE.sidecars/NAME/`. A declaration contains either
