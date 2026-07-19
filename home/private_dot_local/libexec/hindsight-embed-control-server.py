@@ -21,6 +21,8 @@ HATCHERY_RUNTIME_PROVIDER = "lmstudio"
 HATCHERY_LABEL = "hatchery"
 HATCHERY_BASE_URL = "http://hatchery.komodo-vector.ts.net:13305/v1"
 HATCHERY_MODEL = "Qwen3.6-35B-A3B-MTP-GGUF-UD-Q4_K_XL"
+AUTOMATIC_PROVIDER_ID = "automatic"
+AUTOMATIC_LABEL = "Automatic — work → personal → hatchery"
 CODEX_NISAVID_PROVIDER_ID = "codex-spark-nisavid"
 CODEX_NISAVID_LABEL = "Codex Spark — personal (ivan@nisavid.io)"
 CODEX_SYSTALYZE_PROVIDER_ID = "codex-spark-systalyze"
@@ -30,6 +32,25 @@ CODEX_MODEL = "gpt-5.3-codex-spark"
 CODEX_REASONING_EFFORT = "xhigh"
 CODEX_HOME_ENV = "CODEX_HOME"
 CODEX_REASONING_EFFORT_ENV = "HINDSIGHT_API_LLM_REASONING_EFFORT"
+LLM_API_KEY_ENV = "HINDSIGHT_API_LLM_API_KEY"
+AUTOMATIC_ENV = {
+    "HINDSIGHT_API_LLM_1_PROVIDER": CODEX_RUNTIME_PROVIDER,
+    "HINDSIGHT_API_LLM_1_MODEL": CODEX_MODEL,
+    "HINDSIGHT_API_LLM_1_REASONING_EFFORT": CODEX_REASONING_EFFORT,
+    "HINDSIGHT_API_LLM_2_PROVIDER": HATCHERY_RUNTIME_PROVIDER,
+    "HINDSIGHT_API_LLM_2_MODEL": HATCHERY_MODEL,
+    "HINDSIGHT_API_LLM_2_BASE_URL": HATCHERY_BASE_URL,
+    "HINDSIGHT_API_LLM_2_REASONING_EFFORT": "low",
+    "HINDSIGHT_API_LLM_STRATEGY": '{"mode":"failover"}',
+    "HINDSIGHT_API_LLM_MAX_RETRIES": "0",
+    "HINDSIGHT_API_SKIP_LLM_VERIFICATION": "true",
+}
+AUTOMATIC_OWNED_ENV = frozenset(
+    {
+        *AUTOMATIC_ENV,
+        "HINDSIGHT_API_LLM_1_API_KEY",
+    }
+)
 CODEX_NISAVID_HOME = Path.home() / ".hindsight/codex-nisavid"
 CODEX_SYSTALYZE_HOME = Path.home() / ".hindsight/codex-systalyze"
 CODEX_PROVIDER_HOMES = {
@@ -272,6 +293,14 @@ def install_provider_catalog(providers) -> None:
     )
     existing = {provider.id for provider in catalog}
     additions = []
+    if AUTOMATIC_PROVIDER_ID not in existing:
+        additions.append(
+            providers.ProviderInfo(
+                AUTOMATIC_PROVIDER_ID,
+                AUTOMATIC_LABEL,
+                False,
+            )
+        )
     if CODEX_NISAVID_PROVIDER_ID not in existing:
         additions.append(
             providers.ProviderInfo(
@@ -310,6 +339,20 @@ def _is_hatchery_config(config) -> bool:
     )
 
 
+def _codex_home_marker(home: Path) -> str:
+    return f"codex-home:{home}"
+
+
+def _is_automatic_config(config, env: dict[str, str]) -> bool:
+    return (
+        config.provider == CODEX_RUNTIME_PROVIDER
+        and config.model == CODEX_MODEL
+        and env.get(LLM_API_KEY_ENV) == _codex_home_marker(CODEX_SYSTALYZE_HOME)
+        and env.get("HINDSIGHT_API_LLM_1_API_KEY") == _codex_home_marker(CODEX_NISAVID_HOME)
+        and all(env.get(key) == value for key, value in AUTOMATIC_ENV.items())
+    )
+
+
 def _codex_alias_for_config(config, env: dict[str, str]) -> str | None:
     if not (
         config.provider == CODEX_RUNTIME_PROVIDER
@@ -320,7 +363,7 @@ def _codex_alias_for_config(config, env: dict[str, str]) -> str | None:
         return None
     codex_home = env.get(CODEX_HOME_ENV)
     for provider_id, home in CODEX_PROVIDER_HOMES.items():
-        if codex_home == str(home):
+        if codex_home == str(home) or env.get(LLM_API_KEY_ENV) == _codex_home_marker(home):
             return provider_id
     return None
 
@@ -331,14 +374,23 @@ def install_provider_alias(service) -> None:
     original_save_llm_config = service.save_llm_config
 
     def display_config(config):
+        env = service._read_raw_env(config.name)
+        if _is_automatic_config(config, env):
+            changes = {"provider": AUTOMATIC_PROVIDER_ID}
+            if hasattr(config, "has_api_key"):
+                changes.update(has_api_key=False, api_key_masked=None)
+            return replace(config, **changes)
         if _is_hatchery_config(config):
             return replace(config, provider=HATCHERY_PROVIDER_ID)
         codex_alias = _codex_alias_for_config(
             config,
-            service._read_raw_env(config.name),
+            env,
         )
         if codex_alias:
-            return replace(config, provider=codex_alias)
+            changes = {"provider": codex_alias}
+            if hasattr(config, "has_api_key"):
+                changes.update(has_api_key=False, api_key_masked=None)
+            return replace(config, **changes)
         return config
 
     def get_profile_config(name: str):
@@ -371,11 +423,18 @@ def install_provider_alias(service) -> None:
         current = original_get_profile_config(name)
         current_env = service._read_raw_env(name)
         current_codex_alias = _codex_alias_for_config(current, current_env)
+        current_is_automatic = _is_automatic_config(current, current_env)
         codex_home = None
-        if provider in CODEX_PROVIDER_HOMES:
+        automatic = provider == AUTOMATIC_PROVIDER_ID
+        if automatic:
+            provider = CODEX_RUNTIME_PROVIDER
+            api_key = _codex_home_marker(CODEX_SYSTALYZE_HOME)
+            model = CODEX_MODEL
+            base_url = ""
+        elif provider in CODEX_PROVIDER_HOMES:
             codex_home = CODEX_PROVIDER_HOMES[provider]
             provider = CODEX_RUNTIME_PROVIDER
-            api_key = ""
+            api_key = _codex_home_marker(codex_home)
             model = CODEX_MODEL
             base_url = ""
         elif provider == HATCHERY_PROVIDER_ID:
@@ -397,15 +456,26 @@ def install_provider_alias(service) -> None:
             api_version=api_version,
             cp_version=cp_version,
         )
-        if codex_home is not None:
-            env = service._read_raw_env(name)
+        env = service._read_raw_env(name)
+        if automatic:
+            env.pop(CODEX_HOME_ENV, None)
+            env[CODEX_REASONING_EFFORT_ENV] = CODEX_REASONING_EFFORT
+            env[LLM_API_KEY_ENV] = _codex_home_marker(CODEX_SYSTALYZE_HOME)
+            env["HINDSIGHT_API_LLM_1_API_KEY"] = _codex_home_marker(CODEX_NISAVID_HOME)
+            env.update(AUTOMATIC_ENV)
+            service._write_raw_env(name, env)
+        elif codex_home is not None:
             env[CODEX_HOME_ENV] = str(codex_home)
             env[CODEX_REASONING_EFFORT_ENV] = CODEX_REASONING_EFFORT
+            env[LLM_API_KEY_ENV] = _codex_home_marker(codex_home)
+            for key in AUTOMATIC_OWNED_ENV:
+                env.pop(key, None)
             service._write_raw_env(name, env)
-        elif current_codex_alias:
-            env = service._read_raw_env(name)
+        elif current_codex_alias or current_is_automatic:
             env.pop(CODEX_HOME_ENV, None)
             env.pop(CODEX_REASONING_EFFORT_ENV, None)
+            for key in AUTOMATIC_OWNED_ENV:
+                env.pop(key, None)
             service._write_raw_env(name, env)
         return display_config(original_get_profile_config(name))
 

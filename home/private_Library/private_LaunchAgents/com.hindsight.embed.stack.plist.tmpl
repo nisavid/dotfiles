@@ -33,6 +33,10 @@
     <string>{{ .chezmoi.username }}</string>
     <key>PATH</key>
     <string>{{ joinPath .chezmoi.homeDir ".local/bin" }}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>PYTHONPATH</key>
+    <string>{{ joinPath .chezmoi.homeDir ".local/lib/hindsight-runtime" }}</string>
+    <key>HINDSIGHT_EMBED_LLM_RUNTIME</key>
+    <string>{{ joinPath .chezmoi.homeDir ".local/lib/hindsight-runtime" }}</string>
     <key>HINDSIGHT_EMBED_UVX</key>
     <string>{{ joinPath .chezmoi.homeDir ".local/bin/uvx" }}</string>
     <key>HINDSIGHT_EMBED_CONTROL_PORT</key>

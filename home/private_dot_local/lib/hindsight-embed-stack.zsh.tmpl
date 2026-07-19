@@ -22,6 +22,8 @@ hindsight_stack_load_config() {
   typeset -g HINDSIGHT_EMBED_PYTHON="${HINDSIGHT_EMBED_PYTHON:-$HOME/.local/share/uv/tools/hindsight-embed/bin/python}"
   typeset -g HINDSIGHT_EMBED_STOP_HELPER="${HINDSIGHT_EMBED_STOP_HELPER:-$HOME/.local/libexec/hindsight-embed-stop-profile-services.py}"
   typeset -g HINDSIGHT_EMBED_CONTROL_SERVER="${HINDSIGHT_EMBED_CONTROL_SERVER:-$HOME/.local/libexec/hindsight-embed-control-server.py}"
+  typeset -g HINDSIGHT_EMBED_LLM_RUNTIME="${HINDSIGHT_EMBED_LLM_RUNTIME:-$HOME/.local/lib/hindsight-runtime}"
+  typeset -gx PYTHONPATH="$HINDSIGHT_EMBED_LLM_RUNTIME"
   typeset -g HINDSIGHT_MEMORY_CLI="${HINDSIGHT_MEMORY_CLI:-$HOME/.local/bin/hindsight-memory}"
   typeset -g HINDSIGHT_MEMORY_STATE_DIR="${HINDSIGHT_MEMORY_STATE_DIR:-$HOME/.local/state/hindsight-memory}"
   typeset -g HINDSIGHT_MEMORY_BROKER_SOCKET="${HINDSIGHT_MEMORY_BROKER_SOCKET:-$HINDSIGHT_MEMORY_STATE_DIR/broker.sock}"
@@ -112,6 +114,10 @@ hindsight_stack_require_runtime_helpers() {
   }
   [[ -r "$HINDSIGHT_EMBED_CONTROL_SERVER" ]] || {
     print -ru2 -- "hindsight-embed-stack: missing control server wrapper at ${HINDSIGHT_EMBED_CONTROL_SERVER}"
+    return 1
+  }
+  [[ -r "$HINDSIGHT_EMBED_LLM_RUNTIME/sitecustomize.py" && -r "$HINDSIGHT_EMBED_LLM_RUNTIME/hindsight_llm_failover.py" ]] || {
+    print -ru2 -- "hindsight-embed-stack: missing LLM failover runtime at ${HINDSIGHT_EMBED_LLM_RUNTIME}"
     return 1
   }
   "$HINDSIGHT_EMBED_PYTHON" "$HINDSIGHT_EMBED_STOP_HELPER" --help >/dev/null 2>&1 || {

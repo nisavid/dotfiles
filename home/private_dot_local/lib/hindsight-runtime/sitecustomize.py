@@ -1,0 +1,4 @@
+from hindsight_llm_failover import install_hindsight_patches
+
+
+install_hindsight_patches()

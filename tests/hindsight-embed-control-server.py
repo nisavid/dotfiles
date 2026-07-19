@@ -126,6 +126,11 @@ class ControlServerHooksTest(unittest.TestCase):
             "Codex Spark — work (ivan@systalyze.com)",
         )
         self.assertFalse(providers["codex-spark-systalyze"].needs_api_key)
+        self.assertEqual(
+            providers["automatic"].label,
+            "Automatic — work → personal → hatchery",
+        )
+        self.assertFalse(providers["automatic"].needs_api_key)
         self.assertFalse(providers["claude-code"].needs_api_key)
         self.assertEqual(providers["hatchery"].label, "hatchery")
         self.assertFalse(providers["hatchery"].needs_api_key)
@@ -175,7 +180,7 @@ class ControlServerHooksTest(unittest.TestCase):
             {
                 "name": "systalyze",
                 "provider": "openai-codex",
-                "api_key": "",
+                "api_key": f"codex-home:{Path.home() / '.hindsight/codex-nisavid'}",
                 "model": "gpt-5.3-codex-spark",
                 "base_url": "",
                 "api_port": None,
@@ -189,6 +194,7 @@ class ControlServerHooksTest(unittest.TestCase):
             {
                 "CODEX_HOME": str(Path.home() / ".hindsight/codex-nisavid"),
                 "HINDSIGHT_API_LLM_REASONING_EFFORT": "xhigh",
+                "HINDSIGHT_API_LLM_API_KEY": f"codex-home:{Path.home() / '.hindsight/codex-nisavid'}",
             },
         )
         self.assertEqual(
@@ -217,9 +223,70 @@ class ControlServerHooksTest(unittest.TestCase):
             "xhigh",
         )
         self.assertEqual(
+            self.profile_env["HINDSIGHT_API_LLM_API_KEY"],
+            f"codex-home:{Path.home() / '.hindsight/codex-systalyze'}",
+        )
+        self.assertEqual(
             self.service.list_profiles()[0].provider,
             "codex-spark-systalyze",
         )
+
+    def test_automatic_alias_saves_ordered_native_failover_chain(self) -> None:
+        result = self.service.save_llm_config(
+            name="systalyze",
+            provider="automatic",
+            api_key=None,
+            model=None,
+            base_url=None,
+        )
+
+        self.assertEqual(result.provider, "automatic")
+        self.assertEqual(self.saved_configs[-1]["provider"], "openai-codex")
+        self.assertEqual(self.saved_configs[-1]["model"], "gpt-5.3-codex-spark")
+        self.assertEqual(
+            self.profile_env["HINDSIGHT_API_LLM_API_KEY"],
+            f"codex-home:{Path.home() / '.hindsight/codex-systalyze'}",
+        )
+        self.assertEqual(self.profile_env["HINDSIGHT_API_LLM_1_PROVIDER"], "openai-codex")
+        self.assertEqual(
+            self.profile_env["HINDSIGHT_API_LLM_1_API_KEY"],
+            f"codex-home:{Path.home() / '.hindsight/codex-nisavid'}",
+        )
+        self.assertEqual(self.profile_env["HINDSIGHT_API_LLM_2_PROVIDER"], "lmstudio")
+        self.assertEqual(
+            self.profile_env["HINDSIGHT_API_LLM_2_MODEL"],
+            "Qwen3.6-35B-A3B-MTP-GGUF-UD-Q4_K_XL",
+        )
+        self.assertEqual(
+            self.profile_env["HINDSIGHT_API_LLM_2_BASE_URL"],
+            "http://hatchery.komodo-vector.ts.net:13305/v1",
+        )
+        self.assertEqual(self.profile_env["HINDSIGHT_API_LLM_2_REASONING_EFFORT"], "low")
+        self.assertEqual(self.profile_env["HINDSIGHT_API_LLM_STRATEGY"], '{"mode":"failover"}')
+        self.assertEqual(self.profile_env["HINDSIGHT_API_LLM_MAX_RETRIES"], "0")
+        self.assertEqual(self.profile_env["HINDSIGHT_API_SKIP_LLM_VERIFICATION"], "true")
+        self.assertEqual(self.service.list_profiles()[0].provider, "automatic")
+
+    def test_switching_from_automatic_clears_failover_owned_environment(self) -> None:
+        self.service.save_llm_config(
+            name="systalyze",
+            provider="automatic",
+            api_key=None,
+            model=None,
+            base_url=None,
+        )
+        self.service.save_llm_config(
+            name="systalyze",
+            provider="hatchery",
+            api_key=None,
+            model=None,
+            base_url=None,
+        )
+
+        self.assertFalse(any("LLM_1_" in key or "LLM_2_" in key for key in self.profile_env))
+        self.assertNotIn("HINDSIGHT_API_LLM_STRATEGY", self.profile_env)
+        self.assertNotIn("HINDSIGHT_API_SKIP_LLM_VERIFICATION", self.profile_env)
+        self.assertEqual(self.service.get_profile_config("systalyze").provider, "hatchery")
 
     def test_switching_from_codex_alias_clears_alias_owned_environment(self) -> None:
         self.service.save_llm_config(

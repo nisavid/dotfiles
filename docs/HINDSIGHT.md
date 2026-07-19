@@ -105,6 +105,14 @@ OAuth state separate. Authenticate each Codex home once; switching choices does
 not copy credentials or require another login. These subscription choices do
 not require an API key in the profile.
 
+`Automatic — work → personal → hatchery` uses Hindsight's in-process failover
+chain in that order. It sends no quota probes and performs no provider-driven
+daemon restarts. A real request that receives Codex `usage_limit_reached`
+continues on the next provider, and later requests bypass that account until
+the reset time reported by Codex. The higher-priority account becomes eligible
+again after that time. Other provider or network failures fall through for the
+current request without opening a quota cooldown.
+
 Each optional sidecar is declared under
 `~/.hindsight/profiles/PROFILE.sidecars/NAME/`. A declaration contains either
 `port` or `port-base`, may contain `health-path`, and may provide executable
