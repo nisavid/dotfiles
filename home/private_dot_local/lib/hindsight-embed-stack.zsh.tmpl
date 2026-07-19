@@ -37,6 +37,8 @@ hindsight_stack_load_config() {
   typeset -g HINDSIGHT_MEMORY_BROKER_WAIT_SECONDS="${HINDSIGHT_MEMORY_BROKER_WAIT_SECONDS:-30}"
   typeset -g HINDSIGHT_EMBED_STOP_WAIT_SECONDS="${HINDSIGHT_EMBED_STOP_WAIT_SECONDS:-30}"
   typeset -g HINDSIGHT_EMBED_START_COOLDOWN_SECONDS="${HINDSIGHT_EMBED_START_COOLDOWN_SECONDS:-20}"
+  typeset -g HINDSIGHT_EMBED_HEALTH_FAILURE_CONFIRMATIONS="${HINDSIGHT_EMBED_HEALTH_FAILURE_CONFIRMATIONS:-3}"
+  typeset -g HINDSIGHT_EMBED_HEALTH_FAILURE_INTERVAL_SECONDS="${HINDSIGHT_EMBED_HEALTH_FAILURE_INTERVAL_SECONDS:-2}"
 }
 
 hindsight_stack_timestamp() {
@@ -1131,6 +1133,25 @@ hindsight_stack_reconcile_broker() {
   hindsight_stack_wait_broker
 }
 
+hindsight_stack_health_failure_confirmed() {
+  emulate -L zsh
+  hindsight_stack_load_config
+
+  local status_function="$1"
+  local confirmations="$HINDSIGHT_EMBED_HEALTH_FAILURE_CONFIRMATIONS"
+  local interval_seconds="$HINDSIGHT_EMBED_HEALTH_FAILURE_INTERVAL_SECONDS"
+  [[ "$confirmations" == <-> ]] || confirmations=3
+  [[ "$interval_seconds" == <-> ]] || interval_seconds=2
+  (( confirmations > 1 )) || return 0
+
+  integer attempt
+  for (( attempt = 2; attempt <= confirmations; attempt += 1 )); do
+    (( interval_seconds == 0 )) || sleep "$interval_seconds"
+    "$status_function" && return 1
+  done
+  return 0
+}
+
 hindsight_stack_reconcile_daemon() {
   emulate -L zsh
 
@@ -1141,6 +1162,7 @@ hindsight_stack_reconcile_daemon() {
   if hindsight_stack_daemon_status; then
     return 0
   fi
+  hindsight_stack_health_failure_confirmed hindsight_stack_daemon_status || return 0
 
   if ! hindsight_stack_can_start "$component"; then
     return 1
@@ -1165,6 +1187,7 @@ hindsight_stack_reconcile_ui() {
   if hindsight_stack_ui_status; then
     return 0
   fi
+  hindsight_stack_health_failure_confirmed hindsight_stack_ui_status || return 0
 
   if ! hindsight_stack_can_start "$component"; then
     return 1

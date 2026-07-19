@@ -103,6 +103,7 @@ reconcile_start_marker="$tmp_dir/reconcile-started"
   export HINDSIGHT_EMBED_API_PORT=7979
   export HINDSIGHT_EMBED_UI_PORT=17979
   export HINDSIGHT_EMBED_START_COOLDOWN_SECONDS=0
+  export HINDSIGHT_EMBED_HEALTH_FAILURE_CONFIRMATIONS=1
   export HINDSIGHT_TEST_RECONCILE_START_MARKER="$reconcile_start_marker"
   source "$rendered_stack_lib"
   (( $+functions[hindsight_stack_set_desired_state] )) || {
@@ -132,6 +133,31 @@ reconcile_start_marker="$tmp_dir/reconcile-started"
   hindsight_stack_reconcile_ui
   [[ ! -s "$HINDSIGHT_TEST_RECONCILE_START_MARKER" ]] || {
     print -ru2 -- "intentionally stopped components were restarted"
+    exit 1
+  }
+)
+
+transient_health_marker="$tmp_dir/transient-health-started"
+(
+  export HOME="$test_home"
+  export HINDSIGHT_EMBED_STATE_DIR="$desired_state_dir"
+  export HINDSIGHT_EMBED_PROFILE="present-profile"
+  export HINDSIGHT_EMBED_FLEET_PROFILES="present-profile"
+  export HINDSIGHT_EMBED_HEALTH_FAILURE_CONFIRMATIONS=2
+  export HINDSIGHT_EMBED_HEALTH_FAILURE_INTERVAL_SECONDS=0
+  export HINDSIGHT_TEST_TRANSIENT_HEALTH_MARKER="$transient_health_marker"
+  source "$rendered_stack_lib"
+  integer daemon_checks=0
+  hindsight_stack_daemon_status() {
+    (( daemon_checks += 1 ))
+    (( daemon_checks > 1 ))
+  }
+  hindsight_stack_daemon_start() { touch "$HINDSIGHT_TEST_TRANSIENT_HEALTH_MARKER" }
+  hindsight_stack_wait_daemon() { return 0 }
+  hindsight_stack_set_desired_state daemon running
+  hindsight_stack_reconcile_daemon
+  [[ ! -e "$HINDSIGHT_TEST_TRANSIENT_HEALTH_MARKER" ]] || {
+    print -ru2 -- "one transient daemon health miss triggered a restart"
     exit 1
   }
 )
