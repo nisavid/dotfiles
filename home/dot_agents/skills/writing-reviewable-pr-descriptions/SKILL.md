@@ -39,6 +39,42 @@ For large PRs, consider these first-viewport elements and include only the ones 
 
 Then add only the sections reviewers need: summary, architecture/contracts, concrete change groups, media, triage/rationale, verification, current status, PR readiness blockers, and story follow-up.
 
+## Change Mix
+
+Put a compact change-mix line at the top of every PR body when the pushed PR diff is available. Keep it visually subordinate with `<sup>` and report the share of changed lines that is implementation:
+
+```md
+<sup>change mix: **42%&nbsp;implementation** (28 of 66 changed lines)</sup>
+```
+
+For a stacked PR, lead with its current position and navigation:
+
+```md
+<sup>**[7 ⁄ 7]** · depends on #1418 · top of stack · change mix: **42%&nbsp;implementation** (28 of 66 changed lines)</sup>
+```
+
+Use `&nbsp;` between the percentage and `implementation` so the metric cannot wrap between them. Use **change mix** for the concept, **implementation** for the primary bucket, and **changed lines** for additions plus deletions. Do not call the bucket meat, real code, core code, production code, functional code, or review-weighted lines.
+
+Classify the exact pushed PR diff into these buckets, in this order:
+
+- **Implementation:** non-test source and configuration that changes runtime, build, deployment, migration, tooling, or CI behavior.
+- **Tests:** test source, fixtures, test helpers, test-only setup and configuration, and test-only dependency changes.
+- **Docs:** documentation and prose-only examples.
+- **Generated:** lockfiles and generated artifacts or data.
+- **Other:** assets, manifests, or supporting metadata that do not fit the preceding buckets.
+
+Inspect mixed files instead of classifying them from the path alone. When a mixed file cannot be split reliably, use `other`. Count pure moves and copies as file operations, not changed lines; classify only their modified lines when they also contain edits. Count binary files in file operations even when they have no line count.
+
+In a `## Stack` section, link each PR's recognizable title and put its composition and file operations directly below it:
+
+```md
+- [#1419 — refactor(web): expose functional a11y/state handles](https://github.com/OWNER/REPO/pull/1419) **← this PR**<br><sup>change mix: **42%&nbsp;implementation** (28 of 66 changed lines) · tests 38 · files: 0 added · 6 changed · 0 removed</sup>
+```
+
+Keep category order fixed and omit zero-value `tests`, `docs`, `generated`, and `other` categories. Always show added, changed, and removed file counts; add moved or copied counts when nonzero. Define the taxonomy once below the stack: implementation excludes tests, docs, generated files, and other supporting files; pure moves and copies are file operations rather than changed lines.
+
+Prefer this native text treatment to Shields.io badges for change composition. Badges make supporting data louder, introduce color semantics, wrap poorly in long stacks, and turn searchable text into external images. Essential stack navigation must also remain in the semantic `## Stack` list because `<sup>` is visually small.
+
 ## Scannability And Links
 
 - Lead with bullets when listing facts, changes, risks, checks, or follow-up.
@@ -95,6 +131,8 @@ For large, stacked, cross-cutting, reviewer-heavy, or readiness-ambiguous PRs, i
 - Dependencies identify actual base PRs, companion PRs, required artifacts, blockers, and likely-changing areas. Omit empty categories such as "no companion PRs" unless reviewers are likely to assume one exists.
 - The reviewer map gives a boundary-based path through the diff.
 - Architecture/contracts explain ownership, data flow, lifecycle, and visible behavior.
+- The top change-mix line matches the exact pushed PR base/head, uses `&nbsp;` between the implementation percentage and label, and is regenerated after a restack or force-push.
+- Stacked PR bodies use the current full-stack denominator, consistent previous/next navigation, recognizable linked titles, per-entry change mix, and file-operation counts.
 
 ## Rules
 

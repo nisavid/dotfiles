@@ -2,6 +2,8 @@
 
 This is a concrete example to study and adapt, not a template to paste.
 
+<sup>change mix: **38%&nbsp;implementation** (1,240 of 3,260 changed lines)</sup>
+
 [![Checks: Passing](https://img.shields.io/badge/checks-passing-2EA44F?style=flat-square)](#verification) [![Review: Requested](https://img.shields.io/badge/review-requested-0969DA?style=flat-square)](#review-path) [![Rollout: Gated](https://img.shields.io/badge/rollout-gated-DBAB09?style=flat-square)](#rollout-follow-up)
 
 Adds organization-wide API key rotation with audit export across shared API contracts, database migrations, background workers, service authorization, and the admin UI. GitHub checks are currently passing; start with the API contracts and migration, while customer-facing enablement remains gated on rollout validation.
