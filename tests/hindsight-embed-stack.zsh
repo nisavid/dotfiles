@@ -340,6 +340,9 @@ runtime_helper="$tmp_dir/hindsight-embed-stop-profile-services.py"
 touch "$runtime_helper"
 control_server="$tmp_dir/hindsight-embed-control-server.py"
 touch "$control_server"
+llm_runtime="$test_home/.local/lib/hindsight-runtime"
+mkdir -p "$llm_runtime"
+touch "$llm_runtime/sitecustomize.py" "$llm_runtime/hindsight_llm_failover.py"
 
 assert_missing_profile_blocks_mutation() {
   local command="$1"

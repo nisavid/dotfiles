@@ -42,12 +42,20 @@ AUTOMATIC_ENV = {
     "HINDSIGHT_API_LLM_2_BASE_URL": HATCHERY_BASE_URL,
     "HINDSIGHT_API_LLM_2_REASONING_EFFORT": "low",
     "HINDSIGHT_API_LLM_STRATEGY": '{"mode":"failover"}',
-    "HINDSIGHT_API_LLM_MAX_RETRIES": "0",
     "HINDSIGHT_API_SKIP_LLM_VERIFICATION": "true",
 }
+HATCHERY_LEGACY_GLOBAL_ENV = frozenset(
+    {
+        "HINDSIGHT_API_LLM_MAX_CONCURRENT",
+        "HINDSIGHT_API_LLM_MAX_RETRIES",
+        "HINDSIGHT_API_LLM_TIMEOUT",
+        "HINDSIGHT_API_CONSOLIDATION_MAX_ATTEMPTS",
+    }
+)
 AUTOMATIC_OWNED_ENV = frozenset(
     {
         *AUTOMATIC_ENV,
+        *HATCHERY_LEGACY_GLOBAL_ENV,
         "HINDSIGHT_API_LLM_1_API_KEY",
     }
 )
@@ -459,6 +467,8 @@ def install_provider_alias(service) -> None:
         env = service._read_raw_env(name)
         if automatic:
             env.pop(CODEX_HOME_ENV, None)
+            for key in HATCHERY_LEGACY_GLOBAL_ENV:
+                env.pop(key, None)
             env[CODEX_REASONING_EFFORT_ENV] = CODEX_REASONING_EFFORT
             env[LLM_API_KEY_ENV] = _codex_home_marker(CODEX_SYSTALYZE_HOME)
             env["HINDSIGHT_API_LLM_1_API_KEY"] = _codex_home_marker(CODEX_NISAVID_HOME)

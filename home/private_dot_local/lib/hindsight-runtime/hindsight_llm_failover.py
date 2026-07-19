@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -12,6 +13,12 @@ from typing import Any, Callable, Iterator
 
 CODEX_HOME_MARKER = "codex-home:"
 DEFAULT_USAGE_LIMIT_COOLDOWN_SECONDS = 300.0
+HATCHERY_PROVIDER = "lmstudio"
+HATCHERY_MODEL = "Qwen3.6-35B-A3B-MTP-GGUF-UD-Q4_K_XL"
+HATCHERY_BASE_URL = "http://hatchery.komodo-vector.ts.net:13305/v1"
+HATCHERY_MAX_CONCURRENT = 1
+HATCHERY_MAX_RETRIES = 0
+HATCHERY_TIMEOUT_SECONDS = 300
 _CODEX_ENVIRONMENT_LOCK = threading.Lock()
 
 
@@ -82,6 +89,58 @@ def usage_limit_reset_at(exc: BaseException, *, now: float | None = None) -> flo
     if isinstance(remaining, (int, float)) and remaining > 0:
         return now + float(remaining)
     return now + DEFAULT_USAGE_LIMIT_COOLDOWN_SECONDS
+
+
+class HatcheryGuard:
+    def __init__(self) -> None:
+        self._semaphore: asyncio.Semaphore | None = None
+        self._semaphore_loop: asyncio.AbstractEventLoop | None = None
+
+    def _current_semaphore(self) -> asyncio.Semaphore:
+        loop = asyncio.get_running_loop()
+        if self._semaphore is None or self._semaphore_loop is not loop:
+            self._semaphore = asyncio.Semaphore(HATCHERY_MAX_CONCURRENT)
+            self._semaphore_loop = loop
+        return self._semaphore
+
+    @staticmethod
+    def applies_to(member: Any) -> bool:
+        return (
+            getattr(member, "provider", "").lower() == HATCHERY_PROVIDER
+            and getattr(member, "model", "") == HATCHERY_MODEL
+            and str(getattr(member, "base_url", "")).rstrip("/")
+            == HATCHERY_BASE_URL.rstrip("/")
+        )
+
+    def prepare(self, member: Any) -> None:
+        if not self.applies_to(member) or getattr(member, "_hindsight_hatchery_prepared", False):
+            return
+
+        member.timeout = HATCHERY_TIMEOUT_SECONDS
+        member.max_retries = HATCHERY_MAX_RETRIES
+        provider_impl = getattr(member, "_provider_impl", None)
+        if provider_impl is not None:
+            provider_impl.timeout = HATCHERY_TIMEOUT_SECONDS
+            client = getattr(provider_impl, "_client", None)
+            if client is not None and hasattr(client, "with_options"):
+                provider_impl._client = client.with_options(timeout=HATCHERY_TIMEOUT_SECONDS)
+        member._hindsight_hatchery_prepared = True
+
+    async def call(
+        self,
+        member: Any,
+        operation: Callable[..., Any],
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        if not self.applies_to(member):
+            return await operation(*args, **kwargs)
+
+        self.prepare(member)
+        hatchery_kwargs = dict(kwargs)
+        hatchery_kwargs["max_retries"] = HATCHERY_MAX_RETRIES
+        async with self._current_semaphore():
+            return await operation(*args, **hatchery_kwargs)
 
 
 class QuotaAwareDispatcher:
@@ -169,12 +228,44 @@ class QuotaAwareDispatcher:
 
 def install_hindsight_patches() -> bool:
     try:
+        from hindsight_api.engine.llm_wrapper import LLMProvider
         from hindsight_api.engine.multi_llm import MultiLLMProvider, _should_failover, logger
         from hindsight_api.engine.providers.codex_llm import CodexLLM
     except ModuleNotFoundError as exc:
         if exc.name == "hindsight_api" or (exc.name or "").startswith("hindsight_api."):
             return False
         raise
+
+    hatchery_guard = HatcheryGuard()
+
+    if not getattr(LLMProvider.__init__, "_hindsight_hatchery_aware", False):
+        original_llm_init = LLMProvider.__init__
+
+        def hatchery_aware_init(self, *args: Any, **kwargs: Any) -> None:
+            original_llm_init(self, *args, **kwargs)
+            hatchery_guard.prepare(self)
+
+        hatchery_aware_init._hindsight_hatchery_aware = True  # type: ignore[attr-defined]
+        LLMProvider.__init__ = hatchery_aware_init
+
+    for method_name in ("call", "call_with_tools"):
+        original_method = getattr(LLMProvider, method_name)
+        if getattr(original_method, "_hindsight_hatchery_guarded", False):
+            continue
+
+        async def hatchery_guarded_call(
+            self,
+            *args: Any,
+            _original_method: Callable[..., Any] = original_method,
+            **kwargs: Any,
+        ) -> Any:
+            async def invoke(*call_args: Any, **call_kwargs: Any) -> Any:
+                return await _original_method(self, *call_args, **call_kwargs)
+
+            return await hatchery_guard.call(self, invoke, *args, **kwargs)
+
+        hatchery_guarded_call._hindsight_hatchery_guarded = True  # type: ignore[attr-defined]
+        setattr(LLMProvider, method_name, hatchery_guarded_call)
 
     if not getattr(CodexLLM.__init__, "_hindsight_account_aware", False):
         original_init = CodexLLM.__init__

@@ -232,6 +232,14 @@ class ControlServerHooksTest(unittest.TestCase):
         )
 
     def test_automatic_alias_saves_ordered_native_failover_chain(self) -> None:
+        self.profile_env.update(
+            {
+                "HINDSIGHT_API_LLM_MAX_CONCURRENT": "1",
+                "HINDSIGHT_API_LLM_MAX_RETRIES": "0",
+                "HINDSIGHT_API_LLM_TIMEOUT": "300",
+                "HINDSIGHT_API_CONSOLIDATION_MAX_ATTEMPTS": "1",
+            }
+        )
         result = self.service.save_llm_config(
             name="systalyze",
             provider="automatic",
@@ -263,7 +271,10 @@ class ControlServerHooksTest(unittest.TestCase):
         )
         self.assertEqual(self.profile_env["HINDSIGHT_API_LLM_2_REASONING_EFFORT"], "low")
         self.assertEqual(self.profile_env["HINDSIGHT_API_LLM_STRATEGY"], '{"mode":"failover"}')
-        self.assertEqual(self.profile_env["HINDSIGHT_API_LLM_MAX_RETRIES"], "0")
+        self.assertNotIn("HINDSIGHT_API_LLM_MAX_CONCURRENT", self.profile_env)
+        self.assertNotIn("HINDSIGHT_API_LLM_MAX_RETRIES", self.profile_env)
+        self.assertNotIn("HINDSIGHT_API_LLM_TIMEOUT", self.profile_env)
+        self.assertNotIn("HINDSIGHT_API_CONSOLIDATION_MAX_ATTEMPTS", self.profile_env)
         self.assertEqual(self.profile_env["HINDSIGHT_API_SKIP_LLM_VERIFICATION"], "true")
         self.assertEqual(self.service.list_profiles()[0].provider, "automatic")
 
