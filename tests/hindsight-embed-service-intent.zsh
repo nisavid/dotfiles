@@ -306,6 +306,40 @@ rg -F -q 'api=stopped@7979 ui=stopped@17979' "$intentional_status" || {
   exit 1
 }
 
+coherent_status="$tmp_dir/coherent-status"
+coherent_status_count="$tmp_dir/coherent-status-count"
+print -r -- 0 > "$coherent_status_count"
+(
+  export HOME="$test_home"
+  export HINDSIGHT_EMBED_STATE_DIR="$desired_state_dir"
+  export HINDSIGHT_EMBED_PROFILE="present-profile"
+  export HINDSIGHT_EMBED_FLEET_PROFILES="present-profile"
+  export HINDSIGHT_TEST_COHERENT_STATUS_COUNT="$coherent_status_count"
+  source "$rendered_stack_lib"
+  hindsight_stack_broker_status() { return 0 }
+  hindsight_stack_control_status() { return 0 }
+  hindsight_stack_daemon_status() {
+    integer daemon_status_checks=$(( $(<"$HINDSIGHT_TEST_COHERENT_STATUS_COUNT") + 1 ))
+    print -r -- "$daemon_status_checks" > "$HINDSIGHT_TEST_COHERENT_STATUS_COUNT"
+    (( daemon_status_checks == 1 ))
+  }
+  hindsight_stack_ui_status() { return 0 }
+  hindsight_stack_sidecar_names() { return 0 }
+  hindsight_stack_status_report > "$coherent_status"
+)
+rg -F -q 'daemon: healthy' "$coherent_status" || {
+  print -ru2 -- "status did not capture primary daemon health"
+  exit 1
+}
+rg -F -q 'api=healthy@7979 ui=healthy@17979' "$coherent_status" || {
+  print -ru2 -- "status re-probed the primary profile into a contradictory result"
+  exit 1
+}
+rg -F -q 'fleet: healthy' "$coherent_status" || {
+  print -ru2 -- "contradictory primary re-probe degraded fleet status"
+  exit 1
+}
+
 restart_events="$tmp_dir/restart-events"
 (
   source "$service_lib"

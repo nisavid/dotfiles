@@ -888,7 +888,7 @@ hindsight_stack_daemon_present() {
   hindsight_stack_run_stop_helper \
     --mode check-api \
     --profile "$HINDSIGHT_EMBED_PROFILE" \
-    --desired-api-port "$HINDSIGHT_EMBED_API_PORT"
+    --desired-api-port "$HINDSIGHT_EMBED_API_PORT" >/dev/null 2>&1
 }
 
 hindsight_stack_ui_status() {
@@ -1391,8 +1391,13 @@ hindsight_stack_status_profile() {
   emulate -L zsh
   local profile="$1" sidecar
   [[ -z "$requested" || "$requested" == "$profile" ]] || return 0
-  daemon_health="$(hindsight_stack_status_word daemon)"
-  ui_health="$(hindsight_stack_status_word ui)"
+  if [[ "$profile" == "$HINDSIGHT_EMBED_PRIMARY_PROFILE" ]]; then
+    daemon_health="$primary_daemon_health"
+    ui_health="$primary_ui_health"
+  else
+    daemon_health="$(hindsight_stack_status_word daemon)"
+    ui_health="$(hindsight_stack_status_word ui)"
+  fi
   [[ "$daemon_health" == healthy || "$daemon_health" == stopped ]] || fleet_health=degraded
   [[ "$ui_health" == healthy || "$ui_health" == stopped ]] || fleet_health=degraded
   sidecar_records=()
@@ -1422,19 +1427,25 @@ hindsight_stack_status_profile() {
 hindsight_stack_status_report() {
   emulate -L zsh
   hindsight_stack_load_config
+  local requested="${1:-}"
+  local -a profiles sidecar_records profile_records
+  local fleet_health=healthy daemon_health ui_health sidecar_health
+  local broker_health control_health primary_daemon_health primary_ui_health
   hindsight_stack_push_profile_state
   hindsight_stack_select_profile "$HINDSIGHT_EMBED_PRIMARY_PROFILE" || {
     hindsight_stack_pop_profile_state
     return 1
   }
-  print -r -- "broker: $(hindsight_stack_status_word broker) (${HINDSIGHT_MEMORY_BROKER_SOCKET})"
-  print -r -- "control: $(hindsight_stack_status_word control) (http://${HINDSIGHT_EMBED_CONTROL_HOSTNAME}:${HINDSIGHT_EMBED_CONTROL_PORT})"
-  print -r -- "daemon: $(hindsight_stack_status_word daemon) (${HINDSIGHT_EMBED_PROFILE}, http://127.0.0.1:${HINDSIGHT_EMBED_API_PORT})"
-  print -r -- "ui: $(hindsight_stack_status_word ui) (${HINDSIGHT_EMBED_PROFILE}, $(hindsight_stack_ui_url))"
+  broker_health="$(hindsight_stack_status_word broker)"
+  control_health="$(hindsight_stack_status_word control)"
+  primary_daemon_health="$(hindsight_stack_status_word daemon)"
+  primary_ui_health="$(hindsight_stack_status_word ui)"
+  print -r -- "broker: ${broker_health} (${HINDSIGHT_MEMORY_BROKER_SOCKET})"
+  print -r -- "control: ${control_health} (http://${HINDSIGHT_EMBED_CONTROL_HOSTNAME}:${HINDSIGHT_EMBED_CONTROL_PORT})"
+  print -r -- "daemon: ${primary_daemon_health} (${HINDSIGHT_EMBED_PROFILE}, http://127.0.0.1:${HINDSIGHT_EMBED_API_PORT})"
+  print -r -- "ui: ${primary_ui_health} (${HINDSIGHT_EMBED_PROFILE}, $(hindsight_stack_ui_url))"
   hindsight_stack_pop_profile_state
 
-  local requested="${1:-}"
-  local -a profiles sidecar_records profile_records
   profiles=("${(@f)$(hindsight_stack_enabled_profiles)}") || return 1
   if [[ -n "$requested" ]]; then
     hindsight_stack_profile_enabled "$requested" || {
@@ -1443,9 +1454,8 @@ hindsight_stack_status_report() {
     }
   fi
 
-  local fleet_health=healthy daemon_health ui_health sidecar_health
-  hindsight_stack_broker_status || fleet_health=degraded
-  hindsight_stack_control_status || fleet_health=degraded
+  [[ "$broker_health" == healthy ]] || fleet_health=degraded
+  [[ "$control_health" == healthy ]] || fleet_health=degraded
   local profile_count="${#profiles}"
   [[ -z "$requested" ]] || profile_count=1
   local profile_label=profiles
