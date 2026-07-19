@@ -20,20 +20,20 @@ HATCHERY_RUNTIME_PROVIDER = "lmstudio"
 HATCHERY_LABEL = "hatchery"
 HATCHERY_BASE_URL = "http://hatchery.komodo-vector.ts.net:13305/v1"
 HATCHERY_MODEL = "Qwen3.6-35B-A3B-MTP-GGUF-UD-Q4_K_XL"
-CODEX_PERSONAL_PROVIDER_ID = "codex-spark-personal"
-CODEX_PERSONAL_LABEL = "Codex Spark — personal (ivan@nisavid.io)"
-CODEX_WORK_PROVIDER_ID = "codex-spark-work"
-CODEX_WORK_LABEL = "Codex Spark — work (ivan@systalyze.com)"
+CODEX_NISAVID_PROVIDER_ID = "codex-spark-nisavid"
+CODEX_NISAVID_LABEL = "Codex Spark — personal (ivan@nisavid.io)"
+CODEX_SYSTALYZE_PROVIDER_ID = "codex-spark-systalyze"
+CODEX_SYSTALYZE_LABEL = "Codex Spark — work (ivan@systalyze.com)"
 CODEX_RUNTIME_PROVIDER = "openai-codex"
 CODEX_MODEL = "gpt-5.3-codex-spark"
 CODEX_REASONING_EFFORT = "xhigh"
 CODEX_HOME_ENV = "CODEX_HOME"
 CODEX_REASONING_EFFORT_ENV = "HINDSIGHT_API_LLM_REASONING_EFFORT"
-CODEX_PERSONAL_HOME = Path.home() / ".hindsight/codex"
-CODEX_WORK_HOME = Path.home() / ".hindsight/codex-work"
+CODEX_NISAVID_HOME = Path.home() / ".hindsight/codex-nisavid"
+CODEX_SYSTALYZE_HOME = Path.home() / ".hindsight/codex-systalyze"
 CODEX_PROVIDER_HOMES = {
-    CODEX_PERSONAL_PROVIDER_ID: CODEX_PERSONAL_HOME,
-    CODEX_WORK_PROVIDER_ID: CODEX_WORK_HOME,
+    CODEX_NISAVID_PROVIDER_ID: CODEX_NISAVID_HOME,
+    CODEX_SYSTALYZE_PROVIDER_ID: CODEX_SYSTALYZE_HOME,
 }
 
 
@@ -127,19 +127,19 @@ def install_provider_catalog(providers) -> None:
     )
     existing = {provider.id for provider in catalog}
     additions = []
-    if CODEX_PERSONAL_PROVIDER_ID not in existing:
+    if CODEX_NISAVID_PROVIDER_ID not in existing:
         additions.append(
             providers.ProviderInfo(
-                CODEX_PERSONAL_PROVIDER_ID,
-                CODEX_PERSONAL_LABEL,
+                CODEX_NISAVID_PROVIDER_ID,
+                CODEX_NISAVID_LABEL,
                 False,
             )
         )
-    if CODEX_WORK_PROVIDER_ID not in existing:
+    if CODEX_SYSTALYZE_PROVIDER_ID not in existing:
         additions.append(
             providers.ProviderInfo(
-                CODEX_WORK_PROVIDER_ID,
-                CODEX_WORK_LABEL,
+                CODEX_SYSTALYZE_PROVIDER_ID,
+                CODEX_SYSTALYZE_LABEL,
                 False,
             )
         )

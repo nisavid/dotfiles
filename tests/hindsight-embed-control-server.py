@@ -117,15 +117,15 @@ class ControlServerHooksTest(unittest.TestCase):
         providers = {provider.id: provider for provider in self.providers.PROVIDER_CATALOG}
         self.assertNotIn("openai-codex", providers)
         self.assertEqual(
-            providers["codex-spark-personal"].label,
+            providers["codex-spark-nisavid"].label,
             "Codex Spark — personal (ivan@nisavid.io)",
         )
-        self.assertFalse(providers["codex-spark-personal"].needs_api_key)
+        self.assertFalse(providers["codex-spark-nisavid"].needs_api_key)
         self.assertEqual(
-            providers["codex-spark-work"].label,
+            providers["codex-spark-systalyze"].label,
             "Codex Spark — work (ivan@systalyze.com)",
         )
-        self.assertFalse(providers["codex-spark-work"].needs_api_key)
+        self.assertFalse(providers["codex-spark-systalyze"].needs_api_key)
         self.assertFalse(providers["claude-code"].needs_api_key)
         self.assertEqual(providers["hatchery"].label, "hatchery")
         self.assertFalse(providers["hatchery"].needs_api_key)
@@ -163,13 +163,13 @@ class ControlServerHooksTest(unittest.TestCase):
     def test_personal_codex_alias_saves_its_oauth_home(self) -> None:
         result = self.service.save_llm_config(
             name="systalyze",
-            provider="codex-spark-personal",
+            provider="codex-spark-nisavid",
             api_key=None,
             model="ignored",
             base_url=None,
         )
 
-        self.assertEqual(result.provider, "codex-spark-personal")
+        self.assertEqual(result.provider, "codex-spark-nisavid")
         self.assertEqual(
             self.saved_configs[-1],
             {
@@ -187,30 +187,30 @@ class ControlServerHooksTest(unittest.TestCase):
         self.assertEqual(
             self.profile_env,
             {
-                "CODEX_HOME": str(Path.home() / ".hindsight/codex"),
+                "CODEX_HOME": str(Path.home() / ".hindsight/codex-nisavid"),
                 "HINDSIGHT_API_LLM_REASONING_EFFORT": "xhigh",
             },
         )
         self.assertEqual(
             self.service.list_profiles()[0].provider,
-            "codex-spark-personal",
+            "codex-spark-nisavid",
         )
 
     def test_work_codex_alias_saves_its_oauth_home(self) -> None:
         result = self.service.save_llm_config(
             name="systalyze",
-            provider="codex-spark-work",
+            provider="codex-spark-systalyze",
             api_key=None,
             model=None,
             base_url=None,
         )
 
-        self.assertEqual(result.provider, "codex-spark-work")
+        self.assertEqual(result.provider, "codex-spark-systalyze")
         self.assertEqual(self.saved_configs[-1]["provider"], "openai-codex")
         self.assertEqual(self.saved_configs[-1]["model"], "gpt-5.3-codex-spark")
         self.assertEqual(
             self.profile_env["CODEX_HOME"],
-            str(Path.home() / ".hindsight/codex-work"),
+            str(Path.home() / ".hindsight/codex-systalyze"),
         )
         self.assertEqual(
             self.profile_env["HINDSIGHT_API_LLM_REASONING_EFFORT"],
@@ -218,13 +218,13 @@ class ControlServerHooksTest(unittest.TestCase):
         )
         self.assertEqual(
             self.service.list_profiles()[0].provider,
-            "codex-spark-work",
+            "codex-spark-systalyze",
         )
 
     def test_switching_from_codex_alias_clears_alias_owned_environment(self) -> None:
         self.service.save_llm_config(
             name="systalyze",
-            provider="codex-spark-personal",
+            provider="codex-spark-nisavid",
             api_key=None,
             model=None,
             base_url=None,
@@ -244,7 +244,7 @@ class ControlServerHooksTest(unittest.TestCase):
     def test_switching_between_codex_aliases_returns_selected_choice(self) -> None:
         self.service.save_llm_config(
             name="systalyze",
-            provider="codex-spark-personal",
+            provider="codex-spark-nisavid",
             api_key=None,
             model=None,
             base_url=None,
@@ -252,13 +252,13 @@ class ControlServerHooksTest(unittest.TestCase):
 
         result = self.service.save_llm_config(
             name="systalyze",
-            provider="codex-spark-work",
+            provider="codex-spark-systalyze",
             api_key=None,
             model=None,
             base_url=None,
         )
 
-        self.assertEqual(result.provider, "codex-spark-work")
+        self.assertEqual(result.provider, "codex-spark-systalyze")
 
     def test_switching_from_hatchery_clears_its_base_url(self) -> None:
         self.service.save_llm_config(

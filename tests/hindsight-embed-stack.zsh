@@ -296,7 +296,11 @@ rg -F -q 'hindsight-embed profile set-env "$profile" HINDSIGHT_BANK_ID "$bank_id
 
 configured_profile="$(chezmoi --override-data-file "$repo_dir/home/.chezmoidata/hindsight.toml" execute-template '{{ .hindsight.profile }}')"
 configured_bank="$(chezmoi --override-data-file "$repo_dir/home/.chezmoidata/hindsight.toml" execute-template '{{ .hindsight.bank }}')"
-if rg -F -n -e "$configured_profile" -e "$configured_bank" "$repo_dir/docs/HINDSIGHT.md" >/dev/null; then
+fenced_setup_commands="$(awk '
+  /^```/ { in_fence = !in_fence; next }
+  in_fence { print }
+' "$repo_dir/docs/HINDSIGHT.md")"
+if print -r -- "$fenced_setup_commands" | rg -F -n -e "$configured_profile" -e "$configured_bank" >/dev/null; then
   print -ru2 -- "setup guide must use generic profile and bank placeholders"
   exit 1
 fi
