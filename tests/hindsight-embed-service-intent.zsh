@@ -162,6 +162,49 @@ transient_health_marker="$tmp_dir/transient-health-started"
   }
 )
 
+daemon_start_launched="$tmp_dir/daemon-start-launched"
+daemon_start_finished="$tmp_dir/daemon-start-finished"
+fake_uvx="$tmp_dir/fake-uvx"
+print -rl -- \
+  '#!/usr/bin/env zsh' \
+  'touch "$HINDSIGHT_TEST_DAEMON_START_LAUNCHED"' \
+  'sleep 1' \
+  'touch "$HINDSIGHT_TEST_DAEMON_START_FINISHED"' > "$fake_uvx"
+chmod 700 "$fake_uvx"
+(
+  export HOME="$test_home"
+  export HINDSIGHT_EMBED_STATE_DIR="$desired_state_dir"
+  export HINDSIGHT_EMBED_PROFILE="present-profile"
+  export HINDSIGHT_EMBED_FLEET_PROFILES="present-profile"
+  export HINDSIGHT_EMBED_UVX="$fake_uvx"
+  export HINDSIGHT_TEST_DAEMON_START_LAUNCHED="$daemon_start_launched"
+  export HINDSIGHT_TEST_DAEMON_START_FINISHED="$daemon_start_finished"
+  source "$rendered_stack_lib"
+  hindsight_stack_ensure_profile_ports() { return 0 }
+  hindsight_stack_daemon_start
+  integer attempt
+  for attempt in {1..20}; do
+    [[ -e "$HINDSIGHT_TEST_DAEMON_START_LAUNCHED" ]] && break
+    sleep 0.05
+  done
+  [[ -e "$HINDSIGHT_TEST_DAEMON_START_LAUNCHED" ]] || {
+    print -ru2 -- "daemon start launcher did not run"
+    exit 1
+  }
+  [[ ! -e "$HINDSIGHT_TEST_DAEMON_START_FINISHED" ]] || {
+    print -ru2 -- "daemon start blocked reconciliation until its launcher exited"
+    exit 1
+  }
+)
+for attempt in {1..30}; do
+  [[ -e "$daemon_start_finished" ]] && break
+  sleep 0.05
+done
+[[ -e "$daemon_start_finished" ]] || {
+  print -ru2 -- "detached daemon start launcher did not finish"
+  exit 1
+}
+
 intentional_status="$tmp_dir/intentional-status"
 (
   export HOME="$test_home"

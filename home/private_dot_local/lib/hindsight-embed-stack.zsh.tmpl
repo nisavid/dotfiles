@@ -930,10 +930,14 @@ hindsight_stack_broker_start() {
 
 hindsight_stack_daemon_start() {
   emulate -L zsh
+  unsetopt BG_NICE
   hindsight_stack_load_config
 
   hindsight_stack_ensure_profile_ports || return 1
-  "$HINDSIGHT_EMBED_UVX" hindsight-embed --profile "$HINDSIGHT_EMBED_PROFILE" daemon start >/dev/null 2>&1
+  # The upstream launcher can remain blocked after the HTTP API is already
+  # healthy. Detach only the launcher; readiness and failure still converge
+  # through the supervisor's bounded HTTP wait.
+  "$HINDSIGHT_EMBED_UVX" hindsight-embed --profile "$HINDSIGHT_EMBED_PROFILE" daemon start >/dev/null 2>&1 &!
 }
 
 hindsight_stack_ui_start() {
