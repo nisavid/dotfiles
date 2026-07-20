@@ -15,8 +15,30 @@ fixture_home=$test_dir/home
 fake_bin=$test_dir/bin
 state_dir=$test_dir/proton-state
 mkdir -p -- "$fixture_home/.config/environment.d" "$fixture_home/.config/zsh/zshrc.d" \
-  "$fixture_home/.config/secret-exec" "$fixture_home/.aws" "$fake_bin" "$state_dir"
+  "$fixture_home/.config/secret-exec" "$fixture_home/.aws" "$fixture_home/.codex" \
+  "$fixture_home/.claude" "$fixture_home/.local/bin" "$fake_bin" "$state_dir"
 cp -R "$repo_root/home/dot_config/secret-exec/profiles" "$fixture_home/.config/secret-exec/"
+
+cat > "$fixture_home/.config/zsh/zshenv.zsh" <<'EOF'
+# secret-exec-environment-loader-v1
+EOF
+ln -s .config/zsh/zshenv.zsh "$fixture_home/.zshenv"
+: > "$fixture_home/.local/bin/secret-exec"
+chmod +x "$fixture_home/.local/bin/secret-exec"
+cat > "$fixture_home/.codex/config.toml" <<'EOF'
+[mcp_servers.context7]
+command = "managed-by-fake-codex"
+EOF
+cat > "$fixture_home/.claude.json" <<EOF
+{"mcpServers":{"context7":{"command":"$fixture_home/.local/bin/secret-exec","args":["context7","--","npx","-y","@upstash/context7-mcp"]},"firecrawl":{"command":"$fixture_home/.local/bin/secret-exec","args":["firecrawl","--","npx","-y","firecrawl-mcp"]},"github":{"command":"$fixture_home/.local/bin/secret-exec","args":["github","--","npx","-y","mcp-remote","https://api.githubcopilot.com/mcp/","--header","Authorization:Bearer \${GITHUB_PERSONAL_ACCESS_TOKEN}"]},"greptile":{"command":"$fixture_home/.local/bin/secret-exec","args":["greptile","--","npx","-y","mcp-remote","https://api.greptile.com/mcp","--header","Authorization:Bearer \${GREPTILE_API_KEY}"]}}}
+EOF
+cat > "$fixture_home/.claude/settings.json" <<'EOF'
+{"enabledPlugins":{"context7@claude-plugins-official":false,"github@claude-plugins-official":false,"greptile@claude-plugins-official":false}}
+EOF
+cat > "$fixture_home/.aws/config" <<EOF
+[default]
+credential_process = $fixture_home/.local/bin/secret-exec aws-credential-process aws
+EOF
 
 cat > "$fixture_home/.config/environment.d/10-apikeys.local.conf" <<'EOF'
 AWS_ACCESS_KEY_ID=AKIACANARY123
@@ -90,6 +112,19 @@ esac
 EOF
 chmod +x "$fake_bin/pass-cli"
 
+cat > "$fake_bin/codex" <<'EOF'
+#!/usr/bin/env zsh
+set -euo pipefail
+[[ $* == 'mcp list --json' ]] || exit 64
+command=$HOME/.local/bin/secret-exec
+jq -n --arg command "$command" '[
+  {name:"context7",transport:{type:"stdio",command:$command,args:["context7","--","npx","-y","@upstash/context7-mcp"],env:{},env_vars:[],cwd:null}},
+  {name:"firecrawl",transport:{type:"stdio",command:$command,args:["firecrawl","--","npx","-y","firecrawl-mcp"],env:{},env_vars:[],cwd:null}},
+  {name:"github",transport:{type:"stdio",command:$command,args:["github","--","npx","-y","mcp-remote","https://api.githubcopilot.com/mcp/","--header","Authorization:Bearer ${GITHUB_PERSONAL_ACCESS_TOKEN}"],env:{},env_vars:[],cwd:null}}
+]'
+EOF
+chmod +x "$fake_bin/codex"
+
 export HOME=$fixture_home
 export XDG_CONFIG_HOME=$fixture_home/.config
 export PATH=$fake_bin:/opt/homebrew/bin:/usr/bin:/bin
@@ -105,8 +140,8 @@ done
 output=$(zsh "$migrator")
 (( $(wc -l < "$state_dir/created.log") == 5 )) || fail 'repeated migration must not create duplicate items'
 
-cat > "$fixture_home/.config/mcp-config.json" <<'EOF'
-{"mcpServers":{"firecrawl":{"type":"stdio","command":"/home/test/.local/bin/secret-exec"}}}
+cat > "$fixture_home/.config/mcp-config.json" <<EOF
+{"mcpServers":{"firecrawl":{"type":"stdio","command":"$fixture_home/.local/bin/secret-exec","args":["firecrawl","--","npx","-y","firecrawl-mcp"]}}}
 EOF
 mv "$fixture_home/.config/environment.d/10-apikeys.local.conf" "$test_dir/environment-source"
 set +e
@@ -128,6 +163,19 @@ set -e
   fail 'a missing-MCP rejection must preserve every plaintext source'
 mv "$test_dir/mcp-config" "$fixture_home/.config/mcp-config.json"
 
+cp "$fixture_home/.claude.json" "$test_dir/claude.json"
+cat > "$fixture_home/.claude.json" <<'EOF'
+{"mcpServers":{"firecrawl":{"url":"https://mcp.firecrawl.dev/firecrawl-canary/v2/mcp"}}}
+EOF
+set +e
+zsh "$migrator" --retire-plaintext > "$test_dir/legacy-claude.out" 2>&1
+exit_code=$?
+set -e
+(( exit_code != 0 )) || fail 'retirement must reject a credential-bearing Claude MCP URL'
+[[ -e $fixture_home/.config/environment.d/10-apikeys.local.conf ]] || \
+  fail 'a legacy-Claude rejection must preserve every plaintext source'
+mv "$test_dir/claude.json" "$fixture_home/.claude.json"
+
 cat > "$fixture_home/.config/mcp-config.json" <<'EOF'
 {"mcpServers":{"firecrawl":{"url":"https://mcp.firecrawl.dev/firecrawl-canary/v2/mcp"}}}
 EOF
@@ -138,8 +186,8 @@ set -e
 (( exit_code != 0 )) || fail 'retirement must fail while the MCP config still contains the Firecrawl value'
 [[ -e $fixture_home/.config/environment.d/10-apikeys.local.conf ]] || fail 'blocked retirement must preserve every plaintext source'
 
-cat > "$fixture_home/.config/mcp-config.json" <<'EOF'
-{"mcpServers":{"firecrawl":{"type":"stdio","command":"/home/test/.local/bin/secret-exec"}}}
+cat > "$fixture_home/.config/mcp-config.json" <<EOF
+{"mcpServers":{"firecrawl":{"type":"stdio","command":"$fixture_home/.local/bin/secret-exec","args":["firecrawl","--","npx","-y","firecrawl-mcp"]}}}
 EOF
 output=$(zsh "$migrator" --retire-plaintext)
 for retired_path in \

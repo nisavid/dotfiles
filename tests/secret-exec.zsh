@@ -23,6 +23,12 @@ EOF
 cat > "$profile_dir/firecrawl.env" <<'EOF'
 FIRECRAWL_API_KEY=pass://cli-secrets/firecrawl/password
 EOF
+cat > "$profile_dir/github.env" <<'EOF'
+GITHUB_PERSONAL_ACCESS_TOKEN=pass://cli-secrets/github-mcp/password
+EOF
+cat > "$profile_dir/greptile.env" <<'EOF'
+GREPTILE_API_KEY=pass://cli-secrets/greptile/password
+EOF
 cat > "$profile_dir/aws.env" <<'EOF'
 AWS_ACCESS_KEY_ID=pass://cli-secrets/aws/username
 AWS_SECRET_ACCESS_KEY=pass://cli-secrets/aws/password
@@ -64,6 +70,12 @@ exit 37
 EOF
 chmod +x "$fake_bin/exit-37"
 
+cat > "$fake_bin/mark-target" <<'EOF'
+#!/usr/bin/env zsh
+: > "$TARGET_MARKER"
+EOF
+chmod +x "$fake_bin/mark-target"
+
 export HOME=$fixture_home
 export XDG_CONFIG_HOME=$fixture_home/.config
 export PATH=$fake_bin:/usr/bin:/bin
@@ -84,6 +96,16 @@ zsh "$launcher" context7 -- exit-37
 exit_code=$?
 set -e
 (( exit_code == 37 )) || fail 'the launcher must preserve the target exit status'
+
+mv "$profile_dir/firecrawl.env" "$test_dir/firecrawl.env"
+export TARGET_MARKER=$test_dir/target-ran
+set +e
+zsh "$launcher" context7 -- mark-target > /dev/null 2>&1
+exit_code=$?
+set -e
+(( exit_code != 0 )) || fail 'the launcher must reject an incomplete canonical profile set'
+[[ ! -e $TARGET_MARKER ]] || fail 'an invalid profile set must never run the target'
+mv "$test_dir/firecrawl.env" "$profile_dir/firecrawl.env"
 
 trace_output=$(zsh -x "$launcher" context7 -- check-context 'argument with spaces' 2>&1)
 [[ $trace_output != *context7-canary* ]] || fail 'xtrace must not expose a retrieved canary'
