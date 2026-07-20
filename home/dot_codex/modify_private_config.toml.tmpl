@@ -7,6 +7,7 @@
 # onto Codex's live file and passes everything else through untouched:
 #   - [tui] theme, [desktop] git-branch-prefix   (portable prefs)
 #   - [desktop.open-in-target-preferences] global (parametrized editor target)
+#   - process-scoped Context7, Firecrawl, and GitHub MCP launchers
 #   - macOS developer-tool writable_roots
 #   - work-private writable_roots + project trusts (decrypted from an age partial)
 #
@@ -40,6 +41,29 @@ ensure_table(doc, "tui")["theme"] = "catppuccin-mocha"
 desk = ensure_table(doc, "desktop")
 desk["git-branch-prefix"] = os.environ["GIT_BRANCH_PREFIX"]
 ensure_table(desk, "open-in-target-preferences")["global"] = editor
+
+mcp = ensure_table(doc, "mcp_servers")
+secret_exec = os.path.join(home, ".local", "bin", "secret-exec")
+managed_mcp_servers = {
+    "context7": [
+        "context7", "--", "npx", "-y", "@upstash/context7-mcp",
+    ],
+    "firecrawl": [
+        "firecrawl", "--", "npx", "-y", "firecrawl-mcp",
+    ],
+    "github": [
+        "github", "--", "npx", "-y", "mcp-remote",
+        "https://api.githubcopilot.com/mcp/", "--header",
+        "Authorization:Bearer ${GITHUB_PERSONAL_ACCESS_TOKEN}",
+    ],
+}
+for name, args in managed_mcp_servers.items():
+    if name in mcp:
+        del mcp[name]
+    server = tomlkit.table()
+    server["command"] = secret_exec
+    server["args"] = args
+    mcp[name] = server
 
 sww = ensure_table(doc, "sandbox_workspace_write")
 if "writable_roots" not in sww:

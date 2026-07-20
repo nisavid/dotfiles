@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+command={{ joinPath .chezmoi.homeDir ".local/bin/secret-exec" | quote }}
+
+jq --arg command "$command" '
+  .mcpServers = (.mcpServers // {}) |
+  .mcpServers.firecrawl = ((.mcpServers.firecrawl // {}) + {
+    type: "stdio",
+    command: $command,
+    args: ["firecrawl", "--", "npx", "-y", "firecrawl-mcp"]
+  }) |
+  del(.mcpServers.firecrawl.url)
+' < /dev/stdin

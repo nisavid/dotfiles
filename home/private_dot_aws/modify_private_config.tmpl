@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+credential_process={{ printf "%s aws-credential-process aws" (joinPath .chezmoi.homeDir ".local/bin/secret-exec") | quote }}
+
+awk -v credential_process="$credential_process" '
+  function emit_process() {
+    print "credential_process = " credential_process
+    process_emitted = 1
+  }
+
+  /^\[[^]]+\]$/ {
+    if (in_default && !process_emitted) {
+      emit_process()
+      print ""
+    }
+    in_default = ($0 == "[default]")
+    if (in_default) {
+      saw_default = 1
+      process_emitted = 0
+    }
+    print
+    next
+  }
+
+  in_default && /^[[:space:]]*(credential_process|aws_access_key_id|aws_secret_access_key)[[:space:]]*=/ {
+    next
+  }
+
+  { print }
+
+  END {
+    if (in_default && !process_emitted) {
+      emit_process()
+    } else if (!saw_default) {
+      if (NR) print ""
+      print "[default]"
+      emit_process()
+    }
+  }
+' /dev/stdin
