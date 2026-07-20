@@ -40,6 +40,34 @@ Interactive `configure` is intentional: the non-interactive `--env` path
 bypasses provider setup and would put credential material at risk of appearing
 in process arguments.
 
+## Current machine migration status
+
+The reusable control-plane architecture is adopted on this machine. The
+consumer binding selects the `systalyze` profile, the `engineering` canonical
+bank, and the `~/src/nisavid/agents` reusable checkout. Verify the installed
+architecture without changing Hindsight data:
+
+```zsh
+profile="$(chezmoi execute-template '{{ .hindsight.profile }}')"
+hindsight-embed-service status
+hindsight-embed-service status --profile "$profile"
+```
+
+The separately invoked cleanup binding identifies `claude_code` and
+`Engineering` as legacy source banks and `claude-code` plus the default profile
+as legacy profile state. Those bindings describe a proposed migration scope;
+they do not prove that the named live state exists or authorize changing it.
+
+There is no safe live data-migration action yet. Read-only live discovery is
+blocked by the upstream server-generation contract in
+[`nisavid/agents` issue #11](https://github.com/nisavid/agents/issues/11), and
+the approved cutover workflow is tracked in
+[`nisavid/agents` issue #23](https://github.com/nisavid/agents/issues/23).
+Until those gates are implemented and independently reviewed, do not create
+either completion-gate half and do not run cleanup with `--apply`. See the
+reusable
+[migration-readiness contract](https://github.com/nisavid/agents/blob/main/tooling/hindsight/docs/migration-readiness.md).
+
 ## Everyday operation
 
 ```zsh
