@@ -24,10 +24,10 @@ It emits the AWS credential-process JSON shape only when stdout is not a
 terminal. The default AWS profile invokes this interface from
 `~/.aws/config`.
 
-Codex, Claude Code, and the generic MCP configuration invoke the same launcher
-for credentialed servers. Each child receives only its own credential. Git and
-GitHub CLI authentication remain independent of the MCP GitHub token. Every
-credential-bearing `npx` launch uses an exact audited package version.
+Codex, Claude Code, the generic MCP configuration, and OpenCode invoke the same
+launcher for credentialed servers. Each child receives only its own credential.
+Git and GitHub CLI authentication remain independent of the MCP GitHub token.
+Every credential-bearing `npx` launch uses an exact audited package version.
 
 ## Proton Pass layout
 
@@ -59,7 +59,11 @@ secret-exec-migrate
 
 The importer verifies that duplicate sources agree, creates missing Proton
 items without placing values in arguments or temporary files, and verifies all
-six references. It is idempotent and does not delete the sources.
+six references. If an existing item differs, the importer stops; reconcile it
+through a secure Proton interface because the CLI update command places field
+values in process arguments. Once the legacy sources are gone, the importer can
+verify that references resolve but cannot infer whether a provider rotated a
+credential. It is idempotent and does not delete the sources.
 
 Apply the launcher, profiles, AWS configuration, and MCP configuration with
 chezmoi. Validate each consumer before retirement. Then run:
@@ -69,23 +73,32 @@ secret-exec-migrate --retire-plaintext
 ```
 
 Retirement fails unless every managed consumer has the exact process-scoped
-binding, including the absence of any URL field on the generic Firecrawl MCP
-entry. It also requires the hardened Zsh loader and canonical profile set. A
-successful retirement permanently removes the ambient environment file, the
-interactive Zsh fragment, and the static AWS credentials file. Rollback may
-restore the launcher and consumer configuration, but must not restore ambient
-plaintext credentials; repair Proton or re-enter a rotated credential through
-the provider's secure flow instead.
+binding, including the absence of URL or header fields where local launchers
+replace remote MCP bindings. It also rejects additional `environment.d` or Zsh
+fragments that export known credential names and any stale Firecrawl CLI
+credential file. The hardened Zsh loader and canonical profile set are
+required. A successful retirement permanently removes the ambient environment
+file, the interactive Zsh fragment, and the static AWS credentials file.
+Rollback may restore the launcher and consumer configuration, but must not
+restore ambient plaintext credentials; repair Proton or re-enter a rotated
+credential through the provider's secure flow instead.
 
 ## Validation
 
 For each host:
 
 1. Start fresh login, interactive, and non-interactive shells and confirm that
-   none of the six managed variable names is present.
+   none of these scrubbed variable names is present: `AWS_ACCESS_KEY_ID`,
+   `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`,
+   `GITHUB_PERSONAL_ACCESS_TOKEN`, `CONTEXT7_API_KEY`, `FIRECRAWL_API_KEY`, and
+   `GREPTILE_API_KEY`.
+   Also confirm known retired local names such as `CODEX_GITHUB_PAT` and
+   `FOSSA_API_KEY` are absent on hosts that previously defined them.
 2. Run the launcher tests with canary values and confirm traced execution does
    not reveal them.
-3. Confirm `aws sts get-caller-identity` succeeds through the default profile.
+3. Confirm `AWS_SHARED_CREDENTIALS_FILE=/dev/null aws sts get-caller-identity`
+   succeeds through the default profile, proving that `credential_process` is
+   used without a static credentials file.
 4. Start each credentialed MCP server through its configured client and perform
    a non-destructive authenticated operation.
 5. Confirm the retired files are absent and no managed configuration contains a
