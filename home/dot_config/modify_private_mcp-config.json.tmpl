@@ -8,7 +8,7 @@ jq --arg command "$command" '
   .mcpServers.firecrawl = ((.mcpServers.firecrawl // {}) + {
     type: "stdio",
     command: $command,
-    args: ["firecrawl", "--", "npx", "-y", "firecrawl-mcp"]
+    args: ["firecrawl", "--", "npx", "-y", "firecrawl-mcp@3.22.3"]
   }) |
   del(
     .mcpServers.firecrawl.url,
