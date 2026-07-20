@@ -156,13 +156,43 @@ class HindsightLLMFailoverTest(unittest.TestCase):
         guard.prepare(codex)
 
         self.assertEqual(hatchery.timeout, 300)
-        self.assertEqual(hatchery.max_retries, 0)
+        self.assertEqual(hatchery.max_retries, 1)
         self.assertEqual(hatchery._provider_impl.timeout, 300)
         self.assertEqual(hatchery._provider_impl._client.timeout, 300)
         self.assertEqual(codex.timeout, 120)
         self.assertEqual(codex.max_retries, 3)
         self.assertEqual(codex._provider_impl.timeout, 120)
         self.assertEqual(codex._provider_impl._client.timeout, 120)
+
+    def test_hatchery_guard_leaves_nearby_lmstudio_configs_unchanged(self) -> None:
+        class Provider:
+            def __init__(self, model: str, base_url: str) -> None:
+                self.provider = "lmstudio"
+                self.model = model
+                self.base_url = base_url
+                self.timeout = 120
+                self.max_retries = 3
+                self._provider_impl = None
+
+        guard = self.module.HatcheryGuard()
+        nearby_members = [
+            Provider(
+                "Qwen3.6-35B-A3B-MTP-GGUF-UD-Q4_K_XL",
+                "http://localhost:13305/v1",
+            ),
+            Provider(
+                "Qwen3.6-27B-GGUF",
+                "http://hatchery.komodo-vector.ts.net:13305/v1",
+            ),
+        ]
+
+        for member in nearby_members:
+            guard.prepare(member)
+
+        self.assertEqual(
+            [(member.timeout, member.max_retries) for member in nearby_members],
+            [(120, 3), (120, 3)],
+        )
 
     def test_hatchery_guard_serializes_hatchery_without_blocking_codex(self) -> None:
         class Provider:
@@ -228,9 +258,69 @@ class HindsightLLMFailoverTest(unittest.TestCase):
             )
 
             self.assertEqual(hatchery_max_active, 1)
-            self.assertEqual(first_result["max_retries"], 0)
-            self.assertEqual(second_result["max_retries"], 0)
+            self.assertEqual(first_result["max_retries"], 1)
+            self.assertEqual(second_result["max_retries"], 1)
             self.assertEqual(codex_result["max_retries"], 7)
+
+        asyncio.run(scenario())
+
+    def test_hatchery_guard_prioritizes_reflect_over_queued_bulk_work(self) -> None:
+        class Provider:
+            provider = "lmstudio"
+            model = "Qwen3.6-35B-A3B-MTP-GGUF-UD-Q4_K_XL"
+            base_url = "http://hatchery.komodo-vector.ts.net:13305/v1"
+            timeout = 120
+            max_retries = 3
+            _provider_impl = None
+
+        async def scenario() -> None:
+            guard = self.module.HatcheryGuard()
+            hatchery = Provider()
+            first_started = asyncio.Event()
+            release_first = asyncio.Event()
+            started: list[str] = []
+
+            async def operation(label: str, **_kwargs):
+                started.append(label)
+                if label == "first":
+                    first_started.set()
+                    await release_first.wait()
+                return label
+
+            first = asyncio.create_task(
+                guard.call(
+                    hatchery,
+                    operation,
+                    "first",
+                    scope="retain_extract_facts",
+                )
+            )
+            await first_started.wait()
+            bulk = asyncio.create_task(
+                guard.call(
+                    hatchery,
+                    operation,
+                    "bulk",
+                    scope="retain_extract_facts",
+                )
+            )
+            await asyncio.sleep(0)
+            reflect = asyncio.create_task(
+                guard.call(
+                    hatchery,
+                    operation,
+                    "reflect",
+                    scope="reflect",
+                )
+            )
+            await asyncio.sleep(0)
+
+            release_first.set()
+            self.assertEqual(
+                await asyncio.gather(first, bulk, reflect),
+                ["first", "bulk", "reflect"],
+            )
+            self.assertEqual(started, ["first", "reflect", "bulk"])
 
         asyncio.run(scenario())
 
@@ -319,7 +409,7 @@ class HindsightLLMFailoverTest(unittest.TestCase):
 
         self.assertEqual(hatchery.timeout, 300)
         self.assertEqual(hatchery._provider_impl._client.timeout, 300)
-        self.assertEqual(hatchery_result["max_retries"], 0)
+        self.assertEqual(hatchery_result["max_retries"], 1)
         self.assertEqual(codex.timeout, 120)
         self.assertEqual(codex._provider_impl._client.timeout, 120)
         self.assertEqual(codex_result["max_retries"], 7)

@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import heapq
 import json
 import logging
 import os
 import threading
 import time
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import Any, AsyncIterator, Callable, Iterator
 
 
 CODEX_HOME_MARKER = "codex-home:"
@@ -17,9 +18,52 @@ HATCHERY_PROVIDER = "lmstudio"
 HATCHERY_MODEL = "Qwen3.6-35B-A3B-MTP-GGUF-UD-Q4_K_XL"
 HATCHERY_BASE_URL = "http://hatchery.komodo-vector.ts.net:13305/v1"
 HATCHERY_MAX_CONCURRENT = 1
-HATCHERY_MAX_RETRIES = 0
+HATCHERY_MAX_RETRIES = 1
 HATCHERY_TIMEOUT_SECONDS = 300
 _CODEX_ENVIRONMENT_LOCK = threading.Lock()
+
+
+class _PriorityGate:
+    def __init__(self, limit: int) -> None:
+        self._limit = limit
+        self._active = 0
+        self._sequence = 0
+        self._waiters: list[tuple[int, int, asyncio.Future[None]]] = []
+
+    async def acquire(self, priority: int) -> None:
+        if self._active < self._limit and not self._waiters:
+            self._active += 1
+            return
+
+        loop = asyncio.get_running_loop()
+        waiter: asyncio.Future[None] = loop.create_future()
+        self._sequence += 1
+        heapq.heappush(self._waiters, (priority, self._sequence, waiter))
+        try:
+            await waiter
+        except BaseException:
+            if waiter.done() and not waiter.cancelled():
+                self.release()
+            else:
+                waiter.cancel()
+            raise
+
+    def release(self) -> None:
+        while self._waiters:
+            _priority, _sequence, waiter = heapq.heappop(self._waiters)
+            if waiter.cancelled():
+                continue
+            waiter.set_result(None)
+            return
+        self._active -= 1
+
+    @asynccontextmanager
+    async def slot(self, priority: int) -> AsyncIterator[None]:
+        await self.acquire(priority)
+        try:
+            yield
+        finally:
+            self.release()
 
 
 def codex_home_marker(path: Path | str) -> str:
@@ -93,15 +137,24 @@ def usage_limit_reset_at(exc: BaseException, *, now: float | None = None) -> flo
 
 class HatcheryGuard:
     def __init__(self) -> None:
-        self._semaphore: asyncio.Semaphore | None = None
-        self._semaphore_loop: asyncio.AbstractEventLoop | None = None
+        self._gate: _PriorityGate | None = None
+        self._gate_loop: asyncio.AbstractEventLoop | None = None
 
-    def _current_semaphore(self) -> asyncio.Semaphore:
+    def _current_gate(self) -> _PriorityGate:
         loop = asyncio.get_running_loop()
-        if self._semaphore is None or self._semaphore_loop is not loop:
-            self._semaphore = asyncio.Semaphore(HATCHERY_MAX_CONCURRENT)
-            self._semaphore_loop = loop
-        return self._semaphore
+        if self._gate is None or self._gate_loop is not loop:
+            self._gate = _PriorityGate(HATCHERY_MAX_CONCURRENT)
+            self._gate_loop = loop
+        return self._gate
+
+    @staticmethod
+    def _priority(kwargs: dict[str, Any]) -> int:
+        scope = str(kwargs.get("scope", ""))
+        if scope.startswith("retain"):
+            return 20
+        if scope.startswith("consolidation"):
+            return 30
+        return 0
 
     @staticmethod
     def applies_to(member: Any) -> bool:
@@ -139,7 +192,7 @@ class HatcheryGuard:
         self.prepare(member)
         hatchery_kwargs = dict(kwargs)
         hatchery_kwargs["max_retries"] = HATCHERY_MAX_RETRIES
-        async with self._current_semaphore():
+        async with self._current_gate().slot(self._priority(hatchery_kwargs)):
             return await operation(*args, **hatchery_kwargs)
 
 
