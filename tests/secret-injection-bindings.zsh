@@ -151,6 +151,8 @@ cat > "$test_dir/aws-input" <<'EOF'
 region = us-east-1
 login_session = personal
 credential_process = old-helper
+aws_access_key_id = access-key-canary
+aws_secret_access_key = secret-key-canary
 aws_session_token = session-canary
 
 [profile unrelated]
@@ -159,7 +161,7 @@ EOF
 "$aws_modifier" < "$test_dir/aws-input" > "$test_dir/aws-output"
 rg -Fx "credential_process = $fixture_home/.local/bin/secret-exec aws-credential-process aws" \
   "$test_dir/aws-output" >/dev/null || fail 'AWS must resolve credentials through secret-exec'
-! rg -e 'login_session|aws_session_token' "$test_dir/aws-output" >/dev/null || \
+! rg -e 'login_session|aws_(access_key_id|secret_access_key|session_token)' "$test_dir/aws-output" >/dev/null || \
   fail 'the default AWS profile must not retain higher-precedence or partial credentials'
 rg -Fx '[profile unrelated]' "$test_dir/aws-output" >/dev/null || fail 'unrelated AWS profiles must be preserved'
 

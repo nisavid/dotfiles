@@ -58,6 +58,7 @@ set -euo pipefail
 [[ -z ${FIRECRAWL_API_KEY:-} ]] || exit 71
 [[ -z ${AWS_ACCESS_KEY_ID:-} ]] || exit 72
 [[ -z ${AWS_SECRET_ACCESS_KEY:-} ]] || exit 75
+[[ -z ${AWS_SESSION_TOKEN:-} ]] || exit 76
 [[ ${ORDINARY_SETTING:-} == preserved ]] || exit 73
 [[ $1 == 'argument with spaces' ]] || exit 74
 print -r -- 'target-ok'
@@ -85,6 +86,7 @@ export CONTEXT7_API_KEY=inherited-context7-canary
 export FIRECRAWL_API_KEY=inherited-firecrawl-canary
 export AWS_ACCESS_KEY_ID=INHERITEDACCESS
 export AWS_SECRET_ACCESS_KEY=InheritedSecret
+export AWS_SESSION_TOKEN=InheritedSession
 
 output=$(zsh "$launcher" context7 -- check-context 'argument with spaces')
 [[ $output == target-ok ]] || fail 'selected profile must reach the target with argv preserved'
