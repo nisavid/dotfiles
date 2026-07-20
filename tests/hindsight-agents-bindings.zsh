@@ -57,8 +57,8 @@ grep -F "$HOME/.pg0/instances/hindsight-embed-systalyze" \
 ! grep -F "hindsight-embed-/systalyze" \
   "$tmp_dir/hindsight-embed-single-bank-cleanup" >/dev/null
 
-HINDSIGHT_AGENTS_ROOT="$agents_root" zsh -c \
-  'source "$1"; (( $+functions[hindsight_stack_validate_fleet] ))' \
+HINDSIGHT_AGENTS_ROOT="$agents_root" zsh -f -c \
+  'source "$1"; hindsight_stack_load_config && (( $+functions[hindsight_stack_validate_fleet] ))' \
   zsh "$tmp_dir/hindsight-embed-stack.zsh"
 HINDSIGHT_AGENTS_ROOT="$agents_root" "$tmp_dir/hindsight-embed-service" --help >/dev/null
 HINDSIGHT_AGENTS_ROOT="$agents_root" "$tmp_dir/hindsight-memory" --help >/dev/null
