@@ -153,7 +153,8 @@ EOF
 "$aws_modifier" < "$test_dir/aws-input" > "$test_dir/aws-output"
 rg -Fx "credential_process = $fixture_home/.local/bin/secret-exec aws-credential-process aws" \
   "$test_dir/aws-output" >/dev/null || fail 'AWS must resolve credentials through secret-exec'
-rg -Fx 'login_session = personal' "$test_dir/aws-output" >/dev/null || fail 'AWS login session must be preserved'
+! rg -F 'login_session' "$test_dir/aws-output" >/dev/null || \
+  fail 'the default AWS profile must not retain a higher-precedence login session'
 rg -Fx '[profile unrelated]' "$test_dir/aws-output" >/dev/null || fail 'unrelated AWS profiles must be preserved'
 
 profiles=home/dot_config/secret-exec/profiles
