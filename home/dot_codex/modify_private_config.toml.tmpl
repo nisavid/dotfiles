@@ -58,9 +58,14 @@ managed_mcp_servers = {
     ],
 }
 for name, args in managed_mcp_servers.items():
-    if name in mcp:
-        del mcp[name]
-    server = tomlkit.table()
+    existing = mcp[name] if name in mcp else None
+    server = existing if hasattr(existing, "items") else tomlkit.table()
+    for key in (
+        "type", "url", "env", "env_vars", "headers", "http_headers",
+        "bearer_token_env_var",
+    ):
+        if key in server:
+            del server[key]
     server["command"] = secret_exec
     server["args"] = args
     mcp[name] = server

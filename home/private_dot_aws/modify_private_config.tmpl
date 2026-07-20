@@ -23,7 +23,7 @@ awk -v credential_process="$credential_process" '
     next
   }
 
-  in_default && /^[[:space:]]*(credential_process|login_session|aws_access_key_id|aws_secret_access_key|aws_session_token)[[:space:]]*=/ {
+  in_default && /^[[:space:]]*(credential_process|login_session|aws_access_key_id|aws_secret_access_key|aws_session_token|credential_source|source_profile|role_arn|web_identity_token_file|sso_[[:alnum:]_]+)[[:space:]]*=/ {
     next
   }
 

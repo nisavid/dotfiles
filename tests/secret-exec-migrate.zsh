@@ -55,7 +55,7 @@ export FIRECRAWL_API_KEY=firecrawl-canary
 EOF
 cat > "$fixture_home/.aws/credentials" <<'EOF'
 # Shared credentials fixture
-; unrelated profiles are preserved outside retirement validation
+; duplicate verification tolerates unrelated profiles; retirement removes this legacy file
 [unrelated]
 aws_access_key_id = UNRELATEDCANARY
 aws_secret_access_key = UnrelatedSecretCanary
@@ -96,7 +96,8 @@ case "$1 $2" in
     print -r -- ']}'
     ;;
   'item view')
-    reference=$3
+    [[ $3 == --output && $4 == human && $# == 5 ]] || exit 64
+    reference=$5
     tail=${reference#pass://cli-secrets/}
     title=${tail%%/*}
     field=${tail##*/}
@@ -117,6 +118,13 @@ case "$1 $2" in
 esac
 EOF
 chmod +x "$fake_bin/pass-cli"
+
+cat > "$fake_bin/rm" <<'EOF'
+#!/usr/bin/env zsh
+[[ -z ${FAKE_RM_FAIL:-} ]] || exit 1
+exec /bin/rm "$@"
+EOF
+chmod +x "$fake_bin/rm"
 
 cat > "$fake_bin/codex" <<'EOF'
 #!/usr/bin/env zsh
@@ -223,6 +231,69 @@ done
 cat > "$fixture_home/.config/mcp-config.json" <<EOF
 {"mcpServers":{"firecrawl":{"type":"stdio","command":"$fixture_home/.local/bin/secret-exec","args":["firecrawl","--","npx","-y","firecrawl-mcp@3.22.3"]}}}
 EOF
+
+cat > "$fixture_home/.config/environment.d/70-keys.conf" <<'EOF'
+HF_HOME=/tmp/models
+FIRECRAWL_API_KEY=unexpected-ambient-canary
+EOF
+set +e
+zsh "$migrator" --retire-plaintext > "$test_dir/unexpected-ambient.out" 2>&1
+exit_code=$?
+set -e
+(( exit_code != 0 )) || fail 'retirement must reject unexpected ambient credential sources'
+[[ $(<"$test_dir/unexpected-ambient.out") != *unexpected-ambient-canary* ]] || \
+  fail 'unexpected ambient diagnostics must not contain credential values'
+[[ -e $fixture_home/.config/environment.d/10-apikeys.local.conf ]] || \
+  fail 'unexpected ambient sources must block retirement before deletion'
+rm -- "$fixture_home/.config/environment.d/70-keys.conf"
+
+mkdir -p -- "$fixture_home/.config/firecrawl-cli"
+print -r -- '{"apiKey":"stale-firecrawl-canary"}' > \
+  "$fixture_home/.config/firecrawl-cli/credentials.json"
+set +e
+zsh "$migrator" --retire-plaintext > "$test_dir/stale-firecrawl.out" 2>&1
+exit_code=$?
+set -e
+(( exit_code != 0 )) || fail 'retirement must reject stale Firecrawl CLI credentials'
+[[ $(<"$test_dir/stale-firecrawl.out") != *stale-firecrawl-canary* ]] || \
+  fail 'stale Firecrawl diagnostics must not contain credential values'
+[[ -e $fixture_home/.config/firecrawl-cli/credentials.json ]] || \
+  fail 'stale Firecrawl rejection must preserve the detected plaintext source'
+rm -- "$fixture_home/.config/firecrawl-cli/credentials.json"
+
+mkdir -p -- "$fixture_home/.config/opencode"
+cat > "$fixture_home/.config/opencode/opencode.json" <<'EOF'
+{"mcp":{"context7":{"type":"remote","url":"https://mcp.context7.com/mcp","headers":{"CONTEXT7_API_KEY":"literal-context7-canary"}}}}
+EOF
+set +e
+zsh "$migrator" --retire-plaintext > "$test_dir/legacy-opencode.out" 2>&1
+exit_code=$?
+set -e
+(( exit_code != 0 )) || fail 'retirement must reject a literal OpenCode Context7 binding'
+[[ $(<"$test_dir/legacy-opencode.out") != *literal-context7-canary* ]] || \
+  fail 'legacy OpenCode diagnostics must not contain credential values'
+[[ -e $fixture_home/.config/opencode/opencode.json ]] || \
+  fail 'legacy OpenCode rejection must preserve the detected plaintext source'
+cat > "$fixture_home/.config/opencode/opencode.json" <<EOF
+{"mcp":{"context7":{"type":"local","command":["$fixture_home/.local/bin/secret-exec","context7","--","npx","-y","@upstash/context7-mcp@3.2.4"],"enabled":true}}}
+EOF
+
+export FAKE_RM_FAIL=1
+set +e
+failed_cleanup_output=$(zsh "$migrator" --retire-plaintext 2>&1)
+exit_code=$?
+set -e
+unset FAKE_RM_FAIL
+(( exit_code != 0 )) || fail 'retirement must fail when plaintext cleanup fails'
+[[ $failed_cleanup_output != *'retired plaintext credential files'* ]] || \
+  fail 'failed cleanup must not report plaintext retirement success'
+for retained_path in \
+  "$fixture_home/.config/environment.d/10-apikeys.local.conf" \
+  "$fixture_home/.config/zsh/zshrc.d/apikeys.local.zsh" \
+  "$fixture_home/.aws/credentials"; do
+  [[ -e $retained_path ]] || fail "failed cleanup must preserve ${retained_path:t}"
+done
+
 output=$(zsh "$migrator" --retire-plaintext 2>&1)
 for retired_path in \
   "$fixture_home/.config/environment.d/10-apikeys.local.conf" \
