@@ -10,5 +10,12 @@ jq --arg command "$command" '
     command: $command,
     args: ["firecrawl", "--", "npx", "-y", "firecrawl-mcp"]
   }) |
-  del(.mcpServers.firecrawl.url)
+  del(
+    .mcpServers.firecrawl.url,
+    .mcpServers.firecrawl.env,
+    .mcpServers.firecrawl.env_vars,
+    .mcpServers.firecrawl.headers,
+    .mcpServers.firecrawl.http_headers,
+    .mcpServers.firecrawl.bearer_token_env_var
+  )
 ' < /dev/stdin
