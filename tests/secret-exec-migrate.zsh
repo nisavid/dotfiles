@@ -136,6 +136,22 @@ export XDG_CONFIG_HOME=$fixture_home/.config
 export PATH=$fake_bin:/opt/homebrew/bin:/usr/bin:/bin
 export FAKE_PROTON_STATE=$state_dir
 
+cp "$fixture_home/.config/environment.d/10-apikeys.local.conf" "$test_dir/environment-pattern"
+cat > "$fixture_home/.config/environment.d/10-apikeys.local.conf" <<'EOF'
+AWS_ACCESS_KEY_ID=AKIACANARY123
+AWS_SECRET_ACCESS_KEY=AwsSecretCanary123+/=
+GITHUB_PERSONAL_ACCESS_TOKEN=github-*
+CONTEXT7_API_KEY=context7-canary
+FIRECRAWL_API_KEY=firecrawl-canary
+GREPTILE_API_KEY=greptile-canary
+EOF
+set +e
+zsh "$migrator" > "$test_dir/pattern-mismatch.out" 2>&1
+exit_code=$?
+set -e
+(( exit_code != 0 )) || fail 'duplicate verification must compare secret values literally'
+mv "$test_dir/environment-pattern" "$fixture_home/.config/environment.d/10-apikeys.local.conf"
+
 output=$(zsh "$migrator" 2>&1)
 for canary in AKIACANARY AwsSecret github-canary context7-canary firecrawl-canary greptile-canary; do
   [[ $output != *$canary* ]] || fail 'migration output must never contain canary values'
