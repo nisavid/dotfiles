@@ -1,27 +1,28 @@
 # Hindsight Local Stack
 
-This repository manages the local Hindsight API, control-plane UI, inactive
-memory broker, launchd supervisor, and client broker bindings. Run the service
-as the login user, not as root.
+This repository owns Ivan's machine bindings for the local Hindsight stack.
+Reusable implementation, policy, skills, schemas, examples, and tests live in
+[`nisavid/agents`](https://github.com/nisavid/agents/tree/main/tooling/hindsight).
 
-## First-Time Setup
+## Source boundary
 
-Install [uv](https://docs.astral.sh/uv/getting-started/installation/) so
-`~/.local/bin/uvx` is executable. Choose a named profile, bank, and API port,
-then set the matching non-secret values in
-[`home/.chezmoidata/hindsight.toml`](../home/.chezmoidata/hindsight.toml):
+| Classification | Dotfiles-owned assets | Canonical reusable source |
+| --- | --- | --- |
+| Machine and user specific | `home/.chezmoidata/hindsight.toml`, launchd values, harness socket files, the named profile and bank, local ports, and the account-aware Hatchery failover patch | Not applicable |
+| Installation binding | The installed `hindsight-*` launchers, `hindsight-embed-stack.zsh`, and skill links | `tooling/hindsight/bin`, `tooling/hindsight/lib`, `tooling/hindsight/libexec`, and `tooling/hindsight/skills` in `nisavid/agents` |
+| Reusable | None duplicated here | The control-plane package, lifecycle implementation, cleanup implementation, skills, PRD, schemas, examples, and tests in `nisavid/agents` |
 
-```toml
-[hindsight]
-profile = "YOUR_PROFILE"
-profiles = ["YOUR_PROFILE"]
-bank = "YOUR_BANK_ID"
-apiPort = YOUR_API_PORT
-```
+The configured agents checkout is `~/src/nisavid/agents`. Change
+`hindsight.agentsSourceDir` in `home/.chezmoidata/hindsight.toml` if that
+checkout moves. Chezmoi renders regular, machine-owned launchers that delegate
+to the reusable files in that checkout; the launchd and trusted-file checks do
+not need to accept symlinked machine bindings.
 
-Replace every placeholder before continuing. Shell variables alone do not
-change the managed service configuration. Derive the setup values from the
-chezmoi source so the profile setup and rendered LaunchAgent agree:
+## First-time setup
+
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/), clone the
+agents repository at the configured checkout path, and configure the named
+profile without placing credentials in process arguments:
 
 ```zsh
 profile="$(chezmoi execute-template '{{ .hindsight.profile }}')"
@@ -30,54 +31,16 @@ api_port="$(chezmoi execute-template '{{ .hindsight.apiPort }}')"
 
 uvx hindsight-embed configure --profile "$profile" --port "$api_port"
 uvx hindsight-embed profile set-env "$profile" HINDSIGHT_BANK_ID "$bank_id"
-
 chezmoi apply
 hindsight-embed-service install
-uvx hindsight-embed profile set-active "$profile"
 hindsight-embed-service status
 ```
 
-`configure` is intentionally run without `--env`: supplying `--env` selects
-Hindsight's non-interactive path and bypasses provider setup. The CLI currently
-labels interactive `configure` as deprecated, but it remains the named-profile
-path that keeps credentials out of process arguments. Do not replace it with
-`profile create --env` when supplying credentials.
+Interactive `configure` is intentional: the non-interactive `--env` path
+bypasses provider setup and would put credential material at risk of appearing
+in process arguments.
 
-`chezmoi apply` renders these managed targets:
-
-- `~/Library/LaunchAgents/com.hindsight.embed.stack.plist`
-- `~/.local/bin/hindsight-embed-service`, `~/.local/bin/hindsight-memory`, and
-  their supervisor/helpers
-- `~/.hindsight/claude-code.json`, `~/.hindsight/codex.json`, and
-  `~/.hindsight/cursor.json`
-
-`hindsight-embed-service install` validates the rendered files, requires the
-configured profile to exist, retires the legacy service label when present,
-loads the LaunchAgent, and waits for the memory broker, control service, API,
-and UI to become healthy. It prints each bounded wait as it proceeds. The
-LaunchAgent starts the stack again at each login and reconciles the broker,
-control service, every profile in `HINDSIGHT_EMBED_FLEET_PROFILES`, and each declared local
-provider sidecar if a desired-running component stops. An API or UI stopped in
-the Embed Control Center remains stopped for the current login session; starting it in
-the Control Center restores crash recovery. An explicit service start or
-restart and a new login restore the configured autostart policy. The first
-profile remains the primary profile used by the existing single-profile status
-lines.
-
-The broker starts in inactive mode on
-`~/.local/state/hindsight-memory/broker.sock`. It owns its signing material in
-that private state directory, installs no data-plane route, and denies session
-minting. Applying these dotfiles does not activate any harness or authorize a
-memory write.
-
-## Recover An Incomplete Profile
-
-If a profile was created with `configure --env`, rerun the interactive
-`configure` command above for that profile, set `HINDSIGHT_BANK_ID` afterward,
-then run `chezmoi apply` and `hindsight-embed-service install`. This refreshes
-the profile's provider configuration without putting credentials in Git.
-
-## Everyday Operation
+## Everyday operation
 
 ```zsh
 hindsight-embed-service status
@@ -88,102 +51,24 @@ hindsight-embed-service stop
 hindsight-embed-service logs
 ```
 
-Use `status` after installation or a reboot. It reports the LaunchAgent, broker
-socket, fleet health, stable profile slots, endpoint readiness, and sidecar
-readiness. `status --profile NAME` selects one enabled profile. `start` reloads
-or starts the LaunchAgent. `restart` performs a validated clean stop/start so
-profile changes replace the running daemon. `stop` unloads the LaunchAgent and
-performs a bounded stop of the broker, control service, every enabled API/UI
-pair, and declared sidecars.
+The managed stack uses the configured named profile, canonical bank, loopback
+ports, launchd label, inactive broker socket, and client adapter files. The
+account-aware runtime patch remains local because it names Ivan's personal and
+work Codex homes plus the private Hatchery fallback.
 
-The managed Control Center exposes personal and work Codex Spark subscription
-choices plus `Claude Code (subscription)`. The personal choice uses
-`~/.hindsight/codex-nisavid`; the work choice uses
-`~/.hindsight/codex-systalyze`. Both Codex choices save `openai-codex`,
-`gpt-5.3-codex-spark`, and `xhigh` into the runtime profile while keeping their
-OAuth state separate. Authenticate each Codex home once; switching choices does
-not copy credentials or require another login. These subscription choices do
-not require an API key in the profile.
+## Cleanup boundary
 
-`Automatic — work → personal → hatchery` uses Hindsight's in-process failover
-chain in that order. It sends no quota probes and performs no provider-driven
-daemon restarts. A real request that receives Codex `usage_limit_reached`
-continues on the next provider, and later requests bypass that account until
-the reset time reported by Codex. The higher-priority account becomes eligible
-again after that time. Other provider or network failures fall through for the
-current request without opening a quota cooldown.
+`hindsight-embed-single-bank-cleanup` is a destructive, separately invoked
+runbook. Its launcher supplies Ivan's bank, legacy profile, archive-source, and
+local endpoint bindings to the reusable implementation. `--apply` additionally
+requires explicit `HINDSIGHT_CLEANUP_API_TOKEN`,
+`HINDSIGHT_CLEANUP_ARCHIVE_ENCRYPT_COMMAND`, and
+`HINDSIGHT_CLEANUP_ARCHIVE_DECRYPT_COMMAND` values. Begin with `--dry-run` and
+do not run `--apply` without an independently reviewed migration plan.
 
-Each optional sidecar is declared under
-`~/.hindsight/profiles/PROFILE.sidecars/NAME/`. A declaration contains either
-`port` or `port-base`, may contain `health-path`, and may provide executable
-`start`, `status`, and `stop` hooks. Slot-derived ports and explicit overrides
-must be unique across the fleet.
-
-## Configuration Changes
-
-Edit [`home/.chezmoidata/hindsight.toml`](../home/.chezmoidata/hindsight.toml)
-to change the profile, bank, ports, UI host, or autostart policy. For a profile
-or bank change, follow the first-time setup flow so the profile exists before
-the new service configuration is applied. For other changes, apply and restart
-the managed stack:
-
-```zsh
-chezmoi apply
-hindsight-embed-service restart
-hindsight-embed-service status
-```
-
-The client JSON files contain only the private broker socket and adapter
-identity. They remain `active: false`; direct API URLs, bank destinations, and
-credentials are not rendered into harness configuration.
-
-## Boundaries
-
-Keep provider credentials, profile environment files, control tokens, logs,
-archives, and generated plugin state out of Git. The dotfiles source only owns
-the non-secret desired service settings and client connection configuration.
-
-Broker health is not activation approval. Enabling a harness requires a
-separate digest-bound activation plan with unchanged inventory, policy,
-artifact, endpoint, and owned-key pre-state plus a healthy broker/profile and
-adapter self-test. Migration mutation additionally requires the matching
-two-part completion gate and an independently approved immutable mutation plan.
-On activation failure, restore the recorded harness-owned values and leave the
-adapter disabled. On migration failure, keep profile writes frozen and use the
-verified rollback artifacts named by the approved plan.
-
-The completion marker is
-`MIGRATION_ARTIFACT_DIR/distillation-complete.marker` with exactly
-`run=RUN_ID` and `artifact=SHA256` lines. The proposal log must contain a
-`## Migration complete` section with the same two lines. `hindsight-memory
-apply` rereads both trusted regular files immediately before mutation, requires
-the approved plan digest, and resolves the data-plane token only from the named
-environment variable. Trusted gate and restore-evidence files and every
-directory ancestor must be owned by the current user or root. Files must have
-one hard link and must not be group or world writable; paths must not descend
-through a non-sticky writable directory. The gate SHA-256 identifies the
-completed migration package, independently of the desired-state inventory
-digest.
-
-A mutation action binds distinct source and target bank references, the
-completion-gate artifact digest, its `--migration-archive` digest, and the
-canonical digest of its disposable restore-evidence record. The migration
-archive and evidence bindings must be distinct from the rollback bindings.
-The evidence record contains only `schema_version`, the archive's
-`artifact_digest`, and the digest of an independently reviewed disposable-
-restore verification receipt. Apply copies verified archive bytes into a
-private mode-`0400` snapshot below a mode-`0700` directory, passes only that
-snapshot to the Hindsight 0.8.4 vector `hindsight-admin import-bank --archive
-ARCHIVE --target-bank BANK`, and removes it after the command. Snapshot creation
-rejects archives larger than 8 GiB. Archive digests remain out-of-band approval
-inputs and are not passed to the CLI.
-
-The plan separately binds the `--rollback-archive` digest and its
-restore-evidence record digest. Apply runs `hindsight-admin backup ARCHIVE
---schema public`, verifies the resulting archive digest before mutation, and
-uses a fresh verified private snapshot with `hindsight-admin restore ARCHIVE
---schema public --yes` if a postcondition fails.
-
-`hindsight-embed-single-bank-cleanup` is a separate, destructive migration
-runbook. It is not part of normal installation; begin with its default dry run
-and use `--apply` only after reviewing the archive and migration plan.
+Live migration remains blocked until the server-backed opaque monotonic
+generation contract described by
+[`nisavid/agents` issue #11](https://github.com/nisavid/agents/issues/11) is
+available and the complete read-only discovery gate passes. Applying these
+dotfiles does not perform a migration, activate a harness, or authorize a
+memory write.
