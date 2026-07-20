@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+command={{ joinPath .chezmoi.homeDir ".local/bin/secret-exec" | quote }}
+
+jq --arg command "$command" '
+  .mcpServers = (.mcpServers // {}) |
+  .mcpServers.context7 = {
+    command: $command,
+    args: ["context7", "--", "npx", "-y", "@upstash/context7-mcp"]
+  } |
+  .mcpServers.firecrawl = {
+    command: $command,
+    args: ["firecrawl", "--", "npx", "-y", "firecrawl-mcp"]
+  } |
+  .mcpServers.github = {
+    command: $command,
+    args: [
+      "github", "--", "npx", "-y", "mcp-remote",
+      "https://api.githubcopilot.com/mcp/", "--header",
+      "Authorization:Bearer ${GITHUB_PERSONAL_ACCESS_TOKEN}"
+    ]
+  } |
+  .mcpServers.greptile = {
+    command: $command,
+    args: [
+      "greptile", "--", "npx", "-y", "mcp-remote",
+      "https://api.greptile.com/mcp", "--header",
+      "Authorization:Bearer ${GREPTILE_API_KEY}"
+    ]
+  }
+' < /dev/stdin

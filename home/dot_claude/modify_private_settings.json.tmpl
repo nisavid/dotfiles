@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+jq '
+  .enabledPlugins = (.enabledPlugins // {}) |
+  .enabledPlugins["context7@claude-plugins-official"] = false |
+  .enabledPlugins["github@claude-plugins-official"] = false |
+  .enabledPlugins["greptile@claude-plugins-official"] = false
+' < /dev/stdin
