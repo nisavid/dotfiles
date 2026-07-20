@@ -11,7 +11,8 @@ receive these credentials.
 `pass-cli`, removes every managed credential name inherited from the parent,
 exports only the selected profile, and replaces itself with the target command.
 The supported profiles are `aws`, `context7`, `firecrawl`, `github`, and
-`greptile`.
+`greptile`. The `github` profile resolves the `github-mcp` Proton item; it does
+not replace the GitHub CLI login.
 
 AWS uses the narrower external-process protocol:
 
@@ -66,7 +67,9 @@ chezmoi. Validate each consumer before retirement. Then run:
 secret-exec-migrate --retire-plaintext
 ```
 
-Retirement fails while the generic Firecrawl MCP entry still has a URL. A
+Retirement fails unless every managed consumer has the exact process-scoped
+binding, including the absence of any URL field on the generic Firecrawl MCP
+entry. It also requires the hardened Zsh loader and canonical profile set. A
 successful retirement permanently removes the ambient environment file, the
 interactive Zsh fragment, and the static AWS credentials file. Rollback may
 restore the launcher and consumer configuration, but must not restore ambient
