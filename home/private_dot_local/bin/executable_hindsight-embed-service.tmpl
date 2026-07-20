@@ -1,0 +1,15 @@
+#!/usr/bin/env zsh
+set -euo pipefail
+umask 077
+
+export HINDSIGHT_AGENTS_ROOT="${HINDSIGHT_AGENTS_ROOT:-{{ joinPath .chezmoi.homeDir .hindsight.agentsSourceDir }}}"
+export HINDSIGHT_EMBED_STACK_LABEL="com.hindsight.embed.stack"
+export HINDSIGHT_EMBED_LEGACY_LABEL="com.hindsight.embed.control"
+export HINDSIGHT_EMBED_SERVICE_MANIFEST="{{ joinPath .chezmoi.homeDir "Library/LaunchAgents/com.hindsight.embed.stack.plist" }}"
+export HINDSIGHT_EMBED_LEGACY_MANIFEST="{{ joinPath .chezmoi.homeDir "Library/LaunchAgents/com.hindsight.embed.control.plist" }}"
+export HINDSIGHT_EMBED_SUPERVISOR="{{ joinPath .chezmoi.homeDir ".local/bin/hindsight-embed-supervisor" }}"
+export HINDSIGHT_EMBED_STACK_LIB="{{ joinPath .chezmoi.homeDir ".local/lib/hindsight-embed-stack.zsh" }}"
+export HINDSIGHT_EMBED_STATE_DIR="${HINDSIGHT_EMBED_STATE_DIR:-{{ joinPath .chezmoi.homeDir ".local/state/hindsight-embed-launchd" }}}"
+export HINDSIGHT_EMBED_SERVICE_LOG="${HINDSIGHT_EMBED_SERVICE_LOG:-$HINDSIGHT_EMBED_STATE_DIR/logs/supervisor.log}"
+
+exec "$HINDSIGHT_AGENTS_ROOT/tooling/hindsight/bin/hindsight-embed-service" "$@"

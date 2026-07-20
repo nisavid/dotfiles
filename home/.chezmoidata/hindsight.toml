@@ -1,4 +1,5 @@
 [hindsight]
+agentsSourceDir = "src/nisavid/agents"
 profile = "systalyze"
 bank = "engineering"
 clientApiUrl = "http://localhost:7979"
