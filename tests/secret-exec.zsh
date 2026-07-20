@@ -51,6 +51,7 @@ set -euo pipefail
 [[ ${CONTEXT7_API_KEY:-} == context7-canary ]] || exit 70
 [[ -z ${FIRECRAWL_API_KEY:-} ]] || exit 71
 [[ -z ${AWS_ACCESS_KEY_ID:-} ]] || exit 72
+[[ -z ${AWS_SECRET_ACCESS_KEY:-} ]] || exit 75
 [[ ${ORDINARY_SETTING:-} == preserved ]] || exit 73
 [[ $1 == 'argument with spaces' ]] || exit 74
 print -r -- 'target-ok'

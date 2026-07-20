@@ -121,6 +121,10 @@ cat > "$test_dir/mcp-config-input.json" <<'EOF'
       "type": "http",
       "command": "npx",
       "args": ["mcp-remote", "https://mcp.firecrawl.dev/firecrawl-canary/v2/mcp"],
+      "env": {"FIRECRAWL_API_KEY": "environment-canary"},
+      "headers": {"Authorization": "Bearer header-canary"},
+      "http_headers": {"X-API-Key": "http-header-canary"},
+      "bearer_token_env_var": "FIRECRAWL_API_KEY",
       "tools": ["scrape"],
       "url": "https://mcp.firecrawl.dev/firecrawl-canary/v2/mcp"
     }
@@ -137,7 +141,8 @@ jq -e --arg command "$fixture_home/.local/bin/secret-exec" '
     tools: ["scrape"]
   }
 ' "$test_dir/mcp-config-output.json" > /dev/null || fail 'generic MCP config must preserve metadata while retiring the Firecrawl URL'
-! rg -n 'firecrawl-canary' "$test_dir/mcp-config-output.json" >/dev/null || fail 'generic MCP output must not retain credential-bearing URLs'
+! rg -n 'firecrawl-canary|environment-canary|header-canary|FIRECRAWL_API_KEY' \
+  "$test_dir/mcp-config-output.json" >/dev/null || fail 'generic MCP output must not retain legacy authentication data'
 
 aws_modifier=$test_dir/modify-aws-config
 render_modifier home/private_dot_aws/modify_private_config.tmpl "$aws_modifier"
@@ -146,6 +151,7 @@ cat > "$test_dir/aws-input" <<'EOF'
 region = us-east-1
 login_session = personal
 credential_process = old-helper
+aws_session_token = session-canary
 
 [profile unrelated]
 region = us-west-2
@@ -153,8 +159,8 @@ EOF
 "$aws_modifier" < "$test_dir/aws-input" > "$test_dir/aws-output"
 rg -Fx "credential_process = $fixture_home/.local/bin/secret-exec aws-credential-process aws" \
   "$test_dir/aws-output" >/dev/null || fail 'AWS must resolve credentials through secret-exec'
-! rg -F 'login_session' "$test_dir/aws-output" >/dev/null || \
-  fail 'the default AWS profile must not retain a higher-precedence login session'
+! rg -e 'login_session|aws_session_token' "$test_dir/aws-output" >/dev/null || \
+  fail 'the default AWS profile must not retain higher-precedence or partial credentials'
 rg -Fx '[profile unrelated]' "$test_dir/aws-output" >/dev/null || fail 'unrelated AWS profiles must be preserved'
 
 profiles=home/dot_config/secret-exec/profiles

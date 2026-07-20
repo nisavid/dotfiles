@@ -105,6 +105,32 @@ done
 output=$(zsh "$migrator")
 (( $(wc -l < "$state_dir/created.log") == 5 )) || fail 'repeated migration must not create duplicate items'
 
+cat > "$fixture_home/.config/mcp-config.json" <<'EOF'
+{"mcpServers":{"firecrawl":{"type":"stdio","command":"/home/test/.local/bin/secret-exec"}}}
+EOF
+mv "$fixture_home/.config/environment.d/10-apikeys.local.conf" "$test_dir/environment-source"
+set +e
+zsh "$migrator" --retire-plaintext > "$test_dir/partial-source.out" 2>&1
+exit_code=$?
+set -e
+(( exit_code != 0 )) || fail 'retirement must reject a partial legacy source set'
+[[ -e $fixture_home/.config/zsh/zshrc.d/apikeys.local.zsh && -e $fixture_home/.aws/credentials ]] || \
+  fail 'a partial-source rejection must preserve the remaining plaintext sources'
+mv "$test_dir/environment-source" "$fixture_home/.config/environment.d/10-apikeys.local.conf"
+
+mv "$fixture_home/.config/mcp-config.json" "$test_dir/mcp-config"
+set +e
+zsh "$migrator" --retire-plaintext > "$test_dir/missing-mcp.out" 2>&1
+exit_code=$?
+set -e
+(( exit_code != 0 )) || fail 'retirement must require a readable generic MCP config'
+[[ -e $fixture_home/.config/environment.d/10-apikeys.local.conf ]] || \
+  fail 'a missing-MCP rejection must preserve every plaintext source'
+mv "$test_dir/mcp-config" "$fixture_home/.config/mcp-config.json"
+
+cat > "$fixture_home/.config/mcp-config.json" <<'EOF'
+{"mcpServers":{"firecrawl":{"url":"https://mcp.firecrawl.dev/firecrawl-canary/v2/mcp"}}}
+EOF
 set +e
 zsh "$migrator" --retire-plaintext > "$test_dir/blocked.out" 2>&1
 exit_code=$?
