@@ -57,9 +57,41 @@ grep -F "$HOME/.pg0/instances/hindsight-embed-systalyze" \
 ! grep -F "hindsight-embed-/systalyze" \
   "$tmp_dir/hindsight-embed-single-bank-cleanup" >/dev/null
 
-HINDSIGHT_AGENTS_ROOT="$agents_root" zsh -f -c \
-  'source "$1"; hindsight_stack_load_config && (( $+functions[hindsight_stack_validate_fleet] ))' \
-  zsh "$tmp_dir/hindsight-embed-stack.zsh"
+HINDSIGHT_AGENTS_ROOT="$agents_root" zsh -f -c '
+  source "$1"
+  hindsight_stack_load_config || exit 1
+  (( $+functions[hindsight_stack_validate_fleet] )) || exit 1
+  /usr/bin/python3 -I - "$2" <<"PY"
+import os
+import plistlib
+import sys
+
+required = {
+    "HINDSIGHT_EMBED_STACK_LIB", "HINDSIGHT_EMBED_UVX",
+    "HINDSIGHT_EMBED_CONTROL_PORT", "HINDSIGHT_EMBED_CONTROL_HOSTNAME",
+    "HINDSIGHT_EMBED_PRIMARY_PROFILE", "HINDSIGHT_EMBED_FLEET_PROFILES",
+    "HINDSIGHT_EMBED_API_BASE_PORT", "HINDSIGHT_EMBED_UI_BASE_PORT",
+    "HINDSIGHT_EMBED_UI_HOSTNAME", "HINDSIGHT_EMBED_PYTHON",
+    "HINDSIGHT_EMBED_STOP_HELPER", "HINDSIGHT_MEMORY_CLI",
+    "HINDSIGHT_MEMORY_STATE_DIR", "HINDSIGHT_MEMORY_BROKER_SOCKET",
+    "HINDSIGHT_EMBED_STATE_DIR", "HINDSIGHT_EMBED_AUTOSTART_DAEMON",
+    "HINDSIGHT_EMBED_AUTOSTART_UI",
+}
+with open(sys.argv[1], "rb") as handle:
+    environment = plistlib.load(handle).get("EnvironmentVariables", {})
+missing = sorted(
+    key for key in required
+    if not isinstance(environment.get(key), str)
+    or not environment[key]
+    or not os.environ.get(key)
+)
+if missing:
+    raise SystemExit("missing lifecycle bindings: " + ", ".join(missing))
+mismatched = sorted(key for key in required if environment.get(key) != os.environ.get(key))
+if mismatched:
+    raise SystemExit("manifest lifecycle bindings differ: " + ", ".join(mismatched))
+PY
+' zsh "$tmp_dir/hindsight-embed-stack.zsh" "$tmp_dir/com.hindsight.embed.stack.plist"
 HINDSIGHT_AGENTS_ROOT="$agents_root" "$tmp_dir/hindsight-embed-service" --help >/dev/null
 HINDSIGHT_AGENTS_ROOT="$agents_root" "$tmp_dir/hindsight-memory" --help >/dev/null
 HINDSIGHT_AGENTS_ROOT="$agents_root" "$tmp_dir/hindsight-embed-single-bank-cleanup" --help >/dev/null
