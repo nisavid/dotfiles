@@ -52,10 +52,10 @@ path, home = sys.argv[1:]
 doc = tomlkit.load(open(path))
 assert doc["unrelated"] == "preserved"
 expected = {
-    "context7": ["context7", "--", "npx", "-y", "@upstash/context7-mcp"],
-    "firecrawl": ["firecrawl", "--", "npx", "-y", "firecrawl-mcp"],
+    "context7": ["context7", "--", "npx", "-y", "@upstash/context7-mcp@3.2.4"],
+    "firecrawl": ["firecrawl", "--", "npx", "-y", "firecrawl-mcp@3.22.3"],
     "github": [
-        "github", "--", "npx", "-y", "mcp-remote",
+        "github", "--", "npx", "-y", "mcp-remote@0.1.38",
         "https://api.githubcopilot.com/mcp/", "--header",
         "Authorization:Bearer ${GITHUB_PERSONAL_ACCESS_TOKEN}",
     ],
@@ -81,10 +81,10 @@ EOF
 "$claude_modifier" < "$test_dir/claude-input.json" > "$test_dir/claude-output.json"
 jq -e --arg command "$fixture_home/.local/bin/secret-exec" '
   .unrelated == "preserved" and
-  .mcpServers.context7 == {command: $command, args: ["context7", "--", "npx", "-y", "@upstash/context7-mcp"]} and
-  .mcpServers.firecrawl == {command: $command, args: ["firecrawl", "--", "npx", "-y", "firecrawl-mcp"]} and
-  .mcpServers.github == {command: $command, args: ["github", "--", "npx", "-y", "mcp-remote", "https://api.githubcopilot.com/mcp/", "--header", "Authorization:Bearer ${GITHUB_PERSONAL_ACCESS_TOKEN}"]} and
-  .mcpServers.greptile == {command: $command, args: ["greptile", "--", "npx", "-y", "mcp-remote", "https://api.greptile.com/mcp", "--header", "Authorization:Bearer ${GREPTILE_API_KEY}"]}
+  .mcpServers.context7 == {command: $command, args: ["context7", "--", "npx", "-y", "@upstash/context7-mcp@3.2.4"]} and
+  .mcpServers.firecrawl == {command: $command, args: ["firecrawl", "--", "npx", "-y", "firecrawl-mcp@3.22.3"]} and
+  .mcpServers.github == {command: $command, args: ["github", "--", "npx", "-y", "mcp-remote@0.1.38", "https://api.githubcopilot.com/mcp/", "--header", "Authorization:Bearer ${GITHUB_PERSONAL_ACCESS_TOKEN}"]} and
+  .mcpServers.greptile == {command: $command, args: ["greptile", "--", "npx", "-y", "mcp-remote@0.1.38", "https://api.greptile.com/mcp", "--header", "Authorization:Bearer ${GREPTILE_API_KEY}"]}
 ' "$test_dir/claude-output.json" > /dev/null || fail 'Claude MCP bindings must use process-scoped launch profiles'
 ! rg -n 'firecrawl-canary|ambient-canary' "$test_dir/claude-output.json" >/dev/null || \
   fail 'Claude output must retire credential-bearing MCP URLs'
@@ -137,7 +137,7 @@ jq -e --arg command "$fixture_home/.local/bin/secret-exec" '
   .mcpServers.firecrawl == {
     type: "stdio",
     command: $command,
-    args: ["firecrawl", "--", "npx", "-y", "firecrawl-mcp"],
+    args: ["firecrawl", "--", "npx", "-y", "firecrawl-mcp@3.22.3"],
     tools: ["scrape"]
   }
 ' "$test_dir/mcp-config-output.json" > /dev/null || fail 'generic MCP config must preserve metadata while retiring the Firecrawl URL'
@@ -161,6 +161,8 @@ EOF
 "$aws_modifier" < "$test_dir/aws-input" > "$test_dir/aws-output"
 rg -Fx "credential_process = $fixture_home/.local/bin/secret-exec aws-credential-process aws" \
   "$test_dir/aws-output" >/dev/null || fail 'AWS must resolve credentials through secret-exec'
+! rg -F 'old-helper' "$test_dir/aws-output" >/dev/null || \
+  fail 'AWS output must not retain the legacy credential-process helper'
 ! rg -e 'login_session|aws_(access_key_id|secret_access_key|session_token)' "$test_dir/aws-output" >/dev/null || \
   fail 'the default AWS profile must not retain higher-precedence or partial credentials'
 rg -Fx '[profile unrelated]' "$test_dir/aws-output" >/dev/null || fail 'unrelated AWS profiles must be preserved'

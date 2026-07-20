@@ -7,16 +7,16 @@ jq --arg command "$command" '
   .mcpServers = (.mcpServers // {}) |
   .mcpServers.context7 = {
     command: $command,
-    args: ["context7", "--", "npx", "-y", "@upstash/context7-mcp"]
+    args: ["context7", "--", "npx", "-y", "@upstash/context7-mcp@3.2.4"]
   } |
   .mcpServers.firecrawl = {
     command: $command,
-    args: ["firecrawl", "--", "npx", "-y", "firecrawl-mcp"]
+    args: ["firecrawl", "--", "npx", "-y", "firecrawl-mcp@3.22.3"]
   } |
   .mcpServers.github = {
     command: $command,
     args: [
-      "github", "--", "npx", "-y", "mcp-remote",
+      "github", "--", "npx", "-y", "mcp-remote@0.1.38",
       "https://api.githubcopilot.com/mcp/", "--header",
       "Authorization:Bearer ${GITHUB_PERSONAL_ACCESS_TOKEN}"
     ]
@@ -24,7 +24,7 @@ jq --arg command "$command" '
   .mcpServers.greptile = {
     command: $command,
     args: [
-      "greptile", "--", "npx", "-y", "mcp-remote",
+      "greptile", "--", "npx", "-y", "mcp-remote@0.1.38",
       "https://api.greptile.com/mcp", "--header",
       "Authorization:Bearer ${GREPTILE_API_KEY}"
     ]

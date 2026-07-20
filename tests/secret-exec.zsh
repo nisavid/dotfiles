@@ -116,7 +116,8 @@ aws_json=$(zsh "$launcher" aws-credential-process aws)
 [[ $aws_json == '{"Version":1,"AccessKeyId":"AKIACANARY123","SecretAccessKey":"AwsSecretCanary123+/="}' ]] || \
   fail 'AWS credential-process output must match the external AWS contract'
 
-cat > "$profile_dir/malformed.env" <<'EOF'
+cp "$profile_dir/firecrawl.env" "$test_dir/firecrawl.env.bak"
+cat > "$profile_dir/firecrawl.env" <<'EOF'
 NOT AN ASSIGNMENT
 EOF
 set +e
@@ -124,5 +125,6 @@ zsh "$launcher" context7 -- check-context 'argument with spaces' > /dev/null 2>&
 exit_code=$?
 set -e
 (( exit_code != 0 )) || fail 'malformed profile mappings must fail closed'
+mv "$test_dir/firecrawl.env.bak" "$profile_dir/firecrawl.env"
 
 print -r -- 'secret-exec behavior checks passed'

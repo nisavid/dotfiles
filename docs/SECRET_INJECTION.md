@@ -26,7 +26,8 @@ terminal. The default AWS profile invokes this interface from
 
 Codex, Claude Code, and the generic MCP configuration invoke the same launcher
 for credentialed servers. Each child receives only its own credential. Git and
-GitHub CLI authentication remain independent of the MCP GitHub token.
+GitHub CLI authentication remain independent of the MCP GitHub token. Every
+credential-bearing `npx` launch uses an exact audited package version.
 
 ## Proton Pass layout
 
