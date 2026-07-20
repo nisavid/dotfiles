@@ -64,6 +64,16 @@ HINDSIGHT_AGENTS_ROOT="$agents_root" "$tmp_dir/hindsight-embed-service" --help >
 HINDSIGHT_AGENTS_ROOT="$agents_root" "$tmp_dir/hindsight-memory" --help >/dev/null
 HINDSIGHT_AGENTS_ROOT="$agents_root" "$tmp_dir/hindsight-embed-single-bank-cleanup" --help >/dev/null
 /usr/bin/plutil -lint "$tmp_dir/com.hindsight.embed.stack.plist" >/dev/null
+[[ "$(/usr/libexec/PlistBuddy -c \
+  'Print :EnvironmentVariables:HINDSIGHT_EMBED_AUTOSTART_DAEMON' \
+  "$tmp_dir/com.hindsight.embed.stack.plist")" == true ]]
+[[ "$(/usr/libexec/PlistBuddy -c \
+  'Print :EnvironmentVariables:HINDSIGHT_EMBED_AUTOSTART_UI' \
+  "$tmp_dir/com.hindsight.embed.stack.plist")" == true ]]
+[[ "$(/usr/libexec/PlistBuddy -c \
+  'Print :EnvironmentVariables:HINDSIGHT_MEMORY_CLI' \
+  "$tmp_dir/com.hindsight.embed.stack.plist")" == \
+  "$agents_root/tooling/hindsight/bin/hindsight-memory" ]]
 
 for retired_dir in \
   home/private_dot_local/lib/hindsight_memory_control_plane \
