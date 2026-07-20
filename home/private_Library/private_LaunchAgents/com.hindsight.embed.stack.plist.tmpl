@@ -37,6 +37,8 @@
     <string>{{ joinPath .chezmoi.homeDir ".local/lib/hindsight-runtime" }}</string>
     <key>HINDSIGHT_EMBED_LLM_RUNTIME</key>
     <string>{{ joinPath .chezmoi.homeDir ".local/lib/hindsight-runtime" }}</string>
+    <key>HINDSIGHT_EMBED_STACK_LIB</key>
+    <string>{{ joinPath .chezmoi.homeDir ".local/lib/hindsight-embed-stack.zsh" }}</string>
     <key>HINDSIGHT_EMBED_UVX</key>
     <string>{{ joinPath .chezmoi.homeDir ".local/bin/uvx" }}</string>
     <key>HINDSIGHT_EMBED_CONTROL_PORT</key>
@@ -44,6 +46,8 @@
     <key>HINDSIGHT_EMBED_CONTROL_HOSTNAME</key>
     <string>127.0.0.1</string>
     <key>HINDSIGHT_EMBED_PROFILE</key>
+    <string>{{ .hindsight.profile }}</string>
+    <key>HINDSIGHT_EMBED_PRIMARY_PROFILE</key>
     <string>{{ .hindsight.profile }}</string>
     <key>HINDSIGHT_EMBED_FLEET_PROFILES</key>
     <string>{{ .hindsight.profile }}</string>
@@ -57,6 +61,10 @@
     <string>{{ .hindsight.uiPort }}</string>
     <key>HINDSIGHT_EMBED_UI_HOSTNAME</key>
     <string>{{ .hindsight.uiHostname }}</string>
+    <key>HINDSIGHT_EMBED_PYTHON</key>
+    <string>{{ joinPath .chezmoi.homeDir ".local/share/uv/tools/hindsight-embed/bin/python" }}</string>
+    <key>HINDSIGHT_EMBED_STOP_HELPER</key>
+    <string>{{ joinPath .chezmoi.homeDir .hindsight.agentsSourceDir "tooling/hindsight/libexec/hindsight-embed-stop-profile-services.py" }}</string>
     <key>HINDSIGHT_EMBED_AUTOSTART_DAEMON</key>
     <string>{{ if .hindsight.autostartDaemon }}true{{ else }}false{{ end }}</string>
     <key>HINDSIGHT_EMBED_AUTOSTART_UI</key>
