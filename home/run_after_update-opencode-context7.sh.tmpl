@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+config={{ joinPath .chezmoi.homeDir ".config/opencode/opencode.json" | quote }}
+launcher={{ joinPath .chezmoi.homeDir ".local/bin/secret-exec" | quote }}
+
+[[ -f $config && ! -L $config ]] || exit 0
+
+umask 077
+tmp=$(mktemp "${config}.tmp.XXXXXX")
+trap 'rm -f -- "$tmp"' EXIT
+jq --arg launcher "$launcher" '
+  .mcp = (.mcp // {}) |
+  (.mcp.context7 // {}) as $existing |
+  .mcp.context7 = ($existing |
+    del(.url, .headers, .env, .env_vars, .http_headers, .bearer_token_env_var) + {
+      type: "local",
+      command: [$launcher, "context7", "--", "npx", "-y", "@upstash/context7-mcp@3.2.4"],
+      enabled: (if $existing | has("enabled") then $existing.enabled else true end)
+    })
+' "$config" > "$tmp"
+chmod 600 "$tmp"
+mv -- "$tmp" "$config"
+trap - EXIT
