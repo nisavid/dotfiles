@@ -30,7 +30,7 @@ cat > "$fixture_home/.codex/config.toml" <<'EOF'
 command = "managed-by-fake-codex"
 EOF
 cat > "$fixture_home/.claude.json" <<EOF
-{"mcpServers":{"context7":{"command":"$fixture_home/.local/bin/secret-exec","args":["context7","--","npx","-y","@upstash/context7-mcp"]},"firecrawl":{"command":"$fixture_home/.local/bin/secret-exec","args":["firecrawl","--","npx","-y","firecrawl-mcp"]},"github":{"command":"$fixture_home/.local/bin/secret-exec","args":["github","--","npx","-y","mcp-remote","https://api.githubcopilot.com/mcp/","--header","Authorization:Bearer \${GITHUB_PERSONAL_ACCESS_TOKEN}"]},"greptile":{"command":"$fixture_home/.local/bin/secret-exec","args":["greptile","--","npx","-y","mcp-remote","https://api.greptile.com/mcp","--header","Authorization:Bearer \${GREPTILE_API_KEY}"]}}}
+{"mcpServers":{"context7":{"command":"$fixture_home/.local/bin/secret-exec","args":["context7","--","npx","-y","@upstash/context7-mcp@3.2.4"]},"firecrawl":{"command":"$fixture_home/.local/bin/secret-exec","args":["firecrawl","--","npx","-y","firecrawl-mcp@3.22.3"]},"github":{"command":"$fixture_home/.local/bin/secret-exec","args":["github","--","npx","-y","mcp-remote@0.1.38","https://api.githubcopilot.com/mcp/","--header","Authorization:Bearer \${GITHUB_PERSONAL_ACCESS_TOKEN}"]},"greptile":{"command":"$fixture_home/.local/bin/secret-exec","args":["greptile","--","npx","-y","mcp-remote@0.1.38","https://api.greptile.com/mcp","--header","Authorization:Bearer \${GREPTILE_API_KEY}"]}}}
 EOF
 cat > "$fixture_home/.claude/settings.json" <<'EOF'
 {"enabledPlugins":{"context7@claude-plugins-official":false,"github@claude-plugins-official":false,"greptile@claude-plugins-official":false}}
@@ -54,6 +54,12 @@ export CONTEXT7_API_KEY=context7-canary
 export FIRECRAWL_API_KEY=firecrawl-canary
 EOF
 cat > "$fixture_home/.aws/credentials" <<'EOF'
+# Shared credentials fixture
+; unrelated profiles are preserved outside retirement validation
+[unrelated]
+aws_access_key_id = UNRELATEDCANARY
+aws_secret_access_key = UnrelatedSecretCanary
+
 [default]
 aws_access_key_id = AKIACANARY123
 aws_secret_access_key = AwsSecretCanary123+/=
@@ -118,9 +124,9 @@ set -euo pipefail
 [[ $* == 'mcp list --json' ]] || exit 64
 command=$HOME/.local/bin/secret-exec
 jq -n --arg command "$command" '[
-  {name:"context7",transport:{type:"stdio",command:$command,args:["context7","--","npx","-y","@upstash/context7-mcp"],env:{},env_vars:[],cwd:null}},
-  {name:"firecrawl",transport:{type:"stdio",command:$command,args:["firecrawl","--","npx","-y","firecrawl-mcp"],env:{},env_vars:[],cwd:null}},
-  {name:"github",transport:{type:"stdio",command:$command,args:["github","--","npx","-y","mcp-remote","https://api.githubcopilot.com/mcp/","--header","Authorization:Bearer ${GITHUB_PERSONAL_ACCESS_TOKEN}"],env:{},env_vars:[],cwd:null}}
+  {name:"context7",transport:{type:"stdio",command:$command,args:["context7","--","npx","-y","@upstash/context7-mcp@3.2.4"],env:{},env_vars:[],cwd:null}},
+  {name:"firecrawl",transport:{type:"stdio",command:$command,args:["firecrawl","--","npx","-y","firecrawl-mcp@3.22.3"],env:{},env_vars:[],cwd:null}},
+  {name:"github",transport:{type:"stdio",command:$command,args:["github","--","npx","-y","mcp-remote@0.1.38","https://api.githubcopilot.com/mcp/","--header","Authorization:Bearer ${GITHUB_PERSONAL_ACCESS_TOKEN}"],env:{},env_vars:[],cwd:null}}
 ]'
 EOF
 chmod +x "$fake_bin/codex"
@@ -130,18 +136,18 @@ export XDG_CONFIG_HOME=$fixture_home/.config
 export PATH=$fake_bin:/opt/homebrew/bin:/usr/bin:/bin
 export FAKE_PROTON_STATE=$state_dir
 
-output=$(zsh "$migrator")
+output=$(zsh "$migrator" 2>&1)
 for canary in AKIACANARY AwsSecret github-canary context7-canary firecrawl-canary greptile-canary; do
   [[ $output != *$canary* ]] || fail 'migration output must never contain canary values'
 done
 [[ -e $fixture_home/.config/environment.d/10-apikeys.local.conf ]] || fail 'import must not retire plaintext without the explicit flag'
 (( $(wc -l < "$state_dir/created.log") == 5 )) || fail 'migration must create the five Proton items'
 
-output=$(zsh "$migrator")
+output=$(zsh "$migrator" 2>&1)
 (( $(wc -l < "$state_dir/created.log") == 5 )) || fail 'repeated migration must not create duplicate items'
 
 cat > "$fixture_home/.config/mcp-config.json" <<EOF
-{"mcpServers":{"firecrawl":{"type":"stdio","command":"$fixture_home/.local/bin/secret-exec","args":["firecrawl","--","npx","-y","firecrawl-mcp"]}}}
+{"mcpServers":{"firecrawl":{"type":"stdio","command":"$fixture_home/.local/bin/secret-exec","args":["firecrawl","--","npx","-y","firecrawl-mcp@3.22.3"]}}}
 EOF
 mv "$fixture_home/.config/environment.d/10-apikeys.local.conf" "$test_dir/environment-source"
 set +e
@@ -149,6 +155,9 @@ zsh "$migrator" --retire-plaintext > "$test_dir/partial-source.out" 2>&1
 exit_code=$?
 set -e
 (( exit_code != 0 )) || fail 'retirement must reject a partial legacy source set'
+for canary in AKIACANARY AwsSecret github-canary context7-canary firecrawl-canary greptile-canary; do
+  [[ $(<"$test_dir/partial-source.out") != *$canary* ]] || fail 'partial-source diagnostics must not contain canary values'
+done
 [[ -e $fixture_home/.config/zsh/zshrc.d/apikeys.local.zsh && -e $fixture_home/.aws/credentials ]] || \
   fail 'a partial-source rejection must preserve the remaining plaintext sources'
 mv "$test_dir/environment-source" "$fixture_home/.config/environment.d/10-apikeys.local.conf"
@@ -159,6 +168,9 @@ zsh "$migrator" --retire-plaintext > "$test_dir/missing-mcp.out" 2>&1
 exit_code=$?
 set -e
 (( exit_code != 0 )) || fail 'retirement must require a readable generic MCP config'
+for canary in AKIACANARY AwsSecret github-canary context7-canary firecrawl-canary greptile-canary; do
+  [[ $(<"$test_dir/missing-mcp.out") != *$canary* ]] || fail 'missing-MCP diagnostics must not contain canary values'
+done
 [[ -e $fixture_home/.config/environment.d/10-apikeys.local.conf ]] || \
   fail 'a missing-MCP rejection must preserve every plaintext source'
 mv "$test_dir/mcp-config" "$fixture_home/.config/mcp-config.json"
@@ -172,6 +184,9 @@ zsh "$migrator" --retire-plaintext > "$test_dir/legacy-claude.out" 2>&1
 exit_code=$?
 set -e
 (( exit_code != 0 )) || fail 'retirement must reject a credential-bearing Claude MCP URL'
+for canary in AKIACANARY AwsSecret github-canary context7-canary firecrawl-canary greptile-canary; do
+  [[ $(<"$test_dir/legacy-claude.out") != *$canary* ]] || fail 'legacy-Claude diagnostics must not contain canary values'
+done
 [[ -e $fixture_home/.config/environment.d/10-apikeys.local.conf ]] || \
   fail 'a legacy-Claude rejection must preserve every plaintext source'
 mv "$test_dir/claude.json" "$fixture_home/.claude.json"
@@ -184,12 +199,15 @@ zsh "$migrator" --retire-plaintext > "$test_dir/blocked.out" 2>&1
 exit_code=$?
 set -e
 (( exit_code != 0 )) || fail 'retirement must fail while the MCP config still contains the Firecrawl value'
+for canary in AKIACANARY AwsSecret github-canary context7-canary firecrawl-canary greptile-canary; do
+  [[ $(<"$test_dir/blocked.out") != *$canary* ]] || fail 'blocked-retirement diagnostics must not contain canary values'
+done
 [[ -e $fixture_home/.config/environment.d/10-apikeys.local.conf ]] || fail 'blocked retirement must preserve every plaintext source'
 
 cat > "$fixture_home/.config/mcp-config.json" <<EOF
-{"mcpServers":{"firecrawl":{"type":"stdio","command":"$fixture_home/.local/bin/secret-exec","args":["firecrawl","--","npx","-y","firecrawl-mcp"]}}}
+{"mcpServers":{"firecrawl":{"type":"stdio","command":"$fixture_home/.local/bin/secret-exec","args":["firecrawl","--","npx","-y","firecrawl-mcp@3.22.3"]}}}
 EOF
-output=$(zsh "$migrator" --retire-plaintext)
+output=$(zsh "$migrator" --retire-plaintext 2>&1)
 for retired_path in \
   "$fixture_home/.config/environment.d/10-apikeys.local.conf" \
   "$fixture_home/.config/zsh/zshrc.d/apikeys.local.zsh" \
