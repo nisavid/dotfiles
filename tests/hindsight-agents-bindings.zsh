@@ -60,6 +60,8 @@ grep -F "$HOME/.pg0/instances/hindsight-embed-systalyze" \
 HINDSIGHT_AGENTS_ROOT="$agents_root" zsh -f -c '
   source "$1"
   hindsight_stack_load_config || exit 1
+  [[ "$HINDSIGHT_EMBED_DAEMON_WAIT_SECONDS" == 300 ]] || exit 1
+  [[ "$HINDSIGHT_EMBED_LIFECYCLE_COMMAND_TIMEOUT_SECONDS" == 300 ]] || exit 1
   (( $+functions[hindsight_stack_validate_fleet] )) || exit 1
   /usr/bin/python3 -I - "$2" <<"PY"
 import os
