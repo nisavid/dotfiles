@@ -1066,14 +1066,15 @@ class _ShellToken(str):
         return token
 
 
-def _mask_literal_shell_meta(command: str) -> tuple[str, str, str]:
+def _mask_literal_shell_meta(command: str) -> tuple[str, dict[str, str]]:
     markers = (
         character
         for character in (chr(codepoint) for codepoint in range(0xE000, 0xF900))
         if character not in command
     )
-    dollar_marker = next(markers)
-    backtick_marker = next(markers)
+    literal_markers = {
+        character: next(markers) for character in ("$", "`", "*", "?", "[")
+    }
     masked: list[str] = []
     quote: str | None = None
     index = 0
@@ -1081,10 +1082,8 @@ def _mask_literal_shell_meta(command: str) -> tuple[str, str, str]:
         character = command[index]
         if character == "\\" and quote != "'":
             escaped = command[index + 1] if index + 1 < len(command) else None
-            if escaped == "$":
-                masked.append(dollar_marker)
-            elif escaped == "`":
-                masked.append(backtick_marker)
+            if escaped in literal_markers:
+                masked.append(literal_markers[escaped])
             else:
                 masked.append(character)
                 if escaped is not None:
@@ -1097,19 +1096,19 @@ def _mask_literal_shell_meta(command: str) -> tuple[str, str, str]:
             elif quote == character:
                 quote = None
             masked.append(character)
-        elif quote == "'" and character == "$":
-            masked.append(dollar_marker)
-        elif quote == "'" and character == "`":
-            masked.append(backtick_marker)
+        elif quote == "'" and character in {"$", "`"}:
+            masked.append(literal_markers[character])
+        elif quote is not None and character in {"*", "?", "["}:
+            masked.append(literal_markers[character])
         else:
             masked.append(character)
         index += 1
-    return "".join(masked), dollar_marker, backtick_marker
+    return "".join(masked), literal_markers
 
 
 def _segments(command: str) -> Iterable[list[str]]:
     try:
-        masked, dollar_marker, backtick_marker = _mask_literal_shell_meta(
+        masked, literal_markers = _mask_literal_shell_meta(
             _without_shell_comments(command)
         )
         lexer = shlex.shlex(
@@ -1124,15 +1123,13 @@ def _segments(command: str) -> Iterable[list[str]]:
     except ValueError:
         return
     restored: list[_ShellToken] = []
+    literal_characters = {marker: value for value, marker in literal_markers.items()}
     for token in tokens:
         characters: list[str] = []
         literal_positions: list[int] = []
         for character in token:
-            if character == dollar_marker:
-                character = "$"
-                literal_positions.append(len(characters))
-            elif character == backtick_marker:
-                character = "`"
+            if character in literal_characters:
+                character = literal_characters[character]
                 literal_positions.append(len(characters))
             characters.append(character)
         restored.append(_ShellToken("".join(characters), literal_positions))
@@ -3063,7 +3060,7 @@ def _resolve_sensitive_gh_arguments(
                 return segment, "gh argument"
             resolved[argument_index] = value
         elif any(
-            character in "$`" and position not in literal_positions
+            character in "$`*?[" and position not in literal_positions
             for position, character in enumerate(argument)
         ):
             literal_graphql_variables = False
