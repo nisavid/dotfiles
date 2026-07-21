@@ -8,6 +8,7 @@ from collections.abc import Iterable
 from functools import lru_cache
 import json
 import os
+import posixpath
 import re
 import shlex
 import subprocess
@@ -15,7 +16,7 @@ import sys
 import time
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 
 JAVASCRIPT_LITERAL = r"'(?:\\.|[^'\\])*'|\"(?:\\.|[^\"\\])*\"|`(?:\\.|[^`\\])*`"
@@ -89,14 +90,21 @@ GH_API_VALUE_OPTIONS = {
     "--field",
     "-H",
     "--header",
+    "--cache",
     "--hostname",
     "--input",
+    "-p",
+    "--preview",
     "-f",
     "--raw-field",
+    "-q",
+    "--jq",
+    "-t",
+    "--template",
     "-X",
     "--method",
 }
-GH_API_VALUE_SHORT_OPTIONS = {"F", "H", "f", "X"}
+GH_API_VALUE_SHORT_OPTIONS = {"F", "H", "f", "p", "q", "t", "X"}
 ISSUE_EDIT_VALUE_OPTIONS = {
     "--add-assignee",
     "--add-label",
@@ -185,11 +193,24 @@ REST_PULLS_RE = re.compile(r"(?:^|/)repos/[^/]+/[^/]+/pulls(?:/(?P<number>\d+))?
 REST_ISSUE_RE = re.compile(
     r"(?:^|/)repos/(?P<owner>[^/]+)/(?P<repo>[^/]+)/issues/(?P<number>\d+)/?$"
 )
+REST_REVIEW_REPLY_ROUTE_RE = re.compile(
+    r"^repos/[^/]+/[^/]+/pulls/[^/]+/comments/?$"
+)
+REST_REVIEW_REPLY_RE = re.compile(
+    r"^repos/(?P<owner>[A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))/"
+    r"(?P<repo>[A-Za-z0-9_.-]+)/pulls/(?P<number>[1-9][0-9]*)/comments/?$"
+)
 GRAPHQL_DIRECT_PR_MUTATION_RE = re.compile(
     r"\b(?:createPullRequest|updatePullRequest|markPullRequestReadyForReview)\b",
     re.I,
 )
 GRAPHQL_UPDATE_ISSUE_RE = re.compile(r"\bupdateIssue\b", re.I)
+GRAPHQL_RESOLVE_REVIEW_THREAD_RE = re.compile(r"\bresolveReviewThread\b", re.I)
+GRAPHQL_RESOLVE_REVIEW_THREAD_QUERY_RE = re.compile(
+    r"^mutation\(\$(?P<variable>[A-Za-z_][A-Za-z0-9_]*):ID!\)"
+    r"\{resolveReviewThread\(input:\{threadId:\$(?P=variable)\}\)"
+    r"\{thread\{(?:id\s+isResolved|isResolved\s+id)\}\}\}$"
+)
 VALIDATOR = (
     Path.home()
     / ".agents/skills/writing-reviewable-pr-descriptions/scripts/validate_change_navigation.py"
@@ -216,6 +237,10 @@ EXPANDABLE_UPDATER_ARGUMENTS = {
     "$HOME/.agents/skills/publishing-reviewable-prs/scripts/update_reviewable_pr.py",
     "${HOME}/.agents/skills/publishing-reviewable-prs/scripts/update_reviewable_pr.py",
 }
+REVIEW_STATE = (
+    Path.home()
+    / ".agents/skills/pr-review-orchestration/scripts/pr_review_state.py"
+)
 
 
 def _has_exact_expandable_helper_spelling(command: str) -> bool:
@@ -1030,10 +1055,65 @@ def _without_shell_comments(command: str) -> str:
     return "".join(masked)
 
 
+class _ShellToken(str):
+    literal_shell_meta_positions: frozenset[int]
+
+    def __new__(
+        cls, value: str, literal_shell_meta_positions: Iterable[int] = ()
+    ) -> _ShellToken:
+        token = super().__new__(cls, value)
+        token.literal_shell_meta_positions = frozenset(literal_shell_meta_positions)
+        return token
+
+
+def _mask_literal_shell_meta(command: str) -> tuple[str, str, str]:
+    markers = (
+        character
+        for character in (chr(codepoint) for codepoint in range(0xE000, 0xF900))
+        if character not in command
+    )
+    dollar_marker = next(markers)
+    backtick_marker = next(markers)
+    masked: list[str] = []
+    quote: str | None = None
+    index = 0
+    while index < len(command):
+        character = command[index]
+        if character == "\\" and quote != "'":
+            escaped = command[index + 1] if index + 1 < len(command) else None
+            if escaped == "$":
+                masked.append(dollar_marker)
+            elif escaped == "`":
+                masked.append(backtick_marker)
+            else:
+                masked.append(character)
+                if escaped is not None:
+                    masked.append(escaped)
+            index += 2
+            continue
+        if character in "'\"":
+            if quote is None:
+                quote = character
+            elif quote == character:
+                quote = None
+            masked.append(character)
+        elif quote == "'" and character == "$":
+            masked.append(dollar_marker)
+        elif quote == "'" and character == "`":
+            masked.append(backtick_marker)
+        else:
+            masked.append(character)
+        index += 1
+    return "".join(masked), dollar_marker, backtick_marker
+
+
 def _segments(command: str) -> Iterable[list[str]]:
     try:
+        masked, dollar_marker, backtick_marker = _mask_literal_shell_meta(
+            _without_shell_comments(command)
+        )
         lexer = shlex.shlex(
-            _without_shell_comments(command),
+            masked,
             posix=True,
             punctuation_chars=";&|()!\n",
         )
@@ -1043,6 +1123,20 @@ def _segments(command: str) -> Iterable[list[str]]:
         tokens = list(lexer)
     except ValueError:
         return
+    restored: list[_ShellToken] = []
+    for token in tokens:
+        characters: list[str] = []
+        literal_positions: list[int] = []
+        for character in token:
+            if character == dollar_marker:
+                character = "$"
+                literal_positions.append(len(characters))
+            elif character == backtick_marker:
+                character = "`"
+                literal_positions.append(len(characters))
+            characters.append(character)
+        restored.append(_ShellToken("".join(characters), literal_positions))
+    tokens = restored
     current: list[str] = []
     for token in tokens:
         if token in SHELL_OPERATORS or (
@@ -1887,6 +1981,67 @@ def _updater_invocation_is_invalid(segment: list[str]) -> bool | None:
     )
 
 
+def _review_state_invocation_is_invalid(segment: list[str]) -> bool | None:
+    index = _skip_prefixes(segment)
+    if index >= len(segment):
+        return None
+    executable = os.path.basename(segment[index])
+    if executable not in {"python", "python3"}:
+        return True if executable == REVIEW_STATE.name else None
+    script_index = index + 1
+    if script_index >= len(segment):
+        return None
+    script = segment[script_index]
+    if os.path.basename(script) != REVIEW_STATE.name:
+        if any(
+            os.path.basename(token) == REVIEW_STATE.name
+            for token in segment[script_index + 1 :]
+        ):
+            return True
+        return None
+    if script != str(REVIEW_STATE):
+        return True
+
+    values: dict[str, str] = {}
+    flags: set[str] = set()
+    arguments = segment[script_index + 1 :]
+    position = 0
+    while position < len(arguments):
+        argument = arguments[position]
+        if argument in {"--repo", "--pr"}:
+            if argument in values or position + 1 >= len(arguments):
+                return True
+            values[argument] = arguments[position + 1]
+            position += 2
+            continue
+        if argument.startswith(("--repo=", "--pr=")):
+            name, value = argument.split("=", 1)
+            if name in values:
+                return True
+            values[name] = value
+            position += 1
+            continue
+        if argument in {"--summary", "--json"}:
+            if argument in flags:
+                return True
+            flags.add(argument)
+            position += 1
+            continue
+        return True
+
+    repository = values.get("--repo")
+    pr_number = values.get("--pr", "")
+    return not (
+        values.keys() == {"--repo", "--pr"}
+        and flags == {"--summary", "--json"}
+        and repository is not None
+        and re.fullmatch(r"[A-Za-z0-9-]+/[A-Za-z0-9_.-]+", repository) is not None
+        and pr_number.isascii()
+        and pr_number.isdigit()
+        and int(pr_number) > 0
+    )
+
+
 def _read_literal_file(value: str) -> str | None:
     path = _literal_absolute_path(value)
     if path is None:
@@ -1918,7 +2073,17 @@ def _api_endpoint(arguments: list[str]) -> str | None:
             else:
                 index += 1
             continue
-        return token.split("?", 1)[0].lstrip("/")
+        endpoint = token.split("?", 1)[0].split("#", 1)[0]
+        if "://" in endpoint:
+            parsed = urlsplit(endpoint)
+            if (
+                parsed.scheme == "https"
+                and parsed.hostname == "api.github.com"
+                and parsed.port is None
+            ):
+                return posixpath.normpath(unquote(parsed.path)).lstrip("/")
+            return endpoint
+        return posixpath.normpath(unquote(endpoint)).lstrip("/")
     return None
 
 
@@ -2044,6 +2209,49 @@ def _graphql_node_identity(
     return ("issue" if typename == "Issue" else "pull_request", identity)
 
 
+@lru_cache(maxsize=64)
+def _graphql_review_thread_repository(thread_id: str) -> str | None:
+    query = (
+        "query($id: ID!) { node(id: $id) { "
+        "... on PullRequestReviewThread { pullRequest { "
+        "repository { nameWithOwner } } } } }"
+    )
+    try:
+        result = _budgeted_run(
+            [
+                "gh",
+                "--hostname",
+                "github.com",
+                "api",
+                "graphql",
+                "-f",
+                f"query={query}",
+                "-f",
+                f"id={thread_id}",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode:
+        return None
+    try:
+        value = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return None
+    node = value.get("data", {}).get("node") if isinstance(value, dict) else None
+    pull_request = node.get("pullRequest") if isinstance(node, dict) else None
+    repository = (
+        pull_request.get("repository") if isinstance(pull_request, dict) else None
+    )
+    name_with_owner = (
+        repository.get("nameWithOwner") if isinstance(repository, dict) else None
+    )
+    return _normalize_repository(name_with_owner)
+
+
 def _json_find_string(value: Any, names: set[str]) -> str | None:
     if isinstance(value, dict):
         for key, nested in value.items():
@@ -2164,6 +2372,250 @@ def _api_body(fields: dict[str, list[str]], input_content: str | None) -> str | 
             return None
         return _json_find_string(value, {"body"})
     return None
+
+
+def _strict_review_reply_arguments(arguments: list[str]) -> bool:
+    endpoints: list[str] = []
+    methods: list[str] = []
+    fields: list[tuple[str, str]] = []
+    index = 0
+    while index < len(arguments):
+        token = arguments[index]
+        if token in {"-X", "--method", "-f", "--raw-field", "-F", "--field"}:
+            if index + 1 >= len(arguments):
+                return False
+            value = arguments[index + 1]
+            if token in {"-X", "--method"}:
+                methods.append(value)
+            else:
+                fields.append((token, value))
+            index += 2
+            continue
+        matched = False
+        for option in ("--method", "--raw-field", "--field"):
+            if token.startswith(f"{option}="):
+                value = token.split("=", 1)[1]
+                if option == "--method":
+                    methods.append(value)
+                else:
+                    fields.append((option, value))
+                matched = True
+                break
+        if matched:
+            index += 1
+            continue
+        if token.startswith("-X") and token != "-X":
+            methods.append(token[2:])
+            index += 1
+            continue
+        if token.startswith(("-f", "-F")) and token[:2] in {"-f", "-F"}:
+            fields.append((token[:2], token[2:]))
+            index += 1
+            continue
+        if token in {"--jq", "-q"}:
+            if index + 1 >= len(arguments):
+                return False
+            index += 2
+            continue
+        if token.startswith("--jq="):
+            index += 1
+            continue
+        if token.startswith("-"):
+            return False
+        endpoints.append(token)
+        index += 1
+
+    if len(endpoints) != 1 or len(methods) != 1 or methods[0].upper() != "POST":
+        return False
+    endpoint = endpoints[0].split("?", 1)[0].lstrip("/")
+    match = REST_REVIEW_REPLY_RE.fullmatch(endpoint)
+    if match is None or "?" in endpoints[0]:
+        return False
+    if _normalize_repository(f"{match.group('owner')}/{match.group('repo')}") is None:
+        return False
+    parsed_fields: dict[str, list[tuple[str, str]]] = {}
+    for option, raw_field in fields:
+        name, separator, value = raw_field.partition("=")
+        if not separator:
+            return False
+        parsed_fields.setdefault(name, []).append((option, value))
+    if parsed_fields.keys() != {"body", "in_reply_to"}:
+        return False
+    if any(len(values) != 1 for values in parsed_fields.values()):
+        return False
+    body_option, body = parsed_fields["body"][0]
+    _reply_option, reply_id = parsed_fields["in_reply_to"][0]
+    return bool(
+        body
+        and not (body_option in {"-F", "--field"} and body.startswith("@"))
+        and reply_id.isascii()
+        and reply_id.isdigit()
+        and int(reply_id) > 0
+    )
+
+
+def _review_reply_route_path(arguments: list[str]) -> str | None:
+    endpoint = _api_endpoint(arguments)
+    if endpoint is None:
+        return None
+    if "://" in endpoint:
+        endpoint = urlsplit(endpoint).path.lstrip("/")
+    return endpoint if REST_REVIEW_REPLY_ROUTE_RE.fullmatch(endpoint) else None
+
+
+def _review_reply_route_is_unproven(arguments: list[str]) -> bool:
+    return bool(
+        _review_reply_route_path(arguments)
+        and not _strict_review_reply_arguments(arguments)
+    )
+
+
+def _review_resolution_query_texts(arguments: list[str]) -> list[str]:
+    queries: list[str] = []
+    for value in _api_fields(arguments).get("query", []):
+        if value.startswith("@"):
+            content = _read_literal_file(value[1:])
+            if content is not None:
+                queries.append(content)
+        else:
+            queries.append(value)
+    input_content, _unresolved_input = _api_input(arguments)
+    if input_content:
+        queries.append(input_content)
+    return queries
+
+
+def _strict_review_resolution_arguments(
+    arguments: list[str], repository: str | None
+) -> bool:
+    endpoints: list[str] = []
+    methods: list[str] = []
+    fields: list[str] = []
+    index = 0
+    while index < len(arguments):
+        token = arguments[index]
+        if token in {"-X", "--method", "-f", "--raw-field", "-F", "--field"}:
+            if index + 1 >= len(arguments):
+                return False
+            value = arguments[index + 1]
+            if token in {"-X", "--method"}:
+                methods.append(value)
+            else:
+                fields.append(value)
+            index += 2
+            continue
+        matched = False
+        for option in ("--method", "--raw-field", "--field"):
+            if token.startswith(f"{option}="):
+                value = token.split("=", 1)[1]
+                if option == "--method":
+                    methods.append(value)
+                else:
+                    fields.append(value)
+                matched = True
+                break
+        if matched:
+            index += 1
+            continue
+        if token.startswith("-X") and token != "-X":
+            methods.append(token[2:])
+            index += 1
+            continue
+        if token.startswith(("-f", "-F")) and token[:2] in {"-f", "-F"}:
+            fields.append(token[2:])
+            index += 1
+            continue
+        if token in {"--jq", "-q"}:
+            if index + 1 >= len(arguments):
+                return False
+            index += 2
+            continue
+        if token.startswith("--jq="):
+            index += 1
+            continue
+        if token.startswith("-"):
+            return False
+        endpoints.append(token)
+        index += 1
+
+    if endpoints != ["graphql"]:
+        return False
+    if len(methods) > 1 or (methods and methods[0].upper() != "POST"):
+        return False
+    parsed_fields: dict[str, list[str]] = {}
+    for raw_field in fields:
+        name, separator, value = raw_field.partition("=")
+        if not separator:
+            return False
+        parsed_fields.setdefault(name, []).append(value)
+    if len(parsed_fields.get("query", [])) != 1:
+        return False
+    query = parsed_fields["query"][0]
+    if query.startswith("@"):
+        return False
+    normalized_query = re.sub(r"\s*([!$():{}])\s*", r"\1", query.strip())
+    query_match = GRAPHQL_RESOLVE_REVIEW_THREAD_QUERY_RE.fullmatch(normalized_query)
+    if query_match is None:
+        return False
+    variable = query_match.group("variable")
+    if parsed_fields.keys() != {"query", variable}:
+        return False
+    if len(parsed_fields[variable]) != 1:
+        return False
+    thread_id = parsed_fields[variable][0]
+    return bool(
+        repository
+        and re.fullmatch(r"PRRT_[A-Za-z0-9_-]+", thread_id)
+        and _graphql_review_thread_repository(thread_id) == repository
+    )
+
+
+def _is_review_resolution_route(arguments: list[str]) -> bool:
+    if _api_endpoint(arguments) != "graphql":
+        return False
+    queries = _review_resolution_query_texts(arguments)
+    return any(GRAPHQL_RESOLVE_REVIEW_THREAD_RE.search(query) for query in queries)
+
+
+def _review_resolution_route_is_unproven(
+    arguments: list[str], repository: str | None
+) -> bool:
+    return _is_review_resolution_route(arguments) and not (
+        _strict_review_resolution_arguments(arguments, repository)
+    )
+
+
+def _gh_targets_github_dot_com(
+    segment: list[str], bindings: dict[str, str | None]
+) -> bool:
+    gh_index = _skip_prefixes(segment)
+    if gh_index >= len(segment) or os.path.basename(segment[gh_index]) != "gh":
+        return False
+    index = gh_index + 1
+    explicit_hosts: list[str] = []
+    while index < len(segment) and segment[index] != "api":
+        token = segment[index]
+        if token == "--hostname":
+            if index + 1 >= len(segment):
+                return False
+            explicit_hosts.append(segment[index + 1])
+            index += 2
+            continue
+        if token.startswith("--hostname="):
+            explicit_hosts.append(token.split("=", 1)[1])
+        index += 1
+    if explicit_hosts:
+        return len(explicit_hosts) == 1 and explicit_hosts[0] == "github.com"
+    prefix_hosts = [
+        assignment.group("value")
+        for token in segment[:gh_index]
+        if (assignment := SHELL_ASSIGNMENT_RE.fullmatch(token)) is not None
+        and assignment.group("name") == "GH_HOST"
+    ]
+    if prefix_hosts:
+        return all(host == "github.com" for host in prefix_hosts)
+    host = bindings.get("GH_HOST", os.environ.get("GH_HOST", "github.com"))
+    return host == "github.com"
 
 
 def _api_changes_pr_text(arguments: list[str]) -> bool:
@@ -2603,13 +3055,17 @@ def _resolve_sensitive_gh_arguments(
     graphql = "api" in resolved[index + 1 :] and "graphql" in resolved[index + 1 :]
     for argument_index in range(index + 1, len(resolved)):
         argument = resolved[argument_index]
-        variable = _shell_variable_name(argument)
+        literal_positions = getattr(argument, "literal_shell_meta_positions", frozenset())
+        variable = None if literal_positions else _shell_variable_name(argument)
         if variable is not None:
             value = bindings.get(variable)
             if value is None or any(character.isspace() for character in value):
                 return segment, "gh argument"
             resolved[argument_index] = value
-        elif "$" in argument or "`" in argument:
+        elif any(
+            character in "$`" and position not in literal_positions
+            for position, character in enumerate(argument)
+        ):
             literal_graphql_variables = False
             if (
                 graphql
@@ -2625,6 +3081,8 @@ def _resolve_sensitive_gh_arguments(
                 )
             if not literal_graphql_variables:
                 return segment, "gh argument"
+        else:
+            resolved[argument_index] = str(argument)
     return resolved, None
 
 
@@ -3507,6 +3965,7 @@ def _command_assessment(
     has_exact_expandable_helper = _has_exact_expandable_helper_spelling(command)
     current_workdir = workdir
     directory_stack: list[str] = []
+    trusted_review_reply_followup = False
     command_without_data, shell_bodies = _without_heredoc_payloads(command)
     substitutions, unresolved_substitution = _shell_command_substitutions(
         command_without_data
@@ -3526,11 +3985,23 @@ def _command_assessment(
         if blocked:
             return blocked, route
     for segment_number, segment in enumerate(_segments(command_without_data)):
+        review_reply_followup = trusted_review_reply_followup
+        trusted_review_reply_followup = False
         assignments, assignment_end = _leading_shell_assignments(segment)
         direct_python = (
             assignment_end == 0
             and bool(segment)
             and segment[0] in {"python", "python3"}
+        )
+        direct_authenticated_python = (
+            assignment_end == 1
+            and len(segment) > 1
+            and segment[1] in {"python", "python3"}
+        )
+        direct_trusted_gh = (
+            assignment_end < len(segment)
+            and segment[assignment_end] == "gh"
+            and set(assignments) <= {"GH_HOST", "GH_TOKEN"}
         )
         bindings.update(assignments)
         if assignment_end == len(segment):
@@ -3617,6 +4088,32 @@ def _command_assessment(
         segment, dynamic_route = _resolve_dynamic_executable(segment, bindings)
         if dynamic_route is not None:
             return True, dynamic_route
+        review_state_invalid = _review_state_invocation_is_invalid(segment)
+        if review_state_invalid is not None:
+            authenticated_followup = (
+                review_reply_followup
+                and depth == 0
+                and assignment_end == 1
+                and set(assignments) == {"GH_TOKEN"}
+                and set(bindings) == {"GH_TOKEN"}
+                and direct_authenticated_python
+            )
+            trusted_review_state = (
+                allow_owned_helpers
+                and depth == 0
+                and (
+                    (
+                        segment_number == 0
+                        and direct_python
+                        and not bindings
+                        and segment[0] in {"python", "python3"}
+                    )
+                    or authenticated_followup
+                )
+            )
+            if review_state_invalid or not trusted_review_state:
+                return True, "review state query"
+            continue
         segment, interpreter_route = _normalize_interpreter_entrypoint(
             segment,
             bindings,
@@ -3780,8 +4277,28 @@ def _command_assessment(
                 _issue_edit_identities(arguments, repository)
             ):
                 return True, None
-        elif name == "api" and _api_changes_pr_text(arguments):
-            return True, None
+        elif name == "api":
+            review_reply = _review_reply_route_path(arguments) is not None
+            review_resolution = _is_review_resolution_route(arguments)
+            trusted_gh_route = (
+                depth == 0
+                and segment_number == 0
+                and direct_trusted_gh
+                and set(bindings) <= {"GH_HOST", "GH_TOKEN"}
+            )
+            if (review_reply or review_resolution) and not trusted_gh_route:
+                return True, "gh executable"
+            if (review_reply or review_resolution) and not (
+                _gh_targets_github_dot_com(segment, bindings)
+            ):
+                return True, "GitHub hostname"
+            if _review_reply_route_is_unproven(arguments):
+                return True, "review reply"
+            if _review_resolution_route_is_unproven(arguments, repository):
+                return True, "review thread resolution"
+            if _api_changes_pr_text(arguments):
+                return True, None
+            trusted_review_reply_followup = review_reply
     return False, None
 
 
