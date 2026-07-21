@@ -2498,6 +2498,11 @@ def _review_resolution_query_texts(arguments: list[str]) -> list[str]:
 def _strict_review_resolution_arguments(
     arguments: list[str], repository: str | None
 ) -> bool:
+    if repository is not None:
+        # `gh api` does not accept the repository-selection flags supported by
+        # commands such as `gh pr`.  Bind this route with an otherwise unused
+        # literal GraphQL variable instead, then verify the thread against it.
+        return False
     endpoints: list[str] = []
     methods: list[str] = []
     fields: list[str] = []
@@ -2568,13 +2573,21 @@ def _strict_review_resolution_arguments(
     if query_match is None:
         return False
     variable = query_match.group("variable")
-    if parsed_fields.keys() != {"query", variable}:
+    if variable == "repository" or parsed_fields.keys() != {
+        "query",
+        variable,
+        "repository",
+    }:
         return False
-    if len(parsed_fields[variable]) != 1:
+    if len(parsed_fields[variable]) != 1 or len(parsed_fields["repository"]) != 1:
         return False
     thread_id = parsed_fields[variable][0]
+    repository = parsed_fields["repository"][0]
     return bool(
-        repository
+        re.fullmatch(
+            r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9_.-]+",
+            repository,
+        )
         and re.fullmatch(r"PRRT_[A-Za-z0-9_-]+", thread_id)
         and _graphql_review_thread_repository(thread_id) == repository
     )
