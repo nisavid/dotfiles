@@ -1267,6 +1267,266 @@ class BlockPrFillTests(unittest.TestCase):
             MODULE.blocks(payload("Bash", {"command": "gh api repos/acme/app/pulls/7"}))
         )
 
+    def test_allows_static_review_reply_with_authenticated_followup_query(self) -> None:
+        review_state = (
+            Path.home()
+            / ".agents/skills/pr-review-orchestration/scripts/pr_review_state.py"
+        )
+        command = (
+            'GH_TOKEN="$(gh auth token --user nisavid)" '
+            "gh api --method POST repos/acme/app/pulls/62/comments "
+            "-f body='Fixed in `abc1234`. Strict SemVer uses ASCII `[0-9]`.' "
+            "-F in_reply_to=3619280822 --jq '[.id,.html_url] | @tsv'; "
+            'GH_TOKEN="$(gh auth token --user nisavid)" '
+            f"python3 {shlex.quote(str(review_state))} "
+            "--repo acme/app --pr 62 --summary --json "
+            "| jq -r '.github_state.unresolved_threads[] | [.id,.url] | @tsv'"
+        )
+        code = f"await tools.exec_command({{cmd: {json.dumps(command)}}})"
+
+        self.assertFalse(MODULE.blocks(payload("functions.exec", {"code": code})))
+
+        reply = (
+            "gh api --method POST repos/acme/app/pulls/62/comments "
+            "-f body=Fixed -F in_reply_to=3619280822"
+        )
+        helper = (
+            f"{shlex.quote(str(review_state))} --repo acme/app --pr 62 "
+            "--summary --json"
+        )
+        unsafe_followups = (
+            f"{reply}; GH_TOKEN=x sudo python3 {helper}",
+            f"{reply}; GH_TOKEN=x env PATH=/private/tmp python3 {helper}",
+            f"export PATH=/private/tmp; {reply}; GH_TOKEN=x python3 {helper}",
+            f"export PYTHONPATH=/private/tmp; {reply}; GH_TOKEN=x python3 {helper}",
+        )
+        for unsafe in unsafe_followups:
+            with self.subTest(unsafe=unsafe):
+                self.assert_direct_and_nested_blocked(unsafe)
+
+    def test_review_reply_route_requires_static_bounded_arguments(self) -> None:
+        allowed = (
+            "gh api --method POST repos/acme/app/pulls/62/comments "
+            "-f body='Literal `code` and $(shell text) remain review prose.' "
+            "-F in_reply_to=3619280822",
+            "gh --hostname github.com api --method POST "
+            "repos/acme/app/pulls/62/comments -f body=Fixed "
+            "-F in_reply_to=3619280822",
+            "GH_HOST=github.com gh api --method POST "
+            "repos/acme/app/pulls/62/comments -f body=Fixed "
+            "-F in_reply_to=3619280822",
+            "GH_HOST=github.com gh api --jq .id --method POST "
+            "repos/acme/app/pulls/62/comments -f body=@reviewer "
+            "-F in_reply_to=3619280822",
+            "GH_TOKEN='literal-test-token' gh api --method POST "
+            "repos/acme/app/pulls/62/comments -f body='Fixed.' "
+            "-F in_reply_to=3619280822 | jq -r .html_url",
+        )
+        for command in allowed:
+            with self.subTest(command=command):
+                self.assert_direct_and_nested_allowed(command)
+
+        blocked = (
+            'gh api --method POST "$ENDPOINT" -f body=Fixed '
+            "-F in_reply_to=3619280822",
+            "gh api --method POST repos/{owner}/{repo}/pulls/62/comments "
+            "-f body=Fixed -F in_reply_to=3619280822",
+            "gh api --method POST repos/acme/app/pulls/branch/comments "
+            "-f body=Fixed -F in_reply_to=3619280822",
+            "gh api --method POST repos/acme/app/pulls/62/comments "
+            '-f body="$BODY" -F in_reply_to=3619280822',
+            "gh api --method POST repos/acme/app/pulls/62/comments "
+            '-f body="$(printf Fixed)" -F in_reply_to=3619280822',
+            "gh api --method POST repos/acme/app/pulls/62/comments "
+            "-f body=`printf Fixed` -F in_reply_to=3619280822",
+            "gh api --method POST repos/acme/app/pulls/62/comments -f body=Fixed",
+            "gh api --method POST repos/acme/app/pulls/62/comments "
+            "-f body=Fixed -F in_reply_to=branch",
+            "gh api --method POST repos/acme/app/pulls/62/comments "
+            "-f body=Fixed -F in_reply_to=3619280822 -f title=unexpected",
+            "gh --hostname evil.example api --method POST "
+            "repos/acme/app/pulls/62/comments -f body=Fixed "
+            "-F in_reply_to=3619280822",
+            "GH_HOST=evil.example gh api --method POST "
+            "repos/acme/app/pulls/62/comments -f body=Fixed "
+            "-F in_reply_to=3619280822",
+            "env GH_HOST=evil.example gh api --method POST "
+            "repos/acme/app/pulls/62/comments -f body=Fixed "
+            "-F in_reply_to=3619280822",
+            "env GH_HOST=github.com gh api --method POST "
+            "repos/acme/app/pulls/62/comments -f body=Fixed "
+            "-F in_reply_to=3619280822",
+            'GH_HOST="$HOST" gh api --method POST '
+            "repos/acme/app/pulls/62/comments -f body=Fixed "
+            "-F in_reply_to=3619280822",
+            "gh api --method POST repos/acme/app/pulls/62/comments "
+            "-F body=@/private/tmp/reply.md -F in_reply_to=3619280822",
+            "/private/tmp/gh api --method POST "
+            "repos/acme/app/pulls/62/comments -f body=Fixed "
+            "-F in_reply_to=3619280822",
+            "PATH=/private/tmp gh api --method POST "
+            "repos/acme/app/pulls/62/comments -f body=Fixed "
+            "-F in_reply_to=3619280822",
+            "env PATH=/private/tmp gh api --method POST "
+            "repos/acme/app/pulls/62/comments -f body=Fixed "
+            "-F in_reply_to=3619280822",
+            "echo ok; gh api --method POST "
+            "repos/acme/app/pulls/62/comments -f body=Fixed "
+            "-F in_reply_to=3619280822",
+            "gh api --method DELETE "
+            "https://api.github.com/repos/acme/app/pulls/62/comments "
+            "-f body=Fixed -F in_reply_to=3619280822",
+            "gh api --method DELETE "
+            "repos/acme/app/pulls/62/comments#fragment "
+            "-f body=Fixed -F in_reply_to=3619280822",
+            "gh api --method DELETE "
+            "repos/acme/app/pulls/62/comm%65nts "
+            "-f body=Fixed -F in_reply_to=3619280822",
+            "gh api --method DELETE "
+            "repos/acme/app/pulls/62/ignored/../comments "
+            "-f body=Fixed -F in_reply_to=3619280822",
+            "gh api --method POST repos/acme/app/pulls/62/comments "
+            "-f body=Fixed -F in_reply_to=3619280822; gh pr ready 62",
+        )
+        for command in blocked:
+            with self.subTest(command=command):
+                self.assert_direct_and_nested_blocked(command)
+
+        inherited = (
+            "gh api --method POST repos/acme/app/pulls/62/comments "
+            "-f body=Fixed -F in_reply_to=3619280822"
+        )
+        with mock.patch.dict(os.environ, {"GH_HOST": "evil.example"}):
+            self.assert_direct_and_nested_blocked(inherited)
+
+    def test_api_endpoint_parsing_consumes_output_and_transport_values(self) -> None:
+        mutations = (
+            "gh api --cache 1h --method PATCH repos/acme/app/pulls/62 -f body=evil",
+            "gh api --jq .id --method PATCH repos/acme/app/pulls/62 -f body=evil",
+            "gh api --jq=.id --method PATCH repos/acme/app/pulls/62 -f body=evil",
+            "gh api -q.id --method PATCH repos/acme/app/pulls/62 -f body=evil",
+            "gh api --template '{{.id}}' --method PATCH "
+            "repos/acme/app/pulls/62 -f body=evil",
+            "gh api -t'{{.id}}' --method PATCH "
+            "repos/acme/app/pulls/62 -f body=evil",
+            "gh api --preview mercy --method PATCH "
+            "repos/acme/app/pulls/62 -f body=evil",
+            "gh api -pmercy --method PATCH repos/acme/app/pulls/62 -f body=evil",
+            "gh api --jq .data graphql -f "
+            "query='mutation($id:ID!){markPullRequestReadyForReview("
+            "input:{pullRequestId:$id}){pullRequest{id}}}' "
+            "-f id=PR_kwDOExample123",
+        )
+        for command in mutations:
+            with self.subTest(command=command):
+                self.assert_direct_and_nested_blocked(command)
+
+    def test_review_thread_resolution_requires_one_static_thread(self) -> None:
+        query = (
+            "mutation($id:ID!){resolveReviewThread(input:{threadId:$id})"
+            "{thread{id isResolved}}}"
+        )
+        allowed = (
+            'GH_TOKEN="$(gh auth token --user nisavid)" '
+            f"gh -R acme/app api graphql -f query='{query}' "
+            "-f id=PRRT_kwDOExample123 --jq '.data.resolveReviewThread.thread'"
+        )
+        with mock.patch.object(
+            MODULE,
+            "_graphql_review_thread_repository",
+            return_value="acme/app",
+        ):
+            self.assert_direct_and_nested_allowed(allowed)
+            escaped = (
+                'gh -R acme/app api graphql -f "query=mutation(\\$id:ID!){'
+                "resolveReviewThread(input:{threadId:\\$id})"
+                '{thread{id isResolved}}}" -f id=PRRT_kwDOExample123'
+            )
+            self.assert_direct_and_nested_allowed(escaped)
+
+        blocked = (
+            f"gh api graphql -f query='{query}' -f id=not-a-thread",
+            f"gh api graphql -f query='{query}' "
+            "-f id=PRRT_kwDOExample123",
+            f"gh -R other/app api graphql -f query='{query}' "
+            "-f id=PRRT_kwDOExample123",
+            f"gh --hostname evil.example -R acme/app api graphql "
+            f"-f query='{query}' -f id=PRRT_kwDOExample123",
+            "gh -R acme/app api https://api.github.com/graphql "
+            f"-f query='{query}' -f id=PRRT_kwDOExample123",
+            f"gh -R acme/app api graphql#fragment -f query='{query}' "
+            "-f id=PRRT_kwDOExample123",
+            f"gh -R acme/app api graph%71l -f query='{query}' "
+            "-f id=PRRT_kwDOExample123",
+            f"gh -R acme/app api ignored/../graphql -f query='{query}' "
+            "-f id=PRRT_kwDOExample123",
+            f"gh api graphql -f query='{query}'",
+            f"gh api graphql -f query='{query}' "
+            '-f id="$THREAD"',
+            f"gh api graphql -f query='{query}' "
+            "-f id=PRRT_kwDOExample123 -f other=unexpected",
+            "gh api graphql -f "
+            "query='mutation($id:ID!){resolveReviewThread(input:{threadId:$id})"
+            "{thread{id isResolved}} markPullRequestReadyForReview("
+            "input:{pullRequestId:$id}){pullRequest{id}}}' "
+            "-f id=PRRT_kwDOExample123",
+            f"QUERY='{query}'; gh api graphql -f \"query=$QUERY\" "
+            "-f id=PRRT_kwDOExample123",
+        )
+        with mock.patch.object(
+            MODULE,
+            "_graphql_review_thread_repository",
+            return_value="acme/app",
+        ):
+            for command in blocked:
+                with self.subTest(command=command):
+                    self.assert_direct_and_nested_blocked(command)
+
+        with mock.patch.object(
+            MODULE,
+            "_graphql_review_thread_repository",
+            return_value=None,
+        ):
+            self.assert_direct_and_nested_blocked(allowed)
+
+    def test_review_state_query_requires_exact_read_only_contract(self) -> None:
+        script = (
+            Path.home()
+            / ".agents/skills/pr-review-orchestration/scripts/pr_review_state.py"
+        )
+        invocation = f"python3 {shlex.quote(str(script))}"
+        self.assert_direct_and_nested_allowed(
+            f"{invocation} --repo acme/app --pr 62 --summary --json"
+        )
+        self.assert_direct_and_nested_allowed(
+            f"{invocation} --json --pr=62 --summary --repo=acme/app"
+        )
+
+        blocked = (
+            f"/private/tmp/python3 {shlex.quote(str(script))} --repo acme/app "
+            "--pr 62 --summary --json",
+            f"PATH=/private/tmp {invocation} --repo acme/app --pr 62 "
+            "--summary --json",
+            f"PYTHONPATH=/private/tmp {invocation} --repo acme/app --pr 62 "
+            "--summary --json",
+            f"sh -c '{invocation} --repo acme/app --pr 62 --summary --json'",
+            f"echo ok; {invocation} --repo acme/app --pr 62 --summary --json",
+            f"{invocation} --repo acme/app --pr 62 --summary",
+            f"{invocation} --repo acme/app --pr 62 --summary --json --write-ledger",
+            f"{invocation} --repo acme/app --pr 62 --summary --json "
+            "--fixture /private/tmp/state.json",
+            f"{invocation} --repo '{{owner}}/app' --pr 62 --summary --json",
+            f"{invocation} --repo acme/app --pr branch --summary --json",
+            f"{invocation} --repo acme/app --pr 62 --pr 63 --summary --json",
+            "python3 /private/tmp/pr_review_state.py "
+            "--repo acme/app --pr 62 --summary --json",
+            f"python3 -c 'print(1)' {shlex.quote(str(script))} "
+            "--repo acme/app --pr 62 --summary --json",
+        )
+        for command in blocked:
+            with self.subTest(command=command):
+                self.assert_direct_and_nested_blocked(command)
+
     def test_blocks_direct_curl_rest_and_graphql_pr_mutations(self) -> None:
         commands = (
             "curl -X PATCH https://api.github.com/repos/acme/app/pulls/7 "
@@ -1622,6 +1882,55 @@ class BlockPrFillTests(unittest.TestCase):
                 self.assertTrue(
                     MODULE.blocks(payload("Bash", {"command": canonical_command}))
                 )
+
+    def test_classifies_review_thread_repository_on_forced_github_host(self) -> None:
+        response = mock.Mock(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "data": {
+                        "node": {
+                            "pullRequest": {
+                                "repository": {"nameWithOwner": "acme/app"}
+                            }
+                        }
+                    }
+                }
+            ),
+        )
+        MODULE._graphql_review_thread_repository.cache_clear()
+        with mock.patch.object(MODULE, "_budgeted_run", return_value=response) as run:
+            self.assertEqual(
+                MODULE._graphql_review_thread_repository("PRRT_example"),
+                "acme/app",
+            )
+        arguments = run.call_args.args[0]
+        self.assertEqual(
+            arguments[:5],
+            ["gh", "--hostname", "github.com", "api", "graphql"],
+        )
+        self.assertIn("id=PRRT_example", arguments)
+
+        failures = (
+            mock.Mock(returncode=1, stdout=""),
+            mock.Mock(returncode=0, stdout="not-json"),
+            mock.Mock(returncode=0, stdout='{"data":{"node":null}}'),
+            subprocess.TimeoutExpired(["gh"], 1),
+        )
+        for failure in failures:
+            with self.subTest(failure=failure):
+                MODULE._graphql_review_thread_repository.cache_clear()
+                context = (
+                    mock.patch.object(MODULE, "_budgeted_run", side_effect=failure)
+                    if isinstance(failure, BaseException)
+                    else mock.patch.object(
+                        MODULE, "_budgeted_run", return_value=failure
+                    )
+                )
+                with context:
+                    self.assertIsNone(
+                        MODULE._graphql_review_thread_repository("PRRT_example")
+                    )
 
     def test_classifies_issue_connectors_authoritatively(self) -> None:
         connector = {
