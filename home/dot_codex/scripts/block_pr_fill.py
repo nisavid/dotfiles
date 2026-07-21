@@ -12,6 +12,7 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -24,6 +25,9 @@ SHELL_OPERATORS = {";", "&&", "||", "|", "(", ")", "{", "}"}
 SHELL_OPERATOR_CHARACTERS = set(";&|()!\n")
 SHELL_INTERPRETERS = {"bash", "dash", "fish", "ksh", "sh", "zsh"}
 SHELL_PARSE_ONLY_LONG_OPTIONS = {"--noexec", "--no-exec", "--no-execute"}
+HOOK_SUBPROCESS_BUDGET_SECONDS = 10.0
+SUBPROCESS_TIMEOUT_SECONDS = 4.0
+_HOOK_DEADLINE: float | None = None
 PYTHON_NON_PR_MODULE_RUNNERS = {
     "compileall",
     "py_compile",
@@ -219,6 +223,15 @@ def _strings(value: Any) -> Iterable[str]:
     elif isinstance(value, list):
         for nested in value:
             yield from _strings(nested)
+
+
+def _budgeted_run(arguments: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
+    timeout = SUBPROCESS_TIMEOUT_SECONDS
+    if _HOOK_DEADLINE is not None:
+        timeout = min(timeout, _HOOK_DEADLINE - time.monotonic())
+        if timeout <= 0:
+            raise subprocess.TimeoutExpired(arguments, 0)
+    return subprocess.run(arguments, timeout=timeout, **kwargs)
 
 
 def _decode_javascript_literal(literal: str) -> str | None:
@@ -584,7 +597,7 @@ def _nested_connector_is_noncanonical(code: str) -> bool:
     masked = _mask_javascript_strings_and_comments(code)
     connector_re = re.compile(
         r"\b(?:tools\.)?(?P<name>[A-Za-z0-9_$]*(?:create|update)_"
-        r"(?:pull_request|issue))\s*\("
+        r"(?:pull_request|issue))\s*(?:\?\.\s*)?\("
     )
     for match in connector_re.finditer(masked):
         end = _javascript_call_end(masked, match.end() - 1)
@@ -602,7 +615,7 @@ def _nested_connector_is_noncanonical(code: str) -> bool:
     if re.search(
         r"\b(?:tools\.)?[A-Za-z0-9_$]*(?:(?:mark|set|make)[A-Za-z0-9_$]*"
         r"pull_request[A-Za-z0-9_$]*ready|pull_request[A-Za-z0-9_$]*"
-        r"(?:mark|set|make)[A-Za-z0-9_$]*ready)\s*\(",
+        r"(?:mark|set|make)[A-Za-z0-9_$]*ready)\s*(?:\?\.\s*)?\(",
         masked,
         re.I,
     ):
@@ -610,35 +623,33 @@ def _nested_connector_is_noncanonical(code: str) -> bool:
     comment_free = _mask_javascript_comments(code)
     alias_re = re.compile(
         r"\b(?:const|let|var)\s+(?P<alias>[A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*"
-        r"tools(?:\.(?P<dot>[A-Za-z0-9_$]*(?:create|update)_"
-        r"(?:pull_request|issue))|\s*\[\s*['\"](?P<bracket>[^'\"]*"
+        r"(?:tools(?:\?\.|\.)(?P<dot>[A-Za-z0-9_$]*(?:create|update)_"
+        r"(?:pull_request|issue))|tools\s*(?:\?\.\s*)?\[\s*['\"](?P<bracket>[^'\"]*"
         r"(?:create|update)_(?:pull_request|issue))['\"]\s*\])"
     )
     for alias_match in alias_re.finditer(comment_free):
-        if re.search(rf"\b{re.escape(alias_match.group('alias'))}\s*\(", masked):
+        if re.search(
+            rf"\b{re.escape(alias_match.group('alias'))}\s*(?:\?\.\s*)?\(",
+            masked,
+        ):
             return True
     ready_alias_re = re.compile(
         r"\b(?:const|let|var)\s+(?P<alias>[A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*"
-        r"tools(?:\.(?P<dot>[A-Za-z0-9_$]*pull_request[A-Za-z0-9_$]*ready[A-Za-z0-9_$]*)"
-        r"|\s*\[\s*['\"](?P<bracket>[^'\"]*pull_request[^'\"]*ready[^'\"]*)"
+        r"(?:tools(?:\?\.|\.)(?P<dot>[A-Za-z0-9_$]*pull_request[A-Za-z0-9_$]*ready[A-Za-z0-9_$]*)"
+        r"|tools\s*(?:\?\.\s*)?\[\s*['\"](?P<bracket>[^'\"]*pull_request[^'\"]*ready[^'\"]*)"
         r"['\"]\s*\])",
         re.I,
     )
     for alias_match in ready_alias_re.finditer(comment_free):
         tool = alias_match.group("dot") or alias_match.group("bracket")
         if _tool_is_ready_mutation(tool) and re.search(
-            rf"\b{re.escape(alias_match.group('alias'))}\s*\(", masked
+            rf"\b{re.escape(alias_match.group('alias'))}\s*(?:\?\.\s*)?\(",
+            masked,
         ):
             return True
-    if re.search(
-        r"\btools\s*\[\s*['\"][^'\"]*(?:create|update)_"
-        r"(?:pull_request|issue)['\"]\s*\]\s*\(",
-        comment_free,
-    ):
-        return True
     ready_bracket_call_re = re.compile(
-        r"\btools\s*\[\s*['\"](?P<tool>[^'\"]*pull_request[^'\"]*ready[^'\"]*)"
-        r"['\"]\s*\]\s*\(",
+        r"\btools\s*(?:\?\.\s*)?\[\s*['\"](?P<tool>[^'\"]*pull_request[^'\"]*ready[^'\"]*)"
+        r"['\"]\s*\]\s*(?:\?\.\s*)?\(",
         re.I,
     )
     if any(
@@ -646,6 +657,33 @@ def _nested_connector_is_noncanonical(code: str) -> bool:
         for match in ready_bracket_call_re.finditer(comment_free)
     ):
         return True
+    computed_tool_call_re = re.compile(
+        r"\btools\s*(?:\?\.\s*)?\[\s*(?P<property>[^\]\r\n]+?)\s*\]"
+        r"\s*(?:\?\.\s*)?\("
+    )
+    for match in computed_tool_call_re.finditer(masked):
+        property_source = code[match.start("property") : match.end("property")].strip()
+        if re.fullmatch(JAVASCRIPT_LITERAL, property_source, re.S) is None:
+            return True
+        tool_name = _decode_javascript_literal(property_source)
+        if tool_name is None:
+            return True
+        if tool_name in {"exec_command", "write_stdin"}:
+            return True
+        if _tool_is_ready_mutation(tool_name):
+            return True
+        if re.search(r"(?:create|update)_(?:pull_request|issue)$", tool_name, re.I):
+            end = _javascript_call_end(masked, match.end() - 1)
+            call_source = code[match.start() : end]
+            call_masked = masked[match.start() : end]
+            if tool_name.lower().endswith(("update_pull_request", "update_issue")) and (
+                "..." in call_masked
+            ):
+                return True
+            if _connector_call_is_noncanonical(
+                tool_name.lower(), _javascript_connector_input(call_source)
+            ):
+                return True
     return False
 
 
@@ -653,7 +691,7 @@ def _nested_shell_tool_route_is_unresolved(code: str) -> bool:
     masked = _mask_javascript_strings_and_comments(code)
     comment_free = _mask_javascript_comments(code)
     bracket_re = re.compile(
-        r"\btools\s*\[\s*['\"](?:exec_command|write_stdin)['\"]\s*\]"
+        r"\btools\s*(?:\?\.\s*)?\[\s*['\"](?:exec_command|write_stdin)['\"]\s*\]"
     )
     for match in bracket_re.finditer(comment_free):
         if masked[match.start() : match.start() + len("tools")] == "tools":
@@ -661,11 +699,12 @@ def _nested_shell_tool_route_is_unresolved(code: str) -> bool:
 
     alias_re = re.compile(
         r"\b(?:const|let|var)\s+(?P<alias>[A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*"
-        r"tools\.(?:exec_command|write_stdin)\b"
+        r"tools(?:\?\.|\.)(?:exec_command|write_stdin)\b"
     )
     for match in alias_re.finditer(masked):
         if re.search(
-            rf"\b{re.escape(match.group('alias'))}\s*\(", masked[match.end() :]
+            rf"\b{re.escape(match.group('alias'))}\s*(?:\?\.\s*)?\(",
+            masked[match.end() :],
         ):
             return True
 
@@ -679,13 +718,13 @@ def _nested_shell_tool_route_is_unresolved(code: str) -> bool:
             match.group("body"),
         ):
             if re.search(
-                rf"\b{re.escape(alias_match.group('alias'))}\s*\(",
+                rf"\b{re.escape(alias_match.group('alias'))}\s*(?:\?\.\s*)?\(",
                 masked[match.end() :],
             ):
                 return True
 
     if re.search(
-        r"\btools\.(?:exec_command|write_stdin)\s*"
+        r"\btools(?:\?\.|\.)(?:exec_command|write_stdin)\s*"
         r"(?:\?\.\s*\(|\.(?:call|apply)\s*\()",
         masked,
     ):
@@ -1364,11 +1403,10 @@ def _issue_edit_arguments(
 @lru_cache(maxsize=1)
 def _gh_aliases() -> dict[str, str]:
     try:
-        result = subprocess.run(
+        result = _budgeted_run(
             ["gh", "alias", "list"],
             capture_output=True,
             text=True,
-            timeout=4,
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -1752,11 +1790,10 @@ def _issue_edit_identities(
 @lru_cache(maxsize=64)
 def _issue_target_kind(repository: str, number: int) -> str | None:
     try:
-        result = subprocess.run(
+        result = _budgeted_run(
             ["gh", "api", f"repos/{repository}/issues/{number}"],
             capture_output=True,
             text=True,
-            timeout=4,
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -1782,11 +1819,10 @@ def _graphql_node_identity(
         "... on PullRequest { number repository { nameWithOwner } } } }"
     )
     try:
-        result = subprocess.run(
+        result = _budgeted_run(
             ["gh", "api", "graphql", "-f", f"query={query}", "-f", f"id={node_id}"],
             capture_output=True,
             text=True,
-            timeout=4,
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -2057,7 +2093,7 @@ def _curl_changes_pr(
             arguments.append(argument)
 
     method: str | None = None
-    data: list[str] = []
+    data: list[tuple[str, bool]] = []
     urls: list[str] = []
     value_options = {
         "-d",
@@ -2090,11 +2126,11 @@ def _curl_changes_pr(
         if token in value_options:
             if index + 1 >= len(arguments):
                 return True, "curl data"
-            data.append(arguments[index + 1])
+            data.append((arguments[index + 1], token == "--json"))
             index += 2
             continue
         if token.startswith("-d") and token != "-d":
-            data.append(token[2:])
+            data.append((token[2:], False))
             index += 1
             continue
         matching_data_option = next(
@@ -2106,7 +2142,9 @@ def _curl_changes_pr(
             None,
         )
         if matching_data_option is not None:
-            data.append(token.split("=", 1)[1])
+            data.append(
+                (token.split("=", 1)[1], matching_data_option == "--json")
+            )
             index += 1
             continue
         parsed_url = urlsplit(token)
@@ -2126,29 +2164,87 @@ def _curl_changes_pr(
         return True, "curl GitHub API"
     endpoint = urls[0]
     method = method or ("POST" if data else "GET")
-    data_content_parts: list[str] = []
-    for value in data:
+    data_content_parts: list[tuple[str, bool]] = []
+    for value, explicit_json in data:
         if value.startswith("@"):
             content = _read_literal_file(value[1:])
             if content is None:
                 return True, "curl data"
-            data_content_parts.append(content)
+            data_content_parts.append((content, explicit_json))
         else:
-            data_content_parts.append(value)
-    data_content = "\n".join(data_content_parts)
+            data_content_parts.append((value, explicit_json))
+    data_content = "\n".join(content for content, _explicit_json in data_content_parts)
+
+    def decoded_json_changes(fields: set[str]) -> tuple[bool, bool]:
+        def contains_sensitive_key(value: Any) -> bool:
+            if isinstance(value, dict):
+                return any(
+                    str(key).lower() in fields or contains_sensitive_key(nested)
+                    for key, nested in value.items()
+                )
+            if isinstance(value, list):
+                return any(contains_sensitive_key(nested) for nested in value)
+            return False
+
+        for content, explicit_json in data_content_parts:
+            stripped = content.lstrip()
+            if not explicit_json and not stripped.startswith(("{", "[")):
+                continue
+            try:
+                decoded = json.loads(content)
+            except (json.JSONDecodeError, TypeError):
+                return False, True
+            if contains_sensitive_key(decoded):
+                return True, False
+        return False, False
+
+    def decoded_json_contains(pattern: str) -> tuple[bool, bool]:
+        def contains_matching_string(value: Any) -> bool:
+            if isinstance(value, str):
+                return bool(re.search(pattern, value, re.I))
+            if isinstance(value, dict):
+                return any(
+                    contains_matching_string(nested) for nested in value.values()
+                )
+            if isinstance(value, list):
+                return any(contains_matching_string(nested) for nested in value)
+            return False
+
+        for content, explicit_json in data_content_parts:
+            stripped = content.lstrip()
+            if not explicit_json and not stripped.startswith(("{", "[")):
+                continue
+            try:
+                decoded = json.loads(content)
+            except (json.JSONDecodeError, TypeError):
+                return False, True
+            if contains_matching_string(decoded):
+                return True, False
+        return False, False
 
     if endpoint == "graphql":
+        json_mutation, invalid_json = decoded_json_contains(r"\bmutation\b")
         return (
             method in {"POST", "PATCH"}
-            and bool(re.search(r"\bmutation\b", data_content, re.I)),
+            and (
+                invalid_json
+                or json_mutation
+                or bool(re.search(r"\bmutation\b", data_content, re.I))
+            ),
             None,
         )
     pulls_match = REST_PULLS_RE.fullmatch(endpoint)
     if pulls_match:
         if pulls_match.group("number") is None:
             return method == "POST", None
+        json_changes, invalid_json = decoded_json_changes(
+            {"title", "body", "draft"}
+        )
+        if method in {"POST", "PATCH"} and invalid_json:
+            return True, "curl JSON"
         return method in {"POST", "PATCH"} and bool(
-            re.search(
+            json_changes
+            or re.search(
                 r'(?:["\'](?:title|body|draft)["\']\s*:|'
                 r"(?:^|\n)(?:title|body|draft)=)",
                 data_content,
@@ -2156,10 +2252,12 @@ def _curl_changes_pr(
             )
         ), None
     issue_match = REST_ISSUE_RE.fullmatch(endpoint)
-    if (
-        issue_match
-        and method in {"POST", "PATCH"}
-        and re.search(
+    issue_json_changes, issue_invalid_json = decoded_json_changes({"title", "body"})
+    if issue_match and method in {"POST", "PATCH"} and issue_invalid_json:
+        return True, "curl JSON"
+    if issue_match and method in {"POST", "PATCH"} and (
+        issue_json_changes
+        or re.search(
             r'(?:["\'](?:title|body)["\']\s*:|(?:^|\n)(?:title|body)=)',
             data_content,
             re.I,
@@ -2564,7 +2662,7 @@ def _literal_interpreter_source(
         else:
             index += 1
     if index >= len(segment):
-        return kind, None, None
+        return kind, None, f"{executable} stdin"
     path = _literal_command_path(segment[index], workdir)
     if path is None or not path.is_file():
         return kind, None, f"{executable} script"
@@ -3234,7 +3332,7 @@ def _canonical_body(body: Any, identity: tuple[str, int] | None) -> bool:
         return False
     repository, pr_number = identity
     try:
-        result = subprocess.run(
+        result = _budgeted_run(
             [
                 sys.executable,
                 str(VALIDATOR),
@@ -3247,7 +3345,6 @@ def _canonical_body(body: Any, identity: tuple[str, int] | None) -> bool:
             input=body,
             capture_output=True,
             text=True,
-            timeout=4,
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -3385,6 +3482,8 @@ def _deny(message: str) -> int:
 
 
 def main() -> int:
+    global _HOOK_DEADLINE
+    _HOOK_DEADLINE = time.monotonic() + HOOK_SUBPROCESS_BUDGET_SECONDS
     try:
         payload = json.load(sys.stdin)
     except (json.JSONDecodeError, OSError):
