@@ -1439,8 +1439,9 @@ class BlockPrFillTests(unittest.TestCase):
         )
         allowed = (
             'GH_TOKEN="$(gh auth token --user nisavid)" '
-            f"gh -R acme/app api graphql -f query='{query}' "
-            "-f id=PRRT_kwDOExample123 --jq '.data.resolveReviewThread.thread'"
+            f"gh api graphql -f query='{query}' "
+            "-f id=PRRT_kwDOExample123 -f repository=acme/app "
+            "--jq '.data.resolveReviewThread.thread'"
         )
         with mock.patch.object(
             MODULE,
@@ -1449,40 +1450,47 @@ class BlockPrFillTests(unittest.TestCase):
         ):
             self.assert_direct_and_nested_allowed(allowed)
             escaped = (
-                'gh -R acme/app api graphql -f "query=mutation(\\$id:ID!){'
+                'gh api graphql -f "query=mutation(\\$id:ID!){'
                 "resolveReviewThread(input:{threadId:\\$id})"
-                '{thread{id isResolved}}}" -f id=PRRT_kwDOExample123'
+                '{thread{id isResolved}}}" -f id=PRRT_kwDOExample123 '
+                "-f repository=acme/app"
             )
             self.assert_direct_and_nested_allowed(escaped)
 
         blocked = (
-            f"gh -R acme/app api graphql -f query='{query}' -f id=not-a-thread",
-            f"gh api graphql -f query='{query}' "
-            "-f id=PRRT_kwDOExample123",
+            f"gh api graphql -f query='{query}' -f id=not-a-thread "
+            "-f repository=acme/app",
+            f"gh api graphql -f query='{query}' -f id=PRRT_kwDOExample123",
             f"gh -R other/app api graphql -f query='{query}' "
-            "-f id=PRRT_kwDOExample123",
-            f"gh --hostname evil.example -R acme/app api graphql "
-            f"-f query='{query}' -f id=PRRT_kwDOExample123",
-            "gh -R acme/app api https://api.github.com/graphql "
-            f"-f query='{query}' -f id=PRRT_kwDOExample123",
-            f"gh -R acme/app api graphql#fragment -f query='{query}' "
-            "-f id=PRRT_kwDOExample123",
-            f"gh -R acme/app api graph%71l -f query='{query}' "
-            "-f id=PRRT_kwDOExample123",
-            f"gh -R acme/app api ignored/../graphql -f query='{query}' "
-            "-f id=PRRT_kwDOExample123",
-            f"gh -R acme/app api graphql -f query='{query}'",
-            f"gh -R acme/app api graphql -f query='{query}' "
-            '-f id="$THREAD"',
-            f"gh -R acme/app api graphql -f query='{query}' "
-            "-f id=PRRT_kwDOExample123 -f other=unexpected",
-            "gh -R acme/app api graphql -f "
+            "-f id=PRRT_kwDOExample123 -f repository=other/app",
+            f"gh api graphql -f query='{query}' "
+            "-f id=PRRT_kwDOExample123 -f repository=other/app",
+            f"gh api graphql -f query='{query}' -f id=PRRT_kwDOExample123 "
+            '-f repository="$REPOSITORY"',
+            f"gh --hostname evil.example api graphql -f query='{query}' "
+            "-f id=PRRT_kwDOExample123 -f repository=acme/app",
+            "gh api https://api.github.com/graphql "
+            f"-f query='{query}' -f id=PRRT_kwDOExample123 "
+            "-f repository=acme/app",
+            f"gh api graphql#fragment -f query='{query}' "
+            "-f id=PRRT_kwDOExample123 -f repository=acme/app",
+            f"gh api graph%71l -f query='{query}' "
+            "-f id=PRRT_kwDOExample123 -f repository=acme/app",
+            f"gh api ignored/../graphql -f query='{query}' "
+            "-f id=PRRT_kwDOExample123 -f repository=acme/app",
+            f"gh api graphql -f query='{query}' -f repository=acme/app",
+            f"gh api graphql -f query='{query}' "
+            '-f id="$THREAD" -f repository=acme/app',
+            f"gh api graphql -f query='{query}' "
+            "-f id=PRRT_kwDOExample123 -f repository=acme/app "
+            "-f other=unexpected",
+            "gh api graphql -f "
             "query='mutation($id:ID!){resolveReviewThread(input:{threadId:$id})"
             "{thread{id isResolved}} markPullRequestReadyForReview("
             "input:{pullRequestId:$id}){pullRequest{id}}}' "
-            "-f id=PRRT_kwDOExample123",
-            'gh -R acme/app api graphql -f "query=$QUERY" '
-            "-f id=PRRT_kwDOExample123",
+            "-f id=PRRT_kwDOExample123 -f repository=acme/app",
+            'gh api graphql -f "query=$QUERY" '
+            "-f id=PRRT_kwDOExample123 -f repository=acme/app",
         )
         with mock.patch.object(
             MODULE,
