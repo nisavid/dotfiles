@@ -1,0 +1,3406 @@
+#!/usr/bin/env python3
+"""Statically block recognized noncanonical GitHub PR publication routes."""
+
+from __future__ import annotations
+
+import ast
+from collections.abc import Iterable
+from functools import lru_cache
+import json
+import os
+import re
+import shlex
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlsplit
+
+
+JAVASCRIPT_LITERAL = r"'(?:\\.|[^'\\])*'|\"(?:\\.|[^\"\\])*\"|`(?:\\.|[^`\\])*`"
+NESTED_EXEC_CALL_RE = re.compile(r"\bexec_command\s*\(")
+NESTED_WRITE_STDIN_CALL_RE = re.compile(r"\bwrite_stdin\s*\(")
+SHELL_OPERATORS = {";", "&&", "||", "|", "(", ")", "{", "}"}
+SHELL_OPERATOR_CHARACTERS = set(";&|()!\n")
+SHELL_INTERPRETERS = {"bash", "dash", "fish", "ksh", "sh", "zsh"}
+SHELL_PARSE_ONLY_LONG_OPTIONS = {"--noexec", "--no-exec", "--no-execute"}
+PYTHON_NON_PR_MODULE_RUNNERS = {
+    "compileall",
+    "py_compile",
+    "pytest",
+    "ruff",
+    "unittest",
+}
+CONTROL_PREFIXES = {
+    "!",
+    "command",
+    "do",
+    "elif",
+    "exec",
+    "if",
+    "then",
+    "time",
+    "until",
+    "while",
+}
+GH_GLOBAL_VALUE_OPTIONS = {"-R", "--repo", "--hostname"}
+REPOSITORY_RE = re.compile(r"(?P<owner>[^/\s]+)/(?P<repo>[^/\s]+)")
+OID_RE = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
+PR_URL_RE = re.compile(
+    r"https://github\.com/(?P<owner>[^/\s]+)/(?P<repo>[^/\s]+)/pull/(?P<pr>\d+)/?"
+)
+ISSUE_URL_RE = re.compile(
+    r"https://github\.com/(?P<owner>[^/\s]+)/(?P<repo>[^/\s]+)/issues/(?P<issue>\d+)/?"
+)
+PR_CREATE_VALUE_OPTIONS = {
+    "-a",
+    "--assignee",
+    "-B",
+    "--base",
+    "-b",
+    "--body",
+    "-F",
+    "--body-file",
+    "-H",
+    "--head",
+    "-l",
+    "--label",
+    "-m",
+    "--milestone",
+    "-p",
+    "--project",
+    "--recover",
+    "-r",
+    "--reviewer",
+    "-T",
+    "--template",
+    "-t",
+    "--title",
+}
+PR_CREATE_VALUE_SHORT_OPTIONS = {
+    option[1:] for option in PR_CREATE_VALUE_OPTIONS if len(option) == 2
+}
+GH_API_VALUE_OPTIONS = {
+    "-F",
+    "--field",
+    "-H",
+    "--header",
+    "--hostname",
+    "--input",
+    "-f",
+    "--raw-field",
+    "-X",
+    "--method",
+}
+GH_API_VALUE_SHORT_OPTIONS = {"F", "H", "f", "X"}
+ISSUE_EDIT_VALUE_OPTIONS = {
+    "--add-assignee",
+    "--add-label",
+    "--add-project",
+    "-b",
+    "--body",
+    "-F",
+    "--body-file",
+    "-m",
+    "--milestone",
+    "--remove-assignee",
+    "--remove-label",
+    "--remove-milestone",
+    "--remove-project",
+    "-t",
+    "--title",
+}
+ISSUE_EDIT_VALUE_SHORT_OPTIONS = {
+    option[1:] for option in ISSUE_EDIT_VALUE_OPTIONS if len(option) == 2
+}
+GH_SAFE_TOP_LEVEL_COMMANDS = {
+    "alias",
+    "attestation",
+    "auth",
+    "browse",
+    "cache",
+    "codespace",
+    "completion",
+    "config",
+    "extension",
+    "gist",
+    "help",
+    "label",
+    "org",
+    "release",
+    "repo",
+    "ruleset",
+    "run",
+    "search",
+    "secret",
+    "ssh-key",
+    "status",
+    "variable",
+    "version",
+    "workflow",
+}
+GH_SAFE_PR_OPERATIONS = {
+    "checks",
+    "checkout",
+    "close",
+    "comment",
+    "diff",
+    "list",
+    "lock",
+    "merge",
+    "reopen",
+    "review",
+    "status",
+    "unlock",
+    "view",
+}
+GH_SAFE_ISSUE_OPERATIONS = {
+    "close",
+    "comment",
+    "create",
+    "delete",
+    "develop",
+    "list",
+    "lock",
+    "pin",
+    "reopen",
+    "status",
+    "transfer",
+    "unlock",
+    "unpin",
+    "view",
+}
+SHELL_META_RE = re.compile(r"[$`*?\[\]{}]")
+DYNAMIC_COMMAND_RE = re.compile(r"^\s*(?:\$\{?[A-Za-z_]|\$\(|`)")
+SHELL_VARIABLE_RE = re.compile(
+    r"^\$(?:\{(?P<braced>[A-Za-z_][A-Za-z0-9_]*)\}|(?P<plain>[A-Za-z_][A-Za-z0-9_]*))$"
+)
+SHELL_ASSIGNMENT_RE = re.compile(r"^(?P<name>[A-Za-z_][A-Za-z0-9_]*)=(?P<value>.*)$")
+GRAPHQL_DYNAMIC_VALUE_RE = re.compile(r"^\$[A-Za-z_][A-Za-z0-9_]*$")
+REST_PULLS_RE = re.compile(r"(?:^|/)repos/[^/]+/[^/]+/pulls(?:/(?P<number>\d+))?/?$")
+REST_ISSUE_RE = re.compile(
+    r"(?:^|/)repos/(?P<owner>[^/]+)/(?P<repo>[^/]+)/issues/(?P<number>\d+)/?$"
+)
+GRAPHQL_DIRECT_PR_MUTATION_RE = re.compile(
+    r"\b(?:createPullRequest|updatePullRequest|markPullRequestReadyForReview)\b",
+    re.I,
+)
+GRAPHQL_UPDATE_ISSUE_RE = re.compile(r"\bupdateIssue\b", re.I)
+VALIDATOR = (
+    Path.home()
+    / ".agents/skills/writing-reviewable-pr-descriptions/scripts/validate_change_navigation.py"
+)
+PUBLISHER = (
+    Path.home()
+    / ".agents/skills/publishing-reviewable-prs/scripts/create_reviewable_pr.py"
+)
+PUBLISHER_ARGUMENTS = {
+    str(PUBLISHER),
+    "$HOME/.agents/skills/publishing-reviewable-prs/scripts/create_reviewable_pr.py",
+    "${HOME}/.agents/skills/publishing-reviewable-prs/scripts/create_reviewable_pr.py",
+}
+UPDATER = (
+    Path.home()
+    / ".agents/skills/publishing-reviewable-prs/scripts/update_reviewable_pr.py"
+)
+UPDATER_ARGUMENTS = {
+    str(UPDATER),
+    "$HOME/.agents/skills/publishing-reviewable-prs/scripts/update_reviewable_pr.py",
+    "${HOME}/.agents/skills/publishing-reviewable-prs/scripts/update_reviewable_pr.py",
+}
+
+
+def _strings(value: Any) -> Iterable[str]:
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for nested in value.values():
+            yield from _strings(nested)
+    elif isinstance(value, list):
+        for nested in value:
+            yield from _strings(nested)
+
+
+def _decode_javascript_literal(literal: str) -> str | None:
+    if literal.startswith("`"):
+        source = literal[1:-1]
+        value: list[str] = []
+        index = 0
+        while index < len(source):
+            if source.startswith("${", index):
+                return None
+            if source[index] != "\\":
+                value.append(source[index])
+                index += 1
+                continue
+            if index + 1 >= len(source) or source[index + 1] not in "\\`":
+                return None
+            value.append(source[index + 1])
+            index += 2
+        return "".join(value)
+    try:
+        value = ast.literal_eval(literal)
+    except (SyntaxError, ValueError):
+        return None
+    return value if isinstance(value, str) else None
+
+
+def _mask_javascript_strings_and_comments(code: str) -> str:
+    """Preserve source positions while hiding non-code occurrences."""
+    masked = list(code)
+    index = 0
+    while index < len(code):
+        if code.startswith("//", index):
+            end = code.find("\n", index)
+            end = len(code) if end < 0 else end
+            masked[index:end] = " " * (end - index)
+            index = end
+            continue
+        if code.startswith("/*", index):
+            end = code.find("*/", index + 2)
+            end = len(code) if end < 0 else end + 2
+            for position in range(index, end):
+                if code[position] != "\n":
+                    masked[position] = " "
+            index = end
+            continue
+        if code[index] not in "'\"`":
+            index += 1
+            continue
+        quote = code[index]
+        index += 1
+        while index < len(code):
+            if code[index] == "\\":
+                masked[index] = " "
+                if index + 1 < len(code):
+                    masked[index + 1] = " "
+                index += 2
+                continue
+            if code[index] == quote:
+                index += 1
+                break
+            if code[index] != "\n":
+                masked[index] = " "
+            index += 1
+    return "".join(masked)
+
+
+def _mask_javascript_comments(code: str) -> str:
+    masked = list(code)
+    quote: str | None = None
+    index = 0
+    while index < len(code):
+        if quote is not None:
+            if code[index] == "\\":
+                index += 2
+                continue
+            if code[index] == quote:
+                quote = None
+            index += 1
+            continue
+        if code[index] in "'\"`":
+            quote = code[index]
+            index += 1
+            continue
+        if code.startswith("//", index):
+            end = code.find("\n", index)
+            end = len(code) if end < 0 else end
+            masked[index:end] = " " * (end - index)
+            index = end
+            continue
+        if code.startswith("/*", index):
+            end = code.find("*/", index + 2)
+            end = len(code) if end < 0 else end + 2
+            for position in range(index, end):
+                if code[position] != "\n":
+                    masked[position] = " "
+            index = end
+            continue
+        index += 1
+    return "".join(masked)
+
+
+def _javascript_template_interpolations(code: str) -> tuple[list[str], bool]:
+    """Return executable `${...}` expressions without treating template text as code."""
+    expressions: list[str] = []
+
+    def skip_quoted(index: int, quote: str) -> tuple[int, bool]:
+        index += 1
+        while index < len(code):
+            if code[index] == "\\":
+                index += 2
+                continue
+            if code[index] == quote:
+                return index + 1, False
+            index += 1
+        return index, True
+
+    def skip_comment(index: int) -> tuple[int, bool]:
+        if code.startswith("//", index):
+            end = code.find("\n", index + 2)
+            return (len(code) if end < 0 else end), False
+        end = code.find("*/", index + 2)
+        return (len(code), True) if end < 0 else (end + 2, False)
+
+    def scan_expression(index: int) -> tuple[int, bool]:
+        start = index
+        depth = 1
+        while index < len(code):
+            if code.startswith(("//", "/*"), index):
+                index, unresolved = skip_comment(index)
+                if unresolved:
+                    return index, True
+                continue
+            # Regex literals can contain braces, so a slash needs a full parser.
+            if code[index] == "/":
+                return index, True
+            if code[index] in "'\"":
+                index, unresolved = skip_quoted(index, code[index])
+                if unresolved:
+                    return index, True
+                continue
+            if code[index] == "`":
+                index, unresolved = scan_template(index)
+                if unresolved:
+                    return index, True
+                continue
+            if code[index] == "{":
+                depth += 1
+            elif code[index] == "}":
+                depth -= 1
+                if depth == 0:
+                    expressions.append(code[start:index])
+                    return index + 1, False
+            index += 1
+        return index, True
+
+    def scan_template(index: int) -> tuple[int, bool]:
+        index += 1
+        while index < len(code):
+            if code[index] == "\\":
+                index += 2
+                continue
+            if code[index] == "`":
+                return index + 1, False
+            if code.startswith("${", index):
+                index, unresolved = scan_expression(index + 2)
+                if unresolved:
+                    return index, True
+                continue
+            index += 1
+        return index, True
+
+    index = 0
+    unresolved = False
+    while index < len(code):
+        if code.startswith(("//", "/*"), index):
+            index, unresolved = skip_comment(index)
+        elif code[index] in "'\"":
+            index, unresolved = skip_quoted(index, code[index])
+        elif code[index] == "`":
+            index, unresolved = scan_template(index)
+        else:
+            index += 1
+        if unresolved:
+            return expressions, True
+    return expressions, False
+
+
+def _javascript_string_bindings(code: str, masked: str) -> dict[str, str | None]:
+    bindings: dict[str, str | None] = {}
+    declaration_re = re.compile(
+        r"\b(?:const|let|var)\s+(?P<name>[A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*"
+    )
+    for match in declaration_re.finditer(masked):
+        value_start = match.end()
+        if value_start >= len(code) or code[value_start] not in "'\"`":
+            expression = masked[value_start : value_start + 300].split(";", 1)[0]
+            bindings[match.group("name")] = (
+                "'suspicious'"
+                if re.search(r"(?:\b(?:pr|pull)\b|(?:Pr|Pull)[A-Z])", expression)
+                else None
+            )
+            continue
+        literal_match = re.match(JAVASCRIPT_LITERAL, code[value_start:], re.S)
+        if literal_match is None:
+            bindings[match.group("name")] = None
+            continue
+        literal = literal_match.group(0)
+        value = _decode_javascript_literal(literal)
+        if value is None and re.search(
+            r"\bgh\s+(?:\S+\s+)*pr\s+(?:create|new|edit)\b", literal
+        ):
+            bindings[match.group("name")] = literal
+        else:
+            bindings[match.group("name")] = value
+    return bindings
+
+
+def _nested_literal_commands(
+    code: str, call_re: re.Pattern[str]
+) -> tuple[list[tuple[str, str | None]], bool]:
+    masked = _mask_javascript_strings_and_comments(code)
+    bindings = _javascript_string_bindings(code, masked)
+    commands: list[tuple[str, str | None]] = []
+    suspicious_unresolved = False
+    for call in call_re.finditer(masked):
+        call_end = _javascript_call_end(masked, call.end() - 1)
+        call_source = code[call.start() : call_end]
+        workdir, unresolved_workdir = _javascript_literal_property(
+            call_source, "workdir"
+        )
+        if unresolved_workdir:
+            suspicious_unresolved = True
+        property_name = "cmd" if "exec_command" in call.group(0) else "chars"
+        call_masked = masked[call.start() : call_end]
+        call_tail = call_masked[call.end() - call.start() :]
+        property_match = re.search(
+            rf"\b{property_name}\s*:\s*", call_masked
+        )
+        value_start = (
+            call.start() + property_match.end()
+            if property_match is not None
+            else None
+        )
+        literal_match = (
+            re.match(
+                rf"\s*(?P<literal>{JAVASCRIPT_LITERAL})",
+                code[value_start:],
+                re.S,
+            )
+            if value_start is not None
+            else None
+        )
+        if literal_match is not None:
+            literal = literal_match.group("literal")
+            command = _decode_javascript_literal(literal)
+            if command is not None:
+                commands.append((command, workdir))
+            else:
+                suspicious_unresolved = True
+            continue
+        name_match = (
+            re.match(
+                r"\s*(?P<name>[A-Za-z_$][A-Za-z0-9_$]*)",
+                masked[value_start:],
+            )
+            if value_start is not None
+            else None
+        )
+        if name_match is None:
+            shorthand_match = re.search(
+                rf"(?:\{{|,)\s*{property_name}\s*(?:,|\}})", call_tail
+            )
+            if shorthand_match is None:
+                suspicious_unresolved = True
+                continue
+            name = property_name
+        else:
+            name = name_match.group("name")
+        value = bindings.get(name)
+        if value is None:
+            suspicious_unresolved = True
+        elif value.startswith(("'", '"', "`")):
+            suspicious_unresolved = True
+        else:
+            commands.append((value, workdir))
+    return commands, suspicious_unresolved
+
+
+def _javascript_literal_property(
+    source: str, property_name: str
+) -> tuple[str | None, bool]:
+    masked = _mask_javascript_strings_and_comments(source)
+    match = re.search(rf"\b{re.escape(property_name)}\s*:\s*", masked)
+    if match is None:
+        return None, False
+    literal_match = re.match(
+        rf"\s*(?P<literal>{JAVASCRIPT_LITERAL})", source[match.end() :], re.S
+    )
+    if literal_match is None:
+        return None, True
+    value = _decode_javascript_literal(literal_match.group("literal"))
+    return value, value is None
+
+
+def _javascript_call_end(masked: str, open_parenthesis: int) -> int:
+    depth = 0
+    for index in range(open_parenthesis, len(masked)):
+        if masked[index] == "(":
+            depth += 1
+        elif masked[index] == ")":
+            depth -= 1
+            if depth == 0:
+                return index + 1
+    return len(masked)
+
+
+def _javascript_connector_input(call_source: str) -> dict[str, Any]:
+    tool_input: dict[str, Any] = {}
+    keys = (
+        "repository_full_name",
+        "repository",
+        "owner",
+        "repo",
+        "pull_number",
+        "pr_number",
+        "pullNumber",
+        "issue_number",
+        "issueNumber",
+        "number",
+        "title",
+        "body",
+        "draft",
+        "isDraft",
+        "is_draft",
+    )
+    for key in keys:
+        property_re = re.compile(
+            rf"(?:\b{re.escape(key)}\b|['\"]{re.escape(key)}['\"])\s*:\s*"
+        )
+        match = property_re.search(call_source)
+        if match is None:
+            continue
+        value_start = match.end()
+        if value_start < len(call_source) and call_source[value_start] in "'\"`":
+            literal_match = re.match(
+                JAVASCRIPT_LITERAL, call_source[value_start:], re.S
+            )
+            if literal_match is not None:
+                tool_input[key] = _decode_javascript_literal(literal_match.group(0))
+                continue
+        integer_match = re.match(r"\d+", call_source[value_start:])
+        boolean_match = re.match(r"(?:true|false)\b", call_source[value_start:])
+        if integer_match is not None:
+            tool_input[key] = int(integer_match.group(0))
+        elif boolean_match is not None:
+            tool_input[key] = boolean_match.group(0) == "true"
+        else:
+            tool_input[key] = None
+    return tool_input
+
+
+def _nested_connector_is_noncanonical(code: str) -> bool:
+    masked = _mask_javascript_strings_and_comments(code)
+    connector_re = re.compile(
+        r"\b(?:tools\.)?(?P<name>[A-Za-z0-9_$]*(?:create|update)_"
+        r"(?:pull_request|issue))\s*\("
+    )
+    for match in connector_re.finditer(masked):
+        end = _javascript_call_end(masked, match.end() - 1)
+        call_source = code[match.start() : end]
+        call_masked = masked[match.start() : end]
+        tool_input = _javascript_connector_input(call_source)
+        name = match.group("name").lower()
+        if (
+            name.endswith(("update_pull_request", "update_issue"))
+            and "..." in call_masked
+        ):
+            return True
+        if _connector_call_is_noncanonical(name, tool_input):
+            return True
+    if re.search(
+        r"\b(?:tools\.)?[A-Za-z0-9_$]*(?:(?:mark|set|make)[A-Za-z0-9_$]*"
+        r"pull_request[A-Za-z0-9_$]*ready|pull_request[A-Za-z0-9_$]*"
+        r"(?:mark|set|make)[A-Za-z0-9_$]*ready)\s*\(",
+        masked,
+        re.I,
+    ):
+        return True
+    comment_free = _mask_javascript_comments(code)
+    alias_re = re.compile(
+        r"\b(?:const|let|var)\s+(?P<alias>[A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*"
+        r"tools(?:\.(?P<dot>[A-Za-z0-9_$]*(?:create|update)_"
+        r"(?:pull_request|issue))|\s*\[\s*['\"](?P<bracket>[^'\"]*"
+        r"(?:create|update)_(?:pull_request|issue))['\"]\s*\])"
+    )
+    for alias_match in alias_re.finditer(comment_free):
+        if re.search(rf"\b{re.escape(alias_match.group('alias'))}\s*\(", masked):
+            return True
+    ready_alias_re = re.compile(
+        r"\b(?:const|let|var)\s+(?P<alias>[A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*"
+        r"tools(?:\.(?P<dot>[A-Za-z0-9_$]*pull_request[A-Za-z0-9_$]*ready[A-Za-z0-9_$]*)"
+        r"|\s*\[\s*['\"](?P<bracket>[^'\"]*pull_request[^'\"]*ready[^'\"]*)"
+        r"['\"]\s*\])",
+        re.I,
+    )
+    for alias_match in ready_alias_re.finditer(comment_free):
+        tool = alias_match.group("dot") or alias_match.group("bracket")
+        if _tool_is_ready_mutation(tool) and re.search(
+            rf"\b{re.escape(alias_match.group('alias'))}\s*\(", masked
+        ):
+            return True
+    if re.search(
+        r"\btools\s*\[\s*['\"][^'\"]*(?:create|update)_"
+        r"(?:pull_request|issue)['\"]\s*\]\s*\(",
+        comment_free,
+    ):
+        return True
+    ready_bracket_call_re = re.compile(
+        r"\btools\s*\[\s*['\"](?P<tool>[^'\"]*pull_request[^'\"]*ready[^'\"]*)"
+        r"['\"]\s*\]\s*\(",
+        re.I,
+    )
+    if any(
+        _tool_is_ready_mutation(match.group("tool"))
+        for match in ready_bracket_call_re.finditer(comment_free)
+    ):
+        return True
+    return False
+
+
+def _nested_shell_tool_route_is_unresolved(code: str) -> bool:
+    masked = _mask_javascript_strings_and_comments(code)
+    comment_free = _mask_javascript_comments(code)
+    bracket_re = re.compile(
+        r"\btools\s*\[\s*['\"](?:exec_command|write_stdin)['\"]\s*\]"
+    )
+    for match in bracket_re.finditer(comment_free):
+        if masked[match.start() : match.start() + len("tools")] == "tools":
+            return True
+
+    alias_re = re.compile(
+        r"\b(?:const|let|var)\s+(?P<alias>[A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*"
+        r"tools\.(?:exec_command|write_stdin)\b"
+    )
+    for match in alias_re.finditer(masked):
+        if re.search(
+            rf"\b{re.escape(match.group('alias'))}\s*\(", masked[match.end() :]
+        ):
+            return True
+
+    destructured_alias_re = re.compile(
+        r"\b(?:const|let|var)\s*\{(?P<body>[^}]*)\}\s*=\s*tools\b"
+    )
+    for match in destructured_alias_re.finditer(masked):
+        for alias_match in re.finditer(
+            r"(?:^|,)\s*(?:exec_command|write_stdin)\s*:\s*"
+            r"(?P<alias>[A-Za-z_$][A-Za-z0-9_$]*)\b",
+            match.group("body"),
+        ):
+            if re.search(
+                rf"\b{re.escape(alias_match.group('alias'))}\s*\(",
+                masked[match.end() :],
+            ):
+                return True
+
+    if re.search(
+        r"\btools\.(?:exec_command|write_stdin)\s*"
+        r"(?:\?\.\s*\(|\.(?:call|apply)\s*\()",
+        masked,
+    ):
+        return True
+
+    return bool(
+        re.search(
+            r"\bReflect\.apply\s*\(\s*tools\.(?:exec_command|write_stdin)\b",
+            masked,
+        )
+    )
+
+
+def _candidate_commands(
+    payload: dict[str, Any],
+) -> tuple[list[tuple[str, str | None]], bool]:
+    tool_name = str(payload.get("tool_name", "")).lower()
+    tool_input = payload.get("tool_input", {})
+    commands: list[tuple[str, str | None]] = []
+    default_workdir = str(Path.cwd())
+    if any(token in tool_name for token in ("bash", "shell", "exec_command")):
+        if isinstance(tool_input, dict):
+            workdir = tool_input.get("workdir")
+            command_workdir = workdir if isinstance(workdir, str) else default_workdir
+            for key in ("command", "cmd"):
+                commands.extend(
+                    (command, command_workdir)
+                    for command in _strings(tool_input.get(key))
+                )
+        return commands, False
+    if tool_name.endswith("write_stdin"):
+        if isinstance(tool_input, dict):
+            commands.extend(
+                (command, None) for command in _strings(tool_input.get("chars"))
+            )
+        return commands, False
+    if tool_name in {"functions.exec", "exec"}:
+        code = (
+            tool_input
+            if isinstance(tool_input, str)
+            else tool_input.get("code", "")
+            if isinstance(tool_input, dict)
+            else ""
+        )
+        if not isinstance(code, str):
+            return commands, False
+        interpolations, unresolved_interpolation = (
+            _javascript_template_interpolations(code)
+        )
+        nested_exec_commands: list[tuple[str, str | None]] = []
+        nested_stdin_commands: list[tuple[str, str | None]] = []
+        unresolved_exec = unresolved_interpolation
+        unresolved_stdin = False
+        for fragment in (code, *interpolations):
+            if _nested_connector_is_noncanonical(fragment):
+                return commands, True
+            if _nested_shell_tool_route_is_unresolved(fragment):
+                return commands, True
+            fragment_exec, fragment_unresolved_exec = _nested_literal_commands(
+                fragment, NESTED_EXEC_CALL_RE
+            )
+            fragment_stdin, fragment_unresolved_stdin = _nested_literal_commands(
+                fragment, NESTED_WRITE_STDIN_CALL_RE
+            )
+            nested_exec_commands.extend(fragment_exec)
+            nested_stdin_commands.extend(fragment_stdin)
+            unresolved_exec = unresolved_exec or fragment_unresolved_exec
+            unresolved_stdin = unresolved_stdin or fragment_unresolved_stdin
+        commands.extend(
+            (command, workdir or default_workdir)
+            for command, workdir in nested_exec_commands
+        )
+        commands.extend(nested_stdin_commands)
+        return commands, unresolved_exec or unresolved_stdin
+    return commands, False
+
+
+def _shell_word_starts_at(command: str, index: int) -> bool:
+    return index == 0 or command[index - 1].isspace() or command[index - 1] in ";&|()!"
+
+
+def _without_shell_comments(command: str) -> str:
+    masked = list(command)
+    quote: str | None = None
+    index = 0
+    while index < len(command):
+        character = command[index]
+        if character == "\\" and quote != "'":
+            index += 2
+            continue
+        if quote is not None:
+            if character == quote:
+                quote = None
+            index += 1
+            continue
+        if character in "'\"":
+            quote = character
+            index += 1
+            continue
+        if character == "`":
+            end = command.find("`", index + 1)
+            index = len(command) if end < 0 else end + 1
+            continue
+        if command.startswith("$(", index) and not command.startswith("$((", index):
+            end = _parenthesized_command_end(command, index + 2)
+            index = len(command) if end is None else end + 1
+            continue
+        if character == "#" and _shell_word_starts_at(command, index):
+            end = command.find("\n", index)
+            end = len(command) if end < 0 else end
+            masked[index:end] = " " * (end - index)
+            index = end
+            continue
+        index += 1
+    return "".join(masked)
+
+
+def _segments(command: str) -> Iterable[list[str]]:
+    try:
+        lexer = shlex.shlex(
+            _without_shell_comments(command),
+            posix=True,
+            punctuation_chars=";&|()!\n",
+        )
+        lexer.whitespace = " \t\r"
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        tokens = list(lexer)
+    except ValueError:
+        return
+    current: list[str] = []
+    for token in tokens:
+        if token in SHELL_OPERATORS or (
+            token and all(character in SHELL_OPERATOR_CHARACTERS for character in token)
+        ):
+            if current:
+                yield current
+                current = []
+        else:
+            current.append(token)
+    if current:
+        yield current
+
+
+HEREDOC_OPERATOR_RE = re.compile(
+    r"<<(?P<strip>-)?\s*(?P<quote>['\"]?)(?P<delimiter>[A-Za-z_][A-Za-z0-9_-]*)(?P=quote)"
+)
+
+
+def _heredoc_specs(line: str) -> list[tuple[int, str, bool]]:
+    specs: list[tuple[int, str, bool]] = []
+    quote: str | None = None
+    index = 0
+    while index < len(line):
+        character = line[index]
+        if character == "\\" and quote != "'":
+            index += 2
+            continue
+        if quote is not None:
+            if character == quote:
+                quote = None
+            index += 1
+            continue
+        if character in "'\"":
+            quote = character
+            index += 1
+            continue
+        if character == "#":
+            break
+        if line.startswith("<<", index) and not line.startswith("<<<", index):
+            match = HEREDOC_OPERATOR_RE.match(line, index)
+            if match is not None:
+                specs.append(
+                    (
+                        match.start(),
+                        match.group("delimiter"),
+                        bool(match.group("strip")),
+                    )
+                )
+                index = match.end()
+                continue
+        index += 1
+    return specs
+
+
+def _heredoc_receiver_is_shell(command_prefix: str) -> bool:
+    segments = list(_segments(command_prefix))
+    if not segments:
+        return False
+    segment = segments[-1]
+    index = _skip_prefixes(segment)
+    return (
+        index < len(segment) and os.path.basename(segment[index]) in SHELL_INTERPRETERS
+    )
+
+
+def _without_heredoc_payloads(command: str) -> tuple[str, list[str]]:
+    lines = command.splitlines(keepends=True)
+    retained: list[str] = []
+    shell_bodies: list[str] = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        specs = _heredoc_specs(line)
+        retained.append(line)
+        index += 1
+        for position, delimiter, strip_tabs in specs:
+            body_lines: list[str] = []
+            while index < len(lines):
+                candidate = lines[index]
+                comparison = candidate.rstrip("\r\n")
+                if strip_tabs:
+                    comparison = comparison.lstrip("\t")
+                index += 1
+                if comparison == delimiter:
+                    break
+                body_lines.append(candidate)
+            if _heredoc_receiver_is_shell(line[:position]):
+                shell_bodies.append("".join(body_lines))
+    return "".join(retained), shell_bodies
+
+
+def _parenthesized_command_end(command: str, start: int) -> int | None:
+    depth = 1
+    quote: str | None = None
+    index = start
+    while index < len(command):
+        character = command[index]
+        if character == "\\" and quote != "'":
+            index += 2
+            continue
+        if quote == "'":
+            if character == "'":
+                quote = None
+            index += 1
+            continue
+        if quote == '"':
+            if character == '"':
+                quote = None
+            index += 1
+            continue
+        if character in "'\"":
+            quote = character
+            index += 1
+            continue
+        if character == "`":
+            index += 1
+            while index < len(command):
+                if command[index] == "\\":
+                    index += 2
+                    continue
+                if command[index] == "`":
+                    break
+                index += 1
+            if index >= len(command):
+                return None
+            index += 1
+            continue
+        if command.startswith("$(", index) and not command.startswith("$((", index):
+            depth += 1
+            index += 2
+            continue
+        if character == "(":
+            depth += 1
+        elif character == ")":
+            depth -= 1
+            if depth == 0:
+                return index
+        index += 1
+    return None
+
+
+def _shell_command_substitutions(command: str) -> tuple[list[str], bool]:
+    substitutions: list[str] = []
+    quote: str | None = None
+    index = 0
+    while index < len(command):
+        character = command[index]
+        if character == "\\" and quote != "'":
+            index += 2
+            continue
+        if quote == "'":
+            if character == "'":
+                quote = None
+            index += 1
+            continue
+        if character == "'" and quote is None:
+            quote = "'"
+            index += 1
+            continue
+        if character == '"':
+            quote = None if quote == '"' else '"'
+            index += 1
+            continue
+        if character == "#" and quote is None and _shell_word_starts_at(command, index):
+            newline = command.find("\n", index)
+            index = len(command) if newline < 0 else newline + 1
+            continue
+        if character == "`":
+            end = index + 1
+            while end < len(command):
+                if command[end] == "\\":
+                    end += 2
+                    continue
+                if command[end] == "`":
+                    break
+                end += 1
+            if end >= len(command):
+                return substitutions, True
+            substitutions.append(command[index + 1 : end])
+            index = end + 1
+            continue
+        if command.startswith("$(", index) and not command.startswith("$((", index):
+            end = _parenthesized_command_end(command, index + 2)
+            if end is None:
+                return substitutions, True
+            substitutions.append(command[index + 2 : end])
+            index = end + 1
+            continue
+        index += 1
+    return substitutions, False
+
+
+def _skip_wrapper(tokens: list[str], index: int) -> int:
+    if index >= len(tokens):
+        return index
+    wrapper = os.path.basename(tokens[index])
+    index += 1
+
+    if wrapper == "nice":
+        while index < len(tokens):
+            token = tokens[index]
+            if token == "--":
+                return index + 1
+            if token in {"-n", "--adjustment"}:
+                index += 2
+            elif token.startswith("--adjustment=") or re.fullmatch(r"-\d+", token):
+                index += 1
+            else:
+                break
+        return index
+
+    if wrapper == "nohup":
+        while index < len(tokens) and tokens[index].startswith("-"):
+            if tokens[index] == "--":
+                return index + 1
+            index += 1
+        return index
+
+    if wrapper == "timeout":
+        while index < len(tokens):
+            token = tokens[index]
+            if token == "--":
+                index += 1
+                break
+            if token in {"-k", "--kill-after", "-s", "--signal"}:
+                index += 2
+            elif token.startswith(("--kill-after=", "--signal=")):
+                index += 1
+            elif token.startswith("-"):
+                index += 1
+            else:
+                break
+        return min(index + 1, len(tokens))
+
+    if wrapper == "watch":
+        value_options = {"-n", "--interval", "-x", "--exec"}
+        while index < len(tokens):
+            token = tokens[index]
+            if token == "--":
+                return index + 1
+            if token in value_options:
+                index += 2 if token in {"-n", "--interval"} else 1
+            elif token.startswith("--interval=") or token.startswith("-"):
+                index += 1
+            else:
+                break
+        return index
+
+    if wrapper == "xargs":
+        value_options = {
+            "-a",
+            "--arg-file",
+            "-d",
+            "--delimiter",
+            "-E",
+            "--eof",
+            "-I",
+            "--replace",
+            "-L",
+            "--max-lines",
+            "-n",
+            "--max-args",
+            "-P",
+            "--max-procs",
+            "-s",
+            "--max-chars",
+        }
+        while index < len(tokens):
+            token = tokens[index]
+            if token == "--":
+                return index + 1
+            if token in value_options:
+                index += 2
+            elif any(token.startswith(f"{option}=") for option in value_options):
+                index += 1
+            elif token.startswith("-"):
+                index += 1
+            else:
+                break
+        return index
+
+    return index - 1
+
+
+def _skip_prefixes(tokens: list[str]) -> int:
+    index = 0
+    while index < len(tokens):
+        previous = index
+        while index < len(tokens) and re.match(
+            r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[index]
+        ):
+            index += 1
+        while index < len(tokens) and tokens[index] in CONTROL_PREFIXES:
+            index += 1
+        if index < len(tokens) and os.path.basename(tokens[index]) == "sudo":
+            index += 1
+            while index < len(tokens) and tokens[index].startswith("-"):
+                if tokens[index] in {
+                    "-u",
+                    "--user",
+                    "-g",
+                    "--group",
+                    "-h",
+                    "--host",
+                }:
+                    index += 2
+                else:
+                    index += 1
+        if index < len(tokens) and os.path.basename(tokens[index]) == "env":
+            index += 1
+            while index < len(tokens):
+                token = tokens[index]
+                if token == "--":
+                    index += 1
+                    break
+                if token in {
+                    "-u",
+                    "--unset",
+                    "-C",
+                    "--chdir",
+                    "-S",
+                    "--split-string",
+                }:
+                    index += 2
+                elif token.startswith("-") or re.match(
+                    r"^[A-Za-z_][A-Za-z0-9_]*=", token
+                ):
+                    index += 1
+                else:
+                    break
+        if index < len(tokens) and os.path.basename(tokens[index]) in {
+            "nice",
+            "nohup",
+            "timeout",
+            "watch",
+            "xargs",
+        }:
+            wrapped_index = _skip_wrapper(tokens, index)
+            if wrapped_index == index:
+                break
+            index = wrapped_index
+        if index == previous:
+            break
+    return index
+
+
+def _env_split_script(segment: list[str]) -> tuple[bool, str | None]:
+    index = 0
+    while index < len(segment) and SHELL_ASSIGNMENT_RE.fullmatch(segment[index]):
+        index += 1
+    while index < len(segment) and segment[index] in CONTROL_PREFIXES:
+        index += 1
+    if index < len(segment) and segment[index] == "sudo":
+        index += 1
+        while index < len(segment) and segment[index].startswith("-"):
+            if segment[index] in {"-u", "--user", "-g", "--group", "-h", "--host"}:
+                index += 2
+            else:
+                index += 1
+    while index < len(segment) and os.path.basename(segment[index]) in {
+        "nice",
+        "nohup",
+        "timeout",
+        "xargs",
+    }:
+        wrapped_index = _skip_wrapper(segment, index)
+        if wrapped_index == index:
+            break
+        index = wrapped_index
+    if index >= len(segment) or os.path.basename(segment[index]) != "env":
+        return False, None
+    index += 1
+    while index < len(segment):
+        token = segment[index]
+        if token in {"-S", "--split-string"}:
+            if index + 1 >= len(segment):
+                return True, None
+            suffix = shlex.join(segment[index + 2 :])
+            return True, segment[index + 1] + (f" {suffix}" if suffix else "")
+        if token.startswith("--split-string="):
+            suffix = shlex.join(segment[index + 1 :])
+            value = token.split("=", 1)[1]
+            return True, value + (f" {suffix}" if suffix else "")
+        if token.startswith("-S") and token != "-S":
+            suffix = shlex.join(segment[index + 1 :])
+            return True, token[2:] + (f" {suffix}" if suffix else "")
+        if token == "--":
+            return False, None
+        if token in {"-u", "--unset", "-C", "--chdir"}:
+            index += 2
+        elif token.startswith(("--unset=", "--chdir=")):
+            index += 1
+        elif token.startswith("-") or SHELL_ASSIGNMENT_RE.fullmatch(token):
+            index += 1
+        else:
+            return False, None
+    return False, None
+
+
+def _watch_script(segment: list[str]) -> str | None:
+    index = 0
+    while index < len(segment):
+        previous = index
+        while index < len(segment) and re.match(
+            r"^[A-Za-z_][A-Za-z0-9_]*=", segment[index]
+        ):
+            index += 1
+        while index < len(segment) and segment[index] in CONTROL_PREFIXES:
+            index += 1
+        if index < len(segment) and os.path.basename(segment[index]) == "watch":
+            command_index = _skip_wrapper(segment, index)
+            return " ".join(segment[command_index:])
+        if index < len(segment) and os.path.basename(segment[index]) in {
+            "nice",
+            "nohup",
+            "timeout",
+        }:
+            index = _skip_wrapper(segment, index)
+        if index == previous:
+            break
+    return None
+
+
+def _nested_shell_script(segment: list[str]) -> str | None:
+    index = _skip_prefixes(segment)
+    if (
+        index >= len(segment)
+        or os.path.basename(segment[index]) not in SHELL_INTERPRETERS
+    ):
+        return None
+    index += 1
+    while index < len(segment):
+        token = segment[index]
+        if token in SHELL_PARSE_ONLY_LONG_OPTIONS or (
+            token.startswith("-")
+            and not token.startswith("--")
+            and "n" in token[1:]
+        ):
+            return None
+        if token in {"-c", "--command"} or (
+            token.startswith("-") and not token.startswith("--") and "c" in token[1:]
+        ):
+            return segment[index + 1] if index + 1 < len(segment) else ""
+        if token == "--":
+            return None
+        if not token.startswith("-"):
+            return None
+        index += 1
+    return None
+
+
+def _short_option_values(
+    arguments: list[str], target_options: set[str], value_options: set[str]
+) -> list[str]:
+    values: list[str] = []
+    index = 0
+    while index < len(arguments):
+        token = arguments[index]
+        if (
+            not token.startswith("-")
+            or token.startswith("--")
+            or token == "-"
+            or len(token) == 2
+        ):
+            index += 1
+            continue
+        characters = token[1:]
+        for offset, short_option in enumerate(characters):
+            if short_option not in value_options:
+                continue
+            remainder = characters[offset + 1 :]
+            if short_option in target_options:
+                if remainder:
+                    values.append(remainder)
+                elif index + 1 < len(arguments):
+                    values.append(arguments[index + 1])
+            break
+        index += 1
+    return values
+
+
+def _option_values(
+    arguments: list[str], options: set[str], value_short_options: set[str]
+) -> list[str]:
+    values: list[str] = []
+    long_options = {option for option in options if option.startswith("--")}
+    short_options = {option[1:] for option in options if len(option) == 2}
+    index = 0
+    while index < len(arguments):
+        token = arguments[index]
+        if token in options and index + 1 < len(arguments):
+            values.append(arguments[index + 1])
+            index += 2
+            continue
+        matched_long = False
+        for option in long_options:
+            if token.startswith(f"{option}="):
+                values.append(token.split("=", 1)[1])
+                matched_long = True
+                break
+        index += 1
+        if matched_long:
+            continue
+    values.extend(_short_option_values(arguments, short_options, value_short_options))
+    return values
+
+
+def _normalize_repository(value: str | None) -> str | None:
+    if value is None:
+        return None
+    match = REPOSITORY_RE.fullmatch(value)
+    return value if match else None
+
+
+def _issue_edit_arguments(
+    arguments: list[str], repository: str | None
+) -> tuple[list[str], str | None]:
+    retained: list[str] = []
+    index = 0
+    while index < len(arguments):
+        token = arguments[index]
+        if token in GH_GLOBAL_VALUE_OPTIONS:
+            if index + 1 >= len(arguments):
+                return arguments, None
+            if token in {"-R", "--repo"}:
+                repository = _normalize_repository(arguments[index + 1])
+            index += 2
+            continue
+        if token.startswith("-R") and token != "-R":
+            repository = _normalize_repository(token[2:])
+            index += 1
+            continue
+        if token.startswith("--repo="):
+            repository = _normalize_repository(token.split("=", 1)[1])
+            index += 1
+            continue
+        if token.startswith("--hostname="):
+            index += 1
+            continue
+        retained.append(token)
+        index += 1
+    return retained, repository
+
+
+@lru_cache(maxsize=1)
+def _gh_aliases() -> dict[str, str]:
+    try:
+        result = subprocess.run(
+            ["gh", "alias", "list"],
+            capture_output=True,
+            text=True,
+            timeout=4,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return {}
+    if result.returncode:
+        return {}
+    aliases: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        name, separator, expansion = line.partition(":")
+        if separator and name.strip() and expansion.strip():
+            aliases[name.strip()] = expansion.strip()
+    return aliases
+
+
+def _gh_command(
+    segment: list[str], seen_aliases: frozenset[str] = frozenset()
+) -> tuple[str, list[str], str | None] | None:
+    index = _skip_prefixes(segment)
+    if index >= len(segment) or os.path.basename(segment[index]) != "gh":
+        return None
+    index += 1
+    if segment[index:] == ["--version"]:
+        return None
+    repository: str | None = None
+    while index < len(segment):
+        token = segment[index]
+        if token in GH_GLOBAL_VALUE_OPTIONS:
+            if token in {"-R", "--repo"} and index + 1 < len(segment):
+                repository = _normalize_repository(segment[index + 1])
+            index += 2
+        elif token.startswith("-R") and token != "-R":
+            repository = _normalize_repository(token[2:])
+            index += 1
+        elif any(token.startswith(f"{option}=") for option in GH_GLOBAL_VALUE_OPTIONS):
+            if token.startswith("--repo="):
+                repository = _normalize_repository(token.split("=", 1)[1])
+            index += 1
+        elif token == "pr" and index + 1 < len(segment):
+            operation = segment[index + 1]
+            if operation in {"create", "new"}:
+                return "create", segment[index + 2 :], repository
+            if operation == "edit":
+                return "edit", segment[index + 2 :], repository
+            if operation == "ready":
+                return "ready", segment[index + 2 :], repository
+            if operation in GH_SAFE_PR_OPERATIONS:
+                return None
+            return "unproven", [f"gh pr {operation}"], repository
+        elif token == "pr":
+            return None
+        elif token == "issue" and index + 1 < len(segment):
+            if segment[index + 1] == "edit":
+                arguments, issue_repository = _issue_edit_arguments(
+                    segment[index + 2 :], repository
+                )
+                return "issue_edit", arguments, issue_repository
+            if segment[index + 1] in GH_SAFE_ISSUE_OPERATIONS:
+                return None
+            return "unproven", [f"gh issue {segment[index + 1]}"], repository
+        elif token == "issue":
+            return None
+        elif token == "api":
+            return "api", segment[index + 1 :], repository
+        elif (
+            token == "extension"
+            and index + 1 < len(segment)
+            and segment[index + 1] == "exec"
+        ):
+            return "unproven", ["gh extension exec"], repository
+        else:
+            aliases = _gh_aliases()
+            if token in aliases:
+                if token in seen_aliases:
+                    return "unproven", [f"gh alias {token}"], repository
+                expansion = aliases[token]
+                if expansion.startswith("!"):
+                    return "unproven", [f"gh alias {token}"], repository
+                try:
+                    expanded = shlex.split(expansion)
+                except ValueError:
+                    return "unproven", [f"gh alias {token}"], repository
+                if not expanded:
+                    return "unproven", [f"gh alias {token}"], repository
+                prefix = ["gh"]
+                if repository:
+                    prefix.extend(["--repo", repository])
+                return _gh_command(
+                    [*prefix, *expanded, *segment[index + 1 :]],
+                    seen_aliases | {token},
+                )
+            if token in GH_SAFE_TOP_LEVEL_COMMANDS:
+                return None
+            return "unproven", [f"gh {token}"], repository
+    return None
+
+
+def _literal_absolute_path(value: str) -> Path | None:
+    if SHELL_META_RE.search(value):
+        return None
+    path = Path(value)
+    return path if path.is_absolute() else None
+
+
+def _literal_command_path(value: str, workdir: str | None) -> Path | None:
+    absolute = _literal_absolute_path(value)
+    if absolute is not None:
+        return absolute
+    if SHELL_META_RE.search(value) or "/" not in value or workdir is None:
+        return None
+    root = Path(workdir)
+    if not root.is_absolute() or not root.is_dir():
+        return None
+    try:
+        return (root / value).resolve(strict=True)
+    except OSError:
+        return None
+
+
+def _literal_directory(value: str, workdir: str | None) -> Path | None:
+    if SHELL_META_RE.search(value):
+        return None
+    path = Path(value)
+    if not path.is_absolute():
+        if workdir is None:
+            return None
+        root = Path(workdir)
+        if not root.is_absolute() or not root.is_dir():
+            return None
+        path = root / path
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError:
+        return None
+    return resolved if resolved.is_dir() else None
+
+
+def _publisher_invocation_is_invalid(segment: list[str]) -> bool | None:
+    index = _skip_prefixes(segment)
+    if index >= len(segment):
+        return None
+    executable = os.path.basename(segment[index])
+    if executable in {"python", "python3"}:
+        index += 1
+        if index >= len(segment):
+            return None
+        if os.path.basename(segment[index]) != PUBLISHER.name and any(
+            os.path.basename(token) == PUBLISHER.name for token in segment[index + 1 :]
+        ):
+            return True
+    script = segment[index]
+    if os.path.basename(script) != PUBLISHER.name:
+        return None
+    if script not in PUBLISHER_ARGUMENTS:
+        return True
+    arguments = segment[index + 1 :]
+    required_options = (
+        "--repository",
+        "--base",
+        "--base-oid",
+        "--head",
+        "--head-oid",
+        "--head-owner",
+        "--title",
+        "--body-template",
+    )
+    required_values = {
+        option: _option_values(arguments, {option}, set())
+        for option in required_options
+    }
+    if any(len(values) != 1 for values in required_values.values()):
+        return True
+    if _normalize_repository(required_values["--repository"][0]) is None:
+        return True
+    if not all(
+        required_values[option][0].strip()
+        for option in ("--base", "--head", "--head-owner", "--title")
+    ):
+        return True
+    head = required_values["--head"][0]
+    head_owner = required_values["--head-owner"][0]
+    if head.count(":") != 1:
+        return True
+    qualified_owner, head_branch = head.split(":", 1)
+    if not head_branch or qualified_owner != head_owner:
+        return True
+    if any(
+        OID_RE.fullmatch(required_values[option][0]) is None
+        for option in ("--base-oid", "--head-oid")
+    ):
+        return True
+    template_path = _literal_absolute_path(required_values["--body-template"][0])
+    return template_path is None or not template_path.is_file()
+
+
+def _strict_long_option_values(
+    arguments: list[str], allowed_options: set[str]
+) -> dict[str, str] | None:
+    values: dict[str, str] = {}
+    index = 0
+    while index < len(arguments):
+        token = arguments[index]
+        if "=" in token:
+            option, value = token.split("=", 1)
+            index += 1
+        else:
+            option = token
+            if option not in allowed_options or index + 1 >= len(arguments):
+                return None
+            value = arguments[index + 1]
+            index += 2
+        if option not in allowed_options or option in values:
+            return None
+        values[option] = value
+    return values
+
+
+def _updater_invocation_is_invalid(segment: list[str]) -> bool | None:
+    index = _skip_prefixes(segment)
+    if index >= len(segment):
+        return None
+    executable = os.path.basename(segment[index])
+    if executable in {"python", "python3"}:
+        index += 1
+        if index >= len(segment):
+            return None
+        if os.path.basename(segment[index]) != UPDATER.name and any(
+            os.path.basename(token) == UPDATER.name for token in segment[index + 1 :]
+        ):
+            return True
+    script = segment[index]
+    if os.path.basename(script) != UPDATER.name:
+        return None
+    if script not in UPDATER_ARGUMENTS or index + 1 >= len(segment):
+        return True
+    operation = segment[index + 1]
+    if operation not in {"text", "ready"}:
+        return True
+    common_options = {
+        "--repository",
+        "--pr",
+        "--base",
+        "--base-oid",
+        "--head",
+        "--head-oid",
+        "--head-owner",
+        "--expected-title-sha256",
+        "--expected-body-sha256",
+    }
+    text_options = {"--expected-state", "--title", "--body-file"}
+    expected_options = common_options | (text_options if operation == "text" else set())
+    values = _strict_long_option_values(segment[index + 2 :], expected_options)
+    if values is None or values.keys() != expected_options:
+        return True
+    repository = _normalize_repository(values["--repository"])
+    if repository is None:
+        return True
+    if not values["--pr"].isdigit() or int(values["--pr"]) <= 0:
+        return True
+    if not values["--base"].strip():
+        return True
+    if any(
+        OID_RE.fullmatch(values[option]) is None
+        for option in ("--base-oid", "--head-oid")
+    ):
+        return True
+    if any(
+        re.fullmatch(r"[0-9a-f]{64}", values[option]) is None
+        for option in ("--expected-title-sha256", "--expected-body-sha256")
+    ):
+        return True
+    head = values["--head"]
+    head_owner = values["--head-owner"]
+    if head.count(":") != 1:
+        return True
+    qualified_owner, head_branch = head.split(":", 1)
+    if not head_branch or qualified_owner != head_owner:
+        return True
+    if operation == "ready":
+        return False
+    if values["--expected-state"] not in {"draft", "ready"}:
+        return True
+    if not values["--title"].strip():
+        return True
+    identity = (repository, int(values["--pr"]))
+    body_path = _literal_absolute_path(values["--body-file"])
+    return (
+        body_path is None
+        or not body_path.is_file()
+        or not _canonical_body(_read_literal_file(str(body_path)), identity)
+    )
+
+
+def _read_literal_file(value: str) -> str | None:
+    path = _literal_absolute_path(value)
+    if path is None:
+        return None
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+
+def _api_endpoint(arguments: list[str]) -> str | None:
+    index = 0
+    while index < len(arguments):
+        token = arguments[index]
+        if token in GH_API_VALUE_OPTIONS:
+            index += 2
+            continue
+        if any(
+            token.startswith(f"{option}=")
+            for option in GH_API_VALUE_OPTIONS
+            if option.startswith("--")
+        ):
+            index += 1
+            continue
+        if token.startswith("-"):
+            short_option = token[1:2]
+            if short_option in GH_API_VALUE_SHORT_OPTIONS and len(token) == 2:
+                index += 2
+            else:
+                index += 1
+            continue
+        return token.split("?", 1)[0].lstrip("/")
+    return None
+
+
+def _issue_edit_identities(
+    arguments: list[str], repository: str | None
+) -> list[tuple[str, int]] | None:
+    identities: list[tuple[str, int]] = []
+    index = 0
+    positional_only = False
+    while index < len(arguments):
+        selector = arguments[index]
+        if not positional_only and selector == "--":
+            positional_only = True
+            index += 1
+            continue
+        if not positional_only and selector in ISSUE_EDIT_VALUE_OPTIONS:
+            if index + 1 >= len(arguments):
+                return None
+            index += 2
+            continue
+        if not positional_only and any(
+            selector.startswith(f"{option}=")
+            for option in ISSUE_EDIT_VALUE_OPTIONS
+            if option.startswith("--")
+        ):
+            index += 1
+            continue
+        if (
+            not positional_only
+            and selector.startswith("-")
+            and not selector.startswith("--")
+            and selector[1:2] in ISSUE_EDIT_VALUE_SHORT_OPTIONS
+        ):
+            index += 1
+            continue
+        if not positional_only and selector.startswith("-"):
+            return None
+        url_match = ISSUE_URL_RE.fullmatch(selector) or PR_URL_RE.fullmatch(selector)
+        if url_match:
+            number = url_match.groupdict().get("issue") or url_match.groupdict().get(
+                "pr"
+            )
+            identities.append(
+                (
+                    f"{url_match.group('owner')}/{url_match.group('repo')}",
+                    int(number),
+                )
+            )
+        elif repository and selector.isdigit() and int(selector) > 0:
+            identities.append((repository, int(selector)))
+        else:
+            return None
+        index += 1
+    return identities or None
+
+
+@lru_cache(maxsize=64)
+def _issue_target_kind(repository: str, number: int) -> str | None:
+    try:
+        result = subprocess.run(
+            ["gh", "api", f"repos/{repository}/issues/{number}"],
+            capture_output=True,
+            text=True,
+            timeout=4,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode:
+        return None
+    try:
+        value = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(value, dict) or value.get("number") != number:
+        return None
+    return "pull_request" if isinstance(value.get("pull_request"), dict) else "issue"
+
+
+@lru_cache(maxsize=64)
+def _graphql_node_identity(
+    node_id: str,
+) -> tuple[str, tuple[str, int] | None] | None:
+    query = (
+        "query($id: ID!) { node(id: $id) { __typename "
+        "... on Issue { number repository { nameWithOwner } } "
+        "... on PullRequest { number repository { nameWithOwner } } } }"
+    )
+    try:
+        result = subprocess.run(
+            ["gh", "api", "graphql", "-f", f"query={query}", "-f", f"id={node_id}"],
+            capture_output=True,
+            text=True,
+            timeout=4,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode:
+        return None
+    try:
+        value = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return None
+    node = value.get("data", {}).get("node") if isinstance(value, dict) else None
+    if not isinstance(node, dict):
+        return None
+    typename = node.get("__typename")
+    if typename not in {"Issue", "PullRequest"}:
+        return None
+    number = node.get("number")
+    repository = node.get("repository")
+    name_with_owner = (
+        repository.get("nameWithOwner") if isinstance(repository, dict) else None
+    )
+    identity = (
+        (name_with_owner, number)
+        if isinstance(name_with_owner, str)
+        and _normalize_repository(name_with_owner)
+        and isinstance(number, int)
+        and not isinstance(number, bool)
+        and number > 0
+        else None
+    )
+    return ("issue" if typename == "Issue" else "pull_request", identity)
+
+
+def _json_find_string(value: Any, names: set[str]) -> str | None:
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            if key in names and isinstance(nested, str):
+                return nested
+        for nested in value.values():
+            found = _json_find_string(nested, names)
+            if found is not None:
+                return found
+    elif isinstance(value, list):
+        for nested in value:
+            found = _json_find_string(nested, names)
+            if found is not None:
+                return found
+    return None
+
+
+def _graphql_update_issue_node_id(
+    query_text: str, fields: dict[str, list[str]], input_content: str | None
+) -> str | None:
+    for name in ("id", "issueId", "issue_id"):
+        if fields.get(name):
+            return fields[name][-1]
+    literal_match = re.search(r"\bid\s*:\s*['\"](?P<id>[^'\"]+)['\"]", query_text)
+    if literal_match:
+        return literal_match.group("id")
+    if input_content:
+        try:
+            value = json.loads(input_content)
+        except json.JSONDecodeError:
+            return None
+        return _json_find_string(value, {"id", "issueId", "issue_id"})
+    return None
+
+
+def _graphql_update_issue_changes_text(
+    query_text: str, fields: dict[str, list[str]], input_content: str | None
+) -> bool:
+    if re.search(r"\b(?:title|body)\s*:", query_text):
+        return True
+    if {"title", "body"} & fields.keys():
+        return True
+    if input_content:
+        try:
+            value = json.loads(input_content)
+        except json.JSONDecodeError:
+            return True
+        return _json_find_string(value, {"title", "body"}) is not None
+    return False
+
+
+def _issue_text_edit_is_noncanonical(
+    identities: list[tuple[str, int]] | None,
+) -> bool:
+    if not identities or len(identities) != 1:
+        return True
+    return _issue_target_kind(*identities[0]) != "issue"
+
+
+def _changes_pr_text(arguments: list[str]) -> bool:
+    return bool(
+        _option_values(
+            arguments,
+            {"-t", "--title", "-b", "--body", "-F", "--body-file"},
+            PR_CREATE_VALUE_SHORT_OPTIONS,
+        )
+    )
+
+
+def _api_method(arguments: list[str]) -> str:
+    methods = _option_values(arguments, {"-X", "--method"}, GH_API_VALUE_SHORT_OPTIONS)
+    if methods:
+        return methods[-1].upper()
+    has_fields = bool(
+        _option_values(
+            arguments,
+            {"-F", "--field", "-f", "--raw-field"},
+            GH_API_VALUE_SHORT_OPTIONS,
+        )
+    )
+    has_input = bool(_option_values(arguments, {"--input"}, set()))
+    return "POST" if has_fields or has_input else "GET"
+
+
+def _api_fields(arguments: list[str]) -> dict[str, list[str]]:
+    fields: dict[str, list[str]] = {}
+    for raw_field in _option_values(
+        arguments,
+        {"-F", "--field", "-f", "--raw-field"},
+        GH_API_VALUE_SHORT_OPTIONS,
+    ):
+        name, separator, value = raw_field.partition("=")
+        if separator:
+            fields.setdefault(name, []).append(value)
+    return fields
+
+
+def _api_input(arguments: list[str]) -> tuple[str | None, bool]:
+    input_paths = _option_values(arguments, {"--input"}, GH_API_VALUE_SHORT_OPTIONS)
+    if not input_paths:
+        return None, False
+    if len(input_paths) != 1:
+        return None, True
+    content = _read_literal_file(input_paths[0])
+    return content, content is None
+
+
+def _api_body(fields: dict[str, list[str]], input_content: str | None) -> str | None:
+    if fields.get("body"):
+        value = fields["body"][-1]
+        if value.startswith("@"):
+            return _read_literal_file(value[1:])
+        return value
+    if input_content:
+        try:
+            value = json.loads(input_content)
+        except json.JSONDecodeError:
+            return None
+        return _json_find_string(value, {"body"})
+    return None
+
+
+def _api_changes_pr_text(arguments: list[str]) -> bool:
+    endpoint = _api_endpoint(arguments)
+    if endpoint is None:
+        return False
+    method = _api_method(arguments)
+    fields = _api_fields(arguments)
+    input_content, unresolved_input = _api_input(arguments)
+    input_has_pr_text = bool(
+        input_content and re.search(r'["\'](?:title|body)["\']\s*:', input_content)
+    )
+    fields_mark_ready = any(
+        value.lower() in {"false", "0"} for value in fields.get("draft", [])
+    )
+    input_marks_ready = bool(
+        input_content
+        and re.search(r'["\']draft["\']\s*:\s*false\b', input_content, re.I)
+    )
+
+    if endpoint == "graphql":
+        queries: list[str] = []
+        unresolved_query = False
+        for query in fields.get("query", []):
+            if query.startswith("@"):
+                query_content = _read_literal_file(query[1:])
+                if query_content is None:
+                    unresolved_query = True
+                else:
+                    queries.append(query_content)
+            elif GRAPHQL_DYNAMIC_VALUE_RE.fullmatch(query):
+                unresolved_query = True
+            else:
+                queries.append(query)
+        if unresolved_input or unresolved_query:
+            return True
+        query_text = "\n".join(queries + ([input_content] if input_content else []))
+        if not re.search(r"\bmutation\b", query_text, re.I):
+            return False
+        if GRAPHQL_DIRECT_PR_MUTATION_RE.search(query_text):
+            return True
+        if not GRAPHQL_UPDATE_ISSUE_RE.search(query_text):
+            return False
+        if not _graphql_update_issue_changes_text(query_text, fields, input_content):
+            return False
+        node_id = _graphql_update_issue_node_id(query_text, fields, input_content)
+        if node_id is None:
+            return True
+        classified = _graphql_node_identity(node_id)
+        if classified is None:
+            return True
+        kind, _identity = classified
+        return kind != "issue"
+
+    pulls_match = REST_PULLS_RE.search(endpoint)
+    if pulls_match:
+        if pulls_match.group("number") is None:
+            return method == "POST"
+        return method in {"PATCH", "POST"} and (
+            bool({"title", "body"} & fields.keys())
+            or input_has_pr_text
+            or fields_mark_ready
+            or input_marks_ready
+            or unresolved_input
+        )
+
+    issue_match = REST_ISSUE_RE.search(endpoint)
+    if issue_match:
+        changes_text = method in {"PATCH", "POST"} and (
+            bool({"title", "body"} & fields.keys())
+            or input_has_pr_text
+            or unresolved_input
+        )
+        if not changes_text:
+            return False
+        repository = f"{issue_match.group('owner')}/{issue_match.group('repo')}"
+        if _normalize_repository(repository) is None or "{" in repository:
+            return True
+        identity = (repository, int(issue_match.group("number")))
+        return _issue_text_edit_is_noncanonical([identity])
+    return False
+
+
+def _curl_changes_pr(
+    segment: list[str], bindings: dict[str, str | None]
+) -> tuple[bool, str | None]:
+    index = _skip_prefixes(segment)
+    if index >= len(segment) or os.path.basename(segment[index]) != "curl":
+        return False, None
+    arguments: list[str] = []
+    for argument in segment[index + 1 :]:
+        variable = _shell_variable_name(argument)
+        if variable is not None:
+            value = bindings.get(variable)
+            if value is None or any(character.isspace() for character in value):
+                return True, "curl argument"
+            arguments.append(value)
+        else:
+            prefix_match = re.match(
+                r"^(?:\$\{(?P<braced>[A-Za-z_][A-Za-z0-9_]*)\}|"
+                r"\$(?P<plain>[A-Za-z_][A-Za-z0-9_]*))(?P<suffix>.+)$",
+                argument,
+            )
+            if prefix_match is not None:
+                value = bindings.get(
+                    prefix_match.group("braced") or prefix_match.group("plain")
+                )
+                if value is None or any(character.isspace() for character in value):
+                    return True, "curl argument"
+                argument = value + prefix_match.group("suffix")
+            if ("$" in argument or "`" in argument) and (
+                argument.startswith(("$", "`")) or "http" in argument.lower()
+            ):
+                return True, "curl argument"
+            arguments.append(argument)
+
+    method: str | None = None
+    data: list[str] = []
+    urls: list[str] = []
+    value_options = {
+        "-d",
+        "--data",
+        "--data-ascii",
+        "--data-binary",
+        "--data-raw",
+        "--data-urlencode",
+        "--json",
+    }
+    index = 0
+    while index < len(arguments):
+        token = arguments[index]
+        if token in {"-K", "--config"} or token.startswith(("-K", "--config=")):
+            return True, "curl config"
+        if token in {"-X", "--request"}:
+            if index + 1 >= len(arguments):
+                return True, "curl request"
+            method = arguments[index + 1].upper()
+            index += 2
+            continue
+        if token.startswith("--request="):
+            method = token.split("=", 1)[1].upper()
+            index += 1
+            continue
+        if token.startswith("-X") and token != "-X":
+            method = token[2:].upper()
+            index += 1
+            continue
+        if token in value_options:
+            if index + 1 >= len(arguments):
+                return True, "curl data"
+            data.append(arguments[index + 1])
+            index += 2
+            continue
+        if token.startswith("-d") and token != "-d":
+            data.append(token[2:])
+            index += 1
+            continue
+        matching_data_option = next(
+            (
+                option
+                for option in value_options
+                if option.startswith("--") and token.startswith(f"{option}=")
+            ),
+            None,
+        )
+        if matching_data_option is not None:
+            data.append(token.split("=", 1)[1])
+            index += 1
+            continue
+        parsed_url = urlsplit(token)
+        if (
+            parsed_url.scheme.lower() in {"http", "https"}
+            and parsed_url.hostname
+            and parsed_url.hostname.lower() == "api.github.com"
+        ):
+            if "$" in token or "`" in token:
+                return True, "curl URL"
+            urls.append(parsed_url.path.lstrip("/"))
+        index += 1
+
+    if not urls:
+        return False, None
+    if len(urls) != 1:
+        return True, "curl GitHub API"
+    endpoint = urls[0]
+    method = method or ("POST" if data else "GET")
+    data_content_parts: list[str] = []
+    for value in data:
+        if value.startswith("@"):
+            content = _read_literal_file(value[1:])
+            if content is None:
+                return True, "curl data"
+            data_content_parts.append(content)
+        else:
+            data_content_parts.append(value)
+    data_content = "\n".join(data_content_parts)
+
+    if endpoint == "graphql":
+        return (
+            method in {"POST", "PATCH"}
+            and bool(re.search(r"\bmutation\b", data_content, re.I)),
+            None,
+        )
+    pulls_match = REST_PULLS_RE.fullmatch(endpoint)
+    if pulls_match:
+        if pulls_match.group("number") is None:
+            return method == "POST", None
+        return method in {"POST", "PATCH"} and bool(
+            re.search(
+                r'(?:["\'](?:title|body|draft)["\']\s*:|'
+                r"(?:^|\n)(?:title|body|draft)=)",
+                data_content,
+                re.I,
+            )
+        ), None
+    issue_match = REST_ISSUE_RE.fullmatch(endpoint)
+    if (
+        issue_match
+        and method in {"POST", "PATCH"}
+        and re.search(
+            r'(?:["\'](?:title|body)["\']\s*:|(?:^|\n)(?:title|body)=)',
+            data_content,
+            re.I,
+        )
+    ):
+        identity = (
+            f"{issue_match.group('owner')}/{issue_match.group('repo')}",
+            int(issue_match.group("number")),
+        )
+        return _issue_text_edit_is_noncanonical([identity]), None
+    return False, None
+
+
+def _wget_changes_pr(
+    segment: list[str], bindings: dict[str, str | None]
+) -> tuple[bool, str | None]:
+    index = _skip_prefixes(segment)
+    if index >= len(segment) or os.path.basename(segment[index]) != "wget":
+        return False, None
+    translated = ["curl"]
+    arguments = segment[index + 1 :]
+    index = 0
+    while index < len(arguments):
+        token = arguments[index]
+        if (
+            token in {"--config", "-e", "--execute"}
+            or token.startswith(("--config=", "--execute=", "-e="))
+            or (token.startswith("-e") and token != "-e")
+        ):
+            return True, "wget config"
+        if token in {
+            "--method",
+            "--body-data",
+            "--body-file",
+            "--post-data",
+            "--post-file",
+        }:
+            if index + 1 >= len(arguments):
+                return True, "wget argument"
+            option = {
+                "--method": "--request",
+                "--body-data": "--data",
+                "--body-file": "--data",
+                "--post-data": "--data",
+                "--post-file": "--data",
+            }[token]
+            value = arguments[index + 1]
+            translated.extend(
+                [
+                    option,
+                    f"@{value}" if token in {"--body-file", "--post-file"} else value,
+                ]
+            )
+            index += 2
+            continue
+        matched = next(
+            (
+                option
+                for option in (
+                    "--method",
+                    "--body-data",
+                    "--body-file",
+                    "--post-data",
+                    "--post-file",
+                )
+                if token.startswith(f"{option}=")
+            ),
+            None,
+        )
+        if matched is not None:
+            value = token.split("=", 1)[1]
+            translated.extend(
+                [
+                    {
+                        "--method": "--request",
+                        "--body-data": "--data",
+                        "--body-file": "--data",
+                        "--post-data": "--data",
+                        "--post-file": "--data",
+                    }[matched],
+                    f"@{value}" if matched in {"--body-file", "--post-file"} else value,
+                ]
+            )
+        else:
+            translated.append(token)
+        index += 1
+    return _curl_changes_pr(translated, bindings)
+
+
+def _leading_shell_assignments(segment: list[str]) -> tuple[dict[str, str | None], int]:
+    assignments: dict[str, str | None] = {}
+    index = 0
+    while index < len(segment):
+        match = SHELL_ASSIGNMENT_RE.fullmatch(segment[index])
+        if match is None:
+            break
+        value = match.group("value")
+        assignments[match.group("name")] = (
+            None if SHELL_META_RE.search(value) else value
+        )
+        index += 1
+    return assignments, index
+
+
+def _shell_variable_name(value: str) -> str | None:
+    match = SHELL_VARIABLE_RE.fullmatch(value)
+    if match is None:
+        return None
+    return match.group("braced") or match.group("plain")
+
+
+def _resolve_shell_value(
+    value: str, bindings: dict[str, str | None]
+) -> tuple[str | None, bool]:
+    variable = _shell_variable_name(value)
+    if variable is not None:
+        resolved = bindings.get(variable)
+        return resolved, resolved is None
+    if SHELL_META_RE.search(value):
+        return None, True
+    return value, False
+
+
+def _resolve_dynamic_executable(
+    segment: list[str], bindings: dict[str, str | None]
+) -> tuple[list[str], str | None]:
+    index = _skip_prefixes(segment)
+    if index >= len(segment):
+        return segment, None
+    executable = segment[index]
+    variable = _shell_variable_name(executable)
+    if variable is None:
+        if DYNAMIC_COMMAND_RE.search(executable):
+            return segment, executable
+        return segment, None
+    resolved = bindings.get(variable)
+    if not resolved:
+        return segment, executable
+    try:
+        replacement = shlex.split(resolved)
+    except ValueError:
+        return segment, executable
+    if not replacement:
+        return segment, executable
+    return [*segment[:index], *replacement, *segment[index + 1 :]], None
+
+
+def _resolve_sensitive_gh_arguments(
+    segment: list[str], bindings: dict[str, str | None]
+) -> tuple[list[str], str | None]:
+    index = _skip_prefixes(segment)
+    if index >= len(segment) or os.path.basename(segment[index]) != "gh":
+        return segment, None
+    resolved = list(segment)
+    graphql = "api" in resolved[index + 1 :] and "graphql" in resolved[index + 1 :]
+    for argument_index in range(index + 1, len(resolved)):
+        argument = resolved[argument_index]
+        variable = _shell_variable_name(argument)
+        if variable is not None:
+            value = bindings.get(variable)
+            if value is None or any(character.isspace() for character in value):
+                return segment, "gh argument"
+            resolved[argument_index] = value
+        elif "$" in argument or "`" in argument:
+            literal_graphql_variables = False
+            if (
+                graphql
+                and argument.startswith("query=")
+                and "${" not in argument
+                and "`" not in argument
+            ):
+                variable_names = re.findall(
+                    r"\$([A-Za-z_][A-Za-z0-9_]*)", argument.removeprefix("query=")
+                )
+                literal_graphql_variables = bool(variable_names) and not any(
+                    name in bindings or name in os.environ for name in variable_names
+                )
+            if not literal_graphql_variables:
+                return segment, "gh argument"
+    return resolved, None
+
+
+def _normalize_control_indirection(
+    segment: list[str],
+) -> tuple[list[str], str | None]:
+    index = 0
+    while index < len(segment) and SHELL_ASSIGNMENT_RE.fullmatch(segment[index]):
+        index += 1
+    while index < len(segment) and os.path.basename(segment[index]) in CONTROL_PREFIXES:
+        control = os.path.basename(segment[index])
+        index += 1
+        if control == "command":
+            while index < len(segment) and segment[index].startswith("-"):
+                option = segment[index]
+                index += 1
+                if option == "--":
+                    break
+                if option in {"-v", "-V"}:
+                    return [], None
+                if option != "-p":
+                    return segment, "command"
+        elif control == "exec":
+            while index < len(segment) and segment[index].startswith("-"):
+                option = segment[index]
+                index += 1
+                if option == "--":
+                    break
+                if option == "-a":
+                    if index >= len(segment):
+                        return segment, "exec"
+                    index += 1
+                elif option not in {"-c", "-l"}:
+                    return segment, "exec"
+        elif control == "time":
+            while index < len(segment) and segment[index] == "-p":
+                index += 1
+            if index < len(segment) and segment[index] == "--":
+                index += 1
+        else:
+            continue
+    return segment[index:], None
+
+
+def _normalize_builtin_indirection(
+    segment: list[str], bindings: dict[str, str | None]
+) -> tuple[list[str], str | None]:
+    index = _skip_prefixes(segment)
+    if index >= len(segment) or os.path.basename(segment[index]) != "builtin":
+        return segment, None
+    if index + 1 >= len(segment):
+        return segment, "builtin"
+    target = segment[index + 1]
+    variable = _shell_variable_name(target)
+    if variable is not None:
+        target = bindings.get(variable) or ""
+        if not target:
+            return segment, "builtin"
+    elif DYNAMIC_COMMAND_RE.search(target):
+        return segment, "builtin"
+    if target not in {"command", "eval", "source", "."}:
+        return segment, None
+    return [*segment[:index], target, *segment[index + 2 :]], None
+
+
+def _normalize_interpreter_entrypoint(
+    segment: list[str], bindings: dict[str, str | None]
+) -> tuple[list[str], str | None]:
+    index = _skip_prefixes(segment)
+    if index >= len(segment) or os.path.basename(segment[index]) not in {
+        "python",
+        "python3",
+    }:
+        return segment, None
+    script_index = index + 1
+    if script_index >= len(segment):
+        return segment, None
+    script = segment[script_index]
+    if script in PUBLISHER_ARGUMENTS | UPDATER_ARGUMENTS:
+        return segment, None
+    variable = _shell_variable_name(script)
+    if variable is not None:
+        resolved = bindings.get(variable)
+        if not resolved:
+            return segment, f"{os.path.basename(segment[index])} script"
+        return [*segment[:script_index], resolved, *segment[script_index + 1 :]], None
+    if DYNAMIC_COMMAND_RE.search(script):
+        return segment, f"{os.path.basename(segment[index])} script"
+    return segment, None
+
+
+def _static_eval_script(
+    arguments: list[str], bindings: dict[str, str | None]
+) -> str | None:
+    if not arguments:
+        return None
+    resolved: list[str] = []
+    for argument in arguments:
+        variable = _shell_variable_name(argument)
+        if variable is not None:
+            value = bindings.get(variable)
+            if value is None:
+                return None
+            resolved.append(value)
+        elif "$(" in argument or "`" in argument:
+            return None
+        else:
+            resolved.append(argument)
+    return " ".join(resolved)
+
+
+def _static_source_script(
+    arguments: list[str], bindings: dict[str, str | None]
+) -> str | None:
+    if not arguments:
+        return None
+    source_path, unresolved = _resolve_shell_value(arguments[0], bindings)
+    if unresolved or source_path is None:
+        return None
+    if any(_resolve_shell_value(argument, bindings)[1] for argument in arguments[1:]):
+        return None
+    path = _literal_absolute_path(source_path)
+    if path is None or not path.is_file():
+        return None
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+
+def _literal_interpreter_source(
+    segment: list[str],
+    workdir: str | None,
+    bindings: dict[str, str | None] | None = None,
+) -> tuple[str, str | None, str | None]:
+    index = _skip_prefixes(segment)
+    if index >= len(segment):
+        return "", None, None
+    executable = os.path.basename(segment[index])
+    if executable not in SHELL_INTERPRETERS | {"node", "nodejs", "python", "python3"}:
+        direct_path = _literal_command_path(segment[index], workdir)
+        if direct_path is None or not direct_path.is_file():
+            if "/" in segment[index] and not os.path.isabs(segment[index]):
+                return "", None, "relative script"
+            return "", None, None
+        try:
+            source = direct_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            return "", None, None
+        shebang = source.splitlines()[0] if source.startswith("#!") else ""
+        if "python" in shebang:
+            return "python", source, None
+        if re.search(r"\bnode(?:js)?\b", shebang):
+            return "javascript", source, None
+        if any(shell in shebang for shell in SHELL_INTERPRETERS):
+            return "shell", source, None
+        if not os.path.isabs(segment[index]):
+            return "", None, "relative executable"
+        return "", None, None
+    if executable in {"python", "python3"}:
+        kind = "python"
+    elif executable in {"node", "nodejs"}:
+        kind = "javascript"
+    else:
+        kind = "shell"
+    index += 1
+    while index < len(segment):
+        token = segment[index]
+        if kind == "python" and token == "-c":
+            if index + 1 >= len(segment):
+                return kind, None, "python -c"
+            return kind, segment[index + 1], None
+        if kind == "javascript" and token in {"-e", "--eval"}:
+            if index + 1 >= len(segment):
+                return kind, None, "node -e"
+            return kind, segment[index + 1], None
+        if kind == "javascript" and token.startswith(("--eval=", "-e=")):
+            return kind, token.split("=", 1)[1], None
+        if token in {"-c", "--command"}:
+            return kind, None, None
+        if kind == "python" and token == "-m":
+            if index + 1 >= len(segment):
+                return kind, None, "python module"
+            module = segment[index + 1]
+            executable_index = _skip_prefixes(segment)
+            python_path_overridden = "PYTHONPATH" in (bindings or {}) or any(
+                prefix.startswith("PYTHONPATH=")
+                for prefix in segment[:executable_index]
+            )
+            root = Path(workdir) if workdir else Path.cwd()
+            module_path = Path(*module.split("."))
+            locally_shadowed = any(
+                candidate.is_file()
+                for candidate in (
+                    root / f"{module_path}.py",
+                    root / module_path / "__init__.py",
+                    root / module_path / "__main__.py",
+                )
+            )
+            if (
+                module in PYTHON_NON_PR_MODULE_RUNNERS
+                and not locally_shadowed
+                and not python_path_overridden
+            ):
+                return kind, None, None
+            return kind, None, "python module"
+        if kind == "shell" and (
+            token in SHELL_PARSE_ONLY_LONG_OPTIONS
+            or (
+                token.startswith("-")
+                and not token.startswith("--")
+                and "n" in token[1:]
+            )
+        ):
+            return kind, None, None
+        if token == "--":
+            index += 1
+            break
+        if not token.startswith("-"):
+            break
+        if kind == "python" and token in {"-W", "-X"}:
+            index += 2
+        else:
+            index += 1
+    if index >= len(segment):
+        return kind, None, None
+    path = _literal_command_path(segment[index], workdir)
+    if path is None or not path.is_file():
+        return kind, None, f"{executable} script"
+    try:
+        return kind, path.read_text(encoding="utf-8"), None
+    except OSError:
+        return kind, None, f"{executable} script"
+
+
+def _python_embedded_commands(source: str) -> tuple[list[str], bool]:
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return [], True
+    commands: list[str] = []
+    unresolved = bool(
+        re.search(r"api\.github\.com", source, re.I)
+        and (
+            re.search(r"\bmutation\b", source, re.I)
+            or (
+                re.search(
+                    r"(?:['\"](?:PATCH|POST|PUT)['\"]|\.(?:patch|post|put)\s*\()",
+                    source,
+                    re.I,
+                )
+                and re.search(r"['\"](?:title|body|draft)['\"]", source, re.I)
+            )
+        )
+    )
+    call_names = {
+        "os.system",
+        "os.popen",
+        "os.execl",
+        "os.execle",
+        "os.execlp",
+        "os.execlpe",
+        "os.execv",
+        "os.execve",
+        "os.execvp",
+        "os.execvpe",
+        "os.spawnl",
+        "os.spawnle",
+        "os.spawnlp",
+        "os.spawnlpe",
+        "os.spawnv",
+        "os.spawnve",
+        "os.spawnvp",
+        "os.spawnvpe",
+        "subprocess.call",
+        "subprocess.check_call",
+        "subprocess.check_output",
+        "subprocess.getoutput",
+        "subprocess.getstatusoutput",
+        "subprocess.Popen",
+        "subprocess.run",
+    }
+    aliases: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for imported in node.names:
+                if imported.name in {"httpx", "os", "requests", "subprocess"}:
+                    aliases[imported.asname or imported.name] = imported.name
+        elif isinstance(node, ast.ImportFrom) and node.module in {
+            "httpx",
+            "os",
+            "requests",
+            "subprocess",
+        }:
+            for imported in node.names:
+                aliases[imported.asname or imported.name] = (
+                    f"{node.module}.{imported.name}"
+                )
+
+    def qualified_name(node: ast.AST) -> str | None:
+        if isinstance(node, ast.Name):
+            return aliases.get(node.id, node.id)
+        if isinstance(node, ast.Attribute):
+            parent = qualified_name(node.value)
+            return f"{parent}.{node.attr}" if parent else None
+        return None
+
+    for node in ast.walk(tree):
+        targets: list[ast.AST] = []
+        value: ast.AST | None = None
+        if isinstance(node, ast.Assign):
+            targets, value = node.targets, node.value
+        elif isinstance(node, ast.AnnAssign):
+            targets, value = [node.target], node.value
+        if value is not None:
+            pending = [(target, value) for target in targets]
+            while pending:
+                target, assigned = pending.pop()
+                canonical = qualified_name(assigned)
+                if isinstance(target, ast.Name) and canonical in call_names:
+                    aliases[target.id] = canonical
+                elif (
+                    isinstance(target, (ast.Tuple, ast.List))
+                    and isinstance(assigned, (ast.Tuple, ast.List))
+                    and len(target.elts) == len(assigned.elts)
+                ):
+                    pending.extend(zip(target.elts, assigned.elts))
+
+    def literal_value(node: ast.AST) -> Any:
+        try:
+            return ast.literal_eval(node)
+        except (ValueError, TypeError):
+            return None
+
+    def http_call_changes_pr(node: ast.Call, name: str) -> bool | None:
+        http_modules = {"requests", "httpx"}
+        module = name.split(".", 1)[0]
+        operation = name.rsplit(".", 1)[-1]
+        if module not in http_modules and operation not in {
+            "patch",
+            "post",
+            "put",
+            "request",
+        }:
+            return None
+        method: str | None
+        url_node: ast.AST | None
+        if operation == "request":
+            if len(node.args) < 2:
+                return True
+            method_value = literal_value(node.args[0])
+            method = method_value.upper() if isinstance(method_value, str) else None
+            url_node = node.args[1]
+            payload_start = 2
+        elif operation in {"post", "put", "patch"}:
+            method = operation.upper()
+            url_node = node.args[0] if node.args else None
+            payload_start = 1
+        else:
+            return None
+        if method is None or url_node is None:
+            return True
+        url = literal_value(url_node)
+        if not isinstance(url, str):
+            return True
+        parsed = urlsplit(url)
+        if not parsed.hostname or parsed.hostname.lower() != "api.github.com":
+            return False
+        endpoint = parsed.path.lstrip("/")
+        payload_nodes = [
+            *node.args[payload_start:],
+            *[
+                keyword.value
+                for keyword in node.keywords
+                if keyword.arg in {"data", "json", "content"}
+            ],
+        ]
+        payload_values = [literal_value(payload_node) for payload_node in payload_nodes]
+        unresolved_payload = any(value is None for value in payload_values)
+        payload = "\n".join(
+            repr(value) for value in payload_values if value is not None
+        )
+        if endpoint == "graphql":
+            return unresolved_payload or bool(re.search(r"\bmutation\b", payload, re.I))
+        pulls_match = REST_PULLS_RE.fullmatch(endpoint)
+        if pulls_match:
+            if pulls_match.group("number") is None:
+                return method == "POST"
+            return method in {"POST", "PUT", "PATCH"} and (
+                unresolved_payload
+                or bool(re.search(r"['\"](?:title|body|draft)['\"]\s*:", payload, re.I))
+            )
+        return False
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        name = qualified_name(node.func)
+        if name is None and isinstance(node.func, ast.Attribute):
+            name = node.func.attr
+        if name is None:
+            continue
+        http_result = http_call_changes_pr(node, name)
+        if http_result is True:
+            unresolved = True
+            continue
+        if http_result is False or name not in call_names:
+            continue
+        if not node.args:
+            unresolved = True
+            continue
+        if name.startswith("os.execl"):
+            arguments = list(node.args)
+            if name.endswith(("le", "lpe")) and arguments:
+                arguments.pop()
+            if len(arguments) < 2:
+                unresolved = True
+                continue
+            command_arguments = [arguments[0], *arguments[2:]]
+            if all(
+                isinstance(argument, ast.Constant) and isinstance(argument.value, str)
+                for argument in command_arguments
+            ):
+                commands.append(
+                    shlex.join([str(argument.value) for argument in command_arguments])
+                )
+            else:
+                unresolved = True
+            continue
+        if name.startswith("os.spawnl"):
+            arguments = list(node.args)
+            if name.endswith(("le", "lpe")) and arguments:
+                arguments.pop()
+            if len(arguments) < 3:
+                unresolved = True
+                continue
+            command_arguments = [arguments[1], *arguments[3:]]
+            if all(
+                isinstance(argument, ast.Constant) and isinstance(argument.value, str)
+                for argument in command_arguments
+            ):
+                commands.append(
+                    shlex.join([str(argument.value) for argument in command_arguments])
+                )
+            else:
+                unresolved = True
+            continue
+        command = (
+            next(
+                (
+                    argument
+                    for argument in reversed(node.args)
+                    if isinstance(argument, (ast.List, ast.Tuple))
+                ),
+                node.args[0],
+            )
+            if name.startswith(("os.exec", "os.spawn"))
+            else node.args[0]
+        )
+        if isinstance(command, ast.Constant) and isinstance(command.value, str):
+            commands.append(command.value)
+            continue
+        if isinstance(command, (ast.List, ast.Tuple)) and all(
+            isinstance(item, ast.Constant) and isinstance(item.value, str)
+            for item in command.elts
+        ):
+            commands.append(shlex.join([str(item.value) for item in command.elts]))
+            continue
+        unresolved = True
+    return commands, unresolved
+
+
+def _javascript_embedded_commands(source: str) -> tuple[list[str], bool]:
+    comment_free = _mask_javascript_comments(source)
+    process_methods = {
+        "exec",
+        "execSync",
+        "execFile",
+        "execFileSync",
+        "fork",
+        "spawn",
+        "spawnSync",
+    }
+    child_process_names = {"child_process"}
+    binding_re = re.compile(
+        r"\b(?:const|let|var)\s+(?P<name>[A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*"
+        r"require\s*\(\s*['\"](?:node:)?child_process['\"]\s*\)"
+    )
+    child_process_names.update(
+        match.group("name") for match in binding_re.finditer(comment_free)
+    )
+    namespace_import_re = re.compile(
+        r"\bimport\s+\*\s+as\s+(?P<name>[A-Za-z_$][A-Za-z0-9_$]*)\s+from\s*"
+        r"['\"](?:node:)?child_process['\"]"
+    )
+    child_process_names.update(
+        match.group("name") for match in namespace_import_re.finditer(comment_free)
+    )
+    dynamic_import_re = re.compile(
+        r"\b(?:const|let|var)\s+(?P<name>[A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*"
+        r"(?:await\s+)?import\s*\(\s*['\"](?:node:)?child_process['\"]\s*\)"
+    )
+    child_process_names.update(
+        match.group("name") for match in dynamic_import_re.finditer(comment_free)
+    )
+    receiver = "|".join(re.escape(name) for name in sorted(child_process_names))
+    command_call_re = re.compile(
+        rf"(?:\b(?:{receiver})\b|"
+        r"require\s*\(\s*['\"](?:node:)?child_process['\"]\s*\))"
+        r"\s*\.\s*(?P<method>exec|execSync|execFile|execFileSync|fork|spawn|spawnSync)"
+        r"\s*\("
+    )
+    direct_methods: dict[str, str] = {}
+    destructured_re = re.compile(
+        r"\b(?:const|let|var)\s*\{(?P<body>[^}]*)\}\s*=\s*"
+        r"require\s*\(\s*['\"](?:node:)?child_process['\"]\s*\)"
+    )
+    for binding in destructured_re.finditer(comment_free):
+        for item in binding.group("body").split(","):
+            name, separator, alias = item.strip().partition(":")
+            if name in process_methods:
+                direct_methods[alias.strip() if separator else name] = name
+    import_re = re.compile(
+        r"\bimport\s*\{(?P<body>[^}]*)\}\s*from\s*"
+        r"['\"](?:node:)?child_process['\"]"
+    )
+    for binding in import_re.finditer(comment_free):
+        for item in binding.group("body").split(","):
+            parts = re.split(r"\s+as\s+", item.strip())
+            if parts and parts[0] in process_methods:
+                direct_methods[parts[-1]] = parts[0]
+    direct_assignment_re = re.compile(
+        r"\b(?:const|let|var)\s+(?P<alias>[A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*"
+        r"require\s*\(\s*['\"](?:node:)?child_process['\"]\s*\)\s*\.\s*"
+        r"(?P<method>exec|execSync|execFile|execFileSync|fork|spawn|spawnSync)\b"
+    )
+    for binding in direct_assignment_re.finditer(comment_free):
+        direct_methods[binding.group("alias")] = binding.group("method")
+    commands: list[str] = []
+    rest_mutation = bool(
+        re.search(
+            r"api\.github\.com/repos/[^/'\"\s]+/[^/'\"\s]+/pulls(?:/\d+)?",
+            comment_free,
+            re.I,
+        )
+        and re.search(
+            r"(?:\bmethod\s*:\s*['\"](?:PATCH|POST|PUT)['\"]|"
+            r"\.(?:patch|post|put)\s*\()",
+            comment_free,
+            re.I,
+        )
+    )
+    graphql_mutation = bool(
+        re.search(r"api\.github\.com/graphql", comment_free, re.I)
+        and GRAPHQL_DIRECT_PR_MUTATION_RE.search(comment_free)
+    )
+    unresolved = rest_mutation or graphql_mutation
+    calls = [
+        (match.start(), match.end(), match.group("method"))
+        for match in command_call_re.finditer(comment_free)
+    ]
+    if direct_methods:
+        aliases = "|".join(re.escape(alias) for alias in sorted(direct_methods))
+        direct_call_re = re.compile(rf"\b(?P<alias>{aliases})\s*\(")
+        calls.extend(
+            (match.start(), match.end(), direct_methods[match.group("alias")])
+            for match in direct_call_re.finditer(comment_free)
+        )
+    for _start, end, method in sorted(calls):
+        remainder = source[end:]
+        literal_match = re.match(
+            rf"\s*(?P<literal>{JAVASCRIPT_LITERAL})", remainder, re.S
+        )
+        if literal_match is None:
+            unresolved = True
+            continue
+        command = _decode_javascript_literal(literal_match.group("literal"))
+        if command is None:
+            unresolved = True
+        elif method in {"exec", "execSync"}:
+            commands.append(command)
+        else:
+            tail = remainder[literal_match.end() :]
+            if not tail.lstrip().startswith(","):
+                commands.append(
+                    shlex.join(["node", command])
+                    if method == "fork"
+                    else shlex.join([command])
+                )
+                continue
+            arguments_match = re.match(r"\s*,\s*\[(?P<items>[^][]*)\]", tail, re.S)
+            if arguments_match is None:
+                unresolved = True
+                continue
+            arguments = _javascript_literal_list(arguments_match.group("items"))
+            if arguments is None:
+                unresolved = True
+            else:
+                commands.append(
+                    shlex.join(["node", command, *arguments])
+                    if method == "fork"
+                    else shlex.join([command, *arguments])
+                )
+    return commands, unresolved
+
+
+def _javascript_literal_list(source: str) -> list[str] | None:
+    values: list[str] = []
+    position = 0
+    while position < len(source):
+        separator_pattern = r"\s*" if not values else r"\s*,\s*"
+        separator = re.match(separator_pattern, source[position:])
+        if separator is None:
+            return None
+        position += separator.end()
+        if position >= len(source):
+            break
+        literal = re.match(JAVASCRIPT_LITERAL, source[position:], re.S)
+        if literal is None:
+            return None
+        value = _decode_javascript_literal(literal.group(0))
+        if value is None:
+            return None
+        values.append(value)
+        position += literal.end()
+        remainder = source[position:]
+        if remainder.strip() and not remainder.lstrip().startswith(","):
+            return None
+    return values
+
+
+def _command_assessment(
+    command: str,
+    depth: int = 0,
+    inherited_bindings: dict[str, str | None] | None = None,
+    workdir: str | None = None,
+) -> tuple[bool, str | None]:
+    if depth > 8:
+        return True, "nested shell recursion"
+    bindings = dict(inherited_bindings or {})
+    current_workdir = workdir
+    directory_stack: list[str] = []
+    command_without_data, shell_bodies = _without_heredoc_payloads(command)
+    substitutions, unresolved_substitution = _shell_command_substitutions(
+        command_without_data
+    )
+    if unresolved_substitution:
+        return True, "command substitution"
+    for substitution in substitutions:
+        blocked, route = _command_assessment(substitution, depth + 1, bindings, workdir)
+        if blocked:
+            return blocked, route
+    for body in shell_bodies:
+        blocked, route = _command_assessment(body, depth + 1, bindings, workdir)
+        if blocked:
+            return blocked, route
+    for segment in _segments(command_without_data):
+        assignments, assignment_end = _leading_shell_assignments(segment)
+        bindings.update(assignments)
+        if assignment_end == len(segment):
+            continue
+        segment, control_route = _normalize_control_indirection(segment)
+        if control_route is not None:
+            return True, control_route
+        if not segment:
+            continue
+        executable_index = _skip_prefixes(segment)
+        executable_name = (
+            os.path.basename(segment[executable_index])
+            if executable_index < len(segment)
+            else ""
+        )
+        if executable_name in {"cd", "pushd", "popd"}:
+            arguments = segment[executable_index + 1 :]
+            if executable_name == "popd":
+                if arguments or not directory_stack:
+                    return True, "popd"
+                current_workdir = directory_stack.pop()
+                continue
+            while arguments and arguments[0] in {"-L", "-P", "--"}:
+                arguments = arguments[1:]
+            if len(arguments) > 1:
+                return True, executable_name
+            target = arguments[0] if arguments else os.environ.get("HOME", "")
+            destination = _literal_directory(target, current_workdir)
+            if destination is None:
+                return True, executable_name
+            if executable_name == "pushd":
+                if current_workdir is None:
+                    return True, "pushd"
+                directory_stack.append(current_workdir)
+            current_workdir = str(destination)
+            continue
+        has_env_split, env_script = _env_split_script(segment)
+        if has_env_split:
+            if not env_script:
+                return True, "env -S"
+            blocked, route = _command_assessment(
+                env_script, depth + 1, bindings, current_workdir
+            )
+            if blocked:
+                return blocked, route
+            continue
+        watch_script = _watch_script(segment)
+        if watch_script is not None:
+            if not watch_script:
+                return True, "watch command"
+            blocked, route = _command_assessment(
+                watch_script, depth + 1, bindings, current_workdir
+            )
+            if blocked:
+                return blocked, route
+        segment, dynamic_route = _resolve_dynamic_executable(segment, bindings)
+        if dynamic_route is not None:
+            return True, dynamic_route
+        segment, builtin_route = _normalize_builtin_indirection(segment, bindings)
+        if builtin_route is not None:
+            return True, builtin_route
+        segment, control_route = _normalize_control_indirection(segment)
+        if control_route is not None:
+            return True, control_route
+        if not segment:
+            continue
+        segment, dynamic_route = _resolve_dynamic_executable(segment, bindings)
+        if dynamic_route is not None:
+            return True, dynamic_route
+        segment, interpreter_route = _normalize_interpreter_entrypoint(
+            segment, bindings
+        )
+        if interpreter_route is not None:
+            return True, interpreter_route
+        publisher_invalid = _publisher_invocation_is_invalid(segment)
+        if publisher_invalid is not None:
+            if publisher_invalid:
+                return True, None
+            continue
+        updater_invalid = _updater_invocation_is_invalid(segment)
+        if updater_invalid is not None:
+            if updater_invalid:
+                return True, None
+            continue
+        executable_index = _skip_prefixes(segment)
+        executable = (
+            segment[executable_index] if executable_index < len(segment) else None
+        )
+        executable_name = os.path.basename(executable) if executable else None
+        if executable_name and executable_name.startswith("gh-"):
+            return True, executable_name
+        if executable_name == "eval":
+            script = _static_eval_script(segment[executable_index + 1 :], bindings)
+            if script is None:
+                return True, "eval"
+            blocked, route = _command_assessment(
+                script, depth + 1, bindings, current_workdir
+            )
+            if blocked:
+                return blocked, route
+            continue
+        if executable in {"source", "."}:
+            script = _static_source_script(segment[executable_index + 1 :], bindings)
+            if script is None:
+                return True, executable
+            blocked, route = _command_assessment(
+                script, depth + 1, bindings, current_workdir
+            )
+            if blocked:
+                return blocked, route
+            continue
+        nested_shell = _nested_shell_script(segment)
+        if nested_shell is not None:
+            variable = _shell_variable_name(nested_shell)
+            if variable is not None:
+                resolved_shell = bindings.get(variable)
+            elif DYNAMIC_COMMAND_RE.search(nested_shell):
+                resolved_shell = None
+            else:
+                resolved_shell = nested_shell
+            if not resolved_shell:
+                return True, f"{executable_name or 'shell'} -c"
+            blocked, route = _command_assessment(
+                resolved_shell, depth + 1, bindings, current_workdir
+            )
+            if blocked:
+                return blocked, route
+            continue
+        script_kind, script_source, script_route = _literal_interpreter_source(
+            segment, current_workdir, bindings
+        )
+        if script_route is not None:
+            return True, script_route
+        if script_source is not None:
+            if script_kind == "python":
+                python_commands, unresolved_python = _python_embedded_commands(
+                    script_source
+                )
+                if unresolved_python:
+                    return True, "python command"
+                for python_command in python_commands:
+                    blocked, route = _command_assessment(
+                        python_command, depth + 1, bindings, current_workdir
+                    )
+                    if blocked:
+                        return blocked, route
+            elif script_kind == "javascript":
+                javascript_commands, unresolved_javascript = (
+                    _javascript_embedded_commands(script_source)
+                )
+                if unresolved_javascript:
+                    return True, "node command"
+                for javascript_command in javascript_commands:
+                    blocked, route = _command_assessment(
+                        javascript_command, depth + 1, bindings, current_workdir
+                    )
+                    if blocked:
+                        return blocked, route
+            else:
+                blocked, route = _command_assessment(
+                    script_source, depth + 1, bindings, current_workdir
+                )
+                if blocked:
+                    return blocked, route
+            continue
+        curl_blocked, curl_route = _curl_changes_pr(segment, bindings)
+        if curl_blocked:
+            return True, curl_route
+        wget_blocked, wget_route = _wget_changes_pr(segment, bindings)
+        if wget_blocked:
+            return True, wget_route
+        operation = _gh_command(segment)
+        if operation is not None and operation[0] in {"edit", "issue_edit", "api"}:
+            segment, argument_route = _resolve_sensitive_gh_arguments(segment, bindings)
+            if argument_route is not None:
+                return True, argument_route
+            operation = _gh_command(segment)
+        if operation is None:
+            continue
+        name, arguments, repository = operation
+        if name == "unproven":
+            return True, arguments[0]
+        if name == "create":
+            return True, None
+        elif name == "edit" and _changes_pr_text(arguments):
+            return True, None
+        elif name == "ready":
+            return True, None
+        elif name == "issue_edit" and _changes_pr_text(arguments):
+            if _issue_text_edit_is_noncanonical(
+                _issue_edit_identities(arguments, repository)
+            ):
+                return True, None
+        elif name == "api" and _api_changes_pr_text(arguments):
+            return True, None
+    return False, None
+
+
+def _command_is_noncanonical(
+    command: str, depth: int = 0, workdir: str | None = None
+) -> bool:
+    return _command_assessment(command, depth, workdir=workdir)[0]
+
+
+def _command_has_multi_target_issue_text_edit(command: str, depth: int = 0) -> bool:
+    if depth > 8:
+        return False
+    command_without_data, shell_bodies = _without_heredoc_payloads(command)
+    if any(
+        _command_has_multi_target_issue_text_edit(body, depth + 1)
+        for body in shell_bodies
+    ):
+        return True
+    for segment in _segments(command_without_data):
+        nested_shell = _nested_shell_script(segment)
+        if nested_shell and _command_has_multi_target_issue_text_edit(
+            nested_shell, depth + 1
+        ):
+            return True
+        operation = _gh_command(segment)
+        if operation is None:
+            continue
+        name, arguments, repository = operation
+        if name != "issue_edit" or not _changes_pr_text(arguments):
+            continue
+        identities = _issue_edit_identities(arguments, repository)
+        if identities is not None and len(identities) > 1:
+            return True
+    return False
+
+
+def _canonical_body(body: Any, identity: tuple[str, int] | None) -> bool:
+    if not isinstance(body, str) or not VALIDATOR.is_file():
+        return False
+    if identity is None:
+        return False
+    repository, pr_number = identity
+    try:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(VALIDATOR),
+                "/dev/stdin",
+                "--repository",
+                repository,
+                "--pr",
+                str(pr_number),
+            ],
+            input=body,
+            capture_output=True,
+            text=True,
+            timeout=4,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
+
+
+def _connector_identity(tool_input: dict[str, Any]) -> tuple[str, int] | None:
+    repository: str | None = None
+    for key in ("repository_full_name", "repository"):
+        value = tool_input.get(key)
+        if isinstance(value, str):
+            repository = _normalize_repository(value)
+            if repository:
+                break
+    if repository is None:
+        owner = tool_input.get("owner")
+        repo = tool_input.get("repo")
+        if isinstance(owner, str) and isinstance(repo, str):
+            repository = _normalize_repository(f"{owner}/{repo}")
+
+    pr_number: int | None = None
+    for key in (
+        "pull_number",
+        "pr_number",
+        "pullNumber",
+        "issue_number",
+        "issueNumber",
+        "number",
+    ):
+        value = tool_input.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            pr_number = value
+            break
+        if isinstance(value, str) and value.isdigit() and int(value) > 0:
+            pr_number = int(value)
+            break
+    if repository is None or pr_number is None:
+        return None
+    return repository, pr_number
+
+
+def _connector_call_is_noncanonical(tool_name: str, tool_input: dict[str, Any]) -> bool:
+    if tool_name.endswith("create_pull_request"):
+        return True
+    if tool_name.endswith("update_pull_request"):
+        changes_text = "title" in tool_input or "body" in tool_input
+        changes_ready = any(
+            key in tool_input and tool_input.get(key) in {False, "false", 0, "0", None}
+            for key in ("draft", "isDraft", "is_draft")
+        )
+        return changes_text or changes_ready
+    if tool_name.endswith("update_issue"):
+        changes_text = "title" in tool_input or "body" in tool_input
+        if not changes_text:
+            return False
+        identity = _connector_identity(tool_input)
+        return _issue_text_edit_is_noncanonical(
+            [identity] if identity is not None else None
+        )
+    return False
+
+
+def _tool_is_ready_mutation(tool_name: str) -> bool:
+    return bool(
+        re.search(
+            r"(?:(?:mark|set|make).*pull_request.*ready|"
+            r"pull_request.*(?:mark|set|make).*ready)",
+            tool_name,
+            re.I,
+        )
+    )
+
+
+def blocks(payload: dict[str, Any]) -> bool:
+    tool_name = str(payload.get("tool_name", "")).lower()
+    tool_input = payload.get("tool_input", {})
+    if _tool_is_ready_mutation(tool_name):
+        return True
+    if tool_name.endswith(
+        ("create_pull_request", "update_pull_request", "update_issue")
+    ):
+        if not isinstance(tool_input, dict):
+            return True
+        return _connector_call_is_noncanonical(tool_name, tool_input)
+    commands, unresolved = _candidate_commands(payload)
+    return unresolved or any(
+        _command_is_noncanonical(command, workdir=workdir)
+        for command, workdir in commands
+    )
+
+
+def _block_message(payload: dict[str, Any]) -> str:
+    commands, unresolved = _candidate_commands(payload)
+    if any(
+        _command_has_multi_target_issue_text_edit(command)
+        for command, _workdir in commands
+    ):
+        return (
+            "Blocked multi-target issue text edit: edit one issue number at a time so "
+            "the guard can classify it authoritatively as an issue or pull request."
+        )
+    for command, workdir in commands:
+        _blocked, route = _command_assessment(command, workdir=workdir)
+        if route is not None:
+            return (
+                f"Blocked unproven command route `{route}`: safety could not be proven. "
+                "Stop and surface this blocker at this tool boundary; do not retry through "
+                "another shell, alias, extension, subcommand, or delegated tool."
+            )
+    if unresolved:
+        return (
+            "Blocked unproven nested delegated command route: safety could not be proven. "
+            "Stop and surface this blocker at this tool boundary; do not retry through "
+            "another shell, alias, extension, subcommand, or delegated tool."
+        )
+    return (
+        "Blocked noncanonical PR publication: use publishing-reviewable-prs. "
+        "New PRs require its guarded creator with exact preflight and final re-read; "
+        "text and ready-state updates require its guarded updater."
+    )
+
+
+def _deny(message: str) -> int:
+    output = {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": message,
+        },
+        "systemMessage": message,
+    }
+    print(json.dumps(output), file=sys.stderr)
+    return 2
+
+
+def main() -> int:
+    try:
+        payload = json.load(sys.stdin)
+    except (json.JSONDecodeError, OSError):
+        return _deny(
+            "Blocked malformed PreToolUse payload: safety could not be proven. "
+            "Stop and surface this blocker at this tool boundary."
+        )
+    if not isinstance(payload, dict):
+        return _deny(
+            "Blocked non-object PreToolUse payload: safety could not be proven. "
+            "Stop and surface this blocker at this tool boundary."
+        )
+    if not blocks(payload):
+        return 0
+    return _deny(_block_message(payload))
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

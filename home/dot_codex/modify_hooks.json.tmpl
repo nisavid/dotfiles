@@ -1,0 +1,100 @@
+#!/usr/bin/env python3
+"""Merge the bounded canonical PR-publication guard into Codex's hooks file.
+
+This remains a user-level command hook. Codex intentionally skips a new or
+changed definition until the operator reviews and trusts it through `/hooks`.
+The guard is defense in depth over recognized static command and connector
+surfaces; the publication skill's owned helpers and hard rules remain primary.
+"""
+
+import json
+import shlex
+import sys
+
+
+raw = sys.stdin.read()
+document = json.loads(raw) if raw.strip() else {}
+if not isinstance(document, dict):
+    raise ValueError("hooks document root must be a JSON object")
+if "hooks" not in document:
+    document["hooks"] = {}
+hooks = document["hooks"]
+if not isinstance(hooks, dict):
+    raise ValueError("hooks must be a JSON object")
+if "PreToolUse" not in hooks:
+    hooks["PreToolUse"] = []
+pre_tool_use = hooks["PreToolUse"]
+if not isinstance(pre_tool_use, list):
+    raise ValueError("hooks.PreToolUse must be a JSON list")
+guard_path = {{ joinPath .chezmoi.homeDir ".codex/scripts/block_pr_fill.py" | quote }}
+guard_command = shlex.join(["python3", guard_path])
+
+
+def unwrap_env(arguments):
+    if not arguments or arguments[0].rsplit("/", 1)[-1] != "env":
+        return arguments
+    tail = arguments[1:]
+    if tail[:1] == ["--"]:
+        return tail[1:]
+    if not tail:
+        return arguments
+    name, separator, _value = tail[0].partition("=")
+    if tail[0].startswith("-") or (separator and name.isidentifier()):
+        return arguments
+    return tail
+
+
+def is_guard_hook(hook):
+    if not isinstance(hook, dict):
+        return False
+    if hook.get("type") not in {None, "command"}:
+        return False
+    try:
+        arguments = shlex.split(str(hook.get("command", "")))
+    except ValueError:
+        return False
+    arguments = unwrap_env(arguments)
+    if arguments == [guard_path]:
+        return True
+    interpreter = arguments[0].rsplit("/", 1)[-1] if arguments else ""
+    return interpreter in {"python", "python3"} and arguments[1:] in (
+        [guard_path],
+        ["-u", guard_path],
+    )
+
+
+filtered = []
+insert_at = None
+for index, matcher in enumerate(pre_tool_use):
+    nested_hooks = matcher.get("hooks", []) if isinstance(matcher, dict) else []
+    if not isinstance(nested_hooks, list):
+        raise ValueError(
+            f"hooks.PreToolUse matcher {index} hooks must be a JSON list"
+        )
+    retained_hooks = [hook for hook in nested_hooks if not is_guard_hook(hook)]
+    if len(retained_hooks) == len(nested_hooks):
+        filtered.append(matcher)
+        continue
+    if insert_at is None:
+        insert_at = len(filtered)
+    if retained_hooks:
+        retained_matcher = dict(matcher)
+        retained_matcher["hooks"] = retained_hooks
+        filtered.append(retained_matcher)
+
+canonical_matcher = (
+    {
+        "hooks": [
+            {
+                "type": "command",
+                "command": guard_command,
+                "timeout": 12,
+                "statusMessage": "Checking canonical PR publication",
+            }
+        ]
+    }
+)
+filtered.insert(len(filtered) if insert_at is None else insert_at, canonical_matcher)
+hooks["PreToolUse"] = filtered
+json.dump(document, sys.stdout, indent=2)
+sys.stdout.write("\n")
