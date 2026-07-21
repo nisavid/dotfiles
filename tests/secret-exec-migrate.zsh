@@ -170,6 +170,18 @@ done
 output=$(zsh "$migrator" 2>&1)
 (( $(wc -l < "$state_dir/created.log") == 5 )) || fail 'repeated migration must not create duplicate items'
 
+print -r -- 'different-existing-value' > "$state_dir/context7.password"
+set +e
+zsh "$migrator" > "$test_dir/proton-drift.out" 2>&1
+exit_code=$?
+set -e
+(( exit_code != 0 )) || fail 'migration must stop when an existing Proton item differs'
+[[ $(<"$state_dir/context7.password") == different-existing-value ]] || \
+  fail 'migration must not overwrite an existing Proton item that differs'
+[[ $(<"$test_dir/proton-drift.out") != *context7-canary* ]] || \
+  fail 'Proton drift diagnostics must not expose credential values'
+print -r -- 'context7-canary' > "$state_dir/context7.password"
+
 cat > "$fixture_home/.config/mcp-config.json" <<EOF
 {"mcpServers":{"firecrawl":{"type":"stdio","command":"$fixture_home/.local/bin/secret-exec","args":["firecrawl","--","npx","-y","firecrawl-mcp@3.22.3"]}}}
 EOF
@@ -214,6 +226,22 @@ done
 [[ -e $fixture_home/.config/environment.d/10-apikeys.local.conf ]] || \
   fail 'a legacy-Claude rejection must preserve every plaintext source'
 mv "$test_dir/claude.json" "$fixture_home/.claude.json"
+
+cp "$fake_bin/codex" "$test_dir/codex"
+cat > "$fake_bin/codex" <<'EOF'
+#!/usr/bin/env zsh
+set -euo pipefail
+[[ $* == 'mcp list --json' ]] || exit 64
+jq -n '[{name:"context7",transport:{type:"stdio",command:"mismatched-command",args:[],env:{},env_vars:[],cwd:null}}]'
+EOF
+set +e
+zsh "$migrator" --retire-plaintext > "$test_dir/legacy-codex.out" 2>&1
+exit_code=$?
+set -e
+(( exit_code != 0 )) || fail 'retirement must reject mismatched effective Codex MCP bindings'
+[[ -e $fixture_home/.config/environment.d/10-apikeys.local.conf ]] || \
+  fail 'a Codex binding rejection must preserve every plaintext source'
+mv "$test_dir/codex" "$fake_bin/codex"
 
 cat > "$fixture_home/.config/mcp-config.json" <<'EOF'
 {"mcpServers":{"firecrawl":{"url":"https://mcp.firecrawl.dev/firecrawl-canary/v2/mcp"}}}
