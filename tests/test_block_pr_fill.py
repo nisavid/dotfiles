@@ -5,11 +5,14 @@ import hashlib
 import io
 import json
 import os
+import py_compile
 import shlex
 import subprocess
 import sys
 import tempfile
 import unittest
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
 
@@ -347,6 +350,262 @@ class BlockPrFillTests(unittest.TestCase):
                             )
                         )
                     )
+
+    @contextmanager
+    def _prepared_hindsight_repository(
+        self,
+    ) -> Iterator[tuple[Path, Path, Path, str, dict[str, str]]]:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            template_directory = root / "empty-git-template"
+            template_directory.mkdir()
+            environment = os.environ.copy()
+            for name in tuple(environment):
+                if name.startswith("GIT_"):
+                    del environment[name]
+            environment.update(
+                {
+                    "GIT_CONFIG_GLOBAL": os.devnull,
+                    "GIT_CONFIG_NOSYSTEM": "1",
+                    "GIT_TEMPLATE_DIR": str(template_directory),
+                }
+            )
+            script = root / MODULE.TRUSTED_TASK_TEST_PATH
+            script.parent.mkdir(parents=True)
+            script.write_text(
+                "#!/usr/bin/env zsh\n"
+                'repo_dir="${0:A:h:h}"\n'
+                'zsh "$repo_dir/bin/hindsight-embed-supervisor"\n',
+                encoding="utf-8",
+            )
+            script.chmod(0o755)
+            dependency = (
+                root / MODULE.TRUSTED_TASK_TEST_TREE_PATH / "bin/dependency"
+            )
+            dependency.parent.mkdir(parents=True)
+            dependency.write_text("tracked\n", encoding="utf-8")
+            for arguments in (
+                ["git", "init", "-q"],
+                ["git", "config", "user.name", "Test"],
+                ["git", "config", "user.email", "test@example.com"],
+                [
+                    "git",
+                    "remote",
+                    "add",
+                    "origin",
+                    "https://github.com/nisavid/agents.git",
+                ],
+                [
+                    "git",
+                    "add",
+                    "--",
+                    str(MODULE.TRUSTED_TASK_TEST_TREE_PATH),
+                ],
+                ["git", "commit", "-qm", "test: add controller runner"],
+            ):
+                subprocess.run(
+                    arguments,
+                    cwd=root,
+                    check=True,
+                    env=environment,
+                )
+
+            tree = subprocess.run(
+                [
+                    "git",
+                    "rev-parse",
+                    f"HEAD:{MODULE.TRUSTED_TASK_TEST_TREE_PATH}",
+                ],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+                env=environment,
+            ).stdout.strip()
+            yield root, script, dependency, tree, environment
+
+    @staticmethod
+    def _hindsight_runner_payloads(
+        root: Path,
+    ) -> tuple[dict[str, object], dict[str, object]]:
+        command = f"zsh {MODULE.TRUSTED_TASK_TEST_PATH}"
+        direct = payload("Bash", {"command": command, "workdir": str(root)})
+        nested = payload(
+            "functions.exec",
+            {
+                "code": (
+                    "await tools.exec_command({"
+                    f"cmd: {json.dumps(command)}, "
+                    f"workdir: {json.dumps(str(root))}"
+                    "})"
+                )
+            },
+        )
+        return direct, nested
+
+    def test_allows_clean_tracked_hindsight_controller_test_runner(self) -> None:
+        with self._prepared_hindsight_repository() as prepared:
+            root, _script, _dependency, tree, _environment = prepared
+            direct, nested = self._hindsight_runner_payloads(root)
+            with mock.patch.object(MODULE, "TRUSTED_TASK_TEST_TREE", tree):
+                self.assertFalse(MODULE.blocks(direct))
+                self.assertFalse(MODULE.blocks(nested))
+
+    def test_hindsight_controller_rejects_unproven_and_near_miss_routes(
+        self,
+    ) -> None:
+        with self._prepared_hindsight_repository() as prepared:
+            root, _script, _dependency, tree, _environment = prepared
+            commands = (
+                f"{MODULE.TRUSTED_TASK_TEST_COMMAND} --verbose",
+                "zsh ./tooling/hindsight/tests/hindsight-memory-controller.zsh",
+                f"{MODULE.TRUSTED_TASK_TEST_COMMAND}; echo ok",
+                "hash -p /private/tmp/zsh zsh; "
+                f"{MODULE.TRUSTED_TASK_TEST_COMMAND}",
+            )
+            with mock.patch.object(MODULE, "TRUSTED_TASK_TEST_TREE", tree):
+                self.assertTrue(
+                    MODULE.blocks(
+                        payload(
+                            "functions.write_stdin",
+                            {"chars": MODULE.TRUSTED_TASK_TEST_COMMAND},
+                        )
+                    )
+                )
+                for command in commands:
+                    with self.subTest(command=command):
+                        self.assertTrue(
+                            MODULE.blocks(
+                                payload(
+                                    "Bash",
+                                    {"command": command, "workdir": str(root)},
+                                )
+                            )
+                        )
+
+    def test_hindsight_controller_decode_error_fails_closed(self) -> None:
+        with self._prepared_hindsight_repository() as prepared:
+            root, _script, _dependency, _tree, _environment = prepared
+            decode_error = UnicodeDecodeError(
+                "utf-8", b"\xff", 0, 1, "invalid start byte"
+            )
+            with mock.patch.object(
+                MODULE, "_budgeted_run", side_effect=decode_error
+            ):
+                self.assertFalse(
+                    MODULE._trusted_task_test_script(
+                        ["zsh", str(MODULE.TRUSTED_TASK_TEST_PATH)],
+                        str(root),
+                    )
+                )
+
+    def test_hindsight_controller_rejects_dirty_script(self) -> None:
+        with self._prepared_hindsight_repository() as prepared:
+            root, script, _dependency, tree, _environment = prepared
+            direct, _nested = self._hindsight_runner_payloads(root)
+            script.write_text(script.read_text() + "print dirty\n", encoding="utf-8")
+            with mock.patch.object(MODULE, "TRUSTED_TASK_TEST_TREE", tree):
+                self.assertTrue(MODULE.blocks(direct))
+
+    def test_hindsight_controller_rejects_assume_unchanged_dirt(self) -> None:
+        with self._prepared_hindsight_repository() as prepared:
+            root, _script, dependency, tree, environment = prepared
+            direct, _nested = self._hindsight_runner_payloads(root)
+            subprocess.run(
+                [
+                    "git",
+                    "update-index",
+                    "--assume-unchanged",
+                    "--",
+                    str(dependency.relative_to(root)),
+                ],
+                cwd=root,
+                check=True,
+                env=environment,
+            )
+            dependency.write_text("index-hidden dirty\n", encoding="utf-8")
+            with mock.patch.object(MODULE, "TRUSTED_TASK_TEST_TREE", tree):
+                self.assertTrue(MODULE.blocks(direct))
+
+    def test_hindsight_controller_rejects_ignored_untracked_file(self) -> None:
+        with self._prepared_hindsight_repository() as prepared:
+            root, _script, _dependency, tree, _environment = prepared
+            direct, _nested = self._hindsight_runner_payloads(root)
+            ignored = (
+                root / MODULE.TRUSTED_TASK_TEST_TREE_PATH / "bin/ignored"
+            )
+            exclude = root / ".git/info/exclude"
+            exclude.parent.mkdir(parents=True, exist_ok=True)
+            exclude.write_text(
+                (exclude.read_text(encoding="utf-8") if exclude.exists() else "")
+                + f"\n{MODULE.TRUSTED_TASK_TEST_TREE_PATH}/bin/ignored\n",
+                encoding="utf-8",
+            )
+            ignored.write_text("ignored untracked\n", encoding="utf-8")
+            with mock.patch.object(MODULE, "TRUSTED_TASK_TEST_TREE", tree):
+                self.assertTrue(MODULE.blocks(direct))
+
+    def test_hindsight_controller_rejects_wrong_remote(self) -> None:
+        with self._prepared_hindsight_repository() as prepared:
+            root, _script, _dependency, tree, environment = prepared
+            direct, _nested = self._hindsight_runner_payloads(root)
+            subprocess.run(
+                [
+                    "git",
+                    "remote",
+                    "set-url",
+                    "origin",
+                    "https://github.com/other/agents.git",
+                ],
+                cwd=root,
+                check=True,
+                env=environment,
+            )
+            with mock.patch.object(MODULE, "TRUSTED_TASK_TEST_TREE", tree):
+                self.assertTrue(MODULE.blocks(direct))
+
+    def test_hindsight_controller_rejects_committed_symlink(self) -> None:
+        with self._prepared_hindsight_repository() as prepared:
+            root, _script, _dependency, _tree, environment = prepared
+            direct, _nested = self._hindsight_runner_payloads(root)
+            outside = root / "outside"
+            outside.write_text("outside pinned tree\n", encoding="utf-8")
+            escape = root / MODULE.TRUSTED_TASK_TEST_TREE_PATH / "bin/escape"
+            escape.symlink_to(os.path.relpath(outside, escape.parent))
+            self.assertEqual(escape.resolve(), outside.resolve())
+            subprocess.run(
+                ["git", "add", "--", str(escape.relative_to(root))],
+                cwd=root,
+                check=True,
+                env=environment,
+            )
+            subprocess.run(
+                ["git", "commit", "-qm", "test: add escaping symlink"],
+                cwd=root,
+                check=True,
+                env=environment,
+            )
+            symlink_tree = subprocess.run(
+                [
+                    "git",
+                    "rev-parse",
+                    f"HEAD:{MODULE.TRUSTED_TASK_TEST_TREE_PATH}",
+                ],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+                env=environment,
+            ).stdout.strip()
+            with mock.patch.object(
+                MODULE, "TRUSTED_TASK_TEST_TREE", symlink_tree
+            ):
+                self.assertFalse(
+                    MODULE._working_tree_matches_git_tree(
+                        root, MODULE.TRUSTED_TASK_TEST_TREE_PATH
+                    )
+                )
+                self.assertTrue(MODULE.blocks(direct))
 
     def test_defaults_relative_script_resolution_to_hook_cwd(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -941,8 +1200,8 @@ class BlockPrFillTests(unittest.TestCase):
                     MODULE.blocks(payload("Bash", {"command": untrusted_interpreter}))
                 )
             for variable_script in (
-                '"$HOME/.agents/skills/publishing-reviewable-prs/scripts/create_reviewable_pr.py"',
-                '"${HOME}/.agents/skills/publishing-reviewable-prs/scripts/create_reviewable_pr.py"',
+                '"$HOME/.agents/skills/publishing-reviewable-prs/scripts/reviewable_pr.py"',
+                '"${HOME}/.agents/skills/publishing-reviewable-prs/scripts/reviewable_pr.py"',
             ):
                 variable_command = command.replace(
                     shlex.quote(str(MODULE.PUBLISHER)), variable_script
@@ -959,12 +1218,12 @@ class BlockPrFillTests(unittest.TestCase):
                     )
                 )
             for literal_script in (
-                "'$HOME/.agents/skills/publishing-reviewable-prs/scripts/create_reviewable_pr.py'",
-                "'${HOME}/.agents/skills/publishing-reviewable-prs/scripts/create_reviewable_pr.py'",
-                "'$HOME'/.agents/skills/publishing-reviewable-prs/scripts/create_reviewable_pr.py",
-                "'${HOME}'/.agents/skills/publishing-reviewable-prs/scripts/create_reviewable_pr.py",
-                r"\$HOME/.agents/skills/publishing-reviewable-prs/scripts/create_reviewable_pr.py",
-                r'"\$HOME/.agents/skills/publishing-reviewable-prs/scripts/create_reviewable_pr.py"',
+                "'$HOME/.agents/skills/publishing-reviewable-prs/scripts/reviewable_pr.py'",
+                "'${HOME}/.agents/skills/publishing-reviewable-prs/scripts/reviewable_pr.py'",
+                "'$HOME'/.agents/skills/publishing-reviewable-prs/scripts/reviewable_pr.py",
+                "'${HOME}'/.agents/skills/publishing-reviewable-prs/scripts/reviewable_pr.py",
+                r"\$HOME/.agents/skills/publishing-reviewable-prs/scripts/reviewable_pr.py",
+                r'"\$HOME/.agents/skills/publishing-reviewable-prs/scripts/reviewable_pr.py"',
             ):
                 literal_command = command.replace(
                     shlex.quote(str(MODULE.PUBLISHER)), literal_script
@@ -1509,10 +1768,8 @@ class BlockPrFillTests(unittest.TestCase):
             self.assert_direct_and_nested_blocked(allowed)
 
     def test_review_state_query_requires_exact_read_only_contract(self) -> None:
-        script = (
-            Path.home()
-            / ".agents/skills/pr-review-orchestration/scripts/pr_review_state.py"
-        )
+        script = MODULE.REVIEW_STATE
+        self.assertEqual(script.name, "pr_review_state.py")
         invocation = f"python3 {shlex.quote(str(script))}"
         with mock.patch.object(
             MODULE, "_review_state_helper_is_trusted", return_value=True
@@ -1523,8 +1780,18 @@ class BlockPrFillTests(unittest.TestCase):
             self.assert_direct_and_nested_allowed(
                 f"{invocation} --json --pr=62 --summary --repo=acme/app"
             )
+            self.assert_direct_and_nested_allowed(
+                f"{invocation} --repo nisavid/agents --pr 29 --summary "
+                "--write-ledger --json"
+            )
+            self.assert_direct_and_nested_allowed(
+                f"{invocation} --repo nisavid/agents --pr 28 --summary "
+                "--write-ledger --json"
+            )
 
             blocked = (
+                f"{invocation} --repo nisavid/agents --pr 30 --summary --json "
+                "--write-ledger",
                 f"/private/tmp/python3 {shlex.quote(str(script))} --repo acme/app "
                 "--pr 62 --summary --json",
                 f"PATH=/private/tmp {invocation} --repo acme/app --pr 62 "
@@ -1534,7 +1801,8 @@ class BlockPrFillTests(unittest.TestCase):
                 f"sh -c '{invocation} --repo acme/app --pr 62 --summary --json'",
                 f"echo ok; {invocation} --repo acme/app --pr 62 --summary --json",
                 f"{invocation} --repo acme/app --pr 62 --summary",
-                f"{invocation} --repo acme/app --pr 62 --summary --json --write-ledger",
+                f"{invocation} --repo acme/app --pr 62 --summary --json "
+                "--write-ledger",
                 f"{invocation} --repo acme/app --pr 62 --summary --json "
                 "--fixture /private/tmp/state.json",
                 f"{invocation} --repo '{{owner}}/app' --pr 62 --summary --json",
@@ -1548,6 +1816,172 @@ class BlockPrFillTests(unittest.TestCase):
             for command in blocked:
                 with self.subTest(command=command):
                     self.assert_direct_and_nested_blocked(command)
+
+        with mock.patch.object(
+            MODULE, "_review_state_helper_is_trusted", return_value=False
+        ):
+            self.assert_direct_and_nested_blocked(
+                f"{invocation} --repo acme/app --pr 62 --summary --json"
+            )
+
+    def test_guarded_helper_help_requires_exact_digest_pinned_route(  # noqa: PLR0915
+        self,
+    ) -> None:
+        self.assertEqual(MODULE.PUBLISHER.name, "reviewable_pr.py")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = root / "reviewable_pr_state.py"
+            updater = root / "update_reviewable_pr.py"
+            state.write_text(
+                "import subprocess\n"
+                "def run(command):\n"
+                "    subprocess.run(command)\n"
+                "VALUE = 1\n",
+                encoding="utf-8",
+            )
+            updater.write_text(
+                "import argparse\n"
+                "import reviewable_pr_state\n"
+                "argparse.ArgumentParser().parse_args()\n",
+                encoding="utf-8",
+            )
+            trusted = {
+                state: hashlib.sha256(state.read_bytes()).hexdigest(),
+                updater: hashlib.sha256(updater.read_bytes()).hexdigest(),
+            }
+            state_help = f"python3 {shlex.quote(str(state))} --help"
+            updater_help = f"python3 {shlex.quote(str(updater))} --help"
+            with mock.patch.object(
+                MODULE, "TRUSTED_HELP_ONLY_SCRIPTS", trusted
+            ):
+                self.assert_direct_and_nested_allowed(state_help)
+                self.assert_direct_and_nested_allowed(
+                    f"{state_help} && {updater_help}"
+                )
+                self.assert_direct_and_nested_blocked(
+                    f"hash -p /private/tmp/python3 python3; {state_help}"
+                )
+                self.assert_direct_and_nested_blocked(
+                    f"eval 'hash -p /private/tmp/python3 python3'; {state_help}"
+                )
+                lookup_mutation = root / "lookup-mutation.zsh"
+                lookup_mutation.write_text(
+                    "hash -p /private/tmp/python3 python3\n",
+                    encoding="utf-8",
+                )
+                self.assert_direct_and_nested_blocked(
+                    f"source {shlex.quote(str(lookup_mutation))}; {state_help}"
+                )
+                lookup_mutation.unlink()
+                environment = os.environ.copy()
+                environment.pop("PYTHONPYCACHEPREFIX", None)
+                environment.pop("PYTHONDONTWRITEBYTECODE", None)
+                subprocess.run(
+                    [sys.executable, str(updater), "--help"],
+                    cwd=root,
+                    check=True,
+                    capture_output=True,
+                    env=environment,
+                )
+                cache = root / "__pycache__"
+                self.assertTrue(cache.is_dir())
+                cache_files = list(cache.glob("reviewable_pr_state.*.pyc"))
+                self.assertEqual(len(cache_files), 1)
+                self.assert_direct_and_nested_allowed(updater_help)
+
+                metadata = root / ".DS_Store"
+                metadata.write_bytes(b"inert Finder metadata\n")
+                self.assert_direct_and_nested_allowed(updater_help)
+                metadata.unlink()
+                metadata.mkdir()
+                self.assert_direct_and_nested_blocked(updater_help)
+                metadata.rmdir()
+
+                original_budgeted_run = MODULE._budgeted_run
+
+                def replace_source_and_cache(
+                    arguments: list[str], **kwargs: object
+                ) -> subprocess.CompletedProcess:
+                    if (
+                        len(arguments) > 5
+                        and arguments[0] == sys.executable
+                        and arguments[1:4] == ["-I", "-S", "-c"]
+                        and arguments[4] == MODULE.BYTECODE_VALIDATOR_SOURCE
+                    ):
+                        state.write_text(
+                            "import subprocess\n"
+                            "def run(command):\n"
+                            "    subprocess.run(command)\n"
+                            "VALUE = 2\n",
+                            encoding="utf-8",
+                        )
+                        replacement = root / "replacement.pyc"
+                        py_compile.compile(
+                            str(state), cfile=str(replacement), doraise=True
+                        )
+                        cache_files[0].write_bytes(replacement.read_bytes())
+                        replacement.unlink()
+                    return original_budgeted_run(arguments, **kwargs)
+
+                with mock.patch.object(
+                    MODULE,
+                    "_budgeted_run",
+                    side_effect=replace_source_and_cache,
+                ):
+                    self.assert_direct_and_nested_blocked(updater_help)
+                state.write_text(
+                    "import subprocess\n"
+                    "def run(command):\n"
+                    "    subprocess.run(command)\n"
+                    "VALUE = 1\n",
+                    encoding="utf-8",
+                )
+                self.assert_direct_and_nested_blocked(updater_help)
+
+                cache_files[0].write_bytes(
+                    importlib.util.MAGIC_NUMBER + (b"\0" * 12) + b"\x80"
+                )
+                self.assert_direct_and_nested_blocked(updater_help)
+                cache_files[0].write_bytes(
+                    importlib.util.MAGIC_NUMBER
+                    + (b"\0" * MODULE.MAX_TRUSTED_BYTECODE_BYTES)
+                )
+                self.assert_direct_and_nested_blocked(updater_help)
+                cache_files[0].unlink()
+                cache.rmdir()
+                for command in (
+                    f"python3 {shlex.quote(str(state))} -h",
+                    f"{state_help} extra",
+                    f"sh -c '{state_help}'",
+                    f"command {state_help}",
+                    f"command -p {state_help}",
+                    f"exec {state_help}",
+                    f"time {state_help}",
+                    "python3 /private/tmp/reviewable_pr_state.py --help",
+                ):
+                    with self.subTest(command=command):
+                        self.assert_direct_and_nested_blocked(command)
+
+                state.write_text(
+                    "import subprocess\n"
+                    "def run(command):\n"
+                    "    subprocess.run(command)\n"
+                    "VALUE = 2\n",
+                    encoding="utf-8",
+                )
+                self.assert_direct_and_nested_blocked(state_help)
+                self.assert_direct_and_nested_blocked(updater_help)
+                state.write_text(
+                    "import subprocess\n"
+                    "def run(command):\n"
+                    "    subprocess.run(command)\n"
+                    "VALUE = 1\n",
+                    encoding="utf-8",
+                )
+
+                shadow = root / "argparse.py"
+                shadow.write_text("shadow module\n", encoding="utf-8")
+                self.assert_direct_and_nested_blocked(updater_help)
 
     def test_review_state_helper_requires_pinned_regular_file(self) -> None:
         with tempfile.NamedTemporaryFile() as helper:
