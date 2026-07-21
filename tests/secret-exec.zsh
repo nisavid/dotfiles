@@ -149,6 +149,15 @@ for profile in context7 firecrawl github greptile aws; do
   zsh "$launcher" "$profile" -- check-selected "$profile"
 done
 
+export TARGET_MARKER=$test_dir/target-ran
+rm -f -- "$TARGET_MARKER"
+set +e
+zsh "$launcher" '*' -- mark-target > /dev/null 2>&1
+exit_code=$?
+set -e
+(( exit_code != 0 )) || fail 'profile selection must treat glob characters literally'
+[[ ! -e $TARGET_MARKER ]] || fail 'a glob-like profile must never run the target'
+
 set +e
 zsh "$launcher" context7 -- exit-37
 exit_code=$?
