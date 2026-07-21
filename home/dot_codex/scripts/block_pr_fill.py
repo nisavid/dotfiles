@@ -7,11 +7,13 @@ import ast
 from collections.abc import Iterable
 from functools import lru_cache
 import hashlib
+import importlib.util
 import json
 import os
 import posixpath
 import re
 import shlex
+import stat
 import subprocess
 import sys
 import time
@@ -29,6 +31,7 @@ SHELL_INTERPRETERS = {"bash", "dash", "fish", "ksh", "sh", "zsh"}
 SHELL_PARSE_ONLY_LONG_OPTIONS = {"--noexec", "--no-exec", "--no-execute"}
 HOOK_SUBPROCESS_BUDGET_SECONDS = 10.0
 SUBPROCESS_TIMEOUT_SECONDS = 4.0
+MAX_TRUSTED_BYTECODE_BYTES = 1_048_576
 _HOOK_DEADLINE: float | None = None
 PYTHON_NON_PR_MODULE_RUNNERS = {
     "compileall",
@@ -218,14 +221,14 @@ VALIDATOR = (
 )
 PUBLISHER = (
     Path.home()
-    / ".agents/skills/publishing-reviewable-prs/scripts/create_reviewable_pr.py"
+    / ".agents/skills/publishing-reviewable-prs/scripts/reviewable_pr.py"
 )
 PUBLISHER_ARGUMENTS = {
     str(PUBLISHER),
 }
 EXPANDABLE_PUBLISHER_ARGUMENTS = {
-    "$HOME/.agents/skills/publishing-reviewable-prs/scripts/create_reviewable_pr.py",
-    "${HOME}/.agents/skills/publishing-reviewable-prs/scripts/create_reviewable_pr.py",
+    "$HOME/.agents/skills/publishing-reviewable-prs/scripts/reviewable_pr.py",
+    "${HOME}/.agents/skills/publishing-reviewable-prs/scripts/reviewable_pr.py",
 }
 UPDATER = (
     Path.home()
@@ -238,11 +241,66 @@ EXPANDABLE_UPDATER_ARGUMENTS = {
     "$HOME/.agents/skills/publishing-reviewable-prs/scripts/update_reviewable_pr.py",
     "${HOME}/.agents/skills/publishing-reviewable-prs/scripts/update_reviewable_pr.py",
 }
+REVIEWABLE_PR_STATE = (
+    Path.home()
+    / ".agents/skills/publishing-reviewable-prs/scripts/reviewable_pr_state.py"
+)
+TRUSTED_HELP_ONLY_SCRIPTS = {
+    PUBLISHER: "bf6f16692097d72fdb9008450577852069da95fe948e14875662802a2c95236d",
+    UPDATER: "8af340214cfc19e1e6b4ce885a90af4f795307b846363a8b8ececde47632da43",
+    REVIEWABLE_PR_STATE: (
+        "f06c51077e814ff689a995aff75cb08bbe609507b588349e7838f4c8eb901a4c"
+    ),
+}
+BYTECODE_VALIDATOR_SOURCE = """\
+import importlib.util
+import marshal
+import os
+import sys
+import types
+
+try:
+    limit = int(sys.argv[1])
+    for index in range(2, len(sys.argv), 5):
+        source_path, cache_path, optimization, device, inode = sys.argv[index : index + 5]
+        with open(source_path, "rb") as source_file:
+            expected = compile(
+                source_file.read(),
+                source_path,
+                "exec",
+                dont_inherit=True,
+                optimize=int(optimization),
+            )
+        with open(cache_path, "rb") as cache_file:
+            status = os.fstat(cache_file.fileno())
+            if status.st_dev != int(device) or status.st_ino != int(inode):
+                raise ValueError("cache identity changed")
+            bytecode = cache_file.read(limit + 1)
+        if (
+            not 16 <= len(bytecode) <= limit
+            or bytecode[:4] != importlib.util.MAGIC_NUMBER
+        ):
+            raise ValueError("invalid bytecode cache")
+        cached = marshal.loads(bytecode[16:])
+        if not isinstance(cached, types.CodeType) or cached != expected:
+            raise ValueError("bytecode mismatch")
+except BaseException:
+    sys.exit(1)
+"""
 REVIEW_STATE = (
     Path.home()
     / ".agents/skills/pr-review-orchestration/scripts/pr_review_state.py"
 )
 REVIEW_STATE_SHA256 = "3c5f280740fd6e6dfb8d49bb63f99430464bcddd0a608ee4c35689cf00eaf177"
+TRUSTED_TASK_TEST_COMMAND = (
+    "zsh tooling/hindsight/tests/hindsight-memory-controller.zsh"
+)
+TRUSTED_TASK_TEST_REPOSITORY = "nisavid/agents"
+TRUSTED_TASK_TEST_PATH = Path(
+    "tooling/hindsight/tests/hindsight-memory-controller.zsh"
+)
+TRUSTED_TASK_TEST_TREE_PATH = Path("tooling/hindsight")
+TRUSTED_TASK_TEST_TREE = "d51a23a4c49ce9fecd6de53e94cda3063bbc171b"
 
 
 def _has_exact_expandable_helper_spelling(command: str) -> bool:
@@ -2020,7 +2078,7 @@ def _review_state_invocation_is_invalid(segment: list[str]) -> bool | None:
             values[name] = value
             position += 1
             continue
-        if argument in {"--summary", "--json"}:
+        if argument in {"--summary", "--json", "--write-ledger"}:
             if argument in flags:
                 return True
             flags.add(argument)
@@ -2032,7 +2090,11 @@ def _review_state_invocation_is_invalid(segment: list[str]) -> bool | None:
     pr_number = values.get("--pr", "")
     return not (
         values.keys() == {"--repo", "--pr"}
-        and flags == {"--summary", "--json"}
+        and flags
+        in (
+            {"--summary", "--json"},
+            {"--summary", "--json", "--write-ledger"},
+        )
         and repository is not None
         and re.fullmatch(r"[A-Za-z0-9-]+/[A-Za-z0-9_.-]+", repository) is not None
         and pr_number.isascii()
@@ -2050,6 +2112,239 @@ def _review_state_helper_is_trusted() -> bool:
     except OSError:
         return False
     return digest == REVIEW_STATE_SHA256
+
+
+def _trusted_help_only_invocation(segment: list[str]) -> bool:
+    if (
+        len(segment) != 3
+        or segment[0] not in {"python", "python3"}
+        or segment[2] != "--help"
+    ):
+        return False
+    script = Path(segment[1])
+    if script not in TRUSTED_HELP_ONLY_SCRIPTS:
+        return False
+    directory = script.parent
+    if any(candidate.parent != directory for candidate in TRUSTED_HELP_ONLY_SCRIPTS):
+        return False
+    try:
+        cache_directory = directory / "__pycache__"
+        entries = set(directory.iterdir())
+        if entries - set(TRUSTED_HELP_ONLY_SCRIPTS) - {cache_directory}:
+            return False
+        for candidate, candidate_digest in TRUSTED_HELP_ONLY_SCRIPTS.items():
+            resolved = candidate.resolve(strict=True)
+            if candidate.is_symlink() or not resolved.is_file():
+                return False
+            digest = hashlib.sha256(resolved.read_bytes()).hexdigest()
+            if digest != candidate_digest:
+                return False
+        if cache_directory in entries and not _trusted_bytecode_cache(
+            cache_directory, TRUSTED_HELP_ONLY_SCRIPTS
+        ):
+            return False
+    except OSError:
+        return False
+    return True
+
+
+def _trusted_bytecode_cache(
+    directory: Path, sources: dict[Path, str]
+) -> bool:
+    if directory.is_symlink() or not directory.is_dir():
+        return False
+    source_by_module = {source.stem: source for source in sources}
+    cache_tag = sys.implementation.cache_tag
+    if cache_tag is None:
+        return False
+    validation_arguments: list[str] = []
+    try:
+        for candidate in directory.iterdir():
+            if candidate.is_symlink() or not candidate.is_file():
+                return False
+            match = re.fullmatch(
+                rf"(?P<module>[A-Za-z_][A-Za-z0-9_]*)\.{re.escape(cache_tag)}"
+                r"(?:\.opt-(?P<opt>[12]))?\.pyc",
+                candidate.name,
+            )
+            if match is None:
+                return False
+            source = source_by_module.get(match.group("module"))
+            if source is None:
+                return False
+            status = candidate.stat()
+            if not 16 <= status.st_size <= MAX_TRUSTED_BYTECODE_BYTES:
+                return False
+            with candidate.open("rb") as handle:
+                magic = handle.read(4)
+            if magic != importlib.util.MAGIC_NUMBER:
+                return False
+            optimization = int(match.group("opt") or "0")
+            validation_arguments.extend(
+                [
+                    str(source),
+                    str(candidate),
+                    str(optimization),
+                    str(status.st_dev),
+                    str(status.st_ino),
+                ]
+            )
+        if not validation_arguments:
+            return True
+        result = _budgeted_run(
+            [
+                sys.executable,
+                "-I",
+                "-S",
+                "-c",
+                BYTECODE_VALIDATOR_SOURCE,
+                str(MAX_TRUSTED_BYTECODE_BYTES),
+                *validation_arguments,
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return False
+    return result.returncode == 0
+
+
+def _github_remote_repository(value: str) -> str | None:
+    match = re.fullmatch(
+        r"(?:https://github\.com/|ssh://git@github\.com/|git@github\.com:)"
+        r"(?P<owner>[A-Za-z0-9-]+)/"
+        r"(?P<repo>[A-Za-z0-9_.-]+?)(?:\.git)?/?",
+        value.strip(),
+    )
+    if match is None:
+        return None
+    return _normalize_repository(f"{match.group('owner')}/{match.group('repo')}")
+
+
+def _git_blob_digest(content: bytes) -> str:
+    header = f"blob {len(content)}\0".encode("ascii")
+    return hashlib.sha1(header + content).hexdigest()
+
+
+def _working_tree_matches_git_tree(root: Path, tree_path: Path) -> bool:
+    try:
+        listing = _budgeted_run(
+            ["git", "-C", str(root), "ls-tree", "-rz", "HEAD", "--", str(tree_path)],
+            capture_output=True,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    if listing.returncode:
+        return False
+
+    expected: dict[Path, tuple[bytes, str]] = {}
+    for record in listing.stdout.split(b"\0"):
+        if not record:
+            continue
+        metadata, separator, raw_path = record.partition(b"\t")
+        fields = metadata.split()
+        if separator != b"\t" or len(fields) != 3 or fields[1] != b"blob":
+            return False
+        relative = Path(os.fsdecode(raw_path))
+        try:
+            relative.relative_to(tree_path)
+        except ValueError:
+            return False
+        expected[relative] = (fields[0], fields[2].decode("ascii"))
+    if not expected:
+        return False
+
+    actual: set[Path] = set()
+    try:
+        for directory, directories, filenames in os.walk(
+            root / tree_path, followlinks=False
+        ):
+            directory_path = Path(directory)
+            for name in list(directories):
+                candidate = directory_path / name
+                if candidate.is_symlink():
+                    directories.remove(name)
+                    filenames.append(name)
+            for name in filenames:
+                candidate = directory_path / name
+                relative = candidate.relative_to(root)
+                entry = expected.get(relative)
+                if entry is None:
+                    return False
+                status = candidate.lstat()
+                if stat.S_ISLNK(status.st_mode):
+                    mode = b"120000"
+                    content = os.fsencode(os.readlink(candidate))
+                elif stat.S_ISREG(status.st_mode):
+                    mode = b"100755" if status.st_mode & 0o111 else b"100644"
+                    content = candidate.read_bytes()
+                else:
+                    return False
+                expected_mode, expected_digest = entry
+                if mode != expected_mode or _git_blob_digest(content) != expected_digest:
+                    return False
+                actual.add(relative)
+    except (OSError, ValueError):
+        return False
+    return actual == expected.keys()
+
+
+def _trusted_task_test_script(segment: list[str], workdir: str | None) -> bool:
+    if segment != ["zsh", str(TRUSTED_TASK_TEST_PATH)] or workdir is None:
+        return False
+    try:
+        root = Path(workdir).resolve(strict=True)
+        candidate = root / TRUSTED_TASK_TEST_PATH
+        script = candidate.resolve(strict=True)
+    except OSError:
+        return False
+    if (
+        not root.is_dir()
+        or script != root / TRUSTED_TASK_TEST_PATH
+        or candidate.is_symlink()
+        or not script.is_file()
+    ):
+        return False
+    try:
+        top_level = _budgeted_run(
+            ["git", "-C", str(root), "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        remote = _budgeted_run(
+            ["git", "-C", str(root), "config", "--get", "remote.origin.url"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        tree = _budgeted_run(
+            [
+                "git",
+                "-C",
+                str(root),
+                "rev-parse",
+                f"HEAD:{TRUSTED_TASK_TEST_TREE_PATH}",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return bool(
+        top_level.returncode == 0
+        and Path(top_level.stdout.strip()).resolve() == root
+        and remote.returncode == 0
+        and _github_remote_repository(remote.stdout)
+        == TRUSTED_TASK_TEST_REPOSITORY
+        and tree.returncode == 0
+        and tree.stdout.strip() == TRUSTED_TASK_TEST_TREE
+        and _working_tree_matches_git_tree(root, TRUSTED_TASK_TEST_TREE_PATH)
+    )
 
 
 def _read_literal_file(value: str) -> str | None:
@@ -4111,6 +4406,14 @@ def _command_assessment(
         segment, dynamic_route = _resolve_dynamic_executable(segment, bindings)
         if dynamic_route is not None:
             return True, dynamic_route
+        if (
+            allow_owned_helpers
+            and depth == 0
+            and direct_python
+            and not bindings
+            and _trusted_help_only_invocation(segment)
+        ):
+            continue
         review_state_invalid = _review_state_invocation_is_invalid(segment)
         if review_state_invalid is not None:
             authenticated_followup = (
@@ -4223,6 +4526,13 @@ def _command_assessment(
         if awk_sources is not None:
             if any(_awk_source_executes_commands(source) for source in awk_sources):
                 return True, "awk command"
+            continue
+        if (
+            depth == 0
+            and segment_number == 0
+            and command_without_data.strip() == TRUSTED_TASK_TEST_COMMAND
+            and _trusted_task_test_script(segment, current_workdir)
+        ):
             continue
         script_kind, script_source, script_route = _literal_interpreter_source(
             segment, current_workdir, bindings
