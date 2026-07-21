@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import os
 import shlex
@@ -427,6 +428,9 @@ class BlockPrFillTests(unittest.TestCase):
                 f"zsh -n {path}",
                 f"bash --noexec {path}",
                 f"fish --no-execute {path}",
+                "zsh -n",
+                "bash --noexec",
+                "fish --no-execute",
             ):
                 with self.subTest(command=command):
                     self.assert_direct_and_nested_allowed(command)
@@ -443,6 +447,17 @@ class BlockPrFillTests(unittest.TestCase):
             ):
                 with self.subTest(command=command):
                     self.assertTrue(MODULE.blocks(payload("Bash", {"command": command})))
+
+    def test_blocks_source_less_interpreters_that_can_execute_stdin(self) -> None:
+        commands = (
+            "printf '%s\\n' 'gh pr ready 7' | sh",
+            "printf '%s\\n' 'gh pr ready 7' | bash",
+            "printf '%s\\n' 'import os; os.system(\"gh pr ready 7\")' | python3",
+            "printf '%s\\n' 'require(\"child_process\").execSync(\"gh pr ready 7\")' | node",
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                self.assert_direct_and_nested_blocked(command)
 
     def test_inspects_only_statically_provable_sourced_scripts(self) -> None:
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as script:
@@ -583,6 +598,23 @@ class BlockPrFillTests(unittest.TestCase):
                 self.assertTrue(
                     MODULE.blocks(payload("functions.exec", {"code": code}))
                 )
+        self.assertFalse(
+            MODULE.blocks(
+                payload(
+                    "functions.exec",
+                    {"code": "await tools[`clock__curr_time`]({})"},
+                )
+            )
+        )
+        for code in (
+            "await tools['github__update_pull_request']({pull_number: 2})",
+            "await tools?.['github__update_pull_request']({pull_number: 2})",
+            "await tools['github__update_issue']({issue_number: 2})",
+        ):
+            with self.subTest(code=code):
+                self.assertFalse(
+                    MODULE.blocks(payload("functions.exec", {"code": code}))
+                )
 
         benign = "await tools.exec_command({cmd: 'git status --short'})"
         self.assertFalse(MODULE.blocks(payload("functions.exec", {"code": benign})))
@@ -636,12 +668,34 @@ class BlockPrFillTests(unittest.TestCase):
             "await tools['github__mark_pull_request_ready_for_review']({pull_number: 2})",
             "const ready = tools['github__mark_pull_request_ready_for_review']; "
             "await ready({pull_number: 2})",
+            "const optional_call = tools?.github__update_pull_request; "
+            "await optional_call?.({pull_number: 2, body: 'bad'})",
+            "const optional_ready = tools?.['github__mark_pull_request_ready_for_review']; "
+            "await optional_ready?.({pull_number: 2})",
+            'const op = "update_" + "pull_request"; '
+            "await tools[op]({pull_number: 2, body: 'bad'})",
+            "await tools[`github__update_pull_request`]({pull_number: 2, body: 'bad'})",
+            "await tools[`github__mark_pull_request_ready_for_review`]({pull_number: 2})",
+            "await tools.github__update_pull_request?.({pull_number: 2, body: 'bad'})",
+            "await tools?.['github__update_pull_request']({pull_number: 2, body: 'bad'})",
+            "await tools['github__update_pull_request']?.({pull_number: 2, body: 'bad'})",
+            "await tools?.[`github__update_pull_request`]({pull_number: 2, body: 'bad'})",
         )
         for code in code_samples:
             with self.subTest(code=code):
                 self.assertTrue(
                     MODULE.blocks(payload("functions.exec", {"code": code}))
                 )
+        self.assertFalse(
+            MODULE.blocks(
+                payload(
+                    "functions.exec",
+                    {
+                        "code": "await tools[`github__update_pull_request`]({pull_number: 2})"
+                    },
+                )
+            )
+        )
 
     def test_fails_closed_for_indirect_nested_shell_tool_routes(self) -> None:
         code_samples = (
@@ -656,6 +710,13 @@ class BlockPrFillTests(unittest.TestCase):
             "const {exec_command: run} = tools; await run({cmd: 'gh pr ready 7'})",
             "const {exec_command: run, write_stdin: write} = tools; "
             "await run({cmd: 'gh pr ready 7'})",
+            "await tools[`exec_command`]({cmd: 'gh pr ready 7'})",
+            "await tools[`write_stdin`]({session_id: 1, chars: 'gh pr ready 7\\n'})",
+            "await tools?.[`exec_command`]({cmd: 'gh pr ready 7'})",
+            "await tools?.['write_stdin']({session_id: 1, chars: 'gh pr ready 7\\n'})",
+            "await tools[`exec_command`]?.({cmd: 'gh pr ready 7'})",
+            "const optional = tools.exec_command; "
+            "await optional?.({cmd: 'gh pr ready 7'})",
         )
         for code in code_samples:
             with self.subTest(code=code):
@@ -1039,6 +1100,12 @@ class BlockPrFillTests(unittest.TestCase):
             "HOST=api.github.com; "
             'curl -XPATCH "https://${HOST}/repos/acme/app/pulls/7" '
             '-d\'{"title":"changed"}\'',
+            r'''curl -X PATCH https://api.github.com/repos/acme/app/pulls/7 --json '{"bo\u0064y":"changed"}' ''',
+            r'''curl -X PATCH https://api.github.com/repos/acme/app/pulls/7 -H 'Content-Type: application/json' --data-binary '{"ti\u0074le":"changed"}' ''',
+            r'''curl -X PATCH https://api.github.com/repos/acme/app/pulls/7 --json '{"dra\u0066t":false}' ''',
+            r'''curl -X PATCH https://api.github.com/repos/acme/app/pulls/7 --json '{"bo\u0064y":' ''',
+            r'''curl https://api.github.com/graphql --json '{"query":"mu\u0074ation { updatePullRequest(input: {}) { clientMutationId } }"}' ''',
+            r'''curl https://api.github.com/graphql --json '{"query":' ''',
         )
         for command in commands:
             with self.subTest(command=command):
@@ -1051,6 +1118,12 @@ class BlockPrFillTests(unittest.TestCase):
                     {"command": "curl https://api.github.com/repos/acme/app/pulls/7"},
                 )
             )
+        )
+        self.assert_direct_and_nested_allowed(
+            """curl -X PATCH https://api.github.com/repos/acme/app/pulls/7 --json '{"labels":["safe"]}'"""
+        )
+        self.assert_direct_and_nested_allowed(
+            """curl https://api.github.com/graphql --json '{"query":"query { viewer { login } }"}'"""
         )
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as config:
             config.write(
@@ -1296,6 +1369,46 @@ class BlockPrFillTests(unittest.TestCase):
             self.assertEqual(MODULE._issue_target_kind("acme/app", 7), "pull_request")
         self.assertEqual(run.call_count, 1)
         MODULE._issue_target_kind.cache_clear()
+
+    def test_subprocess_calls_share_a_bounded_hook_deadline(self) -> None:
+        response = mock.Mock(returncode=0, stdout="")
+        with (
+            mock.patch.object(MODULE, "_HOOK_DEADLINE", 110.0),
+            mock.patch.object(
+                MODULE.time, "monotonic", side_effect=(109.5, 110.1)
+            ),
+            mock.patch.object(
+                MODULE.subprocess, "run", return_value=response
+            ) as run,
+        ):
+            MODULE._budgeted_run(["gh", "--version"], check=False)
+            self.assertAlmostEqual(run.call_args.kwargs["timeout"], 0.5)
+            with self.assertRaises(subprocess.TimeoutExpired):
+                MODULE._budgeted_run(["gh", "--version"], check=False)
+        self.assertEqual(run.call_count, 1)
+
+    def test_main_reuses_one_deadline_for_decision_and_message(self) -> None:
+        observed_deadlines: list[float | None] = []
+
+        def decide(_payload: dict[str, object]) -> bool:
+            observed_deadlines.append(MODULE._HOOK_DEADLINE)
+            return True
+
+        def message(_payload: dict[str, object]) -> str:
+            observed_deadlines.append(MODULE._HOOK_DEADLINE)
+            return "blocked"
+
+        request = payload("Bash", {"command": "gh pr ready 7"})
+        with (
+            mock.patch.object(MODULE, "_HOOK_DEADLINE", None),
+            mock.patch.object(MODULE.time, "monotonic", return_value=100.0),
+            mock.patch.object(MODULE.sys, "stdin", io.StringIO(json.dumps(request))),
+            mock.patch.object(MODULE.sys, "stderr", io.StringIO()),
+            mock.patch.object(MODULE, "blocks", side_effect=decide),
+            mock.patch.object(MODULE, "_block_message", side_effect=message),
+        ):
+            self.assertEqual(MODULE.main(), 2)
+        self.assertEqual(observed_deadlines, [110.0, 110.0])
 
     def test_classifies_rest_issue_edits_authoritatively(self) -> None:
         command = "gh api repos/acme/app/issues/7 -X PATCH -f title=changed"

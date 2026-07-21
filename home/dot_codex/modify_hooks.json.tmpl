@@ -44,22 +44,54 @@ def unwrap_env(arguments):
     return tail
 
 
+def is_expandable_guard_path(argument, command):
+    if argument == guard_path:
+        return True
+    spellings = (
+        "$HOME/.codex/scripts/block_pr_fill.py",
+        "${HOME}/.codex/scripts/block_pr_fill.py",
+        "~/.codex/scripts/block_pr_fill.py",
+    )
+    if argument not in spellings:
+        return False
+    suffixes = (argument,) if argument.startswith("~") else (
+        argument,
+        f'"{argument}"',
+    )
+    return any(
+        command == suffix
+        or (
+            command.endswith(suffix)
+            and len(command) > len(suffix)
+            and command[-len(suffix) - 1].isspace()
+        )
+        for suffix in suffixes
+    )
+
+
 def is_guard_hook(hook):
     if not isinstance(hook, dict):
         return False
     if hook.get("type") not in {None, "command"}:
         return False
+    command = str(hook.get("command", ""))
     try:
-        arguments = shlex.split(str(hook.get("command", "")))
+        arguments = shlex.split(command)
     except ValueError:
         return False
     arguments = unwrap_env(arguments)
-    if arguments == [guard_path]:
+    if len(arguments) == 1 and is_expandable_guard_path(
+        arguments[0], command
+    ):
         return True
     interpreter = arguments[0].rsplit("/", 1)[-1] if arguments else ""
-    return interpreter in {"python", "python3"} and arguments[1:] in (
-        [guard_path],
-        ["-u", guard_path],
+    if interpreter not in {"python", "python3"}:
+        return False
+    path_arguments = arguments[1:]
+    if path_arguments[:1] == ["-u"]:
+        path_arguments = path_arguments[1:]
+    return len(path_arguments) == 1 and is_expandable_guard_path(
+        path_arguments[0], command
     )
 
 

@@ -153,6 +153,70 @@ class ModifyHooksTests(unittest.TestCase):
             ["first-command", f'python3 "{GUARD_PATH}"', "second-command"],
         )
 
+    def test_deduplicates_expandable_home_guard_path_spellings(self) -> None:
+        home_guard_path = "$HOME/.codex/scripts/block_pr_fill.py"
+        braced_home_guard_path = "${HOME}/.codex/scripts/block_pr_fill.py"
+        tilde_guard_path = "~/.codex/scripts/block_pr_fill.py"
+        equivalent = (
+            home_guard_path,
+            f'"{home_guard_path}"',
+            braced_home_guard_path,
+            f'"{braced_home_guard_path}"',
+            tilde_guard_path,
+            f'python3 "{home_guard_path}"',
+            f"python3 {braced_home_guard_path}",
+            f"python3 {tilde_guard_path}",
+            f'python3 -u "{home_guard_path}"',
+            f'/usr/bin/env python3 "{braced_home_guard_path}"',
+            f"/usr/bin/env -- python3 {tilde_guard_path}",
+        )
+        literal = (
+            f"python3 '{home_guard_path}'",
+            f"python3 '{braced_home_guard_path}'",
+            f'python3 "{tilde_guard_path}"',
+            f"python3 \\{home_guard_path}",
+        )
+        context_changing_env = f'env FOO=bar python3 "{home_guard_path}"'
+        document = {
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "matcher": "Bash",
+                        "hooks": [
+                            *(
+                                {"type": "command", "command": command}
+                                for command in equivalent
+                            ),
+                            *(
+                                {"type": "command", "command": command}
+                                for command in literal
+                            ),
+                            {
+                                "type": "command",
+                                "command": context_changing_env,
+                            },
+                        ],
+                    }
+                ]
+            }
+        }
+
+        modified = apply_modifier(document)
+
+        self.assertEqual(len(guard_hooks(modified)), 1)
+        commands = [
+            hook["command"]
+            for matcher in modified["hooks"]["PreToolUse"]
+            if isinstance(matcher, dict)
+            for hook in matcher.get("hooks", [])
+            if isinstance(hook, dict)
+        ]
+        for command in equivalent:
+            self.assertNotIn(command, commands)
+        for command in literal:
+            self.assertIn(command, commands)
+        self.assertIn(context_changing_env, commands)
+
     def test_rejects_invalid_hook_shapes_without_output(self) -> None:
         cases = (
             ([], "root"),
