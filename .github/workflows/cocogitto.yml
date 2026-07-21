@@ -5,9 +5,9 @@ jobs:
     runs-on: ubuntu-latest
     name: check conventional commit compliance
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@a37ce9120846195fa4ece8f58b268e6043cb2f26 # v3
         with:
           fetch-depth: 0
 
       - name: Conventional commit check
-        uses: cocogitto/cocogitto-action@v3
+        uses: cocogitto/cocogitto-action@c7a74f5406bab86da17da0f0e460a69f8219a68c # v3
