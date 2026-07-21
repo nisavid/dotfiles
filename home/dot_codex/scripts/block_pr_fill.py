@@ -200,6 +200,8 @@ PUBLISHER = (
 )
 PUBLISHER_ARGUMENTS = {
     str(PUBLISHER),
+}
+EXPANDABLE_PUBLISHER_ARGUMENTS = {
     "$HOME/.agents/skills/publishing-reviewable-prs/scripts/create_reviewable_pr.py",
     "${HOME}/.agents/skills/publishing-reviewable-prs/scripts/create_reviewable_pr.py",
 }
@@ -209,9 +211,26 @@ UPDATER = (
 )
 UPDATER_ARGUMENTS = {
     str(UPDATER),
+}
+EXPANDABLE_UPDATER_ARGUMENTS = {
     "$HOME/.agents/skills/publishing-reviewable-prs/scripts/update_reviewable_pr.py",
     "${HOME}/.agents/skills/publishing-reviewable-prs/scripts/update_reviewable_pr.py",
 }
+
+
+def _has_exact_expandable_helper_spelling(command: str) -> bool:
+    paths = (
+        *EXPANDABLE_PUBLISHER_ARGUMENTS,
+        *EXPANDABLE_UPDATER_ARGUMENTS,
+    )
+    return any(
+        re.match(
+            rf'^\s*(?:python|python3)\s+"{re.escape(path)}"(?:\s|$)',
+            command,
+        )
+        is not None
+        for path in paths
+    )
 
 
 def _strings(value: Any) -> Iterable[str]:
@@ -548,7 +567,78 @@ def _javascript_call_end(masked: str, open_parenthesis: int) -> int:
     return len(masked)
 
 
-def _javascript_connector_input(call_source: str) -> dict[str, Any]:
+def _javascript_connector_input(call_source: str) -> tuple[dict[str, Any], bool]:
+    masked = _mask_javascript_strings_and_comments(call_source)
+    open_parenthesis = masked.find("(")
+    if open_parenthesis < 0:
+        return {}, True
+    argument_source = call_source[open_parenthesis + 1 : -1]
+    argument_masked = masked[open_parenthesis + 1 : -1]
+    leading = len(argument_masked) - len(argument_masked.lstrip())
+    if leading >= len(argument_masked) or argument_masked[leading] != "{":
+        return {}, True
+    depth = 0
+    object_end: int | None = None
+    for index in range(leading, len(argument_masked)):
+        if argument_masked[index] == "{":
+            depth += 1
+        elif argument_masked[index] == "}":
+            depth -= 1
+            if depth == 0:
+                object_end = index
+                break
+    if object_end is None or argument_masked[object_end + 1 :].strip() not in {"", ","}:
+        return {}, True
+
+    object_source = argument_source[leading + 1 : object_end]
+    object_masked = argument_masked[leading + 1 : object_end]
+    entry_start = 0
+    delimiters: list[str] = []
+    pairs = {"(": ")", "[": "]", "{": "}"}
+    entry_ranges: list[tuple[int, int]] = []
+    for index, character in enumerate(object_masked):
+        if character in pairs:
+            delimiters.append(pairs[character])
+        elif character in ")]}" and delimiters:
+            if character != delimiters.pop():
+                return {}, True
+        elif character == "," and not delimiters:
+            entry_ranges.append((entry_start, index))
+            entry_start = index + 1
+    if delimiters:
+        return {}, True
+    entry_ranges.append((entry_start, len(object_source)))
+
+    properties: list[tuple[str, str]] = []
+    protected_shorthand = {"title", "body", "draft", "isDraft", "is_draft"}
+    property_re = re.compile(
+        rf"\s*(?P<key>[A-Za-z_$][A-Za-z0-9_$]*|{JAVASCRIPT_LITERAL})"
+        r"(?P<colon>\s*:\s*)?"
+    )
+    for start, end in entry_ranges:
+        entry_source = object_source[start:end]
+        entry_masked = object_masked[start:end]
+        if not entry_masked.strip():
+            continue
+        property_match = property_re.match(entry_masked)
+        if property_match is None:
+            return {}, True
+        raw_key = entry_source[
+            property_match.start("key") : property_match.end("key")
+        ]
+        key = (
+            _decode_javascript_literal(raw_key)
+            if raw_key.startswith(("'", '"', "`"))
+            else raw_key
+        )
+        if key is None:
+            return {}, True
+        if property_match.group("colon") is None:
+            if entry_masked[property_match.end() :].strip() or key in protected_shorthand:
+                return {}, True
+            continue
+        properties.append((key, entry_source[property_match.end() :].lstrip()))
+
     tool_input: dict[str, Any] = {}
     keys = (
         "repository_full_name",
@@ -567,44 +657,53 @@ def _javascript_connector_input(call_source: str) -> dict[str, Any]:
         "isDraft",
         "is_draft",
     )
-    for key in keys:
-        property_re = re.compile(
-            rf"(?:\b{re.escape(key)}\b|['\"]{re.escape(key)}['\"])\s*:\s*"
-        )
-        match = property_re.search(call_source)
-        if match is None:
+    for key, value_source in properties:
+        if key not in keys:
             continue
-        value_start = match.end()
-        if value_start < len(call_source) and call_source[value_start] in "'\"`":
+        if value_source.startswith(("'", '"', "`")):
             literal_match = re.match(
-                JAVASCRIPT_LITERAL, call_source[value_start:], re.S
+                JAVASCRIPT_LITERAL, value_source, re.S
             )
             if literal_match is not None:
                 tool_input[key] = _decode_javascript_literal(literal_match.group(0))
                 continue
-        integer_match = re.match(r"\d+", call_source[value_start:])
-        boolean_match = re.match(r"(?:true|false)\b", call_source[value_start:])
+        integer_match = re.match(r"\d+", value_source)
+        boolean_match = re.match(r"(?:true|false)\b", value_source)
         if integer_match is not None:
             tool_input[key] = int(integer_match.group(0))
         elif boolean_match is not None:
             tool_input[key] = boolean_match.group(0) == "true"
         else:
             tool_input[key] = None
-    return tool_input
+    return tool_input, False
 
 
 def _nested_connector_is_noncanonical(code: str) -> bool:
     masked = _mask_javascript_strings_and_comments(code)
     connector_re = re.compile(
-        r"\b(?:tools\.)?(?P<name>[A-Za-z0-9_$]*(?:create|update)_"
+        r"(?<![A-Za-z0-9_$.])tools\s*(?:\?\.\s*|\.\s*)"
+        r"(?P<name>[A-Za-z0-9_$]*(?:create|update)_"
         r"(?:pull_request|issue))\s*(?:\?\.\s*)?\("
     )
+
+    def alias_is_invoked(alias: str, tail: str) -> bool:
+        escaped = re.escape(alias)
+        return bool(
+            re.search(
+                rf"\b{escaped}\s*(?:(?:\?\.\s*)?\(|(?:\?\.|\.)\s*"
+                rf"(?:call|apply)\s*\(|(?:\?\.|\.)\s*bind\s*\([^)]*\)\s*\()",
+                tail,
+            )
+            or re.search(rf"\bReflect\.apply\s*\(\s*{escaped}\b", tail)
+        )
     for match in connector_re.finditer(masked):
         end = _javascript_call_end(masked, match.end() - 1)
         call_source = code[match.start() : end]
         call_masked = masked[match.start() : end]
-        tool_input = _javascript_connector_input(call_source)
+        tool_input, unresolved_input = _javascript_connector_input(call_source)
         name = match.group("name").lower()
+        if unresolved_input:
+            return True
         if (
             name.endswith(("update_pull_request", "update_issue"))
             and "..." in call_masked
@@ -612,8 +711,55 @@ def _nested_connector_is_noncanonical(code: str) -> bool:
             return True
         if _connector_call_is_noncanonical(name, tool_input):
             return True
+    receiver_alias_re = re.compile(
+        r"\b(?:const|let|var)\s+(?P<alias>[A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*"
+        r"(?<![A-Za-z0-9_$.])tools\b"
+    )
+    for receiver_alias in receiver_alias_re.finditer(masked):
+        alias = re.escape(receiver_alias.group("alias"))
+        tail = masked[receiver_alias.end() :]
+        receiver_member_re = re.compile(
+            rf"\b{alias}\s*(?:\?\.\s*|\.\s*)[A-Za-z0-9_$]*"
+            r"(?:(?:create|update)_(?:pull_request|issue)|"
+            r"pull_request[A-Za-z0-9_$]*ready)[A-Za-z0-9_$]*",
+            re.I,
+        )
+        for receiver_member in receiver_member_re.finditer(tail):
+            expression = tail[receiver_member.start() : receiver_member.end()].strip()
+            if alias_is_invoked(expression, tail[receiver_member.start() :]):
+                return True
+        if re.search(
+            rf"\b{alias}\s*(?:\?\.\s*)?\[[^\]]+\]\s*(?:\?\.\s*)?\(",
+            tail,
+        ):
+            return True
+        destructured_from_alias = re.compile(
+            rf"\b(?:const|let|var)\s*\{{(?P<members>[^{{}}]*)\}}\s*=\s*{alias}\b"
+        )
+        for destructured in destructured_from_alias.finditer(tail):
+            invocation_tail = tail[destructured.end() :]
+            for computed in re.finditer(
+                r"(?:^|,)\s*\[[^\]]+\]\s*:\s*"
+                r"(?P<alias>[A-Za-z_$][A-Za-z0-9_$]*)",
+                destructured.group("members"),
+            ):
+                if alias_is_invoked(computed.group("alias"), invocation_tail):
+                    return True
+            for member in re.finditer(
+                r"(?:^|,)\s*(?P<tool>[A-Za-z0-9_$]*"
+                r"(?:(?:create|update)_(?:pull_request|issue)|"
+                r"pull_request[A-Za-z0-9_$]*ready)[A-Za-z0-9_$]*)"
+                r"\s*(?::\s*(?P<alias>[A-Za-z_$][A-Za-z0-9_$]*))?",
+                destructured.group("members"),
+                re.I,
+            ):
+                if alias_is_invoked(
+                    member.group("alias") or member.group("tool"), invocation_tail
+                ):
+                    return True
     if re.search(
-        r"\b(?:tools\.)?[A-Za-z0-9_$]*(?:(?:mark|set|make)[A-Za-z0-9_$]*"
+        r"(?<![A-Za-z0-9_$.])tools\s*(?:\?\.\s*|\.\s*)"
+        r"[A-Za-z0-9_$]*(?:(?:mark|set|make)[A-Za-z0-9_$]*"
         r"pull_request[A-Za-z0-9_$]*ready|pull_request[A-Za-z0-9_$]*"
         r"(?:mark|set|make)[A-Za-z0-9_$]*ready)\s*(?:\?\.\s*)?\(",
         masked,
@@ -628,11 +774,49 @@ def _nested_connector_is_noncanonical(code: str) -> bool:
         r"(?:create|update)_(?:pull_request|issue))['\"]\s*\])"
     )
     for alias_match in alias_re.finditer(comment_free):
-        if re.search(
-            rf"\b{re.escape(alias_match.group('alias'))}\s*(?:\?\.\s*)?\(",
-            masked,
-        ):
+        declaration = alias_match.group(0).lstrip()
+        declaration_start = alias_match.start() + len(alias_match.group(0)) - len(declaration)
+        if re.match(r"(?:const|let|var)\b", masked[declaration_start:]) is None:
+            continue
+        if alias_is_invoked(alias_match.group("alias"), masked[alias_match.end() :]):
             return True
+    destructured_alias_re = re.compile(
+        r"\b(?:const|let|var)\s*\{(?P<members>[^{}]*)\}\s*=\s*tools\b"
+    )
+    destructured_member_re = re.compile(
+        r"(?:^|,)\s*(?P<tool>[A-Za-z_$][A-Za-z0-9_$]*|"
+        r"'(?:\\.|[^'\\])*'|\"(?:\\.|[^\"\\])*\")"
+        r"\s*(?::\s*(?P<alias>[A-Za-z_$][A-Za-z0-9_$]*))?"
+    )
+    for destructured in destructured_alias_re.finditer(masked):
+        members_start, members_end = destructured.span("members")
+        members = comment_free[members_start:members_end]
+        members_masked = masked[members_start:members_end]
+        for computed in re.finditer(
+            r"(?:^|,)\s*\[[^\]]+\]\s*:\s*(?P<alias>[A-Za-z_$][A-Za-z0-9_$]*)",
+            members_masked,
+        ):
+            if alias_is_invoked(
+                computed.group("alias"), masked[destructured.end() :]
+            ):
+                return True
+        for member in destructured_member_re.finditer(members_masked):
+            raw_tool = member.group("tool")
+            if raw_tool.startswith(("'", '"')):
+                raw_tool = members[member.start("tool") : member.end("tool")]
+            tool = (
+                _decode_javascript_literal(raw_tool)
+                if raw_tool.startswith(("'", '"'))
+                else raw_tool
+            )
+            if tool is None or not (
+                re.search(r"(?:create|update)_(?:pull_request|issue)$", tool, re.I)
+                or _tool_is_ready_mutation(tool)
+            ):
+                continue
+            alias = member.group("alias") or tool
+            if alias_is_invoked(alias, masked[destructured.end() :]):
+                return True
     ready_alias_re = re.compile(
         r"\b(?:const|let|var)\s+(?P<alias>[A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*"
         r"(?:tools(?:\?\.|\.)(?P<dot>[A-Za-z0-9_$]*pull_request[A-Za-z0-9_$]*ready[A-Za-z0-9_$]*)"
@@ -641,10 +825,13 @@ def _nested_connector_is_noncanonical(code: str) -> bool:
         re.I,
     )
     for alias_match in ready_alias_re.finditer(comment_free):
+        declaration = alias_match.group(0).lstrip()
+        declaration_start = alias_match.start() + len(alias_match.group(0)) - len(declaration)
+        if re.match(r"(?:const|let|var)\b", masked[declaration_start:]) is None:
+            continue
         tool = alias_match.group("dot") or alias_match.group("bracket")
-        if _tool_is_ready_mutation(tool) and re.search(
-            rf"\b{re.escape(alias_match.group('alias'))}\s*(?:\?\.\s*)?\(",
-            masked,
+        if _tool_is_ready_mutation(tool) and alias_is_invoked(
+            alias_match.group("alias"), masked[alias_match.end() :]
         ):
             return True
     ready_bracket_call_re = re.compile(
@@ -680,8 +867,9 @@ def _nested_connector_is_noncanonical(code: str) -> bool:
                 "..." in call_masked
             ):
                 return True
-            if _connector_call_is_noncanonical(
-                tool_name.lower(), _javascript_connector_input(call_source)
+            tool_input, unresolved_input = _javascript_connector_input(call_source)
+            if unresolved_input or _connector_call_is_noncanonical(
+                tool_name.lower(), tool_input
             ):
                 return True
     return False
@@ -2503,7 +2691,11 @@ def _normalize_builtin_indirection(
 
 
 def _normalize_interpreter_entrypoint(
-    segment: list[str], bindings: dict[str, str | None]
+    segment: list[str],
+    bindings: dict[str, str | None],
+    *,
+    allow_expandable_helpers: bool = False,
+    trusted_helper_interpreter: bool = False,
 ) -> tuple[list[str], str | None]:
     index = _skip_prefixes(segment)
     if index >= len(segment) or os.path.basename(segment[index]) not in {
@@ -2516,7 +2708,15 @@ def _normalize_interpreter_entrypoint(
         return segment, None
     script = segment[script_index]
     if script in PUBLISHER_ARGUMENTS | UPDATER_ARGUMENTS:
+        if not trusted_helper_interpreter:
+            return segment, f"{os.path.basename(segment[index])} script"
         return segment, None
+    expandable = EXPANDABLE_PUBLISHER_ARGUMENTS | EXPANDABLE_UPDATER_ARGUMENTS
+    if script in expandable:
+        if not allow_expandable_helpers:
+            return segment, f"{os.path.basename(segment[index])} script"
+        resolved = PUBLISHER if script in EXPANDABLE_PUBLISHER_ARGUMENTS else UPDATER
+        return [*segment[:script_index], str(resolved), *segment[script_index + 1 :]], None
     variable = _shell_variable_name(script)
     if variable is not None:
         resolved = bindings.get(variable)
@@ -2565,6 +2765,232 @@ def _static_source_script(
         return path.read_text(encoding="utf-8")
     except OSError:
         return None
+
+
+def _mask_awk_strings_comments_and_regexes(source: str) -> str:
+    masked = list(source)
+    index = 0
+    expect_operand = True
+    brace_depth = 0
+    while index < len(source):
+        if source[index] == "\n":
+            if brace_depth == 0:
+                expect_operand = True
+            index += 1
+            continue
+        if source[index] == "#":
+            end = source.find("\n", index)
+            end = len(source) if end < 0 else end
+            masked[index:end] = " " * (end - index)
+            index = end
+            continue
+        if source[index] == '"':
+            start = index
+            index += 1
+            while index < len(source):
+                if source[index] == "\\":
+                    index += 2
+                    continue
+                if source[index] == '"':
+                    index += 1
+                    break
+                index += 1
+            for position in range(start, min(index, len(source))):
+                if source[position] != "\n":
+                    masked[position] = " "
+            expect_operand = False
+            continue
+        if source[index] == "/" and expect_operand:
+            start = index
+            index += 1
+            while index < len(source):
+                if source[index] == "\\":
+                    index += 2
+                    continue
+                if source[index] == "/":
+                    index += 1
+                    break
+                index += 1
+            for position in range(start, min(index, len(source))):
+                if source[position] != "\n":
+                    masked[position] = " "
+            expect_operand = False
+            continue
+        if source[index].isalpha() or source[index] == "_":
+            word = re.match(r"[A-Za-z_][A-Za-z0-9_]*", source[index:])
+            assert word is not None
+            index += word.end()
+            expect_operand = word.group(0) in {"print", "printf", "return"}
+            continue
+        if source[index] == "$":
+            index += 1
+            if index < len(source) and source[index] == "(":
+                depth = 1
+                index += 1
+                while index < len(source) and depth:
+                    if source[index] == "(":
+                        depth += 1
+                    elif source[index] == ")":
+                        depth -= 1
+                    index += 1
+            else:
+                while index < len(source) and source[index].isalnum():
+                    index += 1
+            expect_operand = False
+            continue
+        if source.startswith(("&&", "||"), index):
+            expect_operand = True
+            index += 2
+            continue
+        if source[index] in "([{,;=~!?:+-*%^<>":
+            expect_operand = True
+            if source[index] == "{":
+                brace_depth += 1
+        elif source[index] in ")]}" or source[index].isdigit():
+            expect_operand = False
+            if source[index] == "}" and brace_depth:
+                brace_depth -= 1
+        elif source[index] == "/":
+            expect_operand = True
+        elif source[index] == "|":
+            expect_operand = True
+        index += 1
+    return "".join(masked)
+
+
+def _awk_source_executes_commands(source: str) -> bool:
+    source = source.replace("\\\n", "")
+    masked = _mask_awk_strings_comments_and_regexes(source)
+    if re.search(r"(?m)^\s*@(include|load)\b", masked):
+        return True
+    if re.search(r"\bsystem\s*\(", masked):
+        return True
+    return bool(re.search(r"(?<!\|)\|(?!\|)&?", masked))
+
+
+def _awk_program_sources(
+    segment: list[str], workdir: str | None, bindings: dict[str, str | None]
+) -> tuple[list[str] | None, str | None]:
+    index = _skip_prefixes(segment)
+    if index >= len(segment) or os.path.basename(segment[index]) not in {
+        "awk",
+        "gawk",
+        "mawk",
+        "nawk",
+    }:
+        return None, None
+    arguments = segment[index + 1 :]
+    sources: list[str] = []
+    has_program_option = False
+    safe_flag_options = {
+        "--bignum",
+        "--characters-as-bytes",
+        "--csv",
+        "--lint",
+        "--non-decimal-data",
+        "--posix",
+        "--sandbox",
+        "--traditional",
+    }
+    value_options = {"-F", "-v", "--assign", "--field-separator"}
+
+    def static_source(value: str) -> str | None:
+        variable = _shell_variable_name(value)
+        if variable is not None:
+            return bindings.get(variable)
+        return value
+
+    def has_shell_expansion(value: str) -> bool:
+        if re.search(r"\$\{[A-Za-z_][A-Za-z0-9_]*\}", value):
+            return True
+        return any(
+            name in bindings or name in os.environ
+            for name in re.findall(r"\$([A-Za-z_][A-Za-z0-9_]*)", value)
+        )
+
+    index = 0
+    while index < len(arguments):
+        token = arguments[index]
+        if token == "--":
+            index += 1
+            break
+        if token in {"-l", "--load"} or token.startswith(("-l", "--load=")):
+            return None, "awk extension"
+        if token in {"-f", "--file"}:
+            if index + 1 >= len(arguments):
+                return None, "awk program"
+            program_path = arguments[index + 1]
+            index += 2
+            if program_path == "-" or SHELL_META_RE.search(program_path):
+                return None, "awk program"
+            path = _literal_command_path(program_path, workdir)
+            if path is None or not path.is_file():
+                return None, "awk program"
+            try:
+                sources.append(path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeError):
+                return None, "awk program"
+            has_program_option = True
+            continue
+        if token.startswith("--file=") or (token.startswith("-f") and token != "-f"):
+            program_path = token.split("=", 1)[1] if "=" in token else token[2:]
+            arguments[index:index + 1] = ["-f", program_path]
+            continue
+        if token in {"-e", "--source"}:
+            if index + 1 >= len(arguments):
+                return None, "awk program"
+            source = static_source(arguments[index + 1])
+            if source is None or has_shell_expansion(source):
+                return None, "awk program"
+            sources.append(source)
+            has_program_option = True
+            index += 2
+            continue
+        if token.startswith("--source="):
+            source = static_source(token.split("=", 1)[1])
+            if source is None or has_shell_expansion(source):
+                return None, "awk program"
+            sources.append(source)
+            has_program_option = True
+            index += 1
+            continue
+        if token in value_options:
+            if index + 1 >= len(arguments):
+                return None, "awk option"
+            index += 2
+            continue
+        if token.startswith(("-F", "-v")) and token not in {"-F", "-v"}:
+            index += 1
+            continue
+        if token.startswith(("--assign=", "--field-separator=")):
+            index += 1
+            continue
+        if token in safe_flag_options:
+            index += 1
+            continue
+        if token == "-W":
+            if index + 1 >= len(arguments) or arguments[index + 1] not in {
+                "posix",
+                "traditional",
+                "lint",
+            }:
+                return None, "awk option"
+            index += 2
+            continue
+        if token in {"-Wposix", "-Wtraditional", "-Wlint"}:
+            index += 1
+            continue
+        if token.startswith("-"):
+            return None, "awk option"
+        break
+    if not has_program_option:
+        if index >= len(arguments):
+            return None, "awk program"
+        source = static_source(arguments[index])
+        if source is None or has_shell_expansion(source):
+            return None, "awk program"
+        sources.append(source)
+    return sources, None
 
 
 def _literal_interpreter_source(
@@ -3073,10 +3499,12 @@ def _command_assessment(
     depth: int = 0,
     inherited_bindings: dict[str, str | None] | None = None,
     workdir: str | None = None,
+    allow_owned_helpers: bool = True,
 ) -> tuple[bool, str | None]:
     if depth > 8:
         return True, "nested shell recursion"
     bindings = dict(inherited_bindings or {})
+    has_exact_expandable_helper = _has_exact_expandable_helper_spelling(command)
     current_workdir = workdir
     directory_stack: list[str] = []
     command_without_data, shell_bodies = _without_heredoc_payloads(command)
@@ -3086,15 +3514,24 @@ def _command_assessment(
     if unresolved_substitution:
         return True, "command substitution"
     for substitution in substitutions:
-        blocked, route = _command_assessment(substitution, depth + 1, bindings, workdir)
+        blocked, route = _command_assessment(
+            substitution, depth + 1, bindings, workdir, allow_owned_helpers
+        )
         if blocked:
             return blocked, route
     for body in shell_bodies:
-        blocked, route = _command_assessment(body, depth + 1, bindings, workdir)
+        blocked, route = _command_assessment(
+            body, depth + 1, bindings, workdir, allow_owned_helpers
+        )
         if blocked:
             return blocked, route
-    for segment in _segments(command_without_data):
+    for segment_number, segment in enumerate(_segments(command_without_data)):
         assignments, assignment_end = _leading_shell_assignments(segment)
+        direct_python = (
+            assignment_end == 0
+            and bool(segment)
+            and segment[0] in {"python", "python3"}
+        )
         bindings.update(assignments)
         if assignment_end == len(segment):
             continue
@@ -3109,6 +3546,23 @@ def _command_assessment(
             if executable_index < len(segment)
             else ""
         )
+        if executable_name == "export":
+            for argument in segment[executable_index + 1 :]:
+                if argument in {"-p", "--"}:
+                    continue
+                if argument.startswith("-"):
+                    return True, "export"
+                assignment = SHELL_ASSIGNMENT_RE.fullmatch(argument)
+                if assignment is not None:
+                    value = assignment.group("value")
+                    bindings[assignment.group("name")] = (
+                        None if SHELL_META_RE.search(value) else value
+                    )
+                elif re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", argument):
+                    bindings[argument] = os.environ.get(argument)
+                else:
+                    return True, "export"
+            continue
         if executable_name in {"cd", "pushd", "popd"}:
             arguments = segment[executable_index + 1 :]
             if executable_name == "popd":
@@ -3135,7 +3589,7 @@ def _command_assessment(
             if not env_script:
                 return True, "env -S"
             blocked, route = _command_assessment(
-                env_script, depth + 1, bindings, current_workdir
+                env_script, depth + 1, bindings, current_workdir, allow_owned_helpers
             )
             if blocked:
                 return blocked, route
@@ -3145,7 +3599,7 @@ def _command_assessment(
             if not watch_script:
                 return True, "watch command"
             blocked, route = _command_assessment(
-                watch_script, depth + 1, bindings, current_workdir
+                watch_script, depth + 1, bindings, current_workdir, allow_owned_helpers
             )
             if blocked:
                 return blocked, route
@@ -3164,7 +3618,21 @@ def _command_assessment(
         if dynamic_route is not None:
             return True, dynamic_route
         segment, interpreter_route = _normalize_interpreter_entrypoint(
-            segment, bindings
+            segment,
+            bindings,
+            allow_expandable_helpers=(
+                allow_owned_helpers
+                and depth == 0
+                and segment_number == 0
+                and direct_python
+                and has_exact_expandable_helper
+            ),
+            trusted_helper_interpreter=(
+                allow_owned_helpers
+                and depth == 0
+                and segment_number == 0
+                and direct_python
+            ),
         )
         if interpreter_route is not None:
             return True, interpreter_route
@@ -3190,7 +3658,7 @@ def _command_assessment(
             if script is None:
                 return True, "eval"
             blocked, route = _command_assessment(
-                script, depth + 1, bindings, current_workdir
+                script, depth + 1, bindings, current_workdir, allow_owned_helpers
             )
             if blocked:
                 return blocked, route
@@ -3200,7 +3668,7 @@ def _command_assessment(
             if script is None:
                 return True, executable
             blocked, route = _command_assessment(
-                script, depth + 1, bindings, current_workdir
+                script, depth + 1, bindings, current_workdir, allow_owned_helpers
             )
             if blocked:
                 return blocked, route
@@ -3217,10 +3685,23 @@ def _command_assessment(
             if not resolved_shell:
                 return True, f"{executable_name or 'shell'} -c"
             blocked, route = _command_assessment(
-                resolved_shell, depth + 1, bindings, current_workdir
+                resolved_shell,
+                depth + 1,
+                bindings,
+                current_workdir,
+                allow_owned_helpers,
             )
             if blocked:
                 return blocked, route
+            continue
+        awk_sources, awk_route = _awk_program_sources(
+            segment, current_workdir, bindings
+        )
+        if awk_route is not None:
+            return True, awk_route
+        if awk_sources is not None:
+            if any(_awk_source_executes_commands(source) for source in awk_sources):
+                return True, "awk command"
             continue
         script_kind, script_source, script_route = _literal_interpreter_source(
             segment, current_workdir, bindings
@@ -3236,7 +3717,11 @@ def _command_assessment(
                     return True, "python command"
                 for python_command in python_commands:
                     blocked, route = _command_assessment(
-                        python_command, depth + 1, bindings, current_workdir
+                        python_command,
+                        depth + 1,
+                        bindings,
+                        current_workdir,
+                        allow_owned_helpers,
                     )
                     if blocked:
                         return blocked, route
@@ -3248,13 +3733,21 @@ def _command_assessment(
                     return True, "node command"
                 for javascript_command in javascript_commands:
                     blocked, route = _command_assessment(
-                        javascript_command, depth + 1, bindings, current_workdir
+                        javascript_command,
+                        depth + 1,
+                        bindings,
+                        current_workdir,
+                        allow_owned_helpers,
                     )
                     if blocked:
                         return blocked, route
             else:
                 blocked, route = _command_assessment(
-                    script_source, depth + 1, bindings, current_workdir
+                    script_source,
+                    depth + 1,
+                    bindings,
+                    current_workdir,
+                    allow_owned_helpers,
                 )
                 if blocked:
                     return blocked, route
@@ -3293,9 +3786,14 @@ def _command_assessment(
 
 
 def _command_is_noncanonical(
-    command: str, depth: int = 0, workdir: str | None = None
+    command: str,
+    depth: int = 0,
+    workdir: str | None = None,
+    allow_owned_helpers: bool = True,
 ) -> bool:
-    return _command_assessment(command, depth, workdir=workdir)[0]
+    return _command_assessment(
+        command, depth, workdir=workdir, allow_owned_helpers=allow_owned_helpers
+    )[0]
 
 
 def _command_has_multi_target_issue_text_edit(command: str, depth: int = 0) -> bool:
@@ -3419,6 +3917,17 @@ def _tool_is_ready_mutation(tool_name: str) -> bool:
     )
 
 
+def _payload_uses_write_stdin(payload: dict[str, Any]) -> bool:
+    tool_name = str(payload.get("tool_name", "")).lower()
+    if tool_name.endswith("write_stdin"):
+        return True
+    tool_input = payload.get("tool_input", {})
+    code = tool_input.get("code") if isinstance(tool_input, dict) else None
+    return isinstance(code, str) and NESTED_WRITE_STDIN_CALL_RE.search(
+        _mask_javascript_strings_and_comments(code)
+    ) is not None
+
+
 def blocks(payload: dict[str, Any]) -> bool:
     tool_name = str(payload.get("tool_name", "")).lower()
     tool_input = payload.get("tool_input", {})
@@ -3431,14 +3940,20 @@ def blocks(payload: dict[str, Any]) -> bool:
             return True
         return _connector_call_is_noncanonical(tool_name, tool_input)
     commands, unresolved = _candidate_commands(payload)
+    allow_owned_helpers = not _payload_uses_write_stdin(payload)
     return unresolved or any(
-        _command_is_noncanonical(command, workdir=workdir)
+        _command_is_noncanonical(
+            command,
+            workdir=workdir,
+            allow_owned_helpers=allow_owned_helpers,
+        )
         for command, workdir in commands
     )
 
 
 def _block_message(payload: dict[str, Any]) -> str:
     commands, unresolved = _candidate_commands(payload)
+    allow_owned_helpers = not _payload_uses_write_stdin(payload)
     if any(
         _command_has_multi_target_issue_text_edit(command)
         for command, _workdir in commands
@@ -3448,7 +3963,11 @@ def _block_message(payload: dict[str, Any]) -> str:
             "the guard can classify it authoritatively as an issue or pull request."
         )
     for command, workdir in commands:
-        _blocked, route = _command_assessment(command, workdir=workdir)
+        _blocked, route = _command_assessment(
+            command,
+            workdir=workdir,
+            allow_owned_helpers=allow_owned_helpers,
+        )
         if route is not None:
             return (
                 f"Blocked unproven command route `{route}`: safety could not be proven. "

@@ -459,6 +459,59 @@ class BlockPrFillTests(unittest.TestCase):
             with self.subTest(command=command):
                 self.assert_direct_and_nested_blocked(command)
 
+    def test_blocks_awk_external_command_routes_without_blocking_filters(self) -> None:
+        blocked_commands = (
+            "awk 'BEGIN { system(\"gh pr edit 1 --body attacker-content\") }'",
+            "/usr/bin/awk 'BEGIN { system(\"gh pr ready 1\") }'",
+            "env awk 'BEGIN { system(\"gh pr ready 1\") }'",
+            "command awk 'BEGIN { system(\"gh pr ready 1\") }'",
+            "gawk 'BEGIN { command = \"gh pr ready 1\"; system(command) }'",
+            "mawk 'BEGIN { print \"\" | \"gh pr ready 1\" }'",
+            "nawk 'BEGIN { \"gh pr ready 1\" | getline result }'",
+            "gawk '@include \"/private/tmp/hidden.awk\"; BEGIN {print 1}'",
+            "gawk '@load \"extension\"; BEGIN {print 1}'",
+            "awk 'BEGIN { system \\\n(\"gh pr ready 1\") }'",
+            "A=sys; awk \"BEGIN {${A}tem(\\\"gh pr ready 1\\\")}\"",
+            "A=sys; B=tem; awk \"BEGIN {$A$B(\\\"gh pr ready 1\\\")}\"",
+            "export A=sys B=tem; "
+            "awk \"BEGIN {$A$B(\\\"gh pr ready 1\\\")}\"",
+            "awk -f -",
+            "awk -l extension '{print $1}'",
+        )
+        for command in blocked_commands:
+            with self.subTest(command=command):
+                self.assert_direct_and_nested_blocked(command)
+
+        allowed_commands = (
+            "awk '{print $1}' input.txt",
+            "awk -F: '{print $1}' input.txt",
+            "awk '/foo|bar/ {print $1}' input.txt",
+            "awk 'BEGIN {print \"system(\\\"gh pr ready 1\\\")\"}'",
+            "awk 'BEGIN {print \"|\"}'",
+            "awk '# system(\"gh pr ready 1\")\n{print $1}' input.txt",
+            "awk '$1 == \"foo\" {print $2}' input.txt",
+            "awk '{print $(NF-1)}' input.txt",
+            "awk 'BEGIN {print \"$(not-shell)\"}'",
+            "awk 'BEGIN {print /foo|bar/}'",
+            "awk '$0 && /foo|bar/ {print}' input.txt",
+            "awk '$0 || /foo|bar/ {print}' input.txt",
+            "awk --posix '{print $1}' input.txt",
+            "awk --field-separator=: '{print $1}' input.txt",
+            "awk --assign=OFS=, '{print $1}' input.txt",
+            "awk 'BEGIN {x=1}\n/foo|bar/ {print}' input.txt",
+            "export -p",
+        )
+        for command in allowed_commands:
+            with self.subTest(command=command):
+                self.assert_direct_and_nested_allowed(command)
+
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as script:
+            script.write('BEGIN { system("gh pr ready 1") }\n')
+            script.flush()
+            self.assert_direct_and_nested_blocked(
+                "awk -f " + shlex.quote(script.name)
+            )
+
     def test_inspects_only_statically_provable_sourced_scripts(self) -> None:
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as script:
             script.write("git status --short\n")
@@ -680,6 +733,42 @@ class BlockPrFillTests(unittest.TestCase):
             "await tools?.['github__update_pull_request']({pull_number: 2, body: 'bad'})",
             "await tools['github__update_pull_request']?.({pull_number: 2, body: 'bad'})",
             "await tools?.[`github__update_pull_request`]({pull_number: 2, body: 'bad'})",
+            "const args = {pull_number: 2, body: 'bad'}; "
+            "await tools.github__update_pull_request(args)",
+            "const args = {issue_number: 2, title: 'bad'}; "
+            "await tools.github__update_issue(args)",
+            "const {github__update_pull_request: mutate} = tools; "
+            "await mutate({pull_number: 2, body: 'bad'})",
+            "const {github__update_issue: mutate} = tools; "
+            "await mutate({issue_number: 2, body: 'bad'})",
+            "const {github__create_pull_request: create} = tools; "
+            "await create({title: 'bad'})",
+            "const {github__mark_pull_request_ready_for_review: ready} = tools; "
+            "await ready({pull_number: 2})",
+            "const {'github__update_pull_request': mutate} = tools; "
+            "await mutate({pull_number: 2, body: 'bad'})",
+            "const body = 'bad'; "
+            "await tools.github__update_pull_request({pull_number: 2, body})",
+            "await tools.github__update_pull_request({pull_number: 2, ['body']: 'bad'})",
+            r'''await tools.github__update_pull_request({pull_number: 2, "bo\u0064y": "bad"})''',
+            r'''await tools.github__update_pull_request({pull_number: 2, "dra\u0066t": false})''',
+            "const {[name]: mutate} = tools; await mutate({body: 'bad'})",
+            "const {github__update_pull_request: mutate} = tools; "
+            "await mutate.call(tools, {pull_number: 2, body: 'bad'})",
+            "const {github__update_pull_request: mutate} = tools; "
+            "await mutate.apply(tools, [{pull_number: 2, body: 'bad'}])",
+            "const {github__update_pull_request: mutate} = tools; "
+            "await Reflect.apply(mutate, tools, [{pull_number: 2, body: 'bad'}])",
+            "const {github__update_pull_request: mutate} = tools; "
+            "await mutate.bind(tools)({pull_number: 2, body: 'bad'})",
+            "const {github__update_pull_request: mutate} = tools; "
+            "await mutate?.call(tools, {pull_number: 2, body: 'bad'})",
+            "const t = tools; await t.github__update_pull_request({body: 'bad'})",
+            "const t = tools; await t?.github__update_pull_request({body: 'bad'})",
+            "const t = tools; const {github__update_pull_request: mutate} = t; "
+            "await mutate({body: 'bad'})",
+            "const t = tools; "
+            "await t.github__update_pull_request.call(t, {body: 'bad'})",
         )
         for code in code_samples:
             with self.subTest(code=code):
@@ -696,6 +785,23 @@ class BlockPrFillTests(unittest.TestCase):
                 )
             )
         )
+        for code in (
+            "const {clock__curr_time: now} = tools; await now({})",
+            "const {github__update_pull_request: mutate} = tools; return mutate",
+            "const args = {}; update_issue(args)",
+            'const example = "const {github__update_pull_request: mutate} = tools"; '
+            "mutate()",
+            "await tools.github__update_pull_request({/* safe */ pull_number: 2})",
+            "const pull_number = 2, state = 'closed'; "
+            "await tools.github__update_pull_request({pull_number, state})",
+            "fake.tools.github__update_pull_request(args)",
+            "const t = tools; const {github__update_pull_request: mutate} = t; "
+            "return mutate",
+        ):
+            with self.subTest(code=code):
+                self.assertFalse(
+                    MODULE.blocks(payload("functions.exec", {"code": code}))
+                )
 
     def test_fails_closed_for_indirect_nested_shell_tool_routes(self) -> None:
         code_samples = (
@@ -798,19 +904,73 @@ class BlockPrFillTests(unittest.TestCase):
             template.write("template")
             template.flush()
             command = (
-                'python3 "$HOME/.agents/skills/publishing-reviewable-prs/'
-                'scripts/create_reviewable_pr.py" --repository acme/app --base main '
+                "python3 "
+                + shlex.quote(str(MODULE.PUBLISHER))
+                + " --repository acme/app --base main "
                 f"--base-oid {'a' * 40} --head acme:widget --head-oid {'b' * 40} "
                 "--head-owner acme --title 'feat: widget' --body-template "
                 + shlex.quote(template.name)
             )
             self.assertFalse(MODULE.blocks(payload("Bash", {"command": command})))
+            self.assertTrue(
+                MODULE.blocks(payload("functions.write_stdin", {"chars": command}))
+            )
+            self.assertTrue(
+                MODULE.blocks(
+                    payload(
+                        "functions.exec",
+                        {
+                            "code": "await tools.write_stdin({session_id: 1, chars: "
+                            + json.dumps(command)
+                            + "})"
+                        },
+                    )
+                )
+            )
 
             wrong_script = command.replace(
-                "$HOME/.agents/skills/publishing-reviewable-prs/scripts/",
-                "/private/tmp/",
+                str(MODULE.PUBLISHER), "/private/tmp/create_reviewable_pr.py"
             )
             self.assertTrue(MODULE.blocks(payload("Bash", {"command": wrong_script})))
+            for untrusted_interpreter in (
+                command.replace("python3 ", "/private/tmp/python3 ", 1),
+                command.replace("python3 ", "env PATH=/private/tmp python3 ", 1),
+            ):
+                self.assertTrue(
+                    MODULE.blocks(payload("Bash", {"command": untrusted_interpreter}))
+                )
+            for variable_script in (
+                '"$HOME/.agents/skills/publishing-reviewable-prs/scripts/create_reviewable_pr.py"',
+                '"${HOME}/.agents/skills/publishing-reviewable-prs/scripts/create_reviewable_pr.py"',
+            ):
+                variable_command = command.replace(
+                    shlex.quote(str(MODULE.PUBLISHER)), variable_script
+                )
+                self.assertFalse(
+                    MODULE.blocks(payload("Bash", {"command": variable_command}))
+                )
+                self.assertTrue(
+                    MODULE.blocks(
+                        payload(
+                            "Bash",
+                            {"command": "HOME=/private/tmp; " + variable_command},
+                        )
+                    )
+                )
+            for literal_script in (
+                "'$HOME/.agents/skills/publishing-reviewable-prs/scripts/create_reviewable_pr.py'",
+                "'${HOME}/.agents/skills/publishing-reviewable-prs/scripts/create_reviewable_pr.py'",
+                "'$HOME'/.agents/skills/publishing-reviewable-prs/scripts/create_reviewable_pr.py",
+                "'${HOME}'/.agents/skills/publishing-reviewable-prs/scripts/create_reviewable_pr.py",
+                r"\$HOME/.agents/skills/publishing-reviewable-prs/scripts/create_reviewable_pr.py",
+                r'"\$HOME/.agents/skills/publishing-reviewable-prs/scripts/create_reviewable_pr.py"',
+            ):
+                literal_command = command.replace(
+                    shlex.quote(str(MODULE.PUBLISHER)), literal_script
+                )
+                self.assertTrue(
+                    MODULE.blocks(payload("Bash", {"command": literal_command}))
+                )
             relative_template = command.replace(template.name, "template.md")
             self.assertTrue(
                 MODULE.blocks(payload("Bash", {"command": relative_template}))
@@ -839,10 +999,7 @@ class BlockPrFillTests(unittest.TestCase):
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as body_file:
             body_file.write(CANONICAL_BODY)
             body_file.flush()
-            script = (
-                'python3 "$HOME/.agents/skills/publishing-reviewable-prs/'
-                'scripts/update_reviewable_pr.py"'
-            )
+            script = "python3 " + shlex.quote(str(MODULE.UPDATER))
             common = (
                 f" --repository acme/app --pr 2 --base main --base-oid {'a' * 40}"
                 f" --head acme:widget --head-oid {'b' * 40} --head-owner acme"
@@ -859,12 +1016,49 @@ class BlockPrFillTests(unittest.TestCase):
             ready_command = script + " ready" + common
             self.assertFalse(MODULE.blocks(payload("Bash", {"command": text_command})))
             self.assertFalse(MODULE.blocks(payload("Bash", {"command": ready_command})))
+            for command in (text_command, ready_command):
+                self.assertTrue(
+                    MODULE.blocks(payload("functions.write_stdin", {"chars": command}))
+                )
             aliased_python = "PYTHON=python3; $PYTHON" + text_command.removeprefix(
                 "python3"
             )
-            self.assertFalse(
+            self.assertTrue(
                 MODULE.blocks(payload("Bash", {"command": aliased_python}))
             )
+
+            for variable_script in (
+                '"$HOME/.agents/skills/publishing-reviewable-prs/'
+                'scripts/update_reviewable_pr.py"',
+                '"${HOME}/.agents/skills/publishing-reviewable-prs/'
+                'scripts/update_reviewable_pr.py"',
+            ):
+                variable_command = text_command.replace(
+                    shlex.quote(str(MODULE.UPDATER)), variable_script
+                )
+                self.assertFalse(
+                    MODULE.blocks(payload("Bash", {"command": variable_command}))
+                )
+                self.assertTrue(
+                    MODULE.blocks(
+                        payload(
+                            "Bash",
+                            {"command": "export HOME=/private/tmp; " + variable_command},
+                        )
+                    )
+                )
+            for literal_script in (
+                "'$HOME/.agents/skills/publishing-reviewable-prs/scripts/update_reviewable_pr.py'",
+                "'${HOME}/.agents/skills/publishing-reviewable-prs/scripts/update_reviewable_pr.py'",
+                r"\$HOME/.agents/skills/publishing-reviewable-prs/scripts/update_reviewable_pr.py",
+                r'"\${HOME}/.agents/skills/publishing-reviewable-prs/scripts/update_reviewable_pr.py"',
+            ):
+                literal_command = text_command.replace(
+                    shlex.quote(str(MODULE.UPDATER)), literal_script
+                )
+                self.assertTrue(
+                    MODULE.blocks(payload("Bash", {"command": literal_command}))
+                )
 
             blocked_commands = (
                 text_command.replace(
