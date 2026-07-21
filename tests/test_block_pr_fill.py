@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import io
 import json
 import os
@@ -1282,27 +1283,28 @@ class BlockPrFillTests(unittest.TestCase):
             "--repo acme/app --pr 62 --summary --json "
             "| jq -r '.github_state.unresolved_threads[] | [.id,.url] | @tsv'"
         )
-        code = f"await tools.exec_command({{cmd: {json.dumps(command)}}})"
+        with mock.patch.object(
+            MODULE, "_review_state_helper_is_trusted", return_value=True
+        ):
+            self.assert_direct_and_nested_allowed(command)
 
-        self.assertFalse(MODULE.blocks(payload("functions.exec", {"code": code})))
-
-        reply = (
-            "gh api --method POST repos/acme/app/pulls/62/comments "
-            "-f body=Fixed -F in_reply_to=3619280822"
-        )
-        helper = (
-            f"{shlex.quote(str(review_state))} --repo acme/app --pr 62 "
-            "--summary --json"
-        )
-        unsafe_followups = (
-            f"{reply}; GH_TOKEN=x sudo python3 {helper}",
-            f"{reply}; GH_TOKEN=x env PATH=/private/tmp python3 {helper}",
-            f"export PATH=/private/tmp; {reply}; GH_TOKEN=x python3 {helper}",
-            f"export PYTHONPATH=/private/tmp; {reply}; GH_TOKEN=x python3 {helper}",
-        )
-        for unsafe in unsafe_followups:
-            with self.subTest(unsafe=unsafe):
-                self.assert_direct_and_nested_blocked(unsafe)
+            reply = (
+                "gh api --method POST repos/acme/app/pulls/62/comments "
+                "-f body=Fixed -F in_reply_to=3619280822"
+            )
+            helper = (
+                f"{shlex.quote(str(review_state))} --repo acme/app --pr 62 "
+                "--summary --json"
+            )
+            unsafe_followups = (
+                f"{reply}; GH_TOKEN=x sudo python3 {helper}",
+                f"{reply}; GH_TOKEN=x env PATH=/private/tmp python3 {helper}",
+                f"export PATH=/private/tmp; {reply}; GH_TOKEN=x python3 {helper}",
+                f"export PYTHONPATH=/private/tmp; {reply}; GH_TOKEN=x python3 {helper}",
+            )
+            for unsafe in unsafe_followups:
+                with self.subTest(unsafe=unsafe):
+                    self.assert_direct_and_nested_blocked(unsafe)
 
     def test_review_reply_route_requires_static_bounded_arguments(self) -> None:
         allowed = (
@@ -1382,16 +1384,16 @@ class BlockPrFillTests(unittest.TestCase):
             "echo ok; gh api --method POST "
             "repos/acme/app/pulls/62/comments -f body=Fixed "
             "-F in_reply_to=3619280822",
-            "gh api --method DELETE "
+            "gh api --method POST "
             "https://api.github.com/repos/acme/app/pulls/62/comments "
             "-f body=Fixed -F in_reply_to=3619280822",
-            "gh api --method DELETE "
+            "gh api --method POST "
             "repos/acme/app/pulls/62/comments#fragment "
             "-f body=Fixed -F in_reply_to=3619280822",
-            "gh api --method DELETE "
+            "gh api --method POST "
             "repos/acme/app/pulls/62/comm%65nts "
             "-f body=Fixed -F in_reply_to=3619280822",
-            "gh api --method DELETE "
+            "gh api --method POST "
             "repos/acme/app/pulls/62/ignored/../comments "
             "-f body=Fixed -F in_reply_to=3619280822",
             "gh api --method POST repos/acme/app/pulls/62/comments "
@@ -1454,7 +1456,7 @@ class BlockPrFillTests(unittest.TestCase):
             self.assert_direct_and_nested_allowed(escaped)
 
         blocked = (
-            f"gh api graphql -f query='{query}' -f id=not-a-thread",
+            f"gh -R acme/app api graphql -f query='{query}' -f id=not-a-thread",
             f"gh api graphql -f query='{query}' "
             "-f id=PRRT_kwDOExample123",
             f"gh -R other/app api graphql -f query='{query}' "
@@ -1469,17 +1471,17 @@ class BlockPrFillTests(unittest.TestCase):
             "-f id=PRRT_kwDOExample123",
             f"gh -R acme/app api ignored/../graphql -f query='{query}' "
             "-f id=PRRT_kwDOExample123",
-            f"gh api graphql -f query='{query}'",
-            f"gh api graphql -f query='{query}' "
+            f"gh -R acme/app api graphql -f query='{query}'",
+            f"gh -R acme/app api graphql -f query='{query}' "
             '-f id="$THREAD"',
-            f"gh api graphql -f query='{query}' "
+            f"gh -R acme/app api graphql -f query='{query}' "
             "-f id=PRRT_kwDOExample123 -f other=unexpected",
-            "gh api graphql -f "
+            "gh -R acme/app api graphql -f "
             "query='mutation($id:ID!){resolveReviewThread(input:{threadId:$id})"
             "{thread{id isResolved}} markPullRequestReadyForReview("
             "input:{pullRequestId:$id}){pullRequest{id}}}' "
             "-f id=PRRT_kwDOExample123",
-            f"QUERY='{query}'; gh api graphql -f \"query=$QUERY\" "
+            'gh -R acme/app api graphql -f "query=$QUERY" '
             "-f id=PRRT_kwDOExample123",
         )
         with mock.patch.object(
@@ -1504,37 +1506,59 @@ class BlockPrFillTests(unittest.TestCase):
             / ".agents/skills/pr-review-orchestration/scripts/pr_review_state.py"
         )
         invocation = f"python3 {shlex.quote(str(script))}"
-        self.assert_direct_and_nested_allowed(
-            f"{invocation} --repo acme/app --pr 62 --summary --json"
-        )
-        self.assert_direct_and_nested_allowed(
-            f"{invocation} --json --pr=62 --summary --repo=acme/app"
-        )
+        with mock.patch.object(
+            MODULE, "_review_state_helper_is_trusted", return_value=True
+        ):
+            self.assert_direct_and_nested_allowed(
+                f"{invocation} --repo acme/app --pr 62 --summary --json"
+            )
+            self.assert_direct_and_nested_allowed(
+                f"{invocation} --json --pr=62 --summary --repo=acme/app"
+            )
 
-        blocked = (
-            f"/private/tmp/python3 {shlex.quote(str(script))} --repo acme/app "
-            "--pr 62 --summary --json",
-            f"PATH=/private/tmp {invocation} --repo acme/app --pr 62 "
-            "--summary --json",
-            f"PYTHONPATH=/private/tmp {invocation} --repo acme/app --pr 62 "
-            "--summary --json",
-            f"sh -c '{invocation} --repo acme/app --pr 62 --summary --json'",
-            f"echo ok; {invocation} --repo acme/app --pr 62 --summary --json",
-            f"{invocation} --repo acme/app --pr 62 --summary",
-            f"{invocation} --repo acme/app --pr 62 --summary --json --write-ledger",
-            f"{invocation} --repo acme/app --pr 62 --summary --json "
-            "--fixture /private/tmp/state.json",
-            f"{invocation} --repo '{{owner}}/app' --pr 62 --summary --json",
-            f"{invocation} --repo acme/app --pr branch --summary --json",
-            f"{invocation} --repo acme/app --pr 62 --pr 63 --summary --json",
-            "python3 /private/tmp/pr_review_state.py "
-            "--repo acme/app --pr 62 --summary --json",
-            f"python3 -c 'print(1)' {shlex.quote(str(script))} "
-            "--repo acme/app --pr 62 --summary --json",
-        )
-        for command in blocked:
-            with self.subTest(command=command):
-                self.assert_direct_and_nested_blocked(command)
+            blocked = (
+                f"/private/tmp/python3 {shlex.quote(str(script))} --repo acme/app "
+                "--pr 62 --summary --json",
+                f"PATH=/private/tmp {invocation} --repo acme/app --pr 62 "
+                "--summary --json",
+                f"PYTHONPATH=/private/tmp {invocation} --repo acme/app --pr 62 "
+                "--summary --json",
+                f"sh -c '{invocation} --repo acme/app --pr 62 --summary --json'",
+                f"echo ok; {invocation} --repo acme/app --pr 62 --summary --json",
+                f"{invocation} --repo acme/app --pr 62 --summary",
+                f"{invocation} --repo acme/app --pr 62 --summary --json --write-ledger",
+                f"{invocation} --repo acme/app --pr 62 --summary --json "
+                "--fixture /private/tmp/state.json",
+                f"{invocation} --repo '{{owner}}/app' --pr 62 --summary --json",
+                f"{invocation} --repo acme/app --pr branch --summary --json",
+                f"{invocation} --repo acme/app --pr 62 --pr 63 --summary --json",
+                "python3 /private/tmp/pr_review_state.py "
+                "--repo acme/app --pr 62 --summary --json",
+                f"python3 -c 'print(1)' {shlex.quote(str(script))} "
+                "--repo acme/app --pr 62 --summary --json",
+            )
+            for command in blocked:
+                with self.subTest(command=command):
+                    self.assert_direct_and_nested_blocked(command)
+
+    def test_review_state_helper_requires_pinned_regular_file(self) -> None:
+        with tempfile.NamedTemporaryFile() as helper:
+            helper.write(b"trusted helper\n")
+            helper.flush()
+            path = Path(helper.name)
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            with (
+                mock.patch.object(MODULE, "REVIEW_STATE", path),
+                mock.patch.object(MODULE, "REVIEW_STATE_SHA256", digest),
+            ):
+                self.assertTrue(MODULE._review_state_helper_is_trusted())
+                path.write_bytes(b"replaced helper\n")
+                self.assertFalse(MODULE._review_state_helper_is_trusted())
+
+        with mock.patch.object(
+            MODULE, "REVIEW_STATE", Path("/private/tmp/missing-review-state.py")
+        ):
+            self.assertFalse(MODULE._review_state_helper_is_trusted())
 
     def test_blocks_direct_curl_rest_and_graphql_pr_mutations(self) -> None:
         commands = (

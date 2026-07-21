@@ -6,6 +6,7 @@ from __future__ import annotations
 import ast
 from collections.abc import Iterable
 from functools import lru_cache
+import hashlib
 import json
 import os
 import posixpath
@@ -241,6 +242,7 @@ REVIEW_STATE = (
     Path.home()
     / ".agents/skills/pr-review-orchestration/scripts/pr_review_state.py"
 )
+REVIEW_STATE_SHA256 = "3c5f280740fd6e6dfb8d49bb63f99430464bcddd0a608ee4c35689cf00eaf177"
 
 
 def _has_exact_expandable_helper_spelling(command: str) -> bool:
@@ -2037,6 +2039,17 @@ def _review_state_invocation_is_invalid(segment: list[str]) -> bool | None:
         and pr_number.isdigit()
         and int(pr_number) > 0
     )
+
+
+def _review_state_helper_is_trusted() -> bool:
+    try:
+        resolved = REVIEW_STATE.resolve(strict=True)
+        if REVIEW_STATE.is_symlink() or not resolved.is_file():
+            return False
+        digest = hashlib.sha256(resolved.read_bytes()).hexdigest()
+    except OSError:
+        return False
+    return digest == REVIEW_STATE_SHA256
 
 
 def _read_literal_file(value: str) -> str | None:
@@ -4097,6 +4110,7 @@ def _command_assessment(
             )
             trusted_review_state = (
                 allow_owned_helpers
+                and _review_state_helper_is_trusted()
                 and depth == 0
                 and (
                     (
