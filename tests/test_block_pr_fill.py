@@ -1309,6 +1309,9 @@ class BlockPrFillTests(unittest.TestCase):
             "gh api --method POST repos/acme/app/pulls/62/comments "
             "-f body='Literal `code` and $(shell text) remain review prose.' "
             "-F in_reply_to=3619280822",
+            "gh api --method POST repos/acme/app/pulls/62/comments "
+            "-f body='Literal *emphasis*, ? and [tag].' "
+            "-F in_reply_to=3619280822",
             "gh --hostname github.com api --method POST "
             "repos/acme/app/pulls/62/comments -f body=Fixed "
             "-F in_reply_to=3619280822",
@@ -1339,6 +1342,12 @@ class BlockPrFillTests(unittest.TestCase):
             '-f body="$(printf Fixed)" -F in_reply_to=3619280822',
             "gh api --method POST repos/acme/app/pulls/62/comments "
             "-f body=`printf Fixed` -F in_reply_to=3619280822",
+            "gh api --method POST repos/acme/app/pulls/62/comments "
+            "-f body=* -F in_reply_to=3619280822",
+            "gh api --method POST repos/acme/app/pulls/62/comments "
+            "-f body=? -F in_reply_to=3619280822",
+            "gh api --method POST repos/acme/app/pulls/62/comments "
+            "-f body=[ab] -F in_reply_to=3619280822",
             "gh api --method POST repos/acme/app/pulls/62/comments -f body=Fixed",
             "gh api --method POST repos/acme/app/pulls/62/comments "
             "-f body=Fixed -F in_reply_to=branch",
