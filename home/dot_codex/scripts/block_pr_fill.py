@@ -2582,14 +2582,14 @@ def _strict_review_resolution_arguments(
     if len(parsed_fields[variable]) != 1 or len(parsed_fields["repository"]) != 1:
         return False
     thread_id = parsed_fields[variable][0]
-    repository = parsed_fields["repository"][0]
+    bound_repository = parsed_fields["repository"][0]
     return bool(
         re.fullmatch(
             r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9_.-]+",
-            repository,
+            bound_repository,
         )
         and re.fullmatch(r"PRRT_[A-Za-z0-9_-]+", thread_id)
-        and _graphql_review_thread_repository(thread_id) == repository
+        and _graphql_review_thread_repository(thread_id) == bound_repository
     )
 
 
