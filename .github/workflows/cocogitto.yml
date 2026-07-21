@@ -8,6 +8,7 @@ jobs:
       - uses: actions/checkout@a37ce9120846195fa4ece8f58b268e6043cb2f26 # v3
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Conventional commit check
         uses: cocogitto/cocogitto-action@c7a74f5406bab86da17da0f0e460a69f8219a68c # v3
