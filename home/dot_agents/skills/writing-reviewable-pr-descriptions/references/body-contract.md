@@ -52,8 +52,10 @@ Edited moves/copies count only modified lines. Binary files count as operations.
 The live body is not disposable source. Carry forward still-current custom or
 user-authored sections unless removal is explicit or current facts make them
 stale: links, images, recordings, demo cards, captions, access details,
-credentials intentionally placed in the PR, issue references, caveats, review
-instructions, and rollout notes.
+issue references, caveats, review instructions, and rollout notes. Never carry
+forward credentials or other secrets, even when intentionally authored in the
+PR. Redact the published value and require revocation or rotation instead of
+republishing it; preserve only non-secret access details that remain current.
 
 Before publication, compare baseline and proposal for unintended deletion.
 After publication, re-read the stored body and repair any mismatch.
