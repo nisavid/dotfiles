@@ -18,8 +18,11 @@ fixture_home=$test_dir/home
 shim_dir=$fixture_home/.local/lib/secret-exec/bin
 real_bin=$test_dir/real-bin
 backend_bin=$test_dir/backend-bin
+runtime_bin=$test_dir/runtime-bin
+cwd_target=$test_dir/cwd-target
 profile_dir=$fixture_home/.config/secret-exec/profiles
-mkdir -p -- "$shim_dir" "$real_bin" "$backend_bin" "$profile_dir" \
+mkdir -p -- "$shim_dir" "$real_bin" "$backend_bin" "$runtime_bin" \
+  "$cwd_target" "$profile_dir" \
   "$fixture_home/.local/bin"
 
 cp "$launcher_source" "$fixture_home/.local/bin/secret-exec"
@@ -60,11 +63,24 @@ print -r -- 'sz-ok'
 EOF
 chmod +x "$real_bin/sz"
 
+cat > "$cwd_target/sz" <<'EOF'
+#!/usr/bin/env zsh
+set -euo pipefail
+
+[[ ${AWS_ACCESS_KEY_ID:-} == AKIACANARY123 ]] || exit 70
+[[ ${AWS_SECRET_ACCESS_KEY:-} == AwsSecretCanary123+/= ]] || exit 71
+print -r -- 'cwd-ok'
+EOF
+chmod +x "$cwd_target/sz"
+
 cat > "$real_bin/exit-37" <<'EOF'
 #!/usr/bin/env zsh
 exit 37
 EOF
 chmod +x "$real_bin/exit-37"
+
+zsh_path=${commands[zsh]}
+ln -s "$zsh_path" "$runtime_bin/zsh"
 
 export HOME=$fixture_home
 export XDG_CONFIG_HOME=$fixture_home/.config
@@ -79,6 +95,14 @@ export GREPTILE_API_KEY=inherited-greptile
 
 output=$(sz 'argument with spaces')
 [[ $output == sz-ok ]] || fail 'the sz shim must launch the real executable with the AWS profile'
+
+original_directory=$PWD
+cd "$cwd_target"
+PATH=$shim_dir::$real_bin:$backend_bin:/usr/bin:/bin
+output=$(sz)
+PATH=$shim_dir:$real_bin:$backend_bin:/usr/bin:/bin
+cd "$original_directory"
+[[ $output == cwd-ok ]] || fail 'an empty PATH component must resolve the target from the current directory'
 
 trace_output=$(zsh -x "$shim_dir/sz" 'argument with spaces' 2>&1)
 [[ $trace_output != *AKIACANARY123* ]] || fail 'xtrace must not expose the AWS access-key canary'
@@ -121,10 +145,13 @@ set -e
 
 print -r -- 'sz=aws' > "$fixture_home/.config/secret-exec/commands.env"
 rm -- "$real_bin/sz"
+full_fixture_path=$PATH
+PATH=$shim_dir:$real_bin:$runtime_bin
 set +e
 sz > /dev/null 2>&1
 exit_code=$?
 set -e
+PATH=$full_fixture_path
 (( exit_code != 0 )) || fail 'a missing later executable must fail closed without recursion'
 
 print -r -- 'secret command shim checks passed'

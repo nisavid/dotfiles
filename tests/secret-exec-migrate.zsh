@@ -177,6 +177,32 @@ done
 output=$(zsh "$migrator" 2>&1)
 (( $(wc -l < "$state_dir/created.log") == 5 )) || fail 'repeated migration must not create duplicate items'
 
+dispatcher=$fixture_home/.local/lib/secret-exec/secret-exec-command
+mv "$dispatcher" "$test_dir/secret-exec-command"
+mkdir "$dispatcher"
+chmod +x "$dispatcher"
+set +e
+zsh "$migrator" --retire-plaintext > "$test_dir/directory-dispatcher.out" 2>&1
+exit_code=$?
+set -e
+(( exit_code != 0 )) || fail 'retirement must reject a dispatcher directory'
+[[ $(<"$test_dir/directory-dispatcher.out") == \
+  *'secret-exec command dispatcher must be an executable regular file before retirement'* ]] || \
+  fail 'retirement must reject a dispatcher directory before later validation'
+rmdir "$dispatcher"
+mv "$test_dir/secret-exec-command" "$dispatcher"
+
+chmod 111 "$dispatcher"
+set +e
+zsh "$migrator" --retire-plaintext > "$test_dir/unreadable-dispatcher.out" 2>&1
+exit_code=$?
+set -e
+(( exit_code != 0 )) || fail 'retirement must reject an unreadable dispatcher'
+[[ $(<"$test_dir/unreadable-dispatcher.out") == \
+  *'secret-exec command dispatcher must be an executable regular file before retirement'* ]] || \
+  fail 'retirement must reject an unreadable dispatcher before later validation'
+chmod 755 "$dispatcher"
+
 print -r -- 'different-existing-value' > "$state_dir/context7.password"
 set +e
 zsh "$migrator" > "$test_dir/proton-drift.out" 2>&1
