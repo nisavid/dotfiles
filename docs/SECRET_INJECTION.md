@@ -39,14 +39,16 @@ with the same name, then launches it through the mapped `secret-exec` profile.
 The current command mapping is:
 
 ```text
+k9s=aws
 sz=aws
 ```
 
-Consequently, a terminal or application that resolves `sz` through the managed
-`PATH` runs the real `sz` executable with only the AWS profile. An application
-that uses an absolute path bypasses command lookup and therefore bypasses the
-shim. The dispatcher rejects missing, duplicate, malformed, and recursive
-mappings rather than launching a consumer without the intended profile.
+Consequently, a terminal or application that resolves `k9s` or `sz` through the
+managed `PATH` runs the real executable with only the AWS profile. An
+application that uses an absolute path bypasses command lookup and therefore
+bypasses the shim. The dispatcher rejects missing, duplicate, malformed, and
+recursive mappings rather than launching a consumer without the intended
+profile.
 
 The managed command map, shim directory, and later `PATH` targets are trusted
 user configuration. The dispatcher preserves normal `PATH` semantics, including
