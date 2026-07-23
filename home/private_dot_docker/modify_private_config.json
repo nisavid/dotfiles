@@ -1,7 +1,31 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-jq -s '
+select_orbstack=false
+expected_host="unix://$HOME/.orbstack/run/docker.sock"
+if docker_path="$(command -v docker 2>/dev/null)" &&
+  curl_path="$(command -v curl 2>/dev/null)" &&
+  observed_host="$(
+    "$docker_path" \
+      context inspect orbstack \
+      --format '{{.Endpoints.docker.Host}}' \
+      2>/dev/null
+  )" &&
+  [[ "$observed_host" == "$expected_host" ]] &&
+  [[ "$(
+    "$curl_path" \
+      --silent \
+      --show-error \
+      --fail \
+      --max-time 2 \
+      --unix-socket "${expected_host#unix://}" \
+      http://localhost/_ping \
+      2>/dev/null
+  )" == OK ]]; then
+  select_orbstack=true
+fi
+
+jq -s --argjson selectOrbstack "$select_orbstack" '
   if length == 0 then
     {}
   elif length == 1 and (.[0] | type) == "object" then
@@ -9,5 +33,5 @@ jq -s '
   else
     error("Docker configuration must contain exactly one object")
   end
-  | .currentContext = "orbstack"
+  | if $selectOrbstack then .currentContext = "orbstack" else . end
 ' </dev/stdin
