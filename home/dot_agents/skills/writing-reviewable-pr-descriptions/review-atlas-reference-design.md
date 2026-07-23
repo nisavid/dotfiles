@@ -14,7 +14,15 @@
 
 The batch-math PR stack needs a review aid that explains both the architecture and the sequence of changes without forcing every concern into one dense diagram. The reference implementation will replace the current collection of isolated static diagrams with a manifest-driven review atlas: one canonical semantic model rendered as a guided set of related architectural lenses, with cumulative Graphite PR overlays and exact routes back to GitHub, Graphite, files, symbols, tests, and evidence.
 
-Each PR body will again contain a compact inline orientation image. Selecting that image will open the atlas at the relevant lens, PR, and changed seam rather than at a generic landing page. GitHub and Graphite remain the systems of record for code, comments, checks, approvals, and stack ancestry. The atlas guides review; it does not conduct or record review.
+This reference applies only after visual escalation selects the atlas because
+normal Stack, Diff, and prose navigation is insufficient. Without that
+selection, the ordinary review path remains authoritative and no atlas preview
+is required. When the atlas is selected, each affected PR body contains a
+compact inline orientation image. Selecting that image opens the atlas at the
+relevant lens, PR, and changed seam rather than at a generic landing page.
+GitHub and Graphite remain the systems of record for code, comments, checks,
+approvals, and stack ancestry. The atlas guides review; it does not conduct or
+record review.
 
 This work is a repository-agnostic personal reference implementation, first applied to the current 11-PR Systalyze batch-math stack. It is not application product code or the proposed reusable personal review product. A PAT-backed, live review application merits a separate `nisavid` project, but creating that project requires a separate explicit decision.
 
@@ -127,7 +135,7 @@ Each operation records its before and after state, owning PR, required predecess
 
 ### Published payload boundary
 
-Browser assets may contain semantic IDs, human-written architectural claims, display labels, PR, branch, and commit identifiers, repo-relative file paths, symbol names, test and evidence labels, and authenticated deep links needed for review routing. They may not contain raw source files, diff bodies, comments, private API payloads, credentials, or unrelated repository metadata. Generation retains richer source evidence locally and publishes only the minimum review-facing representation.
+Browser assets may contain semantic IDs, human-written architectural claims, display labels, PR, branch, and commit identifiers, repo-relative file paths, symbol names, test and evidence labels, and non-secret deep links needed for review routing. A deep link may rely on the destination's access control, but it must not embed a bearer token, signed credential, or other authentication material. Browser assets may not contain raw source files, diff bodies, comments, private API payloads, credentials, or unrelated repository metadata. Generation retains richer source evidence locally and publishes only the minimum review-facing representation.
 
 ### Review contracts
 
@@ -259,7 +267,12 @@ This table is the initial reference mapping. The semantic review contracts are a
 
 ## PR-body delivery
 
-Each PR body contains a compact inline orientation image hosted as a private GitHub attachment. The image shows the PR's focused region or seam, its immediate architectural context, and its direction toward the stack outcome. It must remain legible at normal PR-body width.
+This section applies only when visual escalation has selected the atlas. Other
+PRs keep the canonical Stack, Diff, and prose review path without an atlas
+preview. Each affected PR body contains a compact inline orientation image
+hosted as a private GitHub attachment. The image shows the PR's focused region
+or seam, its immediate architectural context, and its direction toward the
+stack outcome. It must remain legible at normal PR-body width.
 
 The image links to the exact atlas state for:
 
