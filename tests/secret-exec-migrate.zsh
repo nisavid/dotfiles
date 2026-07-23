@@ -151,7 +151,8 @@ chmod +x "$fake_bin/codex"
 
 export HOME=$fixture_home
 export XDG_CONFIG_HOME=$fixture_home/.config
-export PATH=$fake_bin:/opt/homebrew/bin:/usr/bin:/bin
+shim_bin=$fixture_home/.local/lib/secret-exec/bin
+export PATH=$shim_bin:$fake_bin:/opt/homebrew/bin:/usr/bin:/bin
 export FAKE_PROTON_STATE=$state_dir
 
 cp "$fixture_home/.config/environment.d/10-apikeys.local.conf" "$test_dir/environment-pattern"
@@ -179,6 +180,20 @@ done
 
 output=$(zsh "$migrator" 2>&1)
 (( $(wc -l < "$state_dir/created.log") == 5 )) || fail 'repeated migration must not create duplicate items'
+
+active_path=$PATH
+PATH=$fake_bin:/opt/homebrew/bin:/usr/bin:/bin
+set +e
+zsh "$migrator" --retire-plaintext > "$test_dir/inactive-shim-path.out" 2>&1
+exit_code=$?
+set -e
+PATH=$active_path
+(( exit_code != 0 )) || fail 'retirement must require the active shim PATH'
+[[ $(<"$test_dir/inactive-shim-path.out") == \
+  *'secret-exec shim directory must lead the active PATH before retirement'* ]] || \
+  fail 'retirement must reject an inactive shim PATH before later validation'
+[[ -e $fixture_home/.config/environment.d/10-apikeys.local.conf ]] || \
+  fail 'an inactive shim PATH must preserve every plaintext source'
 
 shim_environment=$fixture_home/.config/environment.d/99-secret-exec-shims.conf
 mv "$shim_environment" "$test_dir/99-secret-exec-shims.conf"
