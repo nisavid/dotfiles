@@ -14,6 +14,7 @@ Core principle: make the PR easier to approve without hiding new behavior. Keep 
 ## Required Routing
 
 - Use `pr-review-orchestration` for PR state, review-thread state, ledgers, external-review budgets, and merge-readiness gates.
+- Use `publishing-reviewable-prs` whenever refreshed commits, verification, scope, stack state, or review decisions require a PR title/body update.
 - Use `receiving-code-review` before accepting or rejecting reviewer feedback.
 - Use `ralph-review-until-clean` when fixes and judgments need review.
 - Use `tightening-code-for-review` after review-comment fixes are in place.
@@ -45,7 +46,8 @@ Authority comes from the current instruction, repo policy, and `resolving-workfl
 10. Apply `tightening-code-for-review` to reduce reader burden without changing acceptance criteria. Reviewer-unmentioned bloat is fair game when introduced or amplified by the PR. Remove compatibility shims only when no persisted data, public API, deployed customer behavior, or accepted requirement depends on them. If the PR is too broad to make reviewable safely, recommend splitting, deferring, or narrowing instead of polishing around it.
 11. Close out according to the authority model. In autonomous repo-ops contexts,
     post scoped replies, resolve evidenced handled threads, refresh PR state,
-    rerun required review/check gates, mark ready, and merge when
+    update stale title/body facts through `publishing-reviewable-prs`, rerun
+    required review/check gates, mark ready, and merge when
     `pr-review-orchestration` merge-readiness gates and workflow ownership pass.
     If actuation is not agent-owned, prepare the pause packet and stop.
 

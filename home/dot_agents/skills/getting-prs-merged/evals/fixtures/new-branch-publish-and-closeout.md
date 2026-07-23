@@ -28,7 +28,9 @@ Mock GitHub state after publish:
 
 Expected behavior focus:
 
-- Use `yeet` for the publish/create-PR portion only.
+- Use `checkpointing-and-publishing-git-work` for task-owned commits and pushes,
+  then `publishing-reviewable-prs` with `writing-reviewable-pr-descriptions` for
+  PR creation.
 - Discover local policy before pushing or marking ready.
 - Update PR body with verification before marking ready.
 - Merge only after refreshed checks and ownership gates pass.

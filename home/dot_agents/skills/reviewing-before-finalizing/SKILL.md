@@ -46,7 +46,16 @@ When unsure, choose Ralph review with `ralph-review-until-clean`.
 
 ## Subagent Use
 
-For substantial finalization work, prefer a fresh review subagent with precise context: goal, requirements, base/head diff, tests run, and known risks. Do not pass session history as review context. If `subagent-driven-development` applies, keep its stronger gates; this skill is not a shortcut.
+For substantial finalization work, prefer an independent review subagent with a precise review contract:
+
+- exact requirements or spec, without advocacy for the implementation;
+- immutable base and head for the task or whole change, never an inferred `HEAD~1`;
+- the exact diff, verification evidence, and named risks;
+- a request for evidence-backed findings, without suggested verdicts, severity ceilings, or instructions about what not to flag.
+
+Do not pass session history as review context or let the implementation report substitute for inspection. Use task-scoped review when an independently testable unit is risky enough to benefit from an early gate. Always review the complete integrated change at the strength selected above; task reviews do not replace that final view.
+
+When a final review returns several compatible findings, send one coherent fix wave to a suitably scoped worker when that avoids repeated context reconstruction and verification. Preserve disjoint parallelism when separate fix scopes truly do not share state. Verify the integrated fixes, then continue the selected review strategy; Ralph still requires a clean latest cycle.
 
 ## Red Flags
 

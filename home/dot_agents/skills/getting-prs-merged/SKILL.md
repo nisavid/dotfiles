@@ -18,9 +18,9 @@ Use the narrower skill when its boundary becomes active:
 
 | Situation | Skill |
 | --- | --- |
-| Stage, commit, push, or create the draft PR | `yeet` |
-| Write or refresh reviewer-facing PR text | `writing-reviewable-pr-descriptions` |
-| Mark ready, run review loops, inspect merge blockers, resolve threads, or merge | `pr-review-orchestration` |
+| Stage, commit, or push task-owned work | `checkpointing-and-publishing-git-work` |
+| Create the PR or write/refresh its title and body | `publishing-reviewable-prs`, which requires `writing-reviewable-pr-descriptions` |
+| Mark ready, run review loops, inspect merge blockers, resolve threads, or merge | `pr-review-orchestration`; it uses `publishing-reviewable-prs` for guarded ready actuation |
 | Inspect and address actionable unresolved review threads | `github:gh-address-comments` |
 | Decide who owns readiness, thread resolution, or merge actuation | `resolving-workflow-ownership` through `pr-review-orchestration` |
 
@@ -40,13 +40,13 @@ Read the applicable sub-skill before acting. Do not copy a weaker local substitu
    - Use `pr-review-orchestration`'s `scripts/pr_review_state.py --summary` or an equivalent GraphQL review-thread query for thread state. Do not rely on `gh pr view`, status checks, bot status contexts, or auto-merge state alone to infer that conversations are resolved.
    - Preserve unrelated user changes. Ask before touching ambiguous or unrelated dirty work.
 4. Start at the first incomplete stage.
-   - No PR yet: use `yeet` to stage, commit, push, and open a draft PR.
-   - Draft or stale PR body: use `writing-reviewable-pr-descriptions` to update the body from the real pushed diff and current verification.
+   - No PR yet: checkpoint and push task-owned work, then use `publishing-reviewable-prs` to open a canonical draft PR.
+   - Draft or stale PR body: use `publishing-reviewable-prs` to update the title/body from the real pushed diff and current verification.
    - Ready gate pending: use `pr-review-orchestration`; mark ready only after local readiness gates pass and the PR body records evidence.
    - Review comments or requested changes present: use `github:gh-address-comments`, then `pr-review-orchestration` for classification, evidence, thread resolution, and ledger updates.
    - Merge blockers present: use `pr-review-orchestration` to identify the next blocker before spending another review cycle.
 5. Iterate until merged or blocked.
-   - After each fix, run the targeted checks, push the verified head, refresh PR state, update the PR body or ledger when status changed, and continue.
+   - After each fix, run the targeted checks, push the verified head, refresh PR state, and use `publishing-reviewable-prs` when the title/body facts changed.
    - Before diagnosing a blocked merge as missing approval, branch policy, last-pusher approval, or bot-review state, refresh thread-aware PR state. If GitHub says the PR is blocked while checks are green and the head is mergeable, unresolved conversations are a first-class blocker to check, not an afterthought.
    - When `pr-review-orchestration` classifies an unresolved review thread as fixed, already fixed, stale, outdated, duplicate, or otherwise handled with evidence, resolve it yourself as part of merge closeout. Do not ask for separate confirmation just because resolving the thread satisfies a branch-policy gate; ask only when the thread needs a human decision or repo policy reserves resolution for another owner.
    - Request or rerun external review only when local readiness gates allow it and the review budget rules allow another cycle.

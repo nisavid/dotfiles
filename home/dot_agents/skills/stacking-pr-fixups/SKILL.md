@@ -9,7 +9,7 @@ description: Use when creating a stacked PR-fixup, follow-up patch PR, companion
 
 A PR-fixup branch is a narrow patch stacked on the PR under review. Its base is the reviewed PR's head branch, and its readiness depends on how complete the requested fixes are.
 
-**Required sub-skills:** Use `writing-reviewable-pr-descriptions` for the PR body, `yeet` when the user asks for the full stage/commit/push/PR flow, and `ralph-review-until-clean` before publishing when requested.
+**Required sub-skills:** Use `checkpointing-and-publishing-git-work` for task-only commits and pushes, `publishing-reviewable-prs` for PR creation, title/body updates, or ready-state changes, and `ralph-review-until-clean` before publishing when requested. The publisher must use `writing-reviewable-pr-descriptions`.
 
 ## Workflow
 
@@ -34,8 +34,8 @@ A PR-fixup branch is a narrow patch stacked on the PR under review. Its base is 
 5. Publish the stacked PR:
    - Head: the fixup branch.
    - Base: the base PR's head branch.
-   - Body: state that the PR is stacked on the base PR, list the fixes, and include verification.
-   - Mark ready and request review from the base PR author only when the readiness rule below allows it; report any review-request failure instead of silently skipping it.
+   - Use `publishing-reviewable-prs`; its canonical body states that the PR is stacked on the base PR, lists the fixes and verification, and includes current Stack and Diff disclosures.
+   - Mark ready through the publisher's guarded `ready` operation and request review from the base PR author only when the readiness rule below allows it; report any review-request failure instead of silently skipping it.
 6. Comment on the base PR after the fixup PR exists:
    - Offer the fixup PR link.
    - Include only a terse, high-level summary of the issues addressed.

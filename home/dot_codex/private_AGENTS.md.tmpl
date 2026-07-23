@@ -2,11 +2,19 @@
 
 Name and use the standing skill or plugin that fits the work. Use `grilling` for unresolved decisions, with `domain-modeling` when the model is unclear; `to-prd` for durable requirements; `tdd` for low-level design and implementation; `improve-codebase-architecture` for architecture; `diagnosing-bugs` and `systematic-debugging` for troubleshooting; `stitch-design` and `stitch-utilities` for UI/UX design; `impeccable` and `stitch-build` for UI/UX implementation; and an appropriate security skill or plugin, such as `codex-security`, for security work. Refer to skills by name so each harness can resolve its installed copy.
 
+Treat written plans as revisable hypotheses. Compare them with live truth and current policy before mutation, track execution in the harness's native plan state, and adapt when evidence changes. Stop only for consequential ambiguity, missing authority, or a true blocker. Use an external ledger only for exceptional long-running work that must span tasks.
+
 ## Git Checkpoints And Publication
 
 Treat commits and pushes as normal completion steps for task-owned changes.
 
 For every Git-backed task, use `checkpointing-and-publishing-git-work` at task start, at every clean checkpoint, and before a stopping-point response.
+
+For every pull-request creation, title edit, body edit, or draft/ready-state
+change, use
+`publishing-reviewable-prs`. It must use
+`writing-reviewable-pr-descriptions` for the complete reviewer-facing text.
+Never use `gh pr create --fill`, `--fill-first`, or `--fill-verbose`.
 
 Stage and commit only task-owned work. A path is local-only and non-blocking only when explicitly classified by the operator, active task, or applicable repository policy. Explicit instructions to keep work uncommitted or local override default commit and publication.
 

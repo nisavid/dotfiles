@@ -1,4 +1,4 @@
 interface:
-  display_name: "Checkpoint and Publish Git Work"
-  short_description: "Commit and publish task-owned Git work safely"
-  default_prompt: "Use $checkpointing-and-publishing-git-work to checkpoint and publish the current Git task safely."
+  display_name: "Checkpoint, Publish, and Finish Git Work"
+  short_description: "Commit, publish, and finish Git work safely"
+  default_prompt: "Use $checkpointing-and-publishing-git-work to checkpoint, publish, and finish the current Git task safely."
