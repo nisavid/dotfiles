@@ -29,6 +29,25 @@ launcher for credentialed servers. Each child receives only its own credential.
 Git and GitHub CLI authentication remain independent of the MCP GitHub token.
 Every credential-bearing `npx` launch uses an exact audited package version.
 
+## Automatic command shims
+
+Commands listed in `~/.config/secret-exec/commands.env` have managed shims in
+`~/.local/lib/secret-exec/bin`. That directory precedes ordinary command
+directories on the managed `PATH`. A shim resolves the first later executable
+with the same name, then launches it through the mapped `secret-exec` profile.
+
+The current command mapping is:
+
+```text
+sz=aws
+```
+
+Consequently, a terminal or application that resolves `sz` through the managed
+`PATH` runs the real `sz` executable with only the AWS profile. An application
+that uses an absolute path bypasses command lookup and therefore bypasses the
+shim. The dispatcher rejects missing, duplicate, malformed, and recursive
+mappings rather than launching a consumer without the intended profile.
+
 ## Proton Pass layout
 
 The dedicated vault contains five login items:
