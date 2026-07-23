@@ -79,6 +79,12 @@ exit 37
 EOF
 chmod +x "$real_bin/exit-37"
 
+cat > "$real_bin/exit-0" <<'EOF'
+#!/usr/bin/env zsh
+exit 0
+EOF
+chmod +x "$real_bin/exit-0"
+
 zsh_path=${commands[zsh]}
 ln -s "$zsh_path" "$runtime_bin/zsh"
 
@@ -115,33 +121,46 @@ exit_code=$?
 set -e
 (( exit_code == 37 )) || fail 'the shim must preserve the real executable exit status'
 
+cp "$real_bin/exit-0" "$real_bin/sz"
+launcher=$fixture_home/.local/bin/secret-exec
+mv "$launcher" "$test_dir/secret-exec"
+mkdir "$launcher"
+chmod +x "$launcher"
+set +e
+sz > /dev/null 2>&1
+exit_code=$?
+set -e
+rmdir "$launcher"
+mv "$test_dir/secret-exec" "$launcher"
+(( exit_code == 1 )) || fail 'the dispatcher must reject an executable launcher directory'
+
 print -r -- 'sz=unknown' > "$fixture_home/.config/secret-exec/commands.env"
 set +e
 sz > /dev/null 2>&1
 exit_code=$?
 set -e
-(( exit_code != 0 )) || fail 'an unknown profile mapping must fail closed'
+(( exit_code == 1 )) || fail 'an unknown profile mapping must fail closed'
 
 print -r -- 'other=aws' > "$fixture_home/.config/secret-exec/commands.env"
 set +e
 sz > /dev/null 2>&1
 exit_code=$?
 set -e
-(( exit_code != 0 )) || fail 'a missing command mapping must fail closed'
+(( exit_code == 1 )) || fail 'a missing command mapping must fail closed'
 
 print -r -- $'sz=aws\nsz=context7' > "$fixture_home/.config/secret-exec/commands.env"
 set +e
 sz > /dev/null 2>&1
 exit_code=$?
 set -e
-(( exit_code != 0 )) || fail 'a duplicate command mapping must fail closed'
+(( exit_code == 1 )) || fail 'a duplicate command mapping must fail closed'
 
 print -r -- 'sz = aws' > "$fixture_home/.config/secret-exec/commands.env"
 set +e
 sz > /dev/null 2>&1
 exit_code=$?
 set -e
-(( exit_code != 0 )) || fail 'a malformed command mapping must fail closed'
+(( exit_code == 1 )) || fail 'a malformed command mapping must fail closed'
 
 print -r -- 'sz=aws' > "$fixture_home/.config/secret-exec/commands.env"
 rm -- "$real_bin/sz"

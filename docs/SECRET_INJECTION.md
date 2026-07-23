@@ -48,6 +48,12 @@ that uses an absolute path bypasses command lookup and therefore bypasses the
 shim. The dispatcher rejects missing, duplicate, malformed, and recursive
 mappings rather than launching a consumer without the intended profile.
 
+The managed command map, shim directory, and later `PATH` targets are trusted
+user configuration. The dispatcher preserves normal `PATH` semantics, including
+relative and user-owned entries; it does not defend against another process
+that can modify the user's dotfiles, shims, or target executables. Do not place
+shared or otherwise untrusted directories before the intended target.
+
 ## Proton Pass layout
 
 The dedicated vault contains five login items:
