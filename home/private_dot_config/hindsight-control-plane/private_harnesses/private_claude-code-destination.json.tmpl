@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "harness_id": "claude-code",
+  "hooks_path": "{{ joinPath .chezmoi.homeDir ".claude/settings.json" }}",
+  "settings_path": "{{ joinPath .chezmoi.homeDir ".hindsight/claude-code.json" }}",
+  "tools_path": "{{ joinPath .chezmoi.homeDir .hindsight.stateRoot "harness-tools/claude-code.json" }}",
+  "rollback_root": "{{ joinPath .chezmoi.homeDir .hindsight.stateRoot "harness-rollbacks" }}"
+}
