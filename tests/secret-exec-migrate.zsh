@@ -16,8 +16,15 @@ fake_bin=$test_dir/bin
 state_dir=$test_dir/proton-state
 mkdir -p -- "$fixture_home/.config/environment.d" "$fixture_home/.config/zsh/zshrc.d" \
   "$fixture_home/.config/secret-exec" "$fixture_home/.aws" "$fixture_home/.codex" \
-  "$fixture_home/.claude" "$fixture_home/.local/bin" "$fake_bin" "$state_dir"
+  "$fixture_home/.claude" "$fixture_home/.local/bin" \
+  "$fixture_home/.local/lib/secret-exec/bin" "$fake_bin" "$state_dir"
 cp -R "$repo_root/home/dot_config/secret-exec/profiles" "$fixture_home/.config/secret-exec/"
+cp "$repo_root/home/dot_config/secret-exec/commands.env" \
+  "$fixture_home/.config/secret-exec/commands.env"
+cp "$repo_root/home/private_dot_local/lib/secret-exec/executable_secret-exec-command" \
+  "$fixture_home/.local/lib/secret-exec/secret-exec-command"
+chmod +x "$fixture_home/.local/lib/secret-exec/secret-exec-command"
+ln -s ../secret-exec-command "$fixture_home/.local/lib/secret-exec/bin/sz"
 
 cat > "$fixture_home/.config/zsh/zshenv.zsh" <<'EOF'
 # secret-exec-environment-loader-v1
