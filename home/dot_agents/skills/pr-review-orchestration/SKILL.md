@@ -34,9 +34,14 @@ When you first push a task branch, create a draft PR in the same workflow turn
 unless the operator explicitly says not to create a PR. Do not leave pushed
 work branches PR-less as handoff state.
 
-Mark the PR ready only after local readiness gates pass and the PR body records
-the verification evidence. If the branch is not review-ready, keep the draft PR
-open and state the blocker in the PR body or a comment.
+Use `publishing-reviewable-prs` for that creation and for every later title/body
+or draft/ready-state mutation. It must construct the complete body through
+`writing-reviewable-pr-descriptions`; generated `--fill` text is prohibited.
+
+Mark the PR ready through the publisher's guarded `ready` operation only after
+local readiness gates pass, the PR body records the verification evidence, and
+required live-render inspection passes. If the branch is not review-ready, keep
+the draft PR open and state the blocker in the PR body or a comment.
 
 Use `scripts/pr_review_state.py` for PR state and ledger work:
 
@@ -162,3 +167,4 @@ When Ralph review is requested for PR review, bot-review, comment-resolution, or
 | Editing managed review skills | Keep them immutable; use this extension skill. |
 | Reviewing stale remote diffs | Push local fixes and confirm PR head SHA first. |
 | Pushing a branch and planning to create the PR later | Create a draft PR immediately, then mark ready after readiness gates pass. |
+| Updating status facts in a body without the canonical publisher | Use `publishing-reviewable-prs`, preserve the live body, and verify stored and rendered output. |

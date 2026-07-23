@@ -104,14 +104,13 @@ test_git_publication() {
   assert_contains "$skill" 'reconcile with an exact lease' 'Git publication trigger must cover reconciliation and exact leases'
   assert_contains "$skill" 'If a repository task says "In Codex" or "In Claude Code," apply in either harness' 'Git publication trigger must ignore harness-name phrasing'
   assert_contains "$skill" 'Do not use for Git explanations or pasted summaries without repository action' 'Git publication trigger must exclude explanation-only requests'
-  assert_contains "$skill" 'finishing-a-development-branch' 'Git publication skill must name the overlapping managed skill'
-  assert_contains "$skill" 'conflicting completion menus or force rules' 'Git publication trigger must name the conflicting-rule failure mode'
+  assert_contains "$skill" 'completion choices, and provenance-aware cleanup' 'Git publication trigger must own the consolidated completion workflow'
   assert_contains "$skill" 'publishing non-task work' 'Git publication trigger must name the ownership failure mode'
 
   [[ -f $metadata ]] || fail 'missing generated Git publication interface metadata'
-  assert_contains "$metadata" 'display_name: "Checkpoint and Publish Git Work"' 'Git publication display name is stale'
-  assert_contains "$metadata" 'short_description: "Commit and publish task-owned Git work safely"' 'Git publication short description is stale'
-  assert_contains "$metadata" 'default_prompt: "Use $checkpointing-and-publishing-git-work to checkpoint and publish the current Git task safely."' 'Git publication default prompt is stale'
+  assert_contains "$metadata" 'display_name: "Checkpoint, Publish, and Finish Git Work"' 'Git publication display name is stale'
+  assert_contains "$metadata" 'short_description: "Commit, publish, and finish Git work safely"' 'Git publication short description is stale'
+  assert_contains "$metadata" 'default_prompt: "Use $checkpointing-and-publishing-git-work to checkpoint, publish, and finish the current Git task safely."' 'Git publication default prompt is stale'
 
   [[ -f $skill_dir/scripts/plan_git_publication.py ]] || fail 'missing Git publication planner'
   [[ -f $skill_dir/scripts/check_eval_gate.py ]] || fail 'missing Git publication evaluation gate'
@@ -149,9 +148,54 @@ test_git_publication() {
     fail 'Git publication post-push verification must follow the CAS push before Plan And Publish'
   assert_contains "$skill" 'terminal `verified` plan' 'Git publication skill must end on verified remote state'
   assert_contains "$skill" 'Never offer detached discard' 'Git publication skill must prohibit detached discard'
+  assert_contains "$skill" 'Do not present a completion menu when the operator already chose the outcome' 'Git publication skill must avoid redundant completion menus'
+  assert_contains "$skill" 'branch while a PR is active or review feedback remains' 'Git publication skill must preserve active PR workspaces'
+  assert_contains "$skill" 'path-name heuristic is insufficient' 'Git publication skill must classify worktree provenance from evidence'
+  assert_contains "$skill" 'native cleanup actuator' 'Git publication skill must route harness cleanup through the harness'
+  assert_contains "$skill" 'user-created, externally managed, or unknown-provenance worktree' 'Git publication skill must preserve external worktrees'
+  assert_contains "$skill" 'verification on the merged result' 'Git publication skill must verify integration before cleanup'
+  assert_contains "$skill" 'type exactly `discard`' 'Git publication skill must require typed discard confirmation'
+  assert_contains "$skill" 'Never run global `git worktree prune`' 'Git publication cleanup must not prune unrelated registrations'
+  assert_contains "$skill" 'check out the verified safe base before deleting the normal-checkout branch' 'Normal-checkout cleanup must leave the target branch before deletion'
+  assert_contains "$skill" '`git worktree remove --force` only after exact discard confirmation covered' 'Forced worktree removal must require exact discard authority over dirt'
+  assert_contains "$skill" 'If an action is not target-local' 'Non-target-local cleanup must preserve and report the remaining state'
+  assert_contains "$repo_dir/home/dot_codex/modify_private_config.toml.tmpl" '"yeet"' 'Codex config must disable every installed yeet copy'
+  assert_contains "$repo_dir/home/dot_codex/modify_private_config.toml.tmpl" '"finishing-a-development-branch"' 'Codex config must disable every installed finishing copy'
+  assert_contains "$repo_dir/home/dot_codex/modify_private_config.toml.tmpl" 'plugin_root.glob(f"*/*/*/skills/{skill}/SKILL.md")' 'Codex config must discover every plugin provenance and version dynamically'
+  for retired in \
+    dispatching-parallel-agents executing-plans finishing-a-development-branch \
+    subagent-driven-development test-driven-development writing-plans yeet; do
+    assert_contains "$repo_dir/home/.chezmoiremove" ".claude/skills/$retired" "Claude must not discover retired $retired"
+  done
   assert_contains "$skill" 'only the raw prompt and fixture' 'Git publication eval instructions must prevent answer leakage'
 
   python3 -m unittest discover -s "$skill_dir/tests" -p 'test_*.py'
+}
+
+test_pr_publication() {
+  local publisher="$repo_dir/home/dot_agents/skills/publishing-reviewable-prs/SKILL.md"
+  local graphite="$repo_dir/home/dot_agents/skills/graphite/SKILL.md"
+  local atlas="$repo_dir/home/dot_agents/skills/writing-reviewable-pr-descriptions/review-atlas-reference-design.md"
+
+  assert_symlink_source \
+    "$repo_dir/home/dot_claude/skills/symlink_publishing-reviewable-prs" \
+    '../../.agents/skills/publishing-reviewable-prs'
+  assert_symlink_source \
+    "$repo_dir/home/dot_claude/skills/symlink_graphite" \
+    '../../.agents/skills/graphite'
+  assert_contains "$graphite" 'gt submit --stack --draft --no-edit --no-ai --no-interactive' 'Graphite submission must produce untouched drafts'
+  assert_contains "$graphite" 'Keep newly created or' 'Graphite publication must preserve new draft state'
+  assert_contains "$graphite" 'already-draft PRs draft during inspection.' 'Graphite publication must inspect canonical drafts before readiness'
+  assert_contains "$graphite" "Preserve an existing ready PR's" 'Graphite publication must preserve existing ready state'
+  assert_contains "$graphite" 'state unless the task explicitly changes it' 'Graphite ready-state changes must require task authority'
+  assert_contains "$graphite" 'guarded `ready` helper' 'Graphite readiness must use the guarded publisher'
+  assert_contains "$publisher" 'validates the current body, then reruns the exact identity, title/body digest, and draft-state preflight immediately before the mutation' 'Ready publication must bind validation to an immediate exact preflight'
+  assert_contains "$atlas" '## Contents' 'Atlas reference must have a linked table of contents'
+  assert_contains "$atlas" 'expected title and title digest' 'Atlas publication must bind expected titles'
+  assert_contains "$atlas" 'Final verification re-reads every title and body' 'Atlas final verification must verify titles and bodies'
+
+  python3 "$repo_dir/tests/test_publish_reviewable_pr.py"
+  python3 "$repo_dir/tests/test_modify_private_config.py"
 }
 
 typeset -a dry_targets
@@ -172,20 +216,58 @@ case "${1:-all}" in
       "$HOME/.claude/skills/checkpointing-and-publishing-git-work"
     )
     ;;
+  pr-publication)
+    test_pr_publication
+    dry_targets=(
+      "$HOME/.claude/skills/publishing-reviewable-prs"
+      "$HOME/.claude/skills/graphite"
+    )
+    ;;
   all)
     test_context7
     test_serena
     test_git_publication
+    test_pr_publication
     dry_targets=(
       "$HOME/.claude/skills/context7-mcp"
       "$HOME/.claude/skills/using-serena-projects"
       "$HOME/.agents/skills/checkpointing-and-publishing-git-work"
       "$HOME/.claude/skills/checkpointing-and-publishing-git-work"
+      "$HOME/.claude/skills/publishing-reviewable-prs"
+      "$HOME/.claude/skills/graphite"
     )
     ;;
   *)
-    fail 'usage: public-agent-skills.zsh [context7|serena|git-publication|all]'
+    fail 'usage: public-agent-skills.zsh [context7|serena|git-publication|pr-publication|all]'
     ;;
 esac
 
-chezmoi apply --dry-run --verbose $dry_targets
+tmpdir="$(mktemp -d)"
+trap 'rm -rf -- "$tmpdir"' EXIT
+isolated_source="$tmpdir/source"
+isolated_home="$tmpdir/home"
+mkdir -p -- "$isolated_source/dot_agents/skills" "$isolated_source/dot_claude/skills" "$isolated_home"
+
+for skill in \
+  checkpointing-and-publishing-git-work context7-mcp graphite \
+  publishing-reviewable-prs using-serena-projects; do
+  cp -R -- \
+    "$repo_dir/home/dot_agents/skills/$skill" \
+    "$isolated_source/dot_agents/skills/$skill"
+done
+
+for link in \
+  checkpointing-and-publishing-git-work context7-mcp graphite \
+  publishing-reviewable-prs using-serena-projects; do
+  cp -- \
+    "$repo_dir/home/dot_claude/skills/symlink_$link" \
+    "$isolated_source/dot_claude/skills/symlink_$link"
+done
+
+typeset -a isolated_targets
+for target in $dry_targets; do
+  isolated_targets+=("$isolated_home/${target#$HOME/}")
+done
+
+chezmoi --source "$isolated_source" --destination "$isolated_home" \
+  apply --dry-run --verbose $isolated_targets

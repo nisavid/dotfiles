@@ -13,8 +13,9 @@ You are the work leader. Keep ambiguity, hypotheses, decisions, interpretation, 
 
 1. Identify the leader: Cursor uses the user's selected model; Claude Code should be latest Opus at `high`+ effort; Codex should be latest GPT at `high`+ effort.
 2. Identify repo, branch, base, dirty state, submodules, and owning worktree. For repos with dedicated per-project worktrees, target the appropriate worktree for repo or submodule targets.
-3. Same harness: prefer native subagents for tight, short-lived tasks. Prefer peer agents for longer work, broad context, browser/computer use, separate worktrees, follow-ups, or independent lifecycle.
-4. Cross-harness CLI/API launches are peer agents, not subagents.
+3. When executing a written plan, compare it once with live repository state, current policy, and applicable instructions before dispatch. Batch consequential conflicts for the operator; adapt stale mechanics when current evidence preserves the intended outcome.
+4. Same harness: prefer native subagents for tight, short-lived tasks. Prefer peer agents for longer work, broad context, browser/computer use, separate worktrees, follow-ups, or independent lifecycle.
+5. Cross-harness CLI/API launches are peer agents, not subagents.
 
 ## Validate First
 
@@ -61,12 +62,24 @@ Cursor effort is a model slug, e.g. `composer-2.5`, `gpt-5.5-high`, `gpt-5.5-ext
 
 ## Prompt Contract
 
-Every prompt states goal, success criteria, cwd/worktree, branch/base, facts, target behavior, allowed/forbidden scope, read/write permission, verification, output, and stop conditions. Workers preserve user and peer edits, avoid broad refactors, and adapt instead of reverting.
+Every prompt is a bounded task contract: goal; success criteria; cwd/worktree and, for Git-backed edits, immutable base; relevant facts and interfaces; target behavior; allowed and forbidden scope; read/write permission; required verification; output shape; and stop conditions. Workers preserve user and peer edits, avoid broad refactors, and adapt instead of reverting.
+
+Use the smallest sufficient context. Put a large task brief, diff, log, or report in a uniquely named file only when passing it inline would materially bloat or truncate the handoff. Name the file and its role in the prompt; keep exact requirements in one authoritative place.
+
+Ask workers to return one status:
+
+- `DONE`: success criteria and required verification are complete.
+- `DONE_WITH_CONCERNS`: work is complete, with concrete correctness or scope concerns for the leader to resolve.
+- `NEEDS_CONTEXT`: a named missing fact or decision prevents safe progress.
+- `BLOCKED`: the task cannot complete within its authority, scope, or available environment.
+
+On `NEEDS_CONTEXT` or `BLOCKED`, change the inputs, authority, task boundary, or worker capability before retrying. Do not repeat the same dispatch unchanged.
 
 ## Leader Duties
 
 - Settle hard thinking before delegating execution.
 - Keep parallel edit scopes disjoint.
+- Record the task's immutable base before edit-capable delegation when later review must isolate that task; never infer it as `HEAD~1`.
 - Review returned patches, claims, screenshots, logs, and summaries.
 - Integrate centrally in the owning worktree and verify the final contract.
 - Reconcile conflicts; delegates do not decide final architecture, root cause, or user-facing wording unless assigned.
@@ -81,4 +94,4 @@ Every prompt states goal, success criteria, cwd/worktree, branch/base, facts, ta
 - Citing external CLI docs instead of local command evidence: trust installed `--help` first.
 - Delegate output treated as done: review, integrate, verify.
 
-Related skills: `dispatching-parallel-agents`, `choosing-agent-models`, `using-git-worktrees`.
+Related skills: `choosing-agent-models`, `using-persistent-git-worktrees`.

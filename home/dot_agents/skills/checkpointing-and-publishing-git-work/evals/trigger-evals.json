@@ -4,6 +4,8 @@
   {"query": "The tests are green. Create the task checkpoint commit.", "should_trigger": true},
   {"query": "Push the current task-owned commit and verify the remote tip.", "should_trigger": true},
   {"query": "Close out this Git branch at the current stopping point.", "should_trigger": true},
+  {"query": "The branch is finished. Help me choose whether to merge, publish, keep, or discard it.", "should_trigger": true},
+  {"query": "Discard this completed branch and clean up its worktree safely.", "should_trigger": true},
   {"query": "Reconcile the remote branch and publish with an exact lease.", "should_trigger": true},
   {"query": "Implement the parser in this repository and commit clean checkpoints.", "should_trigger": true},
   {"query": "In Codex, implement the parser in this repository and commit clean checkpoints.", "should_trigger": true},
