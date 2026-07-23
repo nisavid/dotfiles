@@ -9,7 +9,9 @@ contains the existing workload state. Its last recorded uptime was July 8,
 approximately 441–442 GB of allocated data. It also exposes broad writable host
 mounts that must not be reproduced blindly.
 
-The repository manages only a Podman PATH preference. It does not describe the
+The repository keeps Docker's `currentContext` set to `orbstack` while
+preserving unrelated Docker configuration and credentials. It also keeps the
+Podman CLI available for unmigrated workloads. It does not describe the
 workloads, images, volumes, secrets, networks, port bindings, architecture
 requirements, or rollback procedures needed to migrate the actual machine
 state.

@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+jq -s '
+  if length == 0 then
+    {}
+  elif length == 1 and (.[0] | type) == "object" then
+    .[0]
+  else
+    error("Docker configuration must contain exactly one object")
+  end
+  | .currentContext = "orbstack"
+' </dev/stdin
