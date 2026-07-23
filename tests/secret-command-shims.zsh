@@ -31,6 +31,7 @@ cp "$mapping_source" "$fixture_home/.config/secret-exec/commands.env"
 chmod +x "$fixture_home/.local/bin/secret-exec" \
   "$fixture_home/.local/lib/secret-exec/secret-exec-command"
 ln -s ../secret-exec-command "$shim_dir/sz"
+ln -s ../secret-exec-command "$shim_dir/k9s"
 
 cp -R "$repo_root/home/dot_config/secret-exec/profiles/." "$profile_dir/"
 
@@ -62,6 +63,22 @@ set -euo pipefail
 print -r -- 'sz-ok'
 EOF
 chmod +x "$real_bin/sz"
+
+cat > "$real_bin/k9s" <<'EOF'
+#!/usr/bin/env zsh
+set -euo pipefail
+
+[[ ${AWS_ACCESS_KEY_ID:-} == AKIACANARY123 ]] || exit 70
+[[ ${AWS_SECRET_ACCESS_KEY:-} == AwsSecretCanary123+/= ]] || exit 71
+[[ -z ${AWS_SESSION_TOKEN:-} ]] || exit 72
+[[ -z ${CONTEXT7_API_KEY:-} ]] || exit 73
+[[ -z ${FIRECRAWL_API_KEY:-} ]] || exit 74
+[[ -z ${GITHUB_PERSONAL_ACCESS_TOKEN:-} ]] || exit 75
+[[ -z ${GREPTILE_API_KEY:-} ]] || exit 76
+[[ $1 == 'argument with spaces' ]] || exit 77
+print -r -- 'k9s-ok'
+EOF
+chmod +x "$real_bin/k9s"
 
 cat > "$cwd_target/sz" <<'EOF'
 #!/usr/bin/env zsh
@@ -101,6 +118,9 @@ export GREPTILE_API_KEY=inherited-greptile
 
 output=$(sz 'argument with spaces')
 [[ $output == sz-ok ]] || fail 'the sz shim must launch the real executable with the AWS profile'
+
+output=$(k9s 'argument with spaces')
+[[ $output == k9s-ok ]] || fail 'the k9s shim must launch the real executable with the AWS profile'
 
 original_directory=$PWD
 cd "$cwd_target"

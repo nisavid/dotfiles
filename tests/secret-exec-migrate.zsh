@@ -26,6 +26,7 @@ cp "$repo_root/home/dot_config/environment.d/99-secret-exec-shims.conf" \
 cp "$repo_root/home/private_dot_local/lib/secret-exec/executable_secret-exec-command" \
   "$fixture_home/.local/lib/secret-exec/secret-exec-command"
 chmod +x "$fixture_home/.local/lib/secret-exec/secret-exec-command"
+ln -s ../secret-exec-command "$fixture_home/.local/lib/secret-exec/bin/k9s"
 ln -s ../secret-exec-command "$fixture_home/.local/lib/secret-exec/bin/sz"
 
 cat > "$fixture_home/.config/zsh/zshenv.zsh" <<'EOF'
@@ -231,6 +232,20 @@ set -e
   *'secret-exec command dispatcher must be an executable regular file before retirement'* ]] || \
   fail 'retirement must reject an unreadable dispatcher before later validation'
 chmod 755 "$dispatcher"
+
+k9s_shim=$fixture_home/.local/lib/secret-exec/bin/k9s
+mv "$k9s_shim" "$test_dir/k9s-shim"
+set +e
+zsh "$migrator" --retire-plaintext > "$test_dir/missing-k9s-shim.out" 2>&1
+exit_code=$?
+set -e
+(( exit_code != 0 )) || fail 'retirement must require the k9s command shim'
+[[ $(<"$test_dir/missing-k9s-shim.out") == \
+  *'the k9s command shim must resolve to the secret-exec command dispatcher'* ]] || \
+  fail 'retirement must reject a missing k9s command shim before later validation'
+[[ -e $fixture_home/.config/environment.d/10-apikeys.local.conf ]] || \
+  fail 'a missing k9s command shim must preserve every plaintext source'
+mv "$test_dir/k9s-shim" "$k9s_shim"
 
 print -r -- 'different-existing-value' > "$state_dir/context7.password"
 set +e
