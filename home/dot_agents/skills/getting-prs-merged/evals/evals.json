@@ -12,7 +12,7 @@
       "expectations": [
         "The response starts from discovered repo and branch state instead of asking broad scope questions.",
         "The agent discovers local policy before staging, committing, pushing, marking ready, resolving threads, or merging.",
-        "The agent uses yeet only for the publish/create-PR stage.",
+        "The agent uses checkpointing-and-publishing-git-work for task-owned commits and pushes, then publishing-reviewable-prs with writing-reviewable-pr-descriptions for PR creation.",
         "The agent marks the PR ready only after local readiness gates and PR body evidence are current.",
         "The agent stops rather than merging if required checks, approvals, ownership, or branch protection block merge."
       ]
@@ -27,7 +27,7 @@
       ],
       "expectations": [
         "The agent does not create a duplicate PR or replay completed publish work.",
-        "The agent uses writing-reviewable-pr-descriptions before publishing readiness claims.",
+        "The agent uses publishing-reviewable-prs with writing-reviewable-pr-descriptions before publishing readiness claims.",
         "The agent uses pr-review-orchestration for review-ready and merge-readiness decisions.",
         "The agent applies repo-local guidance before marking ready or merging.",
         "The agent reports the next blocker if merge cannot proceed."

@@ -24,6 +24,7 @@ export WORK_TOML_B64={{ include ".private-codex-work.toml.age" | decrypt | b64en
 # python3 reads the script via process substitution; the live config arrives on stdin.
 uv run --quiet --with tomlkit python3 <(cat <<'PYEOF'
 import os, sys, base64, tomlkit
+from pathlib import Path
 
 home = os.environ["HOMEDIR"]
 editor = os.environ["EDITOR_TARGET"]
@@ -106,6 +107,72 @@ for rel in work["projects"]:
     p = os.path.join(home, rel)
     if p not in projs:
         t = tomlkit.table(); t["trust_level"] = "trusted"; projs[p] = t
+
+# Disable retired workflow skills from personal and plugin discovery roots.
+# Cache versions change, so resolve installed paths whenever chezmoi applies the
+# overlay instead of persisting versioned absolute paths.
+skills = ensure_table(doc, "skills")
+configured_skills = skills.get("config")
+if configured_skills is None:
+    configured_skills = tomlkit.aot()
+    skills["config"] = configured_skills
+retired_skill_names = (
+    "yeet",
+    "finishing-a-development-branch",
+    "executing-plans",
+    "subagent-driven-development",
+    "writing-plans",
+    "test-driven-development",
+    "dispatching-parallel-agents",
+)
+plugin_root = Path(home) / ".codex" / "plugins" / "cache"
+personal_skill_root = Path(home) / ".agents" / "skills"
+
+def is_retired_skill_path(raw_path):
+    path = Path(raw_path)
+    if path.name != "SKILL.md" or path.parent.name not in retired_skill_names:
+        return False
+    parts = path.parts
+    if tuple(parts[-4:-2]) == (".agents", "skills"):
+        return True
+    for index in range(len(parts) - 2):
+        if tuple(parts[index:index + 3]) != (".codex", "plugins", "cache"):
+            continue
+        return len(parts[index + 3:]) == 6 and parts[-3] == "skills"
+    return False
+
+retired_paths = set()
+for skill in retired_skill_names:
+    personal_path = personal_skill_root / skill / "SKILL.md"
+    if personal_path.is_file():
+        retired_paths.add(personal_path)
+    retired_paths.update(plugin_root.glob(f"*/*/*/skills/{skill}/SKILL.md"))
+
+retired_path_strings = {str(path) for path in retired_paths}
+kept_retired_paths = set()
+remove_indices = []
+for index, entry in enumerate(configured_skills):
+    path = str(entry.get("path", ""))
+    if not is_retired_skill_path(path):
+        continue
+    if (
+        path in retired_path_strings
+        and entry.get("enabled") == False
+        and path not in kept_retired_paths
+    ):
+        kept_retired_paths.add(path)
+    else:
+        remove_indices.append(index)
+for index in reversed(remove_indices):
+    del configured_skills[index]
+
+for path in sorted(retired_paths, key=str):
+    if str(path) in kept_retired_paths:
+        continue
+    entry = tomlkit.table()
+    entry["path"] = str(path)
+    entry["enabled"] = False
+    configured_skills.append(entry)
 
 sys.stdout.write(tomlkit.dumps(doc))
 PYEOF

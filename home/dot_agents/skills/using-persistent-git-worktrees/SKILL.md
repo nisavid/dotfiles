@@ -129,6 +129,14 @@ Every worktree handoff should state:
 - uncommitted files, if any
 - stale worktree copies or cleanup still needed
 
+## Completion Cleanup
+
+`checkpointing-and-publishing-git-work` owns terminal branch and worktree
+cleanup. The move/repair commands above apply only to an explicitly selected
+persistent worktree whose provenance and ownership are established. Never use
+them to remove a harness-created, user-created, externally managed, or
+unknown-provenance worktree during task closeout. Preserve active PR worktrees.
+
 ## Guardrails
 
 - Do not switch the user's main checkout away from `main` just to start work.
