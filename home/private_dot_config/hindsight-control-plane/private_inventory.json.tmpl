@@ -1,0 +1,93 @@
+{
+  "archetype": {
+    "id": "trusted-workstation"
+  },
+  "banks": [
+    {
+      "authority": "authoritative",
+      "data_class": "engineering",
+      "enable_auto_consolidation": true,
+      "id": "{{ .hindsight.bank }}",
+      "profile_id": "{{ .hindsight.profile }}",
+      "writable": true
+    }
+  ],
+  "harnesses": [
+    {{- range $index, $harness := list "codex" "claude-code" "cursor" }}
+    {{- if $index }},{{ end }}
+    {
+      "home_bank": {
+        "bank_id": "{{ $.hindsight.bank }}",
+        "profile_id": "{{ $.hindsight.profile }}"
+      },
+      "id": "{{ $harness }}",
+      "profile_id": "{{ $.hindsight.profile }}",
+      "write_bank": {
+        "bank_id": "{{ $.hindsight.bank }}",
+        "profile_id": "{{ $.hindsight.profile }}"
+      }
+    }
+    {{- end }}
+  ],
+  "machine": {
+    "base_port": {{ .hindsight.apiPort }},
+    "engineering_memory_enabled": true,
+    "id": "{{ .hindsight.consumerId }}"
+  },
+  "migration": {
+    "artifact_dir": "{{ joinPath .chezmoi.homeDir .hindsight.stateRoot "migration/artifacts" }}",
+    "proposal_log": "{{ joinPath .chezmoi.homeDir .hindsight.stateRoot "migration/proposals.md" }}"
+  },
+  "policy": {
+    "allowed_placements": {
+      "engineering": [
+        "local",
+        "private-remote"
+      ]
+    },
+    "engineering_memory_enabled": true
+  },
+  "profiles": [
+    {
+      "data_classes": [
+        "engineering"
+      ],
+      "enabled": true,
+      "host": "127.0.0.1",
+      "id": "{{ .hindsight.profile }}",
+      "roles": {
+        "embedding": "codex-embedding",
+        "llm": "resilient-llm-chain",
+        "reranking": "jina-mlx-reranker"
+      },
+      "slot": 0
+    }
+  ],
+  "providers": [
+    {
+      "data_classes": [
+        "engineering"
+      ],
+      "id": "resilient-llm-chain",
+      "placement": "private-remote",
+      "role": "llm"
+    },
+    {
+      "data_classes": [
+        "engineering"
+      ],
+      "id": "codex-embedding",
+      "placement": "private-remote",
+      "role": "embedding"
+    },
+    {
+      "data_classes": [
+        "engineering"
+      ],
+      "id": "jina-mlx-reranker",
+      "placement": "local",
+      "role": "reranking"
+    }
+  ],
+  "schema_version": 1
+}

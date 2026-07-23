@@ -1,0 +1,41 @@
+{
+  "consumer_id": "{{ .hindsight.consumerId }}",
+  "credential_resolver": {
+    "path": "{{ joinPath .chezmoi.homeDir .hindsight.credentialResolverPath }}",
+    "sha256": "53a12180332535cc782469234b4d23e1a3d0f960adc055d78ba595008acf8c98"
+  },
+  "data_root": "{{ joinPath .chezmoi.homeDir .hindsight.dataRoot }}",
+  "health_checks": [
+    {
+      "arguments": [
+        "--health"
+      ],
+      "check_id": "fleet",
+      {{ template "hindsight-stack-credentials-environment.tmpl" . }},
+      "entrypoint": "bin/hindsight-embed-supervisor",
+      "timeout_seconds": 300
+    }
+  ],
+  "install_root": "{{ joinPath .chezmoi.homeDir .hindsight.installRoot }}",
+  "installation_mode": "adopt",
+  "inventory_path": "{{ joinPath .chezmoi.homeDir .hindsight.inventoryPath }}",
+  "npx_executable": "{{ joinPath .chezmoi.homeDir .hindsight.npxExecutable }}",
+  "platform": "launchd",
+  "python_executable": "{{ joinPath .chezmoi.homeDir .hindsight.managedPython }}",
+  "schema_version": 1,
+  "service_root": "{{ joinPath .chezmoi.homeDir "Library/LaunchAgents" }}",
+  "services": [
+    {
+      "arguments": [],
+      {{ template "hindsight-stack-credentials-environment.tmpl" . }},
+      "entrypoint": "bin/hindsight-embed-supervisor",
+      "label": "io.nisavid.hindsight.{{ .hindsight.consumerId }}.stack",
+      "restart": "on-failure",
+      "service_id": "stack"
+    }
+  ],
+  "state_root": "{{ joinPath .chezmoi.homeDir .hindsight.stateRoot }}",
+  "timers": [],
+  "uvx_executable": "{{ joinPath .chezmoi.homeDir .hindsight.uvxExecutable }}",
+  "zsh_executable": "/bin/zsh"
+}

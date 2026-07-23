@@ -1,5 +1,5 @@
 #!/usr/bin/env zsh
 set -euo pipefail
 
-agents_root="${HINDSIGHT_AGENTS_ROOT:-{{ joinPath .chezmoi.homeDir .hindsight.agentsSourceDir }}}"
-exec "$agents_root/tooling/hindsight/bin/hindsight-memory" "$@"
+install_root="{{ joinPath .chezmoi.homeDir .hindsight.installRoot }}"
+exec "$install_root/bin/hindsight-memory" "$@"

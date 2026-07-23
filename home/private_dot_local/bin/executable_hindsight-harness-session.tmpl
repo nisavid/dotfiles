@@ -1,0 +1,156 @@
+#!/usr/bin/python3
+"""Launch a broker-scoped Hindsight harness session without ambient authority."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+from pathlib import Path
+import pwd
+import re
+import subprocess
+import sys
+import uuid
+
+
+HOME = Path({{ .chezmoi.homeDir | quote }})
+CONTROLLER = HOME / {{ .hindsight.installRoot | quote }} / "bin/hindsight-memory"
+RESOLVER = HOME / {{ .hindsight.credentialResolverPath | quote }}
+STATE = HOME / {{ .hindsight.stateRoot | quote }} / "memory"
+BROKER = STATE / "broker.sock"
+LOCATORS = STATE / "bridge-locators"
+BRIDGES = STATE / "bridges"
+MINT_LOCATOR = {{ .hindsight.mintAuthorityLocator | quote }}
+HARNESS_EXECUTABLES = {
+    "codex": HOME / {{ .hindsight.codexExecutable | quote }},
+    "claude-code": HOME / {{ .hindsight.claudeCodeExecutable | quote }},
+    "cursor": HOME / {{ .hindsight.cursorExecutable | quote }},
+}
+HARNESS_COMMANDS = {
+    "codex": "codex",
+    "claude-code": "claude",
+    "cursor": "cursor",
+}
+SESSION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
+
+
+def resolve_mint_authority() -> str:
+    request = {
+        "schema_version": 1,
+        "credentials": [
+            {
+                "environment": "HINDSIGHT_MINT_AUTHORITY",
+                "locator": MINT_LOCATOR,
+            }
+        ],
+    }
+    account = pwd.getpwuid(os.getuid())
+    completed = subprocess.run(
+        [str(RESOLVER)],
+        input=json.dumps(request, separators=(",", ":")).encode(),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        cwd="/",
+        env={
+            "HOME": account.pw_dir,
+            "USER": account.pw_name,
+            "LOGNAME": account.pw_name,
+            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+        },
+        timeout=10,
+        check=True,
+    )
+    response = json.loads(completed.stdout)
+    if (
+        not isinstance(response, dict)
+        or set(response) != {"schema_version", "values"}
+        or type(response.get("schema_version")) is not int
+        or response["schema_version"] != 1
+        or not isinstance(response.get("values"), dict)
+        or set(response["values"]) != {"HINDSIGHT_MINT_AUTHORITY"}
+    ):
+        raise RuntimeError("credential resolver response is invalid")
+    authority = response["values"]["HINDSIGHT_MINT_AUTHORITY"]
+    if not isinstance(authority, str) or not authority:
+        raise RuntimeError("mint authority is unavailable")
+    return authority
+
+
+def parse_arguments() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("harness", choices=("codex", "claude-code", "cursor"))
+    parser.add_argument("mode", choices=("launch", "stage-gui"))
+    parser.add_argument("--session-id")
+    parser.add_argument("command", nargs=argparse.REMAINDER)
+    args = parser.parse_args()
+    if args.session_id is None:
+        if args.mode == "stage-gui":
+            parser.error("--session-id is required for a GUI envelope")
+        args.session_id = str(uuid.uuid4())
+    if SESSION_ID.fullmatch(args.session_id) is None:
+        parser.error("--session-id is invalid")
+    if args.command[:1] == ["--"]:
+        args.command.pop(0)
+    if args.mode == "launch" and not args.command:
+        parser.error("launch requires a harness command after --")
+    if args.mode == "stage-gui" and args.command:
+        parser.error("stage-gui does not accept a harness command")
+    return args
+
+
+def bind_harness_command(harness: str, command: list[str]) -> list[str]:
+    executable = HARNESS_EXECUTABLES[harness]
+    requested = command[0]
+    if requested not in {HARNESS_COMMANDS[harness], str(executable)}:
+        raise RuntimeError("harness executable does not match the machine binding")
+    if not executable.is_absolute() or not executable.is_file():
+        raise RuntimeError("bound harness executable is unavailable")
+    if not os.access(executable, os.X_OK):
+        raise RuntimeError("bound harness executable is not executable")
+    return [str(executable), *command[1:]]
+
+
+def main() -> int:
+    args = parse_arguments()
+    if args.command:
+        args.command = bind_harness_command(args.harness, args.command)
+    command = [
+        str(CONTROLLER),
+        "--state-dir",
+        str(STATE),
+        "harness",
+        args.harness,
+        args.mode,
+        "--locator-dir",
+        str(LOCATORS),
+        "--broker-socket",
+        str(BROKER),
+        "--session-id",
+        args.session_id,
+        "--companion-id",
+        f"controller-{args.harness}",
+        "--route",
+        args.harness,
+        "--bridge-dir",
+        str(BRIDGES),
+    ]
+    if args.command:
+        command.extend(["--command", "--", *args.command])
+    environment = {
+        "HOME": str(HOME),
+        "USER": pwd.getpwuid(os.getuid()).pw_name,
+        "LOGNAME": pwd.getpwuid(os.getuid()).pw_name,
+        "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+        "HINDSIGHT_MEMORY_CONTROL_CAPABILITY": resolve_mint_authority(),
+    }
+    os.execve(str(CONTROLLER), command, environment)
+    return 127
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except (OSError, RuntimeError, subprocess.SubprocessError, ValueError):
+        print("hindsight-harness-session: launch failed closed", file=sys.stderr)
+        raise SystemExit(1) from None

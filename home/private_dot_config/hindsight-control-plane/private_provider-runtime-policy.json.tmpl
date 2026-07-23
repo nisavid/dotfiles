@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "hindsight_version": "0.8.4",
+  "default_usage_limit_cooldown_seconds": 300,
+  "failover_order": [
+    "personal-codex",
+    "work-codex",
+    "hatchery"
+  ],
+  "members": [
+    {
+      "id": "personal-codex",
+      "identity": {
+        "provider": "openai-codex",
+        "model": "gpt-5.3-codex-spark",
+        "base_url": "",
+        "credential_marker": "provider-policy:personal-codex"
+      },
+      "credential": {
+        "mode": "oauth-home",
+        "locator": "oauth-home:personal"
+      },
+      "timeout_seconds": null,
+      "max_retries": null,
+      "max_concurrent": null,
+      "operation_priorities": {
+        "default": 0,
+        "reflect": 0,
+        "retain": 20,
+        "consolidation": 30
+      },
+      "quota_cooldown": true
+    },
+    {
+      "id": "work-codex",
+      "identity": {
+        "provider": "openai-codex",
+        "model": "gpt-5.3-codex-spark",
+        "base_url": "",
+        "credential_marker": "provider-policy:work-codex"
+      },
+      "credential": {
+        "mode": "oauth-home",
+        "locator": "oauth-home:work"
+      },
+      "timeout_seconds": null,
+      "max_retries": null,
+      "max_concurrent": null,
+      "operation_priorities": {
+        "default": 0,
+        "reflect": 0,
+        "retain": 20,
+        "consolidation": 30
+      },
+      "quota_cooldown": true
+    },
+    {
+      "id": "hatchery",
+      "identity": {
+        "provider": "{{ .hindsight.hatcheryProvider }}",
+        "model": "{{ .hindsight.hatcheryModel }}",
+        "base_url": "{{ .hindsight.hatcheryBaseUrl }}",
+        "credential_marker": null
+      },
+      "credential": {
+        "mode": "none",
+        "locator": null
+      },
+      "timeout_seconds": 300,
+      "max_retries": 1,
+      "max_concurrent": 1,
+      "operation_priorities": {
+        "default": 0,
+        "reflect": 0,
+        "retain": 20,
+        "consolidation": 30
+      },
+      "quota_cooldown": false
+    }
+  ]
+}

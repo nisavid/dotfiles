@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "harness_id": "codex",
+  "hooks_path": "{{ joinPath .chezmoi.homeDir ".codex/hooks.json" }}",
+  "settings_path": "{{ joinPath .chezmoi.homeDir ".hindsight/codex-nisavid/settings.json" }}",
+  "tools_path": "{{ joinPath .chezmoi.homeDir .hindsight.stateRoot "harness-tools/codex.json" }}",
+  "rollback_root": "{{ joinPath .chezmoi.homeDir .hindsight.stateRoot "harness-rollbacks" }}"
+}
