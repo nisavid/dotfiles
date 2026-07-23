@@ -21,6 +21,8 @@ mkdir -p -- "$fixture_home/.config/environment.d" "$fixture_home/.config/zsh/zsh
 cp -R "$repo_root/home/dot_config/secret-exec/profiles" "$fixture_home/.config/secret-exec/"
 cp "$repo_root/home/dot_config/secret-exec/commands.env" \
   "$fixture_home/.config/secret-exec/commands.env"
+cp "$repo_root/home/dot_config/environment.d/98-proton-pass.conf" \
+  "$fixture_home/.config/environment.d/98-proton-pass.conf"
 cp "$repo_root/home/dot_config/environment.d/99-secret-exec-shims.conf" \
   "$fixture_home/.config/environment.d/99-secret-exec-shims.conf"
 cp "$repo_root/home/private_dot_local/lib/secret-exec/executable_secret-exec-command" \
@@ -180,6 +182,20 @@ done
 
 output=$(zsh "$migrator" 2>&1)
 (( $(wc -l < "$state_dir/created.log") == 5 )) || fail 'repeated migration must not create duplicate items'
+
+proton_environment=$fixture_home/.config/environment.d/98-proton-pass.conf
+mv "$proton_environment" "$test_dir/98-proton-pass.conf"
+set +e
+zsh "$migrator" --retire-plaintext > "$test_dir/missing-proton-environment.out" 2>&1
+exit_code=$?
+set -e
+(( exit_code != 0 )) || fail 'retirement must require persistent Proton Pass session configuration'
+[[ $(<"$test_dir/missing-proton-environment.out") == \
+  *'Proton Pass environment must be a readable regular file before retirement'* ]] || \
+  fail 'retirement must reject missing persistent Proton Pass session configuration'
+[[ -e $fixture_home/.config/environment.d/10-apikeys.local.conf ]] || \
+  fail 'missing persistent Proton Pass session configuration must preserve every plaintext source'
+mv "$test_dir/98-proton-pass.conf" "$proton_environment"
 
 active_path=$PATH
 PATH=$fake_bin:/opt/homebrew/bin:/usr/bin:/bin
