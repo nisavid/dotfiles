@@ -126,4 +126,12 @@ fi
 grep -F 'Legacy Podman command paths' \
   "$repo_dir/home/dot_config/environment.d/01-podman.conf" >/dev/null
 
+managed_path="$(
+  PATH="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin"
+  source "$repo_dir/home/dot_config/environment.d/01-podman.conf"
+  print -r -- "$PATH"
+)"
+[[ "$managed_path" == \
+  "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/opt/podman/bin" ]]
+
 print -r -- "container runtime bindings: PASS"
