@@ -25,6 +25,8 @@ prepare_case() {
   fake_home="$case_root/home"
   helpers="$case_root/helpers"
   events="$case_root/events"
+  test_install_root="$fake_home/.local/opt/hindsight-control-plane"
+  test_managed_python="$fake_home/.local/share/uv/python/cpython-3.13.14-macos-aarch64-none/bin/python3.13"
   /bin/mkdir -p \
     "$fake_home/.cache" \
     "$fake_home/.config/hindsight-control-plane" \
@@ -43,7 +45,8 @@ prepare_case() {
     "$fake_home/.local/share/uv/python/cpython-3.13.14-macos-aarch64-none" \
     "$fake_home/.local/share/uv/python/cpython-3.13.14-macos-aarch64-none/bin" \
     "$helpers"
-  print -r -- '{}' \
+  print -r -- \
+    "{\"install_root\":\"$test_install_root\",\"python_executable\":\"$test_managed_python\"}" \
     >"$fake_home/.config/hindsight-control-plane/installation.json"
   /bin/chmod 600 \
     "$fake_home/.config/hindsight-control-plane/installation.json"
@@ -63,10 +66,10 @@ prepare_case() {
     'print -r -- accept >>"$HINDSIGHT_TEST_EVENTS"' \
     'exit "${HINDSIGHT_TEST_ACCEPT_RC:-0}"'
   write_fixture \
-    "$fake_home/.local/share/uv/python/cpython-3.13.14-macos-aarch64-none/bin/python3.13" \
+    "$test_managed_python" \
     '[[ "$2" == install ]]' \
     'print -r -- install >>"$HINDSIGHT_TEST_EVENTS"' \
-    'installed="$HOME/.local/opt/hindsight-control-plane/bin/hindsight-memory"' \
+    'installed="$HINDSIGHT_TEST_INSTALL_ROOT/bin/hindsight-memory"' \
     '/bin/mkdir -p "${installed:h}"' \
     'print -r -- "#!/bin/zsh" >"$installed"' \
     'print -r -- '\''print -r -- "installed:$*" >>"$HINDSIGHT_TEST_EVENTS"'\'' >>"$installed"' \
@@ -84,6 +87,7 @@ run_cutover() {
   HINDSIGHT_TEST_ACCEPT_RC="$accept_rc" \
   HINDSIGHT_TEST_REPLACE_ACCEPT="$replace_accept" \
   HINDSIGHT_TEST_ACCEPT_PATH="$helpers/accept" \
+  HINDSIGHT_TEST_INSTALL_ROOT="$test_install_root" \
   HINDSIGHT_AGENTS_CHECKOUT="$agents_root" \
   stop_legacy="$helpers/stop" \
   rollback_preflight="$helpers/rollback" \
@@ -116,6 +120,103 @@ prepare_case success
 run_cutover 0 0
 [[ "$cutover_status" == 0 ]]
 assert_events $'rollback:--verify-only\nstop\ninstall\ninstalled:verify --config '"$fake_home"$'/.config/hindsight-control-plane/installation.json\naccept'
+
+prepare_case configured-paths
+configured_root="$case_root/dotfiles"
+configured_python_rel=".local/custom-hindsight/python3.13"
+configured_installation_rel=".config/custom-hindsight/installation.json"
+configured_install_root_rel=".local/custom-hindsight/install"
+test_install_root="$fake_home/$configured_install_root_rel"
+/bin/mkdir -p \
+  "$configured_root/scripts" \
+  "$configured_root/home/.chezmoidata" \
+  "$fake_home/${configured_python_rel:h}" \
+  "$fake_home/${configured_installation_rel:h}"
+/bin/chmod 700 \
+  "$configured_root" \
+  "$configured_root/scripts" \
+  "$configured_root/home" \
+  "$configured_root/home/.chezmoidata" \
+  "$fake_home/${configured_python_rel:h}" \
+  "$fake_home/${configured_installation_rel:h}"
+/bin/cp \
+  "$repo_dir/scripts/hindsight-control-plane-cutover.zsh" \
+  "$configured_root/scripts/hindsight-control-plane-cutover.zsh"
+/bin/cp \
+  "$test_managed_python" \
+  "$fake_home/$configured_python_rel"
+/bin/chmod 700 "$fake_home/$configured_python_rel"
+print -r -- \
+  "{\"install_root\":\"$test_install_root\",\"python_executable\":\"$fake_home/$configured_python_rel\"}" \
+  >"$fake_home/$configured_installation_rel"
+/bin/chmod 600 "$fake_home/$configured_installation_rel"
+while IFS= read -r line; do
+  case "$line" in
+    'managedPython = '*)
+      print -r -- "managedPython = \"$configured_python_rel\""
+      ;;
+    'installationPath = '*)
+      print -r -- "installationPath = \"$configured_installation_rel\""
+      ;;
+    'installRoot = '*)
+      print -r -- "installRoot = \"$configured_install_root_rel\""
+      ;;
+    *)
+      print -r -- "$line"
+      ;;
+  esac
+done <"$repo_dir/home/.chezmoidata/hindsight.toml" \
+  >"$configured_root/home/.chezmoidata/hindsight.toml"
+run_cutover \
+  0 \
+  0 \
+  false \
+  "$configured_root/scripts/hindsight-control-plane-cutover.zsh"
+[[ "$cutover_status" == 0 ]]
+assert_events $'rollback:--verify-only\nstop\ninstall\ninstalled:verify --config '"$fake_home/$configured_installation_rel"$'\naccept'
+
+prepare_case manifest-root-mismatch
+print -r -- \
+  "{\"install_root\":\"$fake_home/.local/other-install\",\"python_executable\":\"$test_managed_python\"}" \
+  >"$fake_home/.config/hindsight-control-plane/installation.json"
+run_cutover 0 0
+[[ "$cutover_status" != 0 ]]
+[[ ! -e "$events" ]]
+
+prepare_case manifest-python-mismatch
+print -r -- \
+  "{\"install_root\":\"$test_install_root\",\"python_executable\":\"$fake_home/.local/other-python\"}" \
+  >"$fake_home/.config/hindsight-control-plane/installation.json"
+run_cutover 0 0
+[[ "$cutover_status" != 0 ]]
+[[ ! -e "$events" ]]
+
+prepare_case configured-path-escape
+escape_root="$case_root/dotfiles"
+/bin/mkdir -p "$escape_root/scripts" "$escape_root/home/.chezmoidata"
+/bin/chmod 700 \
+  "$escape_root" \
+  "$escape_root/scripts" \
+  "$escape_root/home" \
+  "$escape_root/home/.chezmoidata"
+/bin/cp \
+  "$repo_dir/scripts/hindsight-control-plane-cutover.zsh" \
+  "$escape_root/scripts/hindsight-control-plane-cutover.zsh"
+while IFS= read -r line; do
+  if [[ "$line" == 'managedPython = '* ]]; then
+    print -r -- 'managedPython = "../outside/python3.13"'
+  else
+    print -r -- "$line"
+  fi
+done <"$repo_dir/home/.chezmoidata/hindsight.toml" \
+  >"$escape_root/home/.chezmoidata/hindsight.toml"
+run_cutover \
+  0 \
+  0 \
+  false \
+  "$escape_root/scripts/hindsight-control-plane-cutover.zsh"
+[[ "$cutover_status" != 0 ]]
+[[ ! -e "$events" ]]
 
 prepare_case replaced-helper
 run_cutover 0 0 true

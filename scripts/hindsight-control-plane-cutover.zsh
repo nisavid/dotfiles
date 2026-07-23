@@ -64,8 +64,6 @@ source_root="$repo_dir/home"
 data_file="$source_root/.chezmoidata/hindsight.toml"
 repository_root="${HINDSIGHT_AGENTS_CHECKOUT:A}"
 release_root="$repository_root/tooling/hindsight"
-managed_python="$HOME/.local/share/uv/python/cpython-3.13.14-macos-aarch64-none/bin/python3.13"
-installation_config="$HOME/.config/hindsight-control-plane/installation.json"
 read_hindsight_value() {
   local key="$1" line value=
   local count=0
@@ -79,6 +77,40 @@ read_hindsight_value() {
   [[ "$count" == 1 ]] || return 1
   print -r -- "$value"
 }
+read_hindsight_home_path() {
+  local key="$1" value home_root resolved
+  value="$(read_hindsight_value "$key")" || return 1
+  [[ "$value" != /* &&
+    "$value" != .. &&
+    "$value" != ../* &&
+    "$value" != */../* &&
+    "$value" != */.. ]] || return 1
+  home_root="${HOME:A}"
+  resolved="$home_root/$value"
+  [[ "${resolved:A}" == "$home_root"/* ]] || return 1
+  print -r -- "$resolved"
+}
+managed_python="$(read_hindsight_home_path managedPython)" || exit 1
+installation_config="$(read_hindsight_home_path installationPath)" || exit 1
+install_root="$(read_hindsight_home_path installRoot)" || exit 1
+manifest_managed_python="$(
+  /usr/bin/plutil \
+    -extract python_executable raw \
+    -o - \
+    "$installation_config" \
+    2>/dev/null
+)" || exit 1
+manifest_install_root="$(
+  /usr/bin/plutil \
+    -extract install_root raw \
+    -o - \
+    "$installation_config" \
+    2>/dev/null
+)" || exit 1
+[[ "$manifest_managed_python" == /* &&
+  "$manifest_install_root" == /* &&
+  "${manifest_managed_python:A}" == "${managed_python:A}" &&
+  "${manifest_install_root:A}" == "${install_root:A}" ]] || exit 1
 expected_commit="$(read_hindsight_value releaseCommit)"
 expected_version="$(read_hindsight_value releaseVersion)"
 candidate="$release_root/bin/hindsight-memory"
@@ -113,7 +145,7 @@ run_bound_command "$stop_legacy" "$stop_binding" || exit $?
   --release-root "$release_root" \
   --version "$expected_version"
 
-installed="$HOME/.local/opt/hindsight-control-plane/bin/hindsight-memory"
+installed="$manifest_install_root/bin/hindsight-memory"
 "$installed" verify --config "$installation_config"
 run_bound_command "$activation_acceptance" "$acceptance_binding" || exit $?
 
