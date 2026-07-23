@@ -33,5 +33,11 @@ jq -s --argjson selectOrbstack "$select_orbstack" '
   else
     error("Docker configuration must contain exactly one object")
   end
-  | if $selectOrbstack then .currentContext = "orbstack" else . end
+  | if $selectOrbstack then
+      .currentContext = "orbstack"
+    elif .currentContext == "orbstack" then
+      del(.currentContext)
+    else
+      .
+    end
 ' </dev/stdin
