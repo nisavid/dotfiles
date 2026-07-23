@@ -228,6 +228,11 @@ rg -Fx '[profile unrelated]' "$test_dir/aws-output" >/dev/null || fail 'unrelate
 rg -Fx 'role_arn = arn:aws:iam::123456789012:role/preserved' "$test_dir/aws-output" >/dev/null || \
   fail 'unrelated AWS authentication settings must be preserved'
 
+proton_environment=home/dot_config/environment.d/98-proton-pass.conf
+[[ $(<"$proton_environment") == \
+  $'# Keep Proton Pass sessions available across Linux launch contexts and reboots.\nPROTON_PASS_LINUX_KEYRING=dbus' ]] || \
+  fail 'Proton Pass must use the persistent Linux Secret Service provider'
+
 profiles=home/dot_config/secret-exec/profiles
 [[ $(<"$profiles/context7.env") == 'CONTEXT7_API_KEY=pass://cli-secrets/context7/password' ]] || fail 'Context7 profile mismatch'
 [[ $(<"$profiles/firecrawl.env") == 'FIRECRAWL_API_KEY=pass://cli-secrets/firecrawl/password' ]] || fail 'Firecrawl profile mismatch'

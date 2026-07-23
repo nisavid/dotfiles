@@ -69,11 +69,18 @@ The dedicated vault contains five login items:
 | `firecrawl` | password | `FIRECRAWL_API_KEY` |
 | `greptile` | password | `GREPTILE_API_KEY` |
 
-Every supported host must install the same supported `pass-cli` release, log in
-to Proton Pass, and keep the CLI session unlocked for unattended MCP and AWS
-processes. This deliberately trades unattended availability for the ability of
-any process running as the same operating-system user to invoke `pass-cli`.
-Host account isolation remains the security boundary.
+Proton sessions are local to each host. Every supported host must install the
+same supported `pass-cli` release, log in independently, pass `pass-cli test`,
+and keep its CLI session unlocked for unattended MCP and AWS processes. macOS
+uses the default Keychain provider. Managed Linux sessions set
+`PROTON_PASS_LINUX_KEYRING=dbus` so Proton stores its local encryption key
+through the desktop Secret Service implementation instead of the reboot- and
+launch-context-sensitive kernel keyring. On KDE, `org.freedesktop.secrets` must
+be available and KWallet must be unlocked before login or unattended use.
+
+This deliberately trades unattended availability for the ability of any
+process running as the same operating-system user to invoke `pass-cli`. Host
+account isolation remains the security boundary.
 
 ## Migration and activation
 
@@ -92,8 +99,9 @@ values in process arguments. Once the legacy sources are gone, the importer can
 verify that references resolve but cannot infer whether a provider rotated a
 credential. It is idempotent and does not delete the sources.
 
-Apply the launcher, profiles, AWS configuration, and MCP configuration with
-chezmoi. Validate each consumer before retirement. Then run:
+Apply the Proton provider binding, launcher, profiles, AWS configuration, and
+MCP configuration with chezmoi. Log in separately on each host and require
+`pass-cli test` to succeed before validating consumers. Then run:
 
 ```sh
 secret-exec-migrate --retire-plaintext
