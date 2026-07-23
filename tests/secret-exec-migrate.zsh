@@ -21,6 +21,8 @@ mkdir -p -- "$fixture_home/.config/environment.d" "$fixture_home/.config/zsh/zsh
 cp -R "$repo_root/home/dot_config/secret-exec/profiles" "$fixture_home/.config/secret-exec/"
 cp "$repo_root/home/dot_config/secret-exec/commands.env" \
   "$fixture_home/.config/secret-exec/commands.env"
+cp "$repo_root/home/dot_config/environment.d/99-secret-exec-shims.conf" \
+  "$fixture_home/.config/environment.d/99-secret-exec-shims.conf"
 cp "$repo_root/home/private_dot_local/lib/secret-exec/executable_secret-exec-command" \
   "$fixture_home/.local/lib/secret-exec/secret-exec-command"
 chmod +x "$fixture_home/.local/lib/secret-exec/secret-exec-command"
@@ -176,6 +178,33 @@ done
 
 output=$(zsh "$migrator" 2>&1)
 (( $(wc -l < "$state_dir/created.log") == 5 )) || fail 'repeated migration must not create duplicate items'
+
+shim_environment=$fixture_home/.config/environment.d/99-secret-exec-shims.conf
+mv "$shim_environment" "$test_dir/99-secret-exec-shims.conf"
+set +e
+zsh "$migrator" --retire-plaintext > "$test_dir/missing-shim-environment.out" 2>&1
+exit_code=$?
+set -e
+(( exit_code != 0 )) || fail 'retirement must require the shim PATH configuration'
+[[ $(<"$test_dir/missing-shim-environment.out") == \
+  *'secret-exec shim environment must be a readable regular file before retirement'* ]] || \
+  fail 'retirement must reject a missing shim PATH configuration before later validation'
+[[ -e $fixture_home/.config/environment.d/10-apikeys.local.conf ]] || \
+  fail 'a missing shim PATH configuration must preserve every plaintext source'
+mv "$test_dir/99-secret-exec-shims.conf" "$shim_environment"
+
+print -r -- 'PATH=$PATH:$HOME/.local/lib/secret-exec/bin' > "$shim_environment"
+set +e
+zsh "$migrator" --retire-plaintext > "$test_dir/stale-shim-environment.out" 2>&1
+exit_code=$?
+set -e
+(( exit_code != 0 )) || fail 'retirement must reject a stale shim PATH configuration'
+[[ $(<"$test_dir/stale-shim-environment.out") == \
+  *'secret-exec shim environment does not match the canonical contract'* ]] || \
+  fail 'retirement must reject a stale shim PATH configuration before later validation'
+[[ -e $fixture_home/.config/environment.d/10-apikeys.local.conf ]] || \
+  fail 'a stale shim PATH configuration must preserve every plaintext source'
+cp "$repo_root/home/dot_config/environment.d/99-secret-exec-shims.conf" "$shim_environment"
 
 dispatcher=$fixture_home/.local/lib/secret-exec/secret-exec-command
 mv "$dispatcher" "$test_dir/secret-exec-command"
