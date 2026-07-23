@@ -73,7 +73,11 @@ Ask workers to return one status:
 - `NEEDS_CONTEXT`: a named missing fact or decision prevents safe progress.
 - `BLOCKED`: the task cannot complete within its authority, scope, or available environment.
 
-On `NEEDS_CONTEXT` or `BLOCKED`, change the inputs, authority, task boundary, or worker capability before retrying. Do not repeat the same dispatch unchanged.
+On `NEEDS_CONTEXT` or `BLOCKED`, clarify the inputs, adjust the task boundary,
+or change the worker capability before retrying. Broaden authority or
+permissions only when the operator or repository policy explicitly authorizes
+that increase. Otherwise keep the original authority or report the task as
+blocked. Do not repeat the same dispatch unchanged.
 
 ## Leader Duties
 

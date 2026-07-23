@@ -44,12 +44,19 @@ worktree, invoke its native cleanup actuator. Preserve user/external worktrees.
 If an action is not target-local, preserve and report the remaining state.
 
 Discard is destructive. Enumerate the branch, commits, uncommitted files, and
-worktree path, then wait for the operator to type exactly `discard`. After exact
-confirmation, use the same provenance-aware terminal cleanup rules; force-delete
-a branch only for a normal checkout or directly agent-created worktree. Use
-`git worktree remove --force` only after exact discard confirmation covered
-every dirty path in that directly agent-created worktree. Otherwise preserve
-and report it. Never infer discard authority from a generic completion request.
+worktree registration and path, then wait for the operator to type exactly `discard`.
+The confirmation binds only that enumerated branch, worktree
+registration and path, commit set, and dirty-path snapshot. Immediately before
+any forced branch or worktree removal, re-enumerate those values and compare
+them with the confirmed snapshot. If any value changed, invalidate the
+confirmation, preserve and report the state, and require a new exact
+confirmation. After a still-valid confirmation, use the same provenance-aware
+terminal cleanup rules; force-delete a branch only for a normal checkout or
+directly agent-created worktree. Use `git worktree remove --force` only after exact discard confirmation covered
+every dirty path in that directly agent-created worktree and the immediate
+re-enumeration still matches.
+Otherwise preserve and report it. Never infer discard authority from a generic
+completion request.
 
 ## Establish The Baseline
 
