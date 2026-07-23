@@ -56,6 +56,7 @@ chmod 0700 \
   "$test_dir/impostor-orbstack/curl"
 
 fixture='{"auths":{"registry.example":{"auth":"credential-canary"}},"currentContext":"default","features":{"containerd-snapshotter":true}}'
+stale_fixture='{"auths":{"registry.example":{"auth":"credential-canary"}},"currentContext":"orbstack","features":{"containerd-snapshotter":true}}'
 rendered="$(
   print -r -- "$fixture" |
     PATH="$test_dir/with-orbstack:$PATH" /bin/bash "$modifier"
@@ -96,6 +97,18 @@ for unavailable_context in stale-orbstack impostor-orbstack; do
   )"
   print -r -- "$unavailable_rendered" | jq -e '
     .currentContext == "default" and
+    .auths["registry.example"].auth == "credential-canary" and
+    .features["containerd-snapshotter"] == true
+  ' >/dev/null
+done
+
+for unavailable_context in without-orbstack stale-orbstack impostor-orbstack; do
+  stale_rendered="$(
+    print -r -- "$stale_fixture" |
+      PATH="$test_dir/$unavailable_context:$PATH" /bin/bash "$modifier"
+  )"
+  print -r -- "$stale_rendered" | jq -e '
+    (has("currentContext") | not) and
     .auths["registry.example"].auth == "credential-canary" and
     .features["containerd-snapshotter"] == true
   ' >/dev/null
