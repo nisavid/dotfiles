@@ -35,9 +35,9 @@ Commands listed in `~/.config/secret-exec/commands.env` have managed shims in
 `~/.local/lib/secret-exec/bin`. That directory precedes ordinary command
 directories on the managed `PATH`. A shim resolves the first later executable
 with the same name, then launches it through the mapped `secret-exec` profile.
-The managed `.zprofile` modifier preserves host-specific login setup and sources
-the external Zsh configuration's `zprofile.zsh` so macOS `path_helper` cannot
-move Homebrew ahead of the shim.
+The managed post-update hook preserves host-specific `.zprofile` setup and
+sources the external Zsh configuration's `zprofile.zsh` so macOS `path_helper`
+cannot move Homebrew ahead of the shim.
 
 The current command mapping is:
 
