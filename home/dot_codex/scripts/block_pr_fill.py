@@ -330,7 +330,7 @@ TRUSTED_TASK_TEST_PATH = Path(
     "tooling/hindsight/tests/hindsight-memory-controller.zsh"
 )
 TRUSTED_TASK_TEST_TREE_PATH = Path("tooling/hindsight")
-TRUSTED_TASK_TEST_TREE = "d51a23a4c49ce9fecd6de53e94cda3063bbc171b"
+TRUSTED_TASK_TEST_TREE = "603e98d2b28e022a1038f919384471051c78e9ab"
 
 
 def _has_exact_expandable_helper_spelling(command: str) -> bool:
