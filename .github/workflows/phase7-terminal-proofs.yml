@@ -1,0 +1,446 @@
+name: Phase 7 terminal backend proofs
+
+on:
+  workflow_dispatch:
+    inputs:
+      public_commit:
+        description: Exact 40-hex commit in nisavid/agents
+        required: true
+        type: string
+      private_commit:
+        description: Exact 40-hex dotfiles deployment-source commit containing the private candidate
+        required: true
+        type: string
+      expected_public_candidate_identity:
+        description: Exact 64-hex public candidate content identity
+        required: true
+        type: string
+      expected_private_candidate_identity:
+        description: Exact 64-hex private candidate content identity
+        required: true
+        type: string
+      reviewed_producer_sha256:
+        description: Reviewed private producer registry sha256 identity
+        required: true
+        type: string
+
+concurrency:
+  group: phase7-terminal-proofs-${{ inputs.public_commit }}-${{ inputs.private_commit }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate-inputs:
+    name: Validate immutable inputs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require exact commit and content identities
+        shell: bash
+        env:
+          PHASE7_PUBLIC_COMMIT: ${{ inputs.public_commit }}
+          PHASE7_PRIVATE_COMMIT: ${{ inputs.private_commit }}
+          PHASE7_PUBLIC_IDENTITY: ${{ inputs.expected_public_candidate_identity }}
+          PHASE7_PRIVATE_IDENTITY: ${{ inputs.expected_private_candidate_identity }}
+          PHASE7_PRODUCER_IDENTITY: ${{ inputs.reviewed_producer_sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "$PHASE7_PUBLIC_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$PHASE7_PRIVATE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$PHASE7_PUBLIC_IDENTITY" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$PHASE7_PRIVATE_IDENTITY" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$PHASE7_PRODUCER_IDENTITY" =~ ^sha256:[0-9a-f]{64}$ ]]
+
+  unix-target:
+    name: ${{ matrix.target }}
+    needs: validate-inputs
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            target: macos-seatbelt
+          - runner: ubuntu-24.04
+            target: linux-bubblewrap
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - name: Check out exact dotfiles deployment source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ inputs.private_commit }}
+          path: deployment-source
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Check out exact public candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: nisavid/agents
+          ref: ${{ inputs.public_commit }}
+          path: public-source
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Select Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+
+      - name: Assert exact checkouts
+        shell: bash
+        env:
+          PHASE7_PUBLIC_COMMIT: ${{ inputs.public_commit }}
+          PHASE7_PRIVATE_COMMIT: ${{ inputs.private_commit }}
+        run: |
+          set -euo pipefail
+          [[ "$(git -C deployment-source rev-parse HEAD)" == "$PHASE7_PRIVATE_COMMIT" ]]
+          [[ "$(git -C public-source rev-parse HEAD)" == "$PHASE7_PUBLIC_COMMIT" ]]
+
+      - name: Require native Bubblewrap
+        if: matrix.target == 'linux-bubblewrap'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get -qq update >/dev/null
+          sudo apt-get -qq install -y bubblewrap >/dev/null
+          [[ "$(command -v bwrap)" == "/usr/bin/bwrap" ]]
+          [[ -x /usr/bin/bwrap ]]
+
+      - name: Build canonical capability manifest
+        shell: bash
+        env:
+          PHASE7_PROOF_TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          umask 077
+          python deployment-source/scripts/phase7_hosted_proof_bootstrap.py \
+            build-capability \
+            --private-source "$GITHUB_WORKSPACE/deployment-source" \
+            --target "$PHASE7_PROOF_TARGET" \
+            --root "$RUNNER_TEMP/phase7-capability-$PHASE7_PROOF_TARGET" \
+            --output "$RUNNER_TEMP/phase7-capability-$PHASE7_PROOF_TARGET.json"
+
+      - name: Execute direct terminal proof
+        shell: bash
+        env:
+          PHASE7_PROOF_TARGET: ${{ matrix.target }}
+          PHASE7_PUBLIC_IDENTITY: ${{ inputs.expected_public_candidate_identity }}
+          PHASE7_PRIVATE_IDENTITY: ${{ inputs.expected_private_candidate_identity }}
+          PHASE7_PRIVATE_COMMIT: ${{ inputs.private_commit }}
+          PHASE7_PRODUCER_IDENTITY: ${{ inputs.reviewed_producer_sha256 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          private_builder_target_args=()
+          if [[ "$PHASE7_PROOF_TARGET" != "macos-seatbelt" ]]; then
+            private_builder_target_args=(--proof-target "$PHASE7_PROOF_TARGET")
+          fi
+          if ! python public-source/scripts/run_phase7_terminal_proof.py \
+            --private-repository "$GITHUB_WORKSPACE/deployment-source" \
+            --private-commit-oid "$PHASE7_PRIVATE_COMMIT" \
+            --expected-private-candidate-identity "$PHASE7_PRIVATE_IDENTITY" \
+            --reviewed-producer-sha256 "$PHASE7_PRODUCER_IDENTITY" \
+            --public-root "$GITHUB_WORKSPACE/public-source" \
+            --public-candidate-sha256 "$PHASE7_PUBLIC_IDENTITY" \
+            --capability-manifest "$RUNNER_TEMP/phase7-capability-$PHASE7_PROOF_TARGET.json" \
+            --private-output "$RUNNER_TEMP/phase7-private-output-$PHASE7_PROOF_TARGET" \
+            --private-summary-output "$RUNNER_TEMP/phase7-private-summary-$PHASE7_PROOF_TARGET.json" \
+            --composed-output "$RUNNER_TEMP/phase7-composed-$PHASE7_PROOF_TARGET" \
+            ${private_builder_target_args[@]+"${private_builder_target_args[@]}"} \
+            --target-proof-output "$RUNNER_TEMP/phase7-target-proof-$PHASE7_PROOF_TARGET.json" \
+            >"$RUNNER_TEMP/phase7-proof-run-$PHASE7_PROOF_TARGET.log" 2>&1
+          then
+            echo "::error::Phase 7 terminal proof generation failed"
+            exit 1
+          fi
+          python deployment-source/scripts/phase7_hosted_proof_bootstrap.py \
+            gate-target \
+            --proof "$RUNNER_TEMP/phase7-target-proof-$PHASE7_PROOF_TARGET.json" \
+            --target "$PHASE7_PROOF_TARGET" \
+            --public-candidate-identity "$PHASE7_PUBLIC_IDENTITY"
+
+      - name: Upload public-safe target proof
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: phase7-target-proof-${{ matrix.target }}
+          path: ${{ runner.temp }}/phase7-target-proof-${{ matrix.target }}.json
+          if-no-files-found: error
+          retention-days: 1
+
+  wsl2-target:
+    name: wsl2-bubblewrap
+    needs: validate-inputs
+    runs-on: windows-2025
+    timeout-minutes: 45
+    steps:
+      - name: Check out exact dotfiles deployment source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ inputs.private_commit }}
+          path: deployment-source
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Check out exact public candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: nisavid/agents
+          ref: ${{ inputs.public_commit }}
+          path: public-source
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Assert exact checkouts
+        shell: pwsh
+        env:
+          PHASE7_PUBLIC_COMMIT: ${{ inputs.public_commit }}
+          PHASE7_PRIVATE_COMMIT: ${{ inputs.private_commit }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ((git -C deployment-source rev-parse HEAD) -ne $env:PHASE7_PRIVATE_COMMIT) {
+            throw "Dotfiles deployment-source checkout identity mismatch"
+          }
+          if ((git -C public-source rev-parse HEAD) -ne $env:PHASE7_PUBLIC_COMMIT) {
+            throw "Public checkout identity mismatch"
+          }
+
+      - name: Require Ubuntu 24.04 under WSL2
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $distribution = "Ubuntu-24.04"
+          $installed = (wsl.exe --list --quiet) -replace "`0", ""
+          if ($distribution -notin $installed) {
+            wsl.exe --install --distribution $distribution --no-launch
+            if ($LASTEXITCODE -ne 0) {
+              throw "WSL distribution installation failed"
+            }
+          }
+          wsl.exe --set-version $distribution 2
+          if ($LASTEXITCODE -ne 0) {
+            throw "WSL2 selection failed"
+          }
+          $inventory = (wsl.exe --list --verbose) -replace "`0", ""
+          $selected = @(
+            $inventory | Where-Object { $_ -match "^\s*\*?\s*Ubuntu-24\.04\s+" }
+          )
+          if ($selected.Count -ne 1 -or $selected[0] -notmatch "\s+2\s*$") {
+            throw "Ubuntu-24.04 is not positively identified as WSL2"
+          }
+          $kernel = wsl.exe --distribution $distribution --user root --exec uname -r
+          if ($LASTEXITCODE -ne 0 -or $kernel -notmatch "(?i)(microsoft-standard|wsl2)") {
+            throw "WSL2 kernel identity is unavailable or ambiguous"
+          }
+
+      - name: Prepare isolated WSL ext4 proof checkout
+        shell: pwsh
+        env:
+          PHASE7_PUBLIC_COMMIT: ${{ inputs.public_commit }}
+          PHASE7_PRIVATE_COMMIT: ${{ inputs.private_commit }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $distribution = "Ubuntu-24.04"
+          $privateWindows = (Resolve-Path deployment-source).Path
+          $publicWindows = (Resolve-Path public-source).Path
+          $deploymentGuest = (wsl.exe --distribution $distribution --user root --exec wslpath -a $privateWindows).Trim()
+          $publicGuest = (wsl.exe --distribution $distribution --user root --exec wslpath -a $publicWindows).Trim()
+          if (-not $deploymentGuest.StartsWith("/mnt/") -or -not $publicGuest.StartsWith("/mnt/")) {
+            throw "Windows checkout translation failed"
+          }
+          $prepareCommand = @'
+          set -euo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get -qq update >/dev/null
+          apt-get -qq install -y bubblewrap git python3 >/dev/null
+          test "$(command -v bwrap)" = /usr/bin/bwrap
+          test -x /usr/bin/bwrap
+          install -d -m 0700 /root/phase7-proof
+          test ! -e /root/phase7-proof/deployment-source
+          test ! -e /root/phase7-proof/public-source
+          git clone --no-local --no-hardlinks --no-checkout --depth 1 \
+            "file://$PHASE7_DEPLOYMENT_GUEST" \
+            /root/phase7-proof/deployment-source
+          git clone --no-local --no-hardlinks --no-checkout --depth 1 \
+            "file://$PHASE7_PUBLIC_GUEST" \
+            /root/phase7-proof/public-source
+          git -C /root/phase7-proof/deployment-source checkout --detach "$PHASE7_PRIVATE_COMMIT"
+          git -C /root/phase7-proof/public-source checkout --detach "$PHASE7_PUBLIC_COMMIT"
+          test "$(git -C /root/phase7-proof/deployment-source rev-parse HEAD)" = "$PHASE7_PRIVATE_COMMIT"
+          test "$(git -C /root/phase7-proof/public-source rev-parse HEAD)" = "$PHASE7_PUBLIC_COMMIT"
+          test "$(git -C /root/phase7-proof/deployment-source rev-parse --is-shallow-repository)" = true
+          test "$(git -C /root/phase7-proof/public-source rev-parse --is-shallow-repository)" = true
+          test "$(stat -f -c %T /root/phase7-proof)" = ext2/ext3
+          '@
+          wsl.exe --distribution $distribution --user root --exec env `
+            "PHASE7_DEPLOYMENT_GUEST=$deploymentGuest" `
+            "PHASE7_PUBLIC_GUEST=$publicGuest" `
+            "PHASE7_PRIVATE_COMMIT=$env:PHASE7_PRIVATE_COMMIT" `
+            "PHASE7_PUBLIC_COMMIT=$env:PHASE7_PUBLIC_COMMIT" `
+            bash -lc $prepareCommand
+          if ($LASTEXITCODE -ne 0) {
+            throw "WSL proof prerequisites or exact ext4 checkouts are unavailable"
+          }
+
+      - name: Execute direct WSL2 terminal proof
+        shell: pwsh
+        env:
+          PHASE7_PUBLIC_IDENTITY: ${{ inputs.expected_public_candidate_identity }}
+          PHASE7_PRIVATE_IDENTITY: ${{ inputs.expected_private_candidate_identity }}
+          PHASE7_PRIVATE_COMMIT: ${{ inputs.private_commit }}
+          PHASE7_PRODUCER_IDENTITY: ${{ inputs.reviewed_producer_sha256 }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $distribution = "Ubuntu-24.04"
+          $guestCommand = @'
+          set -euo pipefail
+          umask 077
+          private_source=/root/phase7-proof/deployment-source
+          public_source=/root/phase7-proof/public-source
+          capability_root=/root/phase7-proof/capability-root
+          capability_manifest=/root/phase7-proof/capability.json
+          target_proof=/root/phase7-proof/wsl2-target-proof.json
+          python3 "$private_source/scripts/phase7_hosted_proof_bootstrap.py" \
+            build-capability \
+            --private-source "$private_source" \
+            --target wsl2-bubblewrap \
+            --root "$capability_root" \
+            --output "$capability_manifest"
+          if ! python3 "$public_source/scripts/run_phase7_terminal_proof.py" \
+            --private-repository "$private_source" \
+            --private-commit-oid "$PHASE7_PRIVATE_COMMIT" \
+            --expected-private-candidate-identity "$PHASE7_PRIVATE_IDENTITY" \
+            --reviewed-producer-sha256 "$PHASE7_PRODUCER_IDENTITY" \
+            --public-root "$public_source" \
+            --public-candidate-sha256 "$PHASE7_PUBLIC_IDENTITY" \
+            --capability-manifest "$capability_manifest" \
+            --private-output /root/phase7-proof/private-output \
+            --private-summary-output /root/phase7-proof/private-summary.json \
+            --composed-output /root/phase7-proof/composed \
+            --proof-target wsl2-bubblewrap \
+            --target-proof-output "$target_proof" \
+            >/root/phase7-proof/proof-run.log 2>&1
+          then
+            exit 1
+          fi
+          python3 "$private_source/scripts/phase7_hosted_proof_bootstrap.py" \
+            gate-target \
+            --proof "$target_proof" \
+            --target wsl2-bubblewrap \
+            --public-candidate-identity "$PHASE7_PUBLIC_IDENTITY"
+          '@
+          wsl.exe --distribution $distribution --user root --exec env `
+            "PHASE7_PUBLIC_IDENTITY=$env:PHASE7_PUBLIC_IDENTITY" `
+            "PHASE7_PRIVATE_IDENTITY=$env:PHASE7_PRIVATE_IDENTITY" `
+            "PHASE7_PRIVATE_COMMIT=$env:PHASE7_PRIVATE_COMMIT" `
+            "PHASE7_PRODUCER_IDENTITY=$env:PHASE7_PRODUCER_IDENTITY" `
+            bash -lc $guestCommand
+          if ($LASTEXITCODE -ne 0) {
+            throw "WSL2 terminal proof generation failed"
+          }
+          $proof = @(
+            wsl.exe --distribution $distribution --user root --exec cat /root/phase7-proof/wsl2-target-proof.json
+          )
+          if ($LASTEXITCODE -ne 0 -or $proof.Count -ne 1) {
+            throw "Public WSL2 proof transfer failed"
+          }
+          $utf8 = [System.Text.UTF8Encoding]::new($false)
+          [System.IO.File]::WriteAllText(
+            (Join-Path $env:RUNNER_TEMP "phase7-target-proof-wsl2-bubblewrap.json"),
+            $proof[0] + "`n",
+            $utf8
+          )
+
+      - name: Upload public-safe WSL2 proof
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: phase7-target-proof-wsl2-bubblewrap
+          path: ${{ runner.temp }}/phase7-target-proof-wsl2-bubblewrap.json
+          if-no-files-found: error
+          retention-days: 1
+
+  combine:
+    name: Combine exact target proofs
+    needs: [unix-target, wsl2-target]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out exact dotfiles deployment source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ inputs.private_commit }}
+          path: deployment-source
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Check out exact public candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: nisavid/agents
+          ref: ${{ inputs.public_commit }}
+          path: public-source
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Select Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+
+      - name: Assert exact checkouts
+        shell: bash
+        env:
+          PHASE7_PUBLIC_COMMIT: ${{ inputs.public_commit }}
+          PHASE7_PRIVATE_COMMIT: ${{ inputs.private_commit }}
+        run: |
+          set -euo pipefail
+          [[ "$(git -C deployment-source rev-parse HEAD)" == "$PHASE7_PRIVATE_COMMIT" ]]
+          [[ "$(git -C public-source rev-parse HEAD)" == "$PHASE7_PUBLIC_COMMIT" ]]
+
+      - name: Download macOS proof
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: phase7-target-proof-macos-seatbelt
+          path: ${{ runner.temp }}/phase7-target-proofs/macos
+
+      - name: Download native Linux proof
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: phase7-target-proof-linux-bubblewrap
+          path: ${{ runner.temp }}/phase7-target-proofs/linux
+
+      - name: Download WSL2 proof
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: phase7-target-proof-wsl2-bubblewrap
+          path: ${{ runner.temp }}/phase7-target-proofs/wsl2
+
+      - name: Combine and gate public evidence
+        shell: bash
+        env:
+          PHASE7_PUBLIC_IDENTITY: ${{ inputs.expected_public_candidate_identity }}
+        run: |
+          set -euo pipefail
+          umask 077
+          python public-source/scripts/combine_phase7_terminal_proofs.py \
+            --macos-proof "$RUNNER_TEMP/phase7-target-proofs/macos/phase7-target-proof-macos-seatbelt.json" \
+            --linux-proof "$RUNNER_TEMP/phase7-target-proofs/linux/phase7-target-proof-linux-bubblewrap.json" \
+            --wsl2-proof "$RUNNER_TEMP/phase7-target-proofs/wsl2/phase7-target-proof-wsl2-bubblewrap.json" \
+            --output "$RUNNER_TEMP/phase7-public-backend-release-evidence-v2.json"
+          python deployment-source/scripts/phase7_hosted_proof_bootstrap.py \
+            gate-combined \
+            --evidence "$RUNNER_TEMP/phase7-public-backend-release-evidence-v2.json" \
+            --public-candidate-identity "$PHASE7_PUBLIC_IDENTITY"
+
+      - name: Upload combined public evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: phase7-public-backend-release-evidence-v2
+          path: ${{ runner.temp }}/phase7-public-backend-release-evidence-v2.json
+          if-no-files-found: error
+          retention-days: 1
