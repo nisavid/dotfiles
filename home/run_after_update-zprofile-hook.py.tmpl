@@ -1,0 +1,104 @@
+#!/usr/bin/env python3
+"""Preserve local login setup while activating the managed Zsh profile."""
+
+from __future__ import annotations
+
+import os
+import stat
+import tempfile
+from pathlib import Path
+
+
+TARGET = Path({{ joinPath .chezmoi.homeDir ".config/zsh/.zprofile" | quote }})
+START = "# >>> secret-exec managed zprofile >>>"
+END = "# <<< secret-exec managed zprofile <<<"
+CANONICAL = "\n".join(
+    (
+        START,
+        "function {",
+        "  local managed_zprofile=${ZDOTDIR:-$HOME/.config/zsh}/zprofile.zsh",
+        "  [[ -r $managed_zprofile ]] && source $managed_zprofile",
+        "}",
+        END,
+    )
+)
+
+
+def updated_content(existing: str) -> str:
+    start_count = existing.count(START)
+    end_count = existing.count(END)
+    if start_count or end_count:
+        if start_count != 1 or end_count != 1 or CANONICAL not in existing:
+            raise ValueError(
+                "managed zprofile block is partial, duplicated, or modified"
+            )
+        return existing
+    if not existing:
+        separator = ""
+    elif existing.endswith("\n"):
+        separator = "\n"
+    else:
+        separator = "\n\n"
+    return f"{existing}{separator}{CANONICAL}\n"
+
+
+def current_content(path: Path) -> tuple[str, int]:
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return "", 0o644
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_nlink != 1
+        or metadata.st_uid != os.geteuid()
+    ):
+        raise ValueError("managed zprofile target must be an owned single-link file")
+    return path.read_text(encoding="utf-8"), stat.S_IMODE(metadata.st_mode)
+
+
+def replace(path: Path, content: str, mode: int) -> None:
+    parent = path.parent
+    metadata = parent.lstat()
+    if not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != os.geteuid():
+        raise ValueError("managed zprofile parent must be an owned directory")
+    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=parent)
+    temporary_path = Path(temporary)
+    try:
+        os.fchmod(descriptor, mode)
+        payload = content.encode("utf-8")
+        offset = 0
+        while offset < len(payload):
+            written = os.write(descriptor, payload[offset:])
+            if written <= 0:
+                raise RuntimeError("managed zprofile write made no progress")
+            offset += written
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = -1
+        os.replace(temporary_path, path)
+        parent_descriptor = os.open(
+            parent,
+            os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+        )
+        try:
+            os.fsync(parent_descriptor)
+        finally:
+            os.close(parent_descriptor)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        try:
+            temporary_path.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def main() -> None:
+    existing, mode = current_content(TARGET)
+    content = updated_content(existing)
+    if content != existing:
+        replace(TARGET, content, mode)
+
+
+if __name__ == "__main__":
+    main()
