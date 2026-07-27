@@ -8,10 +8,13 @@ encryption_doc="$repo_root/docs/ENCRYPTION.md"
 rendered=$(mktemp "${TMPDIR:-/tmp}/global-agents-policy.XXXXXX")
 target_state=$(mktemp "${TMPDIR:-/tmp}/global-agents-state.XXXXXX")
 git_policy=$(mktemp "${TMPDIR:-/tmp}/global-agents-git-policy.XXXXXX")
+render_source_root=$source_root
+render_template=$template
+render_fixture=
 chmod 600 "$rendered"
 chmod 600 "$target_state"
 chmod 600 "$git_policy"
-trap 'rm -f "$rendered" "$target_state" "$git_policy"' EXIT
+trap 'rm -f "$rendered" "$target_state" "$git_policy"; [[ -z $render_fixture ]] || rm -rf "$render_fixture"' EXIT
 
 fail() {
   print -u2 -- "global AGENTS policy: $1"
@@ -32,12 +35,22 @@ mode_of() {
 [[ $(chezmoi -S "$source_root" target-path "$template") == "$HOME/.codex/AGENTS.md" ]] ||
   fail "source template targets the wrong file"
 
-chezmoi -S "$source_root" dump --format json "$HOME/.codex/AGENTS.md" > "$target_state"
+if [[ ${GLOBAL_AGENTS_POLICY_PUBLIC_ONLY:-0} == 1 ]]; then
+  render_fixture=$(mktemp -d "${TMPDIR:-/tmp}/global-agents-source.XXXXXX")
+  chmod 700 "$render_fixture"
+  mkdir -m 700 "$render_fixture/dot_codex"
+  render_template="$render_fixture/dot_codex/private_AGENTS.md.tmpl"
+  grep -Fv '{{ include ".private-agents.md.age" | decrypt }}' "$template" > "$render_template"
+  chmod 644 "$render_template"
+  render_source_root=$render_fixture
+fi
+
+chezmoi -S "$render_source_root" dump --format json "$HOME/.codex/AGENTS.md" > "$target_state"
 [[ $(jq -r '.[".codex/AGENTS.md"].perm' "$target_state") == 384 ]] || fail "target mode is not 0600"
 
 (
-  cd "$source_root"
-  chezmoi -S "$source_root" execute-template < "$template" > "$rendered"
+  cd "$render_source_root"
+  chezmoi -S "$render_source_root" execute-template < "$render_template" > "$rendered"
 )
 [[ $(mode_of "$rendered") == 600 ]] || fail "rendered test artifact must be 0600"
 
@@ -65,17 +78,6 @@ done
 
 required=(
   'operator owns the checklist and the active task authorizes changing the issue, pull request, or comment'
-  'active task authorizes thread resolution'
-  'Resolve a Systalyze pull request review thread only when the active task authorizes thread resolution, addressed evidence is present'
-  'thread author login exactly matches the selected and verified GitHub login'
-  'If no GitHub login is selected, resolve no threads.'
-  "Limit debloating to the current task's behavioral surface."
-  'use `working-in-systalyze-worktrees`'
-  'Set the Kubernetes context explicitly for every command.'
-  'Set a namespace only for namespaced resources.'
-  'Confirm the exact resource and its cluster scope before mutating a cluster-scoped resource.'
-  'Every Kubernetes mutation requires authorization and a post-change check.'
-  'Do not persistently change the current context merely to run a command.'
   'Use `context7-mcp`'
   'Send only the minimum public query needed'
   'Use internal documentation only through a local, internal-only fallback.'
@@ -85,9 +87,25 @@ required=(
   'Keep one to three captures as discrete files.'
   'Present four or more captures as a local site-shaped collection.'
   'Publication requires separate authorization.'
-  'use `publishing-systalyze-sites`'
   'Only refresh local `main` when the operation depends on it.'
 )
+
+if [[ ${GLOBAL_AGENTS_POLICY_PUBLIC_ONLY:-0} != 1 ]]; then
+  required+=(
+    'active task authorizes thread resolution'
+    'Resolve a Systalyze pull request review thread only when the active task authorizes thread resolution, addressed evidence is present'
+    'thread author login exactly matches the selected and verified GitHub login'
+    'If no GitHub login is selected, resolve no threads.'
+    "Limit debloating to the current task's behavioral surface."
+    'use `working-in-systalyze-worktrees`'
+    'Set the Kubernetes context explicitly for every command.'
+    'Set a namespace only for namespaced resources.'
+    'Confirm the exact resource and its cluster scope before mutating a cluster-scoped resource.'
+    'Every Kubernetes mutation requires authorization and a post-change check.'
+    'Do not persistently change the current context merely to run a command.'
+    'use `publishing-systalyze-sites`'
+  )
+fi
 
 for ((i = 1; i <= ${#required}; i++)); do
   grep -Fq -- "$required[$i]" "$rendered" || fail "missing required clause $i"
