@@ -10,6 +10,7 @@ apply_prepublication_exit() {
 
 recover_apply_existing() {
   local identity=$1 root recovery phase version table_digest new_digest state db stage kind
+  local cleanup_trap
   root=$(state_root); recovery=$root/apply-recovery
   [[ -d $recovery ]] || return 0
   [[ -f $recovery/pointer && $(mode_of "$recovery") == 700 ]] || die 'apply recovery metadata is invalid'
@@ -26,7 +27,8 @@ recover_apply_existing() {
   [[ $table_digest == $(sha256_file "$recovery/table.age") ]] || die 'apply operation table digest mismatch'
   phase=$root/phase.apply-recover.$(opaque_token)
   /bin/mkdir -m 700 "$phase"
-  trap '/bin/rm -rf -- "$phase"' EXIT
+  printf -v cleanup_trap '/bin/rm -rf -- %q' "$phase"
+  trap "$cleanup_trap" EXIT
   /bin/mkdir -m 700 "$phase/old" "$phase/table"
   age -d -i "$identity" -o "$phase/old.tar" "$recovery/old.age" >/dev/null 2>&1 || die 'cannot decrypt old persistent state'
   age -d -i "$identity" -o "$phase/table.tar" "$recovery/table.age" >/dev/null 2>&1 || die 'cannot decrypt apply operation table'
@@ -88,7 +90,9 @@ apply_internal() {
   local identity='' persistent_state='' chezmoi_bin=chezmoi stage protected_state status
   local db_dir db_base arg target existing i rel desired_archive
   local root recovery recovery_build phase recipient op_id table_digest new_digest
-  local -a apply_args target_paths ephemeral_targets all_targets validated_targets
+  local exit_trap hup_trap int_trap term_trap
+  local -a apply_args=() target_paths=() ephemeral_targets=()
+  local -a all_targets=() validated_targets=()
   while (($#)); do
     case $1 in
       --identity) (($# >= 2)) || die 'missing identity'; identity=$2; shift 2 ;;
@@ -136,14 +140,18 @@ apply_internal() {
   root=$(state_root)
   recovery=$root/apply-recovery; op_id=$(opaque_token)
   phase=$root/phase.apply.$op_id; recovery_build=$phase/recovery
+  stage=$db_dir/.$db_base.private-skill-tx.$(opaque_token)
   recipient=$(age-keygen -y "$identity") || die 'cannot derive recovery recipient'
   /bin/mkdir -m 700 "$phase"
-  trap 'apply_prepublication_exit $? "$phase" "$stage"' EXIT
-  trap 'apply_prepublication_exit 129 "$phase" "$stage"' HUP
-  trap 'apply_prepublication_exit 130 "$phase" "$stage"' INT
-  trap 'apply_prepublication_exit 143 "$phase" "$stage"' TERM
+  printf -v exit_trap 'apply_prepublication_exit $? %q %q' "$phase" "$stage"
+  printf -v hup_trap 'apply_prepublication_exit 129 %q %q' "$phase" "$stage"
+  printf -v int_trap 'apply_prepublication_exit 130 %q %q' "$phase" "$stage"
+  printf -v term_trap 'apply_prepublication_exit 143 %q %q' "$phase" "$stage"
+  trap "$exit_trap" EXIT
+  trap "$hup_trap" HUP
+  trap "$int_trap" INT
+  trap "$term_trap" TERM
   /bin/mkdir -m 700 "$phase/old" "$phase/table" "$phase/table/desired" "$phase/projected" "$recovery_build"
-  stage=$db_dir/.$db_base.private-skill-tx.$(opaque_token)
   protected_state=$phase/persistent-state
   if [[ -e $persistent_state ]]; then
     [[ -f $persistent_state && ! -L $persistent_state ]] || die 'persistent state must be a regular file'
@@ -189,10 +197,14 @@ apply_internal() {
   write_pointer "$recovery_build" "$table_digest" pending
   tx_failpoint apply-after-pointer
   /bin/mv "$recovery_build" "$recovery"; sync_boundary
-  trap 'apply_exit $? "$identity" "$recovery" "$phase" "$stage"' EXIT
-  trap 'apply_exit 129 "$identity" "$recovery" "$phase" "$stage"' HUP
-  trap 'apply_exit 130 "$identity" "$recovery" "$phase" "$stage"' INT
-  trap 'apply_exit 143 "$identity" "$recovery" "$phase" "$stage"' TERM
+  printf -v exit_trap 'apply_exit $? %q %q %q %q' "$identity" "$recovery" "$phase" "$stage"
+  printf -v hup_trap 'apply_exit 129 %q %q %q %q' "$identity" "$recovery" "$phase" "$stage"
+  printf -v int_trap 'apply_exit 130 %q %q %q %q' "$identity" "$recovery" "$phase" "$stage"
+  printf -v term_trap 'apply_exit 143 %q %q %q %q' "$identity" "$recovery" "$phase" "$stage"
+  trap "$exit_trap" EXIT
+  trap "$hup_trap" HUP
+  trap "$int_trap" INT
+  trap "$term_trap" TERM
   tx_failpoint apply-after-publish
   tx_failpoint apply-before-chezmoi
   /bin/cp -p "$protected_state" "$stage"; /bin/chmod 600 "$stage"
@@ -255,7 +267,7 @@ apply_internal_participant() {
 }
 
 recover_internal() {
-  local identity='' root recovery phase op_id
+  local identity='' root recovery phase op_id cleanup_trap
   while (($#)); do
     case $1 in
       --identity) (($# >= 2)) || die 'missing identity'; identity=$2; shift 2 ;;
@@ -268,7 +280,8 @@ recover_internal() {
   [[ -d $recovery ]] || return 0
   op_id=$(opaque_token); phase=$root/phase.$op_id
   /bin/mkdir -m 700 "$phase"
-  trap '/bin/rm -rf -- "$phase"' EXIT HUP INT TERM
+  printf -v cleanup_trap '/bin/rm -rf -- %q' "$phase"
+  trap "$cleanup_trap" EXIT HUP INT TERM
   recover_existing "$identity" "$recovery" "$phase"
   discard_plaintext_then_recovery "$phase" "$recovery"
   tx_failpoint recovery-after-encrypted-removal
@@ -288,6 +301,6 @@ recover_participant() {
   shift
   [[ ${PRIVATE_SKILL_TX_TOKEN:-} == "$token" ]] || die 'invalid recover participant token'
   root=$(state_root); lock=$root/lock
-  [[ -f $lock && $(identity_of "$lock") == $(/usr/bin/stat -Lf '%i' /dev/fd/9) ]] || die 'invalid recover lock descriptor'
+  [[ -f $lock && $(identity_of "$lock") == $(followed_identity_of /dev/fd/9) ]] || die 'invalid recover lock descriptor'
   recover_internal "$@"
 }

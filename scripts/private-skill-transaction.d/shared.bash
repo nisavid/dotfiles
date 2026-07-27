@@ -5,12 +5,56 @@ die() {
   exit 1
 }
 
+PRIVATE_SKILL_PLATFORM=$(/usr/bin/uname -s 2>/dev/null) ||
+  die 'operating system identity is unavailable'
+
+case $PRIVATE_SKILL_PLATFORM in
+  Darwin)
+    PRIVATE_SKILL_STAT=/usr/bin/stat
+    PRIVATE_SKILL_LOCK=/usr/bin/lockf
+    PRIVATE_SKILL_SHA256=/usr/bin/shasum
+    ;;
+  Linux)
+    PRIVATE_SKILL_STAT=/usr/bin/stat
+    PRIVATE_SKILL_LOCK=/usr/bin/flock
+    PRIVATE_SKILL_SHA256=/usr/bin/sha256sum
+    ;;
+  *)
+    die "unsupported operating system: $PRIVATE_SKILL_PLATFORM"
+    ;;
+esac
+
+[[ -x $PRIVATE_SKILL_STAT ]] || die "$PRIVATE_SKILL_STAT is unavailable"
+[[ -x $PRIVATE_SKILL_LOCK ]] || die "$PRIVATE_SKILL_LOCK is unavailable"
+[[ -x $PRIVATE_SKILL_SHA256 ]] || die "$PRIVATE_SKILL_SHA256 is unavailable"
+
 mode_of() {
-  /usr/bin/stat -f '%Lp' "$1"
+  case $PRIVATE_SKILL_PLATFORM in
+    Darwin) "$PRIVATE_SKILL_STAT" -f '%Lp' "$1" ;;
+    Linux) "$PRIVATE_SKILL_STAT" -c '%a' -- "$1" ;;
+  esac
 }
 
 identity_of() {
-  /usr/bin/stat -f '%i' "$1"
+  case $PRIVATE_SKILL_PLATFORM in
+    Darwin) "$PRIVATE_SKILL_STAT" -f '%i' "$1" ;;
+    Linux) "$PRIVATE_SKILL_STAT" -c '%i' -- "$1" ;;
+  esac
+}
+
+followed_identity_of() {
+  case $PRIVATE_SKILL_PLATFORM in
+    Darwin) "$PRIVATE_SKILL_STAT" -Lf '%i' "$1" ;;
+    Linux) "$PRIVATE_SKILL_STAT" -L -c '%i' -- "$1" ;;
+  esac
+}
+
+lock_descriptor() {
+  local descriptor=$1
+  case $PRIVATE_SKILL_PLATFORM in
+    Darwin) "$PRIVATE_SKILL_LOCK" -s -t 0 "$descriptor" ;;
+    Linux) "$PRIVATE_SKILL_LOCK" -n "$descriptor" ;;
+  esac
 }
 
 state_root() {
@@ -36,12 +80,12 @@ ensure_lock() {
   [[ $(mode_of "$lock") == 600 ]] || die 'lock must have mode 0600'
   before=$(identity_of "$lock")
   exec 9<>"$lock"
-  after=$(/usr/bin/stat -Lf '%i' /dev/fd/9)
+  after=$(followed_identity_of /dev/fd/9)
   [[ $before == "$after" ]] || die 'lock descriptor identity changed'
   [[ $(mode_of "$root") == 700 && $(identity_of "$root") == "$parent_before" &&
      $(identity_of "$lock") == "$before" ]] ||
     die 'lock parent or file changed during open'
-  /usr/bin/lockf -s -t 0 9 || die 'another private-skill transaction is active'
+  lock_descriptor 9 || die 'another private-skill transaction is active'
 }
 
 opaque_token() {
@@ -53,7 +97,10 @@ opaque_token() {
 }
 
 sha256_file() {
-  /usr/bin/shasum -a 256 "$1" | /usr/bin/awk '{print $1}'
+  case $PRIVATE_SKILL_PLATFORM in
+    Darwin) "$PRIVATE_SKILL_SHA256" -a 256 "$1" ;;
+    Linux) "$PRIVATE_SKILL_SHA256" "$1" ;;
+  esac | /usr/bin/awk '{print $1}'
 }
 
 sync_boundary() {
@@ -116,7 +163,7 @@ assert_no_symlink_ancestor() {
 snapshot_target() {
   local target=$1 index=$2 snapshot=$3 type mode link='-' hash='-'
   if [[ -L $target ]]; then
-    type=link; mode=$(/usr/bin/stat -f '%Lp' "$target"); link=$(/usr/bin/readlink "$target")
+    type=link; mode=$(mode_of "$target"); link=$(/usr/bin/readlink "$target")
   elif [[ -f $target ]]; then
     type=file; mode=$(mode_of "$target"); hash=$(sha256_file "$target")
     /bin/cp -p "$target" "$snapshot/item.$index"

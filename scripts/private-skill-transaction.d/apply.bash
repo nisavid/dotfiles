@@ -33,7 +33,7 @@ restore_old_nondirectories() {
 
 restore_old_directory_modes() {
   local old=$1 table=$2 count i j selected selected_length kind target stage record type mode
-  local -a paths modes used
+  local -a paths=() modes=() used=()
   count=$(/usr/bin/awk 'END { print NR }' "$table/operations")
   for ((i=2; i<=count; i++)); do
     IFS=$'\t' read -r kind target stage <<<"$(/usr/bin/awk -F '\t' -v i="$i" 'NR == i { print; exit }' "$table/operations")"
@@ -69,7 +69,7 @@ validate_archive_members() {
 
 validate_apply_target() {
   local target=$1 current='' part i
-  local -a parts
+  local -a parts=()
   [[ $target == /* && $target != / && $target != */ && $target != *//* &&
      ! $target =~ [[:cntrl:]] ]] || return 1
   IFS=/ read -r -a parts <<<"$target"
@@ -118,7 +118,7 @@ apply_targets_match_desired() {
 
 rollback_apply_targets() {
   local old=$1 table=$2 count i j selected selected_length kind target stage
-  local -a paths used
+  local -a paths=() used=()
   count=$(/usr/bin/awk 'END { print NR }' "$table/operations")
   for ((i=2; i<=count; i++)); do
     IFS=$'\t' read -r kind target stage <<<"$(/usr/bin/awk -F '\t' -v i="$i" 'NR == i { print; exit }' "$table/operations")"

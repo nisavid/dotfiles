@@ -58,11 +58,21 @@ case "$(uname -s 2>/dev/null)" in
 Darwin)
   exit 0
   ;;
+Linux)
+  ;;
+*)
+  echo "save-acl: unsupported operating system" >&2
+  exit 1
+  ;;
 esac
 
+umask 077
 ACL_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/chezmoi/acl"
-mkdir -p "$(dirname "$ACL_FILE")"
+ACL_STATE_DIR=$(dirname "$ACL_FILE")
+mkdir -p "$ACL_STATE_DIR"
+chmod 700 "$ACL_STATE_DIR" || exit 1
 : >"$ACL_FILE"
+chmod 600 "$ACL_FILE" || exit 1
 
 cd -- "$HOME" || exit 1
 
