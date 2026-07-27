@@ -210,7 +210,9 @@ configured Hatchery Qwen endpoint is an LLM endpoint and does not expose a
 compatible embeddings API.
 
 After the no-active-session gate, use the pinned release's
-`bin/hindsight-embed-uvx` wrapper to persist these non-secret profile values:
+`bin/hindsight-embed-uvx` wrapper to persist these non-secret profile values.
+The pinned Node runtime must provide npm and npx 12.0.1, as required by the
+Hindsight 0.8.4 control-plane package:
 
 ```zsh
 /bin/chmod 700 \
@@ -249,6 +251,9 @@ expected_commit="$(read_consumer_value releaseCommit)"
 embed="$release_root/bin/hindsight-embed-uvx"
 profile=systalyze
 export HINDSIGHT_EMBED_UVX_EXECUTABLE=~/.local/bin/uvx
+export HINDSIGHT_EMBED_NPX_EXECUTABLE=\
+~/.local/share/fnm/node-versions/v24.18.0/installation/bin/npx
+[[ "$("$HINDSIGHT_EMBED_NPX_EXECUTABLE" --version)" == 12.0.1 ]] || return 1
 
 set_profile_env() {
   "$embed" hindsight-embed profile set-env "$profile" "$1" "$2"
