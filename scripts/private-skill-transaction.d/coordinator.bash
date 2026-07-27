@@ -88,7 +88,7 @@ apply_exit() {
 
 apply_internal() {
   local identity='' persistent_state='' chezmoi_bin=chezmoi stage protected_state status
-  local db_dir db_base arg target existing i rel desired_archive
+  local db_dir db_base arg target existing i rel desired_archive projected_link
   local root recovery recovery_build phase recipient op_id table_digest new_digest
   local exit_trap hup_trap int_trap term_trap
   local -a apply_args=() target_paths=() ephemeral_targets=()
@@ -170,7 +170,9 @@ apply_internal() {
   validate_archive_members "$desired_archive" "$phase/archive-members" ||
     die 'chezmoi desired-state archive contains an unsafe path'
   (umask 000; /usr/bin/tar -xpf "$desired_archive" -C "$phase/projected")
-  /usr/bin/find "$phase/projected" -type l -exec /bin/chmod -h 700 {} +
+  while IFS= read -r -d '' projected_link; do
+    set_symlink_mode "$projected_link" 700
+  done < <(/usr/bin/find "$phase/projected" -type l -print0)
   : >"$phase/old/manifest"; : >"$phase/table/desired/manifest"
   snapshot_target "$persistent_state" 1 "$phase/old"
   snapshot_target "$protected_state" 1 "$phase/table/desired"
@@ -215,9 +217,6 @@ apply_internal() {
   )
   status=$?
   set -e
-  if [[ ${PRIVATE_SKILL_TEST_APPLY_MODE:-} == kill* ]]; then
-    printf 'mode=%s status=%s\n' "$PRIVATE_SKILL_TEST_APPLY_MODE" "$status" >"$root/test-apply-crash-status"
-  fi
   case ${PRIVATE_SKILL_TEST_APPLY_MODE:-}:$status in
     kill:137|kill-ephemeral:137|kill-mixed:137)
       trap - EXIT HUP INT TERM
