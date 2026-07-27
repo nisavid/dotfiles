@@ -35,9 +35,20 @@ Commands listed in `~/.config/secret-exec/commands.env` have managed shims in
 `~/.local/lib/secret-exec/bin`. That directory precedes ordinary command
 directories on the managed `PATH`. A shim resolves the first later executable
 with the same name, then launches it through the mapped `secret-exec` profile.
-The managed `.zprofile` modifier preserves host-specific login setup and sources
-the external Zsh configuration's `zprofile.zsh` so macOS `path_helper` cannot
-move Homebrew ahead of the shim.
+The external Zsh checkout owns `.zprofile` as a direct symlink and repairs
+macOS `path_helper` ordering through its shared startup policy; chezmoi does not
+rewrite files inside that checkout.
+
+On macOS, the per-user `io.nisavid.zsh-gui-path` LaunchAgent sources the same
+policy's core-only `launcher` phase in an isolated Zsh process and installs the
+result in the Aqua launchd session. An after-apply chezmoi hook registers the
+agent and refreshes the current Aqua session from the external policy on every
+apply. Applies outside an Aqua session
+defer registration until the next GUI login and never modify a system or
+all-user launchd domain. The launchd environment affects only processes created
+after the update, so already-running applications must be relaunched. If the
+external startup policy is missing or invalid, the adapter fails without
+installing a partial PATH; the next successful apply or login retries it.
 
 The current command mapping is:
 
