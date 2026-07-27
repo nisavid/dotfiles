@@ -9,7 +9,7 @@ description: Use when refreshing, refocusing, streamlining, polishing, or reorga
 
 Human-facing docs should help each reader decide, act, or understand without absorbing maintainer-only machinery first.
 
-**Required background:** Use `documentation-writer` for audience, goal, scope, and Diataxis shape. Use `writing-clearly-and-concisely` for all prose. For docs that serve both humans and agents, use both `honing-agent-facing-docs` and this skill; also use `writing-skills`.
+**Required background:** Use `applying-diataxis` to classify human-facing material by reader, immediate need, artifact boundary, and Diataxis shape. Use `writing-clearly-and-concisely` for all prose. For durable docs that also steer agents, use `honing-agent-facing-docs` alongside this skill, treat the agent-policy surface as reference, and use `writing-skills`.
 
 ## When To Use
 
@@ -60,7 +60,7 @@ Start with people and their objectives, not the repository tree.
 - Put incident history in maintainer docs when it explains a current constraint, validation boundary, or update policy.
 - Put incident history in package docs only when package users must know the risk or caveat.
 - Drop incident history when the current rule is enough and the story no longer affects decisions.
-- If the user already gave document type, audience, goal, and scope, proceed with `documentation-writer` judgment instead of pausing for ritual clarification.
+- If the user already gave document type, audience, goal, and scope, proceed with `applying-diataxis` judgment instead of pausing for ritual clarification.
 
 ## Closeout
 
