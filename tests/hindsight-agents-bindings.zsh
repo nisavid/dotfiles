@@ -254,7 +254,8 @@ assert raw_installation["credential_resolver"]["path"] == str(
 )
 for surface in [raw_installation["health_checks"][0], raw_installation["services"][0]]:
     environment = surface["environment"]
-    assert environment["HINDSIGHT_API_AUDIT_LOG_ENABLED"] == "false"
+    assert environment["HINDSIGHT_API_AUDIT_LOG_ENABLED"] == "true"
+    assert environment["HINDSIGHT_API_AUDIT_LOG_RETENTION_DAYS"] == "7"
     assert environment["HINDSIGHT_API_EMBEDDINGS_PROVIDER"] == "openai-codex"
     assert environment["HINDSIGHT_API_HTTP_EXTENSION"] == (
         "hindsight_memory_control_plane.migration_generation_extension:"

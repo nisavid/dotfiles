@@ -60,9 +60,9 @@ installation and remains stopped until an explicit start or restart; launchd
 continues to recover genuine crashes while the desired service state is
 running.
 
-LLM request tracing is intentionally enabled with retention limited to seven
-days. These bank-scoped diagnostics are not replayed or treated as migration
-input. Generated embedding runtime state is private under
+Native audit logging and LLM request tracing are intentionally enabled with
+retention limited to seven days. These bank-scoped diagnostics are not replayed
+or treated as migration input. Generated embedding runtime state is private under
 `~/.local/state/hindsight-control-plane`; keep that tree mode `0700`, never
 commit it, and include it only in protected operational backups.
 
@@ -258,7 +258,8 @@ export HINDSIGHT_EMBED_NPX_EXECUTABLE=\
 set_profile_env() {
   "$embed" hindsight-embed profile set-env "$profile" "$1" "$2"
 }
-set_profile_env HINDSIGHT_API_AUDIT_LOG_ENABLED false
+set_profile_env HINDSIGHT_API_AUDIT_LOG_ENABLED true
+set_profile_env HINDSIGHT_API_AUDIT_LOG_RETENTION_DAYS 7
 set_profile_env HINDSIGHT_API_LLM_TRACE_ENABLED true
 set_profile_env HINDSIGHT_API_LLM_TRACE_RETENTION_DAYS 7
 set_profile_env HINDSIGHT_API_WORKER_ID stlz-ivan-mbp-systalyze
@@ -291,7 +292,8 @@ and verify that every key above has exactly the expected value:
 from pathlib import Path
 
 expected = {
-    "HINDSIGHT_API_AUDIT_LOG_ENABLED": "false",
+    "HINDSIGHT_API_AUDIT_LOG_ENABLED": "true",
+    "HINDSIGHT_API_AUDIT_LOG_RETENTION_DAYS": "7",
     "HINDSIGHT_API_LLM_TRACE_ENABLED": "true",
     "HINDSIGHT_API_LLM_TRACE_RETENTION_DAYS": "7",
     "HINDSIGHT_API_WORKER_ID": "stlz-ivan-mbp-systalyze",

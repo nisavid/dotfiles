@@ -386,13 +386,19 @@ class HindsightProviderBindingTest(unittest.TestCase):
             '"HINDSIGHT_API_LLM_TRACE_RETENTION_DAYS": "7"',
             template,
         )
+        self.assertIn('"HINDSIGHT_API_AUDIT_LOG_ENABLED": "true"', template)
+        self.assertIn(
+            '"HINDSIGHT_API_AUDIT_LOG_RETENTION_DAYS": "7"',
+            template,
+        )
 
-    def test_operator_docs_cover_trace_and_embedding_state_privacy(self) -> None:
+    def test_operator_docs_cover_logging_and_embedding_state_privacy(self) -> None:
         documentation = (ROOT / "docs/HINDSIGHT.md").read_text()
         normalized = " ".join(documentation.split())
 
         self.assertIn(
-            "LLM request tracing is intentionally enabled",
+            "Native audit logging and LLM request tracing are intentionally "
+            "enabled",
             normalized,
         )
         self.assertIn("seven days", normalized)
