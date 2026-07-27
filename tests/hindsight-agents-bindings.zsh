@@ -151,6 +151,45 @@ except RuntimeError:
     pass
 else:
     raise AssertionError("unbound harness executable was accepted")
+
+class ExecveCalled(Exception):
+    pass
+
+captured = {}
+module.parse_arguments = lambda: type(
+    "Arguments",
+    (),
+    {
+        "harness": "codex",
+        "mode": "launch",
+        "session_id": "launcher-regression",
+        "command": ["codex", "--version"],
+    },
+)()
+module.bind_harness_command = lambda _harness, _command: [
+    "/bound/codex",
+    "--version",
+]
+module.resolve_mint_authority = lambda: "x" * 32
+def fake_execve(path, arguments, environment):
+    captured.update(
+        path=path,
+        arguments=arguments,
+        environment=environment,
+    )
+    raise ExecveCalled
+module.os.execve = fake_execve
+try:
+    module.main()
+except ExecveCalled:
+    pass
+else:
+    raise AssertionError("launcher did not exec the controller")
+assert captured["arguments"][-3:] == [
+    "--command",
+    "/bound/codex",
+    "--version",
+]
 PY
 
 "$managed_python" -I - "$tmp_dir" "$repo_dir" "$agents_root" <<'PY'

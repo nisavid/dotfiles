@@ -136,7 +136,7 @@ def main() -> int:
         str(BRIDGES),
     ]
     if args.command:
-        command.extend(["--command", "--", *args.command])
+        command.extend(["--command", *args.command])
     environment = {
         "HOME": str(HOME),
         "USER": pwd.getpwuid(os.getuid()).pw_name,
