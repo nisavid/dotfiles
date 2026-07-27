@@ -3,9 +3,9 @@
 assert_outer_target_old_set() {
   assert_eq "$(<$APPLY_REGULAR)" old-file
   [[ -d $APPLY_TRANSITION && ! -L $APPLY_TRANSITION ]] || fail 'directory target type was not restored'
-  [[ $(stat -f '%Lp' $APPLY_TRANSITION) == 500 ]] || fail 'restrictive directory target mode was not restored'
+  [[ $(mode_of $APPLY_TRANSITION) == 500 ]] || fail 'restrictive directory target mode was not restored'
   assert_eq "$(<$APPLY_TRANSITION/child)" old-directory
-  [[ $(stat -f '%Lp' $APPLY_TRANSITION/child) == 644 ]] || fail 'directory child mode was not restored'
+  [[ $(mode_of $APPLY_TRANSITION/child) == 644 ]] || fail 'directory child mode was not restored'
   [[ ! -e $APPLY_ABSENT && ! -L $APPLY_ABSENT ]] || fail 'old-absent target was created'
   assert_eq "$(<$APPLY_NESTED)" old-nested
   [[ ! -e $APPLY_LOGICAL && ! -L $APPLY_LOGICAL ]] || fail 'logical run-script target was created'
@@ -13,13 +13,13 @@ assert_outer_target_old_set() {
 
 assert_outer_target_new_set() {
   assert_eq "$(<$APPLY_REGULAR)" new-file
-  [[ $(stat -f '%Lp' $APPLY_REGULAR) == 644 ]] || fail 'public file target mode was not retained'
+  [[ $(mode_of $APPLY_REGULAR) == 644 ]] || fail 'public file target mode was not retained'
   [[ -L $APPLY_TRANSITION && $(readlink $APPLY_TRANSITION) == $APPLY_LINK_DEST ]] ||
     fail 'directory-to-symlink target was not retained'
   assert_eq "$(<$APPLY_ABSENT)" new-absent
-  [[ $(stat -f '%Lp' $APPLY_ABSENT) == 644 ]] || fail 'new public file target mode was not retained'
+  [[ $(mode_of $APPLY_ABSENT) == 644 ]] || fail 'new public file target mode was not retained'
   assert_eq "$(<$APPLY_NESTED)" new-nested
-  [[ $(stat -f '%Lp' $APPLY_NESTED) == 644 ]] || fail 'nested public file target mode was not retained'
+  [[ $(mode_of $APPLY_NESTED) == 644 ]] || fail 'nested public file target mode was not retained'
   [[ ! -e $APPLY_LOGICAL && ! -L $APPLY_LOGICAL ]] || fail 'logical run-script target became persistent'
 }
 

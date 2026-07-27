@@ -317,7 +317,7 @@ test_directory_metadata_only_conflict() {
   if $cli recover --identity $fixture/identity.txt >/dev/null 2>&1; then
     fail 'metadata-only directory conflict was accepted'
   fi
-  [[ $(stat -f '%Lp' $HOME/.claude/skills/alpha/child) == 644 ]] ||
+  [[ $(mode_of $HOME/.claude/skills/alpha/child) == 644 ]] ||
     fail 'metadata-only concurrent edit was overwritten'
   [[ -d $XDG_STATE_HOME/chezmoi/private-skill-transaction/recovery ]] ||
     fail 'metadata-conflicting recovery was discarded'
@@ -335,7 +335,7 @@ test_final_desired_state_check_retains_conflict() {
     --pair $fixture/source/a.path.age $fixture/source/a.md.age >/dev/null 2>&1; then
     fail 'final-check conflict unexpectedly committed'
   fi
-  [[ -f $HOME/.agents/skills/alpha/SKILL.md && $(stat -f '%Lp' $HOME/.agents/skills/alpha/SKILL.md) == 644 ]] ||
+  [[ -f $HOME/.agents/skills/alpha/SKILL.md && $(mode_of $HOME/.agents/skills/alpha/SKILL.md) == 644 ]] ||
     fail 'final-check conflict was overwritten'
   [[ -d $XDG_STATE_HOME/chezmoi/private-skill-transaction/recovery ]] ||
     fail 'final-check conflict discarded durable recovery'
@@ -434,6 +434,6 @@ test_directory_snapshot_tree_contract() {
   chmod 600 $HOME/.agents/skills/alpha/.tree-list.fixture
   $cli recover --identity $fixture/identity.txt
   assert_eq "$(<$HOME/.agents/skills/alpha/.tree-list.fixture)" ordinary
-  [[ $(stat -f '%Lp' $HOME/.agents/skills/alpha/.tree-list.fixture) == 600 ]] ||
+  [[ $(mode_of $HOME/.agents/skills/alpha/.tree-list.fixture) == 600 ]] ||
     fail 'tree-list filename metadata was not restored'
 }

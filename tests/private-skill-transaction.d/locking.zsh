@@ -52,7 +52,7 @@ test_lock_path_validation_and_parent_mode_preservation() {
   if $cli with-lock /usr/bin/true >/dev/null 2>&1; then
     fail 'wrong lock-parent mode was accepted'
   fi
-  [[ $(stat -f '%Lp' $XDG_STATE_HOME/chezmoi) == 711 ]] || fail 'unrelated parent mode was changed'
+  [[ $(mode_of $XDG_STATE_HOME/chezmoi) == 711 ]] || fail 'unrelated parent mode was changed'
 }
 
 test_bogus_participant_token() {

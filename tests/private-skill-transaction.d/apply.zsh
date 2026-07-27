@@ -48,13 +48,13 @@ test_outer_apply_protects_persistent_state_and_rolls_back_restore() {
   fi
   assert_eq "$(<$state_db)" old-db
   assert_eq "$(<$HOME/.agents/skills/alpha/SKILL.md)" old-skill
-  [[ $(stat -f '%Lp' $state_db) == 600 ]] || fail 'persistent state mode changed'
+  [[ $(mode_of $state_db) == 600 ]] || fail 'persistent state mode changed'
 
   $cli apply --identity $fixture/identity.txt --persistent-state $state_db \
     --chezmoi $fixture/bin/fake-chezmoi -- $HOME/.codex/AGENTS.md
   assert_eq "$(<$state_db)" updated-db
   assert_eq "$(<$HOME/.agents/skills/alpha/SKILL.md)" "$(skill_text alpha new)"
-  [[ $(stat -f '%Lp' $state_db) == 600 ]] || fail 'replacement persistent state mode is not 0600'
+  [[ $(mode_of $state_db) == 600 ]] || fail 'replacement persistent state mode is not 0600'
   [[ -z $(find ${state_db:h} -maxdepth 1 -name '.chezmoistate.boltdb.private-skill-tx.*' -print -quit) ]] ||
     fail 'persistent-state sibling staging file leaked'
 
@@ -176,8 +176,8 @@ test_projected_apply_file_modes_are_preserved() {
   install_fake_chezmoi projected-modes
   $cli apply --identity $fixture/identity.txt --persistent-state $state_db \
     --chezmoi $fixture/bin/fake-chezmoi -- $APPLY_PUBLIC $APPLY_PRIVATE
-  [[ $(stat -f '%Lp' $APPLY_PUBLIC) == 644 ]] || fail 'managed public file mode was not verified'
-  [[ $(stat -f '%Lp' $APPLY_PRIVATE) == 600 ]] || fail 'managed private file mode was not verified'
+  [[ $(mode_of $APPLY_PUBLIC) == 644 ]] || fail 'managed public file mode was not verified'
+  [[ $(mode_of $APPLY_PRIVATE) == 600 ]] || fail 'managed private file mode was not verified'
   assert_eq "$(<$state_db)" updated-db
 }
 
