@@ -11,6 +11,12 @@ case "$(uname -s 2>/dev/null)" in
 Darwin)
   exit 0
   ;;
+Linux)
+  ;;
+*)
+  echo "restore-acl: unsupported operating system" >&2
+  exit 1
+  ;;
 esac
 
 ACL_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/chezmoi/acl"
