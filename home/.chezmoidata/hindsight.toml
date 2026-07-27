@@ -1,6 +1,6 @@
 [hindsight]
-releaseCommit = "ddba8449927477922e5dd3d4407dfabcabdc4c84"
-releaseVersion = "2026.07.26+ddba844"
+releaseCommit = "d57e5c8d61297a3d8316eeb8444c8ca0a8bbdae0"
+releaseVersion = "2026.07.26+d57e5c8"
 consumerId = "stlz-ivan-mbp"
 workerId = "stlz-ivan-mbp-systalyze"
 profile = "systalyze"
