@@ -38,14 +38,14 @@ render() {
     execute-template < "$repo_dir/$source" > "$target"
 }
 
-render home/private_dot_config/hindsight-control-plane/private_inventory.json.tmpl \
+render home/dot_config/private_hindsight-control-plane/private_inventory.json.tmpl \
   "$tmp_dir/inventory.json"
-render home/private_dot_config/hindsight-control-plane/private_installation.json.tmpl \
+render home/dot_config/private_hindsight-control-plane/private_installation.json.tmpl \
   "$tmp_dir/installation.json"
-render home/private_dot_config/hindsight-control-plane/private_provider-runtime-policy.json.tmpl \
+render home/dot_config/private_hindsight-control-plane/private_provider-runtime-policy.json.tmpl \
   "$tmp_dir/provider-runtime-policy.json"
 for harness in codex claude-code cursor; do
-  render "home/private_dot_config/hindsight-control-plane/private_harnesses/private_${harness}-destination.json.tmpl" \
+  render "home/dot_config/private_hindsight-control-plane/private_harnesses/private_${harness}-destination.json.tmpl" \
     "$tmp_dir/${harness}-destination.json"
 done
 render home/private_dot_local/bin/executable_hindsight-memory.tmpl \

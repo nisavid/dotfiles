@@ -22,10 +22,10 @@ satisfied.
 
 | Surface | Source | Installed target |
 | --- | --- | --- |
-| Machine inventory | `home/private_dot_config/hindsight-control-plane/private_inventory.json.tmpl` | `~/.config/hindsight-control-plane/inventory.json` |
-| Portable lifecycle | `home/private_dot_config/hindsight-control-plane/private_installation.json.tmpl` | `~/.config/hindsight-control-plane/installation.json` |
-| Provider policy | `home/private_dot_config/hindsight-control-plane/private_provider-runtime-policy.json.tmpl` | `~/.config/hindsight-control-plane/provider-runtime-policy.json` |
-| Harness destinations | `home/private_dot_config/hindsight-control-plane/private_harnesses/` | `~/.config/hindsight-control-plane/harnesses/` |
+| Machine inventory | `home/dot_config/private_hindsight-control-plane/private_inventory.json.tmpl` | `~/.config/hindsight-control-plane/inventory.json` |
+| Portable lifecycle | `home/dot_config/private_hindsight-control-plane/private_installation.json.tmpl` | `~/.config/hindsight-control-plane/installation.json` |
+| Provider policy | `home/dot_config/private_hindsight-control-plane/private_provider-runtime-policy.json.tmpl` | `~/.config/hindsight-control-plane/provider-runtime-policy.json` |
+| Harness destinations | `home/dot_config/private_hindsight-control-plane/private_harnesses/` | `~/.config/hindsight-control-plane/harnesses/` |
 | Keychain resolver binding | `home/.chezmoidata/hindsight.toml` | `~/.local/libexec/hindsight-keychain-resolver` |
 | Provider bootstrap | `home/private_dot_local/lib/hindsight-runtime/sitecustomize.py` | `~/.local/lib/hindsight-runtime/sitecustomize.py` |
 

@@ -1,0 +1,51 @@
+#!/bin/zsh -f
+
+function main {
+  emulate -L zsh
+  setopt err_return no_unset pipe_fail
+
+  local -r launchctl_bin=${ZSH_GUI_PATH_LAUNCHCTL_BIN:-/bin/launchctl}
+  local -r startup_file=${ZSH_GUI_PATH_STARTUP_FILE:-$HOME/.config/zsh/startup.zsh}
+  local manager_name manager_uid observed_path
+
+  if ! manager_name=$("$launchctl_bin" managername 2>/dev/null); then
+    print -ru2 -- 'zsh GUI PATH: no launchd session is available; deferring until login'
+    return 0
+  fi
+  if [[ $manager_name != Aqua ]]; then
+    print -ru2 -- \
+      "zsh GUI PATH: launchd session is ${(q-)manager_name}, not Aqua; deferring until GUI login"
+    return 0
+  fi
+  if ! manager_uid=$("$launchctl_bin" manageruid 2>/dev/null); then
+    print -ru2 -- 'zsh GUI PATH: cannot identify the launchd session user'
+    return 1
+  fi
+  if [[ $manager_uid != $EUID ]]; then
+    print -ru2 -- \
+      "zsh GUI PATH: refusing session uid ${(q-)manager_uid}; expected $EUID"
+    return 1
+  fi
+  if [[ ! -r $startup_file ]]; then
+    print -ru2 -- \
+      "zsh GUI PATH: shared startup policy is not readable: ${(q-)startup_file}"
+    return 1
+  fi
+
+  path=( /usr/bin /bin /usr/sbin /sbin )
+  source "$startup_file" launcher darwin
+  local -r rendered_path=$PATH
+  if [[ -z $rendered_path ]]; then
+    print -ru2 -- 'zsh GUI PATH: shared startup policy produced an empty PATH'
+    return 1
+  fi
+
+  "$launchctl_bin" setenv PATH "$rendered_path"
+  observed_path=$("$launchctl_bin" getenv PATH)
+  if [[ $observed_path != $rendered_path ]]; then
+    print -ru2 -- 'zsh GUI PATH: launchd did not retain the rendered PATH'
+    return 1
+  fi
+}
+
+main "$@"

@@ -3,3 +3,8 @@
 
 # Machine-local git overrides (e.g. coderabbit machineId); not tracked.
 .config/git/config.local
+
+{{ if ne .chezmoi.os "darwin" }}
+Library/LaunchAgents/io.nisavid.zsh-gui-path.plist
+.local/libexec/nisavid/zsh-gui-path
+{{ end }}
