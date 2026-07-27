@@ -83,7 +83,22 @@ run_failure_case() {
 }
 
 /bin/rm -f -- "$wrapper_config"
-run_failure_case "missing config" healthy
+for phase in pre-start post-start; do
+  : >"$wrapper_log"
+  HINDSIGHT_TEST_CONTROLLER_LOG="$wrapper_log" \
+    HINDSIGHT_TEST_RECONCILE_MODE=healthy \
+    "$wrapper" "$phase" "$wrapper_config" >/dev/null
+  [[ "$(grep -c 'harness-config disable' "$wrapper_log")" == 3 ]] || {
+    print -ru2 -- \
+      "harness reconciler did not disable every harness for missing config during $phase"
+    exit 1
+  }
+  if grep -F 'harness-config reconcile' "$wrapper_log" >/dev/null; then
+    print -ru2 -- \
+      "harness reconciler attempted activation for missing config during $phase"
+    exit 1
+  fi
+done
 print -r -- '{malformed' >"$wrapper_config"
 chmod 600 "$wrapper_config"
 run_failure_case "malformed config" healthy

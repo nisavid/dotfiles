@@ -147,6 +147,10 @@ if [[ "$phase" == disable ]]; then
   disable_all
   exit
 fi
+if [[ ! -e "$expected_config" && ! -L "$expected_config" ]]; then
+  disable_all
+  exit
+fi
 config_digest="$(config_is_safe)" ||
   fail_closed "unsafe or invalid configuration artifact"
 [[ "$config_digest" =~ ^[0-9a-f]{64}$ ]] ||
