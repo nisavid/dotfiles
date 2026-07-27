@@ -8,6 +8,7 @@ on:
       - "home/.chezmoiignore"
       - "home/.chezmoidata/hindsight.toml"
       - "home/dot_agents/skills/symlink_hindsight-*.tmpl"
+      - "home/dot_codex/private_AGENTS.md.tmpl"
       - "home/dot_config/environment.d/**"
       - "home/dot_config/private_hindsight-control-plane/**"
       - "home/private_Library/private_LaunchAgents/io.nisavid.zsh-gui-path.plist.tmpl"
@@ -23,6 +24,7 @@ on:
       - "tests/global-agents-policy.zsh"
       - "tests/hindsight-agents-bindings.zsh"
       - "tests/platform-portability.zsh"
+      - "tests/private-skills.zsh"
       - "tests/private-skill-transaction.zsh"
       - "tests/private-skill-transaction.d/**"
       - "tests/test_chezmoi_source_ownership.py"
@@ -36,6 +38,7 @@ on:
       - "home/.chezmoiignore"
       - "home/.chezmoidata/hindsight.toml"
       - "home/dot_agents/skills/symlink_hindsight-*.tmpl"
+      - "home/dot_codex/private_AGENTS.md.tmpl"
       - "home/dot_config/environment.d/**"
       - "home/dot_config/private_hindsight-control-plane/**"
       - "home/private_Library/private_LaunchAgents/io.nisavid.zsh-gui-path.plist.tmpl"
@@ -51,6 +54,7 @@ on:
       - "tests/global-agents-policy.zsh"
       - "tests/hindsight-agents-bindings.zsh"
       - "tests/platform-portability.zsh"
+      - "tests/private-skills.zsh"
       - "tests/private-skill-transaction.zsh"
       - "tests/private-skill-transaction.d/**"
       - "tests/test_chezmoi_source_ownership.py"
@@ -133,7 +137,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bash -n scripts/private-skill-transaction scripts/private-skill-transaction.d/*.bash
+          bash -n \
+            home/run_after_restore-acl.sh \
+            home/run_before_save-acl.sh \
+            scripts/private-skill-transaction \
+            scripts/private-skill-transaction.d/*.bash
           zsh -n \
             tests/container-runtime-bindings.zsh \
             tests/global-agents-policy.zsh \

@@ -40,7 +40,9 @@ if [[ ${GLOBAL_AGENTS_POLICY_PUBLIC_ONLY:-0} == 1 ]]; then
   chmod 700 "$render_fixture"
   mkdir -m 700 "$render_fixture/dot_codex"
   render_template="$render_fixture/dot_codex/private_AGENTS.md.tmpl"
-  grep -Fv '{{ include ".private-agents.md.age" | decrypt }}' "$template" > "$render_template"
+  awk '
+    !($0 ~ /include[[:space:]]+"\.private-agents\.md\.age"[[:space:]]*\|[[:space:]]*decrypt/)
+  ' "$template" > "$render_template"
   chmod 644 "$render_template"
   render_source_root=$render_fixture
 fi
