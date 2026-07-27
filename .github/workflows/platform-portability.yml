@@ -103,7 +103,7 @@ jobs:
           set -euo pipefail
           zsh -f tests/platform-portability.zsh
           zsh -f tests/container-runtime-bindings.zsh
-          zsh -f tests/global-agents-policy.zsh
+          GLOBAL_AGENTS_POLICY_PUBLIC_ONLY=1 zsh -f tests/global-agents-policy.zsh
           python3 -m unittest tests/test_chezmoi_source_ownership.py
 
       - name: Verify private-skill transaction
