@@ -11,7 +11,13 @@ PRIVATE_SKILL_PLATFORM=$(/usr/bin/uname -s 2>/dev/null) ||
 case $PRIVATE_SKILL_PLATFORM in
   Darwin)
     PRIVATE_SKILL_STAT=/usr/bin/stat
-    PRIVATE_SKILL_LOCK=/usr/bin/lockf
+    PRIVATE_SKILL_LOCK=
+    for candidate in /usr/bin/flock /opt/homebrew/bin/flock /usr/local/bin/flock; do
+      if [[ -x $candidate ]]; then
+        PRIVATE_SKILL_LOCK=$candidate
+        break
+      fi
+    done
     PRIVATE_SKILL_SHA256=/usr/bin/shasum
     ;;
   Linux)
@@ -25,7 +31,8 @@ case $PRIVATE_SKILL_PLATFORM in
 esac
 
 [[ -x $PRIVATE_SKILL_STAT ]] || die "$PRIVATE_SKILL_STAT is unavailable"
-[[ -x $PRIVATE_SKILL_LOCK ]] || die "$PRIVATE_SKILL_LOCK is unavailable"
+[[ -n $PRIVATE_SKILL_LOCK && -x $PRIVATE_SKILL_LOCK ]] ||
+  die "flock is unavailable for $PRIVATE_SKILL_PLATFORM"
 [[ -x $PRIVATE_SKILL_SHA256 ]] || die "$PRIVATE_SKILL_SHA256 is unavailable"
 
 mode_of() {
@@ -51,10 +58,7 @@ followed_identity_of() {
 
 lock_descriptor() {
   local descriptor=$1
-  case $PRIVATE_SKILL_PLATFORM in
-    Darwin) "$PRIVATE_SKILL_LOCK" -s -t 0 "$descriptor" ;;
-    Linux) "$PRIVATE_SKILL_LOCK" -n "$descriptor" ;;
-  esac
+  "$PRIVATE_SKILL_LOCK" -n "$descriptor"
 }
 
 state_root() {
