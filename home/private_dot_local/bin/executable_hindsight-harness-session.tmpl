@@ -20,7 +20,7 @@ RESOLVER = HOME / {{ .hindsight.credentialResolverPath | quote }}
 STATE = HOME / {{ .hindsight.stateRoot | quote }} / "memory"
 BROKER = STATE / "broker.sock"
 LOCATORS = STATE / "bridge-locators"
-BRIDGES = STATE / "bridges"
+BRIDGES = HOME / ".local/state/hindsight-bridges"
 MINT_LOCATOR = {{ .hindsight.mintAuthorityLocator | quote }}
 HARNESS_EXECUTABLES = {
     "codex": HOME / {{ .hindsight.codexExecutable | quote }},
@@ -48,7 +48,11 @@ def resolve_mint_authority() -> str:
     account = pwd.getpwuid(os.getuid())
     completed = subprocess.run(
         [str(RESOLVER)],
-        input=json.dumps(request, separators=(",", ":")).encode(),
+        input=json.dumps(
+            request,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode(),
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
         cwd="/",

@@ -124,6 +124,7 @@ user_name="$(/usr/bin/id -un)"
   "$managed_python" -I - "$tmp_dir/hindsight-harness-session" <<'PY'
 import importlib.machinery
 import importlib.util
+import os
 from pathlib import Path
 import sys
 
@@ -136,6 +137,11 @@ spec = importlib.util.spec_from_loader(loader.name, loader)
 assert spec is not None and spec.loader is not None
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
+longest_bridge_socket = (
+    module.BRIDGES
+    / f"bridge-{'a' * 16}-{'b' * 16}.sock"
+)
+assert len(os.fsencode(longest_bridge_socket)) < 100
 for harness, command, expected in (
     ("codex", "codex", Path.home() / ".local/bin/codex"),
     ("claude-code", "claude", Path.home() / ".local/bin/claude"),
@@ -151,6 +157,27 @@ except RuntimeError:
     pass
 else:
     raise AssertionError("unbound harness executable was accepted")
+
+captured_resolver = {}
+class ResolverCompleted:
+    stdout = (
+        b'{"schema_version":1,"values":'
+        b'{"HINDSIGHT_MINT_AUTHORITY":"mint-authority"}}'
+    )
+def fake_resolver_run(arguments, **kwargs):
+    captured_resolver.update(arguments=arguments, kwargs=kwargs)
+    return ResolverCompleted()
+original_run = module.subprocess.run
+try:
+    module.subprocess.run = fake_resolver_run
+    assert module.resolve_mint_authority() == "mint-authority"
+    assert captured_resolver["kwargs"]["input"] == (
+        b'{"credentials":[{"environment":"HINDSIGHT_MINT_AUTHORITY",'
+        b'"locator":"keychain://io.nisavid.hindsight/mint-authority"}],'
+        b'"schema_version":1}'
+    )
+finally:
+    module.subprocess.run = original_run
 
 class ExecveCalled(Exception):
     pass
