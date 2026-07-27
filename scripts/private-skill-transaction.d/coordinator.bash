@@ -215,6 +215,9 @@ apply_internal() {
   )
   status=$?
   set -e
+  if [[ ${PRIVATE_SKILL_TEST_APPLY_MODE:-} == kill* ]]; then
+    printf 'mode=%s status=%s\n' "$PRIVATE_SKILL_TEST_APPLY_MODE" "$status" >"$root/test-apply-crash-status"
+  fi
   case ${PRIVATE_SKILL_TEST_APPLY_MODE:-}:$status in
     kill:137|kill-ephemeral:137|kill-mixed:137)
       trap - EXIT HUP INT TERM
