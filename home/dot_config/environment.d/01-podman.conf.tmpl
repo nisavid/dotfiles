@@ -1,0 +1,13 @@
+# vim: ft=sh
+# shellcheck shell=sh disable=SC2034
+
+# Keep the native container runtime ahead of the compatibility runtime.
+{{ if eq .chezmoi.os "darwin" -}}
+# OrbStack remains the default on macOS; Podman is a compatibility fallback.
+PATH=$PATH:/opt/podman/bin
+{{ else if eq .chezmoi.os "linux" -}}
+# Podman remains the default on Linux.
+PATH=/opt/podman/bin:$PATH
+{{ else -}}
+{{ fail (printf "unsupported container runtime platform: %s" .chezmoi.os) }}
+{{ end -}}
