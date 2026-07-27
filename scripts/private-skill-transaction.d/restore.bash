@@ -195,7 +195,8 @@ install_staged_set() {
 restore_internal() {
   local identity='' phase recovery recovery_build root recipient op_id table_digest new_digest
   local count=0 path_cipher body_cipher rel body i target
-  local -a path_ciphers body_ciphers rels
+  local exit_trap hup_trap int_trap term_trap
+  local -a path_ciphers=() body_ciphers=() rels=()
   while (($#)); do
     case $1 in
       --identity) (($# >= 2)) || die 'missing identity'; identity=$2; shift 2 ;;
@@ -209,10 +210,14 @@ restore_internal() {
   op_id=$(opaque_token)
   phase=$root/phase.restore.$op_id
   /bin/mkdir -m 700 "$phase"
-  trap 'restore_exit $? "$identity" "$recovery" "$phase"' EXIT
-  trap 'restore_exit 129 "$identity" "$recovery" "$phase"' HUP
-  trap 'restore_exit 130 "$identity" "$recovery" "$phase"' INT
-  trap 'restore_exit 143 "$identity" "$recovery" "$phase"' TERM
+  printf -v exit_trap 'restore_exit $? %q %q %q' "$identity" "$recovery" "$phase"
+  printf -v hup_trap 'restore_exit 129 %q %q %q' "$identity" "$recovery" "$phase"
+  printf -v int_trap 'restore_exit 130 %q %q %q' "$identity" "$recovery" "$phase"
+  printf -v term_trap 'restore_exit 143 %q %q %q' "$identity" "$recovery" "$phase"
+  trap "$exit_trap" EXIT
+  trap "$hup_trap" HUP
+  trap "$int_trap" INT
+  trap "$term_trap" TERM
   if [[ -e $recovery ]]; then
     recover_existing "$identity" "$recovery" "$phase"
     discard_plaintext_then_recovery "$phase" "$recovery"
@@ -364,6 +369,6 @@ restore_participant() {
   [[ ${PRIVATE_SKILL_TX_TOKEN:-} == "$token" ]] || die 'invalid restore participant token'
   local root lock
   root=$(state_root); lock=$root/lock
-  [[ -f $lock && $(identity_of "$lock") == $(/usr/bin/stat -Lf '%i' /dev/fd/9) ]] || die 'invalid restore lock descriptor'
+  [[ -f $lock && $(identity_of "$lock") == $(followed_identity_of /dev/fd/9) ]] || die 'invalid restore lock descriptor'
   restore_internal "$@"
 }

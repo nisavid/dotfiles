@@ -24,7 +24,7 @@ participant() {
   lock=$root/lock
   [[ -d $root && $(mode_of "$root") == 700 && -f $lock && ! -L $lock ]] ||
     die 'transaction lock path is invalid'
-  [[ $(mode_of "$lock") == 600 && $(identity_of "$lock") == $(/usr/bin/stat -Lf '%i' /dev/fd/9) ]] ||
+  [[ $(mode_of "$lock") == 600 && $(identity_of "$lock") == $(followed_identity_of /dev/fd/9) ]] ||
     die 'transaction lock descriptor identity is invalid'
   exec "$@"
 }
