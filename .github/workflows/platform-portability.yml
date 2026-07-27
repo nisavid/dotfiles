@@ -6,16 +6,27 @@ on:
       - ".github/workflows/platform-portability.yml"
       - "docs/HINDSIGHT.md"
       - "home/.chezmoiignore"
+      - "home/.chezmoidata/hindsight.toml"
+      - "home/dot_agents/skills/symlink_hindsight-*.tmpl"
       - "home/dot_config/environment.d/**"
+      - "home/dot_config/private_hindsight-control-plane/**"
+      - "home/private_Library/private_LaunchAgents/io.nisavid.zsh-gui-path.plist.tmpl"
+      - "home/private_dot_hindsight/**"
+      - "home/private_dot_local/bin/executable_hindsight-*.tmpl"
+      - "home/private_dot_local/lib/hindsight-runtime/**"
+      - "home/private_dot_local/libexec/nisavid/executable_zsh-gui-path.tmpl"
       - "home/run_*acl.sh"
+      - "home/run_after_activate-zsh-gui-path.zsh.tmpl"
       - "scripts/private-skill-transaction"
       - "scripts/private-skill-transaction.d/**"
       - "tests/container-runtime-bindings.zsh"
       - "tests/global-agents-policy.zsh"
+      - "tests/hindsight-agents-bindings.zsh"
       - "tests/platform-portability.zsh"
       - "tests/private-skill-transaction.zsh"
       - "tests/private-skill-transaction.d/**"
       - "tests/test_chezmoi_source_ownership.py"
+      - "tests/zsh-gui-path.zsh"
   push:
     branches:
       - main
@@ -23,16 +34,27 @@ on:
       - ".github/workflows/platform-portability.yml"
       - "docs/HINDSIGHT.md"
       - "home/.chezmoiignore"
+      - "home/.chezmoidata/hindsight.toml"
+      - "home/dot_agents/skills/symlink_hindsight-*.tmpl"
       - "home/dot_config/environment.d/**"
+      - "home/dot_config/private_hindsight-control-plane/**"
+      - "home/private_Library/private_LaunchAgents/io.nisavid.zsh-gui-path.plist.tmpl"
+      - "home/private_dot_hindsight/**"
+      - "home/private_dot_local/bin/executable_hindsight-*.tmpl"
+      - "home/private_dot_local/lib/hindsight-runtime/**"
+      - "home/private_dot_local/libexec/nisavid/executable_zsh-gui-path.tmpl"
       - "home/run_*acl.sh"
+      - "home/run_after_activate-zsh-gui-path.zsh.tmpl"
       - "scripts/private-skill-transaction"
       - "scripts/private-skill-transaction.d/**"
       - "tests/container-runtime-bindings.zsh"
       - "tests/global-agents-policy.zsh"
+      - "tests/hindsight-agents-bindings.zsh"
       - "tests/platform-portability.zsh"
       - "tests/private-skill-transaction.zsh"
       - "tests/private-skill-transaction.d/**"
       - "tests/test_chezmoi_source_ownership.py"
+      - "tests/zsh-gui-path.zsh"
   workflow_dispatch:
 
 permissions:
@@ -66,7 +88,29 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          brew install age bat chezmoi flock jq
+          brew install age bat flock jq
+          case "$(uname -m)" in
+            arm64)
+              archive=chezmoi_2.71.1_darwin_arm64.tar.gz
+              digest=9fad1201c328428634b8a086f767df0dfe6dd3ea1128a2a7c45bc0b16641e294
+              ;;
+            x86_64)
+              archive=chezmoi_2.71.1_darwin_amd64.tar.gz
+              digest=1551f07cab00441540a12e663ffbf4645664319c0f91d30a5f9a255470b561cc
+              ;;
+            *)
+              printf 'unsupported macOS architecture: %s\n' "$(uname -m)" >&2
+              exit 1
+              ;;
+          esac
+          package="$RUNNER_TEMP/$archive"
+          curl --fail --location --silent --show-error \
+            --output "$package" \
+            "https://github.com/twpayne/chezmoi/releases/download/v2.71.1/$archive"
+          printf '%s  %s\n' "$digest" "$package" | shasum -a 256 --check
+          mkdir -p "$RUNNER_TEMP/chezmoi-bin"
+          tar -xzf "$package" -C "$RUNNER_TEMP/chezmoi-bin" chezmoi
+          printf '%s\n' "$RUNNER_TEMP/chezmoi-bin" >>"$GITHUB_PATH"
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
@@ -93,9 +137,11 @@ jobs:
           zsh -n \
             tests/container-runtime-bindings.zsh \
             tests/global-agents-policy.zsh \
+            tests/hindsight-agents-bindings.zsh \
             tests/platform-portability.zsh \
             tests/private-skill-transaction.zsh \
-            tests/private-skill-transaction.d/*.zsh
+            tests/private-skill-transaction.d/*.zsh \
+            tests/zsh-gui-path.zsh
 
       - name: Verify platform bindings
         shell: bash
@@ -104,6 +150,10 @@ jobs:
           zsh -f tests/platform-portability.zsh
           zsh -f tests/container-runtime-bindings.zsh
           GLOBAL_AGENTS_POLICY_PUBLIC_ONLY=1 zsh -f tests/global-agents-policy.zsh
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            zsh -f tests/hindsight-agents-bindings.zsh
+          fi
+          zsh -f tests/zsh-gui-path.zsh
           python3 -m unittest tests/test_chezmoi_source_ownership.py
 
       - name: Verify private-skill transaction
