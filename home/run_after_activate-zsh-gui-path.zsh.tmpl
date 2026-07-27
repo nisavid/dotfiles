@@ -1,0 +1,50 @@
+{{- if eq .chezmoi.os "darwin" -}}
+#!/bin/zsh -f
+
+function main {
+  emulate -L zsh
+  setopt err_return no_unset pipe_fail
+
+  local -r launchctl_bin=${ZSH_GUI_PATH_LAUNCHCTL_BIN:-/bin/launchctl}
+  local -r label=io.nisavid.zsh-gui-path
+  local -r domain=gui/$EUID
+  local -r service=$domain/$label
+  local -r plist={{ joinPath .chezmoi.homeDir "Library/LaunchAgents/io.nisavid.zsh-gui-path.plist" | quote }}
+  local -r adapter={{ joinPath .chezmoi.homeDir ".local/libexec/nisavid/zsh-gui-path" | quote }}
+  local manager_name manager_uid
+
+  if ! manager_name=$("$launchctl_bin" managername 2>/dev/null); then
+    print -ru2 -- 'zsh GUI PATH: no launchd session is available; registration will occur at next login'
+    return 0
+  fi
+  if [[ $manager_name != Aqua ]]; then
+    print -ru2 -- \
+      "zsh GUI PATH: launchd session is ${(q-)manager_name}, not Aqua; registration will occur at next GUI login"
+    return 0
+  fi
+  if ! manager_uid=$("$launchctl_bin" manageruid 2>/dev/null); then
+    print -ru2 -- 'zsh GUI PATH: cannot identify the launchd session user'
+    return 1
+  fi
+  if [[ $manager_uid != $EUID ]]; then
+    print -ru2 -- \
+      "zsh GUI PATH: refusing session uid ${(q-)manager_uid}; expected $EUID"
+    return 1
+  fi
+  if [[ ! -r $plist || ! -x $adapter ]]; then
+    print -ru2 -- 'zsh GUI PATH: managed LaunchAgent files are incomplete'
+    return 1
+  fi
+
+  if ! "$launchctl_bin" print "$service" >/dev/null 2>&1; then
+    "$launchctl_bin" bootstrap "$domain" "$plist"
+    "$launchctl_bin" print "$service" >/dev/null
+  fi
+  "$adapter"
+}
+
+main "$@"
+{{- else -}}
+#!/bin/sh
+exit 0
+{{- end -}}
