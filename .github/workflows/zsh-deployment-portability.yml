@@ -1,0 +1,113 @@
+name: Zsh deployment portability
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    name: macOS
+    runs-on: macos-14
+    timeout-minutes: 10
+    steps:
+      - name: Check out dotfiles
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Install verified chezmoi 2.71.0
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$(uname -m)" in
+            x86_64)
+              asset=chezmoi_2.71.0_darwin_amd64.tar.gz
+              sha256=12b78b365528597ad701f5117fa71f6c42b5b1e65d8075e19c48472ad81faf30
+              ;;
+            arm64)
+              asset=chezmoi_2.71.0_darwin_arm64.tar.gz
+              sha256=8b03d7be6b5d500a503c712ae6da7dd6817b6c3328223b4ae8be7a8be5a2fa3a
+              ;;
+            *)
+              echo "unsupported macOS architecture: $(uname -m)" >&2
+              exit 1
+              ;;
+          esac
+          archive="$RUNNER_TEMP/$asset"
+          install_dir="$RUNNER_TEMP/chezmoi-2.71.0"
+          curl --fail --location --silent --show-error \
+            "https://github.com/twpayne/chezmoi/releases/download/v2.71.0/$asset" \
+            --output "$archive"
+          printf '%s  %s\n' "$sha256" "$archive" | shasum -a 256 --check
+          mkdir -p "$install_dir"
+          tar -xzf "$archive" -C "$install_dir"
+          echo "$install_dir" >>"$GITHUB_PATH"
+
+      - name: Verify chezmoi version
+        run: chezmoi --version | grep -Fq 'chezmoi version v2.71.0,'
+
+      - name: Verify GUI PATH deployment contract
+        run: zsh tests/zsh-gui-path.zsh
+
+  ubuntu:
+    name: Ubuntu
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out dotfiles
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Install Zsh
+        run: |
+          sudo apt-get -qq update
+          sudo apt-get -qq install -y --no-install-recommends zsh
+
+      - name: Install verified chezmoi 2.71.0
+        shell: bash
+        run: |
+          set -euo pipefail
+          asset=chezmoi_2.71.0_linux_amd64.tar.gz
+          sha256=6ea2040ecc0e82d3dac604289e100b0157afefcd94ebb818e5f6e31655156d34
+          archive="$RUNNER_TEMP/$asset"
+          install_dir="$RUNNER_TEMP/chezmoi-2.71.0"
+          curl --fail --location --silent --show-error \
+            "https://github.com/twpayne/chezmoi/releases/download/v2.71.0/$asset" \
+            --output "$archive"
+          printf '%s  %s\n' "$sha256" "$archive" | sha256sum --check
+          mkdir -p "$install_dir"
+          tar -xzf "$archive" -C "$install_dir"
+          echo "$install_dir" >>"$GITHUB_PATH"
+
+      - name: Verify chezmoi version
+        run: chezmoi --version | grep -Fq 'chezmoi version v2.71.0,'
+
+      - name: Verify GUI PATH deployment contract
+        run: zsh tests/zsh-gui-path.zsh
+
+  zsh-deployment-portability:
+    name: zsh deployment portability
+    if: always()
+    needs:
+      - macos
+      - ubuntu
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every platform
+        env:
+          MACOS_RESULT: ${{ needs.macos.result }}
+          UBUNTU_RESULT: ${{ needs.ubuntu.result }}
+        run: |
+          test "$MACOS_RESULT" = success
+          test "$UBUNTU_RESULT" = success
