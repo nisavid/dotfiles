@@ -211,13 +211,13 @@ apply_internal() {
   set +e
   ( umask 022
     export PRIVATE_SKILL_TX_OUTER_CAPABILITY=${PRIVATE_SKILL_TX_TOKEN:?}
-    if [[ -n ${PRIVATE_SKILL_TEST_APPLY_MODE:-} ]]; then
-      export PRIVATE_SKILL_TX_TEST_COORDINATOR_PID=$$
-    fi
     exec "$chezmoi_bin" --persistent-state "$stage" apply "${apply_args[@]}"
   )
   status=$?
   set -e
+  case ${PRIVATE_SKILL_TEST_APPLY_MODE:-}:$status in
+    kill:137|kill-ephemeral:137|kill-mixed:137) /bin/kill -KILL $$ ;;
+  esac
   if ((status != 0)); then apply_exit "$status" "$identity" "$recovery" "$phase" "$stage"; fi
   [[ -f $stage && ! -L $stage && $(mode_of "$stage") == 600 ]] ||
     apply_exit 1 "$identity" "$recovery" "$phase" "$stage"
