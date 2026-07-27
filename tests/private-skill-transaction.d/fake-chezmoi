@@ -5,6 +5,15 @@ if [[ -n ${PRIVATE_SKILL_TEST_INVOCATION_MARKER:-} ]]; then
   printf '%s\n' invoked >"$PRIVATE_SKILL_TEST_INVOCATION_MARKER"
 fi
 
+record_test_crash() {
+  [[ ${PRIVATE_SKILL_TEST_SUPPRESS_CRASH_MARKER:-0} != 1 ]] || return 0
+  [[ -n ${PRIVATE_SKILL_TEST_CRASH_MARKER:-} &&
+      -n ${PRIVATE_SKILL_TEST_CRASH_CAPABILITY:-} ]] || exit 65
+  ( umask 077
+    printf '%s\n' "$PRIVATE_SKILL_TEST_CRASH_CAPABILITY" >"$PRIVATE_SKILL_TEST_CRASH_MARKER"
+  )
+}
+
 mode=${PRIVATE_SKILL_FAKE_MODE:-empty}
 state=
 command=
@@ -124,9 +133,11 @@ if [[ $command == apply ]]; then
       ln -s "$APPLY_LINK_DEST" "$APPLY_TRANSITION"
       if [[ ${PRIVATE_SKILL_TEST_APPLY_MODE:-success} == kill-ephemeral ]]; then
         printf '%s\n' unexpected >"$APPLY_LOGICAL"
+        record_test_crash
         exit 137
       fi
       if [[ ${PRIVATE_SKILL_TEST_APPLY_MODE:-success} == kill-mixed ]]; then
+        record_test_crash
         exit 137
       fi
       rm -f "$APPLY_ABSENT" "$APPLY_NESTED"
@@ -137,7 +148,7 @@ if [[ $command == apply ]]; then
       fi
       case ${PRIVATE_SKILL_TEST_APPLY_MODE:-success} in
         fail) exit 23 ;;
-        kill) exit 137 ;;
+        kill) record_test_crash; exit 137 ;;
       esac
       ;;
     git-publication-target-set)
