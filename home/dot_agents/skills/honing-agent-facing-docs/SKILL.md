@@ -9,7 +9,7 @@ description: Use when reviewing, refactoring, rewriting, or streamlining AGENTS.
 
 Agent-facing docs should load at the moment they help and stay quiet otherwise.
 
-**Required background:** Use `writing-skills` for agent-facing docs and `writing-clearly-and-concisely` for all prose. For docs that serve both humans and agents, use both `honing-human-facing-docs` and this skill; also use `documentation-writer`.
+**Required background:** Use `writing-skills` for agent-facing docs and `writing-clearly-and-concisely` for all prose. For durable docs that also serve humans, use `honing-human-facing-docs` alongside this skill, treat the agent-policy surface as reference, and apply `applying-diataxis` separately to the human-facing material.
 
 ## When To Use
 
