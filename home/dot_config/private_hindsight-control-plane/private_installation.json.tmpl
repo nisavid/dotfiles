@@ -32,6 +32,14 @@
       "label": "io.nisavid.hindsight.{{ .hindsight.consumerId }}.stack",
       "restart": "on-failure",
       "service_id": "stack"
+    },
+    {
+      "arguments": [],
+      {{ template "hindsight-hook-authority-environment.tmpl" . }},
+      "entrypoint": "bin/hindsight-hook-authority-supervisor",
+      "label": "io.nisavid.hindsight.{{ .hindsight.consumerId }}.hook-authority",
+      "restart": "on-failure",
+      "service_id": "hook-authority"
     }
   ],
   "state_root": "{{ joinPath .chezmoi.homeDir .hindsight.stateRoot }}",

@@ -25,6 +25,7 @@ managed_python="$HOME/$managed_python_relative"
 for relative in \
   tooling/hindsight/bin/hindsight-memory \
   tooling/hindsight/bin/hindsight-embed-supervisor \
+  tooling/hindsight/bin/hindsight-hook-authority-supervisor \
   tooling/hindsight/bin/hindsight-keychain-resolver \
   tooling/hindsight/lib/hindsight_memory_control_plane/portable_install.py \
   tooling/hindsight/lib/hindsight_memory_control_plane/provider_runtime.py \
@@ -56,6 +57,10 @@ for harness in codex claude-code cursor; do
 done
 render home/private_dot_local/bin/executable_hindsight-memory.tmpl \
   "$tmp_dir/hindsight-memory"
+render home/private_dot_local/bin/executable_hindsight-embed-service.tmpl \
+  "$tmp_dir/hindsight-embed-service"
+render home/private_dot_local/bin/executable_hindsight-harness-reconcile.tmpl \
+  "$tmp_dir/hindsight-harness-reconcile"
 render home/private_dot_local/bin/executable_hindsight-embed-supervisor.tmpl \
   "$tmp_dir/hindsight-embed-supervisor"
 render home/private_dot_local/bin/executable_hindsight-harness-session.tmpl \
@@ -72,6 +77,23 @@ grep -F "install_root=\"$HOME/.local/opt/hindsight-control-plane\"" \
   "$tmp_dir/hindsight-memory" >/dev/null
 grep -F 'exec "$install_root/bin/hindsight-memory" "$@"' \
   "$tmp_dir/hindsight-memory" >/dev/null
+grep -F 'service "$@" --config "$config"' \
+  "$tmp_dir/hindsight-embed-service" >/dev/null
+grep -F 'exec "$install_root/bin/hindsight-memory" service --help' \
+  "$tmp_dir/hindsight-embed-service" >/dev/null
+grep -F "config=\"$HOME/.config/hindsight-control-plane/installation.json\"" \
+  "$tmp_dir/hindsight-embed-service" >/dev/null
+grep -F 'harness-config reconcile' \
+  "$tmp_dir/hindsight-harness-reconcile" >/dev/null
+grep -F -- '--config "$expected_config" --config-digest "$config_digest"' \
+  "$tmp_dir/hindsight-harness-reconcile" >/dev/null
+grep -F 'harness-config disable' \
+  "$tmp_dir/hindsight-harness-reconcile" >/dev/null
+if grep -E '(^|[[:space:]])exec([[:space:]]|$)' \
+  "$tmp_dir/hindsight-harness-reconcile" >/dev/null; then
+  print -ru2 -- "harness reconciler must inspect aggregate results"
+  exit 1
+fi
 grep -F "install_root=\"$HOME/.local/opt/hindsight-control-plane\"" \
   "$tmp_dir/hindsight-embed-supervisor" >/dev/null
 grep -F 'exec "$install_root/bin/hindsight-embed-supervisor" "$@"' \
@@ -91,6 +113,7 @@ fi
 "$managed_python" -m py_compile "$tmp_dir/hindsight-harness-session"
 PYTHONPYCACHEPREFIX="$tmp_dir/pycache" "$managed_python" -m py_compile \
   "$repo_dir/home/private_dot_local/lib/hindsight-runtime/sitecustomize.py"
+zsh "$repo_dir/tests/hindsight-harness-reconcile.zsh"
 
 user_name="$(/usr/bin/id -un)"
 /usr/bin/env -i \
@@ -185,7 +208,7 @@ assert {item["id"] for item in inventory.banks if item["writable"]} == {
 
 policy_data = json.loads((root / "provider-runtime-policy.json").read_text())
 policy = ProviderRuntimePolicy.load(policy_data)
-assert policy.failover_order == ("personal-codex", "work-codex", "hatchery")
+assert policy.failover_order == ("work-codex", "personal-codex", "hatchery")
 hatchery = policy.member("hatchery")
 assert hatchery.max_concurrent == 1
 assert hatchery.timeout_seconds == 300
@@ -202,6 +225,22 @@ raw_installation = json.loads(installation_path.read_text())
 assert raw_installation["services"][0]["label"] == (
     "io.nisavid.hindsight.stlz-ivan-mbp.stack"
 )
+assert [service["service_id"] for service in raw_installation["services"]] == [
+    "stack",
+    "hook-authority",
+]
+authority_service = raw_installation["services"][1]
+assert authority_service["entrypoint"] == (
+    "bin/hindsight-hook-authority-supervisor"
+)
+assert authority_service["credentials"] == []
+assert set(authority_service["environment"]) == {
+    "HINDSIGHT_EMBED_POLL_SECONDS",
+    "HINDSIGHT_MEMORY_HARNESS_RECONCILER",
+    "HINDSIGHT_MEMORY_HARNESS_RECONCILE_CONFIG",
+    "HOME",
+    "PATH",
+}
 assert (
     raw_installation["health_checks"][0]["credentials"]
     == raw_installation["services"][0]["credentials"]
@@ -216,7 +255,21 @@ assert raw_installation["credential_resolver"]["path"] == str(
 for surface in [raw_installation["health_checks"][0], raw_installation["services"][0]]:
     environment = surface["environment"]
     assert environment["HINDSIGHT_API_AUDIT_LOG_ENABLED"] == "false"
-    assert environment["HINDSIGHT_API_LLM_TRACE_ENABLED"] == "false"
+    assert environment["HINDSIGHT_API_EMBEDDINGS_PROVIDER"] == "openai-codex"
+    assert environment["HINDSIGHT_API_HTTP_EXTENSION"] == (
+        "hindsight_memory_control_plane.migration_generation_extension:"
+        "MigrationGenerationHttpExtension"
+    )
+    assert environment["HINDSIGHT_API_HTTP_PROFILE_ID"] == "systalyze"
+    assert environment["HINDSIGHT_API_LLM_TRACE_ENABLED"] == "true"
+    assert environment["HINDSIGHT_API_LLM_TRACE_RETENTION_DAYS"] == "7"
+    assert environment["HINDSIGHT_MEMORY_HARNESS_RECONCILER"] == str(
+        Path.home() / ".local/bin/hindsight-harness-reconcile"
+    )
+    assert environment["HINDSIGHT_MEMORY_HARNESS_RECONCILE_CONFIG"] == str(
+        Path.home()
+        / ".local/state/hindsight-control-plane/harness-reconciliation.json"
+    )
     assert environment["HINDSIGHT_API_WORKER_ID"] == "stlz-ivan-mbp-systalyze"
     assert environment["HINDSIGHT_MEMORY_BROKER_WAIT_SECONDS"] == "300"
     assert environment["HINDSIGHT_API_TENANT_EXTENSION"].endswith(
@@ -256,7 +309,6 @@ for retired in \
   home/private_dot_hindsight/codex.json.tmpl \
   home/private_dot_hindsight/claude-code.json.tmpl \
   home/private_dot_hindsight/cursor.json.tmpl \
-  home/private_dot_local/bin/executable_hindsight-embed-service.tmpl \
   home/private_dot_local/bin/executable_hindsight-embed-single-bank-cleanup.tmpl \
   home/private_dot_local/lib/hindsight-embed-stack.zsh.tmpl \
   home/private_dot_local/lib/hindsight-runtime/hindsight_llm_failover.py \

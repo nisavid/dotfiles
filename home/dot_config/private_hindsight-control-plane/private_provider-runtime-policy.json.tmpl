@@ -3,22 +3,22 @@
   "hindsight_version": "0.8.4",
   "default_usage_limit_cooldown_seconds": 300,
   "failover_order": [
-    "personal-codex",
     "work-codex",
+    "personal-codex",
     "hatchery"
   ],
   "members": [
     {
-      "id": "personal-codex",
+      "id": "work-codex",
       "identity": {
         "provider": "openai-codex",
         "model": "gpt-5.3-codex-spark",
         "base_url": "",
-        "credential_marker": "provider-policy:personal-codex"
+        "credential_marker": "provider-policy:work-codex"
       },
       "credential": {
         "mode": "oauth-home",
-        "locator": "oauth-home:personal"
+        "locator": "oauth-home:work"
       },
       "timeout_seconds": null,
       "max_retries": null,
@@ -32,16 +32,16 @@
       "quota_cooldown": true
     },
     {
-      "id": "work-codex",
+      "id": "personal-codex",
       "identity": {
         "provider": "openai-codex",
         "model": "gpt-5.3-codex-spark",
         "base_url": "",
-        "credential_marker": "provider-policy:work-codex"
+        "credential_marker": "provider-policy:personal-codex"
       },
       "credential": {
         "mode": "oauth-home",
-        "locator": "oauth-home:work"
+        "locator": "oauth-home:personal"
       },
       "timeout_seconds": null,
       "max_retries": null,
