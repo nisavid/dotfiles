@@ -13,6 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "home"
 HINDSIGHT_SOURCE_ROOT = SOURCE / "dot_config/private_hindsight-control-plane"
+TEMP_ROOT = Path(tempfile.gettempdir()).resolve()
 CATPPUCCIN_CONFIG_EXTERNALS = (
     "bat-catppuccin.toml.tmpl",
     "gitui-catppuccin.toml.tmpl",
@@ -33,7 +34,7 @@ class ChezmoiSourceOwnershipTests(unittest.TestCase):
             "HOME": str(destination),
             "XDG_CACHE_HOME": str(runtime / "cache"),
             "XDG_CONFIG_HOME": str(destination / ".config"),
-            "XDG_DATA_HOME": str(runtime / "data"),
+            "XDG_DATA_HOME": str(destination / ".local/share"),
             "XDG_STATE_HOME": str(runtime / "state"),
             "CHEZMOI_CONFIG_FILE": str(config),
         }
@@ -51,7 +52,7 @@ class ChezmoiSourceOwnershipTests(unittest.TestCase):
         return environment, arguments
 
     def test_zsh_external_apply_is_byte_mode_and_git_stable(self) -> None:
-        with tempfile.TemporaryDirectory(dir="/private/tmp") as temporary:
+        with tempfile.TemporaryDirectory(dir=TEMP_ROOT) as temporary:
             root = Path(temporary)
             source = root / "source"
             external = root / "zsh-config"
@@ -208,7 +209,7 @@ class ChezmoiSourceOwnershipTests(unittest.TestCase):
     def test_full_source_init_and_scoped_apply_have_consistent_ownership(
         self,
     ) -> None:
-        with tempfile.TemporaryDirectory(dir="/private/tmp") as temporary:
+        with tempfile.TemporaryDirectory(dir=TEMP_ROOT) as temporary:
             root = Path(temporary)
             source = root / "source"
             destination = root / "home"
@@ -251,7 +252,7 @@ class ChezmoiSourceOwnershipTests(unittest.TestCase):
             )
 
     def test_hindsight_keeps_paths_bytes_and_private_modes(self) -> None:
-        with tempfile.TemporaryDirectory(dir="/private/tmp") as temporary:
+        with tempfile.TemporaryDirectory(dir=TEMP_ROOT) as temporary:
             root = Path(temporary)
             destination = root / "home"
             destination.mkdir()
@@ -264,6 +265,8 @@ class ChezmoiSourceOwnershipTests(unittest.TestCase):
                     "-S",
                     str(SOURCE),
                     *arguments,
+                    "--override-data",
+                    '{"chezmoi":{"os":"darwin"}}',
                     "--source-path",
                     "--refresh-externals=never",
                     "apply",
@@ -310,6 +313,8 @@ class ChezmoiSourceOwnershipTests(unittest.TestCase):
                         "-S",
                         str(SOURCE),
                         *arguments,
+                        "--override-data",
+                        '{"chezmoi":{"os":"darwin"}}',
                         "target-path",
                         "--source-path",
                         str(source),
@@ -329,6 +334,8 @@ class ChezmoiSourceOwnershipTests(unittest.TestCase):
                         "-S",
                         str(SOURCE),
                         *arguments,
+                        "--override-data",
+                        '{"chezmoi":{"os":"darwin"}}',
                         "execute-template",
                     ],
                     env=environment,
@@ -340,7 +347,7 @@ class ChezmoiSourceOwnershipTests(unittest.TestCase):
             self.assertEqual(actual_targets, expected_targets)
 
     def test_externals_retain_targets_and_refresh_contracts(self) -> None:
-        with tempfile.TemporaryDirectory(dir="/private/tmp") as temporary:
+        with tempfile.TemporaryDirectory(dir=TEMP_ROOT) as temporary:
             root = Path(temporary)
             destination = root / "home"
             destination.mkdir()

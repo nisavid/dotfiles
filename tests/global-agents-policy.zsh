@@ -18,19 +18,28 @@ fail() {
   exit 1
 }
 
+mode_of() {
+  case "$(uname -s)" in
+    Darwin) stat -f '%Lp' "$1" ;;
+    Linux) stat -c '%a' -- "$1" ;;
+    *) fail "unsupported test platform: $(uname -s)" ;;
+  esac
+}
+
 [[ -f "$template" ]] || fail "private source template is missing"
 [[ ! -e "$source_root/dot_codex/AGENTS.md.tmpl" ]] || fail "public-mode source template still exists"
-[[ $(stat -f '%Lp' "$template") == 644 ]] || fail "source template mode must be 0644"
-[[ $(chezmoi target-path "$template") == "$HOME/.codex/AGENTS.md" ]] || fail "source template targets the wrong file"
+[[ $(mode_of "$template") == 644 ]] || fail "source template mode must be 0644"
+[[ $(chezmoi -S "$source_root" target-path "$template") == "$HOME/.codex/AGENTS.md" ]] ||
+  fail "source template targets the wrong file"
 
-chezmoi dump --format json "$HOME/.codex/AGENTS.md" > "$target_state"
+chezmoi -S "$source_root" dump --format json "$HOME/.codex/AGENTS.md" > "$target_state"
 [[ $(jq -r '.[".codex/AGENTS.md"].perm' "$target_state") == 384 ]] || fail "target mode is not 0600"
 
 (
   cd "$source_root"
-  chezmoi execute-template < "$template" > "$rendered"
+  chezmoi -S "$source_root" execute-template < "$template" > "$rendered"
 )
-[[ $(stat -f '%Lp' "$rendered") == 600 ]] || fail "rendered test artifact must be 0600"
+[[ $(mode_of "$rendered") == 600 ]] || fail "rendered test artifact must be 0600"
 
 awk '
   $0 == "## Git Checkpoints And Publication" { found = 1; next }

@@ -123,15 +123,31 @@ if print -r -- $'{}\n{}' | /bin/bash "$modifier" >/dev/null 2>&1; then
   exit 1
 fi
 
-grep -F 'Legacy Podman command paths' \
-  "$repo_dir/home/dot_config/environment.d/01-podman.conf" >/dev/null
+podman_template="$repo_dir/home/dot_config/environment.d/01-podman.conf.tmpl"
+darwin_rendered="$test_dir/podman-darwin.conf"
+linux_rendered="$test_dir/podman-linux.conf"
 
-managed_path="$(
+chezmoi -S "$repo_dir/home" execute-template \
+  --override-data '{"chezmoi":{"os":"darwin"}}' \
+  <"$podman_template" >"$darwin_rendered"
+chezmoi -S "$repo_dir/home" execute-template \
+  --override-data '{"chezmoi":{"os":"linux"}}' \
+  <"$podman_template" >"$linux_rendered"
+
+darwin_path="$(
   PATH="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin"
-  source "$repo_dir/home/dot_config/environment.d/01-podman.conf"
+  source "$darwin_rendered"
   print -r -- "$PATH"
 )"
-[[ "$managed_path" == \
+[[ "$darwin_path" == \
   "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/opt/podman/bin" ]]
+
+linux_path="$(
+  PATH="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin"
+  source "$linux_rendered"
+  print -r -- "$PATH"
+)"
+[[ "$linux_path" == \
+  "/opt/podman/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin" ]]
 
 print -r -- "container runtime bindings: PASS"
