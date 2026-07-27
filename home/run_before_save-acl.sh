@@ -59,6 +59,14 @@ Darwin)
   exit 0
   ;;
 Linux)
+  command -v getfacl >/dev/null 2>&1 || {
+    echo "save-acl: getfacl is unavailable" >&2
+    exit 1
+  }
+  command -v setfacl >/dev/null 2>&1 || {
+    echo "save-acl: setfacl is unavailable" >&2
+    exit 1
+  }
   ;;
 *)
   echo "save-acl: unsupported operating system" >&2
@@ -83,10 +91,11 @@ chezmoi managed | while read -r item; do
 
   save=0
 
-  if [ "$(
-    getfacl -- "$item" 2>/dev/null |
-      grep -cvE '^$|^#|^(user|group|other)::'
-  )" -ne 0 ]; then
+  acl=$(getfacl -- "$item" 2>/dev/null) || {
+    echo "save-acl: failed to capture ACL for $item" >&2
+    exit 1
+  }
+  if [ "$(printf '%s\n' "$acl" | grep -cvE '^$|^#|^(user|group|other)::')" -ne 0 ]; then
     save=1
   else
     perms=$(stat -c %a "$item")
@@ -108,6 +117,6 @@ chezmoi managed | while read -r item; do
   fi
 
   if [ "$save" -eq 1 ]; then
-    getfacl -- "$item" >>"$ACL_FILE"
+    printf '%s\n' "$acl" >>"$ACL_FILE"
   fi
 done

@@ -113,6 +113,39 @@ exit 0' >"$acl_bin/chezmoi"
     fail 'ACL state directory is not mode 0700'
   [[ $(stat -c '%a' -- "$acl_state/chezmoi/acl") == 600 ]] ||
     fail 'ACL snapshot is not mode 0600'
+
+  missing_acl_bin=$test_root/missing-acl-bin
+  mkdir -m 700 "$missing_acl_bin"
+  print -r -- '#!/bin/sh
+printf "Linux\n"' >"$missing_acl_bin/uname"
+  chmod 700 "$missing_acl_bin/uname"
+  if HOME=$acl_home XDG_STATE_HOME=$acl_state PATH=$missing_acl_bin \
+    /bin/sh "$repo_root/home/run_before_save-acl.sh" \
+    >"$test_root/missing-acl.out" 2>"$test_root/missing-acl.err"; then
+    fail 'ACL save accepted missing Linux ACL primitives'
+  fi
+  grep -Fq 'getfacl is unavailable' "$test_root/missing-acl.err" ||
+    fail 'ACL save did not report the missing getfacl primitive'
+
+  failed_acl_bin=$test_root/failed-acl-bin
+  failed_acl_home=$test_root/failed-acl-home
+  failed_acl_state=$test_root/failed-acl-state
+  mkdir -m 700 "$failed_acl_bin" "$failed_acl_home"
+  print -r -- managed >"$failed_acl_home/managed"
+  print -r -- '#!/bin/sh
+printf "managed\n"' >"$failed_acl_bin/chezmoi"
+  print -r -- '#!/bin/sh
+exit 42' >"$failed_acl_bin/getfacl"
+  chmod 700 "$failed_acl_bin/chezmoi" "$failed_acl_bin/getfacl"
+  if HOME=$failed_acl_home XDG_STATE_HOME=$failed_acl_state \
+    PATH="$failed_acl_bin:/usr/bin:/bin" \
+    /bin/sh "$repo_root/home/run_before_save-acl.sh" \
+    >"$test_root/failed-acl.out" 2>"$test_root/failed-acl.err"; then
+    fail 'ACL save masked a per-path getfacl failure'
+  fi
+  grep -Fq 'failed to capture ACL for managed' "$test_root/failed-acl.err" ||
+    fail 'ACL save did not report the per-path capture failure'
+
   HOME=$acl_home XDG_STATE_HOME=$acl_state \
     PATH="$acl_bin:/usr/bin:/bin" \
     /bin/sh "$repo_root/home/run_after_restore-acl.sh"
