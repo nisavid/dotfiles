@@ -3,6 +3,12 @@ set -euo pipefail
 
 repo_dir="${0:A:h:h}"
 agents_root="${HINDSIGHT_AGENTS_ROOT:-$HOME/src/nisavid/agents}"
+
+if [[ $(uname -s) != Darwin ]]; then
+  print -r -- 'Hindsight agent bindings: skipped outside Darwin'
+  exit 0
+fi
+
 tmp_dir="$(mktemp -d)"
 trap '/bin/rm -rf -- "$tmp_dir"' EXIT
 managed_python_relative="$(

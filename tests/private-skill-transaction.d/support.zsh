@@ -18,6 +18,14 @@ assert_eq() {
   [[ $1 == $2 ]] || fail "expected <$1> to equal <$2>"
 }
 
+mode_of() {
+  case "$(uname -s)" in
+    Darwin) stat -f '%Lp' "$1" ;;
+    Linux) stat -c '%a' -- "$1" ;;
+    *) fail "unsupported test platform: $(uname -s)" ;;
+  esac
+}
+
 new_fixture() {
   fixture=$(mktemp -d "${TMPDIR:-/tmp}/private-skill-transaction.XXXXXX")
   fixture=${fixture:A}

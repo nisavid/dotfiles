@@ -13,6 +13,14 @@ fail() {
   return 1
 }
 
+mode_of() {
+  case "$(uname -s)" in
+    Darwin) stat -f '%Lp' "$1" ;;
+    Linux) stat -c '%a' -- "$1" ;;
+    *) fail "unsupported test platform: $(uname -s)" ;;
+  esac
+}
+
 assert_contains() {
   local file=$1 text=$2 label=$3
   /usr/bin/grep -Fq -- "$text" "$file" || fail "$label"
@@ -37,8 +45,8 @@ validate_skill() {
   expected_name=${expected_path:t}
   body=$phase/$number.body
   [[ "$(<"$phase/$number.path")" == "$expected_path" ]] || fail "pair $number path is wrong"
-  [[ "$(stat -f '%Lp' "$phase/$number.path")" == 600 ]] || fail "pair $number path plaintext mode is not 0600"
-  [[ "$(stat -f '%Lp' "$body")" == 600 ]] || fail "pair $number body plaintext mode is not 0600"
+  [[ "$(mode_of "$phase/$number.path")" == 600 ]] || fail "pair $number path plaintext mode is not 0600"
+  [[ "$(mode_of "$body")" == 600 ]] || fail "pair $number body plaintext mode is not 0600"
   [[ "$(sed -n '1p' "$body")" == --- ]] || fail "pair $number has no opening frontmatter delimiter"
   [[ "$(awk 'NR > 1 && $0 == "---" { exit } $1 == "name:" { print $2; exit }' "$body")" == "$expected_name" ]] ||
     fail "pair $number frontmatter name does not match its path"
@@ -59,7 +67,7 @@ test_neutral_encrypted_layout_and_wrapper() {
   done
   [[ ! -e $repo_root/home/.private-skill-path.age ]] || fail 'legacy private path ciphertext remains'
   [[ ! -e $repo_root/home/.private-worktrees-skill.md.age ]] || fail 'legacy private body ciphertext remains'
-  chezmoi execute-template <"$wrapper" >"$rendered"
+  chezmoi -S "$repo_root/home" execute-template <"$wrapper" >"$rendered"
   chmod 600 "$rendered"
   assert_contains "$rendered" "$repo_root/scripts/private-skill-transaction" 'wrapper does not invoke the repository transaction helper'
   assert_contains "$rendered" 'restore --identity' 'wrapper does not pass the configured age identity'

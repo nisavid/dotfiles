@@ -1,0 +1,112 @@
+name: Platform portability
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/platform-portability.yml"
+      - "docs/HINDSIGHT.md"
+      - "home/.chezmoiignore"
+      - "home/dot_config/environment.d/**"
+      - "home/run_*acl.sh"
+      - "scripts/private-skill-transaction"
+      - "scripts/private-skill-transaction.d/**"
+      - "tests/container-runtime-bindings.zsh"
+      - "tests/global-agents-policy.zsh"
+      - "tests/platform-portability.zsh"
+      - "tests/private-skill-transaction.zsh"
+      - "tests/private-skill-transaction.d/**"
+      - "tests/test_chezmoi_source_ownership.py"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/platform-portability.yml"
+      - "docs/HINDSIGHT.md"
+      - "home/.chezmoiignore"
+      - "home/dot_config/environment.d/**"
+      - "home/run_*acl.sh"
+      - "scripts/private-skill-transaction"
+      - "scripts/private-skill-transaction.d/**"
+      - "tests/container-runtime-bindings.zsh"
+      - "tests/global-agents-policy.zsh"
+      - "tests/platform-portability.zsh"
+      - "tests/private-skill-transaction.zsh"
+      - "tests/private-skill-transaction.d/**"
+      - "tests/test_chezmoi_source_ownership.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - macos-14
+          - ubuntu-24.04
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Select Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install age chezmoi jq
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get -qq update
+          sudo apt-get -qq install -y acl age curl jq zsh
+          package="$RUNNER_TEMP/chezmoi_2.71.1_linux_amd64.deb"
+          curl --fail --location --silent --show-error \
+            --output "$package" \
+            https://github.com/twpayne/chezmoi/releases/download/v2.71.1/chezmoi_2.71.1_linux_amd64.deb
+          printf '%s  %s\n' \
+            49b68f441f60fbf84a79928e35076ccd4d0d7d5c050924c27d03bda25a7024eb \
+            "$package" | sha256sum --check
+          sudo dpkg --install "$package"
+
+      - name: Verify shell syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/private-skill-transaction scripts/private-skill-transaction.d/*.bash
+          zsh -n \
+            tests/container-runtime-bindings.zsh \
+            tests/global-agents-policy.zsh \
+            tests/platform-portability.zsh \
+            tests/private-skill-transaction.zsh \
+            tests/private-skill-transaction.d/*.zsh
+
+      - name: Verify platform bindings
+        shell: bash
+        run: |
+          set -euo pipefail
+          zsh -f tests/platform-portability.zsh
+          zsh -f tests/container-runtime-bindings.zsh
+          zsh -f tests/global-agents-policy.zsh
+          python3 -m unittest tests/test_chezmoi_source_ownership.py
+
+      - name: Verify private-skill transaction
+        shell: bash
+        run: |
+          set -euo pipefail
+          zsh -f tests/private-skill-transaction.zsh all
