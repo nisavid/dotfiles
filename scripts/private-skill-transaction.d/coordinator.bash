@@ -90,6 +90,7 @@ apply_internal() {
   local identity='' persistent_state='' chezmoi_bin=chezmoi stage protected_state status
   local db_dir db_base arg target existing i rel desired_archive projected_link
   local root recovery recovery_build phase recipient op_id table_digest new_digest
+  local test_crash_capability test_crash_marker
   local exit_trap hup_trap int_trap term_trap
   local -a apply_args=() target_paths=() ephemeral_targets=()
   local -a all_targets=() validated_targets=()
@@ -210,17 +211,25 @@ apply_internal() {
   tx_failpoint apply-after-publish
   tx_failpoint apply-before-chezmoi
   /bin/cp -p "$protected_state" "$stage"; /bin/chmod 600 "$stage"
+  test_crash_capability=$(opaque_token)
+  test_crash_marker=$phase/test-crash
   set +e
   ( umask 022
     export PRIVATE_SKILL_TX_OUTER_CAPABILITY=${PRIVATE_SKILL_TX_TOKEN:?}
+    export PRIVATE_SKILL_TEST_CRASH_CAPABILITY=$test_crash_capability
+    export PRIVATE_SKILL_TEST_CRASH_MARKER=$test_crash_marker
     exec "$chezmoi_bin" --persistent-state "$stage" apply "${apply_args[@]}"
   )
   status=$?
   set -e
   case ${PRIVATE_SKILL_TEST_APPLY_MODE:-}:$status in
     kill:137|kill-ephemeral:137|kill-mixed:137)
-      trap - EXIT HUP INT TERM
-      exit 137
+      if [[ -f $test_crash_marker && ! -L $test_crash_marker &&
+            $(mode_of "$test_crash_marker") == 600 &&
+            $(<"$test_crash_marker") == "$test_crash_capability" ]]; then
+        trap - EXIT HUP INT TERM
+        exit 137
+      fi
       ;;
   esac
   if ((status != 0)); then apply_exit "$status" "$identity" "$recovery" "$phase" "$stage"; fi
