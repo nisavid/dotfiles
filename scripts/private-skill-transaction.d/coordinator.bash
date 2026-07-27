@@ -211,6 +211,9 @@ apply_internal() {
   set +e
   ( umask 022
     export PRIVATE_SKILL_TX_OUTER_CAPABILITY=${PRIVATE_SKILL_TX_TOKEN:?}
+    if [[ -n ${PRIVATE_SKILL_TEST_APPLY_MODE:-} ]]; then
+      export PRIVATE_SKILL_TX_TEST_COORDINATOR_PID=$$
+    fi
     exec "$chezmoi_bin" --persistent-state "$stage" apply "${apply_args[@]}"
   )
   status=$?
