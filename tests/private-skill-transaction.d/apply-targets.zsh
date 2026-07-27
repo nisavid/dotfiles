@@ -91,7 +91,7 @@ outer_target_scenario_pending_conflict() {
       fail 'conflicting mixed killed apply unexpectedly succeeded'
     fi
     [[ -d $XDG_STATE_HOME/chezmoi/private-skill-transaction/apply-recovery ]] ||
-      fail "mixed killed apply did not retain outer recovery ($(cat $XDG_STATE_HOME/chezmoi/private-skill-transaction/test-apply-crash-status 2>/dev/null || print unavailable); $(tail -n 3 $apply_log))"
+      fail "mixed killed apply did not retain outer recovery ($(tail -n 3 $apply_log))"
     print -r -- third-party >$APPLY_REGULAR
     if $cli recover --identity $fixture/identity.txt >/dev/null 2>&1; then
       fail 'pending recovery overwrote an unexpected third-party edit'

@@ -56,6 +56,15 @@ followed_identity_of() {
   esac
 }
 
+set_symlink_mode() {
+  local path=$1 mode=$2
+  [[ -L $path ]] || die 'symlink mode target is not a symlink'
+  case $PRIVATE_SKILL_PLATFORM in
+    Darwin) /bin/chmod -h "$mode" "$path" ;;
+    Linux) : ;;
+  esac
+}
+
 lock_descriptor() {
   local descriptor=$1
   "$PRIVATE_SKILL_LOCK" -n "$descriptor"
