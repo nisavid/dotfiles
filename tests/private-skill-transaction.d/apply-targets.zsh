@@ -72,6 +72,19 @@ outer_target_scenario_killed_recovery() {
 
 }
 
+outer_target_scenario_inherited_kill_mode_rolls_back() {
+  setup_outer_target_fixture
+    if PRIVATE_SKILL_TEST_APPLY_MODE=kill PRIVATE_SKILL_TEST_SUPPRESS_CRASH_MARKER=1 \
+      $cli apply --identity $fixture/identity.txt --persistent-state $state_db \
+      --chezmoi $fixture/bin/fake-chezmoi $wrapper -- $targets >/dev/null 2>&1; then
+      fail 'unmarked status 137 unexpectedly succeeded'
+    fi
+    assert_eq "$(<$state_db)" old-db
+    assert_outer_target_old_set
+    [[ ! -d $XDG_STATE_HOME/chezmoi/private-skill-transaction/apply-recovery ]] ||
+      fail 'unmarked status 137 retained recovery instead of rolling back'
+}
+
 outer_target_scenario_mixed_type_recovery() {
   setup_outer_target_fixture
     if PRIVATE_SKILL_TEST_APPLY_MODE=kill-mixed $cli apply --identity $fixture/identity.txt \
@@ -258,6 +271,7 @@ outer_target_scenario_input_validation() {
 test_outer_apply_protects_every_explicit_target() {
   outer_target_scenario_catchable_failure
   outer_target_scenario_killed_recovery
+  outer_target_scenario_inherited_kill_mode_rolls_back
   outer_target_scenario_mixed_type_recovery
   outer_target_scenario_pending_conflict
   outer_target_scenario_ephemeral_conflict
