@@ -216,7 +216,10 @@ apply_internal() {
   status=$?
   set -e
   case ${PRIVATE_SKILL_TEST_APPLY_MODE:-}:$status in
-    kill:137|kill-ephemeral:137|kill-mixed:137) /bin/kill -KILL $$ ;;
+    kill:137|kill-ephemeral:137|kill-mixed:137)
+      trap - EXIT HUP INT TERM
+      exit 137
+      ;;
   esac
   if ((status != 0)); then apply_exit "$status" "$identity" "$recovery" "$phase" "$stage"; fi
   [[ -f $stage && ! -L $stage && $(mode_of "$stage") == 600 ]] ||
