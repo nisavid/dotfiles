@@ -83,13 +83,15 @@ outer_target_scenario_mixed_type_recovery() {
 }
 
 outer_target_scenario_pending_conflict() {
+  local apply_log
   setup_outer_target_fixture
+    apply_log=$fixture/pending-conflict-apply.log
     if PRIVATE_SKILL_TEST_APPLY_MODE=kill-mixed $cli apply --identity $fixture/identity.txt \
-      --persistent-state $state_db --chezmoi $fixture/bin/fake-chezmoi $wrapper -- $targets >/dev/null 2>&1; then
+      --persistent-state $state_db --chezmoi $fixture/bin/fake-chezmoi $wrapper -- $targets >$apply_log 2>&1; then
       fail 'conflicting mixed killed apply unexpectedly succeeded'
     fi
     [[ -d $XDG_STATE_HOME/chezmoi/private-skill-transaction/apply-recovery ]] ||
-      fail "mixed killed apply did not retain outer recovery ($(cat $XDG_STATE_HOME/chezmoi/private-skill-transaction/test-apply-crash-status 2>/dev/null || print unavailable))"
+      fail "mixed killed apply did not retain outer recovery ($(cat $XDG_STATE_HOME/chezmoi/private-skill-transaction/test-apply-crash-status 2>/dev/null || print unavailable); $(tail -n 3 $apply_log))"
     print -r -- third-party >$APPLY_REGULAR
     if $cli recover --identity $fixture/identity.txt >/dev/null 2>&1; then
       fail 'pending recovery overwrote an unexpected third-party edit'
