@@ -73,12 +73,16 @@ outer_target_scenario_killed_recovery() {
 }
 
 outer_target_scenario_inherited_kill_mode_rolls_back() {
+  local apply_status
   setup_outer_target_fixture
     if PRIVATE_SKILL_TEST_APPLY_MODE=kill PRIVATE_SKILL_TEST_SUPPRESS_CRASH_MARKER=1 \
       $cli apply --identity $fixture/identity.txt --persistent-state $state_db \
       --chezmoi $fixture/bin/fake-chezmoi $wrapper -- $targets >/dev/null 2>&1; then
       fail 'unmarked status 137 unexpectedly succeeded'
+    else
+      apply_status=$?
     fi
+    [[ $apply_status == 137 ]] || fail "unexpected unmarked status: $apply_status"
     assert_eq "$(<$state_db)" old-db
     assert_outer_target_old_set
     [[ ! -d $XDG_STATE_HOME/chezmoi/private-skill-transaction/apply-recovery ]] ||

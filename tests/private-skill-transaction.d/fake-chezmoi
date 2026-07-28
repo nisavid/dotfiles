@@ -133,11 +133,11 @@ if [[ $command == apply ]]; then
       ln -s "$APPLY_LINK_DEST" "$APPLY_TRANSITION"
       if [[ ${PRIVATE_SKILL_TEST_APPLY_MODE:-success} == kill-ephemeral ]]; then
         printf '%s\n' unexpected >"$APPLY_LOGICAL"
-        record_test_crash
+        record_test_crash || exit $?
         exit 137
       fi
       if [[ ${PRIVATE_SKILL_TEST_APPLY_MODE:-success} == kill-mixed ]]; then
-        record_test_crash
+        record_test_crash || exit $?
         exit 137
       fi
       rm -f "$APPLY_ABSENT" "$APPLY_NESTED"
@@ -148,7 +148,7 @@ if [[ $command == apply ]]; then
       fi
       case ${PRIVATE_SKILL_TEST_APPLY_MODE:-success} in
         fail) exit 23 ;;
-        kill) record_test_crash; exit 137 ;;
+        kill) record_test_crash || exit $?; exit 137 ;;
       esac
       ;;
     git-publication-target-set)
