@@ -76,6 +76,10 @@ render_modifier home/modify_private_dot_claude.json.tmpl "$claude_modifier"
 cat > "$test_dir/claude-input.json" <<'EOF'
 {
   "unrelated": "preserved",
+  "pluginUsage": {
+    "serena@claude-plugins-official": {"usageCount": 3},
+    "serena@inline": {"usageCount": 2}
+  },
   "mcpServers": {
     "context7": {"type": "http", "url": "https://mcp.context7.com/mcp", "headers": {"CONTEXT7_API_KEY": "context7-canary"}, "timeout": 60000},
     "firecrawl": {"type": "http", "url": "https://mcp.firecrawl.dev/firecrawl-canary/v2/mcp", "tools": ["scrape"]},
@@ -93,6 +97,8 @@ jq -e --arg command "$fixture_home/.local/bin/secret-exec" '
   .mcpServers.github == {command: $command, args: ["github", "--", "npx", "-y", "mcp-remote@0.1.38", "https://api.githubcopilot.com/mcp/", "--header", "Authorization:Bearer ${GITHUB_PERSONAL_ACCESS_TOKEN}"], disabled: true} and
   .mcpServers.greptile == {command: $command, args: ["greptile", "--", "npx", "-y", "mcp-remote@0.1.38", "https://api.greptile.com/mcp", "--header", "Authorization:Bearer ${GREPTILE_API_KEY}"], timeout: 30000} and
   (.mcpServers | has("serena") | not) and
+  (.pluginUsage | has("serena@claude-plugins-official") | not) and
+  (.pluginUsage | has("serena@inline") | not) and
   ([.mcpServers.context7, .mcpServers.firecrawl, .mcpServers.github, .mcpServers.greptile] |
     all(. as $server | ["type", "url", "env", "env_vars", "headers", "http_headers", "bearer_token_env_var"] |
       all(. as $field | ($server | has($field) | not))))
