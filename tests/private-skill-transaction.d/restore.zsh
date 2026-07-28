@@ -364,6 +364,32 @@ test_recovery_tears_down_plaintext_before_encrypted_state() {
     fail 'plaintext survived until after encrypted recovery removal'
 }
 
+test_recovery_signals_exit_after_cleanup() {
+  local signal expected recover_status tx_root
+  for signal expected in hup 129 int 130 term 143; do
+    new_fixture
+    make_age_fixture
+    encrypt_value alpha $fixture/source/a.path.age
+    encrypt_value "$(skill_text alpha new)" $fixture/source/a.md.age
+    if PRIVATE_SKILL_TX_TEST_FAILURE=kill $cli restore --identity $fixture/identity.txt \
+      --pair $fixture/source/a.path.age $fixture/source/a.md.age >/dev/null 2>&1; then
+      fail "$signal recovery signal fixture unexpectedly succeeded"
+    fi
+    if PRIVATE_SKILL_TX_TEST_FAILURE=recovery-signal-$signal $cli recover \
+      --identity $fixture/identity.txt >/dev/null 2>&1; then
+      fail "$signal recovery signal unexpectedly resumed"
+    else
+      recover_status=$?
+    fi
+    [[ $recover_status == $expected ]] ||
+      fail "$signal recovery signal returned $recover_status instead of $expected"
+    tx_root=$XDG_STATE_HOME/chezmoi/private-skill-transaction
+    [[ ! -d $tx_root/recovery ]] || fail "$signal recovery retained encrypted state"
+    [[ -z $(find $tx_root -maxdepth 1 -name 'phase.*' -print -quit) ]] ||
+      fail "$signal recovery retained plaintext state"
+  done
+}
+
 test_outer_capability_binds_nested_finalization() {
   local marker state_db
   for marker in legacy stale; do
