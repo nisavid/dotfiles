@@ -3,7 +3,7 @@ name: Platform portability
 # Zsh GUI path deployment is verified by zsh-deployment-portability.yml.
 on:
   pull_request:
-    paths:
+    paths: &platform_paths
       - ".github/workflows/platform-portability.yml"
       - "docs/HINDSIGHT.md"
       - "home/.chezmoiignore"
@@ -29,29 +29,7 @@ on:
   push:
     branches:
       - main
-    paths:
-      - ".github/workflows/platform-portability.yml"
-      - "docs/HINDSIGHT.md"
-      - "home/.chezmoiignore"
-      - "home/.chezmoidata/hindsight.toml"
-      - "home/dot_agents/skills/symlink_hindsight-*.tmpl"
-      - "home/dot_codex/private_AGENTS.md.tmpl"
-      - "home/dot_config/environment.d/**"
-      - "home/dot_config/private_hindsight-control-plane/**"
-      - "home/private_dot_hindsight/**"
-      - "home/private_dot_local/bin/executable_hindsight-*.tmpl"
-      - "home/private_dot_local/lib/hindsight-runtime/**"
-      - "home/run_*acl.sh"
-      - "scripts/private-skill-transaction"
-      - "scripts/private-skill-transaction.d/**"
-      - "tests/container-runtime-bindings.zsh"
-      - "tests/global-agents-policy.zsh"
-      - "tests/hindsight-agents-bindings.zsh"
-      - "tests/platform-portability.zsh"
-      - "tests/private-skills.zsh"
-      - "tests/private-skill-transaction.zsh"
-      - "tests/private-skill-transaction.d/**"
-      - "tests/test_chezmoi_source_ownership.py"
+    paths: *platform_paths
   workflow_dispatch:
 
 permissions:
