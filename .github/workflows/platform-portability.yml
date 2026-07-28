@@ -12,8 +12,10 @@ on:
       - "home/dot_codex/private_AGENTS.md.tmpl"
       - "home/dot_config/environment.d/**"
       - "home/run_*acl.sh"
+      - "home/run_after_sync-global-agent-skills-to-claude.zsh"
       - "scripts/private-skill-transaction"
       - "scripts/private-skill-transaction.d/**"
+      - "tests/claude-skill-sync.zsh"
       - "tests/container-runtime-bindings.zsh"
       - "tests/global-agents-policy.zsh"
       - "tests/hindsight-agents-bindings.zsh"
@@ -124,6 +126,8 @@ jobs:
             scripts/private-skill-transaction \
             scripts/private-skill-transaction.d/*.bash
           zsh -n \
+            home/run_after_sync-global-agent-skills-to-claude.zsh \
+            tests/claude-skill-sync.zsh \
             tests/container-runtime-bindings.zsh \
             tests/global-agents-policy.zsh \
             tests/hindsight-agents-bindings.zsh \
@@ -135,6 +139,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          zsh -f tests/claude-skill-sync.zsh
           zsh -f tests/platform-portability.zsh
           zsh -f tests/container-runtime-bindings.zsh
           GLOBAL_AGENTS_POLICY_PUBLIC_ONLY=1 zsh -f tests/global-agents-policy.zsh
