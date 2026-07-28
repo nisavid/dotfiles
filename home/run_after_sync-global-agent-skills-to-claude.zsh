@@ -18,7 +18,10 @@ main() {
 
   broken_links=("$claude_skills"/*(ND@))
   for link in $broken_links; do
-    [[ -e $link ]] || rm -- "$link"
+    [[ -e $link ]] && continue
+    skill_name=${link:t}
+    [[ $(readlink "$link") == "../../.agents/skills/$skill_name" ]] || continue
+    rm -- "$link"
   done
 
   skills=("$agent_skills"/*(ND-/))
