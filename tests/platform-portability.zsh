@@ -37,68 +37,48 @@ chezmoi -S "$repo_root/home" execute-template \
   --override-data '{"chezmoi":{"os":"darwin"}}' \
   <"$ignore_template" >"$test_root/darwin-ignore"
 
-typeset -a linux_only_entries=(
-  '.agents/skills/hindsight-memory-import'
-  '.agents/skills/hindsight-memory-onboarding'
-  '.agents/skills/hindsight-memory-runtime'
-  '.config/hindsight-control-plane'
+typeset -a linux_only_patterns=(
+  '.agents/skills/hindsight-*'
+  '.config/hindsight-*'
   '.docker'
-  '.hindsight'
-  '.local/bin/hindsight-embed-service'
-  '.local/bin/hindsight-embed-supervisor'
-  '.local/bin/hindsight-harness-reconcile'
-  '.local/bin/hindsight-harness-session'
-  '.local/bin/hindsight-memory'
-  '.local/lib/hindsight-runtime'
-  '.local/libexec/nisavid'
-  'Library/LaunchAgents/io.nisavid.zsh-gui-path.plist'
+  '.hindsight*'
+  '.local/bin/hindsight-*'
+  '.local/lib/hindsight-*'
+  '.local/libexec/*/zsh-gui-path'
+  'Library/LaunchAgents/*zsh-gui-path*'
 )
 
-for entry in $linux_only_entries; do
-  assert_line "$entry" "$test_root/linux-ignore"
-  ! grep -Fqx -- "$entry" "$test_root/darwin-ignore" ||
-    fail "Darwin unexpectedly ignores $entry"
-done
-
-typeset -a hindsight_sources=(
-  "$repo_root"/home/dot_agents/skills/*hindsight*
-  "$repo_root"/home/dot_config/private_hindsight-control-plane
-  "$repo_root"/home/private_dot_hindsight
-  "$repo_root"/home/private_dot_local/bin/*hindsight*
-  "$repo_root"/home/private_dot_local/lib/hindsight-runtime
-)
-
-for source_path in $hindsight_sources; do
-  [[ -e $source_path ]] ||
-    fail "Hindsight source inventory contains a missing path: $source_path"
-  target=$(chezmoi -S "$repo_root/home" target-path --source-path "$source_path")
-  relative=${target#"$HOME/"}
-  case $relative in
-    .agents/skills/hindsight-* | \
-      .config/hindsight-control-plane | .config/hindsight-control-plane/* | \
-      .hindsight | .hindsight/* | \
-      .local/bin/hindsight-* | \
-      .local/lib/hindsight-runtime | .local/lib/hindsight-runtime/*)
-      ;;
-    *) fail "ungated Hindsight target: $relative" ;;
-  esac
+for pattern in $linux_only_patterns; do
+  assert_line "$pattern" "$test_root/linux-ignore"
+  ! grep -Fqx -- "$pattern" "$test_root/darwin-ignore" ||
+    fail "Darwin unexpectedly ignores $pattern"
 done
 
 fixture_source=$test_root/source
 fixture_home=$test_root/home
 fixture_config=$test_root/chezmoi.toml
 mkdir -p \
-  "$fixture_source/dot_config/private_hindsight-control-plane" \
   "$fixture_source/private_dot_docker" \
-  "$fixture_source/private_dot_hindsight" \
-  "$fixture_source/private_dot_local/bin" \
+  "$fixture_source/private_dot_local/libexec/fixture" \
+  "$fixture_source/private_Library/private_LaunchAgents" \
   "$fixture_home"
 cp "$test_root/linux-ignore" "$fixture_source/.chezmoiignore"
+
+while IFS= read -r source_path; do
+  relative_source=${source_path#"$repo_root/home/"}
+  fixture_path=$fixture_source/$relative_source
+  if [[ -d $source_path ]]; then
+    mkdir -p "$fixture_path"
+  elif [[ -f $source_path ]]; then
+    mkdir -p "${fixture_path:h}"
+    touch "$fixture_path"
+  fi
+done < <(find "$repo_root/home" -mindepth 1 -path '*hindsight*' -print)
+
 touch \
-  "$fixture_source/dot_config/private_hindsight-control-plane/private_installation.json" \
   "$fixture_source/private_dot_docker/private_config.json" \
-  "$fixture_source/private_dot_hindsight/private_cursor-upstream-settings.json" \
-  "$fixture_source/private_dot_local/bin/executable_hindsight-memory"
+  "$fixture_source/private_dot_local/libexec/fixture/executable_zsh-gui-path" \
+  "$fixture_source/private_Library/private_LaunchAgents/io.fixture.zsh-gui-path.plist"
 touch "$fixture_config"
 
 managed=$(

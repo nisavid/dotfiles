@@ -5,24 +5,17 @@
 .config/git/config.local
 
 {{ if ne .chezmoi.os "darwin" }}
-# The current Hindsight consumer uses launchd, macOS Keychain credentials, and
-# a managed macOS Python runtime.
-.agents/skills/hindsight-memory-import
-.agents/skills/hindsight-memory-onboarding
-.agents/skills/hindsight-memory-runtime
-.config/hindsight-control-plane
-.hindsight
-.local/bin/hindsight-embed-service
-.local/bin/hindsight-embed-supervisor
-.local/bin/hindsight-harness-reconcile
-.local/bin/hindsight-harness-session
-.local/bin/hindsight-memory
-.local/lib/hindsight-runtime
+# The current Hindsight consumer is Darwin-only.
+.agents/skills/hindsight-*
+.config/hindsight-*
+.hindsight*
+.local/bin/hindsight-*
+.local/lib/hindsight-*
 
 # OrbStack owns the managed Docker context on macOS.
 .docker
 
 # The zsh GUI path bridge is a launchd integration.
-Library/LaunchAgents/io.nisavid.zsh-gui-path.plist
-.local/libexec/nisavid
+Library/LaunchAgents/*zsh-gui-path*
+.local/libexec/*/zsh-gui-path
 {{ end }}

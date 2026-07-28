@@ -6,12 +6,8 @@ This repository contains only Ivan's machine inventory, protected credential
 locators, provider selection, native harness destinations, and installed-release
 bindings.
 
-This consumer binding is Darwin-only. Its launchd services, macOS Keychain
-resolver, and managed macOS Python runtime are ignored on Linux. Linux adoption
-remains gated on a systemd-user consumer with native credential and filesystem
-bindings tracked in
-[`nisavid/agents#37`](https://github.com/nisavid/agents/issues/37); dormant
-Linux artifacts and Hindsight data are not removed.
+This consumer binding is Darwin-only. Other platforms ignore its managed
+targets without removing dormant artifacts or data.
 
 The target path is:
 
