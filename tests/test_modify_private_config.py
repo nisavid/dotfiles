@@ -157,6 +157,9 @@ class DynamicSkillDisableModifierTests(unittest.TestCase):
         self.assertIn(str(current), paths)
 
     def test_removes_retired_serena_configuration(self) -> None:
+        self.work = base64.b64encode(
+            b'writable_roots = [".serena/memories"]\nprojects = []\n'
+        ).decode()
         config = textwrap.dedent(
             f"""
             [mcp_servers.serena]

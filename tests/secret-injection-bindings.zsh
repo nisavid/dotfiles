@@ -77,6 +77,7 @@ cat > "$test_dir/claude-input.json" <<'EOF'
 {
   "unrelated": "preserved",
   "pluginUsage": {
+    "context7@inline": {"usageCount": 7},
     "serena@claude-plugins-official": {"usageCount": 3},
     "serena@inline": {"usageCount": 2}
   },
@@ -92,6 +93,7 @@ EOF
 "$claude_modifier" < "$test_dir/claude-input.json" > "$test_dir/claude-output.json"
 jq -e --arg command "$fixture_home/.local/bin/secret-exec" '
   .unrelated == "preserved" and
+  .pluginUsage["context7@inline"] == {usageCount: 7} and
   .mcpServers.context7 == {command: $command, args: ["context7", "--", "npx", "-y", "@upstash/context7-mcp@3.2.4"], timeout: 60000} and
   .mcpServers.firecrawl == {command: $command, args: ["firecrawl", "--", "npx", "-y", "firecrawl-mcp@3.22.3"], tools: ["scrape"]} and
   .mcpServers.github == {command: $command, args: ["github", "--", "npx", "-y", "mcp-remote@0.1.38", "https://api.githubcopilot.com/mcp/", "--header", "Authorization:Bearer ${GITHUB_PERSONAL_ACCESS_TOKEN}"], disabled: true} and

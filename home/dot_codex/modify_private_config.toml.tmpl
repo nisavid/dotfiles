@@ -106,6 +106,8 @@ darwin_writable_roots = [
 ] if {{ if eq .chezmoi.os "darwin" }}True{{ else }}False{{ end }} else []
 for rel in darwin_writable_roots + work["writable_roots"]:
     p = os.path.join(home, rel)
+    if p in retired_writable_roots:
+        continue
     if p not in have:
         roots.append(p); have.add(p)
 
