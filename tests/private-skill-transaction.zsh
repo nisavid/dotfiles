@@ -44,6 +44,7 @@ case ${1:-all} in
   metadata-conflict) test_directory_metadata_only_conflict ;;
   final-check) test_final_desired_state_check_retains_conflict ;;
   recovery-teardown) test_recovery_tears_down_plaintext_before_encrypted_state ;;
+  recovery-signals) test_recovery_signals_exit_after_cleanup ;;
   outer-capability) test_outer_capability_binds_nested_finalization ;;
   snapshot-trees) test_directory_snapshot_tree_contract ;;
   all)
@@ -75,6 +76,7 @@ case ${1:-all} in
     test_directory_metadata_only_conflict
     test_final_desired_state_check_retains_conflict
     test_recovery_tears_down_plaintext_before_encrypted_state
+    test_recovery_signals_exit_after_cleanup
     test_outer_capability_binds_nested_finalization
     test_directory_snapshot_tree_contract
     ;;

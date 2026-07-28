@@ -35,5 +35,8 @@ tx_failpoint() {
       ;;
     apply-commit-kill:apply-after-complete) /bin/kill -KILL $$ ;;
     recovery-after-encrypted-removal-kill:recovery-after-encrypted-removal) /bin/kill -KILL $$ ;;
+    recovery-signal-hup:recovery-after-encrypted-removal) /bin/kill -HUP $$ ;;
+    recovery-signal-int:recovery-after-encrypted-removal) /bin/kill -INT $$ ;;
+    recovery-signal-term:recovery-after-encrypted-removal) /bin/kill -TERM $$ ;;
   esac
 }

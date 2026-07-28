@@ -284,7 +284,7 @@ apply_internal_participant() {
 }
 
 recover_internal() {
-  local identity='' root recovery phase op_id cleanup_trap
+  local identity='' root recovery phase op_id cleanup_trap hup_trap int_trap term_trap
   while (($#)); do
     case $1 in
       --identity) (($# >= 2)) || die 'missing identity'; identity=$2; shift 2 ;;
@@ -298,7 +298,13 @@ recover_internal() {
   op_id=$(opaque_token); phase=$root/phase.$op_id
   /bin/mkdir -m 700 "$phase"
   printf -v cleanup_trap '/bin/rm -rf -- %q' "$phase"
-  trap "$cleanup_trap" EXIT HUP INT TERM
+  printf -v hup_trap '/bin/rm -rf -- %q; trap - EXIT HUP INT TERM; exit 129' "$phase"
+  printf -v int_trap '/bin/rm -rf -- %q; trap - EXIT HUP INT TERM; exit 130' "$phase"
+  printf -v term_trap '/bin/rm -rf -- %q; trap - EXIT HUP INT TERM; exit 143' "$phase"
+  trap "$cleanup_trap" EXIT
+  trap "$hup_trap" HUP
+  trap "$int_trap" INT
+  trap "$term_trap" TERM
   recover_existing "$identity" "$recovery" "$phase"
   discard_plaintext_then_recovery "$phase" "$recovery"
   tx_failpoint recovery-after-encrypted-removal
