@@ -1,7 +1,9 @@
+.agents/skills/using-serena-projects
 .claude/skills/dispatching-parallel-agents
 .claude/skills/executing-plans
 .claude/skills/finishing-a-development-branch
 .claude/skills/subagent-driven-development
 .claude/skills/test-driven-development
+.claude/skills/using-serena-projects
 .claude/skills/writing-plans
 .claude/skills/yeet

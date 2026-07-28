@@ -6,6 +6,7 @@ import re
 import subprocess
 import tempfile
 import textwrap
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -154,6 +155,25 @@ class DynamicSkillDisableModifierTests(unittest.TestCase):
 
         self.assertTrue(cross_host_paths.isdisjoint(paths))
         self.assertIn(str(current), paths)
+
+    def test_removes_retired_serena_configuration(self) -> None:
+        config = textwrap.dedent(
+            f"""
+            [mcp_servers.serena]
+            command = "serena"
+
+            [sandbox_workspace_write]
+            writable_roots = ["/tmp/keep", "{self.home}/.serena/memories"]
+            """
+        )
+
+        parsed = tomllib.loads(self.apply(config))
+
+        self.assertNotIn("serena", parsed["mcp_servers"])
+        self.assertEqual(
+            parsed["sandbox_workspace_write"]["writable_roots"],
+            ["/tmp/keep"],
+        )
 
 
 if __name__ == "__main__":

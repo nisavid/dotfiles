@@ -44,6 +44,8 @@ desk["git-branch-prefix"] = os.environ["GIT_BRANCH_PREFIX"]
 ensure_table(desk, "open-in-target-preferences")["global"] = editor
 
 mcp = ensure_table(doc, "mcp_servers")
+if "serena" in mcp:
+    del mcp["serena"]
 secret_exec = os.path.join(home, ".local", "bin", "secret-exec")
 managed_mcp_servers = {
     "context7": [
@@ -75,6 +77,12 @@ sww = ensure_table(doc, "sandbox_workspace_write")
 if "writable_roots" not in sww:
     sww["writable_roots"] = tomlkit.array()
 roots = sww["writable_roots"]
+retired_writable_roots = {
+    os.path.join(home, ".serena", "memories"),
+}
+for index in reversed(range(len(roots))):
+    if str(roots[index]) in retired_writable_roots:
+        del roots[index]
 have = {str(x) for x in roots}
 darwin_writable_roots = [
     ".codex/worktrees",
@@ -90,7 +98,6 @@ darwin_writable_roots = [
     ".config/gcloud",
     ".config/graphite",
     ".config/helm",
-    ".serena/memories",
     ".kube",
     ".cache",
     ".npm",
