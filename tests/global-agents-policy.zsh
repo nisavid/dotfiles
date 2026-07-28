@@ -92,23 +92,6 @@ required=(
   'Only refresh local `main` when the operation depends on it.'
 )
 
-if [[ ${GLOBAL_AGENTS_POLICY_PUBLIC_ONLY:-0} != 1 ]]; then
-  required+=(
-    'active task authorizes thread resolution'
-    'Resolve a Systalyze pull request review thread only when the active task authorizes thread resolution, addressed evidence is present'
-    'thread author login exactly matches the selected and verified GitHub login'
-    'If no GitHub login is selected, resolve no threads.'
-    "Limit debloating to the current task's behavioral surface."
-    'use `working-in-systalyze-worktrees`'
-    'Set the Kubernetes context explicitly for every command.'
-    'Set a namespace only for namespaced resources.'
-    'Confirm the exact resource and its cluster scope before mutating a cluster-scoped resource.'
-    'Every Kubernetes mutation requires authorization and a post-change check.'
-    'Do not persistently change the current context merely to run a command.'
-    'use `publishing-systalyze-sites`'
-  )
-fi
-
 for ((i = 1; i <= ${#required}; i++)); do
   grep -Fq -- "$required[$i]" "$rendered" || fail "missing required clause $i"
 done

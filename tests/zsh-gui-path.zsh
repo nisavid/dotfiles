@@ -48,9 +48,9 @@ linux_ignore=$(
     --override-data '{"chezmoi":{"os":"linux"}}' \
     < "$repo_root/home/.chezmoiignore"
 )
-[[ $linux_ignore == *'Library/LaunchAgents/io.nisavid.zsh-gui-path.plist'* ]] ||
+[[ $linux_ignore == *'Library/LaunchAgents/*zsh-gui-path*'* ]] ||
   fail 'non-macOS hosts must ignore the macOS LaunchAgent'
-print -r -- "$linux_ignore" | grep -Fqx -- '.local/libexec/nisavid' ||
+print -r -- "$linux_ignore" | grep -Fqx -- '.local/libexec/*/zsh-gui-path' ||
   fail 'non-macOS hosts must ignore the macOS GUI adapter directory'
 darwin_ignore=$(
   chezmoi -S "$repo_root/home" execute-template \
