@@ -10,6 +10,11 @@ jq --arg command "$command" '
 
   .mcpServers = (.mcpServers // {}) |
   del(.mcpServers.serena) |
+  .pluginUsage = (.pluginUsage // {}) |
+  del(
+    .pluginUsage["serena@claude-plugins-official"],
+    .pluginUsage["serena@inline"]
+  ) |
   .mcpServers.context7 = local_server(.mcpServers.context7;
     ["context7", "--", "npx", "-y", "@upstash/context7-mcp@3.2.4"]) |
   .mcpServers.firecrawl = local_server(.mcpServers.firecrawl;
