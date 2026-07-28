@@ -16,7 +16,7 @@ main() {
   }
   mkdir -p -- "$claude_skills"
 
-  broken_links=("$claude_skills"/**/*(ND@))
+  broken_links=("$claude_skills"/*(ND@))
   for link in $broken_links; do
     [[ -e $link ]] || rm -- "$link"
   done

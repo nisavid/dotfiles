@@ -40,8 +40,8 @@ HOME=$home zsh -f "$hook"
 
 [[ ! -L $claude_skills/retired-skill ]] ||
   fail 'top-level broken link was not removed'
-[[ ! -L $claude_skills/nested/retired-nested ]] ||
-  fail 'nested broken link was not removed'
+[[ -L $claude_skills/nested/retired-nested ]] ||
+  fail 'a nested Claude-specific link was removed'
 [[ $(<$claude_skills/new-skill) == preserved ]] ||
   fail 'an existing Claude skill was overwritten'
 assert_skill_link developing-shell-scripts
