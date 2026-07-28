@@ -34,12 +34,15 @@ ln -s ../../.agents/skills/developing-shell-scripts \
   "$claude_skills/developing-shell-scripts"
 print -r -- preserved >"$claude_skills/new-skill"
 ln -s ../../.agents/skills/retired-skill "$claude_skills/retired-skill"
+ln -s /missing/claude-specific-skill "$claude_skills/claude-specific-skill"
 ln -s ../../../../.agents/skills/retired-nested "$claude_skills/nested/retired-nested"
 
 HOME=$home zsh -f "$hook"
 
 [[ ! -L $claude_skills/retired-skill ]] ||
   fail 'top-level broken link was not removed'
+[[ -L $claude_skills/claude-specific-skill ]] ||
+  fail 'an unrelated top-level Claude link was removed'
 [[ -L $claude_skills/nested/retired-nested ]] ||
   fail 'a nested Claude-specific link was removed'
 [[ $(<$claude_skills/new-skill) == preserved ]] ||
