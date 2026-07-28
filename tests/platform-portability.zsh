@@ -104,8 +104,13 @@ if [[ $(uname -s) == Linux ]]; then
   mkdir -m 700 -p "$acl_home" "$acl_bin"
   mkdir -m 755 -p "$acl_state/chezmoi"
   print -r -- '#!/bin/sh
-exit 0' >"$acl_bin/chezmoi"
-  chmod 700 "$acl_bin/chezmoi"
+printf "managed\n"' >"$acl_bin/chezmoi"
+  print -r -- '#!/bin/sh
+printf "%s\n" "$@" >"$SETFACL_ARGS"
+exec /usr/bin/setfacl "$@"' >"$acl_bin/setfacl"
+  chmod 700 "$acl_bin/chezmoi" "$acl_bin/setfacl"
+  print -r -- managed >"$acl_home/managed"
+  chmod 640 "$acl_home/managed"
   HOME=$acl_home XDG_STATE_HOME=$acl_state \
     PATH="$acl_bin:/usr/bin:/bin" \
     /bin/sh "$repo_root***REMOVED***"
@@ -113,13 +118,26 @@ exit 0' >"$acl_bin/chezmoi"
     fail 'ACL state directory is not mode 0700'
   [[ $(stat -c '%a' -- "$acl_state/chezmoi/acl") == 600 ]] ||
     fail 'ACL snapshot is not mode 0600'
+  grep -Fqx '# file: managed' "$acl_state/chezmoi/acl" ||
+    fail 'ACL snapshot did not capture the managed path'
+
+  truncate_acl_state=$test_root/truncate-acl-state
+  mkdir -m 700 -p "$truncate_acl_state/chezmoi/acl"
+  if HOME=$acl_home XDG_STATE_HOME=$truncate_acl_state \
+    PATH="$acl_bin:/usr/bin:/bin" \
+    /bin/sh "$repo_root***REMOVED***" \
+    >"$test_root/truncate-acl.out" 2>"$test_root/truncate-acl.err"; then
+    fail 'ACL save masked a state-file truncation failure'
+  fi
 
   missing_acl_bin=$test_root/missing-acl-bin
-  mkdir -m 700 "$missing_acl_bin"
+  missing_acl_home=$test_root/missing-acl-home
+  missing_acl_state=$test_root/missing-acl-state
+  mkdir -m 700 "$missing_acl_bin" "$missing_acl_home"
   print -r -- '#!/bin/sh
 printf "Linux\n"' >"$missing_acl_bin/uname"
   chmod 700 "$missing_acl_bin/uname"
-  if HOME=$acl_home XDG_STATE_HOME=$acl_state PATH=$missing_acl_bin \
+  if HOME=$missing_acl_home XDG_STATE_HOME=$missing_acl_state PATH=$missing_acl_bin \
     /bin/sh "$repo_root***REMOVED***" \
     >"$test_root/missing-acl.out" 2>"$test_root/missing-acl.err"; then
     fail 'ACL save accepted missing Linux ACL primitives'
@@ -146,11 +164,44 @@ exit 42' >"$failed_acl_bin/getfacl"
   grep -Fq 'failed to capture ACL for managed' "$test_root/failed-acl.err" ||
     fail 'ACL save did not report the per-path capture failure'
 
-  HOME=$acl_home XDG_STATE_HOME=$acl_state \
+  metadata_acl_bin=$test_root/metadata-acl-bin
+  metadata_acl_home=$test_root/metadata-acl-home
+  metadata_acl_state=$test_root/metadata-acl-state
+  mkdir -m 700 "$metadata_acl_bin" "$metadata_acl_home"
+  print -r -- managed >"$metadata_acl_home/managed"
+  print -r -- '#!/bin/sh
+printf "managed\n"' >"$metadata_acl_bin/chezmoi"
+  print -r -- '#!/bin/sh
+cat <<EOF
+# file: managed
+# owner: unexpected-owner
+# group: unexpected-group
+# flags: s--
+user::rw-
+user:12345:r--
+group::---
+mask::r--
+other::---
+EOF' >"$metadata_acl_bin/getfacl"
+  chmod 700 "$metadata_acl_bin/chezmoi" "$metadata_acl_bin/getfacl"
+  HOME=$metadata_acl_home XDG_STATE_HOME=$metadata_acl_state \
+    PATH="$metadata_acl_bin:/usr/bin:/bin" \
+    /bin/sh "$repo_root***REMOVED***"
+  metadata_acl=$metadata_acl_state/chezmoi/acl
+  ! grep -Eq '^# (owner|group):' "$metadata_acl" ||
+    fail 'ACL snapshot retained ownership metadata'
+  grep -Fqx '# flags: s--' "$metadata_acl" ||
+    fail 'ACL snapshot discarded special mode metadata'
+
+  HOME=$acl_home XDG_STATE_HOME=$acl_state SETFACL_ARGS=$test_root/setfacl.args \
     PATH="$acl_bin:/usr/bin:/bin" \
     /bin/sh "$repo_root***REMOVED***"
   [[ ! -e $acl_state/chezmoi/acl ]] ||
     fail 'ACL snapshot was not removed after restoration'
+  [[ $(stat -c '%a' -- "$acl_home/managed") == 640 ]] ||
+    fail 'ACL restoration did not preserve the managed mode'
+  grep -Fqx -- '-P' "$test_root/setfacl.args" ||
+    fail 'ACL restoration did not disable symlink traversal'
 fi
 
 print -r -- 'platform portability: PASS'
