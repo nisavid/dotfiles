@@ -11,11 +11,18 @@ fi
 
 tmp_dir="$(mktemp -d)"
 trap '/bin/rm -rf -- "$tmp_dir"' EXIT
-managed_python_relative="$(
-  chezmoi -S "$repo_dir/home" \
-    --override-data-file "$repo_dir/home/.chezmoidata/hindsight.toml" \
-    execute-template '{{ .hindsight.managedPython }}'
-)"
+
+private_value() {
+  local key=$1
+  chezmoi -S "$repo_dir/home" execute-template \
+    "{{ index (include \".private-hindsight.toml.age\" | decrypt | fromToml).hindsight \"$key\" }}"
+}
+
+managed_python_relative="$(private_value managedPython)"
+install_root_relative="$(private_value installRoot)"
+installation_path_relative="$(private_value installationPath)"
+credential_resolver_relative="$(private_value credentialResolverPath)"
+mint_authority_locator="$(private_value mintAuthorityLocator)"
 managed_python="$HOME/$managed_python_relative"
 [[ -x "$managed_python" ]] || {
   print -ru2 -- "configured Hindsight Python is unavailable: $managed_python"
@@ -65,15 +72,17 @@ render home/private_dot_local/bin/executable_hindsight-embed-supervisor.tmpl \
   "$tmp_dir/hindsight-embed-supervisor"
 render home/private_dot_local/bin/executable_hindsight-harness-session.tmpl \
   "$tmp_dir/hindsight-harness-session"
+render home/private_dot_local/lib/hindsight-runtime/sitecustomize.py.tmpl \
+  "$tmp_dir/sitecustomize.py"
 for skill in hindsight-memory-import hindsight-memory-onboarding hindsight-memory-runtime; do
   render "home/dot_agents/skills/symlink_${skill}.tmpl" "$tmp_dir/${skill}.link"
 done
 
 for skill in hindsight-memory-import hindsight-memory-onboarding hindsight-memory-runtime; do
   [[ "$(<"$tmp_dir/${skill}.link")" == \
-    "$HOME/.local/opt/hindsight-control-plane/active/skills/${skill}" ]]
+    "$HOME/$install_root_relative/active/skills/${skill}" ]]
 done
-grep -F "install_root=\"$HOME/.local/opt/hindsight-control-plane\"" \
+grep -F "install_root=\"$HOME/$install_root_relative\"" \
   "$tmp_dir/hindsight-memory" >/dev/null
 grep -F 'exec "$install_root/bin/hindsight-memory" "$@"' \
   "$tmp_dir/hindsight-memory" >/dev/null
@@ -81,7 +90,7 @@ grep -F 'service "$@" --config "$config"' \
   "$tmp_dir/hindsight-embed-service" >/dev/null
 grep -F 'exec "$install_root/bin/hindsight-memory" service --help' \
   "$tmp_dir/hindsight-embed-service" >/dev/null
-grep -F "config=\"$HOME/.config/hindsight-control-plane/installation.json\"" \
+grep -F "config=\"$HOME/$installation_path_relative\"" \
   "$tmp_dir/hindsight-embed-service" >/dev/null
 grep -F 'harness-config reconcile' \
   "$tmp_dir/hindsight-harness-reconcile" >/dev/null
@@ -94,17 +103,17 @@ if grep -E '(^|[[:space:]])exec([[:space:]]|$)' \
   print -ru2 -- "harness reconciler must inspect aggregate results"
   exit 1
 fi
-grep -F "install_root=\"$HOME/.local/opt/hindsight-control-plane\"" \
+grep -F "install_root=\"$HOME/$install_root_relative\"" \
   "$tmp_dir/hindsight-embed-supervisor" >/dev/null
 grep -F 'exec "$install_root/bin/hindsight-embed-supervisor" "$@"' \
   "$tmp_dir/hindsight-embed-supervisor" >/dev/null
-grep -F 'CONTROLLER = HOME / ".local/opt/hindsight-control-plane" / "bin/hindsight-memory"' \
+grep -F "CONTROLLER = HOME / \"$install_root_relative\" / \"bin/hindsight-memory\"" \
   "$tmp_dir/hindsight-harness-session" >/dev/null
-grep -F 'RESOLVER = HOME / ".local/libexec/hindsight-keychain-resolver"' \
+grep -F "RESOLVER = HOME / \"$credential_resolver_relative\"" \
   "$tmp_dir/hindsight-harness-session" >/dev/null
 grep -F 'HINDSIGHT_MEMORY_CONTROL_CAPABILITY' \
   "$tmp_dir/hindsight-harness-session" >/dev/null
-grep -F 'MINT_LOCATOR = "keychain://io.nisavid.hindsight/mint-authority"' \
+grep -F "MINT_LOCATOR = \"$mint_authority_locator\"" \
   "$tmp_dir/hindsight-harness-session" >/dev/null
 if grep -R -F "$agents_root" "$tmp_dir" >/dev/null; then
   print -ru2 -- "mutable agents checkout leaked into rendered bindings"
@@ -112,7 +121,7 @@ if grep -R -F "$agents_root" "$tmp_dir" >/dev/null; then
 fi
 "$managed_python" -m py_compile "$tmp_dir/hindsight-harness-session"
 PYTHONPYCACHEPREFIX="$tmp_dir/pycache" "$managed_python" -m py_compile \
-  "$repo_dir/home/private_dot_local/lib/hindsight-runtime/sitecustomize.py"
+  "$tmp_dir/sitecustomize.py"
 zsh "$repo_dir/tests/hindsight-harness-reconcile.zsh"
 
 user_name="$(/usr/bin/id -un)"
@@ -171,11 +180,19 @@ original_run = module.subprocess.run
 try:
     module.subprocess.run = fake_resolver_run
     assert module.resolve_mint_authority() == "mint-authority"
-    assert captured_resolver["kwargs"]["input"] == (
-        b'{"credentials":[{"environment":"HINDSIGHT_MINT_AUTHORITY",'
-        b'"locator":"keychain://io.nisavid.hindsight/mint-authority"}],'
-        b'"schema_version":1}'
-    )
+    assert captured_resolver["kwargs"]["input"] == json.dumps(
+        {
+            "credentials": [
+                {
+                    "environment": "HINDSIGHT_MINT_AUTHORITY",
+                    "locator": module.MINT_LOCATOR,
+                }
+            ],
+            "schema_version": 1,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
 finally:
     module.subprocess.run = original_run
 
@@ -219,6 +236,10 @@ assert captured["arguments"][-3:] == [
 ]
 PY
 
+chezmoi decrypt "$repo_dir/home/.private-hindsight.toml.age" \
+  --output "$tmp_dir/private-hindsight.toml"
+chmod 600 "$tmp_dir/private-hindsight.toml"
+
 "$managed_python" -I - "$tmp_dir" "$repo_dir" "$agents_root" <<'PY'
 import hashlib
 import json
@@ -237,7 +258,7 @@ from hindsight_memory_control_plane.provider_runtime import ProviderRuntimePolic
 root = Path(sys.argv[1])
 repo = Path(sys.argv[2])
 consumer_data = tomllib.loads(
-    (repo / "home/.chezmoidata/hindsight.toml").read_text()
+    (root / "private-hindsight.toml").read_text()
 )["hindsight"]
 release_commit = consumer_data["releaseCommit"]
 release_version = consumer_data["releaseVersion"]
@@ -264,23 +285,23 @@ assert subprocess.run(
 assert re.fullmatch(r"\d{4}\.\d{2}\.\d{2}\+[0-9a-f]{7}", release_version)
 assert release_version.endswith(f"+{release_commit[:7]}")
 inventory = load_inventory(root / "inventory.json")
-assert inventory.machine["id"] == "stlz-ivan-mbp"
+assert inventory.machine["id"] == consumer_data["consumerId"]
 assert [item["id"] for item in inventory.harnesses] == [
     "codex", "claude-code", "cursor"
 ]
 assert {item["id"] for item in inventory.banks if item["writable"]} == {
-    "engineering"
+    consumer_data["bank"]
 }
 
 policy_data = json.loads((root / "provider-runtime-policy.json").read_text())
 policy = ProviderRuntimePolicy.load(policy_data)
-assert policy.failover_order == ("work-codex", "personal-codex", "hatchery")
-hatchery = policy.member("hatchery")
-assert hatchery.max_concurrent == 1
-assert hatchery.timeout_seconds == 300
-assert hatchery.max_retries == 1
-assert hatchery.priority("reflect") < hatchery.priority("retain")
-assert hatchery.priority("retain") < hatchery.priority("consolidation")
+assert policy.failover_order == tuple(consumer_data["failoverOrder"])
+fallback = policy.member(consumer_data["fallbackMemberId"])
+assert fallback.max_concurrent == 1
+assert fallback.timeout_seconds == 300
+assert fallback.max_retries == 1
+assert fallback.priority("reflect") < fallback.priority("retain")
+assert fallback.priority("retain") < fallback.priority("consolidation")
 
 installation_path = root / "installation.json"
 installation = InstallationConfig.read(installation_path)
@@ -288,8 +309,8 @@ assert installation.installation_mode == "adopt"
 assert installation.platform == "launchd"
 assert installation.timers == ()
 raw_installation = json.loads(installation_path.read_text())
-assert raw_installation["services"][0]["label"] == (
-    "io.nisavid.hindsight.stlz-ivan-mbp.stack"
+assert raw_installation["services"][0]["label"].endswith(
+    f".{consumer_data['consumerId']}.stack"
 )
 assert [service["service_id"] for service in raw_installation["services"]] == [
     "stack",
@@ -316,29 +337,47 @@ assert (
     == raw_installation["services"][0]["environment"]
 )
 assert raw_installation["credential_resolver"]["path"] == str(
-    Path.home() / ".local/libexec/hindsight-keychain-resolver"
+    Path.home() / consumer_data["credentialResolverPath"]
 )
 for surface in [raw_installation["health_checks"][0], raw_installation["services"][0]]:
     environment = surface["environment"]
-    assert environment["HINDSIGHT_API_AUDIT_LOG_ENABLED"] == "true"
-    assert environment["HINDSIGHT_API_AUDIT_LOG_RETENTION_DAYS"] == "7"
-    assert environment["HINDSIGHT_API_EMBEDDINGS_PROVIDER"] == "openai-codex"
+    assert environment["HINDSIGHT_API_AUDIT_LOG_ENABLED"] == str(
+        consumer_data["auditLogEnabled"]
+    ).lower()
+    assert environment["HINDSIGHT_API_AUDIT_LOG_RETENTION_DAYS"] == str(
+        consumer_data["auditLogRetentionDays"]
+    )
+    assert (
+        environment["HINDSIGHT_API_EMBEDDINGS_PROVIDER"]
+        == consumer_data["codexProvider"]
+    )
     assert environment["HINDSIGHT_API_HTTP_EXTENSION"] == (
         "hindsight_memory_control_plane.migration_generation_extension:"
         "MigrationGenerationHttpExtension"
     )
-    assert environment["HINDSIGHT_API_HTTP_PROFILE_ID"] == "systalyze"
-    assert environment["HINDSIGHT_API_LLM_TRACE_ENABLED"] == "true"
-    assert environment["HINDSIGHT_API_LLM_TRACE_RETENTION_DAYS"] == "7"
+    assert (
+        environment["HINDSIGHT_API_HTTP_PROFILE_ID"]
+        == consumer_data["profile"]
+    )
+    assert environment["HINDSIGHT_API_LLM_TRACE_ENABLED"] == str(
+        consumer_data["llmTraceEnabled"]
+    ).lower()
+    assert environment["HINDSIGHT_API_LLM_TRACE_RETENTION_DAYS"] == str(
+        consumer_data["llmTraceRetentionDays"]
+    )
     assert environment["HINDSIGHT_MEMORY_HARNESS_RECONCILER"] == str(
-        Path.home() / ".local/bin/hindsight-harness-reconcile"
+        Path.home() / consumer_data["harnessReconcilerPath"]
     )
     assert environment["HINDSIGHT_MEMORY_HARNESS_RECONCILE_CONFIG"] == str(
-        Path.home()
-        / ".local/state/hindsight-control-plane/harness-reconciliation.json"
+        Path.home() / consumer_data["harnessReconciliationPath"]
     )
-    assert environment["HINDSIGHT_API_WORKER_ID"] == "stlz-ivan-mbp-systalyze"
-    assert environment["HINDSIGHT_MEMORY_BROKER_WAIT_SECONDS"] == "300"
+    assert (
+        environment["HINDSIGHT_API_WORKER_ID"]
+        == consumer_data["workerId"]
+    )
+    assert environment["HINDSIGHT_MEMORY_BROKER_WAIT_SECONDS"] == str(
+        consumer_data["memoryBrokerWaitSeconds"]
+    )
     assert environment["HINDSIGHT_API_TENANT_EXTENSION"].endswith(
         ":ApiKeyTenantExtension"
     )

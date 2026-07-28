@@ -1,3 +1,8 @@
+{{- $hindsight := .hindsight -}}
+{{- if not (get $hindsight "publicFixture") -}}
+{{- $private := include ".private-hindsight.toml.age" | decrypt | fromToml -}}
+{{- $hindsight = $private.hindsight -}}
+{{- end -}}
 #!/usr/bin/python3
 """Launch a broker-scoped Hindsight harness session without ambient authority."""
 
@@ -15,17 +20,17 @@ import uuid
 
 
 HOME = Path({{ .chezmoi.homeDir | quote }})
-CONTROLLER = HOME / {{ .hindsight.installRoot | quote }} / "bin/hindsight-memory"
-RESOLVER = HOME / {{ .hindsight.credentialResolverPath | quote }}
-STATE = HOME / {{ .hindsight.stateRoot | quote }} / "memory"
+CONTROLLER = HOME / {{ $hindsight.installRoot | quote }} / "bin/hindsight-memory"
+RESOLVER = HOME / {{ $hindsight.credentialResolverPath | quote }}
+STATE = HOME / {{ $hindsight.stateRoot | quote }} / "memory"
 BROKER = STATE / "broker.sock"
 LOCATORS = STATE / "bridge-locators"
-BRIDGES = HOME / ".local/state/hindsight-bridges"
-MINT_LOCATOR = {{ .hindsight.mintAuthorityLocator | quote }}
+BRIDGES = HOME / {{ $hindsight.bridgesRoot | quote }}
+MINT_LOCATOR = {{ $hindsight.mintAuthorityLocator | quote }}
 HARNESS_EXECUTABLES = {
-    "codex": HOME / {{ .hindsight.codexExecutable | quote }},
-    "claude-code": HOME / {{ .hindsight.claudeCodeExecutable | quote }},
-    "cursor": HOME / {{ .hindsight.cursorExecutable | quote }},
+    "codex": HOME / {{ $hindsight.codexExecutable | quote }},
+    "claude-code": HOME / {{ $hindsight.claudeCodeExecutable | quote }},
+    "cursor": HOME / {{ $hindsight.cursorExecutable | quote }},
 }
 HARNESS_COMMANDS = {
     "codex": "codex",

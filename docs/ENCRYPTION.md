@@ -13,6 +13,7 @@ Dot-prefixed ciphertext files are source-only data. Chezmoi ignores them as targ
 - `home/.private-agents.md.age` supplies the private section of `home/dot_codex/private_AGENTS.md.tmpl`. Chezmoi renders the combined policy only to `~/.codex/AGENTS.md`; the `private_` source attribute gives that target mode `0600`.
 - `home/.private-git-identities.toml.age` supplies identity data only to the generated Git configuration targets. The public hostname map in `home/.chezmoidata/git-identity.toml` selects the default identity; unmapped hosts use the personal identity.
 - `home/.private-prd-01.toml.age` is the source-only private deployment catalog for the Hindsight memory control-plane PRD. It holds organization-specific contextual-model IDs, canonical repository tags, legacy aliases, migration dispositions, and the literals that must remain absent from the public PRD. It has no plaintext target.
+- `home/.private-hindsight.toml.age` supplies private consumer data to the Hindsight target templates. The public Hindsight data file contains only the reusable release pin.
 - Each neutral `home/.private-skill-NN-path.age` and `home/.private-skill-NN-body.age` pair contains one relative skill path and its `SKILL.md`. The pair numbers reveal neither skill name nor destination. The restore transaction validates each pair, installs a mode-`0700` directory at `~/.agents/skills/<path>` with a mode-`0600` `SKILL.md`, and creates the corresponding relative symlink under `~/.claude/skills`.
 
 Do not add a plaintext private partial, deployment catalog, identity registry,

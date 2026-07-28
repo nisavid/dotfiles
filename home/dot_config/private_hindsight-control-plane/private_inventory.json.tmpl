@@ -1,3 +1,8 @@
+{{- $hindsight := .hindsight -}}
+{{- if not (get $hindsight "publicFixture") -}}
+{{- $private := include ".private-hindsight.toml.age" | decrypt | fromToml -}}
+{{- $hindsight = $private.hindsight -}}
+{{- end -}}
 {
   "archetype": {
     "id": "trusted-workstation"
@@ -7,8 +12,8 @@
       "authority": "authoritative",
       "data_class": "engineering",
       "enable_auto_consolidation": true,
-      "id": "{{ .hindsight.bank }}",
-      "profile_id": "{{ .hindsight.profile }}",
+      "id": "{{ $hindsight.bank }}",
+      "profile_id": "{{ $hindsight.profile }}",
       "writable": true
     }
   ],
@@ -17,26 +22,26 @@
     {{- if $index }},{{ end }}
     {
       "home_bank": {
-        "bank_id": "{{ $.hindsight.bank }}",
-        "profile_id": "{{ $.hindsight.profile }}"
+        "bank_id": "{{ $hindsight.bank }}",
+        "profile_id": "{{ $hindsight.profile }}"
       },
       "id": "{{ $harness }}",
-      "profile_id": "{{ $.hindsight.profile }}",
+      "profile_id": "{{ $hindsight.profile }}",
       "write_bank": {
-        "bank_id": "{{ $.hindsight.bank }}",
-        "profile_id": "{{ $.hindsight.profile }}"
+        "bank_id": "{{ $hindsight.bank }}",
+        "profile_id": "{{ $hindsight.profile }}"
       }
     }
     {{- end }}
   ],
   "machine": {
-    "base_port": {{ .hindsight.apiPort }},
+    "base_port": {{ $hindsight.apiPort }},
     "engineering_memory_enabled": true,
-    "id": "{{ .hindsight.consumerId }}"
+    "id": "{{ $hindsight.consumerId }}"
   },
   "migration": {
-    "artifact_dir": "{{ joinPath .chezmoi.homeDir .hindsight.stateRoot "migration/artifacts" }}",
-    "proposal_log": "{{ joinPath .chezmoi.homeDir .hindsight.stateRoot "migration/proposals.md" }}"
+    "artifact_dir": "{{ joinPath .chezmoi.homeDir $hindsight.stateRoot "migration/artifacts" }}",
+    "proposal_log": "{{ joinPath .chezmoi.homeDir $hindsight.stateRoot "migration/proposals.md" }}"
   },
   "policy": {
     "allowed_placements": {
@@ -54,7 +59,7 @@
       ],
       "enabled": true,
       "host": "127.0.0.1",
-      "id": "{{ .hindsight.profile }}",
+      "id": "{{ $hindsight.profile }}",
       "roles": {
         "embedding": "codex-embedding",
         "llm": "resilient-llm-chain",

@@ -4,16 +4,22 @@ set -euo pipefail
 repo_dir="${0:A:h:h}"
 tmp_dir="$(mktemp -d)"
 trap '/bin/rm -rf -- "$tmp_dir"' EXIT
-managed_python_relative="$(
-  chezmoi -S "$repo_dir/home" \
-    --override-data-file "$repo_dir/home/.chezmoidata/hindsight.toml" \
-    execute-template '{{ .hindsight.managedPython }}'
-)"
+
+private_value() {
+  local key=$1
+  chezmoi -S "$repo_dir/home" execute-template \
+    "{{ index (include \".private-hindsight.toml.age\" | decrypt | fromToml).hindsight \"$key\" }}"
+}
+
+managed_python_relative="$(private_value managedPython)"
+install_root_relative="$(private_value installRoot)"
+state_root_relative="$(private_value stateRoot)"
+harness_reconciliation_relative="$(private_value harnessReconciliationPath)"
 managed_python="$HOME/$managed_python_relative"
 wrapper_home="$tmp_dir/home"
 wrapper_python="$wrapper_home/$managed_python_relative"
-wrapper_controller="$wrapper_home/.local/opt/hindsight-control-plane/bin/hindsight-memory-hook-authority"
-wrapper_config="$wrapper_home/.local/state/hindsight-control-plane/harness-reconciliation.json"
+wrapper_controller="$wrapper_home/$install_root_relative/bin/hindsight-memory-hook-authority"
+wrapper_config="$wrapper_home/$harness_reconciliation_relative"
 wrapper_log="$tmp_dir/controller.log"
 wrapper="$tmp_dir/hindsight-harness-reconcile"
 

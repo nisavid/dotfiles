@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import tomllib
 import types
 import unittest
 from unittest import mock
@@ -15,7 +16,25 @@ from unittest import mock
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parent.parent
-SOURCE = ROOT / "home/private_dot_local/lib/hindsight-runtime/sitecustomize.py"
+SOURCE_TEMPLATE = (
+    ROOT
+    / "home/private_dot_local/lib/hindsight-runtime/sitecustomize.py.tmpl"
+)
+_SOURCE_PHASE = tempfile.TemporaryDirectory()
+SOURCE = Path(_SOURCE_PHASE.name) / "sitecustomize.py"
+source_descriptor = os.open(
+    SOURCE,
+    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+    0o600,
+)
+with os.fdopen(source_descriptor, "w") as rendered_source:
+    subprocess.run(
+        ["chezmoi", "-S", str(ROOT / "home"), "execute-template"],
+        check=True,
+        input=SOURCE_TEMPLATE.read_text(),
+        stdout=rendered_source,
+        text=True,
+    )
 SPEC = importlib.util.spec_from_file_location("hindsight_sitecustomize", SOURCE)
 assert SPEC is not None and SPEC.loader is not None
 MODULE = importlib.util.module_from_spec(SPEC)
@@ -103,7 +122,7 @@ class HindsightProviderBindingTest(unittest.TestCase):
     def test_production_shaped_startup_uses_active_json(self) -> None:
         home = self.root / "home"
         home.mkdir(mode=0o700)
-        install_root = home / ".local/opt/hindsight-control-plane"
+        install_root = home / MODULE._INSTALL_ROOT
         release_digest = "b" * 64
         release = (
             install_root
@@ -119,11 +138,13 @@ class HindsightProviderBindingTest(unittest.TestCase):
         )
         (control_package / "provider_runtime.py").write_text(
             "class Member:\n"
-            "    id = 'work-codex'\n"
+            "    id = 'member-primary'\n"
             "    credential_mode = 'oauth-home'\n"
-            "    credential_locator = 'oauth-home:work'\n"
+            "    credential_locator = 'home-relative:.fixture/primary'\n"
             "class ProviderRuntimePolicy:\n"
-            "    failover_order = ('work-codex',)\n"
+            "    failover_order = ('member-primary',)\n"
+            "    embedding_failover_order = "
+            "('member-primary', 'member-secondary')\n"
             "    @classmethod\n"
             "    def load(cls, value):\n"
             "        return cls()\n"
@@ -187,7 +208,7 @@ class HindsightProviderBindingTest(unittest.TestCase):
         active.chmod(0o600)
         policy = (
             home
-            / ".config/hindsight-control-plane/provider-runtime-policy.json"
+            / MODULE._PROVIDER_POLICY_PATH
         )
         policy.parent.mkdir(parents=True)
         policy.write_text("{}")
@@ -198,7 +219,7 @@ class HindsightProviderBindingTest(unittest.TestCase):
             "HOME": str(home),
             "HINDSIGHT_CODEX_TERMINAL_AUTH_COOLDOWN_SECONDS": "300",
             "HINDSIGHT_EMBEDDING_FAILOVER_ORDER": (
-                "work-codex,personal-codex"
+                "member-primary,member-secondary"
             ),
             "PYTHONPATH": str(bootstrap),
         }
@@ -230,8 +251,7 @@ class HindsightProviderBindingTest(unittest.TestCase):
         try:
             self.assertEqual(
                 MODULE._provider_policy_path(self.root),
-                self.root
-                / ".config/hindsight-control-plane/provider-runtime-policy.json",
+                self.root / MODULE._PROVIDER_POLICY_PATH,
             )
         finally:
             if previous is None:
@@ -296,44 +316,55 @@ class HindsightProviderBindingTest(unittest.TestCase):
                 "OAuth home",
             )
 
-    def test_provider_policy_uses_work_then_personal_then_hatchery(self) -> None:
+    def test_provider_policy_matches_encrypted_member_order(self) -> None:
+        private_data = tomllib.loads(
+            subprocess.run(
+                [
+                    "chezmoi",
+                    "decrypt",
+                    str(ROOT / "home/.private-hindsight.toml.age"),
+                ],
+                check=True,
+                stdout=subprocess.PIPE,
+                text=True,
+            ).stdout
+        )["hindsight"]
         template = (
             ROOT
             / "home/dot_config/private_hindsight-control-plane/"
             "private_provider-runtime-policy.json.tmpl"
         ).read_text()
-        policy = json.loads(template)
+        policy = json.loads(
+            subprocess.run(
+                ["chezmoi", "-S", str(ROOT / "home"), "execute-template"],
+                check=True,
+                input=template,
+                stdout=subprocess.PIPE,
+                text=True,
+            ).stdout
+        )
         failover_order = policy["failover_order"]
         member_ids = [member["id"] for member in policy["members"]]
 
-        self.assertCountEqual(
-            failover_order,
-            ["work-codex", "personal-codex", "hatchery"],
-        )
+        self.assertEqual(failover_order, private_data["failoverOrder"])
         self.assertCountEqual(member_ids, failover_order)
-        self.assertLess(
-            failover_order.index("work-codex"),
-            failover_order.index("personal-codex"),
-        )
-        self.assertLess(
-            failover_order.index("personal-codex"),
-            failover_order.index("hatchery"),
-        )
         self.assertNotIn("terminal_auth_cooldown_seconds", policy)
         self.assertNotIn("embedding_failover_order", policy)
-        credentials_template = (
-            ROOT
-            / "home/.chezmoitemplates/"
-            "hindsight-stack-credentials-environment.tmpl"
-        ).read_text()
-        self.assertIn(
-            '"HINDSIGHT_CODEX_TERMINAL_AUTH_COOLDOWN_SECONDS": "300"',
-            credentials_template,
-        )
-        self.assertIn(
-            '"HINDSIGHT_EMBEDDING_FAILOVER_ORDER": '
-            '"work-codex,personal-codex"',
-            credentials_template,
+        credentials_template = subprocess.run(
+            ["chezmoi", "-S", str(ROOT / "home"), "execute-template"],
+            check=True,
+            input=(
+                ROOT
+                / "home/.chezmoitemplates/"
+                "hindsight-stack-credentials-environment.tmpl"
+            ).read_text(),
+            stdout=subprocess.PIPE,
+            text=True,
+        ).stdout
+        environment = json.loads(f"{{{credentials_template}}}")["environment"]
+        self.assertEqual(
+            environment["HINDSIGHT_EMBEDDING_FAILOVER_ORDER"],
+            ",".join(private_data["embeddingMemberIds"]),
         )
 
     def test_cross_process_auth_lock_times_out(self) -> None:
@@ -375,40 +406,46 @@ class HindsightProviderBindingTest(unittest.TestCase):
                     self.fail("lock should not have been acquired")
 
     def test_stack_enables_seven_day_llm_trace_retention(self) -> None:
-        template = (
-            ROOT
-            / "home/.chezmoitemplates/"
-            "hindsight-stack-credentials-environment.tmpl"
-        ).read_text()
+        private_data = tomllib.loads(
+            subprocess.run(
+                [
+                    "chezmoi",
+                    "decrypt",
+                    str(ROOT / "home/.private-hindsight.toml.age"),
+                ],
+                check=True,
+                stdout=subprocess.PIPE,
+                text=True,
+            ).stdout
+        )["hindsight"]
+        rendered = subprocess.run(
+            ["chezmoi", "-S", str(ROOT / "home"), "execute-template"],
+            check=True,
+            input=(
+                ROOT
+                / "home/.chezmoitemplates/"
+                "hindsight-stack-credentials-environment.tmpl"
+            ).read_text(),
+            stdout=subprocess.PIPE,
+            text=True,
+        ).stdout
+        environment = json.loads(f"{{{rendered}}}")["environment"]
 
-        self.assertIn('"HINDSIGHT_API_LLM_TRACE_ENABLED": "true"', template)
-        self.assertIn(
-            '"HINDSIGHT_API_LLM_TRACE_RETENTION_DAYS": "7"',
-            template,
+        self.assertEqual(
+            environment["HINDSIGHT_API_LLM_TRACE_ENABLED"],
+            str(private_data["llmTraceEnabled"]).lower(),
         )
-        self.assertIn('"HINDSIGHT_API_AUDIT_LOG_ENABLED": "true"', template)
-        self.assertIn(
-            '"HINDSIGHT_API_AUDIT_LOG_RETENTION_DAYS": "7"',
-            template,
+        self.assertEqual(
+            environment["HINDSIGHT_API_LLM_TRACE_RETENTION_DAYS"],
+            str(private_data["llmTraceRetentionDays"]),
         )
-
-    def test_operator_docs_cover_logging_and_embedding_state_privacy(self) -> None:
-        documentation = (ROOT / "docs/HINDSIGHT.md").read_text()
-        normalized = " ".join(documentation.split())
-
-        self.assertIn(
-            "Native audit logging and LLM request tracing are intentionally "
-            "enabled",
-            normalized,
+        self.assertEqual(
+            environment["HINDSIGHT_API_AUDIT_LOG_ENABLED"],
+            str(private_data["auditLogEnabled"]).lower(),
         )
-        self.assertIn("seven days", normalized)
-        self.assertIn(
-            "~/.local/state/hindsight-control-plane",
-            documentation,
-        )
-        self.assertIn(
-            "embedding runtime state is private",
-            documentation,
+        self.assertEqual(
+            environment["HINDSIGHT_API_AUDIT_LOG_RETENTION_DAYS"],
+            str(private_data["auditLogRetentionDays"]),
         )
 
     def test_codex_manager_rereads_disk_under_cross_process_lock(self) -> None:
@@ -1489,10 +1526,10 @@ class HindsightProviderBindingTest(unittest.TestCase):
         self.assertEqual(asyncio.run(CodexLLM().call()), "ok")
         self.assertFalse(hasattr(CodexLLM, "call_with_tools"))
 
-    def test_embeddings_use_explicit_work_then_personal_homes(self) -> None:
+    def test_embeddings_use_explicit_member_order(self) -> None:
         homes = {
-            "oauth-home:work": self.root / "work",
-            "oauth-home:personal": self.root / "personal",
+            "home-relative:.fixture/primary": self.root / "primary",
+            "home-relative:.fixture/secondary": self.root / "secondary",
         }
         for home in homes.values():
             home.mkdir(mode=0o700)
@@ -1531,8 +1568,8 @@ class HindsightProviderBindingTest(unittest.TestCase):
                 return None
 
             def encode(self, texts):
-                if self.home == str(homes["oauth-home:work"]):
-                    raise RuntimeError("work unavailable")
+                if self.home == str(homes["home-relative:.fixture/primary"]):
+                    raise RuntimeError("primary unavailable")
                 return [[float(len(text))] for text in texts]
 
             @property
@@ -1543,21 +1580,21 @@ class HindsightProviderBindingTest(unittest.TestCase):
         embeddings_module.Embeddings = Embeddings
         embeddings_module.CodexOAuthEmbeddings = CodexOAuthEmbeddings
         policy = types.SimpleNamespace(
-            failover_order=("work-codex", "personal-codex", "hatchery"),
-            embedding_failover_order=("work-codex", "personal-codex"),
+            failover_order=("member-primary", "member-secondary", "member-fallback"),
+            embedding_failover_order=("member-primary", "member-secondary"),
             member=lambda member_id: {
-                "work-codex": types.SimpleNamespace(
-                    id="work-codex",
+                "member-primary": types.SimpleNamespace(
+                    id="member-primary",
                     credential_mode="oauth-home",
-                    credential_locator="oauth-home:work",
+                    credential_locator="home-relative:.fixture/primary",
                 ),
-                "personal-codex": types.SimpleNamespace(
-                    id="personal-codex",
+                "member-secondary": types.SimpleNamespace(
+                    id="member-secondary",
                     credential_mode="oauth-home",
-                    credential_locator="oauth-home:personal",
+                    credential_locator="home-relative:.fixture/secondary",
                 ),
-                "hatchery": types.SimpleNamespace(
-                    id="hatchery",
+                "member-fallback": types.SimpleNamespace(
+                    id="member-fallback",
                     credential_mode="none",
                     credential_locator=None,
                 ),
@@ -1568,7 +1605,7 @@ class HindsightProviderBindingTest(unittest.TestCase):
             embeddings_module,
             policy,
             lambda locator: str(homes[locator]),
-            ("work-codex", "personal-codex"),
+            ("member-primary", "member-secondary"),
         )
         wrapper = embeddings_module.CodexOAuthEmbeddings(
             "environment-positional",
@@ -1579,7 +1616,7 @@ class HindsightProviderBindingTest(unittest.TestCase):
 
         self.assertEqual(
             [instance.home for instance in CodexOAuthEmbeddings.instances],
-            [str(homes["oauth-home:work"]), str(homes["oauth-home:personal"])],
+            [str(homes["home-relative:.fixture/primary"]), str(homes["home-relative:.fixture/secondary"])],
         )
         self.assertEqual(
             [instance.marker for instance in CodexOAuthEmbeddings.instances],
@@ -1595,7 +1632,7 @@ class HindsightProviderBindingTest(unittest.TestCase):
                 return False
 
         wrapper._ready[1][1]._auth_manager = CooldownManager()
-        with self.assertRaisesRegex(RuntimeError, "work unavailable"):
+        with self.assertRaisesRegex(RuntimeError, "primary unavailable"):
             wrapper.encode(["one"])
 
         wrapper._members[1][1]._dimension = 3072
@@ -1610,8 +1647,8 @@ class HindsightProviderBindingTest(unittest.TestCase):
         self.assertEqual(wrapper.dimension, 1536)
 
     def test_embeddings_pass_supported_explicit_codex_home(self) -> None:
-        work_home = self.root / "work"
-        work_home.mkdir(mode=0o700)
+        primary_home = self.root / "primary"
+        primary_home.mkdir(mode=0o700)
 
         class Embeddings:
             pass
@@ -1640,28 +1677,28 @@ class HindsightProviderBindingTest(unittest.TestCase):
         embeddings_module.Embeddings = Embeddings
         embeddings_module.CodexOAuthEmbeddings = CodexOAuthEmbeddings
         member = types.SimpleNamespace(
-            id="work-codex",
+            id="member-primary",
             credential_mode="oauth-home",
-            credential_locator="oauth-home:work",
+            credential_locator="home-relative:.fixture/primary",
         )
         policy = types.SimpleNamespace(
-            failover_order=("work-codex",),
-            embedding_failover_order=("work-codex",),
+            failover_order=("member-primary",),
+            embedding_failover_order=("member-primary",),
             member=lambda _member_id: member,
         )
 
         MODULE._install_codex_embeddings_runtime(
             embeddings_module,
             policy,
-            lambda _locator: str(work_home),
-            ("work-codex",),
+            lambda _locator: str(primary_home),
+            ("member-primary",),
         )
         wrapper = embeddings_module.CodexOAuthEmbeddings(
             "explicit-positional",
             model="embedding",
         )
 
-        self.assertEqual(wrapper._members[0][1].home, str(work_home))
+        self.assertEqual(wrapper._members[0][1].home, str(primary_home))
         self.assertEqual(
             wrapper._members[0][1].marker,
             "explicit-positional",
@@ -1669,8 +1706,8 @@ class HindsightProviderBindingTest(unittest.TestCase):
 
     def test_embeddings_retry_only_definitive_auth_failures(self) -> None:
         homes = {
-            "oauth-home:work": self.root / "retry-work",
-            "oauth-home:personal": self.root / "retry-personal",
+            "home-relative:.fixture/primary": self.root / "retry-primary",
+            "home-relative:.fixture/secondary": self.root / "retry-secondary",
         }
         for home in homes.values():
             home.mkdir(mode=0o700)
@@ -1758,13 +1795,13 @@ class HindsightProviderBindingTest(unittest.TestCase):
                         del texts
                         self.calls += 1
                         if (
-                            self.home == homes["oauth-home:work"]
+                            self.home == homes["home-relative:.fixture/primary"]
                             and self.calls == 1
                         ):
                             raise StatusError(response)
                         value = (
                             11.0
-                            if self.home == homes["oauth-home:work"]
+                            if self.home == homes["home-relative:.fixture/primary"]
                             else 22.0
                         )
                         return [[value]]
@@ -1783,15 +1820,15 @@ class HindsightProviderBindingTest(unittest.TestCase):
                         credential_locator=locator,
                     )
                     for member_id, locator in (
-                        ("work-codex", "oauth-home:work"),
-                        ("personal-codex", "oauth-home:personal"),
+                        ("member-primary", "home-relative:.fixture/primary"),
+                        ("member-secondary", "home-relative:.fixture/secondary"),
                     )
                 }
                 policy = types.SimpleNamespace(
-                    failover_order=("work-codex", "personal-codex"),
+                    failover_order=("member-primary", "member-secondary"),
                     embedding_failover_order=(
-                        "work-codex",
-                        "personal-codex",
+                        "member-primary",
+                        "member-secondary",
                     ),
                     member=members.__getitem__,
                 )
@@ -1799,7 +1836,7 @@ class HindsightProviderBindingTest(unittest.TestCase):
                     embeddings_module,
                     policy,
                     lambda locator: str(homes[locator]),
-                    ("work-codex", "personal-codex"),
+                    ("member-primary", "member-secondary"),
                 )
                 wrapper = embeddings_module.CodexOAuthEmbeddings()
                 asyncio.run(wrapper.initialize())
@@ -1808,13 +1845,13 @@ class HindsightProviderBindingTest(unittest.TestCase):
                     wrapper.encode(["memory"]),
                     [[expected_value]],
                 )
-                work = wrapper._members[0][1]
+                primary = wrapper._members[0][1]
                 self.assertEqual(
-                    work._auth_manager.refresh_calls,
+                    primary._auth_manager.refresh_calls,
                     expected_refreshes,
                 )
                 self.assertEqual(
-                    work.calls,
+                    primary.calls,
                     (
                         2
                         if refresh_changes_token and expected_refreshes

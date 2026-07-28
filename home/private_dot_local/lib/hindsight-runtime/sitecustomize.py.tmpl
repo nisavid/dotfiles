@@ -1,4 +1,9 @@
-"""Install Ivan's provider policy into supported Hindsight API processes."""
+{{- $hindsight := .hindsight -}}
+{{- if not (get $hindsight "publicFixture") -}}
+{{- $private := include ".private-hindsight.toml.age" | decrypt | fromToml -}}
+{{- $hindsight = $private.hindsight -}}
+{{- end -}}
+"""Install the managed provider policy into supported Hindsight API processes."""
 
 from __future__ import annotations
 
@@ -31,6 +36,8 @@ _RELEASE_VERSION = re.compile(r"^[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}$")
 _CODEX_AUTH_FILE_CONTEXT: contextvars.ContextVar[Path | None] = (
     contextvars.ContextVar("hindsight_codex_auth_file", default=None)
 )
+_INSTALL_ROOT = Path({{ $hindsight.installRoot | quote }})
+_PROVIDER_POLICY_PATH = Path({{ $hindsight.providerPolicyPath | quote }})
 
 
 class _AuthLockTimeout(RuntimeError):
@@ -137,7 +144,7 @@ def _protected_directory_ancestry(
 
 
 def _provider_policy_path(home: Path) -> Path:
-    return home / ".config/hindsight-control-plane/provider-runtime-policy.json"
+    return home / _PROVIDER_POLICY_PATH
 
 
 def _read_protected_file(path: Path, label: str) -> bytes:
@@ -1009,7 +1016,7 @@ def _install_codex_embeddings_runtime(
 
 if importlib.util.find_spec("hindsight_api") is not None:
     home = Path.home().resolve(strict=True)
-    install_root = home / ".local/opt/hindsight-control-plane"
+    install_root = home / _INSTALL_ROOT
     try:
         release = _resolve_active_release(install_root)
         release_lib = release / "lib"
@@ -1042,8 +1049,9 @@ if importlib.util.find_spec("hindsight_api") is not None:
             not isinstance(cooldown_raw, str)
             or re.fullmatch(r"[1-9][0-9]{0,3}", cooldown_raw) is None
             or not 1 <= int(cooldown_raw) <= 3600
-            or embedding_order_raw
-            != "work-codex,personal-codex"
+            or not isinstance(embedding_order_raw, str)
+            or tuple(embedding_order_raw.split(","))
+            != policy.embedding_failover_order
         ):
             raise RuntimeError(
                 "Hindsight Codex runtime policy is invalid"
@@ -1052,15 +1060,18 @@ if importlib.util.find_spec("hindsight_api") is not None:
         embedding_member_ids = tuple(
             embedding_order_raw.split(",")
         )
-        oauth_homes = {
-            "oauth-home:personal": home / ".hindsight/codex-nisavid",
-            "oauth-home:work": home / ".hindsight/codex-systalyze",
-        }
-
         def resolve_oauth_home(locator: str) -> str:
-            selected = oauth_homes.get(locator)
-            if selected is None:
+            prefix = "home-relative:"
+            if not locator.startswith(prefix):
                 raise RuntimeError("unknown Hindsight OAuth-home locator")
+            relative = Path(locator.removeprefix(prefix))
+            if (
+                relative.is_absolute()
+                or not relative.parts
+                or ".." in relative.parts
+            ):
+                raise RuntimeError("invalid Hindsight OAuth-home locator")
+            selected = home / relative
             _protected_directory_ancestry(
                 selected,
                 home,

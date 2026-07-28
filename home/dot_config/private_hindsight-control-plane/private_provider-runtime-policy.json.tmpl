@@ -1,24 +1,25 @@
+{{- $hindsight := .hindsight -}}
+{{- if not (get $hindsight "publicFixture") -}}
+{{- $private := include ".private-hindsight.toml.age" | decrypt | fromToml -}}
+{{- $hindsight = $private.hindsight -}}
+{{- end -}}
 {
   "schema_version": 1,
   "hindsight_version": "0.8.4",
   "default_usage_limit_cooldown_seconds": 300,
-  "failover_order": [
-    "work-codex",
-    "personal-codex",
-    "hatchery"
-  ],
+  "failover_order": {{ $hindsight.failoverOrder | toJson }},
   "members": [
     {
-      "id": "work-codex",
+      "id": "{{ $hindsight.primaryMemberId }}",
       "identity": {
-        "provider": "openai-codex",
-        "model": "gpt-5.3-codex-spark",
+        "provider": "{{ $hindsight.codexProvider }}",
+        "model": "{{ $hindsight.codexModel }}",
         "base_url": "",
-        "credential_marker": "provider-policy:work-codex"
+        "credential_marker": "provider-policy:{{ $hindsight.primaryMemberId }}"
       },
       "credential": {
         "mode": "oauth-home",
-        "locator": "oauth-home:work"
+        "locator": "home-relative:{{ $hindsight.primaryCodexHome }}"
       },
       "timeout_seconds": null,
       "max_retries": null,
@@ -32,16 +33,16 @@
       "quota_cooldown": true
     },
     {
-      "id": "personal-codex",
+      "id": "{{ $hindsight.secondaryMemberId }}",
       "identity": {
-        "provider": "openai-codex",
-        "model": "gpt-5.3-codex-spark",
+        "provider": "{{ $hindsight.codexProvider }}",
+        "model": "{{ $hindsight.codexModel }}",
         "base_url": "",
-        "credential_marker": "provider-policy:personal-codex"
+        "credential_marker": "provider-policy:{{ $hindsight.secondaryMemberId }}"
       },
       "credential": {
         "mode": "oauth-home",
-        "locator": "oauth-home:personal"
+        "locator": "home-relative:{{ $hindsight.secondaryCodexHome }}"
       },
       "timeout_seconds": null,
       "max_retries": null,
@@ -55,11 +56,11 @@
       "quota_cooldown": true
     },
     {
-      "id": "hatchery",
+      "id": "{{ $hindsight.fallbackMemberId }}",
       "identity": {
-        "provider": "{{ .hindsight.hatcheryProvider }}",
-        "model": "{{ .hindsight.hatcheryModel }}",
-        "base_url": "{{ .hindsight.hatcheryBaseUrl }}",
+        "provider": "{{ $hindsight.fallbackProvider }}",
+        "model": "{{ $hindsight.fallbackModel }}",
+        "base_url": "{{ $hindsight.fallbackBaseUrl }}",
         "credential_marker": null
       },
       "credential": {

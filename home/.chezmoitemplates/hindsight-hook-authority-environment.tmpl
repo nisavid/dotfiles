@@ -1,8 +1,13 @@
+{{- $hindsight := .hindsight -}}
+{{- if not (get $hindsight "publicFixture") -}}
+{{- $private := include ".private-hindsight.toml.age" | decrypt | fromToml -}}
+{{- $hindsight = $private.hindsight -}}
+{{- end -}}
 "credentials": [],
 "environment": {
-  "HINDSIGHT_EMBED_POLL_SECONDS": "{{ .hindsight.pollSeconds }}",
-  "HINDSIGHT_MEMORY_HARNESS_RECONCILER": "{{ joinPath .chezmoi.homeDir ".local/bin/hindsight-harness-reconcile" }}",
-  "HINDSIGHT_MEMORY_HARNESS_RECONCILE_CONFIG": "{{ joinPath .chezmoi.homeDir .hindsight.stateRoot "harness-reconciliation.json" }}",
+  "HINDSIGHT_EMBED_POLL_SECONDS": "{{ $hindsight.pollSeconds }}",
+  "HINDSIGHT_MEMORY_HARNESS_RECONCILER": "{{ joinPath .chezmoi.homeDir $hindsight.harnessReconcilerPath }}",
+  "HINDSIGHT_MEMORY_HARNESS_RECONCILE_CONFIG": "{{ joinPath .chezmoi.homeDir $hindsight.harnessReconciliationPath }}",
   "HOME": "{{ .chezmoi.homeDir }}",
   "PATH": "/usr/bin:/bin:/usr/sbin:/sbin"
 }

@@ -29,9 +29,8 @@ satisfied.
 | Portable lifecycle | `home/dot_config/private_hindsight-control-plane/private_installation.json.tmpl` | `~/.config/hindsight-control-plane/installation.json` |
 | Provider policy | `home/dot_config/private_hindsight-control-plane/private_provider-runtime-policy.json.tmpl` | `~/.config/hindsight-control-plane/provider-runtime-policy.json` |
 | Harness destinations | `home/dot_config/private_hindsight-control-plane/private_harnesses/` | `~/.config/hindsight-control-plane/harnesses/` |
-| Keychain resolver binding | `home/.chezmoidata/hindsight.toml` | `~/.local/libexec/hindsight-keychain-resolver` |
-| Provider bootstrap | `home/private_dot_local/lib/hindsight-runtime/sitecustomize.py` | `~/.local/lib/hindsight-runtime/sitecustomize.py` |
-| Service CLI | `home/private_dot_local/bin/executable_hindsight-embed-service.tmpl` | `~/.local/bin/hindsight-embed-service` |
+| Private consumer data | encrypted source-only data | private rendered targets |
+| Provider bootstrap | private target template | private runtime target |
 
 The pinned reusable release is recorded in
 `home/.chezmoidata/hindsight.toml`. The installer copies that release into an
@@ -52,27 +51,6 @@ Its exact-executable Keychain ACL prevents unintended same-user programs from
 reading the items directly. Deliberate invocation of the exact approved
 resolver remains possible; this is an executable-capability boundary, not a
 signed client-identity boundary.
-
-After portable activation, `hindsight-embed-service
-status|start|restart|stop` delegates to the verified installed release and the
-managed installation configuration. An intentional stop preserves the
-installation and remains stopped until an explicit start or restart; launchd
-continues to recover genuine crashes while the desired service state is
-running.
-
-Native audit logging and LLM request tracing are intentionally enabled with
-retention limited to seven days. These bank-scoped diagnostics are not replayed
-or treated as migration input. Generated embedding runtime state is private under
-`~/.local/state/hindsight-control-plane`; keep that tree mode `0700`, never
-commit it, and include it only in protected operational backups.
-
-The managed supervisor also invokes
-`~/.local/bin/hindsight-harness-reconcile` on every reconciliation interval.
-Before native activation records exist, it removes recognized direct and
-controller Hindsight hooks. After activation, the private
-`~/.local/state/hindsight-control-plane/harness-reconciliation.json` binds the
-three approved plans and generations; drift disables Hindsight authority
-instead of restoring direct routing.
 
 The resolver never puts values in files, command arguments, logs, shell startup
 state, or browser storage. `hindsight-harness-session` resolves the mint
@@ -195,24 +173,17 @@ Any mismatch is a migration decision and stops adoption.
 
 ## Profile preparation
 
-The provider adapter preserves this exact LLM order and policy:
+The provider adapter preserves this exact order and policy:
 
-1. work Codex OAuth home;
-2. personal Codex OAuth home;
+1. personal Codex OAuth home;
+2. work Codex OAuth home;
 3. Hatchery;
 4. Hatchery concurrency one, 300-second timeout, one transient retry;
 5. reflect and interactive calls ahead of retain and consolidation;
 6. quota-aware cooldown for both Codex members.
 
-Embeddings use the same two dedicated Codex OAuth homes in work-then-personal
-order. Hatchery is explicitly absent from `embedding_failover_order`: the
-configured Hatchery Qwen endpoint is an LLM endpoint and does not expose a
-compatible embeddings API.
-
 After the no-active-session gate, use the pinned release's
-`bin/hindsight-embed-uvx` wrapper to persist these non-secret profile values.
-The pinned Node runtime must provide npm and npx 12.0.1, as required by the
-Hindsight 0.8.4 control-plane package:
+`bin/hindsight-embed-uvx` wrapper to persist these non-secret profile values:
 
 ```zsh
 /bin/chmod 700 \
@@ -251,25 +222,19 @@ expected_commit="$(read_consumer_value releaseCommit)"
 embed="$release_root/bin/hindsight-embed-uvx"
 profile=systalyze
 export HINDSIGHT_EMBED_UVX_EXECUTABLE=~/.local/bin/uvx
-export HINDSIGHT_EMBED_NPX_EXECUTABLE=\
-~/.local/share/fnm/node-versions/v24.18.0/installation/bin/npx
-[[ "$("$HINDSIGHT_EMBED_NPX_EXECUTABLE" --version)" == 12.0.1 ]] || return 1
 
 set_profile_env() {
   "$embed" hindsight-embed profile set-env "$profile" "$1" "$2"
 }
-set_profile_env HINDSIGHT_API_AUDIT_LOG_ENABLED true
-set_profile_env HINDSIGHT_API_AUDIT_LOG_RETENTION_DAYS 7
-set_profile_env HINDSIGHT_API_LLM_TRACE_ENABLED true
-set_profile_env HINDSIGHT_API_LLM_TRACE_RETENTION_DAYS 7
+set_profile_env HINDSIGHT_API_AUDIT_LOG_ENABLED false
+set_profile_env HINDSIGHT_API_LLM_TRACE_ENABLED false
 set_profile_env HINDSIGHT_API_WORKER_ID stlz-ivan-mbp-systalyze
-set_profile_env HINDSIGHT_API_EMBEDDINGS_PROVIDER openai-codex
 set_profile_env HINDSIGHT_API_LLM_PROVIDER openai-codex
 set_profile_env HINDSIGHT_API_LLM_MODEL gpt-5.3-codex-spark
-set_profile_env HINDSIGHT_API_LLM_API_KEY provider-policy:work-codex
+set_profile_env HINDSIGHT_API_LLM_API_KEY provider-policy:personal-codex
 set_profile_env HINDSIGHT_API_LLM_1_PROVIDER openai-codex
 set_profile_env HINDSIGHT_API_LLM_1_MODEL gpt-5.3-codex-spark
-set_profile_env HINDSIGHT_API_LLM_1_API_KEY provider-policy:personal-codex
+set_profile_env HINDSIGHT_API_LLM_1_API_KEY provider-policy:work-codex
 set_profile_env HINDSIGHT_API_LLM_2_PROVIDER lmstudio
 set_profile_env HINDSIGHT_API_LLM_2_MODEL Qwen3.6-35B-A3B-MTP-GGUF-UD-Q4_K_XL
 set_profile_env HINDSIGHT_API_LLM_2_BASE_URL \
@@ -292,18 +257,15 @@ and verify that every key above has exactly the expected value:
 from pathlib import Path
 
 expected = {
-    "HINDSIGHT_API_AUDIT_LOG_ENABLED": "true",
-    "HINDSIGHT_API_AUDIT_LOG_RETENTION_DAYS": "7",
-    "HINDSIGHT_API_LLM_TRACE_ENABLED": "true",
-    "HINDSIGHT_API_LLM_TRACE_RETENTION_DAYS": "7",
+    "HINDSIGHT_API_AUDIT_LOG_ENABLED": "false",
+    "HINDSIGHT_API_LLM_TRACE_ENABLED": "false",
     "HINDSIGHT_API_WORKER_ID": "stlz-ivan-mbp-systalyze",
-    "HINDSIGHT_API_EMBEDDINGS_PROVIDER": "openai-codex",
     "HINDSIGHT_API_LLM_PROVIDER": "openai-codex",
     "HINDSIGHT_API_LLM_MODEL": "gpt-5.3-codex-spark",
-    "HINDSIGHT_API_LLM_API_KEY": "provider-policy:work-codex",
+    "HINDSIGHT_API_LLM_API_KEY": "provider-policy:personal-codex",
     "HINDSIGHT_API_LLM_1_PROVIDER": "openai-codex",
     "HINDSIGHT_API_LLM_1_MODEL": "gpt-5.3-codex-spark",
-    "HINDSIGHT_API_LLM_1_API_KEY": "provider-policy:personal-codex",
+    "HINDSIGHT_API_LLM_1_API_KEY": "provider-policy:work-codex",
     "HINDSIGHT_API_LLM_2_PROVIDER": "lmstudio",
     "HINDSIGHT_API_LLM_2_MODEL": "Qwen3.6-35B-A3B-MTP-GGUF-UD-Q4_K_XL",
     "HINDSIGHT_API_LLM_2_BASE_URL": "http://hatchery.komodo-vector.ts.net:13305/v1",
@@ -408,18 +370,17 @@ revocation, durable watermarks, and writes to `engineering` only.
 Rollback preserves data and follows this order:
 
 1. stop new harness sessions and drain broker writes;
-2. invoke portable rollback with the current release digest; it disables every
-   Hindsight hook before service quiescence;
-3. verify the prior runtime release starts without the candidate-only migration
-   extension;
-4. verify the installer-owned hook-authority service remains healthy and keeps
-   Codex, Claude Code, and Cursor Hindsight hooks disabled;
-5. preserve the controller inventory, provider bootstrap, credentials, data
-   root, and failed generation for repair and diagnosis;
-6. forward-activate the repaired authority release before enabling hooks.
-
-Rollback never restores direct upstream Hindsight hooks or temporary
-harness-specific bank routing.
+2. run each approved `harness-config rollback` and verify the restored native
+   files;
+3. uninstall the portable generation without deleting its data root;
+4. restore the complete pre-adoption snapshot: consumer configuration,
+   Keychain resolver binding, provider bootstrap, shell and skill bindings,
+   provider profile, authentication and privacy flags, native hook and upstream
+   integration settings, and the original LaunchAgent;
+5. verify the restored snapshot digests, then start the original service once;
+6. verify the temporary direct bindings, provider chain, API, UI, control, and
+   fleet;
+7. retain the failed generation and evidence for diagnosis.
 
 ## Integration and data migration boundaries
 

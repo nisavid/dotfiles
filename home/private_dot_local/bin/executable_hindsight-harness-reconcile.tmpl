@@ -1,14 +1,19 @@
+{{- $hindsight := .hindsight -}}
+{{- if not (get $hindsight "publicFixture") -}}
+{{- $private := include ".private-hindsight.toml.age" | decrypt | fromToml -}}
+{{- $hindsight = $private.hindsight -}}
+{{- end -}}
 #!/usr/bin/env zsh
 set -euo pipefail
 umask 077
 
-install_root="{{ joinPath .chezmoi.homeDir .hindsight.installRoot }}"
-state_dir="{{ joinPath .chezmoi.homeDir .hindsight.stateRoot "memory" }}"
-expected_config="{{ joinPath .chezmoi.homeDir .hindsight.stateRoot "harness-reconciliation.json" }}"
-trusted_upstream="{{ joinPath .chezmoi.homeDir ".hindsight/codex-nisavid" }}"
-destination_root="{{ joinPath .chezmoi.homeDir ".config/hindsight-control-plane/harnesses" }}"
+install_root="{{ joinPath .chezmoi.homeDir $hindsight.installRoot }}"
+state_dir="{{ joinPath .chezmoi.homeDir $hindsight.stateRoot "memory" }}"
+expected_config="{{ joinPath .chezmoi.homeDir $hindsight.harnessReconciliationPath }}"
+trusted_upstream="{{ joinPath .chezmoi.homeDir $hindsight.secondaryCodexHome }}"
+destination_root="{{ joinPath .chezmoi.homeDir $hindsight.harnessDestinationRoot }}"
 controller="${HINDSIGHT_HOOK_AUTHORITY_CONTROLLER:-$install_root/bin/hindsight-memory-hook-authority}"
-managed_python="{{ joinPath .chezmoi.homeDir .hindsight.managedPython }}"
+managed_python="{{ joinPath .chezmoi.homeDir $hindsight.managedPython }}"
 
 disable_all() {
   local failures=0 harness
