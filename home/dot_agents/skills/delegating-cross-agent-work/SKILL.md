@@ -39,9 +39,11 @@ Use the least-permissive peer command that can do the job. Do not invent command
 
 | Target | Read-only / probe peer | Edit-capable peer |
 | --- | --- | --- |
-| Cursor Agent | `agent -p --mode ask --model <model-slug> --workspace <cwd> <prompt>` or `--mode plan` for planning | `agent -p --model <model-slug> --workspace <cwd> <prompt>`; add `--yolo` only for explicitly trusted, isolated, edit/shell-intended work |
-| Claude Code | `claude --model <model> --effort <effort> --permission-mode plan -p <prompt>` | `claude --model <model> --effort <effort> -p <prompt>` |
-| Codex | `codex exec -m <model> -c 'model_reasoning_effort="<effort>"' -s read-only --ephemeral -C <cwd> <prompt>` | `codex exec -m <model> -c 'model_reasoning_effort="<effort>"' -s workspace-write -C <cwd> <prompt>` |
+| Cursor Agent | `agent -p --mode ask [--model <model-slug>] --workspace <cwd> <prompt>` or `--mode plan` for planning | `agent -p [--model <model-slug>] --workspace <cwd> <prompt>`; add `--yolo` only for explicitly trusted, isolated, edit/shell-intended work |
+| Claude Code | `claude [--model <model>] --effort <effort> --permission-mode plan -p <prompt>` | `claude [--model <model>] --effort <effort> -p <prompt>` |
+| Codex | `codex exec [-m <model>] -c 'model_reasoning_effort="<effort>"' -s read-only --ephemeral -C <cwd> <prompt>` | `codex exec [-m <model>] -c 'model_reasoning_effort="<effort>"' -s workspace-write -C <cwd> <prompt>` |
+
+Bracketed model arguments are conditional. Include them only when the active tool policy permits explicit model selection; otherwise omit the bracketed segment and preserve every other argument.
 
 If a peer launch is blocked by sandboxed access to harness state, trust prompts, or quota, record the exact blocker and use an approved native app/session path instead. `codex doctor --json` can fail overall for unrelated install or terminal checks; inspect the specific auth/config/reachability checks before treating Codex as unavailable. For Claude, skip prompts when `claude -p /usage` shows insufficient 5h or weekly margin; record the reset time.
 
