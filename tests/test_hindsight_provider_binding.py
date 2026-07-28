@@ -299,7 +299,7 @@ class HindsightProviderBindingTest(unittest.TestCase):
     def test_provider_policy_uses_work_then_personal_then_hatchery(self) -> None:
         template = (
             ROOT
-            / "home/private_dot_config/hindsight-control-plane/"
+            / "home/dot_config/private_hindsight-control-plane/"
             "private_provider-runtime-policy.json.tmpl"
         ).read_text()
         policy = json.loads(template)
