@@ -1,5 +1,6 @@
 name: Platform portability
 
+# Zsh GUI path deployment is verified by zsh-deployment-portability.yml.
 on:
   pull_request:
     paths:
@@ -11,13 +12,10 @@ on:
       - "home/dot_codex/private_AGENTS.md.tmpl"
       - "home/dot_config/environment.d/**"
       - "home/dot_config/private_hindsight-control-plane/**"
-      - "home/private_Library/private_LaunchAgents/io.nisavid.zsh-gui-path.plist.tmpl"
       - "home/private_dot_hindsight/**"
       - "home/private_dot_local/bin/executable_hindsight-*.tmpl"
       - "home/private_dot_local/lib/hindsight-runtime/**"
-      - "home/private_dot_local/libexec/nisavid/executable_zsh-gui-path.tmpl"
       - "home/run_*acl.sh"
-      - "home/run_after_activate-zsh-gui-path.zsh.tmpl"
       - "scripts/private-skill-transaction"
       - "scripts/private-skill-transaction.d/**"
       - "tests/container-runtime-bindings.zsh"
@@ -28,7 +26,6 @@ on:
       - "tests/private-skill-transaction.zsh"
       - "tests/private-skill-transaction.d/**"
       - "tests/test_chezmoi_source_ownership.py"
-      - "tests/zsh-gui-path.zsh"
   push:
     branches:
       - main
@@ -41,13 +38,10 @@ on:
       - "home/dot_codex/private_AGENTS.md.tmpl"
       - "home/dot_config/environment.d/**"
       - "home/dot_config/private_hindsight-control-plane/**"
-      - "home/private_Library/private_LaunchAgents/io.nisavid.zsh-gui-path.plist.tmpl"
       - "home/private_dot_hindsight/**"
       - "home/private_dot_local/bin/executable_hindsight-*.tmpl"
       - "home/private_dot_local/lib/hindsight-runtime/**"
-      - "home/private_dot_local/libexec/nisavid/executable_zsh-gui-path.tmpl"
       - "home/run_*acl.sh"
-      - "home/run_after_activate-zsh-gui-path.zsh.tmpl"
       - "scripts/private-skill-transaction"
       - "scripts/private-skill-transaction.d/**"
       - "tests/container-runtime-bindings.zsh"
@@ -58,11 +52,13 @@ on:
       - "tests/private-skill-transaction.zsh"
       - "tests/private-skill-transaction.d/**"
       - "tests/test_chezmoi_source_ownership.py"
-      - "tests/zsh-gui-path.zsh"
   workflow_dispatch:
 
 permissions:
   contents: read
+
+env:
+  CHEZMOI_VERSION: "2.71.0"
 
 jobs:
   verify:
@@ -95,12 +91,12 @@ jobs:
           brew install age bat flock jq
           case "$(uname -m)" in
             arm64)
-              archive=chezmoi_2.71.1_darwin_arm64.tar.gz
-              digest=9fad1201c328428634b8a086f767df0dfe6dd3ea1128a2a7c45bc0b16641e294
+              archive=chezmoi_${CHEZMOI_VERSION}_darwin_arm64.tar.gz
+              digest=8b03d7be6b5d500a503c712ae6da7dd6817b6c3328223b4ae8be7a8be5a2fa3a
               ;;
             x86_64)
-              archive=chezmoi_2.71.1_darwin_amd64.tar.gz
-              digest=1551f07cab00441540a12e663ffbf4645664319c0f91d30a5f9a255470b561cc
+              archive=chezmoi_${CHEZMOI_VERSION}_darwin_amd64.tar.gz
+              digest=12b78b365528597ad701f5117fa71f6c42b5b1e65d8075e19c48472ad81faf30
               ;;
             *)
               printf 'unsupported macOS architecture: %s\n' "$(uname -m)" >&2
@@ -110,7 +106,7 @@ jobs:
           package="$RUNNER_TEMP/$archive"
           curl --fail --location --silent --show-error \
             --output "$package" \
-            "https://github.com/twpayne/chezmoi/releases/download/v2.71.1/$archive"
+            "https://github.com/twpayne/chezmoi/releases/download/v${CHEZMOI_VERSION}/$archive"
           printf '%s  %s\n' "$digest" "$package" | shasum -a 256 --check
           mkdir -p "$RUNNER_TEMP/chezmoi-bin"
           tar -xzf "$package" -C "$RUNNER_TEMP/chezmoi-bin" chezmoi
@@ -124,14 +120,21 @@ jobs:
           sudo apt-get -qq update
           sudo apt-get -qq install -y acl age bat curl jq zsh
           sudo ln -s /usr/bin/batcat /usr/local/bin/bat
-          package="$RUNNER_TEMP/chezmoi_2.71.1_linux_amd64.deb"
+          archive=chezmoi_${CHEZMOI_VERSION}_linux_amd64.tar.gz
+          package="$RUNNER_TEMP/$archive"
           curl --fail --location --silent --show-error \
             --output "$package" \
-            https://github.com/twpayne/chezmoi/releases/download/v2.71.1/chezmoi_2.71.1_linux_amd64.deb
+            "https://github.com/twpayne/chezmoi/releases/download/v${CHEZMOI_VERSION}/$archive"
           printf '%s  %s\n' \
-            49b68f441f60fbf84a79928e35076ccd4d0d7d5c050924c27d03bda25a7024eb \
+            6ea2040ecc0e82d3dac604289e100b0157afefcd94ebb818e5f6e31655156d34 \
             "$package" | sha256sum --check
-          sudo dpkg --install "$package"
+          mkdir -p "$RUNNER_TEMP/chezmoi-bin"
+          tar -xzf "$package" -C "$RUNNER_TEMP/chezmoi-bin" chezmoi
+          printf '%s\n' "$RUNNER_TEMP/chezmoi-bin" >>"$GITHUB_PATH"
+
+      - name: Verify chezmoi version
+        shell: bash
+        run: chezmoi --version | grep -Fq "chezmoi version v${CHEZMOI_VERSION},"
 
       - name: Verify shell syntax
         shell: bash
@@ -148,8 +151,7 @@ jobs:
             tests/hindsight-agents-bindings.zsh \
             tests/platform-portability.zsh \
             tests/private-skill-transaction.zsh \
-            tests/private-skill-transaction.d/*.zsh \
-            tests/zsh-gui-path.zsh
+            tests/private-skill-transaction.d/*.zsh
 
       - name: Verify platform bindings
         shell: bash
@@ -161,7 +163,6 @@ jobs:
           if [[ "$RUNNER_OS" == Linux ]]; then
             zsh -f tests/hindsight-agents-bindings.zsh
           fi
-          zsh -f tests/zsh-gui-path.zsh
           python3 -m unittest tests/test_chezmoi_source_ownership.py
 
       - name: Verify private-skill transaction
