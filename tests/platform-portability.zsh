@@ -89,6 +89,12 @@ managed=$(
   fail 'Linux manages a Hindsight fixture'
 [[ $managed != *'.docker'* ]] ||
   fail 'Linux manages the OrbStack Docker fixture'
+for held_target in \
+  '.local/libexec/fixture/zsh-gui-path' \
+  'Library/LaunchAgents/io.fixture.zsh-gui-path.plist'; do
+  [[ $managed != *"$held_target"* ]] ||
+    fail "Linux manages the zsh GUI fixture: $held_target"
+done
 
 if [[ $(uname -s) == Linux ]]; then
   acl_home=$test_root/acl-home
