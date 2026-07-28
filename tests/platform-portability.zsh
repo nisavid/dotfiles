@@ -4,6 +4,7 @@ setopt errexit nounset pipefail
 
 repo_root=${0:A:h:h}
 ignore_template=$repo_root***REMOVED***
+workflow=$repo_root/.github/workflows/platform-portability.yml
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/platform-portability.XXXXXX")
 trap 'rm -rf -- "$test_root"' EXIT HUP INT TERM
 
@@ -16,6 +17,18 @@ assert_line() {
   local line=$1 file=$2
   grep -Fqx -- "$line" "$file" || fail "missing ignore entry: $line"
 }
+
+workflow_concurrency=$(
+  awk '
+    $0 == "concurrency:" { in_block = 1; next }
+    in_block && /^[^[:space:]]/ { exit }
+    in_block { print }
+  ' "$workflow"
+)
+[[ $workflow_concurrency == *'group: ${{ github.workflow }}-${{ github.ref }}'* ]] ||
+  fail 'platform workflow does not group superseded runs by workflow and ref'
+[[ $workflow_concurrency == *'cancel-in-progress: true'* ]] ||
+  fail 'platform workflow does not cancel superseded runs'
 
 chezmoi -S "$repo_root/home" execute-template \
   --override-data '{"chezmoi":{"os":"linux"}}' \
