@@ -79,7 +79,7 @@ ACL_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/chezmoi/acl"
 ACL_STATE_DIR=$(dirname "$ACL_FILE")
 mkdir -p "$ACL_STATE_DIR"
 chmod 700 "$ACL_STATE_DIR" || exit 1
-: >"$ACL_FILE"
+: >"$ACL_FILE" || exit 1
 chmod 600 "$ACL_FILE" || exit 1
 
 cd -- "$HOME" || exit 1
@@ -95,6 +95,7 @@ chezmoi managed | while read -r item; do
     echo "save-acl: failed to capture ACL for $item" >&2
     exit 1
   }
+  acl=$(printf '%s\n' "$acl" | sed '/^# owner:/d; /^# group:/d')
   if [ "$(printf '%s\n' "$acl" | grep -cvE '^$|^#|^(user|group|other)::')" -ne 0 ]; then
     save=1
   else

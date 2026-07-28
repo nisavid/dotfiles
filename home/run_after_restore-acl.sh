@@ -26,7 +26,7 @@ if [ -f "$ACL_FILE" ] && [ -s "$ACL_FILE" ]; then
   grep '^# file: ' "$ACL_FILE" | cut -d' ' -f3- >&2
 
   cd "$HOME" || exit 1
-  setfacl --restore="$ACL_FILE" || exit 1
+  setfacl -P --restore="$ACL_FILE" || exit 1
 fi
 
 rm -f "$ACL_FILE"
