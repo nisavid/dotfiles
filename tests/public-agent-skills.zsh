@@ -64,31 +64,6 @@ test_context7() {
   assert_symlink_source "$link" '../../.agents/skills/context7-mcp'
 }
 
-test_serena() {
-  local skill="$repo_dir/home/dot_agents/skills/using-serena-projects/SKILL.md"
-  local link="$repo_dir/home/dot_claude/skills/symlink_using-serena-projects"
-
-  assert_skill_frontmatter "$skill" using-serena-projects
-  assert_contains "$skill" 'setup, initialization, repair, or use' 'Serena trigger must cover its full lifecycle'
-  assert_contains "$skill" 'committed `.serena/project.yml`' 'Serena must prefer committed shared configuration'
-  assert_contains "$skill" 'ignored `.serena/project.local.yml`' 'Serena must prefer ignored local configuration'
-  assert_contains "$skill" 'Inspect and preserve existing configuration' 'Serena must preserve existing configuration'
-  assert_contains "$skill" 'Infer languages from project manifests' 'Serena must infer languages from manifests'
-  assert_contains "$skill" 'in-repo agent worktrees' 'Serena must ignore in-repo agent worktrees'
-  assert_contains "$skill" 'external sibling worktrees' 'Serena must ignore sibling worktrees'
-  assert_contains "$skill" 'dependency directories' 'Serena must ignore dependencies'
-  assert_contains "$skill" 'caches' 'Serena must ignore caches'
-  assert_contains "$skill" 'generated environments' 'Serena must ignore generated environments'
-  assert_contains "$skill" 'Serena runtime state' 'Serena must ignore runtime state'
-  assert_contains "$skill" 'nested Git repositories and submodules as separate Serena projects' 'Nested repositories must remain separate projects'
-  assert_contains "$skill" 'Never add sibling worktrees as additional workspace folders' 'Sibling worktrees must not share a Serena project'
-  assert_contains "$skill" 'unique local `project_name`' 'Each worktree must have a unique local project name'
-  assert_contains "$skill" 'Do not guess unsupported Serena configuration keys' 'Unsupported Serena keys must not be guessed'
-  assert_contains "$skill" 'Do not overwrite repository-owned setup' 'Repository-owned setup must not be overwritten'
-  assert_contains "$skill" 'surface the missing schema or tooling context' 'Missing Serena context must be surfaced'
-  assert_symlink_source "$link" '../../.agents/skills/using-serena-projects'
-}
-
 test_git_publication() {
   local skill_dir="$repo_dir/home/dot_agents/skills/checkpointing-and-publishing-git-work"
   local skill="$skill_dir/SKILL.md"
@@ -205,10 +180,6 @@ case "${1:-all}" in
     test_context7
     dry_targets=("$HOME/.claude/skills/context7-mcp")
     ;;
-  serena)
-    test_serena
-    dry_targets=("$HOME/.claude/skills/using-serena-projects")
-    ;;
   git-publication)
     test_git_publication
     dry_targets=(
@@ -225,12 +196,10 @@ case "${1:-all}" in
     ;;
   all)
     test_context7
-    test_serena
     test_git_publication
     test_pr_publication
     dry_targets=(
       "$HOME/.claude/skills/context7-mcp"
-      "$HOME/.claude/skills/using-serena-projects"
       "$HOME/.agents/skills/checkpointing-and-publishing-git-work"
       "$HOME/.claude/skills/checkpointing-and-publishing-git-work"
       "$HOME/.claude/skills/publishing-reviewable-prs"
@@ -238,7 +207,7 @@ case "${1:-all}" in
     )
     ;;
   *)
-    fail 'usage: public-agent-skills.zsh [context7|serena|git-publication|pr-publication|all]'
+    fail 'usage: public-agent-skills.zsh [context7|git-publication|pr-publication|all]'
     ;;
 esac
 
@@ -250,7 +219,7 @@ mkdir -p -- "$isolated_source/dot_agents/skills" "$isolated_source/dot_claude/sk
 
 for skill in \
   checkpointing-and-publishing-git-work context7-mcp graphite \
-  publishing-reviewable-prs using-serena-projects; do
+  publishing-reviewable-prs; do
   cp -R -- \
     "$repo_dir/home/dot_agents/skills/$skill" \
     "$isolated_source/dot_agents/skills/$skill"
@@ -258,7 +227,7 @@ done
 
 for link in \
   checkpointing-and-publishing-git-work context7-mcp graphite \
-  publishing-reviewable-prs using-serena-projects; do
+  publishing-reviewable-prs; do
   cp -- \
     "$repo_dir/home/dot_claude/skills/symlink_$link" \
     "$isolated_source/dot_claude/skills/symlink_$link"

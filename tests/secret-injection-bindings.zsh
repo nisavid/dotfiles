@@ -80,7 +80,8 @@ cat > "$test_dir/claude-input.json" <<'EOF'
     "context7": {"type": "http", "url": "https://mcp.context7.com/mcp", "headers": {"CONTEXT7_API_KEY": "context7-canary"}, "timeout": 60000},
     "firecrawl": {"type": "http", "url": "https://mcp.firecrawl.dev/firecrawl-canary/v2/mcp", "tools": ["scrape"]},
     "github": {"type": "http", "url": "https://github.example.invalid", "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": "github-canary"}, "disabled": true},
-    "greptile": {"type": "http", "url": "https://greptile.example.invalid", "http_headers": {"Authorization": "greptile-canary"}, "timeout": 30000}
+    "greptile": {"type": "http", "url": "https://greptile.example.invalid", "http_headers": {"Authorization": "greptile-canary"}, "timeout": 30000},
+    "serena": {"command": "serena", "args": ["start-mcp-server"]}
   }
 }
 EOF
@@ -91,6 +92,7 @@ jq -e --arg command "$fixture_home/.local/bin/secret-exec" '
   .mcpServers.firecrawl == {command: $command, args: ["firecrawl", "--", "npx", "-y", "firecrawl-mcp@3.22.3"], tools: ["scrape"]} and
   .mcpServers.github == {command: $command, args: ["github", "--", "npx", "-y", "mcp-remote@0.1.38", "https://api.githubcopilot.com/mcp/", "--header", "Authorization:Bearer ${GITHUB_PERSONAL_ACCESS_TOKEN}"], disabled: true} and
   .mcpServers.greptile == {command: $command, args: ["greptile", "--", "npx", "-y", "mcp-remote@0.1.38", "https://api.greptile.com/mcp", "--header", "Authorization:Bearer ${GREPTILE_API_KEY}"], timeout: 30000} and
+  (.mcpServers | has("serena") | not) and
   ([.mcpServers.context7, .mcpServers.firecrawl, .mcpServers.github, .mcpServers.greptile] |
     all(. as $server | ["type", "url", "env", "env_vars", "headers", "http_headers", "bearer_token_env_var"] |
       all(. as $field | ($server | has($field) | not))))
@@ -107,7 +109,8 @@ cat > "$test_dir/settings-input.json" <<'EOF'
     "context7@claude-plugins-official": true,
     "firecrawl@claude-plugins-official": true,
     "github@claude-plugins-official": true,
-    "greptile@claude-plugins-official": true
+    "greptile@claude-plugins-official": true,
+    "serena@claude-plugins-official": true
   }
 }
 EOF
@@ -117,7 +120,8 @@ jq -e '
   .enabledPlugins["context7@claude-plugins-official"] == false and
   .enabledPlugins["firecrawl@claude-plugins-official"] == true and
   .enabledPlugins["github@claude-plugins-official"] == false and
-  .enabledPlugins["greptile@claude-plugins-official"] == false
+  .enabledPlugins["greptile@claude-plugins-official"] == false and
+  (.enabledPlugins | has("serena@claude-plugins-official") | not)
 ' "$test_dir/settings-output.json" > /dev/null || fail 'credential-dependent plugin MCPs must be replaced without disabling Firecrawl skills'
 
 mcp_config_modifier=$test_dir/modify-mcp-config
