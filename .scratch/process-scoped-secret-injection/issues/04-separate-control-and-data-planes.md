@@ -1,3 +1,5 @@
+# Separate the control plane from the data plane
+
 Type: grilling
 Status: resolved
 

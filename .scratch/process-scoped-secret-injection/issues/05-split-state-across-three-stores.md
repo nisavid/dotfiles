@@ -1,3 +1,5 @@
+# Split desired state across three stores
+
 Type: grilling
 Status: resolved
 

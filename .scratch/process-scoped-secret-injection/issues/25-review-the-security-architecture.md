@@ -1,3 +1,5 @@
+# Review the security architecture
+
 Type: task
 Status: open
 Blocked by: 22, 23, 24

@@ -1,3 +1,5 @@
+# Use a generic injected-secret rotation workflow
+
 Type: grilling
 Status: resolved
 

@@ -1,3 +1,5 @@
+# Trust the logged-in OS user
+
 Type: grilling
 Status: resolved
 

@@ -36,7 +36,7 @@ persisted sessions plus `pass-cli test`
 
 ## macOS credential store
 
-### Safe interfaces
+### Safe macOS interfaces
 
 - Store one generic-password item identified by fixed, non-secret service and
   account attributes. A helper accepts enrollment input on a no-echo TTY,
@@ -140,7 +140,7 @@ signal; unified logs and the next lazy invocation must carry that failure.
 
 ## Linux credential store
 
-### Safe interfaces
+### Safe Linux interfaces
 
 - Use libsecret against `org.freedesktop.secrets` and identify one item with an
   exact, implementation-owned attribute tuple. The

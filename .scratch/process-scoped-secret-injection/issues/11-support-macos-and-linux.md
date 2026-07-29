@@ -1,3 +1,5 @@
+# Support macOS and Linux now
+
 Type: grilling
 Status: resolved
 

@@ -1,3 +1,5 @@
+# Define declared consumer coverage
+
 Type: grilling
 Status: resolved
 

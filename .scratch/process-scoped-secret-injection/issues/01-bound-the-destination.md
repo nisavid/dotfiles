@@ -1,3 +1,5 @@
+# Bound the Wayfinder destination
+
 Type: grilling
 Status: resolved
 
@@ -9,4 +11,5 @@ What does completing this Wayfinder effort produce?
 
 A decision-complete architecture, acceptance specification, and sequenced
 implementation handoff. Wayfinder remains planning-only; implementation resumes
-under the existing reliability-repair handoff.
+from the handoff produced by
+[issue 27](./27-produce-the-implementation-handoff.md).
