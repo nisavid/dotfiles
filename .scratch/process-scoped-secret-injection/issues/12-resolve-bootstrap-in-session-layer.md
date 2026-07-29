@@ -1,3 +1,5 @@
+# Resolve bootstrap tokens in the session layer
+
 Type: grilling
 Status: resolved
 

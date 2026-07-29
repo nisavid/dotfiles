@@ -1,3 +1,5 @@
+# Ship a CLI with human and JSON output
+
 Type: grilling
 Status: resolved
 
