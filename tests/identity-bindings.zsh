@@ -47,13 +47,13 @@ fixture_data='{
 }'
 
 git_config=$test_dir/git-config
-chezmoi execute-template --override-data "$fixture_data" \
+chezmoi -S "$repo_root/home" execute-template --override-data "$fixture_data" \
   < home/dot_config/git/config.tmpl > "$git_config"
 rg -F 'email = developer@example.invalid' "$git_config" >/dev/null ||
   fail 'Git config did not select the synthetic host identity'
 
 modifier=$test_dir/modify-codex
-chezmoi execute-template --override-data "$fixture_data" \
+chezmoi -S "$repo_root/home" execute-template --override-data "$fixture_data" \
   < home/dot_codex/modify_private_config.toml.tmpl > "$modifier"
 rg -F 'export EDITOR_TARGET="code"' "$modifier" >/dev/null ||
   fail 'Codex modifier did not select the synthetic editor target'
@@ -61,7 +61,7 @@ rg -F 'export GIT_BRANCH_PREFIX="developer/"' "$modifier" >/dev/null ||
   fail 'Codex modifier did not select the synthetic branch prefix'
 
 no_tracking=$test_dir/configure-no-tracking
-chezmoi execute-template --override-data "$fixture_data" \
+chezmoi -S "$repo_root/home" execute-template --override-data "$fixture_data" \
   < home/run_after_configure-zsh-no-tracking.zsh.tmpl > "$no_tracking"
 zsh -n "$no_tracking"
 print -r -- '# fixture' > "$fixture_home/.config/zsh/zshrc.d/no-tracking.zsh"
