@@ -1,0 +1,121 @@
+[hindsight]
+publicFixture = true
+releaseCommit = "8c3c9a4835cf73c96cf9bf5c5dd1b0b024023031"
+releaseVersion = "2026.07.23+8c3c9a4"
+apiPort = 11002
+archetypeId = "fixture-consumer"
+allowedPlacementsJson = '["local"]'
+autostartDaemon = false
+autostartUi = false
+bank = "fixture-bank"
+claudeCodeExecutable = ".fixture/bin/harness-b"
+codexExecutable = ".fixture/bin/harness-a"
+consumerId = "fixture-consumer"
+controlPort = 11001
+credentialResolverPath = ".fixture/bin/resolver"
+cursorExecutable = ".fixture/bin/harness-c"
+dataClass = "fixture-data"
+dataPlaneLocator = "fixture:data-plane"
+dataRoot = ".fixture/data"
+installRoot = ".fixture/install"
+installationPath = ".fixture/config/installation.json"
+inventoryPath = ".fixture/config/inventory.json"
+localProviderBaseUrl = "http://127.0.0.1:11003/v1"
+localProviderModel = "fixture-model"
+localProviderRuntime = "fixture-provider"
+managedPython = ".fixture/bin/python"
+memoryBrokerWaitSeconds = 1
+mintAuthorityLocator = "fixture:mint-authority"
+npxExecutable = ".fixture/bin/npx"
+oauthHomesJson = '{"member-a":".fixture/auth/a","member-b":".fixture/auth/b"}'
+personalCodexHome = ".fixture/auth/a"
+pollSeconds = 1
+profile = "fixture-profile"
+profileRolesJson = '{"embedding":"fixture-embedding","llm":"fixture-llm","reranking":"fixture-reranking"}'
+providerPolicyPath = ".fixture/config/provider-policy.json"
+providersJson = '[{"data_classes":["fixture-data"],"id":"fixture-llm","placement":"local","role":"llm"},{"data_classes":["fixture-data"],"id":"fixture-embedding","placement":"local","role":"embedding"},{"data_classes":["fixture-data"],"id":"fixture-reranking","placement":"local","role":"reranking"}]'
+providerPolicyJson = '''{
+  "schema_version": 1,
+  "hindsight_version": "fixture",
+  "default_usage_limit_cooldown_seconds": 1,
+  "failover_order": ["member-a", "member-b", "member-local"],
+  "members": [
+    {
+      "id": "member-a",
+      "identity": {
+        "provider": "fixture-provider",
+        "model": "fixture-model-a",
+        "base_url": "https://example.invalid/a",
+        "credential_marker": "provider-policy:member-a"
+      },
+      "credential": {
+        "mode": "oauth-home",
+        "locator": "member-a"
+      },
+      "timeout_seconds": null,
+      "max_retries": null,
+      "max_concurrent": null,
+      "operation_priorities": {
+        "default": 0,
+        "reflect": 0,
+        "retain": 20,
+        "consolidation": 30
+      },
+      "quota_cooldown": true
+    },
+    {
+      "id": "member-b",
+      "identity": {
+        "provider": "fixture-provider",
+        "model": "fixture-model-b",
+        "base_url": "https://example.invalid/b",
+        "credential_marker": "provider-policy:member-b"
+      },
+      "credential": {
+        "mode": "oauth-home",
+        "locator": "member-b"
+      },
+      "timeout_seconds": null,
+      "max_retries": null,
+      "max_concurrent": null,
+      "operation_priorities": {
+        "default": 0,
+        "reflect": 0,
+        "retain": 20,
+        "consolidation": 30
+      },
+      "quota_cooldown": true
+    },
+    {
+      "id": "member-local",
+      "identity": {
+        "provider": "fixture-provider",
+        "model": "fixture-model-local",
+        "base_url": "http://127.0.0.1:11003/v1",
+        "credential_marker": null
+      },
+      "credential": {
+        "mode": "none",
+        "locator": null
+      },
+      "timeout_seconds": 1,
+      "max_retries": 1,
+      "max_concurrent": 1,
+      "operation_priorities": {
+        "default": 0,
+        "reflect": 0,
+        "retain": 20,
+        "consolidation": 30
+      },
+      "quota_cooldown": false
+    }
+  ]
+}'''
+serviceLabelPrefix = "io.example.fixture"
+stateRoot = ".fixture/state"
+uiAccessKeyLocator = "fixture:ui-access"
+uiHostname = "127.0.0.1"
+uiPort = 11004
+uvxExecutable = ".fixture/bin/uvx"
+workCodexHome = ".fixture/auth/b"
+workerId = "fixture-worker"

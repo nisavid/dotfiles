@@ -1,0 +1,2 @@
+{{- $private := include ".private-machine.toml.age" | decrypt | fromToml -}}
+{{ joinPath .chezmoi.homeDir $private.machine.xcomposeSource }}

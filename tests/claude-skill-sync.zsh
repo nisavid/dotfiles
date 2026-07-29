@@ -3,7 +3,7 @@ emulate -L zsh
 setopt errexit nounset pipefail
 
 repo_root=${0:A:h:h}
-hook=$repo_root***REMOVED***
+hook=$repo_root/home/run_after_sync-global-agent-skills-to-claude.zsh
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/claude-skill-sync.XXXXXX")
 trap 'rm -rf -- "$test_root"' EXIT HUP INT TERM
 
@@ -14,7 +14,7 @@ fail() {
 
 assert_skill_link() {
   local name=$1
-  local link=$test_root***REMOVED***/skills/$name
+  local link=$test_root/home/.claude/skills/$name
 
   [[ -L $link ]] || fail "$name is not linked into Claude"
   [[ $(readlink "$link") == "../../.agents/skills/$name" ]] ||

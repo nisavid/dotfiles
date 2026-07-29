@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_dir="${0:A:h:h}"
-modifier="$repo_dir***REMOVED***/modify_private_config.json"
+modifier="$repo_dir/home/private_dot_docker/modify_private_config.json"
 test_dir="$(mktemp -d)"
 trap 'rm -rf "$test_dir"' EXIT
 
@@ -123,7 +123,7 @@ if print -r -- $'{}\n{}' | /bin/bash "$modifier" >/dev/null 2>&1; then
   exit 1
 fi
 
-podman_template="$repo_dir***REMOVED***/environment.d/01-podman.conf.tmpl"
+podman_template="$repo_dir/home/dot_config/environment.d/01-podman.conf.tmpl"
 darwin_rendered="$test_dir/podman-darwin.conf"
 linux_rendered="$test_dir/podman-linux.conf"
 

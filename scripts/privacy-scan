@@ -1,0 +1,121 @@
+#!/usr/bin/env python3
+"""Scan a source tree without echoing matched sensitive values."""
+
+from __future__ import annotations
+
+import argparse
+from collections.abc import Iterable
+from pathlib import Path
+import re
+import sys
+
+
+ALLOWED_EMAILS = {"ivan@nisavid.io"}
+ALLOWED_EMAIL_DOMAINS = {"example.com", "example.invalid"}
+ALLOWED_HOME_USERS = {"fixture", "runner", "test", "test-user"}
+SKIPPED_DIRECTORIES = {".git", ".mypy_cache", ".pytest_cache", "__pycache__"}
+
+EMAIL = re.compile(r"(?i)\b[A-Z0-9._%+-]+@([A-Z0-9.-]+\.[A-Z]{2,})\b")
+HOME_PATH = re.compile(
+    r"(?<![A-Za-z0-9_.$:-])(?:/Users|/home)/"
+    r"([A-Za-z0-9._-]+)(?:/[^\s\"'<>]*)?"
+)
+MAC_ADDRESS = re.compile(
+    r"(?i)(?<![0-9a-f])(?:[0-9a-f]{2}:){5}[0-9a-f]{2}(?![0-9a-f])"
+)
+PROVIDER_TOKEN = re.compile(
+    r"\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|"
+    r"github_pat_[A-Za-z0-9_]{20,}|"
+    r"AKIA[0-9A-Z]{16}|"
+    r"sk-[A-Za-z0-9_-]{20,}|"
+    r"pst_[A-Za-z0-9_-]{12,}::[A-Za-z0-9_-]{8,})\b"
+)
+PRIVATE_KEY_MARKERS = (
+    "-----BEGIN " + "PRIVATE KEY-----",
+    "AGE-" + "SECRET-KEY-",
+)
+
+
+def files(root: Path) -> Iterable[Path]:
+    for path in root.rglob("*"):
+        if any(part in SKIPPED_DIRECTORIES for part in path.parts):
+            continue
+        if not path.is_file() or path.suffix == ".age":
+            continue
+        yield path
+
+
+def read_text(path: Path) -> str | None:
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return None
+    if b"\0" in data or len(data) > 4 * 1024 * 1024:
+        return None
+    return data.decode("utf-8", "surrogateescape")
+
+
+def exact_terms(source: str | None) -> tuple[str, ...]:
+    if source is None:
+        return ()
+    stream = sys.stdin if source == "-" else Path(source).open(encoding="utf-8")
+    try:
+        terms = {
+            line.strip().casefold()
+            for line in stream
+            if line.strip() and not line.lstrip().startswith("#")
+        }
+    finally:
+        if stream is not sys.stdin:
+            stream.close()
+    return tuple(sorted(terms, key=len, reverse=True))
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--root", type=Path, default=Path.cwd())
+    parser.add_argument(
+        "--denylist",
+        help="plaintext exact-term file, or '-' for standard input",
+    )
+    arguments = parser.parse_args()
+    root = arguments.root.resolve()
+    denylist = exact_terms(arguments.denylist)
+    findings: list[tuple[str, int, str]] = []
+
+    for path in files(root):
+        text = read_text(path)
+        if text is None:
+            continue
+        relative = path.relative_to(root).as_posix()
+        for line_number, line in enumerate(text.splitlines(), start=1):
+            folded = line.casefold()
+            if any(term in folded for term in denylist):
+                findings.append((relative, line_number, "exact-denylist"))
+            if any(marker in line for marker in PRIVATE_KEY_MARKERS):
+                findings.append((relative, line_number, "private-key"))
+            if PROVIDER_TOKEN.search(line) and "fixture" not in folded:
+                findings.append((relative, line_number, "provider-token"))
+            if MAC_ADDRESS.search(line):
+                findings.append((relative, line_number, "mac-address"))
+            for match in EMAIL.finditer(line):
+                address = match.group(0).casefold()
+                domain = match.group(1).casefold()
+                if address.startswith("git@") and "ssh://git@" in folded:
+                    continue
+                if address not in ALLOWED_EMAILS and domain not in ALLOWED_EMAIL_DOMAINS:
+                    findings.append((relative, line_number, "email"))
+            for match in HOME_PATH.finditer(line):
+                prefix = line[: match.start()]
+                if re.search(r"\$[A-Za-z_][A-Za-z0-9_]*\"?$", prefix):
+                    continue
+                if match.group(1).casefold() not in ALLOWED_HOME_USERS:
+                    findings.append((relative, line_number, "user-home"))
+
+    for relative, line_number, rule in sorted(set(findings)):
+        print(f"{relative}:{line_number}: [{rule}] review required")
+    return 1 if findings else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

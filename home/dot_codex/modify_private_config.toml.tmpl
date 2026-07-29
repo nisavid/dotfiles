@@ -1,0 +1,192 @@
+#!/usr/bin/env bash
+# chezmoi modify_ script for ~/.codex/config.toml.
+#
+# Codex owns this file and rewrites it continuously (per-session project trusts,
+# [hooks.state] hashes, marketplace timestamps, app-version paths, etc.). Rather than
+# manage the whole file, this script overlays only a minimal, curated set of settings
+# onto Codex's live file and passes everything else through untouched:
+#   - [tui] theme, [desktop] git-branch-prefix   (portable prefs)
+#   - [desktop.open-in-target-preferences] global (parametrized editor target)
+#   - process-scoped Context7, Firecrawl, and GitHub MCP launchers
+#   - macOS developer-tool writable_roots
+#   - work-private writable_roots + project trusts (decrypted from an age partial)
+#
+# Requires `uv` on PATH; tomlkit is fetched+cached ephemerally (no global install).
+set -euo pipefail
+
+export HOMEDIR={{ .chezmoi.homeDir | quote }}
+{{- $bindingData := .gitIdentity }}
+{{- if not (get $bindingData "publicFixture") }}
+{{- $bindingData = include ".private-git-identities.toml.age" | decrypt | fromToml }}
+{{- end }}
+{{- $identityName := default $bindingData.selection.default (index $bindingData.selection.byHostname .chezmoi.hostname) }}
+{{- $identity := index $bindingData.identities $identityName }}
+export EDITOR_TARGET={{ $identity.editorTarget | quote }}
+export GIT_BRANCH_PREFIX={{ $identity.branchPrefix | quote }}
+export WORK_TOML_B64={{ include ".private-codex-work.toml.age" | decrypt | b64enc | quote }}
+
+# python3 reads the script via process substitution; the live config arrives on stdin.
+uv run --quiet --with tomlkit python3 <(cat <<'PYEOF'
+import os, sys, base64, tomlkit
+from pathlib import Path
+
+home = os.environ["HOMEDIR"]
+editor = os.environ["EDITOR_TARGET"]
+work = tomlkit.parse(base64.b64decode(os.environ["WORK_TOML_B64"]).decode())
+
+raw = sys.stdin.read()
+doc = tomlkit.parse(raw) if raw.strip() else tomlkit.document()
+
+def ensure_table(parent, key):
+    if key not in parent:
+        parent[key] = tomlkit.table()
+    return parent[key]
+
+ensure_table(doc, "tui")["theme"] = "catppuccin-mocha"
+desk = ensure_table(doc, "desktop")
+desk["git-branch-prefix"] = os.environ["GIT_BRANCH_PREFIX"]
+ensure_table(desk, "open-in-target-preferences")["global"] = editor
+
+mcp = ensure_table(doc, "mcp_servers")
+if "serena" in mcp:
+    del mcp["serena"]
+secret_exec = os.path.join(home, ".local", "bin", "secret-exec")
+managed_mcp_servers = {
+    "context7": [
+        "context7", "--", "npx", "-y", "@upstash/context7-mcp@3.2.4",
+    ],
+    "firecrawl": [
+        "firecrawl", "--", "npx", "-y", "firecrawl-mcp@3.22.3",
+    ],
+    "github": [
+        "github", "--", "npx", "-y", "mcp-remote@0.1.38",
+        "https://api.githubcopilot.com/mcp/", "--header",
+        "Authorization:Bearer ${GITHUB_PERSONAL_ACCESS_TOKEN}",
+    ],
+}
+for name, args in managed_mcp_servers.items():
+    existing = mcp[name] if name in mcp else None
+    server = existing if hasattr(existing, "items") else tomlkit.table()
+    for key in (
+        "type", "url", "env", "env_vars", "headers", "http_headers",
+        "bearer_token_env_var",
+    ):
+        if key in server:
+            del server[key]
+    server["command"] = secret_exec
+    server["args"] = args
+    mcp[name] = server
+
+sww = ensure_table(doc, "sandbox_workspace_write")
+if "writable_roots" not in sww:
+    sww["writable_roots"] = tomlkit.array()
+roots = sww["writable_roots"]
+retired_writable_roots = {
+    os.path.join(home, ".serena", "memories"),
+}
+for index in reversed(range(len(roots))):
+    if str(roots[index]) in retired_writable_roots:
+        del roots[index]
+have = {str(x) for x in roots}
+darwin_writable_roots = [
+    ".codex/worktrees",
+    ".t3/worktrees",
+    ".local/share/fnm",
+    ".local/share/go/bin",
+    ".local/share/go/pkg/sumdb",
+    ".local/share/uv",
+    ".local/share/yarn",
+    ".local/share/chezmoi",
+    ".local/share/graphite",
+    ".local/state",
+    ".config/gcloud",
+    ".config/graphite",
+    ".config/helm",
+    ".kube",
+    ".cache",
+    ".npm",
+    ".yarn",
+    "Library/Caches",
+] if {{ if eq .chezmoi.os "darwin" }}True{{ else }}False{{ end }} else []
+for rel in darwin_writable_roots + work["writable_roots"]:
+    p = os.path.join(home, rel)
+    if p in retired_writable_roots:
+        continue
+    if p not in have:
+        roots.append(p); have.add(p)
+
+projs = ensure_table(doc, "projects")
+for rel in work["projects"]:
+    p = os.path.join(home, rel)
+    if p not in projs:
+        t = tomlkit.table(); t["trust_level"] = "trusted"; projs[p] = t
+
+# Disable retired workflow skills from personal and plugin discovery roots.
+# Cache versions change, so resolve installed paths whenever chezmoi applies the
+# overlay instead of persisting versioned absolute paths.
+skills = ensure_table(doc, "skills")
+configured_skills = skills.get("config")
+if configured_skills is None:
+    configured_skills = tomlkit.aot()
+    skills["config"] = configured_skills
+retired_skill_names = (
+    "yeet",
+    "finishing-a-development-branch",
+    "executing-plans",
+    "subagent-driven-development",
+    "writing-plans",
+    "test-driven-development",
+    "dispatching-parallel-agents",
+)
+plugin_root = Path(home) / ".codex" / "plugins" / "cache"
+personal_skill_root = Path(home) / ".agents" / "skills"
+
+def is_retired_skill_path(raw_path):
+    path = Path(raw_path)
+    if path.name != "SKILL.md" or path.parent.name not in retired_skill_names:
+        return False
+    parts = path.parts
+    if tuple(parts[-4:-2]) == (".agents", "skills"):
+        return True
+    for index in range(len(parts) - 2):
+        if tuple(parts[index:index + 3]) != (".codex", "plugins", "cache"):
+            continue
+        return len(parts[index + 3:]) == 6 and parts[-3] == "skills"
+    return False
+
+retired_paths = set()
+for skill in retired_skill_names:
+    personal_path = personal_skill_root / skill / "SKILL.md"
+    if personal_path.is_file():
+        retired_paths.add(personal_path)
+    retired_paths.update(plugin_root.glob(f"*/*/*/skills/{skill}/SKILL.md"))
+
+retired_path_strings = {str(path) for path in retired_paths}
+kept_retired_paths = set()
+remove_indices = []
+for index, entry in enumerate(configured_skills):
+    path = str(entry.get("path", ""))
+    if not is_retired_skill_path(path):
+        continue
+    if (
+        path in retired_path_strings
+        and entry.get("enabled") == False
+        and path not in kept_retired_paths
+    ):
+        kept_retired_paths.add(path)
+    else:
+        remove_indices.append(index)
+for index in reversed(remove_indices):
+    del configured_skills[index]
+
+for path in sorted(retired_paths, key=str):
+    if str(path) in kept_retired_paths:
+        continue
+    entry = tomlkit.table()
+    entry["path"] = str(path)
+    entry["enabled"] = False
+    configured_skills.append(entry)
+
+sys.stdout.write(tomlkit.dumps(doc))
+PYEOF
+)

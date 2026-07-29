@@ -14,9 +14,9 @@ fail() {
   return 1
 }
 
-adapter_template=$repo_root***REMOVED***/libexec/nisavid/executable_zsh-gui-path.tmpl
-agent_template=$repo_root***REMOVED***/private_LaunchAgents/io.nisavid.zsh-gui-path.plist.tmpl
-activation_template=$repo_root***REMOVED***
+adapter_template=$repo_root/home/private_dot_local/libexec/nisavid/executable_zsh-gui-path.tmpl
+agent_template=$repo_root/home/private_Library/private_LaunchAgents/io.nisavid.zsh-gui-path.plist.tmpl
+activation_template=$repo_root/home/run_after_activate-zsh-gui-path.zsh.tmpl
 
 [[ -f $adapter_template ]] || fail 'the GUI PATH adapter template must exist'
 [[ -f $agent_template ]] || fail 'the GUI PATH LaunchAgent template must exist'
@@ -46,7 +46,7 @@ grep -Fq "$fixture_home/.local/libexec/nisavid/zsh-gui-path" "$agent" ||
 linux_ignore=$(
   chezmoi -S "$repo_root/home" execute-template \
     --override-data '{"chezmoi":{"os":"linux"}}' \
-    < "$repo_root***REMOVED***"
+    < "$repo_root/home/.chezmoiignore"
 )
 [[ $linux_ignore == *'Library/LaunchAgents/*zsh-gui-path*'* ]] ||
   fail 'non-macOS hosts must ignore the macOS LaunchAgent'
@@ -55,7 +55,7 @@ print -r -- "$linux_ignore" | grep -Fqx -- '.local/libexec/*/zsh-gui-path' ||
 darwin_ignore=$(
   chezmoi -S "$repo_root/home" execute-template \
     --override-data '{"chezmoi":{"os":"darwin"}}' \
-    < "$repo_root***REMOVED***"
+    < "$repo_root/home/.chezmoiignore"
 )
 [[ $darwin_ignore != *'io.nisavid.zsh-gui-path'* ]] ||
   fail 'macOS hosts must manage the GUI adapter and LaunchAgent'

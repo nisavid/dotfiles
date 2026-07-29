@@ -1,0 +1,66 @@
+{{- $hindsight := .hindsight -}}
+{{- if not (get $hindsight "publicFixture") -}}
+{{- $private := include ".private-hindsight.toml.age" | decrypt | fromToml -}}
+{{- $hindsight = $private.hindsight -}}
+{{- end -}}
+{
+  "archetype": {
+    "id": "{{ $hindsight.archetypeId }}"
+  },
+  "banks": [
+    {
+      "authority": "authoritative",
+      "data_class": "{{ $hindsight.dataClass }}",
+      "enable_auto_consolidation": true,
+      "id": "{{ $hindsight.bank }}",
+      "profile_id": "{{ $hindsight.profile }}",
+      "writable": true
+    }
+  ],
+  "harnesses": [
+    {{- range $index, $harness := list "codex" "claude-code" "cursor" }}
+    {{- if $index }},{{ end }}
+    {
+      "home_bank": {
+        "bank_id": "{{ $hindsight.bank }}",
+        "profile_id": "{{ $hindsight.profile }}"
+      },
+      "id": "{{ $harness }}",
+      "profile_id": "{{ $hindsight.profile }}",
+      "write_bank": {
+        "bank_id": "{{ $hindsight.bank }}",
+        "profile_id": "{{ $hindsight.profile }}"
+      }
+    }
+    {{- end }}
+  ],
+  "machine": {
+    "base_port": {{ $hindsight.apiPort }},
+    "{{ $hindsight.dataClass }}_memory_enabled": true,
+    "id": "{{ $hindsight.consumerId }}"
+  },
+  "migration": {
+    "artifact_dir": "{{ joinPath .chezmoi.homeDir $hindsight.stateRoot "migration/artifacts" }}",
+    "proposal_log": "{{ joinPath .chezmoi.homeDir $hindsight.stateRoot "migration/proposals.md" }}"
+  },
+  "policy": {
+    "allowed_placements": {
+      "{{ $hindsight.dataClass }}": {{ $hindsight.allowedPlacementsJson }}
+    },
+    "{{ $hindsight.dataClass }}_memory_enabled": true
+  },
+  "profiles": [
+    {
+      "data_classes": [
+        "{{ $hindsight.dataClass }}"
+      ],
+      "enabled": true,
+      "host": "127.0.0.1",
+      "id": "{{ $hindsight.profile }}",
+      "roles": {{ $hindsight.profileRolesJson }},
+      "slot": 0
+    }
+  ],
+  "providers": {{ $hindsight.providersJson }},
+  "schema_version": 1
+}

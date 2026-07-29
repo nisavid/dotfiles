@@ -2,13 +2,8 @@
 
 # Default operands
 
-default-key 02A755B28155AA0F2609452C16D4DB03794181FF
-default-key 77C3008070A3649C924D15F0C780D6E774E1C1E9!
-encrypt-to 40CEFE251D4BEF21CA597E2B3AC22943C2252AE2!
-encrypt-to 4ED1E061CB2490E90612D4CC3C2D6878CD9B6FFA!
-encrypt-to 39F2400B31A4D2F510F2838B32A6462EF33FBF44!
-local-user 77C3008070A3649C924D15F0C780D6E774E1C1E9!
-sender ivan@nisavid.io
+{{- $private := include ".private-machine.toml.age" | decrypt | fromToml }}
+{{ $private.machine.gpgIdentityConfig }}
 
 # General operations
 

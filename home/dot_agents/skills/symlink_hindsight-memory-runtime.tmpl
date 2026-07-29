@@ -1,0 +1,6 @@
+{{- $hindsight := .hindsight -}}
+{{- if not (get $hindsight "publicFixture") -}}
+{{- $private := include ".private-hindsight.toml.age" | decrypt | fromToml -}}
+{{- $hindsight = $private.hindsight -}}
+{{- end -}}
+{{ joinPath .chezmoi.homeDir $hindsight.installRoot "active/skills/hindsight-memory-runtime" }}

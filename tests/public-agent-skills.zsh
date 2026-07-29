@@ -39,8 +39,8 @@ assert_symlink_source() {
 }
 
 test_context7() {
-  local skill="$repo_dir***REMOVED***/skills/context7-mcp/SKILL.md"
-  local link="$repo_dir***REMOVED***/skills/symlink_context7-mcp"
+  local skill="$repo_dir/home/dot_agents/skills/context7-mcp/SKILL.md"
+  local link="$repo_dir/home/dot_claude/skills/symlink_context7-mcp"
   local resolve_line query_line
 
   assert_skill_frontmatter "$skill" context7-mcp
@@ -65,10 +65,10 @@ test_context7() {
 }
 
 test_git_publication() {
-  local skill_dir="$repo_dir***REMOVED***/skills/checkpointing-and-publishing-git-work"
+  local skill_dir="$repo_dir/home/dot_agents/skills/checkpointing-and-publishing-git-work"
   local skill="$skill_dir/SKILL.md"
   local metadata="$skill_dir/agents/openai.yaml"
-  local link="$repo_dir***REMOVED***/skills/symlink_checkpointing-and-publishing-git-work"
+  local link="$repo_dir/home/dot_claude/skills/symlink_checkpointing-and-publishing-git-work"
   local workflow_start push_line verify_line plan_publish_line step_nine
 
   assert_skill_frontmatter "$skill" checkpointing-and-publishing-git-work
@@ -134,13 +134,13 @@ test_git_publication() {
   assert_contains "$skill" 'check out the verified safe base before deleting the normal-checkout branch' 'Normal-checkout cleanup must leave the target branch before deletion'
   assert_contains "$skill" '`git worktree remove --force` only after exact discard confirmation covered' 'Forced worktree removal must require exact discard authority over dirt'
   assert_contains "$skill" 'If an action is not target-local' 'Non-target-local cleanup must preserve and report the remaining state'
-  assert_contains "$repo_dir***REMOVED***/modify_private_config.toml.tmpl" '"yeet"' 'Codex config must disable every installed yeet copy'
-  assert_contains "$repo_dir***REMOVED***/modify_private_config.toml.tmpl" '"finishing-a-development-branch"' 'Codex config must disable every installed finishing copy'
-  assert_contains "$repo_dir***REMOVED***/modify_private_config.toml.tmpl" 'plugin_root.glob(f"*/*/*/skills/{skill}/SKILL.md")' 'Codex config must discover every plugin provenance and version dynamically'
+  assert_contains "$repo_dir/home/dot_codex/modify_private_config.toml.tmpl" '"yeet"' 'Codex config must disable every installed yeet copy'
+  assert_contains "$repo_dir/home/dot_codex/modify_private_config.toml.tmpl" '"finishing-a-development-branch"' 'Codex config must disable every installed finishing copy'
+  assert_contains "$repo_dir/home/dot_codex/modify_private_config.toml.tmpl" 'plugin_root.glob(f"*/*/*/skills/{skill}/SKILL.md")' 'Codex config must discover every plugin provenance and version dynamically'
   for retired in \
     dispatching-parallel-agents executing-plans finishing-a-development-branch \
     subagent-driven-development test-driven-development writing-plans yeet; do
-    assert_contains "$repo_dir***REMOVED***" ".claude/skills/$retired" "Claude must not discover retired $retired"
+    assert_contains "$repo_dir/home/.chezmoiremove" ".claude/skills/$retired" "Claude must not discover retired $retired"
   done
   assert_contains "$skill" 'only the raw prompt and fixture' 'Git publication eval instructions must prevent answer leakage'
 
@@ -148,15 +148,15 @@ test_git_publication() {
 }
 
 test_pr_publication() {
-  local publisher="$repo_dir***REMOVED***/skills/publishing-reviewable-prs/SKILL.md"
-  local graphite="$repo_dir***REMOVED***/skills/graphite/SKILL.md"
-  local atlas="$repo_dir***REMOVED***/skills/writing-reviewable-pr-descriptions/review-atlas-reference-design.md"
+  local publisher="$repo_dir/home/dot_agents/skills/publishing-reviewable-prs/SKILL.md"
+  local graphite="$repo_dir/home/dot_agents/skills/graphite/SKILL.md"
+  local atlas="$repo_dir/home/dot_agents/skills/writing-reviewable-pr-descriptions/review-atlas-reference-design.md"
 
   assert_symlink_source \
-    "$repo_dir***REMOVED***/skills/symlink_publishing-reviewable-prs" \
+    "$repo_dir/home/dot_claude/skills/symlink_publishing-reviewable-prs" \
     '../../.agents/skills/publishing-reviewable-prs'
   assert_symlink_source \
-    "$repo_dir***REMOVED***/skills/symlink_graphite" \
+    "$repo_dir/home/dot_claude/skills/symlink_graphite" \
     '../../.agents/skills/graphite'
   assert_contains "$graphite" 'gt submit --stack --draft --no-edit --no-ai --no-interactive' 'Graphite submission must produce untouched drafts'
   assert_contains "$graphite" 'Keep newly created or' 'Graphite publication must preserve new draft state'
@@ -221,7 +221,7 @@ for skill in \
   checkpointing-and-publishing-git-work context7-mcp graphite \
   publishing-reviewable-prs; do
   cp -R -- \
-    "$repo_dir***REMOVED***/skills/$skill" \
+    "$repo_dir/home/dot_agents/skills/$skill" \
     "$isolated_source/dot_agents/skills/$skill"
 done
 
@@ -229,7 +229,7 @@ for link in \
   checkpointing-and-publishing-git-work context7-mcp graphite \
   publishing-reviewable-prs; do
   cp -- \
-    "$repo_dir***REMOVED***/skills/symlink_$link" \
+    "$repo_dir/home/dot_claude/skills/symlink_$link" \
     "$isolated_source/dot_claude/skills/symlink_$link"
 done
 

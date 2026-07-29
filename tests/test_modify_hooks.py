@@ -10,7 +10,7 @@ from typing import Any
 
 
 TEMPLATE = Path(__file__).parents[1] / "home" / "dot_codex" / "modify_hooks.json.tmpl"
-TEST_HOME = "***REMOVED***"
+TEST_HOME = "/Users/test"
 GUARD_PATH = f"{TEST_HOME}/.codex/scripts/block_pr_fill.py"
 
 
@@ -76,7 +76,7 @@ class ModifyHooksTests(unittest.TestCase):
         self.assertEqual(guard_hooks(modified)[0]["timeout"], 12)
 
     def test_shell_quotes_guard_paths_as_one_argument(self) -> None:
-        home_dir = r"***REMOVED***/\1 odd $home's"
+        home_dir = r"/Users/test/\1 odd $home's"
         guard_path = f"{home_dir}/.codex/scripts/block_pr_fill.py"
         modified = apply_modifier({}, home_dir=home_dir)
         command = modified["hooks"]["PreToolUse"][0]["hooks"][0]["command"]

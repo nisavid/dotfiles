@@ -1,0 +1,62 @@
+{{- if eq .chezmoi.os "darwin" -}}
+{{- $sourceDir := "" -}}
+{{- if get .mlxctl "publicFixture" -}}
+{{- $sourceDir = .mlxctl.sourceDir -}}
+{{- else -}}
+{{- $private := include ".private-machine.toml.age" | decrypt | fromToml -}}
+{{- $sourceDir = $private.machine.mlxctlSourceDir -}}
+{{- end -}}
+#!/usr/bin/env zsh
+set -euo pipefail
+
+main() {
+  emulate -L zsh
+  setopt ERR_EXIT NO_UNSET PIPE_FAIL
+  umask 077
+
+  if (( EUID == 0 )); then
+    print -u2 -r -- 'mlxctl: refusing to install a user tool as root'
+    return 1
+  fi
+
+  local source_dir={{ joinPath .chezmoi.homeDir $sourceDir | quote }}
+  local bin_dir={{ joinPath .chezmoi.homeDir .mlxctl.binDir | quote }}
+
+  if [[ ! -d "$source_dir" ]]; then
+    print -u2 -r -- "mlxctl: source checkout not found at $source_dir; installation skipped"
+    return 0
+  fi
+  if [[ ! -r "$source_dir/pyproject.toml" ]]; then
+    print -u2 -r -- "mlxctl: installable project not found at $source_dir; installation skipped"
+    return 0
+  fi
+
+  local launchctl_bin=${MLXCTL_TEST_LAUNCHCTL_BIN:-/bin/launchctl}
+  local legacy_target="gui/$EUID/io.nisavid.mlxd"
+  local legacy_registration=''
+  if legacy_registration=$("$launchctl_bin" print "$legacy_target" 2>/dev/null) &&
+    /usr/bin/grep -Eq \
+      '^[[:space:]]*state[[:space:]]*=[[:space:]]*running[[:space:]]*$' \
+      <<< "$legacy_registration"; then
+    print -u2 -r -- \
+      "mlxctl: legacy LaunchAgent $legacy_target is running; stop it before updating mlxctl, then re-run chezmoi apply and migrate with mlxctl"
+    return 1
+  fi
+
+  local uv_bin=''
+  if ! uv_bin=$(command -v uv); then
+    print -u2 -r -- 'mlxctl: uv is required; install it and re-run `chezmoi apply`'
+    return 1
+  fi
+
+  print -r -- "mlxctl: installing from $source_dir"
+  UV_TOOL_BIN_DIR="$bin_dir" "$uv_bin" tool install --force "$source_dir"
+  if [[ ! -x "$bin_dir/mlxctl" ]]; then
+    print -u2 -r -- "mlxctl: installation did not create $bin_dir/mlxctl"
+    return 1
+  fi
+  print -r -- "mlxctl: installed $bin_dir/mlxctl"
+}
+
+main "$@"
+{{- end -}}

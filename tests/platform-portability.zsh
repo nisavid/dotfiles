@@ -3,7 +3,7 @@ emulate -L zsh
 setopt errexit nounset pipefail
 
 repo_root=${0:A:h:h}
-ignore_template=$repo_root***REMOVED***
+ignore_template=$repo_root/home/.chezmoiignore
 workflow=$repo_root/.github/workflows/platform-portability.yml
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/platform-portability.XXXXXX")
 trap 'rm -rf -- "$test_root"' EXIT HUP INT TERM
@@ -112,7 +112,7 @@ exec /usr/bin/setfacl "$@"' >"$acl_bin/setfacl"
   chmod 640 "$acl_home/managed"
   HOME=$acl_home XDG_STATE_HOME=$acl_state \
     PATH="$acl_bin:/usr/bin:/bin" \
-    /bin/sh "$repo_root***REMOVED***"
+    /bin/sh "$repo_root/home/run_before_save-acl.sh"
   [[ $(stat -c '%a' -- "$acl_state/chezmoi") == 700 ]] ||
     fail 'ACL state directory is not mode 0700'
   [[ $(stat -c '%a' -- "$acl_state/chezmoi/acl") == 600 ]] ||
@@ -124,7 +124,7 @@ exec /usr/bin/setfacl "$@"' >"$acl_bin/setfacl"
   mkdir -m 700 -p "$truncate_acl_state/chezmoi/acl"
   if HOME=$acl_home XDG_STATE_HOME=$truncate_acl_state \
     PATH="$acl_bin:/usr/bin:/bin" \
-    /bin/sh "$repo_root***REMOVED***" \
+    /bin/sh "$repo_root/home/run_before_save-acl.sh" \
     >"$test_root/truncate-acl.out" 2>"$test_root/truncate-acl.err"; then
     fail 'ACL save masked a state-file truncation failure'
   fi
@@ -137,7 +137,7 @@ exec /usr/bin/setfacl "$@"' >"$acl_bin/setfacl"
 printf "Linux\n"' >"$missing_acl_bin/uname"
   chmod 700 "$missing_acl_bin/uname"
   if HOME=$missing_acl_home XDG_STATE_HOME=$missing_acl_state PATH=$missing_acl_bin \
-    /bin/sh "$repo_root***REMOVED***" \
+    /bin/sh "$repo_root/home/run_before_save-acl.sh" \
     >"$test_root/missing-acl.out" 2>"$test_root/missing-acl.err"; then
     fail 'ACL save accepted missing Linux ACL primitives'
   fi
@@ -156,7 +156,7 @@ exit 42' >"$failed_acl_bin/getfacl"
   chmod 700 "$failed_acl_bin/chezmoi" "$failed_acl_bin/getfacl"
   if HOME=$failed_acl_home XDG_STATE_HOME=$failed_acl_state \
     PATH="$failed_acl_bin:/usr/bin:/bin" \
-    /bin/sh "$repo_root***REMOVED***" \
+    /bin/sh "$repo_root/home/run_before_save-acl.sh" \
     >"$test_root/failed-acl.out" 2>"$test_root/failed-acl.err"; then
     fail 'ACL save masked a per-path getfacl failure'
   fi
@@ -185,7 +185,7 @@ EOF' >"$metadata_acl_bin/getfacl"
   chmod 700 "$metadata_acl_bin/chezmoi" "$metadata_acl_bin/getfacl"
   HOME=$metadata_acl_home XDG_STATE_HOME=$metadata_acl_state \
     PATH="$metadata_acl_bin:/usr/bin:/bin" \
-    /bin/sh "$repo_root***REMOVED***"
+    /bin/sh "$repo_root/home/run_before_save-acl.sh"
   metadata_acl=$metadata_acl_state/chezmoi/acl
   ! grep -Eq '^# (owner|group):' "$metadata_acl" ||
     fail 'ACL snapshot retained ownership metadata'
@@ -194,7 +194,7 @@ EOF' >"$metadata_acl_bin/getfacl"
 
   HOME=$acl_home XDG_STATE_HOME=$acl_state SETFACL_ARGS=$test_root/setfacl.args \
     PATH="$acl_bin:/usr/bin:/bin" \
-    /bin/sh "$repo_root***REMOVED***"
+    /bin/sh "$repo_root/home/run_after_restore-acl.sh"
   [[ ! -e $acl_state/chezmoi/acl ]] ||
     fail 'ACL snapshot was not removed after restoration'
   [[ $(stat -c '%a' -- "$acl_home/managed") == 640 ]] ||

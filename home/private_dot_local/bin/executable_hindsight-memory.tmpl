@@ -1,0 +1,10 @@
+{{- $hindsight := .hindsight -}}
+{{- if not (get $hindsight "publicFixture") -}}
+{{- $private := include ".private-hindsight.toml.age" | decrypt | fromToml -}}
+{{- $hindsight = $private.hindsight -}}
+{{- end -}}
+#!/usr/bin/env zsh
+set -euo pipefail
+
+install_root="{{ joinPath .chezmoi.homeDir $hindsight.installRoot }}"
+exec "$install_root/bin/hindsight-memory" "$@"

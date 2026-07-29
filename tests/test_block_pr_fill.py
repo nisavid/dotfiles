@@ -387,7 +387,7 @@ class BlockPrFillTests(unittest.TestCase):
             for arguments in (
                 ["git", "init", "-q"],
                 ["git", "config", "user.name", "Test"],
-                ["git", "config", "user.email", "***REMOVED***"],
+                ["git", "config", "user.email", "test@example.com"],
                 [
                     "git",
                     "remote",

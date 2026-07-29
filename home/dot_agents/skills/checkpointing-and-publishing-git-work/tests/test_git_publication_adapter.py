@@ -19,8 +19,8 @@ from git_publication.adapter import MalformedRequest, parse_request, plan_reposi
 
 def git(repo, *args, env=None):
     merged = os.environ.copy()
-    merged.update({"GIT_AUTHOR_NAME": "Test", "GIT_AUTHOR_EMAIL": "***REMOVED***"})
-    merged.update({"GIT_COMMITTER_NAME": "Test", "GIT_COMMITTER_EMAIL": "***REMOVED***"})
+    merged.update({"GIT_AUTHOR_NAME": "Test", "GIT_AUTHOR_EMAIL": "test@example.com"})
+    merged.update({"GIT_COMMITTER_NAME": "Test", "GIT_COMMITTER_EMAIL": "test@example.com"})
     if env:
         merged.update(env)
     return subprocess.run(
@@ -78,7 +78,7 @@ class RequestTests(unittest.TestCase):
             )
 
     def test_credential_bearing_endpoint_never_enters_transport_argv(self):
-        endpoint = "https://user:***REMOVED***/repository"
+        endpoint = "https://user:secret@example.invalid/repository"
 
         class RecordingRepository:
             def __init__(self):
@@ -250,7 +250,7 @@ class RepositoryPlanningTests(unittest.TestCase):
 
     def test_multiple_push_urls_block_and_raw_urls_are_never_output(self):
         source = commit(self.repo, "change")
-        git(self.repo, "remote", "set-url", "--add", "--push", "publish", "https://user:***REMOVED***/repo")
+        git(self.repo, "remote", "set-url", "--add", "--push", "publish", "https://user:secret@example.invalid/repo")
         result = self.plan(raw_request(self.start, source))
         serialized = json.dumps(result)
         self.assertEqual(result["status"], "blocked")

@@ -1,0 +1,187 @@
+name: Platform portability
+
+# Zsh GUI path deployment is verified by zsh-deployment-portability.yml.
+on:
+  pull_request:
+    paths: &platform_paths
+      - ".github/workflows/platform-portability.yml"
+      - "docs/HINDSIGHT.md"
+      - "docs/ENCRYPTION.md"
+      - "docs/SECRET_INJECTION.md"
+      - "home/.chezmoiignore"
+      - "home/.chezmoidata/git-identity.toml"
+      - "home/.chezmoidata/editor-target.toml"
+      - "home/**/*hindsight*"
+      - "home/**/*hindsight*/**"
+      - "home/**/*secret-exec*"
+      - "home/**/*secret-exec*/**"
+      - "home/dot_codex/private_AGENTS.md.tmpl"
+      - "home/dot_codex/modify_private_config.toml.tmpl"
+      - "home/dot_config/git/config.tmpl"
+      - "home/dot_config/environment.d/**"
+      - "home/run_*acl.sh"
+      - "home/run_after_sync-global-agent-skills-to-claude.zsh"
+      - "scripts/private-skill-transaction"
+      - "scripts/private-skill-transaction.d/**"
+      - "scripts/privacy-scan"
+      - "tests/claude-skill-sync.zsh"
+      - "tests/container-runtime-bindings.zsh"
+      - "tests/global-agents-policy.zsh"
+      - "tests/hindsight-agents-bindings.zsh"
+      - "tests/identity-bindings.zsh"
+      - "tests/platform-portability.zsh"
+      - "tests/private-skills.zsh"
+      - "tests/privacy-scan.zsh"
+      - "tests/proton-pass-session.zsh"
+      - "tests/secret-command-shims.zsh"
+      - "tests/secret-exec-migrate.zsh"
+      - "tests/secret-exec.zsh"
+      - "tests/secret-injection-bindings.zsh"
+      - "tests/fixtures/secret-exec-public.toml"
+      - "tests/private-skill-transaction.zsh"
+      - "tests/private-skill-transaction.d/**"
+      - "tests/test_chezmoi_source_ownership.py"
+  push:
+    branches:
+      - main
+    paths: *platform_paths
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CHEZMOI_VERSION: "2.71.0"
+
+jobs:
+  verify:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - macos-14
+          - ubuntu-24.04
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Select Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install age bat flock jq
+          case "$(uname -m)" in
+            arm64)
+              archive=chezmoi_${CHEZMOI_VERSION}_darwin_arm64.tar.gz
+              digest=8b03d7be6b5d500a503c712ae6da7dd6817b6c3328223b4ae8be7a8be5a2fa3a
+              ;;
+            x86_64)
+              archive=chezmoi_${CHEZMOI_VERSION}_darwin_amd64.tar.gz
+              digest=12b78b365528597ad701f5117fa71f6c42b5b1e65d8075e19c48472ad81faf30
+              ;;
+            *)
+              printf 'unsupported macOS architecture: %s\n' "$(uname -m)" >&2
+              exit 1
+              ;;
+          esac
+          package="$RUNNER_TEMP/$archive"
+          curl --fail --location --silent --show-error \
+            --output "$package" \
+            "https://github.com/twpayne/chezmoi/releases/download/v${CHEZMOI_VERSION}/$archive"
+          printf '%s  %s\n' "$digest" "$package" | shasum -a 256 --check
+          mkdir -p "$RUNNER_TEMP/chezmoi-bin"
+          tar -xzf "$package" -C "$RUNNER_TEMP/chezmoi-bin" chezmoi
+          printf '%s\n' "$RUNNER_TEMP/chezmoi-bin" >>"$GITHUB_PATH"
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get -qq update
+          sudo apt-get -qq install -y acl age bat curl jq zsh
+          sudo ln -s /usr/bin/batcat /usr/local/bin/bat
+          archive=chezmoi_${CHEZMOI_VERSION}_linux_amd64.tar.gz
+          package="$RUNNER_TEMP/$archive"
+          curl --fail --location --silent --show-error \
+            --output "$package" \
+            "https://github.com/twpayne/chezmoi/releases/download/v${CHEZMOI_VERSION}/$archive"
+          printf '%s  %s\n' \
+            6ea2040ecc0e82d3dac604289e100b0157afefcd94ebb818e5f6e31655156d34 \
+            "$package" | sha256sum --check
+          mkdir -p "$RUNNER_TEMP/chezmoi-bin"
+          tar -xzf "$package" -C "$RUNNER_TEMP/chezmoi-bin" chezmoi
+          printf '%s\n' "$RUNNER_TEMP/chezmoi-bin" >>"$GITHUB_PATH"
+
+      - name: Verify chezmoi version
+        shell: bash
+        run: chezmoi --version | grep -Fq "chezmoi version v${CHEZMOI_VERSION},"
+
+      - name: Verify shell syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n \
+            home/run_after_restore-acl.sh \
+            home/run_before_save-acl.sh \
+            scripts/private-skill-transaction \
+            scripts/private-skill-transaction.d/*.bash
+          zsh -n \
+            home/run_after_sync-global-agent-skills-to-claude.zsh \
+            tests/claude-skill-sync.zsh \
+            tests/container-runtime-bindings.zsh \
+            tests/global-agents-policy.zsh \
+            tests/hindsight-agents-bindings.zsh \
+            tests/identity-bindings.zsh \
+            tests/platform-portability.zsh \
+            tests/private-skill-transaction.zsh \
+            tests/privacy-scan.zsh \
+            tests/proton-pass-session.zsh \
+            tests/secret-command-shims.zsh \
+            tests/secret-exec-migrate.zsh \
+            tests/secret-exec.zsh \
+            tests/secret-injection-bindings.zsh \
+            tests/private-skill-transaction.d/*.zsh
+
+      - name: Verify platform bindings
+        shell: bash
+        run: |
+          set -euo pipefail
+          zsh -f tests/claude-skill-sync.zsh
+          zsh -f tests/platform-portability.zsh
+          zsh -f tests/container-runtime-bindings.zsh
+          zsh -f tests/privacy-scan.zsh
+          python3 scripts/privacy-scan --root .
+          zsh -f tests/identity-bindings.zsh
+          zsh -f tests/secret-exec.zsh
+          zsh -f tests/secret-command-shims.zsh
+          zsh -f tests/secret-exec-migrate.zsh
+          zsh -f tests/secret-injection-bindings.zsh
+          zsh -f tests/proton-pass-session.zsh
+          GLOBAL_AGENTS_POLICY_PUBLIC_ONLY=1 zsh -f tests/global-agents-policy.zsh
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            zsh -f tests/hindsight-agents-bindings.zsh
+          fi
+          python3 -m unittest tests/test_chezmoi_source_ownership.py
+
+      - name: Verify private-skill transaction
+        shell: bash
+        run: |
+          set -euo pipefail
+          zsh -f tests/private-skill-transaction.zsh all

@@ -1,0 +1,14 @@
+[gitIdentity]
+# Tests can opt into this synthetic fallback without decrypting private bindings.
+publicFixture = false
+
+[gitIdentity.selection]
+default = "personal"
+
+[gitIdentity.selection.byHostname]
+
+[gitIdentity.identities.personal]
+email = "ivan@nisavid.io"
+editorTarget = "cursor"
+branchPrefix = "nisavid/"
+noTracking = false

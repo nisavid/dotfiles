@@ -1,0 +1,17 @@
+{{- $hindsight := .hindsight -}}
+{{- if not (get $hindsight "publicFixture") -}}
+{{- $private := include ".private-hindsight.toml.age" | decrypt | fromToml -}}
+{{- $hindsight = $private.hindsight -}}
+{{- end -}}
+#!/usr/bin/env zsh
+set -euo pipefail
+umask 077
+
+install_root="{{ joinPath .chezmoi.homeDir $hindsight.installRoot }}"
+state_dir="${HINDSIGHT_EMBED_STATE_DIR:-{{ joinPath .chezmoi.homeDir $hindsight.stateRoot "embed" }}}"
+log_dir="$state_dir/logs"
+/bin/mkdir -p "$log_dir"
+/bin/chmod 700 "$state_dir" "$log_dir"
+exec >>"$log_dir/supervisor.log" 2>&1
+
+exec "$install_root/bin/hindsight-embed-supervisor" "$@"
