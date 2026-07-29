@@ -80,6 +80,10 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install Python runtime dependencies
+        shell: bash
+        run: python3 -m pip install uv==0.11.32
+
       - name: Install macOS dependencies
         if: runner.os == 'macOS'
         shell: bash

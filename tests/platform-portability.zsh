@@ -33,6 +33,8 @@ grep -Fq 'brew install age bat flock jq ripgrep' "$workflow" ||
   fail 'platform workflow does not install ripgrep on macOS'
 grep -Fq 'sudo apt-get -qq install -y acl age bat curl jq ripgrep zsh' "$workflow" ||
   fail 'platform workflow does not install ripgrep on Linux'
+grep -Fq 'python3 -m pip install uv==0.11.32' "$workflow" ||
+  fail 'platform workflow does not install the pinned uv runtime'
 
 chezmoi -S "$repo_root/home" execute-template \
   --override-data '{"chezmoi":{"os":"linux"}}' \
