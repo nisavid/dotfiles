@@ -151,6 +151,8 @@ jobs:
             tests/container-runtime-bindings.zsh \
             tests/global-agents-policy.zsh \
             tests/hindsight-agents-bindings.zsh \
+            tests/hindsight-auth-refresh.zsh \
+            tests/hindsight-harness-reconcile.zsh \
             tests/identity-bindings.zsh \
             tests/platform-portability.zsh \
             tests/private-skill-transaction.zsh \
@@ -183,6 +185,8 @@ jobs:
           zsh -f tests/proton-pass-startup-bindings.zsh
           zsh -f tests/proton-pass-startup.zsh
           zsh -f tests/proton-pass-session.zsh
+          zsh -f tests/hindsight-auth-refresh.zsh
+          zsh -f tests/hindsight-harness-reconcile.zsh
           GLOBAL_AGENTS_POLICY_PUBLIC_ONLY=1 \
             zsh -f tests/global-agents-policy.zsh
           if [[ "$RUNNER_OS" == Linux ]]; then
