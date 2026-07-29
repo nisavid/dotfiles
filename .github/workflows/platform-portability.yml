@@ -85,7 +85,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          brew install age bat flock jq
+          brew install age bat flock jq ripgrep
           case "$(uname -m)" in
             arm64)
               archive=chezmoi_${CHEZMOI_VERSION}_darwin_arm64.tar.gz
@@ -115,7 +115,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get -qq update
-          sudo apt-get -qq install -y acl age bat curl jq zsh
+          sudo apt-get -qq install -y acl age bat curl jq ripgrep zsh
           sudo ln -s /usr/bin/batcat /usr/local/bin/bat
           archive=chezmoi_${CHEZMOI_VERSION}_linux_amd64.tar.gz
           package="$RUNNER_TEMP/$archive"

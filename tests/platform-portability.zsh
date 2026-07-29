@@ -29,6 +29,10 @@ workflow_concurrency=$(
   fail 'platform workflow does not group superseded runs by workflow and ref'
 [[ $workflow_concurrency == *'cancel-in-progress: true'* ]] ||
   fail 'platform workflow does not cancel superseded runs'
+grep -Fq 'brew install age bat flock jq ripgrep' "$workflow" ||
+  fail 'platform workflow does not install ripgrep on macOS'
+grep -Fq 'sudo apt-get -qq install -y acl age bat curl jq ripgrep zsh' "$workflow" ||
+  fail 'platform workflow does not install ripgrep on Linux'
 
 chezmoi -S "$repo_root/home" execute-template \
   --override-data '{"chezmoi":{"os":"linux"}}' \
