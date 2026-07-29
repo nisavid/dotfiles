@@ -44,8 +44,8 @@ typeset -a linux_only_patterns=(
   '.hindsight*'
   '.local/bin/hindsight-*'
   '.local/lib/hindsight-*'
-  '.local/libexec/*/zsh-gui-path'
-  'Library/LaunchAgents/*zsh-gui-path*'
+  '.local/libexec'
+  'Library'
 )
 
 for pattern in $linux_only_patterns; do
@@ -53,6 +53,22 @@ for pattern in $linux_only_patterns; do
   ! grep -Fqx -- "$pattern" "$test_root/darwin-ignore" ||
     fail "Darwin unexpectedly ignores $pattern"
 done
+
+gui_source_inventory=$(
+  find \
+    "$repo_root/home/private_Library" \
+    "$repo_root/home/private_dot_local/libexec" \
+    -type f -print |
+    sed "s#^$repo_root/home/##" |
+    LC_ALL=C sort
+)
+expected_gui_source_inventory=$(
+  printf '%s\n' \
+    'private_Library/private_LaunchAgents/io.nisavid.zsh-gui-path.plist.tmpl' \
+    'private_dot_local/libexec/nisavid/executable_zsh-gui-path.tmpl'
+)
+[[ $gui_source_inventory == $expected_gui_source_inventory ]] ||
+  fail 'Darwin-only GUI source inventory changed without updating the Linux gate'
 
 fixture_source=$test_root/source
 fixture_home=$test_root/home
@@ -90,7 +106,9 @@ managed=$(
 [[ $managed != *'.docker'* ]] ||
   fail 'Linux manages the OrbStack Docker fixture'
 for held_target in \
+  '.local/libexec' \
   '.local/libexec/fixture/zsh-gui-path' \
+  'Library' \
   'Library/LaunchAgents/io.fixture.zsh-gui-path.plist'; do
   [[ $managed != *"$held_target"* ]] ||
     fail "Linux manages the zsh GUI fixture: $held_target"

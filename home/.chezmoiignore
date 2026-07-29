@@ -15,7 +15,9 @@
 # OrbStack owns the managed Docker context on macOS.
 .docker
 
-# The zsh GUI path bridge is a launchd integration.
-Library/LaunchAgents/*zsh-gui-path*
-.local/libexec/*/zsh-gui-path
+# The zsh GUI path bridge is a launchd integration. These source trees contain
+# no non-Darwin targets; the inventory test requires an explicit policy update
+# before another target can be added beneath them.
+Library
+.local/libexec
 {{ end }}
