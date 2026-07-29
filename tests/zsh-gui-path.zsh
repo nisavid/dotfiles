@@ -48,17 +48,19 @@ linux_ignore=$(
     --override-data '{"chezmoi":{"os":"linux"}}' \
     < "$repo_root/home/.chezmoiignore"
 )
-[[ $linux_ignore == *'Library/LaunchAgents/*zsh-gui-path*'* ]] ||
-  fail 'non-macOS hosts must ignore the macOS LaunchAgent'
-print -r -- "$linux_ignore" | grep -Fqx -- '.local/libexec/*/zsh-gui-path' ||
-  fail 'non-macOS hosts must ignore the macOS GUI adapter directory'
+print -r -- "$linux_ignore" | grep -Fqx -- 'Library' ||
+  fail 'non-macOS hosts must ignore the macOS LaunchAgent tree'
+print -r -- "$linux_ignore" | grep -Fqx -- '.local/libexec' ||
+  fail 'non-macOS hosts must ignore the macOS GUI adapter tree'
 darwin_ignore=$(
   chezmoi -S "$repo_root/home" execute-template \
     --override-data '{"chezmoi":{"os":"darwin"}}' \
     < "$repo_root/home/.chezmoiignore"
 )
-[[ $darwin_ignore != *'io.nisavid.zsh-gui-path'* ]] ||
-  fail 'macOS hosts must manage the GUI adapter and LaunchAgent'
+for darwin_target in Library .local/libexec; do
+  ! print -r -- "$darwin_ignore" | grep -Fqx -- "$darwin_target" ||
+    fail "macOS hosts must manage $darwin_target"
+done
 linux_activation=$(
   chezmoi -S "$repo_root/home" execute-template \
     --override-data '{"chezmoi":{"os":"linux"}}' \
