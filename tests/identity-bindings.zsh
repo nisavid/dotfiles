@@ -52,6 +52,12 @@ chezmoi -S "$repo_root/home" execute-template --override-data "$fixture_data" \
 rg -F 'email = developer@example.invalid' "$git_config" >/dev/null ||
   fail 'Git config did not select the synthetic host identity'
 
+personal_include=$test_dir/personal-include
+chezmoi -S "$repo_root/home" execute-template --override-data "$fixture_data" \
+  < home/dot_config/git/personal.inc.tmpl > "$personal_include"
+rg -F 'email = "ivan@nisavid.io"' "$personal_include" >/dev/null ||
+  fail 'Personal Git include did not resolve the synthetic personal identity'
+
 modifier=$test_dir/modify-codex
 chezmoi -S "$repo_root/home" execute-template --override-data "$fixture_data" \
   < home/dot_codex/modify_private_config.toml.tmpl > "$modifier"
