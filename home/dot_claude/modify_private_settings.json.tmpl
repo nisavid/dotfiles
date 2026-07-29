@@ -3,7 +3,6 @@ set -euo pipefail
 
 jq '
   .enabledPlugins = (.enabledPlugins // {}) |
-  del(.enabledPlugins["serena@claude-plugins-official"]) |
   .enabledPlugins["context7@claude-plugins-official"] = false |
   .enabledPlugins["github@claude-plugins-official"] = false |
   .enabledPlugins["greptile@claude-plugins-official"] = false

@@ -20,14 +20,14 @@ on:
       - "home/dot_config/git/config.tmpl"
       - "home/dot_config/environment.d/**"
       - "home/run_*acl.sh"
-      - "home/run_after_sync-global-agent-skills-to-claude.zsh"
       - "scripts/private-skill-transaction"
       - "scripts/private-skill-transaction.d/**"
       - "scripts/privacy-scan"
-      - "tests/claude-skill-sync.zsh"
       - "tests/container-runtime-bindings.zsh"
       - "tests/global-agents-policy.zsh"
       - "tests/hindsight-agents-bindings.zsh"
+      - "tests/hindsight-auth-refresh.zsh"
+      - "tests/hindsight-harness-reconcile.zsh"
       - "tests/identity-bindings.zsh"
       - "tests/platform-portability.zsh"
       - "tests/private-skills.zsh"
@@ -38,6 +38,7 @@ on:
       - "tests/secret-exec.zsh"
       - "tests/secret-injection-bindings.zsh"
       - "tests/fixtures/secret-exec-public.toml"
+      - "tests/fixtures/hindsight-public.toml"
       - "tests/private-skill-transaction.zsh"
       - "tests/private-skill-transaction.d/**"
       - "tests/test_chezmoi_source_ownership.py"
@@ -147,11 +148,11 @@ jobs:
             scripts/private-skill-transaction \
             scripts/private-skill-transaction.d/*.bash
           zsh -n \
-            home/run_after_sync-global-agent-skills-to-claude.zsh \
-            tests/claude-skill-sync.zsh \
             tests/container-runtime-bindings.zsh \
             tests/global-agents-policy.zsh \
             tests/hindsight-agents-bindings.zsh \
+            tests/hindsight-auth-refresh.zsh \
+            tests/hindsight-harness-reconcile.zsh \
             tests/identity-bindings.zsh \
             tests/platform-portability.zsh \
             tests/private-skill-transaction.zsh \
@@ -167,7 +168,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          zsh -f tests/claude-skill-sync.zsh
           zsh -f tests/platform-portability.zsh
           zsh -f tests/container-runtime-bindings.zsh
           zsh -f tests/privacy-scan.zsh
@@ -178,6 +178,8 @@ jobs:
           zsh -f tests/secret-exec-migrate.zsh
           zsh -f tests/secret-injection-bindings.zsh
           zsh -f tests/proton-pass-session.zsh
+          zsh -f tests/hindsight-auth-refresh.zsh
+          zsh -f tests/hindsight-harness-reconcile.zsh
           GLOBAL_AGENTS_POLICY_PUBLIC_ONLY=1 zsh -f tests/global-agents-policy.zsh
           if [[ "$RUNNER_OS" == Linux ]]; then
             zsh -f tests/hindsight-agents-bindings.zsh

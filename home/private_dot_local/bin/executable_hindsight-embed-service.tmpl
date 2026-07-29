@@ -1,0 +1,63 @@
+{{- $hindsight := .hindsight -}}
+{{- if not (get $hindsight "publicFixture") -}}
+{{- $private := include ".private-hindsight.toml.age" | decrypt | fromToml -}}
+{{- $hindsight = $private.hindsight -}}
+{{- end -}}
+#!/usr/bin/env zsh
+set -euo pipefail
+
+install_root="{{ joinPath .chezmoi.homeDir $hindsight.installRoot }}"
+config="{{ joinPath .chezmoi.homeDir $hindsight.installationPath }}"
+codex="{{ joinPath .chezmoi.homeDir $hindsight.codexExecutable }}"
+codex_home="{{ joinPath .chezmoi.homeDir $hindsight.authRefreshCodexHome }}"
+controller="$install_root/bin/hindsight-memory"
+
+auth_refresh() {
+  (( $# == 0 )) || {
+    print -ru2 -- "usage: hindsight-embed-service auth-refresh"
+    return 2
+  }
+  [[ -x "$codex" ]] || {
+    print -ru2 -- "hindsight-embed-service: bound Codex executable is unavailable"
+    return 1
+  }
+  [[ -d "$codex_home" && ! -L "$codex_home" && -O "$codex_home" ]] || {
+    print -ru2 -- "hindsight-embed-service: bound Codex credential directory is unsafe"
+    return 1
+  }
+  local mode
+  case "$(uname -s)" in
+    Darwin) mode="$(/usr/bin/stat -f '%Lp' "$codex_home")" ;;
+    Linux) mode="$(/usr/bin/stat -c '%a' "$codex_home")" ;;
+    *)
+      print -ru2 -- "hindsight-embed-service: unsupported operating system"
+      return 1
+      ;;
+  esac
+  [[ "$mode" == 700 ]] || {
+    print -ru2 -- "hindsight-embed-service: bound Codex credential directory is unsafe"
+    return 1
+  }
+
+  CODEX_HOME="$codex_home" "$codex" login || {
+    print -ru2 -- "hindsight-embed-service: Codex login failed; service was not restarted"
+    return 1
+  }
+  CODEX_HOME="$codex_home" "$codex" login status >/dev/null || {
+    print -ru2 -- "hindsight-embed-service: Codex login verification failed; service was not restarted"
+    return 1
+  }
+  "$controller" service restart --config "$config"
+}
+
+if (( $# == 0 )); then
+  exec "$controller" service --help
+fi
+
+if [[ "$1" == auth-refresh ]]; then
+  shift
+  auth_refresh "$@"
+  exit
+fi
+
+exec "$controller" service "$@" --config "$config"

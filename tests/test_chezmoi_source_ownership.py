@@ -6,6 +6,7 @@ import shutil
 import stat
 import subprocess
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -23,6 +24,41 @@ CATPPUCCIN_CONFIG_EXTERNALS = (
     "micro-catppuccin.toml.tmpl",
 )
 class ChezmoiSourceOwnershipTests(unittest.TestCase):
+    def test_hindsight_private_data_stays_source_only(self) -> None:
+        public_data = tomllib.loads(
+            (SOURCE / ".chezmoidata/hindsight.toml").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(
+            set(public_data["hindsight"]),
+            {"releaseCommit", "releaseVersion"},
+        )
+
+        ciphertext = (
+            SOURCE / ".private-hindsight.toml.age"
+        ).read_text(encoding="utf-8")
+        self.assertTrue(
+            ciphertext.startswith("-----BEGIN AGE ENCRYPTED FILE-----\n")
+        )
+        self.assertNotIn("[hindsight]", ciphertext)
+
+        consumers = [
+            path
+            for path in SOURCE.rglob("*.tmpl")
+            if "hindsight" in path.as_posix()
+        ]
+        self.assertTrue(consumers)
+        for consumer in consumers:
+            with self.subTest(consumer=consumer):
+                source = consumer.read_text(encoding="utf-8")
+                if "$hindsight" in source:
+                    self.assertIn(
+                        'include ".private-hindsight.toml.age" | decrypt',
+                        source,
+                    )
+                self.assertNotIn(".hindsight.", source)
+
     def environment(
         self,
         root: Path,
@@ -266,6 +302,8 @@ class ChezmoiSourceOwnershipTests(unittest.TestCase):
                     "-S",
                     str(SOURCE),
                     *arguments,
+                    "--override-data-file",
+                    str(ROOT / "tests/fixtures/hindsight-public.toml"),
                     "--override-data",
                     '{"chezmoi":{"os":"darwin"}}',
                     "--override-data-file",
@@ -316,6 +354,8 @@ class ChezmoiSourceOwnershipTests(unittest.TestCase):
                         "-S",
                         str(SOURCE),
                         *arguments,
+                        "--override-data-file",
+                        str(ROOT / "tests/fixtures/hindsight-public.toml"),
                         "--override-data",
                         '{"chezmoi":{"os":"darwin"}}',
                         "--override-data-file",
@@ -339,6 +379,8 @@ class ChezmoiSourceOwnershipTests(unittest.TestCase):
                         "-S",
                         str(SOURCE),
                         *arguments,
+                        "--override-data-file",
+                        str(ROOT / "tests/fixtures/hindsight-public.toml"),
                         "--override-data",
                         '{"chezmoi":{"os":"darwin"}}',
                         "--override-data-file",
