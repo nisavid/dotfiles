@@ -7,4 +7,6 @@ Blocked by: 18, 22, 23, 24, 25
 What automated and live macOS/Linux scenarios prove inventory, mapping,
 enrollment, restart and reboot persistence, startup and lazy recovery,
 notification, consumer isolation, rotation, rollback, and ordinary-shell
-scrubbing?
+scrubbing, including helper upgrades, locked or unavailable native stores,
+headless Linux sessions, notification denial, concurrent repair, and rejection
+of persisted sessions after agent deletion or grant revocation?

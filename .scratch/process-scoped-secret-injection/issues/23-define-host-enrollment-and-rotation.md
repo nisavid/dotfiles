@@ -5,4 +5,7 @@ Blocked by: 16, 17, 19, 20, 21
 ## Question
 
 What exact app-assisted enrollment, bootstrap storage, verification, expiry
-monitoring, rotation, revocation, and recovery protocol governs a host agent?
+monitoring, rotation, revocation, and recovery protocol governs a host agent,
+given that privileged lifecycle operations require a full-user session and
+overlap requires a separately created replacement agent with reproduced
+grants?
