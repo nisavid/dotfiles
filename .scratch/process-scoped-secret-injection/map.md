@@ -60,6 +60,12 @@ the existing reliability-repair handoff.
 - [Split Proton administration between the app and CLI](./issues/15-split-proton-administration.md) —
   keep privileged agent and grant choices in Proton while `secretctl` owns
   host-local lifecycle.
+- [Determine the Proton agent lifecycle](./issues/16-research-proton-agent-lifecycle.md) —
+  use a distinct replacement agent for overlap because agents cannot administer
+  themselves; validate persisted-session invalidation fail-closed.
+- [Determine native host lifecycle constraints](./issues/17-research-native-host-lifecycle.md) —
+  use compiled Keychain and libsecret adapters with platform-native startup and
+  diagnostics; Linux readiness begins after persistent Secret Service unlock.
 
 ## Not yet specified
 
