@@ -28,14 +28,16 @@ the sequenced handoff produced by
   produce the architecture, acceptance specification, and implementation
   sequence before resuming execution.
 - [Map Proton agents to managed hosts][decision-02] —
-  use one viewer-only Proton host agent per managed host.
+  use one viewer-only Proton host agent in steady state; permit one verified
+  replacement during rotation, then remove the retired agent and grants.
 - [Recover provider sessions at startup and on demand][decision-03] —
   combine proactive readiness with lazy self-healing.
 - [Separate the control plane from the data plane][decision-04] —
   make `secretctl` the operator surface and keep `secret-exec` minimal.
 - [Split desired state across three stores][decision-05] —
   separate Proton values and grants, host bootstrap tokens, and value-free
-  chezmoi mappings.
+  chezmoi mappings; treat Proton's native-store session key as provider-managed
+  runtime state.
 - [Define declared consumer coverage][decision-06] —
   cover verified PATH shims and explicit application bindings.
 - [Fail closed and notify on provider failure][decision-07] —

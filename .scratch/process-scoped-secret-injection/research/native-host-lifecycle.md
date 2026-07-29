@@ -268,13 +268,17 @@ a notification as proof:
   notifications denied, suppressed, or unavailable while status remains
   inspectable.
 
-Unavoidable prerequisites are an enrolled bootstrap token; a persistent,
-unlocked per-user native store; the installed helper retaining access after
-upgrade; per-user startup enablement; a GUI notification permission/server for
-conspicuous notices; and network access when a provider session actually needs
+Readiness prerequisites are an enrolled bootstrap token; a persistent, unlocked
+per-user native store; the installed helper retaining access after upgrade;
+per-user startup enablement; and network access when a provider session needs
 repair. Linux additionally requires a supported Secret Service provider and
 working session D-Bus/PAM unlock integration. These are enrollment gates, not
 conditions the bootstrap token can repair by itself.
+
+GUI notification permission and a notification server are optional capabilities
+for conspicuous notices. Their absence must not block enrollment or
+`ensure-ready`; durable non-secret status and logs remain available when visible
+delivery is denied, suppressed, or unavailable.
 
 ## Unresolved first-party ambiguity
 

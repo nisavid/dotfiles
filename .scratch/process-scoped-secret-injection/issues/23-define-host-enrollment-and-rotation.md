@@ -9,5 +9,6 @@ Blocked by: 16, 17, 19, 20, 21
 What exact app-assisted enrollment, bootstrap storage, verification, expiry
 monitoring, rotation, revocation, and recovery protocol governs a host agent,
 given that privileged lifecycle operations require a full-user session and
-overlap requires a separately created replacement agent with reproduced
-grants?
+overlap permits at most one separately created replacement agent with
+reproduced grants, verified cutover, and mandatory removal of the retired agent
+and its grants?

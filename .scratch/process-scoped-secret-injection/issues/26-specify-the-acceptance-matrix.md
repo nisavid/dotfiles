@@ -11,4 +11,5 @@ enrollment, restart and reboot persistence, startup and lazy recovery,
 notification, consumer isolation, rotation, rollback, and ordinary-shell
 scrubbing, including helper upgrades, locked or unavailable native stores,
 headless Linux sessions, notification denial, concurrent repair, and rejection
-of persisted sessions after agent deletion or grant revocation?
+of persisted sessions after agent renewal, expiry, deletion, or grant
+revocation, followed by successful replacement enrollment?
