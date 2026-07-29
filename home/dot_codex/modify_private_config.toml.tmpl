@@ -23,7 +23,11 @@ export HOMEDIR={{ .chezmoi.homeDir | quote }}
 {{- $identity := index $bindingData.identities $identityName }}
 export EDITOR_TARGET={{ $identity.editorTarget | quote }}
 export GIT_BRANCH_PREFIX={{ $identity.branchPrefix | quote }}
+{{- if get $bindingData "publicFixture" }}
+export WORK_TOML_B64={{ "writable_roots = []\nprojects = []\n" | b64enc | quote }}
+{{- else }}
 export WORK_TOML_B64={{ include ".private-codex-work.toml.age" | decrypt | b64enc | quote }}
+{{- end }}
 
 # python3 reads the script via process substitution; the live config arrives on stdin.
 uv run --quiet --with tomlkit python3 <(cat <<'PYEOF'
