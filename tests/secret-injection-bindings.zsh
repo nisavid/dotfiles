@@ -16,12 +16,12 @@ export UV_CACHE_DIR=$test_dir/uv-cache
 fixture_home=$test_dir/home
 mkdir -p -- "$fixture_home"
 fixture_home=${fixture_home:A}
-darwin_data='{"chezmoi":{"os":"darwin","homeDir":"'${fixture_home}'","hostname":"test-host"},"gitIdentity":{"publicFixture":true}}'
+darwin_data='{"chezmoi":{"os":"darwin","homeDir":"'${fixture_home}'","hostname":"test-host"},"gitIdentity":{"publicFixture":true,"selection":{"default":"personal","byHostname":{}},"identities":{"personal":{"email":"ivan@nisavid.io","editorTarget":"cursor","branchPrefix":"nisavid/","noTracking":false}}}}'
 
 render_modifier() {
   local source=$1
   local target=$2
-  chezmoi execute-template --override-data "$darwin_data" < "$source" > "$target"
+  chezmoi -S "$repo_root/home" execute-template --override-data "$darwin_data" < "$source" > "$target"
   chmod +x "$target"
 }
 
