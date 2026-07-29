@@ -20,4 +20,11 @@ lost at reboot. The remaining first-party ambiguity is whether renewal, expiry,
 deletion, and grant revocation immediately invalidate sessions already issued
 from the PAT.
 
+Until that behavior is proven, a persisted session associated with a known
+renewal, expiry, deletion, or grant-revocation event is unproven and must be
+refused. Recovery uses the app-assisted, full-user control plane to provision a
+replacement agent, reproduce its grants, and enroll and verify its provider
+session before consumer launches resume. Issue 26 must test all four events,
+old-session rejection, and successful replacement.
+
 See [the Proton agent/PAT lifecycle report](../research/proton-agent-lifecycle.md).
