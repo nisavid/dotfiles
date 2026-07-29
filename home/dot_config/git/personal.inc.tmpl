@@ -1,3 +1,6 @@
-{{- $identities := include ".private-git-identities.toml.age" | decrypt | fromToml -}}
+{{- $bindingData := .gitIdentity -}}
+{{- if not (get $bindingData "publicFixture") -}}
+{{- $bindingData = include ".private-git-identities.toml.age" | decrypt | fromToml -}}
+{{- end -}}
 [user]
-	email = {{ $identities.personal.email | quote }}
+	email = {{ $bindingData.identities.personal.email | quote }}
