@@ -27,7 +27,7 @@ def load(name: str, filename: str):
     return module
 
 
-CREATE = load("create_reviewable_pr", "create_reviewable_pr.py")
+CREATE = load("create_reviewable_pr", "literal_create_reviewable_pr.py")
 UPDATE = load("update_reviewable_pr", "update_reviewable_pr.py")
 
 

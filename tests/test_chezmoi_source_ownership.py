@@ -16,6 +16,11 @@ HINDSIGHT_SOURCE_ROOT = SOURCE / "dot_config/private_hindsight-control-plane"
 HINDSIGHT_FIXTURE = ROOT / "tests/fixtures/hindsight-public.toml"
 SECRET_EXEC_SOURCE_ROOT = SOURCE / "dot_config/private_secret-exec"
 SECRET_EXEC_FIXTURE = ROOT / "tests/fixtures/secret-exec-public.toml"
+PR_CREATOR_SOURCE = (
+    SOURCE
+    / "dot_agents/skills/publishing-reviewable-prs/scripts"
+    / "literal_create_reviewable_pr.py"
+)
 TEMP_ROOT = Path(tempfile.gettempdir()).resolve()
 CATPPUCCIN_CONFIG_EXTERNALS = (
     "bat-catppuccin.toml.tmpl",
@@ -386,6 +391,35 @@ class ChezmoiSourceOwnershipTests(unittest.TestCase):
             secret_exec = destination / ".config/secret-exec"
             self.assertTrue(secret_exec.is_dir())
             self.assertEqual(stat.S_IMODE(secret_exec.stat().st_mode), 0o700)
+
+    def test_pr_creator_keeps_literal_target_name(self) -> None:
+        with tempfile.TemporaryDirectory(dir=TEMP_ROOT) as temporary:
+            root = Path(temporary)
+            destination = root / "home"
+            destination.mkdir()
+            environment, arguments = self.environment(root, destination)
+
+            target = subprocess.run(
+                [
+                    "chezmoi",
+                    "-S",
+                    str(SOURCE),
+                    *arguments,
+                    "target-path",
+                    "--source-path",
+                    str(PR_CREATOR_SOURCE),
+                ],
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            expected = (
+                destination
+                / ".agents/skills/publishing-reviewable-prs/scripts"
+                / "create_reviewable_pr.py"
+            )
+            self.assertEqual(Path(target.stdout.strip()), expected)
 
     def test_externals_retain_targets_and_refresh_contracts(self) -> None:
         with tempfile.TemporaryDirectory(dir=TEMP_ROOT) as temporary:
