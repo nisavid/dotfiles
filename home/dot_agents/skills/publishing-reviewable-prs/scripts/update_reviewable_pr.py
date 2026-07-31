@@ -8,8 +8,10 @@ import hashlib
 import json
 import sys
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
 
 from reviewable_pr_state import (
     OID_RE,
@@ -94,11 +96,12 @@ def _preflight(
     return stored
 
 
-def _write_temporary_body(body: str) -> tempfile.NamedTemporaryFile[str]:
-    temporary = tempfile.NamedTemporaryFile(mode="w", encoding="utf-8")
-    temporary.write(body)
-    temporary.flush()
-    return temporary
+@contextmanager
+def _write_temporary_body(body: str) -> Iterator[IO[str]]:
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as temporary:
+        temporary.write(body)
+        temporary.flush()
+        yield temporary
 
 
 def update_text(

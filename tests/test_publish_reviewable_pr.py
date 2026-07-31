@@ -42,6 +42,24 @@ class ReviewablePrStateTests(unittest.TestCase):
         arguments = run.call_args.args[0]
         self.assertEqual(arguments[arguments.index("--head") + 1], "widget")
 
+    def test_temporary_body_closes_when_write_fails(self) -> None:
+        for module in (CREATE, UPDATE):
+            with self.subTest(module=module.__name__):
+                temporary = mock.MagicMock()
+                temporary.__enter__.return_value = temporary
+                temporary.write.side_effect = OSError("write failed")
+                with (
+                    mock.patch.object(
+                        module.tempfile,
+                        "NamedTemporaryFile",
+                        return_value=temporary,
+                    ),
+                    self.assertRaisesRegex(OSError, "write failed"),
+                ):
+                    with module._write_temporary_body("body"):
+                        self.fail("temporary body unexpectedly yielded")
+                temporary.__exit__.assert_called_once()
+
 
 class ReviewablePrFixture(unittest.TestCase):
     repository = "acme/app"

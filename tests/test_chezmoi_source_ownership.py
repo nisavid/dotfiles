@@ -367,6 +367,10 @@ class ChezmoiSourceOwnershipTests(unittest.TestCase):
             destination.mkdir()
             environment, arguments = self.environment(root, destination)
             sources = sorted(SECRET_EXEC_SOURCE_ROOT.rglob("*.tmpl"))
+            self.assertTrue(
+                sources,
+                f"no secret-exec templates found under {SECRET_EXEC_SOURCE_ROOT}",
+            )
 
             applied = subprocess.run(
                 [
