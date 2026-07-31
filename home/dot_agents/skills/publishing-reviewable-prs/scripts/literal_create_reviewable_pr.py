@@ -8,8 +8,10 @@ import json
 import secrets
 import sys
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
 
 from reviewable_pr_state import (
     PR_URL_RE,
@@ -75,17 +77,15 @@ def _provisional_pr_number(template: str) -> int:
     existing_numbers = {
         int(match.group("pr")) for match in PR_URL_RE.finditer(template)
     }
-    candidate = max(existing_numbers, default=0) + 1
-    while candidate in existing_numbers:
-        candidate += 1
-    return candidate
+    return max(existing_numbers, default=0) + 1
 
 
-def _write_temporary_body(body: str) -> tempfile.NamedTemporaryFile[str]:
-    temporary = tempfile.NamedTemporaryFile(mode="w", encoding="utf-8")
-    temporary.write(body)
-    temporary.flush()
-    return temporary
+@contextmanager
+def _write_temporary_body(body: str) -> Iterator[IO[str]]:
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as temporary:
+        temporary.write(body)
+        temporary.flush()
+        yield temporary
 
 
 def _matching_head_prs(

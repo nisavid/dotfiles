@@ -251,6 +251,8 @@ proton_environment=home/dot_config/environment.d/98-proton-pass.conf
   fail 'plaintext profile sources must not remain in the repository'
 [[ ! -e home/dot_config/private_secret-exec/commands.env ]] || \
   fail 'the plaintext command-map source must not remain in the repository'
+[[ ! -e home/dot_config/secret-exec ]] || \
+  fail 'the legacy secret-exec source root must not remain in the repository'
 
 profile_templates=(home/dot_config/private_secret-exec/private_profiles/private_*.env.tmpl(N))
 (( ${#profile_templates} > 0 )) || fail 'encrypted profile templates are required'
