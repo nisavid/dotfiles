@@ -247,12 +247,12 @@ proton_environment=home/dot_config/environment.d/98-proton-pass.conf
   $'# Keep Proton Pass sessions available across Linux launch contexts and reboots.\nPROTON_PASS_LINUX_KEYRING=dbus' ]] || \
   fail 'Proton Pass must use the persistent Linux Secret Service provider'
 
-[[ ! -e home/dot_config/secret-exec/profiles ]] || \
+[[ ! -e home/dot_config/private_secret-exec/profiles ]] || \
   fail 'plaintext profile sources must not remain in the repository'
-[[ ! -e home/dot_config/secret-exec/commands.env ]] || \
+[[ ! -e home/dot_config/private_secret-exec/commands.env ]] || \
   fail 'the plaintext command-map source must not remain in the repository'
 
-profile_templates=(home/dot_config/secret-exec/private_profiles/private_*.env.tmpl(N))
+profile_templates=(home/dot_config/private_secret-exec/private_profiles/private_*.env.tmpl(N))
 (( ${#profile_templates} > 0 )) || fail 'encrypted profile templates are required'
 rendered_profiles=$test_dir/rendered-profiles
 mkdir -m 700 -- "$rendered_profiles"
@@ -273,7 +273,7 @@ for profile_template in "${profile_templates[@]}"; do
   done < "$rendered_profile"
 done
 
-commands_template=home/dot_config/secret-exec/private_commands.env.tmpl
+commands_template=home/dot_config/private_secret-exec/private_commands.env.tmpl
 rendered_commands=$test_dir/rendered-commands.env
 chezmoi -S home execute-template \
   --override-data-file tests/fixtures/secret-exec-public.toml \
@@ -285,7 +285,7 @@ while IFS= read -r command_line || [[ -n $command_line ]]; do
 done < "$rendered_commands"
 
 ! rg -n '(^|[^[:alnum:]_])(pass|secret-service)://' \
-  home/dot_config/secret-exec --glob '!*.age' >/dev/null || \
+  home/dot_config/private_secret-exec --glob '!*.age' >/dev/null || \
   fail 'public secret-exec sources must not expose backend locators'
 
 print -r -- 'secret injection binding checks passed'
