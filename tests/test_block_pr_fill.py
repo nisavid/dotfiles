@@ -1200,8 +1200,8 @@ class BlockPrFillTests(unittest.TestCase):
                     MODULE.blocks(payload("Bash", {"command": untrusted_interpreter}))
                 )
             for variable_script in (
-                '"$HOME/.agents/skills/publishing-reviewable-prs/scripts/reviewable_pr.py"',
-                '"${HOME}/.agents/skills/publishing-reviewable-prs/scripts/reviewable_pr.py"',
+                '"$HOME/.agents/skills/publishing-reviewable-prs/scripts/create_reviewable_pr.py"',
+                '"${HOME}/.agents/skills/publishing-reviewable-prs/scripts/create_reviewable_pr.py"',
             ):
                 variable_command = command.replace(
                     shlex.quote(str(MODULE.PUBLISHER)), variable_script
@@ -1218,12 +1218,12 @@ class BlockPrFillTests(unittest.TestCase):
                     )
                 )
             for literal_script in (
-                "'$HOME/.agents/skills/publishing-reviewable-prs/scripts/reviewable_pr.py'",
-                "'${HOME}/.agents/skills/publishing-reviewable-prs/scripts/reviewable_pr.py'",
-                "'$HOME'/.agents/skills/publishing-reviewable-prs/scripts/reviewable_pr.py",
-                "'${HOME}'/.agents/skills/publishing-reviewable-prs/scripts/reviewable_pr.py",
-                r"\$HOME/.agents/skills/publishing-reviewable-prs/scripts/reviewable_pr.py",
-                r'"\$HOME/.agents/skills/publishing-reviewable-prs/scripts/reviewable_pr.py"',
+                "'$HOME/.agents/skills/publishing-reviewable-prs/scripts/create_reviewable_pr.py'",
+                "'${HOME}/.agents/skills/publishing-reviewable-prs/scripts/create_reviewable_pr.py'",
+                "'$HOME'/.agents/skills/publishing-reviewable-prs/scripts/create_reviewable_pr.py",
+                "'${HOME}'/.agents/skills/publishing-reviewable-prs/scripts/create_reviewable_pr.py",
+                r"\$HOME/.agents/skills/publishing-reviewable-prs/scripts/create_reviewable_pr.py",
+                r'"\$HOME/.agents/skills/publishing-reviewable-prs/scripts/create_reviewable_pr.py"',
             ):
                 literal_command = command.replace(
                     shlex.quote(str(MODULE.PUBLISHER)), literal_script
@@ -1827,7 +1827,7 @@ class BlockPrFillTests(unittest.TestCase):
     def test_guarded_helper_help_requires_exact_digest_pinned_route(  # noqa: PLR0915
         self,
     ) -> None:
-        self.assertEqual(MODULE.PUBLISHER.name, "reviewable_pr.py")
+        self.assertEqual(MODULE.PUBLISHER.name, "create_reviewable_pr.py")
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             state = root / "reviewable_pr_state.py"

@@ -219,17 +219,17 @@ VALIDATOR = (
     Path.home()
     / ".agents/skills/writing-reviewable-pr-descriptions/scripts/validate_change_navigation.py"
 )
-# reviewable_pr.py is the canonical installed publication entrypoint.
+# create_reviewable_pr.py is the canonical installed publication entrypoint.
 PUBLISHER = (
     Path.home()
-    / ".agents/skills/publishing-reviewable-prs/scripts/reviewable_pr.py"
+    / ".agents/skills/publishing-reviewable-prs/scripts/create_reviewable_pr.py"
 )
 PUBLISHER_ARGUMENTS = {
     str(PUBLISHER),
 }
 EXPANDABLE_PUBLISHER_ARGUMENTS = {
-    "$HOME/.agents/skills/publishing-reviewable-prs/scripts/reviewable_pr.py",
-    "${HOME}/.agents/skills/publishing-reviewable-prs/scripts/reviewable_pr.py",
+    "$HOME/.agents/skills/publishing-reviewable-prs/scripts/create_reviewable_pr.py",
+    "${HOME}/.agents/skills/publishing-reviewable-prs/scripts/create_reviewable_pr.py",
 }
 UPDATER = (
     Path.home()
@@ -247,8 +247,8 @@ REVIEWABLE_PR_STATE = (
     / ".agents/skills/publishing-reviewable-prs/scripts/reviewable_pr_state.py"
 )
 TRUSTED_HELP_ONLY_SCRIPTS = {
-    PUBLISHER: "bf6f16692097d72fdb9008450577852069da95fe948e14875662802a2c95236d",
-    UPDATER: "8af340214cfc19e1e6b4ce885a90af4f795307b846363a8b8ececde47632da43",
+    PUBLISHER: "f8c9d9aa85620affbe9985633fa65b1477dba9600ff29ec60c1fc1c84e3cc01e",
+    UPDATER: "0afdef577cdc049bc7201b6277f8b6629b546c08344eac6b25ef85466d3cf347",
     REVIEWABLE_PR_STATE: (
         "f06c51077e814ff689a995aff75cb08bbe609507b588349e7838f4c8eb901a4c"
     ),
