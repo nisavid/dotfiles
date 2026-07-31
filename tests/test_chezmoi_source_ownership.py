@@ -14,6 +14,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "home"
 HINDSIGHT_SOURCE_ROOT = SOURCE / "dot_config/private_hindsight-control-plane"
 HINDSIGHT_FIXTURE = ROOT / "tests/fixtures/hindsight-public.toml"
+SECRET_EXEC_SOURCE_ROOT = SOURCE / "dot_config/private_secret-exec"
+SECRET_EXEC_FIXTURE = ROOT / "tests/fixtures/secret-exec-public.toml"
 TEMP_ROOT = Path(tempfile.gettempdir()).resolve()
 CATPPUCCIN_CONFIG_EXTERNALS = (
     "bat-catppuccin.toml.tmpl",
@@ -352,6 +354,38 @@ class ChezmoiSourceOwnershipTests(unittest.TestCase):
                 )
                 self.assertEqual(target.read_bytes(), rendered.stdout)
             self.assertEqual(actual_targets, expected_targets)
+
+    def test_secret_exec_state_directory_is_private(self) -> None:
+        with tempfile.TemporaryDirectory(dir=TEMP_ROOT) as temporary:
+            root = Path(temporary)
+            destination = root / "home"
+            destination.mkdir()
+            environment, arguments = self.environment(root, destination)
+            sources = sorted(SECRET_EXEC_SOURCE_ROOT.rglob("*.tmpl"))
+
+            applied = subprocess.run(
+                [
+                    "chezmoi",
+                    "-S",
+                    str(SOURCE),
+                    *arguments,
+                    "--override-data-file",
+                    str(SECRET_EXEC_FIXTURE),
+                    "--source-path",
+                    "--refresh-externals=never",
+                    "apply",
+                    "--parent-dirs",
+                    *map(str, sources),
+                ],
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(applied.returncode, 0, applied.stderr)
+            secret_exec = destination / ".config/secret-exec"
+            self.assertTrue(secret_exec.is_dir())
+            self.assertEqual(stat.S_IMODE(secret_exec.stat().st_mode), 0o700)
 
     def test_externals_retain_targets_and_refresh_contracts(self) -> None:
         with tempfile.TemporaryDirectory(dir=TEMP_ROOT) as temporary:

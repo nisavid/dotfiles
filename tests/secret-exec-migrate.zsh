@@ -19,7 +19,7 @@ mkdir -p -- "$fixture_home/.config/environment.d" "$fixture_home/.config/zsh/zsh
   "$fixture_home/.claude" "$fixture_home/.local/bin" \
   "$fixture_home/.local/lib/secret-exec/bin" "$fake_bin" "$state_dir"
 chmod 700 "$fixture_home/.config/secret-exec/profiles"
-for profile_template in "$repo_root"/home/dot_config/secret-exec/private_profiles/*.tmpl(N); do
+for profile_template in "$repo_root"/home/dot_config/private_secret-exec/private_profiles/*.tmpl(N); do
   profile_name=${${profile_template:t}#private_}
   profile_name=${profile_name%.tmpl}
   chezmoi -S "$repo_root/home" execute-template \
@@ -29,7 +29,7 @@ for profile_template in "$repo_root"/home/dot_config/secret-exec/private_profile
 done
 chezmoi -S "$repo_root/home" execute-template \
   --override-data-file "$repo_root/tests/fixtures/secret-exec-public.toml" \
-  < "$repo_root/home/dot_config/secret-exec/private_commands.env.tmpl" \
+  < "$repo_root/home/dot_config/private_secret-exec/private_commands.env.tmpl" \
   > "$fixture_home/.config/secret-exec/commands.env"
 chmod 600 "$fixture_home/.config/secret-exec/commands.env"
 cp "$repo_root/home/dot_config/environment.d/98-proton-pass.conf" \
@@ -208,7 +208,7 @@ set -e
   fail 'profile-directory mode rejection must identify the private-mode contract'
 chmod 700 "$profile_dir"
 
-profile_template_files=("$repo_root"/home/dot_config/secret-exec/private_profiles/*.tmpl(N))
+profile_template_files=("$repo_root"/home/dot_config/private_secret-exec/private_profiles/*.tmpl(N))
 first_profile_name=${profile_template_files[1]:t}
 first_profile_name=${first_profile_name#private_}
 first_profile_name=${first_profile_name%.tmpl}
