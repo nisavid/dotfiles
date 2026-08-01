@@ -11,15 +11,11 @@ You are the work leader. Keep ambiguity, hypotheses, decisions, interpretation, 
 
 ## Kickoff
 
-1. Identify the leader and use [choosing-agent-models](../choosing-agent-models/SKILL.md) for any model or reasoning-effort selection.
+1. Identify the leader: Cursor uses the user's selected model; Claude Code should be latest Opus at `high`+ effort; Codex should be latest GPT at `high`+ effort.
 2. Identify repo, branch, base, dirty state, submodules, and owning worktree. For repos with dedicated per-project worktrees, target the appropriate worktree for repo or submodule targets.
 3. When executing a written plan, compare it once with live repository state, current policy, and applicable instructions before dispatch. Batch consequential conflicts for the operator; adapt stale mechanics when current evidence preserves the intended outcome.
 4. Same harness: prefer native subagents for tight, short-lived tasks. Prefer peer agents for longer work, broad context, browser/computer use, separate worktrees, follow-ups, or independent lifecycle.
 5. Cross-harness CLI/API launches are peer agents, not subagents.
-
-## Model Selection
-
-Use [choosing-agent-models](../choosing-agent-models/SKILL.md) after delegation and task shape are settled. That skill is the sole source of model criteria, preferred models, reasoning efforts, and fallbacks. This skill defines none of them.
 
 ## Validate First
 
@@ -39,11 +35,9 @@ Use the least-permissive peer command that can do the job. Do not invent command
 
 | Target | Read-only / probe peer | Edit-capable peer |
 | --- | --- | --- |
-| Cursor Agent | `agent -p --mode ask [--model <model-slug>] --workspace <cwd> <prompt>` or `--mode plan` for planning | `agent -p [--model <model-slug>] --workspace <cwd> <prompt>`; add `--yolo` only for explicitly trusted, isolated, edit/shell-intended work |
-| Claude Code | `claude [--model <model>] --effort <effort> --permission-mode plan -p <prompt>` | `claude [--model <model>] --effort <effort> -p <prompt>` |
-| Codex | `codex exec [-m <model>] -c 'model_reasoning_effort="<effort>"' -s read-only --ephemeral -C <cwd> <prompt>` | `codex exec [-m <model>] -c 'model_reasoning_effort="<effort>"' -s workspace-write -C <cwd> <prompt>` |
-
-Bracketed model arguments are conditional. Include them only when the active tool policy permits explicit model selection; otherwise omit the bracketed segment and preserve every other argument.
+| Cursor Agent | `agent -p --mode ask --model <model-slug> --workspace <cwd> <prompt>` or `--mode plan` for planning | `agent -p --model <model-slug> --workspace <cwd> <prompt>`; add `--yolo` only for explicitly trusted, isolated, edit/shell-intended work |
+| Claude Code | `claude --model opus --effort <high/xhigh/max> --permission-mode plan -p <prompt>` | `claude --model opus --effort <high/xhigh/max> -p <prompt>` |
+| Codex | `codex exec -m <model> -c 'model_reasoning_effort="<high/xhigh>"' -s read-only --ephemeral -C <cwd> <prompt>` | `codex exec -m <model> -c 'model_reasoning_effort="<high/xhigh>"' -s workspace-write -C <cwd> <prompt>` |
 
 If a peer launch is blocked by sandboxed access to harness state, trust prompts, or quota, record the exact blocker and use an approved native app/session path instead. `codex doctor --json` can fail overall for unrelated install or terminal checks; inspect the specific auth/config/reachability checks before treating Codex as unavailable. For Claude, skip prompts when `claude -p /usage` shows insufficient 5h or weekly margin; record the reset time.
 
@@ -55,18 +49,16 @@ If a peer launch is blocked by sandboxed access to harness state, trust prompts,
 | Claude Code | Use the native Task/subagent surface when available. | Use Claude peer commands above or Claude background agents; inspect `claude agents --help` first. |
 | Codex | Use the native Codex subagent tool when available; in current Codex app `spawn_agent` exposes `model` and `reasoning_effort`. | Use Codex peer commands above, or app thread tools when exposed; inspect whether they use `thinking` or `reasoning_effort`. |
 
-Use the model and effort selected by [choosing-agent-models](../choosing-agent-models/SKILL.md), expressed through the exact fields and slugs exposed by the target harness. Codex CLI effort uses `model_reasoning_effort`. Codex app tools may expose `thinking` for peer threads or `reasoning_effort` for subagents; inspect the current schema.
+Cursor effort is a model slug, e.g. `composer-2.5`, `gpt-5.5-high`, `gpt-5.5-extra-high`, `claude-opus-4-8-thinking-xhigh`. Codex CLI effort uses `model_reasoning_effort`. Codex app tools may expose `thinking` for peer threads or `reasoning_effort` for subagents; inspect the current schema.
 
 ## Routing
 
 | Task | Default target |
 | --- | --- |
-| Straightforward legwork: scouting, scaffolds, mechanical edits, TDD to a precise spec, bisection, extraction/summarization, mechanical ops, long waits | Cursor peer; use read-only mode for scouting/summarization and edit-capable mode only for assigned edits |
+| Straightforward legwork: scouting, scaffolds, mechanical edits, TDD to a precise spec, bisection, extraction/summarization, mechanical ops, long waits | Cursor Composer 2.5 peer; use read-only mode for scouting/summarization and edit-capable mode only for assigned edits |
 | Numerous well-defined low-ambiguity steps | Spark peer session only when the current harness exposes Spark |
-| Browser/computer use, localhost QA, screenshots, click-throughs | Codex peer session |
+| Browser/computer use, localhost QA, screenshots, click-throughs | Codex peer session. Medium default; High for analysis/judgment; Extra High for visual/UX/taste |
 | Unscripted analysis, interpretation, architecture critique, ambiguous investigation | Claude Code if usage allows; otherwise Codex. Use subagents only when tight and short-lived |
-
-After choosing the target and task shape, use [choosing-agent-models](../choosing-agent-models/SKILL.md) for the model and effort.
 
 ## Prompt Contract
 
