@@ -12,13 +12,13 @@ Ralph review overrides broader review ladders.
 For each cycle:
 1. Label it `Ralph Review Cycle N`.
 2. Review the current artifact or diff; classify findings as valid, fixed, rejected with evidence, or operator-blocked.
-3. Fix valid findings, verify the revised surface, and repeat.
+3. Operator-blocked findings pause for operator resolution; otherwise fix valid findings, verify, and repeat.
 
-Stop only when the latest labeled cycle has no findings.
+Stop only when the latest labeled cycle has no valid or operator-blocked findings.
 
 ## Escalation Checkpoint
 
-Track each finding's claim or abstraction seam across cycles. After correction, pause when its category recurs there or a second adjacent counterexample exposes it; unrelated same-category findings do not count. Resume only after a decision sets a materially new boundary or design: narrow the claim, redesign, authorize bounded residual risk, or validate user value and bound further assurance. Keep the finding operator-blocked if its decision needs the operator.
+Track each finding's claim/seam across cycles. After correction, pause when its category recurs there or a second adjacent counterexample appears; ignore unrelated same-category findings. Resume only after a decision materially changes the boundary/design: narrow the claim, redesign, authorize bounded residual risk, or validate user value and bound further assurance. Keep operator-owned decisions operator-blocked.
 
 ## Scope
 
