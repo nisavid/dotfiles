@@ -14,11 +14,11 @@ For each cycle:
 2. Review the current artifact or diff; classify findings as valid, fixed, rejected with evidence, or operator-blocked.
 3. Active checkpoints or operator-blocked findings pause before another cycle; otherwise fix valid findings, verify, and repeat.
 
-Stop only when the latest labeled cycle has no valid/operator-blocked findings or active checkpoint.
+Stop only when latest labeled cycle has no valid/operator-blocked findings or active checkpoint.
 
 ## Escalation Checkpoint
 
-Track each claim/seam across cycles. After correction, activate the checkpoint when its category recurs there or a second adjacent counterexample appears; ignore unrelated same-category findings. Clear only when a decision supplies a materially new boundary/design: narrow the claim, redesign, bound authorized residual risk outside the claim, or validate user value and bound further assurance. Keep operator-owned decisions operator-blocked.
+Track each claim/seam across cycles. After correction, activate when its category recurs there or a second adjacent counterexample appears; ignore unrelated same-category findings. Clear only after a materially new boundary/design; each choice must create one: narrow the claim, redesign, bound authorized residual risk outside the claim, or validate user value and set a new assurance boundary. Keep operator-owned decisions operator-blocked.
 
 ## Scope
 
