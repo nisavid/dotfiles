@@ -5,29 +5,32 @@ description: "Use when Ralph review semantics apply or reviewing-before-finalizi
 
 # Ralph Review Until Clean
 
-Ralph review is an iterative review-and-revise loop that overrides broader review ladders. One pass plus fixes is not enough; the latest labeled cycle must be clean.
+Ralph review overrides broader review ladders. Its latest labeled cycle must be clean.
 
 ## Core Loop
 
-For each cycle:
-1. Label it `Ralph Review Cycle N`.
-2. Review the current artifact or diff.
-3. Classify findings as valid, fixed, rejected with evidence, or operator-blocked.
-4. Fix valid findings and verify the revised surface.
-5. Start the next labeled cycle from revised state.
+For each `Ralph Review Cycle N`:
+1. Review the current artifact or diff.
+2. Classify findings as valid, fixed, rejected with evidence, or operator-blocked.
+3. Fix valid findings and verify the revised surface.
+4. Review the revised state in the next labeled cycle.
 
-Stop only when the latest cycle has no findings. If a decision blocks progress, report the blocked finding.
+Stop only when the latest cycle has no findings. Report blocking decisions as blocked findings.
+
+## Escalation Checkpoint
+
+When a corrected finding category recurs or adjacent counterexamples repeatedly expose one seam, pause. Resume only after an explicit decision materially changes the boundary or design: narrow the claim, redesign, authorize a residual-risk disposition, or validate user value and bound further assurance. If the decision requires the operator, keep the finding operator-blocked.
 
 ## Scope
 
-For code, plans, specs, docs, durable instructions, or ambiguous finding state, read [references/review-criteria.md](references/review-criteria.md).
+For non-PR artifacts or ambiguous finding states, read [references/review-criteria.md](references/review-criteria.md).
 
-For PR review comments, bot reruns, ready-for-review, merge readiness, stale threads, requested reviewers, or blocked GitHub merge state, run `pr-review-orchestration` once per cycle and follow its external-review budget gates.
+For PR comments, bot reruns, readiness, merge state, stale threads, or requested reviewers, run `pr-review-orchestration` once per cycle and follow its external-review budget gates.
 
 ## Pushback
 
-Reject findings only with evidence; passing tests, rollback, urgency, or inconvenience are not enough.
+Reject only with evidence; tests, rollback, urgency, or inconvenience do not refute a finding.
 
 ## Anti-Recursion
 
-When reviewing review-loop instructions, label cycles on the instruction artifact; do not recurse indefinitely.
+When reviewing review-loop instructions, label cycles on the instruction artifact; stop instead of recursing.
