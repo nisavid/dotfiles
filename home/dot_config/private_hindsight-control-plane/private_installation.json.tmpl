@@ -37,6 +37,14 @@
       "label": "{{ $hindsight.serviceLabelPrefix }}.{{ $hindsight.consumerId }}.stack",
       "restart": "on-failure",
       "service_id": "stack"
+    },
+    {
+      "arguments": [],
+      {{ template "hindsight-hook-authority-environment.tmpl" . }},
+      "entrypoint": "bin/hindsight-hook-authority-supervisor",
+      "label": "{{ $hindsight.serviceLabelPrefix }}.{{ $hindsight.consumerId }}.hook-authority",
+      "restart": "on-failure",
+      "service_id": "hook-authority"
     }
   ],
   "state_root": "{{ joinPath .chezmoi.homeDir $hindsight.stateRoot }}",

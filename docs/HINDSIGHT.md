@@ -18,5 +18,8 @@ Only `releaseCommit` and `releaseVersion` remain in public chezmoi data. They
 identify the reusable release whose immutable installation is consumed by the
 encrypted binding.
 
+`hindsight-embed-service auth-refresh` refreshes the bound Codex session and
+restarts the managed service only after login verification succeeds.
+
 Deployment and rollback procedures belong to the reusable lifecycle rather
 than this consumer repository.

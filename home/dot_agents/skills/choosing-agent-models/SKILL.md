@@ -9,7 +9,7 @@ description: Use when preparing an agent, subagent, Task invocation, or agent de
 
 Choose a model after deciding that an agent or subagent should be invoked. This skill does not decide whether to delegate; orchestration, review, debugging, and implementation skills own that question.
 
-Use the matrix below as the source of truth for model and reasoning-effort selection. Never invent model slugs; resolve the selected model to an exact model exposed by the environment, and pass an explicit `model` parameter only when the current tool policy permits it.
+Use the least expensive and fastest model that can reliably handle the role, but bias toward intelligence when the work is high-risk, ambiguous, architectural, or reviewer-facing. Never invent model slugs; map the role to the best available model exposed by the environment, and pass an explicit `model` parameter only when the current tool policy permits it.
 
 ## When to Use
 
@@ -21,44 +21,50 @@ Use the matrix below as the source of truth for model and reasoning-effort selec
 
 Do not use this for product runtime model routing, AI feature configuration, or deciding whether a subagent should exist.
 
-## Model Selection Matrix
+## Role Matrix
 
-Model names and effort levels below are selections, not guaranteed literal slugs. Resolve them to exact values exposed by the current environment before invoking a tool.
+Tier names below are intent labels, not literal model slugs. Resolve them to explicit available slugs before invoking a tool.
 
-Classify each task by its primary required judgment:
-
-1. Split materially different roles or phases before selecting models.
-2. Use the security, UI design, human-facing writing, or agent-facing writing row when that named judgment determines success.
-3. For coding, use the very-hard or hard row when its criteria apply. Otherwise use Terra or Luna only when the complete criteria and exclusions describe the delegated task; use the low-complexity or typical coding row for the remaining coding work.
-4. For other work, use Terra or Luna only when the complete criteria and exclusions apply. If no row applies, report that the matrix has no selection instead of borrowing a neighboring row.
-
-| Role or task shape | Preferred | Fallback |
+| Role or task shape | Preferred intent | Fallback intent |
 | --- | --- | --- |
-| Coding: very hard, very complex, very risky, or very persistently troublesome problems, or some sufficiently concerning combination of those traits | Claude Opus 5 at `max` | GPT 5.6 Sol at `max` |
-| Security hardening | GPT 5.6 Sol at `max`, using Codex Security | None specified |
-| Coding: hard, complex, risky, or persistently troublesome problems, or some sufficiently concerning combination of those traits | Claude Opus 5 at `high` | GPT 5.6 Sol at `xhigh` |
-| UI design work, visual judgment, design critique, and non-copy UX decisions | Claude Opus 5 at `high` | GPT 5.6 Sol at `xhigh` |
-| Human-facing writing, including user-facing copy, PR or issue text, published docs for humans, internal docs for human readers, and lengthy explainer comments; or reviews thereof | Claude Opus 5 at `high` | GPT 5.6 Sol at `xhigh` |
-| Agent-facing writing, including skills, `AGENTS.md`, durable process instructions, handoffs, agent-readable specs, agent guidance, advice, journaling, and AI-consumed internal docs; or reviews thereof | GPT 5.6 Sol at `xhigh` | None specified |
-| Terra work: stronger cognition can materially improve quality or efficiency, but a suboptimal result remains easy to review, discard, or repair; examples include scoped implementation, recoverable debugging, focused code review, and test design against a settled contract | Grok 4.5 at `high` with fast mode | GPT 5.6 Terra at `high` |
-| Luna work: the task benefits from language understanding but does not require meaningful judgment or high intelligence; examples include exact-format extraction, classification against an explicit rubric, mechanical follow-ups, status monitoring, and tightly specified clerical edits | Grok 4.5 at `low` with fast mode | GPT 5.6 Luna at `high` |
-| Coding: low-complexity, low-risk code intended to be merged | Claude Opus 5 at `medium` | GPT 5.6 Sol at `medium` |
-| Coding: low-complexity, low-risk one-off code | GPT 5.6 Sol at `medium` | None specified |
-| Coding: other or typical code intended to be merged | Claude Opus 5 at `high` | GPT 5.6 Sol at `high` |
-| Coding: other or typical one-off code | GPT 5.6 Sol at `high` | None specified |
+| Reviewer agents, including code, spec, architecture, and pre-closeout review | Latest GPT extra-high | Latest Opus highest-thinking tier, then the most intelligent available latest-generation model at its highest thinking effort. |
+| Many easy, low-risk implementation edits | Latest Composer Fast | Latest Gemini Flash, then the best cheap reliable fast model available. |
+| Rearchitecture or very high complexity across abstractions, interactions, scenarios, plans, or contingencies | Latest GPT extra-high | Latest Opus highest-thinking tier, then the most intelligent available latest-generation model. |
+| Human-facing writing, including user-facing copy, PR or issue text, published docs for humans, internal docs for human readers, and lengthy explainer comments | Latest Opus highest-thinking tier | Latest GPT extra-high, then the most intelligent available latest-generation model. |
+| Agent-facing writing, including skills, `AGENTS.md`, durable process instructions, handoffs, agent-readable specs, agent guidance, advice, journaling, and AI-consumed internal docs | Latest GPT extra-high | Latest GPT high or medium, then the most intelligent available non-Opus model. Use Opus only when no suitable GPT-family model is available, and state the limitation. |
+| UI design work, visual judgment, design critique, and non-copy UX decisions | Latest Opus highest-thinking tier | Latest GPT extra-high, then the most intelligent available latest-generation model. |
+| High complexity across abstractions, interactions, or scenarios, but not top-tier rearchitecture | Latest GPT high | Latest Opus highest-thinking tier, then the most intelligent available latest-generation model. |
+| Ordinary implementation delegated to a subagent | Latest Composer Fast | Latest GPT medium, latest Sonnet highest-thinking tier, then the most intelligent available latest-generation model. |
 
-Terra work excludes tasks that control a hard-to-reverse decision and tasks that need only bounded semantic clerical work. Luna work excludes any choice that can redirect scope, architecture, diagnosis, integration, publication, or another hard-to-recover part of the effort. More Luna reasoning effort does not make it a substitute for Terra or Sol judgment. When delegated work changes character, reclassify it and select a new model before continuing.
+## Slug Resolution
+
+Use exact slugs from the environment. If these Cursor model slugs are available, resolve common intents as follows:
+
+| Intent | Ordered available slugs |
+| --- | --- |
+| Latest GPT extra-high or GPT high when no high tier exists | `gpt-5.5-extra-high` |
+| Latest Opus highest-thinking tier | `claude-opus-4-8-thinking-high` |
+| Latest Composer Fast | `composer-2.5-fast` |
+| Latest Gemini Flash | `gemini-3.5-flash` |
+| Latest GPT medium when unavailable | Use the next fallback for the role; do not invent a GPT medium slug. |
+| Latest Sonnet highest-thinking tier when unavailable | Use `claude-4.6-sonnet-medium-thinking` only if it is the best available Sonnet option and state the tier limitation. |
+| Most intelligent available latest-generation fallback | `gemini-3.1-pro`, then `claude-4.6-sonnet-medium-thinking`, then `composer-2.5`, unless the environment exposes a stronger exact slug. |
+| Cheap reliable fast fallback | `gemini-3.5-flash`, then `composer-2.5`, unless the environment exposes a better exact cheap fast slug. |
+
+For a small, easy, low-risk change, many orchestration skills will choose not to use a subagent. If a subagent is still required by the operator or workflow, treat it as ordinary implementation and prefer a cheap fast model.
+
+If the parent agent is already running the preferred GPT extra-high model but the subagent tool does not expose that model as an explicit slug, omit the `model` parameter so the subagent inherits the parent model. Do not fall back to Opus solely because the GPT extra-high slug is unavailable as an explicit subagent parameter.
 
 ## Mixed Tasks
 
 Pick the model for the hardest required judgment, not the largest line count.
 
-- Review plus implementation: classify the review and implementation independently.
+- Review plus implementation: reviewer model for the review, implementer model for accepted fixes.
 - UI design plus mechanical UI edits: use a design/writing-capable model for design decisions; use a fast implementer only after the decisions are precise.
 - Copywriting inside a code task: use the human-facing writing row when the copy is user-facing, published, long, subtle, or likely to be reviewed on voice and clarity.
 - Agent-facing prose inside a docs, planning, review, or implementation task uses the agent-facing writing row. Do not route it to Opus merely because it is "documentation" or "writing."
-- Architecture plus cleanup: use the coding row matching the hardest required architectural judgment until the target shape is settled, then reclassify mechanical implementation separately.
-- Code review, exploratory codebase research, CI or log investigation, shell or test running, browser QA, issue triage, and PR triage use the coding row matching their difficulty and risk unless a more specific row applies. Use the Terra or Luna row only when its criteria are fully met.
+- Architecture plus cleanup: use the architecture row until the target shape is settled, then downgrade implementation if the remaining edits are mechanical.
+- Exploratory codebase research, CI or log investigation, shell or test running, browser QA, issue triage, and PR triage agents use the reviewer row when judgment dominates and the ordinary implementation row when execution is mechanical and well-scoped.
 
 ## Prompt Requirements
 
@@ -76,21 +82,20 @@ Do not rely on the subagent inheriting your session context.
 
 ## Fallback Rules
 
-- Resolve the preferred selection to an available explicit model slug and effort.
+- Prefer available explicit model slugs over vague labels.
 - If the preferred tier is unavailable, use the next fallback in the same role row and state the limitation when it affects confidence, cost, or speed.
-- If the row specifies no fallback and the preferred model is unavailable, do not invent one; report the missing selection.
 - If the current tool policy does not allow an explicit `model` parameter, omit it even when this matrix identifies a preferred model.
-- If the environment already fixes an appropriate model or the tool has no model parameter, omit the model parameter and state any material mismatch. Do not bypass the matrix merely because the task is mechanical or low-risk.
+- If the environment already fixes an appropriate model, the task is mechanical and low-risk, or the tool has no model parameter, omit the model parameter and let the environment choose.
 - If the user requested a specific unavailable model, do not silently substitute; report the unavailable model and available choices.
-- Reclassify and strengthen the model when the current model blocks, misunderstands the task, or reveals harder judgment than the original classification allowed.
+- Escalate model strength when a cheaper model blocks, misunderstands the task, or reports uncertainty that stronger reasoning is likely to resolve.
 
 ## Common Mistakes
 
 | Mistake | Fix |
 | --- | --- |
 | Using this to justify spawning a subagent | Decide delegation elsewhere; use this only after delegation is chosen. |
-| Treating every review as one task shape | Classify the subject and required judgment; use a specific writing or design row when applicable, otherwise the matching coding row. |
-| Sending agent-facing docs, handoffs, skills, or instructions to Opus because they are "writing" | Use GPT 5.6 Sol at `xhigh`. |
-| Treating Luna as a cheaper Terra or Sol | Use Luna only when the task requires no meaningful judgment and cannot redirect consequential work. |
+| Sending reviewers to cheap fast models | Reviewers need judgment; use the reviewer row. |
+| Sending agent-facing docs, handoffs, skills, or instructions to Opus because they are "writing" | Use the agent-facing writing row; GPT is usually more effective and efficient for machine-consumed prose. |
+| Sending mechanical edits to top-tier models | Use a fast reliable implementer unless risk or ambiguity says otherwise. |
 | Hiding missing model support | State the limitation and fallback used. |
 | Omitting task intent from the prompt | Include specs, intent, and scope, not just file paths. |

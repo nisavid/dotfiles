@@ -9,12 +9,6 @@ jq --arg command "$command" '
     del(.type, .url, .env, .env_vars, .headers, .http_headers, .bearer_token_env_var);
 
   .mcpServers = (.mcpServers // {}) |
-  del(.mcpServers.serena) |
-  .pluginUsage = (.pluginUsage // {}) |
-  del(
-    .pluginUsage["serena@claude-plugins-official"],
-    .pluginUsage["serena@inline"]
-  ) |
   .mcpServers.context7 = local_server(.mcpServers.context7;
     ["context7", "--", "npx", "-y", "@upstash/context7-mcp@3.2.4"]) |
   .mcpServers.firecrawl = local_server(.mcpServers.firecrawl;
