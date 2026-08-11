@@ -18,7 +18,8 @@ only for existing unmanaged runtime state? How do adapters report operation
 dispositions for every active route without changing the provider selection's
 harness coverage outcome? How do adapters enforce route control ownership so
 operator-owned routes are verify-and-report-only and cannot expose automated
-mutating operations? Which full-plan validations run before the first runtime
+mutating operations? How does full-plan validation reject automated mutations
+without declared pre-state-restoring compensation before the first runtime
 checkpoint? What deterministic order, durable checkpoints, failure
 reports, declared compensation boundaries, and audit-before-retry rules make
 partial apply failures safely convergent without claiming global atomicity?

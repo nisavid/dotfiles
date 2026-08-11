@@ -22,9 +22,10 @@ that mutates runtime state. Before its first runtime checkpoint, apply validates
 the complete resolved plan, including every coverage outcome, disposition,
 route control owner, coverage-control compatibility, no-provider constraint,
 route metadata, provenance owner, and overlap. It rejects automated mutating
-operations on operator-owned routes. Any invalid or unresolved entry yields
-zero mutation. A valid apply is not globally atomic across adapters: it uses
-deterministic ordering and durable
+operations on operator-owned routes and every automated mutation without a
+declared compensation that restores its captured pre-state. Any invalid or
+unresolved entry yields zero mutation. A valid apply is not globally atomic
+across adapters: it uses deterministic ordering and durable
 per-operation checkpoints, stops on failure, compensates only changes declared
 reversible, and retries by auditing observed state before idempotent
 convergence.
