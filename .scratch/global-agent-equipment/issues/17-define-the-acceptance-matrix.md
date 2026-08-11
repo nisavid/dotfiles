@@ -26,6 +26,10 @@ does a separate operation matrix prove exactly one `automated`,
 Which fixtures reject missing or conflicting provenance owners and verify
 exactly one owner and its restore evidence per active provider route? Which
 fixtures reject an unlisted overlap or incomplete supplementary route?
+Which fixtures prove `managed_provider` has only reconciler-owned routes,
+`manually_managed_provider` has at least one operator-owned route, and every
+operator-owned route rejects automated mutating dispositions before any runtime
+checkpoint while still allowing automated read-only verification?
 
 Which fixtures prove immutable content-digest verification, stale catalog-lock
 rejection before mutation, and zero mutation when an invalid entry appears last

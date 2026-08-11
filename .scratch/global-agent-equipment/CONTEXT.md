@@ -36,6 +36,13 @@ The declared capability of an active provider route for one operation. Its
 exact serialized literal is `automated`, `operator_action`, or `unavailable`.
 _Avoid_: Harness coverage outcome, manual provider
 
+**Route control owner**:
+The authority allowed to mutate runtime state through an active provider route.
+Its exact serialized literal is `reconciler_owned` or `operator_owned`.
+`operator_owned` routes are verify-and-report-only for the reconciler: every
+mutating operation must be `operator_action` or `unavailable`.
+_Avoid_: Provenance owner, artifact owner
+
 **Provenance owner**:
 The one source or native manager responsible for the artifact and restore
 evidence of an active provider route.

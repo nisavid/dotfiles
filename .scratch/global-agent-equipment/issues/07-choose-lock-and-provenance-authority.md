@@ -16,8 +16,8 @@ routes with reproducible artifacts. It also records native-rolling restore
 classes and non-automated operation dispositions without promising exact
 fresh-home restoration for those operations. The lock records the authored
 catalog's content digest. Apply rejects a stale or mismatched lock before any
-runtime mutation; only an explicit resolve or update operation may regenerate
-it from the catalog.
+runtime mutation; only the explicit update operation may regenerate it from the
+catalog.
 The native global `skills` lock remains useful manager-owned provenance and
 import evidence; the update workflow should derive from it where useful instead
 of hand-copying its inventory. Native locks never silently alter authored
