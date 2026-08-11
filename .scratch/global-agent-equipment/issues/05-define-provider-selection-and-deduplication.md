@@ -5,17 +5,17 @@ Status: resolved
 
 ## Question
 
-How should provider preference, plugin coverage, selective component controls,
+How should provider selection, plugin coverage, selective component controls,
 and unavoidable overlap interact?
 
 ## Answer
 
-For a managed-provider or manually-managed-provider harness coverage outcome,
+For a `managed_provider` or `manually_managed_provider` harness coverage outcome,
 each equipment identity and harness has a provider selection: one preferred
 route plus zero or more supplementary routes named by an `allow_overlap`
 exception with a rationale. Every member is an active provider route and must
 carry its own operation dispositions, provenance owner, restore evidence, and
-acceptance coverage. Intentional omission and unsupported coverage outcomes
+acceptance coverage. `intentional_omission` and `unsupported` coverage outcomes
 select an explicit no-provider value instead. Operation dispositions on active
 routes do not erase or replace that harness-level selection. The resolver
 inventories a distribution's complete coverage, applies every stable harness

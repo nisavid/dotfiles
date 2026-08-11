@@ -26,13 +26,14 @@ provider route.
 _Avoid_: Inferred overlap, interchangeable providers
 
 **Harness coverage outcome**:
-The single declared result for an equipment identity in one harness: managed
-provider, manually managed provider, intentional omission, or unsupported.
+The single declared result for an equipment identity in one harness. Its exact
+serialized literal is `managed_provider`, `manually_managed_provider`,
+`intentional_omission`, or `unsupported`.
 _Avoid_: Operation capability, provider preference
 
 **Operation disposition**:
-The declared capability of an active provider route for one operation:
-automated, operator action, or unavailable.
+The declared capability of an active provider route for one operation. Its
+exact serialized literal is `automated`, `operator_action`, or `unavailable`.
 _Avoid_: Harness coverage outcome, manual provider
 
 **Provenance owner**:

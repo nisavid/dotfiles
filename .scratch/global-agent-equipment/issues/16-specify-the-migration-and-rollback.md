@@ -15,8 +15,11 @@ its provenance owner, restore class, immutable target or native-rolling channel
 and observed version, installation, enablement, MCP-selection, plugin-selection,
 and legacy-projector state. Also record every candidate `~/.claude/skills`
 entry's path, type, link text, resolved target or broken state, and provenance.
-Immediately before removing a link, compare its current identity with that
-record; on mismatch, skip deletion, report drift, and stop for replanning.
+Immediately before every mutation, compare current state with the captured
+pre-state. Immediately before restoring a surface, compare current state with
+the value written by the migration. A mismatch on any provider, projector,
+link, plugin, enablement, MCP, or selection surface preserves the external
+change, reports drift, and stops for replanning.
 
 On failed verification, restore all of them, including pre-existing plugin
 enablement, and uninstall the plugin only when it was absent before migration;

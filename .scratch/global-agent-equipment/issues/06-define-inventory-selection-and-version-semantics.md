@@ -13,9 +13,10 @@ and updates behave?
 The catalog supports both source-wide `all` selection and explicit component
 selection. Both resolve to a reviewed lock snapshot that enumerates the exact
 equipment and each provider route's restore class. An `immutable` route records
-a source revision or package version plus a reproducible artifact reference;
-ordinary apply converges to that target and may use the network only to restore
-the pinned artifact. A `native_rolling` route records its channel and observed
+a source revision or package version, reproducible artifact reference, and
+content digest. Ordinary apply may use the network to restore the pinned
+artifact, verifies its content against that digest, and fails on mismatch. A
+`native_rolling` route records its channel and observed
 version but cannot claim deterministic restoration of that version. A separate
 explicit update operation refreshes immutable sources, expands `all`, samples
 native-rolling channels, and produces a reviewable lock diff without silently

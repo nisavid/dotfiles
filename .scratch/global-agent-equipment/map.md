@@ -32,13 +32,14 @@ migration; execution resumes from the handoff produced by
 - [Choose catalog and runtime ownership][decision-03] — make the chezmoi
   catalog authoritative desired state while native caches remain runtime state.
 - [Define equipment identities and providers][decision-04] — identify each
-  component independently from the distributions and providers that supply it.
+  component independently from the distributions and provider routes that
+  supply it.
 - [Define provider selection and deduplication][decision-05] — resolve the
-  effective component set after selective controls, keep route selection
+  effective component set after selective controls, keep provider selection
   separate from operation disposition, then reject unexplained overlap.
 - [Define inventory selection and version semantics][decision-06] — support
   source-wide and explicit selection, lock reproducible targets immutably,
-  classify native-rolling providers explicitly, and update separately from
+  classify native-rolling routes explicitly, and update separately from
   ordinary apply.
 - [Choose lock and provenance authority][decision-07] — use a generated
   repo-owned lock for deterministic restore where providers expose reproducible

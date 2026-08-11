@@ -8,6 +8,8 @@ Blocked by: 12, 14
 
 Which observed global skills, Claude plugins, Codex plugins, Cursor plugins,
 and direct or plugin-provided MCPs should the initial catalog adopt, leave
-unclassified, or retire? For every accepted equipment identity and harness,
+unclassified, or retire from authored state? Runtime retirement may remove only
+a catalog-owned projection; unmanaged observations require explicit adoption
+before runtime retirement. For every accepted equipment identity and harness,
 which coverage outcome and provider route or explicit no-provider value should
 the catalog record?

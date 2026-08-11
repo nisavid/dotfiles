@@ -15,6 +15,7 @@ reviewable lock changes; adopt changes authored ownership only for existing
 unmanaged state; and apply alone reconciles runtime state for every accepted
 catalog entry? Apply may execute only `automated` operation dispositions on
 active provider routes. `operator_action` is reported for the operator;
-`unavailable`, intentional-omission, and unsupported outcomes select no
+`unavailable`, `intentional_omission`, and `unsupported` outcomes select no
 automated mutation. Unresolved identities, incomplete route metadata, and
-unlisted or invalid provider overlap fail closed.
+unlisted or invalid provider overlap fail closed during complete plan
+validation before the first runtime checkpoint.
