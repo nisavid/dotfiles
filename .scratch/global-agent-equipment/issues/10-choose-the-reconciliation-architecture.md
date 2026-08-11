@@ -18,4 +18,7 @@ caches or native manager state into additional authorities. Import is
 read-only discovery. Adopt records ownership of existing unmanaged runtime
 state through a reviewable authored change. Apply reconciles every accepted
 catalog entry, whether newly authored or adopted, and is the only operation
-that mutates runtime state.
+that mutates runtime state. Apply is not globally atomic across adapters: it
+uses deterministic ordering and durable per-operation checkpoints, stops on
+failure, compensates only changes declared reversible, and retries by auditing
+observed state before idempotent convergence.

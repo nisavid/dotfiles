@@ -8,7 +8,7 @@
   grants selected credentials to individual consumer processes without
   creating ambient shell credentials
 - [Global Agent Equipment](./.scratch/global-agent-equipment/CONTEXT.md) —
-  defines portable desired state, provider coverage, and operation capability
+  defines portable desired state, provider coverage, and operation disposition
   across global agent harnesses
 
 ## Relationships

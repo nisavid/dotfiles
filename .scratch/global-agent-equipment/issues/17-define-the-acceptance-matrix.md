@@ -19,9 +19,17 @@ preservation, retirement, non-automated-state reporting, secret non-disclosure,
 and rollback?
 
 How does the coverage matrix prove exactly one harness coverage outcome for
-every equipment identity × harness, including the selected provider route or
-explicit no-provider value? For every selected provider route × operation, how
+every equipment identity × harness, including the provider selection or
+explicit no-provider value? For every active provider route × operation, how
 does a separate operation matrix prove exactly one `automated`,
 `operator_action`, or `unavailable` disposition with outcome-specific evidence?
 Which fixtures reject missing or conflicting provenance owners and verify
-exactly one owner and its restore evidence per selected provider route?
+exactly one owner and its restore evidence per active provider route? Which
+fixtures reject an unlisted overlap or incomplete supplementary route?
+
+How do partial-apply fixtures inject an adapter failure after each checkpoint,
+verify that processing stops, confirm compensation occurs only where declared,
+and prove that audit-before-retry converges idempotently? How do migration
+fixtures inject failure after legacy-projector replacement, each Claude-link
+removal, plugin installation and enablement, MCP reconciliation, and plugin
+selection, then verify restoration of every captured state item?
