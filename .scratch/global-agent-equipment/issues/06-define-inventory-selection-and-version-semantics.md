@@ -16,4 +16,7 @@ equipment and immutable source revisions or package versions. Ordinary apply
 converges to that lock and may use the network only to restore missing pinned
 artifacts. A separate explicit update operation refreshes sources, expands
 `all`, produces a reviewable lock diff, and never silently changes ordinary
-apply's target.
+apply's target. A provider that follows a native rolling channel or performs
+background updates must not silently report immutable convergence: its adapter
+must suppress that behavior when supported, otherwise detect and classify the
+result as manager-driven drift with the observed version and remediation.

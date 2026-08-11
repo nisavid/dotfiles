@@ -1,6 +1,6 @@
 # Global agent equipment: primary-source findings
 
-Research date: 2026-08-08
+Research dates: 2026-08-08; refreshed 2026-08-11
 
 This note separates public contracts from observations of the currently installed CLIs and this repository. It covers Claude Code, Codex, Cursor, chezmoi, the `skills` CLI, and Matt Pocock's skills. No plugin, skill, or runtime configuration was installed, removed, or changed during this investigation.
 
@@ -294,22 +294,20 @@ Recommended invariants:
 4. Harness-owned caches, credentials, timestamps, and usage databases are never chezmoi-owned.
 5. Fresh-machine install, steady-state no-op, missing-item repair, upstream update, plugin/standalone preference switch, and uninstall/retirement each have a testable convergence case.
 
-## Decisions still requiring grilling or a prototype
+## Decisions resolved after research
 
-1. **Cursor overlap policy.** Which compromise should apply until Cursor supports a documented path-specific disable?
-2. **Meaning of latest.** Should a package follow an upstream branch/channel automatically, or should the repo pin immutable revisions and update them intentionally? For Matt-on-Claude, "latest" currently means the latest snapshot admitted to the official Claude marketplace.
-3. **Standalone inventory selection.** Should the manifest list every skill explicitly, select every skill from a source, or support both? Explicit lists are reviewable; source-wide selection automatically picks up additions but can introduce new behavior without review.
-4. **Lockfile authority.** Is `~/.local/state/skills/.skill-lock.json` tracked as recoverable provenance despite the restore command being experimental, or is it regenerated from a stable higher-level manifest?
-5. **Update cadence and authority.** Should `chezmoi apply` perform networked updates, or only converge to checked-in refs while a separate explicit update command refreshes them?
-6. **Claude projection and Cursor compatibility scan.** Does Cursor deduplicate realpath-identical entries discovered through both `~/.agents/skills` and `~/.claude/skills`? A small controlled prototype is more reliable than guessing because the public docs do not specify it.
-7. **Plugin installation restore.** Validate fresh-home behavior for Claude and Codex: do config entries plus an empty cache prompt/install, or must the reconciler call the CLI? Do not infer this from a populated machine.
-8. **Private/custom sources.** Decide whether encrypted private skills, checked-in public custom skills, helper-managed packages, and external repositories all share one manifest schema or use adapters that report into a common inventory.
+The accepted decisions are recorded in the [Wayfinder map](../../.scratch/global-agent-equipment/map.md) and its resolved grilling tickets. The authored catalog supports both source-wide and explicit component selection; a reviewed lock records exact inventory and immutable targets; ordinary apply restores the locked target without silently updating it; and a separate update operation produces a reviewable lock diff. The global `skills` lock remains useful import evidence, but it is neither the desired-state authority nor a sufficient fresh-home restore mechanism. Harness adapters select providers and component controls while preserving explicit manual or unsupported outcomes.
 
-## Wayfinder assessment
+## Remaining validation
 
-A Wayfinder chart is prudent only if this becomes a cross-session program covering every harness, helper, private skill, update channel, fresh-machine restore, and migration. The decision graph has at least three independent fronts—inventory/provenance, provider preference/deduplication, and convergence/update semantics—and Cursor introduces a genuine capability gap.
+1. **Claude projection and Cursor compatibility scan.** Determine whether Cursor deduplicates realpath-identical entries discovered through both `~/.agents/skills` and `~/.claude/skills`; the public docs do not specify this behavior.
+2. **Plugin installation restore.** Validate fresh-home behavior for Claude and Codex rather than inferring it from populated caches: determine when the reconciler must call a native plugin-install command.
+3. **Live inventory classification.** Import and classify the current skills, helpers, plugins, plugin components, and direct MCPs before claiming ownership or removing unmanaged state.
+4. **Native rolling channels.** Prototype whether each provider can suppress background updates. Where it cannot, require detection and explicit manager-driven-drift reporting instead of claiming immutable convergence.
 
-For the immediate Matt migration plus a first unified manifest, a focused grilling session followed by one prototype should be enough. If the destination expands to complete parity for all plugins, hooks, skills, MCPs, and helper-managed packages, charting a Wayfinder map would prevent the policy from becoming another distributed set of exceptions.
+## Wayfinder status
+
+The cross-session [Wayfinder map](../../.scratch/global-agent-equipment/map.md) now charts the policy, schema, adapters, migration, MCP coverage, and acceptance work. It is a planning artifact rather than runtime configuration. Its current implementation frontier is the catalog-and-lock schema ticket; the Matt migration follows the resolver, inventory, and test-design dependencies recorded in the map.
 
 ## `skills` global lock versus `experimental_install`
 
