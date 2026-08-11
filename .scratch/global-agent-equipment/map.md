@@ -26,14 +26,16 @@ migration; execution resumes from the handoff produced by
 - [Bound the Wayfinder destination][decision-01] — produce the architecture,
   acceptance matrix, and implementation sequence before runtime migration.
 - [Define parity and the active harnesses][decision-02] — require explicit,
-  explainable equipment coverage across Claude Code, Codex, and Cursor rather
-  than identical artifacts.
+  explainable harness coverage outcomes across Claude Code, Codex, and Cursor
+  rather than identical artifacts, with operation dispositions modeled
+  separately on selected provider routes.
 - [Choose catalog and runtime ownership][decision-03] — make the chezmoi
   catalog authoritative desired state while native caches remain runtime state.
 - [Define equipment identities and providers][decision-04] — identify each
   component independently from the distributions and providers that supply it.
 - [Define provider selection and deduplication][decision-05] — resolve the
-  effective component set after selective controls, then reject unexplained overlap.
+  effective component set after selective controls, keep route selection
+  separate from operation capability, then reject unexplained overlap.
 - [Define inventory selection and version semantics][decision-06] — support
   source-wide and explicit selection, lock reproducible targets immutably,
   classify native-rolling providers explicitly, and update separately from
