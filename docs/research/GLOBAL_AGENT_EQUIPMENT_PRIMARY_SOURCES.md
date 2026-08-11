@@ -2,7 +2,7 @@
 
 Research dates: 2026-08-08; refreshed 2026-08-11
 
-This note separates public contracts from observations of the currently installed CLIs and this repository. It covers Claude Code, Codex, Cursor, chezmoi, the `skills` CLI, and Matt Pocock's skills. No plugin, skill, or runtime configuration was installed, removed, or changed during this investigation.
+This note separates public contracts from observations of the currently installed CLIs and this repository. It covers Claude Code, Codex, Cursor, chezmoi, the `skills` CLI, and Matt Pocock's skills. No real user or repository plugin, skill, or runtime configuration was installed, removed, or changed. The isolated disposable restore probe temporarily created `probe-skill` and rewrote its project `skills-lock.json`, then was removed.
 
 ## Executive findings
 
@@ -286,9 +286,11 @@ The reconciler can then derive:
 - which legacy links are removed; and
 - which exceptions are documented at the package/harness edge instead of scattered through scripts.
 
+Before a selective Claude projection removes any losing link, the migration must retire `home/run_after_sync-global-agent-skills-to-claude.zsh` or make it consume the authoritative catalog. Otherwise a later `chezmoi apply` recreates the removed links and leaves two owners for the same projection.
+
 Recommended invariants:
 
-1. Each package has one provenance owner: `skills`, a dedicated helper, a checked-in custom skill, a referenced external, or a harness plugin.
+1. Each selected component-and-harness provider edge has one artifact and provenance owner: `skills`, a dedicated helper, a checked-in custom skill, a referenced external, or a harness plugin. One logical package may therefore use distinct Claude, Codex, and Cursor provider routes with separate restore evidence.
 2. Each managed or manual equipment outcome selects one preferred provider per harness unless an explicit exception allows overlap; intentional omission and unsupported outcomes select no provider. Plugin installation is not assumed to activate an indivisible bundle: the resolver first applies every documented harness control that can selectively enable or disable a plugin component, then treats only the remaining inseparable activation groups as atomic. For example, Codex exposes per-plugin-MCP enablement and tool policy, while Claude plugin MCP servers start with the enabled plugin and plugin hooks cannot be individually disabled. [Codex configuration schema](https://developers.openai.com/codex/config-schema.json), [Claude MCP documentation](https://code.claude.com/docs/en/mcp), and [Claude hooks reference](https://code.claude.com/docs/en/hooks).
 3. Generated projections are fully derivable from the manifest and never become a second authority.
 4. Harness-owned caches, credentials, timestamps, and usage databases are never chezmoi-owned.

@@ -15,5 +15,7 @@ manager and harness adapters. Chezmoi remains the deployment entrypoint and
 owns portable source data and narrow overlays. The resolver exposes distinct
 audit, apply, update, import, and adopt operations rather than turning runtime
 caches or native manager state into additional authorities. Import is
-read-only discovery; adopt produces a reviewable authored ownership change;
-apply alone reconciles adopted runtime state.
+read-only discovery. Adopt records ownership of existing unmanaged runtime
+state through a reviewable authored change. Apply reconciles every accepted
+catalog entry, whether newly authored or adopted, and is the only operation
+that mutates runtime state.
