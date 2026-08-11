@@ -11,7 +11,9 @@ steady-state no-op behavior, missing-item repair, immutable restore, explicit
 update, provider switching, selective component disabling, duplicate
 detection, refusal to claim unmanaged state before explicit adoption, adoption
 and ownership transfer, unmanaged-drift preservation, manager-driven version
-drift, retirement, manual-state reporting, secret non-disclosure, and rollback?
-For each active harness and operation, what outcome-specific evidence proves
-managed convergence where supported and the declared manual, unsupported, or
-omitted outcome otherwise?
+drift, reproducible-versus-native-rolling restore claims, standalone entry type,
+symlink-text, resolved-target, and content preservation, retirement,
+manual-state reporting, secret non-disclosure, and rollback? For each active
+harness and operation, what outcome-specific evidence proves managed
+convergence where supported and the declared manual, unsupported, or omitted
+outcome otherwise?
