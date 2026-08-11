@@ -14,4 +14,6 @@ production implementation is designed in detail? For representative native
 plugin routes, can the adapter suppress background updates and restore an exact
 artifact version; when it cannot, does the fixture retain an explicit
 native-rolling restore class and an `operator_action` or `unavailable`
-disposition instead of claiming immutable convergence?
+disposition instead of claiming immutable convergence? Do generated MCP
+overlays, lock diffs, and diagnostics contain only secret references or variable
+names and never secret values?

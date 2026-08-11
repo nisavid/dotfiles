@@ -27,9 +27,19 @@ Which fixtures reject missing or conflicting provenance owners and verify
 exactly one owner and its restore evidence per active provider route? Which
 fixtures reject an unlisted overlap or incomplete supplementary route?
 
+Which fixtures prove immutable content-digest verification, stale catalog-lock
+rejection before mutation, and zero mutation when an invalid entry appears last
+in the resolved plan? Which fixtures prove unmanaged retirement cannot delete
+runtime state and generated prototype artifacts never disclose secret values?
+
 How do partial-apply fixtures inject an adapter failure after each checkpoint,
 verify that processing stops, confirm compensation occurs only where declared,
-and prove that audit-before-retry converges idempotently? How do migration
-fixtures inject failure after legacy-projector replacement, each Claude-link
+and prove that audit-before-retry converges idempotently? How do they also cover
+mutation followed by failure before checkpoint persistence, checkpoint-write
+failure, and compensation failure without duplicate or destructive replay? How
+do migration fixtures inject failure after legacy-projector replacement, each Claude-link
 removal, plugin installation and enablement, MCP reconciliation, and plugin
-selection, then verify restoration of every captured state item?
+selection, then verify restoration of every captured state item? Which
+concurrent-change fixtures exercise compare-before-mutate and
+compare-before-restore on every affected surface and prove external changes are
+preserved?

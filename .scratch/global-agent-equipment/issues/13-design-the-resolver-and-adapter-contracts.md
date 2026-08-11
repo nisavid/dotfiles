@@ -16,6 +16,7 @@ dedicated helpers, Claude Code, Codex, Cursor, and direct MCP files? How does
 apply reconcile all accepted entries while adopt changes authored ownership
 only for existing unmanaged runtime state? How do adapters report operation
 dispositions for every active route without changing the provider selection's
-harness coverage outcome? What deterministic order, durable checkpoints,
-failure reports, declared compensation boundaries, and audit-before-retry rules
-make partial apply failures safely convergent without claiming global atomicity?
+harness coverage outcome? Which full-plan validations run before the first
+runtime checkpoint? What deterministic order, durable checkpoints, failure
+reports, declared compensation boundaries, and audit-before-retry rules make
+partial apply failures safely convergent without claiming global atomicity?
