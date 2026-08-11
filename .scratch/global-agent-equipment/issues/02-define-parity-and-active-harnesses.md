@@ -14,4 +14,4 @@ that the coverage matrix records exactly one harness coverage outcome for every
 cataloged equipment identity and active harness: managed provider, manually
 managed provider, intentional omission, or unsupported. It does not require
 identical packaging or artifacts when harness capabilities differ. Operation
-capability is recorded separately on selected provider routes.
+dispositions are recorded separately for every active provider route.

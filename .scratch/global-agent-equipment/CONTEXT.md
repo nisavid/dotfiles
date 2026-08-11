@@ -19,21 +19,27 @@ One concrete route by which a distribution supplies an equipment identity to a
 harness.
 _Avoid_: Package, projection
 
+**Provider selection**:
+One preferred provider route plus zero or more explicitly allowed supplementary
+routes for an equipment identity in one harness. Every member is an active
+provider route.
+_Avoid_: Inferred overlap, interchangeable providers
+
 **Harness coverage outcome**:
 The single declared result for an equipment identity in one harness: managed
 provider, manually managed provider, intentional omission, or unsupported.
 _Avoid_: Operation capability, provider preference
 
 **Operation disposition**:
-The declared capability of a selected provider route for one operation:
+The declared capability of an active provider route for one operation:
 automated, operator action, or unavailable.
 _Avoid_: Harness coverage outcome, manual provider
 
 **Provenance owner**:
 The one source or native manager responsible for the artifact and restore
-evidence of a selected provider route.
+evidence of an active provider route.
 _Avoid_: Logical package owner, runtime cache
 
 **Projection**:
-A harness-visible entry derived from a selected provider route.
+A harness-visible entry derived from an active provider route.
 _Avoid_: Source of truth, installed source

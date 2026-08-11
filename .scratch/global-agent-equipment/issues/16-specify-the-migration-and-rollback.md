@@ -11,7 +11,12 @@ Claude skill synchronizer with a catalog-driven projection before removing any
 Claude link, then remove only catalog-identified Matt symlinks under
 `~/.claude/skills`, install and enable the Claude Matt plugin, and reconcile MCP
 and plugin selections? Before mutation, capture every affected provider route,
-ownership, installation, enablement, MCP-selection, and plugin-selection state.
+its provenance owner, restore class, immutable target or native-rolling channel
+and observed version, installation, enablement, MCP-selection, plugin-selection,
+and legacy-projector state. Also record every candidate `~/.claude/skills`
+entry's path, type, link text, resolved target or broken state, and provenance.
+Immediately before removing a link, compare its current identity with that
+record; on mismatch, skip deletion, report drift, and stop for replanning.
 
 On failed verification, restore all of them, including pre-existing plugin
 enablement, and uninstall the plugin only when it was absent before migration;
