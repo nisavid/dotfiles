@@ -12,4 +12,6 @@ Claude skill synchronizer, remove only catalog-identified Matt symlinks under
 `~/.agents/skills`, install and enable the Claude Matt plugin, reconcile MCP
 and plugin selections, and restore the captured pre-migration provider and
 ownership state if verification fails? Rollback must uninstall the plugin only
-when this migration installed it.
+when this migration installed it. The migration and rollback must verify that
+every pre-existing `~/.agents/skills` entry preserves its type, symlink text,
+resolved target, and content identity.

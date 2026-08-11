@@ -9,6 +9,6 @@ Blocked by: 12
 What pure resolution phases, diagnostics, ownership boundaries, adapter input
 and output contracts, supported component controls, idempotency rules, and
 native auto-update suppression or detection, manager-driven-drift
-classification, and audit, apply, update, and import command behavior should
-connect the catalog to `skills`, dedicated helpers, Claude Code, Codex, Cursor,
-and direct MCP files?
+classification without assuming suppression support, and audit, apply, update,
+import, and adopt command behavior should connect the catalog to `skills`,
+dedicated helpers, Claude Code, Codex, Cursor, and direct MCP files?

@@ -12,11 +12,14 @@ and updates behave?
 
 The catalog supports both source-wide `all` selection and explicit component
 selection. Both resolve to a reviewed lock snapshot that enumerates the exact
-equipment and immutable source revisions or package versions. Ordinary apply
-converges to that lock and may use the network only to restore missing pinned
-artifacts. A separate explicit update operation refreshes sources, expands
-`all`, produces a reviewable lock diff, and never silently changes ordinary
-apply's target. A provider that follows a native rolling channel or performs
-background updates must not silently report immutable convergence: its adapter
-must suppress that behavior when supported, otherwise detect and classify the
-result as manager-driven drift with the observed version and remediation.
+equipment and each provider's restore class. An `immutable` provider records a
+source revision or package version plus a reproducible artifact route; ordinary
+apply converges to that target and may use the network only to restore the
+pinned artifact. A `native_rolling` provider records its channel and observed
+version but cannot claim deterministic restoration of that version. A separate
+explicit update operation refreshes immutable sources, expands `all`, and
+produces a reviewable lock diff without silently changing ordinary apply's
+immutable targets. An adapter must suppress native background updates when
+supported; otherwise it detects and classifies manager-driven drift, reports
+the observed version and remediation, and treats immutable restore through
+that provider as manual or unsupported.

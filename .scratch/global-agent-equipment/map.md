@@ -35,10 +35,12 @@ migration; execution resumes from the handoff produced by
 - [Define provider selection and deduplication][decision-05] — resolve the
   effective component set after selective controls, then reject unexplained overlap.
 - [Define inventory selection and version semantics][decision-06] — support
-  source-wide and explicit selection, resolve both to reviewed immutable locks,
-  and update separately from ordinary apply.
+  source-wide and explicit selection, lock reproducible targets immutably,
+  classify native-rolling providers explicitly, and update separately from
+  ordinary apply.
 - [Choose lock and provenance authority][decision-07] — use a generated
-  repo-owned lock for restore while retaining native manager locks as provenance.
+  repo-owned lock for deterministic restore where providers expose reproducible
+  artifacts while retaining native manager locks as provenance.
 - [Define reconciliation and drift boundaries][decision-08] — mutate only
   catalog-managed state, report other drift, and require explicit adoption.
 - [Scope the first implementation slice][decision-09] — inventory all global
