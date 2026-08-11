@@ -6,7 +6,7 @@ Produce a reviewer-ready, decision-complete architecture, acceptance matrix,
 and sequenced implementation handoff for chezmoi-managed global agent
 equipment, including the Matt Pocock migration. The map ends before runtime
 migration; execution resumes from the handoff produced by
-[Produce the implementation handoff](./issues/18-produce-the-implementation-handoff.md).
+[Produce the implementation handoff](https://github.com/nisavid/dotfiles/issues/61).
 
 ## Notes
 
@@ -57,6 +57,16 @@ migration; execution resumes from the handoff produced by
 - [Research current harness and manager behavior][decision-11] — base the
   design on verified Claude, Codex, Cursor, chezmoi, and `skills` constraints.
 
+## Open work
+
+- [#55: Design the catalog and lock schema](https://github.com/nisavid/dotfiles/issues/55) — current implementation frontier.
+- [#56: Design the resolver and adapter contracts](https://github.com/nisavid/dotfiles/issues/56) — depends on #55.
+- [#57: Prototype Matt, MCP, and update-channel resolution](https://github.com/nisavid/dotfiles/issues/57) — depends on #55 and #56.
+- [#58: Classify the initial live inventory](https://github.com/nisavid/dotfiles/issues/58) — depends on #55 and #57.
+- [#59: Specify the migration and rollback](https://github.com/nisavid/dotfiles/issues/59) — depends on #56, #57, and #58.
+- [#60: Define the acceptance matrix](https://github.com/nisavid/dotfiles/issues/60) — depends on #56–#59.
+- [#61: Produce the implementation handoff](https://github.com/nisavid/dotfiles/issues/61) — depends on #59 and #60.
+
 ## Not yet specified
 
 - Whether a future standard Agent Plugin format can replace parts of the
@@ -79,14 +89,14 @@ migration; execution resumes from the handoff produced by
   rules in the first slice, except for modeling plugin coverage and conflicts.
 - Harnesses other than Claude Code, Codex, and Cursor in the first program.
 
-[decision-01]: ./issues/01-bound-the-destination.md
-[decision-02]: ./issues/02-define-parity-and-active-harnesses.md
-[decision-03]: ./issues/03-choose-catalog-and-runtime-ownership.md
-[decision-04]: ./issues/04-define-equipment-identities-and-providers.md
-[decision-05]: ./issues/05-define-provider-selection-and-deduplication.md
-[decision-06]: ./issues/06-define-inventory-selection-and-version-semantics.md
-[decision-07]: ./issues/07-choose-lock-and-provenance-authority.md
-[decision-08]: ./issues/08-define-reconciliation-and-drift-boundaries.md
-[decision-09]: ./issues/09-scope-the-first-implementation-slice.md
-[decision-10]: ./issues/10-choose-the-reconciliation-architecture.md
-[decision-11]: ./issues/11-research-current-harness-and-manager-behavior.md
+[decision-01]: https://github.com/nisavid/dotfiles/issues/44
+[decision-02]: https://github.com/nisavid/dotfiles/issues/45
+[decision-03]: https://github.com/nisavid/dotfiles/issues/46
+[decision-04]: https://github.com/nisavid/dotfiles/issues/47
+[decision-05]: https://github.com/nisavid/dotfiles/issues/48
+[decision-06]: https://github.com/nisavid/dotfiles/issues/49
+[decision-07]: https://github.com/nisavid/dotfiles/issues/50
+[decision-08]: https://github.com/nisavid/dotfiles/issues/51
+[decision-09]: https://github.com/nisavid/dotfiles/issues/52
+[decision-10]: https://github.com/nisavid/dotfiles/issues/53
+[decision-11]: https://github.com/nisavid/dotfiles/issues/54
