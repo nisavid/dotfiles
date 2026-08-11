@@ -36,7 +36,8 @@ migration; execution resumes from the handoff produced by
   supply it.
 - [Define provider selection and deduplication][decision-05] — resolve the
   effective component set after selective controls, keep provider selection
-  separate from operation disposition, then reject unexplained overlap.
+  separate from operation disposition, declare runtime control ownership on
+  every active route, then reject unexplained overlap.
 - [Define inventory selection and version semantics][decision-06] — support
   source-wide and explicit selection, lock reproducible targets immutably,
   classify native-rolling routes explicitly, and update separately from
@@ -45,11 +46,13 @@ migration; execution resumes from the handoff produced by
   repo-owned lock for deterministic restore where providers expose reproducible
   artifacts while retaining native manager locks as provenance.
 - [Define reconciliation and drift boundaries][decision-08] — mutate only
-  catalog-managed state, report other drift, and require explicit adoption.
+  catalog-managed, reconciler-owned routes, keep operator-owned routes
+  verify-and-report-only, report other drift, and require explicit adoption.
 - [Scope the first implementation slice][decision-09] — inventory all global
   equipment and actively reconcile skills, plugins, and MCPs without secrets.
 - [Choose the reconciliation architecture][decision-10] — use one catalog,
-  one resolver and lock, and native manager and harness adapters.
+  one resolver and lock, and native manager and harness adapters with
+  full-plan ownership validation before mutation.
 - [Research current harness and manager behavior][decision-11] — base the
   design on verified Claude, Codex, Cursor, chezmoi, and `skills` constraints.
 
