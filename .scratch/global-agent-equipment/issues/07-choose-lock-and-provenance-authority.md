@@ -11,9 +11,10 @@ deterministic restore and harness projections?
 ## Answer
 
 A generated repo-owned resolved lock governs exact equipment inventory,
-provider coverage, harness projections, and deterministic restore for providers
-with reproducible artifact routes. It also records native-rolling, manual, and
-unsupported outcomes without promising exact fresh-home restoration for them.
+provider-route coverage, harness projections, and deterministic restore for
+routes with reproducible artifacts. It also records native-rolling restore
+classes and non-automated operation dispositions without promising exact
+fresh-home restoration for those operations.
 The native global `skills` lock remains useful manager-owned provenance and
 import evidence; the update workflow should derive from it where useful instead
 of hand-copying its inventory. It is not the sole authority because installed

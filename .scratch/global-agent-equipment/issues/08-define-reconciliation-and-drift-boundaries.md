@@ -16,10 +16,11 @@ owned by the catalog. It preserves and reports unmanaged or unknown state;
 adoption is explicit. `import` discovers unmanaged state and proposes catalog
 entries without claiming ownership or mutating runtime state. A separate
 `adopt` operation records a reviewable ownership transfer in authored state;
-only a later apply may reconcile it. A `manual` outcome has a supported provider
-route but requires operator action. An `unsupported` outcome has no supported
-provider for the operation and selects an explicit no-provider value. For
-example, Cursor's supported UI route may be manual, while editing its opaque
-user-plugin database is unsupported. Both are verified through supported
-observable surfaces where possible and reported with remediation instructions
-instead of editing caches or databases.
+only a later apply may reconcile it. A selected provider route declares one
+operation disposition per operation: `automated`, `operator_action`, or
+`unavailable`. For example, a Cursor UI install route can have
+`operator_action` installation while direct opaque-database editing remains an
+`unavailable` operation; neither changes the route's harness coverage outcome.
+Non-automated dispositions are verified through supported observable surfaces
+where possible and reported with remediation instructions instead of editing
+caches or databases.
