@@ -18,14 +18,16 @@ metadata, symlink-text, resolved-target, broken-symlink-state, and content
 preservation, retirement, non-automated-state reporting, secret non-disclosure,
 and rollback?
 
-How does the coverage matrix prove exactly one harness coverage outcome for
-every equipment identity × harness, including the provider selection or
-explicit no-provider value? For every active provider route × operation, how
+How does the coverage matrix prove exactly one canonical harness coverage record
+for every equipment identity × harness, including exactly one outcome and its
+complete provider selection and active-route records or exact `no_provider`?
+For every active provider route × operation, how
 does a separate operation matrix prove exactly one `automated`,
 `operator_action`, or `unavailable` disposition with outcome-specific evidence?
 Which fixtures reject missing or conflicting provenance owners and verify
 exactly one owner and its restore evidence per active provider route? Which
-fixtures reject an unlisted overlap or incomplete supplementary route?
+fixtures reject a bare coverage outcome, single-route shorthand, unlisted
+overlap, or incomplete preferred or supplementary active-route record?
 Which fixtures prove `managed_provider` has only reconciler-owned routes,
 `manually_managed_provider` has at least one operator-owned route, and every
 operator-owned route rejects automated mutating dispositions before any runtime
@@ -37,10 +39,13 @@ in the resolved plan? Which fixtures prove unmanaged retirement cannot delete
 runtime state and generated prototype artifacts never disclose secret values?
 
 How do partial-apply fixtures inject an adapter failure after each checkpoint,
-verify that processing stops, confirm compensation occurs only where declared,
-and prove that audit-before-retry converges idempotently? How do they also cover
-mutation followed by failure before checkpoint persistence, checkpoint-write
-failure, and compensation failure without duplicate or destructive replay? How
+verify that processing stops, and prove that audit-before-retry converges
+idempotently? Which full-plan fixture places an automated mutation without
+declared pre-state-restoring compensation last and proves rejection with zero
+mutation? For accepted plans, how do fixtures confirm every applied mutation is
+compensated from its durable checkpoint? How do they also cover mutation followed
+by failure before checkpoint persistence, checkpoint-write failure, and
+compensation failure without duplicate or destructive replay? How
 do migration fixtures inject failure after legacy-projector replacement, each Claude-link
 removal, plugin installation and enablement, MCP reconciliation, and plugin
 selection, then verify restoration of every captured state item? Which

@@ -31,6 +31,16 @@ serialized literal is `managed_provider`, `manually_managed_provider`,
 `intentional_omission`, or `unsupported`.
 _Avoid_: Operation capability, provider preference
 
+**Harness coverage record**:
+The complete record for one equipment identity in one harness: exactly one
+harness coverage outcome plus either a provider selection for a provider
+outcome or the exact `no_provider` value for `intentional_omission` and
+`unsupported`. Every active route in a selection carries its route identity,
+route control owner, provenance owner and restore evidence, operation
+dispositions, and required provider, activation, artifact, and compensation
+metadata.
+_Avoid_: Bare coverage outcome, single provider route
+
 **Operation disposition**:
 The declared capability of an active provider route for one operation. Its
 exact serialized literal is `automated`, `operator_action`, or `unavailable`.
