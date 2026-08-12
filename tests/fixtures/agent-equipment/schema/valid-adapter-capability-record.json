@@ -1,6 +1,9 @@
 {
-  "record_type": "CapabilityRecord",
-  "record": {
+  "record_type": "CapabilityDiscovery",
+  "result": {
+    "status": "ok",
+    "records": [
+      {
     "contract_version": "adapter-contract-v1",
     "capability_identity": "capability:claude-native-plugin-v1",
     "adapter_identity": "adapter:claude-native-plugin",
@@ -52,16 +55,15 @@
         "compensation": "restore_captured_pre_state"
       },
       "remove": {
-        "mode": "automated",
-        "compare_before_mutate": true,
-        "idempotency": "state_convergent",
-        "compensation": "restore_captured_pre_state"
+        "mode": "operator_action",
+        "operator_action_reference": "docs/agent-equipment/ARCHITECTURE.md#route-and-control-capability-matrix"
       },
       "restore": {
         "mode": "unavailable"
       },
       "suppress_native_update": {
-        "mode": "unavailable"
+        "mode": "operator_action",
+        "operator_action_reference": "docs/agent-equipment/ARCHITECTURE.md#route-and-control-capability-matrix"
       }
     },
     "component_control_support": {
@@ -82,7 +84,7 @@
       "baseline_comparison": "automated",
       "suppression": {
         "mode": "operator_action",
-        "operator_action_reference": "docs/agent-equipment/OPERATIONS.md#claude-native-update"
+        "operator_action_reference": "docs/agent-equipment/ARCHITECTURE.md#route-and-control-capability-matrix"
       },
       "suppression_scope": "manager"
     },
@@ -91,11 +93,13 @@
       "runtime_observation": "adapter-contract-v1",
       "planned_action": "adapter-contract-v1",
       "mutation_receipt": "adapter-contract-v1",
-      "captured_state": "captured-state/v1"
+      "captured_state": "agent-equipment-captured-state/v1"
     },
     "automated_control_owners": [
       "reconciler_owned"
     ],
-    "capability_digest": "sha256:c0aad6935698f92f477aa2cd9969f83256d13e9c2db4e43ddd6345e3f75c7677"
+    "capability_digest": "sha256:52ddfe33697f159dca8d1d170259f430071760c22e0a10b46404ac4e11c05844"
+      }
+    ]
   }
 }

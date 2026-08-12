@@ -21,7 +21,7 @@
       "source": {
         "kind": "native_manager",
         "manager": "claude",
-        "package": "example-matt",
+        "package": "example-matt@official",
         "channel": "stable"
       },
       "selection": {"equipment": ["plugin:example/matt"]},
@@ -114,7 +114,7 @@
                   "activation_group": "activation:example/native-plugin-claude",
                   "component_controls": [],
                   "control_owner": "operator_owned",
-                  "provenance": {"owner": "manager:claude-plugins"},
+                  "provenance": {"owner": "manager:claude-plugins/example-matt@official"},
                   "restore": {
                     "class": "native_rolling",
                     "channel": "stable",

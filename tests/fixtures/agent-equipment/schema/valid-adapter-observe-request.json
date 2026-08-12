@@ -7,15 +7,16 @@
     "command": "apply",
     "purpose": "capture_pre_state",
     "candidate_identity": "candidate:001",
+    "implementation_manifest_digest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
     "catalog_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "lock_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     "plan_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     "capability_identity": "capability:claude-native-plugin-v1",
-    "capability_digest": "sha256:c0aad6935698f92f477aa2cd9969f83256d13e9c2db4e43ddd6345e3f75c7677",
+    "capability_digest": "sha256:52ddfe33697f159dca8d1d170259f430071760c22e0a10b46404ac4e11c05844",
     "manager_version_evidence_digest": "sha256:c4a5a1878eff82ef30703ca6a3da147e4b94b66dc2b337867e04e3d4ebf1935d",
     "harness": "claude",
     "route_identity": "route:claude/mattpocock-plugin",
-    "route_digest": "sha256:942290fc6dd339c0bb1bae03b5f7163c03adb475ff9147110b8791d903359bbf",
+    "route_digest": "sha256:8dae6009e89f333a632ca158cafc03c5d6f416238c696deef534b09c3801140a",
     "route_record": {
       "identity": "route:claude/mattpocock-plugin",
       "distribution": "distribution:mattpocock/claude-plugin",
@@ -29,7 +30,7 @@
       "component_controls": [],
       "control_owner": "reconciler_owned",
       "provenance": {
-        "owner": "manager:claude-plugins/claude-plugins-official"
+        "owner": "manager:claude-plugins/mattpocock-skills@claude-plugins-official"
       },
       "restore": {
         "channel": "stable",
@@ -44,7 +45,7 @@
         "configure": {"disposition": "unavailable"},
         "enable": {"disposition": "automated", "compensation": "restore_captured_pre_state"},
         "disable": {"disposition": "automated", "compensation": "restore_captured_pre_state"},
-        "remove": {"disposition": "automated", "compensation": "restore_captured_pre_state"},
+        "remove": {"disposition": "operator_action"},
         "restore": {"disposition": "unavailable"},
         "suppress_native_update": {"disposition": "operator_action"}
       },
@@ -53,6 +54,7 @@
     "equipment_identities": [
       "plugin:mattpocock/claude"
     ],
+    "controlled_equipment_identities": [],
     "activation_group": "activation:claude/mattpocock-plugin",
     "surface_scope": [
       "surface:route:claude/mattpocock-plugin/plugin:mattpocock/claude"

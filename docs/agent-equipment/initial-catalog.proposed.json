@@ -40,8 +40,7 @@
                   "disposition": "automated"
                 },
                 "remove": {
-                  "compensation": "restore_captured_pre_state",
-                  "disposition": "automated"
+                  "disposition": "operator_action"
                 },
                 "restore": {
                   "disposition": "unavailable"
@@ -51,7 +50,7 @@
                 }
               },
               "provenance": {
-                "owner": "manager:claude-plugins/chrome-devtools"
+                "owner": "manager:claude-plugins/chrome-devtools-mcp@claude-plugins-official"
               },
               "provider": {
                 "kind": "native_plugin",
@@ -279,7 +278,7 @@
               "provider": {
                 "arguments": [
                   {
-                    "literal": "context7"
+                    "secret_profile_reference": "context7"
                   },
                   {
                     "literal": "--"
@@ -370,7 +369,7 @@
               "provider": {
                 "arguments": [
                   {
-                    "literal": "context7"
+                    "secret_profile_reference": "context7"
                   },
                   {
                     "literal": "--"
@@ -461,7 +460,7 @@
               "provider": {
                 "arguments": [
                   {
-                    "literal": "context7"
+                    "secret_profile_reference": "context7"
                   },
                   {
                     "literal": "--"
@@ -552,7 +551,7 @@
               "provider": {
                 "arguments": [
                   {
-                    "literal": "firecrawl"
+                    "secret_profile_reference": "firecrawl"
                   },
                   {
                     "literal": "--"
@@ -643,7 +642,7 @@
               "provider": {
                 "arguments": [
                   {
-                    "literal": "firecrawl"
+                    "secret_profile_reference": "firecrawl"
                   },
                   {
                     "literal": "--"
@@ -734,7 +733,7 @@
               "provider": {
                 "arguments": [
                   {
-                    "literal": "firecrawl"
+                    "secret_profile_reference": "firecrawl"
                   },
                   {
                     "literal": "--"
@@ -834,8 +833,7 @@
                   "disposition": "automated"
                 },
                 "remove": {
-                  "compensation": "restore_captured_pre_state",
-                  "disposition": "automated"
+                  "disposition": "operator_action"
                 },
                 "restore": {
                   "disposition": "unavailable"
@@ -845,7 +843,7 @@
                 }
               },
               "provenance": {
-                "owner": "manager:codex-plugins/github"
+                "owner": "manager:codex-plugins/github@openai-curated"
               },
               "provider": {
                 "kind": "native_plugin",
@@ -919,7 +917,7 @@
               "provider": {
                 "arguments": [
                   {
-                    "literal": "github"
+                    "secret_profile_reference": "github"
                   },
                   {
                     "literal": "--"
@@ -1024,7 +1022,7 @@
               "provider": {
                 "arguments": [
                   {
-                    "literal": "github"
+                    "secret_profile_reference": "github"
                   },
                   {
                     "literal": "--"
@@ -1129,7 +1127,7 @@
               "provider": {
                 "arguments": [
                   {
-                    "literal": "greptile"
+                    "secret_profile_reference": "greptile"
                   },
                   {
                     "literal": "--"
@@ -1217,8 +1215,7 @@
                   "disposition": "automated"
                 },
                 "remove": {
-                  "compensation": "restore_captured_pre_state",
-                  "disposition": "automated"
+                  "disposition": "operator_action"
                 },
                 "restore": {
                   "disposition": "unavailable"
@@ -1228,7 +1225,7 @@
                 }
               },
               "provenance": {
-                "owner": "manager:claude-plugins/claude-plugins-official"
+                "owner": "manager:claude-plugins/mattpocock-skills@claude-plugins-official"
               },
               "provider": {
                 "kind": "native_plugin",
@@ -1295,7 +1292,7 @@
                 }
               },
               "provenance": {
-                "owner": "source:mattpocock/skills"
+                "owner": "source:mattpocock/standalone"
               },
               "provider": {
                 "canonical_root": "agents_skills",
@@ -1360,7 +1357,7 @@
                 }
               },
               "provenance": {
-                "owner": "source:mattpocock/skills"
+                "owner": "source:mattpocock/standalone"
               },
               "provider": {
                 "canonical_root": "agents_skills",
@@ -3668,7 +3665,7 @@
         "provider": {
           "arguments": [
             {
-              "literal": "github"
+              "secret_profile_reference": "github"
             },
             {
               "literal": "--"

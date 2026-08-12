@@ -1,5 +1,5 @@
 {
-  "catalog_digest": "sha256:b0441be716f89c98df131b7cd86e3e9f5cdc492c92aae77245c15a95dac9e071",
+  "catalog_digest": "sha256:c8e9141c8ced058c8d533f8cfdd026166a2b80b1c96484a366adae4c5c65ac67",
   "coverage": [
     {
       "equipment_identity": "mcp:chrome-devtools/server",
@@ -36,8 +36,7 @@
                   "disposition": "automated"
                 },
                 "remove": {
-                  "compensation": "restore_captured_pre_state",
-                  "disposition": "automated"
+                  "disposition": "operator_action"
                 },
                 "restore": {
                   "disposition": "unavailable"
@@ -47,7 +46,7 @@
                 }
               },
               "provenance": {
-                "owner": "manager:claude-plugins/chrome-devtools"
+                "owner": "manager:claude-plugins/chrome-devtools-mcp@claude-plugins-official"
               },
               "provider": {
                 "kind": "native_plugin",
@@ -275,7 +274,7 @@
               "provider": {
                 "arguments": [
                   {
-                    "literal": "context7"
+                    "secret_profile_reference": "context7"
                   },
                   {
                     "literal": "--"
@@ -366,7 +365,7 @@
               "provider": {
                 "arguments": [
                   {
-                    "literal": "context7"
+                    "secret_profile_reference": "context7"
                   },
                   {
                     "literal": "--"
@@ -457,7 +456,7 @@
               "provider": {
                 "arguments": [
                   {
-                    "literal": "context7"
+                    "secret_profile_reference": "context7"
                   },
                   {
                     "literal": "--"
@@ -548,7 +547,7 @@
               "provider": {
                 "arguments": [
                   {
-                    "literal": "firecrawl"
+                    "secret_profile_reference": "firecrawl"
                   },
                   {
                     "literal": "--"
@@ -639,7 +638,7 @@
               "provider": {
                 "arguments": [
                   {
-                    "literal": "firecrawl"
+                    "secret_profile_reference": "firecrawl"
                   },
                   {
                     "literal": "--"
@@ -730,7 +729,7 @@
               "provider": {
                 "arguments": [
                   {
-                    "literal": "firecrawl"
+                    "secret_profile_reference": "firecrawl"
                   },
                   {
                     "literal": "--"
@@ -821,7 +820,7 @@
               "provider": {
                 "arguments": [
                   {
-                    "literal": "github"
+                    "secret_profile_reference": "github"
                   },
                   {
                     "literal": "--"
@@ -935,8 +934,7 @@
                   "disposition": "automated"
                 },
                 "remove": {
-                  "compensation": "restore_captured_pre_state",
-                  "disposition": "automated"
+                  "disposition": "operator_action"
                 },
                 "restore": {
                   "disposition": "unavailable"
@@ -946,7 +944,7 @@
                 }
               },
               "provenance": {
-                "owner": "manager:codex-plugins/github"
+                "owner": "manager:codex-plugins/github@openai-curated"
               },
               "provider": {
                 "kind": "native_plugin",
@@ -1020,7 +1018,7 @@
               "provider": {
                 "arguments": [
                   {
-                    "literal": "github"
+                    "secret_profile_reference": "github"
                   },
                   {
                     "literal": "--"
@@ -1125,7 +1123,7 @@
               "provider": {
                 "arguments": [
                   {
-                    "literal": "greptile"
+                    "secret_profile_reference": "greptile"
                   },
                   {
                     "literal": "--"
@@ -1263,8 +1261,7 @@
                   "disposition": "automated"
                 },
                 "remove": {
-                  "compensation": "restore_captured_pre_state",
-                  "disposition": "automated"
+                  "disposition": "operator_action"
                 },
                 "restore": {
                   "disposition": "unavailable"
@@ -1274,7 +1271,7 @@
                 }
               },
               "provenance": {
-                "owner": "manager:codex-plugins/github"
+                "owner": "manager:codex-plugins/github@openai-curated"
               },
               "provider": {
                 "kind": "native_plugin",
@@ -1339,8 +1336,7 @@
                   "disposition": "automated"
                 },
                 "remove": {
-                  "compensation": "restore_captured_pre_state",
-                  "disposition": "automated"
+                  "disposition": "operator_action"
                 },
                 "restore": {
                   "disposition": "unavailable"
@@ -1350,7 +1346,7 @@
                 }
               },
               "provenance": {
-                "owner": "manager:claude-plugins/chrome-devtools"
+                "owner": "manager:claude-plugins/chrome-devtools-mcp@claude-plugins-official"
               },
               "provider": {
                 "kind": "native_plugin",
@@ -1457,8 +1453,7 @@
                   "disposition": "automated"
                 },
                 "remove": {
-                  "compensation": "restore_captured_pre_state",
-                  "disposition": "automated"
+                  "disposition": "operator_action"
                 },
                 "restore": {
                   "disposition": "unavailable"
@@ -1468,7 +1463,7 @@
                 }
               },
               "provenance": {
-                "owner": "manager:codex-plugins/github"
+                "owner": "manager:codex-plugins/github@openai-curated"
               },
               "provider": {
                 "kind": "native_plugin",
@@ -1533,8 +1528,7 @@
                   "disposition": "automated"
                 },
                 "remove": {
-                  "compensation": "restore_captured_pre_state",
-                  "disposition": "automated"
+                  "disposition": "operator_action"
                 },
                 "restore": {
                   "disposition": "unavailable"
@@ -1544,7 +1538,7 @@
                 }
               },
               "provenance": {
-                "owner": "manager:claude-plugins/claude-plugins-official"
+                "owner": "manager:claude-plugins/mattpocock-skills@claude-plugins-official"
               },
               "provider": {
                 "kind": "native_plugin",
@@ -1617,8 +1611,7 @@
                   "disposition": "automated"
                 },
                 "remove": {
-                  "compensation": "restore_captured_pre_state",
-                  "disposition": "automated"
+                  "disposition": "operator_action"
                 },
                 "restore": {
                   "disposition": "unavailable"
@@ -1628,7 +1621,7 @@
                 }
               },
               "provenance": {
-                "owner": "manager:claude-plugins/chrome-devtools"
+                "owner": "manager:claude-plugins/chrome-devtools-mcp@claude-plugins-official"
               },
               "provider": {
                 "kind": "native_plugin",
@@ -1701,8 +1694,7 @@
                   "disposition": "automated"
                 },
                 "remove": {
-                  "compensation": "restore_captured_pre_state",
-                  "disposition": "automated"
+                  "disposition": "operator_action"
                 },
                 "restore": {
                   "disposition": "unavailable"
@@ -1712,7 +1704,7 @@
                 }
               },
               "provenance": {
-                "owner": "manager:claude-plugins/chrome-devtools"
+                "owner": "manager:claude-plugins/chrome-devtools-mcp@claude-plugins-official"
               },
               "provider": {
                 "kind": "native_plugin",
@@ -1785,8 +1777,7 @@
                   "disposition": "automated"
                 },
                 "remove": {
-                  "compensation": "restore_captured_pre_state",
-                  "disposition": "automated"
+                  "disposition": "operator_action"
                 },
                 "restore": {
                   "disposition": "unavailable"
@@ -1796,7 +1787,7 @@
                 }
               },
               "provenance": {
-                "owner": "manager:claude-plugins/chrome-devtools"
+                "owner": "manager:claude-plugins/chrome-devtools-mcp@claude-plugins-official"
               },
               "provider": {
                 "kind": "native_plugin",
@@ -1869,8 +1860,7 @@
                   "disposition": "automated"
                 },
                 "remove": {
-                  "compensation": "restore_captured_pre_state",
-                  "disposition": "automated"
+                  "disposition": "operator_action"
                 },
                 "restore": {
                   "disposition": "unavailable"
@@ -1880,7 +1870,7 @@
                 }
               },
               "provenance": {
-                "owner": "manager:claude-plugins/chrome-devtools"
+                "owner": "manager:claude-plugins/chrome-devtools-mcp@claude-plugins-official"
               },
               "provider": {
                 "kind": "native_plugin",
@@ -1953,8 +1943,7 @@
                   "disposition": "automated"
                 },
                 "remove": {
-                  "compensation": "restore_captured_pre_state",
-                  "disposition": "automated"
+                  "disposition": "operator_action"
                 },
                 "restore": {
                   "disposition": "unavailable"
@@ -1964,7 +1953,7 @@
                 }
               },
               "provenance": {
-                "owner": "manager:claude-plugins/chrome-devtools"
+                "owner": "manager:claude-plugins/chrome-devtools-mcp@claude-plugins-official"
               },
               "provider": {
                 "kind": "native_plugin",
@@ -2037,8 +2026,7 @@
                   "disposition": "automated"
                 },
                 "remove": {
-                  "compensation": "restore_captured_pre_state",
-                  "disposition": "automated"
+                  "disposition": "operator_action"
                 },
                 "restore": {
                   "disposition": "unavailable"
@@ -2048,7 +2036,7 @@
                 }
               },
               "provenance": {
-                "owner": "manager:claude-plugins/chrome-devtools"
+                "owner": "manager:claude-plugins/chrome-devtools-mcp@claude-plugins-official"
               },
               "provider": {
                 "kind": "native_plugin",
@@ -2155,8 +2143,7 @@
                   "disposition": "automated"
                 },
                 "remove": {
-                  "compensation": "restore_captured_pre_state",
-                  "disposition": "automated"
+                  "disposition": "operator_action"
                 },
                 "restore": {
                   "disposition": "unavailable"
@@ -2166,7 +2153,7 @@
                 }
               },
               "provenance": {
-                "owner": "manager:codex-plugins/github"
+                "owner": "manager:codex-plugins/github@openai-curated"
               },
               "provider": {
                 "kind": "native_plugin",
@@ -2265,8 +2252,7 @@
                   "disposition": "automated"
                 },
                 "remove": {
-                  "compensation": "restore_captured_pre_state",
-                  "disposition": "automated"
+                  "disposition": "operator_action"
                 },
                 "restore": {
                   "disposition": "unavailable"
@@ -2276,7 +2262,7 @@
                 }
               },
               "provenance": {
-                "owner": "manager:codex-plugins/github"
+                "owner": "manager:codex-plugins/github@openai-curated"
               },
               "provider": {
                 "kind": "native_plugin",
@@ -2375,8 +2361,7 @@
                   "disposition": "automated"
                 },
                 "remove": {
-                  "compensation": "restore_captured_pre_state",
-                  "disposition": "automated"
+                  "disposition": "operator_action"
                 },
                 "restore": {
                   "disposition": "unavailable"
@@ -2386,7 +2371,7 @@
                 }
               },
               "provenance": {
-                "owner": "manager:codex-plugins/github"
+                "owner": "manager:codex-plugins/github@openai-curated"
               },
               "provider": {
                 "kind": "native_plugin",
@@ -2475,8 +2460,7 @@
                   "disposition": "automated"
                 },
                 "remove": {
-                  "compensation": "restore_captured_pre_state",
-                  "disposition": "automated"
+                  "disposition": "operator_action"
                 },
                 "restore": {
                   "disposition": "unavailable"
@@ -2486,7 +2470,7 @@
                 }
               },
               "provenance": {
-                "owner": "manager:claude-plugins/claude-plugins-official"
+                "owner": "manager:claude-plugins/mattpocock-skills@claude-plugins-official"
               },
               "provider": {
                 "kind": "native_plugin",
@@ -2553,7 +2537,7 @@
                 }
               },
               "provenance": {
-                "owner": "source:mattpocock/skills"
+                "owner": "source:mattpocock/standalone"
               },
               "provider": {
                 "canonical_root": "agents_skills",
@@ -2618,7 +2602,7 @@
                 }
               },
               "provenance": {
-                "owner": "source:mattpocock/skills"
+                "owner": "source:mattpocock/standalone"
               },
               "provider": {
                 "canonical_root": "agents_skills",
@@ -2673,8 +2657,7 @@
                   "disposition": "automated"
                 },
                 "remove": {
-                  "compensation": "restore_captured_pre_state",
-                  "disposition": "automated"
+                  "disposition": "operator_action"
                 },
                 "restore": {
                   "disposition": "unavailable"
@@ -2684,7 +2667,7 @@
                 }
               },
               "provenance": {
-                "owner": "manager:claude-plugins/claude-plugins-official"
+                "owner": "manager:claude-plugins/mattpocock-skills@claude-plugins-official"
               },
               "provider": {
                 "kind": "native_plugin",
@@ -2751,7 +2734,7 @@
                 }
               },
               "provenance": {
-                "owner": "source:mattpocock/skills"
+                "owner": "source:mattpocock/standalone"
               },
               "provider": {
                 "canonical_root": "agents_skills",
@@ -2816,7 +2799,7 @@
                 }
               },
               "provenance": {
-                "owner": "source:mattpocock/skills"
+                "owner": "source:mattpocock/standalone"
               },
               "provider": {
                 "canonical_root": "agents_skills",
@@ -2871,8 +2854,7 @@
                   "disposition": "automated"
                 },
                 "remove": {
-                  "compensation": "restore_captured_pre_state",
-                  "disposition": "automated"
+                  "disposition": "operator_action"
                 },
                 "restore": {
                   "disposition": "unavailable"
@@ -2882,7 +2864,7 @@
                 }
               },
               "provenance": {
-                "owner": "manager:claude-plugins/claude-plugins-official"
+                "owner": "manager:claude-plugins/mattpocock-skills@claude-plugins-official"
               },
               "provider": {
                 "kind": "native_plugin",
@@ -2949,7 +2931,7 @@
                 }
               },
               "provenance": {
-                "owner": "source:mattpocock/skills"
+                "owner": "source:mattpocock/standalone"
               },
               "provider": {
                 "canonical_root": "agents_skills",
@@ -3014,7 +2996,7 @@
                 }
               },
               "provenance": {
-                "owner": "source:mattpocock/skills"
+                "owner": "source:mattpocock/standalone"
               },
               "provider": {
                 "canonical_root": "agents_skills",
@@ -3069,8 +3051,7 @@
                   "disposition": "automated"
                 },
                 "remove": {
-                  "compensation": "restore_captured_pre_state",
-                  "disposition": "automated"
+                  "disposition": "operator_action"
                 },
                 "restore": {
                   "disposition": "unavailable"
@@ -3080,7 +3061,7 @@
                 }
               },
               "provenance": {
-                "owner": "manager:claude-plugins/claude-plugins-official"
+                "owner": "manager:claude-plugins/mattpocock-skills@claude-plugins-official"
               },
               "provider": {
                 "kind": "native_plugin",
@@ -3147,7 +3128,7 @@
                 }
               },
               "provenance": {
-                "owner": "source:mattpocock/skills"
+                "owner": "source:mattpocock/standalone"
               },
               "provider": {
                 "canonical_root": "agents_skills",
@@ -3212,7 +3193,7 @@
                 }
               },
               "provenance": {
-                "owner": "source:mattpocock/skills"
+                "owner": "source:mattpocock/standalone"
               },
               "provider": {
                 "canonical_root": "agents_skills",
@@ -3267,8 +3248,7 @@
                   "disposition": "automated"
                 },
                 "remove": {
-                  "compensation": "restore_captured_pre_state",
-                  "disposition": "automated"
+                  "disposition": "operator_action"
                 },
                 "restore": {
                   "disposition": "unavailable"
@@ -3278,7 +3258,7 @@
                 }
               },
               "provenance": {
-                "owner": "manager:claude-plugins/claude-plugins-official"
+                "owner": "manager:claude-plugins/mattpocock-skills@claude-plugins-official"
               },
               "provider": {
                 "kind": "native_plugin",
@@ -3345,7 +3325,7 @@
                 }
               },
               "provenance": {
-                "owner": "source:mattpocock/skills"
+                "owner": "source:mattpocock/standalone"
               },
               "provider": {
                 "canonical_root": "agents_skills",
@@ -3410,7 +3390,7 @@
                 }
               },
               "provenance": {
-                "owner": "source:mattpocock/skills"
+                "owner": "source:mattpocock/standalone"
               },
               "provider": {
                 "canonical_root": "agents_skills",
@@ -3465,8 +3445,7 @@
                   "disposition": "automated"
                 },
                 "remove": {
-                  "compensation": "restore_captured_pre_state",
-                  "disposition": "automated"
+                  "disposition": "operator_action"
                 },
                 "restore": {
                   "disposition": "unavailable"
@@ -3476,7 +3455,7 @@
                 }
               },
               "provenance": {
-                "owner": "manager:claude-plugins/claude-plugins-official"
+                "owner": "manager:claude-plugins/mattpocock-skills@claude-plugins-official"
               },
               "provider": {
                 "kind": "native_plugin",
@@ -3543,7 +3522,7 @@
                 }
               },
               "provenance": {
-                "owner": "source:mattpocock/skills"
+                "owner": "source:mattpocock/standalone"
               },
               "provider": {
                 "canonical_root": "agents_skills",
@@ -3608,7 +3587,7 @@
                 }
               },
               "provenance": {
-                "owner": "source:mattpocock/skills"
+                "owner": "source:mattpocock/standalone"
               },
               "provider": {
                 "canonical_root": "agents_skills",
@@ -3663,8 +3642,7 @@
                   "disposition": "automated"
                 },
                 "remove": {
-                  "compensation": "restore_captured_pre_state",
-                  "disposition": "automated"
+                  "disposition": "operator_action"
                 },
                 "restore": {
                   "disposition": "unavailable"
@@ -3674,7 +3652,7 @@
                 }
               },
               "provenance": {
-                "owner": "manager:claude-plugins/claude-plugins-official"
+                "owner": "manager:claude-plugins/mattpocock-skills@claude-plugins-official"
               },
               "provider": {
                 "kind": "native_plugin",
@@ -3741,7 +3719,7 @@
                 }
               },
               "provenance": {
-                "owner": "source:mattpocock/skills"
+                "owner": "source:mattpocock/standalone"
               },
               "provider": {
                 "canonical_root": "agents_skills",
@@ -3806,7 +3784,7 @@
                 }
               },
               "provenance": {
-                "owner": "source:mattpocock/skills"
+                "owner": "source:mattpocock/standalone"
               },
               "provider": {
                 "canonical_root": "agents_skills",
@@ -3861,8 +3839,7 @@
                   "disposition": "automated"
                 },
                 "remove": {
-                  "compensation": "restore_captured_pre_state",
-                  "disposition": "automated"
+                  "disposition": "operator_action"
                 },
                 "restore": {
                   "disposition": "unavailable"
@@ -3872,7 +3849,7 @@
                 }
               },
               "provenance": {
-                "owner": "manager:claude-plugins/claude-plugins-official"
+                "owner": "manager:claude-plugins/mattpocock-skills@claude-plugins-official"
               },
               "provider": {
                 "kind": "native_plugin",
@@ -3939,7 +3916,7 @@
                 }
               },
               "provenance": {
-                "owner": "source:mattpocock/skills"
+                "owner": "source:mattpocock/standalone"
               },
               "provider": {
                 "canonical_root": "agents_skills",
@@ -4004,7 +3981,7 @@
                 }
               },
               "provenance": {
-                "owner": "source:mattpocock/skills"
+                "owner": "source:mattpocock/standalone"
               },
               "provider": {
                 "canonical_root": "agents_skills",
@@ -4059,8 +4036,7 @@
                   "disposition": "automated"
                 },
                 "remove": {
-                  "compensation": "restore_captured_pre_state",
-                  "disposition": "automated"
+                  "disposition": "operator_action"
                 },
                 "restore": {
                   "disposition": "unavailable"
@@ -4070,7 +4046,7 @@
                 }
               },
               "provenance": {
-                "owner": "manager:claude-plugins/claude-plugins-official"
+                "owner": "manager:claude-plugins/mattpocock-skills@claude-plugins-official"
               },
               "provider": {
                 "kind": "native_plugin",
@@ -4137,7 +4113,7 @@
                 }
               },
               "provenance": {
-                "owner": "source:mattpocock/skills"
+                "owner": "source:mattpocock/standalone"
               },
               "provider": {
                 "canonical_root": "agents_skills",
@@ -4202,7 +4178,7 @@
                 }
               },
               "provenance": {
-                "owner": "source:mattpocock/skills"
+                "owner": "source:mattpocock/standalone"
               },
               "provider": {
                 "canonical_root": "agents_skills",
@@ -4257,8 +4233,7 @@
                   "disposition": "automated"
                 },
                 "remove": {
-                  "compensation": "restore_captured_pre_state",
-                  "disposition": "automated"
+                  "disposition": "operator_action"
                 },
                 "restore": {
                   "disposition": "unavailable"
@@ -4268,7 +4243,7 @@
                 }
               },
               "provenance": {
-                "owner": "manager:claude-plugins/claude-plugins-official"
+                "owner": "manager:claude-plugins/mattpocock-skills@claude-plugins-official"
               },
               "provider": {
                 "kind": "native_plugin",
@@ -4335,7 +4310,7 @@
                 }
               },
               "provenance": {
-                "owner": "source:mattpocock/skills"
+                "owner": "source:mattpocock/standalone"
               },
               "provider": {
                 "canonical_root": "agents_skills",
@@ -4400,7 +4375,7 @@
                 }
               },
               "provenance": {
-                "owner": "source:mattpocock/skills"
+                "owner": "source:mattpocock/standalone"
               },
               "provider": {
                 "canonical_root": "agents_skills",
@@ -4455,8 +4430,7 @@
                   "disposition": "automated"
                 },
                 "remove": {
-                  "compensation": "restore_captured_pre_state",
-                  "disposition": "automated"
+                  "disposition": "operator_action"
                 },
                 "restore": {
                   "disposition": "unavailable"
@@ -4466,7 +4440,7 @@
                 }
               },
               "provenance": {
-                "owner": "manager:claude-plugins/claude-plugins-official"
+                "owner": "manager:claude-plugins/mattpocock-skills@claude-plugins-official"
               },
               "provider": {
                 "kind": "native_plugin",
@@ -4533,7 +4507,7 @@
                 }
               },
               "provenance": {
-                "owner": "source:mattpocock/skills"
+                "owner": "source:mattpocock/standalone"
               },
               "provider": {
                 "canonical_root": "agents_skills",
@@ -4598,7 +4572,7 @@
                 }
               },
               "provenance": {
-                "owner": "source:mattpocock/skills"
+                "owner": "source:mattpocock/standalone"
               },
               "provider": {
                 "canonical_root": "agents_skills",
@@ -4653,8 +4627,7 @@
                   "disposition": "automated"
                 },
                 "remove": {
-                  "compensation": "restore_captured_pre_state",
-                  "disposition": "automated"
+                  "disposition": "operator_action"
                 },
                 "restore": {
                   "disposition": "unavailable"
@@ -4664,7 +4637,7 @@
                 }
               },
               "provenance": {
-                "owner": "manager:claude-plugins/claude-plugins-official"
+                "owner": "manager:claude-plugins/mattpocock-skills@claude-plugins-official"
               },
               "provider": {
                 "kind": "native_plugin",
@@ -4731,7 +4704,7 @@
                 }
               },
               "provenance": {
-                "owner": "source:mattpocock/skills"
+                "owner": "source:mattpocock/standalone"
               },
               "provider": {
                 "canonical_root": "agents_skills",
@@ -4796,7 +4769,7 @@
                 }
               },
               "provenance": {
-                "owner": "source:mattpocock/skills"
+                "owner": "source:mattpocock/standalone"
               },
               "provider": {
                 "canonical_root": "agents_skills",
@@ -4851,8 +4824,7 @@
                   "disposition": "automated"
                 },
                 "remove": {
-                  "compensation": "restore_captured_pre_state",
-                  "disposition": "automated"
+                  "disposition": "operator_action"
                 },
                 "restore": {
                   "disposition": "unavailable"
@@ -4862,7 +4834,7 @@
                 }
               },
               "provenance": {
-                "owner": "manager:claude-plugins/claude-plugins-official"
+                "owner": "manager:claude-plugins/mattpocock-skills@claude-plugins-official"
               },
               "provider": {
                 "kind": "native_plugin",
@@ -4929,7 +4901,7 @@
                 }
               },
               "provenance": {
-                "owner": "source:mattpocock/skills"
+                "owner": "source:mattpocock/standalone"
               },
               "provider": {
                 "canonical_root": "agents_skills",
@@ -4994,7 +4966,7 @@
                 }
               },
               "provenance": {
-                "owner": "source:mattpocock/skills"
+                "owner": "source:mattpocock/standalone"
               },
               "provider": {
                 "canonical_root": "agents_skills",
@@ -5049,8 +5021,7 @@
                   "disposition": "automated"
                 },
                 "remove": {
-                  "compensation": "restore_captured_pre_state",
-                  "disposition": "automated"
+                  "disposition": "operator_action"
                 },
                 "restore": {
                   "disposition": "unavailable"
@@ -5060,7 +5031,7 @@
                 }
               },
               "provenance": {
-                "owner": "manager:claude-plugins/claude-plugins-official"
+                "owner": "manager:claude-plugins/mattpocock-skills@claude-plugins-official"
               },
               "provider": {
                 "kind": "native_plugin",
@@ -5127,7 +5098,7 @@
                 }
               },
               "provenance": {
-                "owner": "source:mattpocock/skills"
+                "owner": "source:mattpocock/standalone"
               },
               "provider": {
                 "canonical_root": "agents_skills",
@@ -5192,7 +5163,7 @@
                 }
               },
               "provenance": {
-                "owner": "source:mattpocock/skills"
+                "owner": "source:mattpocock/standalone"
               },
               "provider": {
                 "canonical_root": "agents_skills",
@@ -5247,8 +5218,7 @@
                   "disposition": "automated"
                 },
                 "remove": {
-                  "compensation": "restore_captured_pre_state",
-                  "disposition": "automated"
+                  "disposition": "operator_action"
                 },
                 "restore": {
                   "disposition": "unavailable"
@@ -5258,7 +5228,7 @@
                 }
               },
               "provenance": {
-                "owner": "manager:claude-plugins/claude-plugins-official"
+                "owner": "manager:claude-plugins/mattpocock-skills@claude-plugins-official"
               },
               "provider": {
                 "kind": "native_plugin",
@@ -5325,7 +5295,7 @@
                 }
               },
               "provenance": {
-                "owner": "source:mattpocock/skills"
+                "owner": "source:mattpocock/standalone"
               },
               "provider": {
                 "canonical_root": "agents_skills",
@@ -5390,7 +5360,7 @@
                 }
               },
               "provenance": {
-                "owner": "source:mattpocock/skills"
+                "owner": "source:mattpocock/standalone"
               },
               "provider": {
                 "canonical_root": "agents_skills",
@@ -5445,8 +5415,7 @@
                   "disposition": "automated"
                 },
                 "remove": {
-                  "compensation": "restore_captured_pre_state",
-                  "disposition": "automated"
+                  "disposition": "operator_action"
                 },
                 "restore": {
                   "disposition": "unavailable"
@@ -5456,7 +5425,7 @@
                 }
               },
               "provenance": {
-                "owner": "manager:claude-plugins/claude-plugins-official"
+                "owner": "manager:claude-plugins/mattpocock-skills@claude-plugins-official"
               },
               "provider": {
                 "kind": "native_plugin",
@@ -5523,7 +5492,7 @@
                 }
               },
               "provenance": {
-                "owner": "source:mattpocock/skills"
+                "owner": "source:mattpocock/standalone"
               },
               "provider": {
                 "canonical_root": "agents_skills",
@@ -5588,7 +5557,7 @@
                 }
               },
               "provenance": {
-                "owner": "source:mattpocock/skills"
+                "owner": "source:mattpocock/standalone"
               },
               "provider": {
                 "canonical_root": "agents_skills",
@@ -5643,8 +5612,7 @@
                   "disposition": "automated"
                 },
                 "remove": {
-                  "compensation": "restore_captured_pre_state",
-                  "disposition": "automated"
+                  "disposition": "operator_action"
                 },
                 "restore": {
                   "disposition": "unavailable"
@@ -5654,7 +5622,7 @@
                 }
               },
               "provenance": {
-                "owner": "manager:claude-plugins/claude-plugins-official"
+                "owner": "manager:claude-plugins/mattpocock-skills@claude-plugins-official"
               },
               "provider": {
                 "kind": "native_plugin",
@@ -5721,7 +5689,7 @@
                 }
               },
               "provenance": {
-                "owner": "source:mattpocock/skills"
+                "owner": "source:mattpocock/standalone"
               },
               "provider": {
                 "canonical_root": "agents_skills",
@@ -5786,7 +5754,7 @@
                 }
               },
               "provenance": {
-                "owner": "source:mattpocock/skills"
+                "owner": "source:mattpocock/standalone"
               },
               "provider": {
                 "canonical_root": "agents_skills",
@@ -5841,8 +5809,7 @@
                   "disposition": "automated"
                 },
                 "remove": {
-                  "compensation": "restore_captured_pre_state",
-                  "disposition": "automated"
+                  "disposition": "operator_action"
                 },
                 "restore": {
                   "disposition": "unavailable"
@@ -5852,7 +5819,7 @@
                 }
               },
               "provenance": {
-                "owner": "manager:claude-plugins/claude-plugins-official"
+                "owner": "manager:claude-plugins/mattpocock-skills@claude-plugins-official"
               },
               "provider": {
                 "kind": "native_plugin",
@@ -5919,7 +5886,7 @@
                 }
               },
               "provenance": {
-                "owner": "source:mattpocock/skills"
+                "owner": "source:mattpocock/standalone"
               },
               "provider": {
                 "canonical_root": "agents_skills",
@@ -5984,7 +5951,7 @@
                 }
               },
               "provenance": {
-                "owner": "source:mattpocock/skills"
+                "owner": "source:mattpocock/standalone"
               },
               "provider": {
                 "canonical_root": "agents_skills",
@@ -6039,8 +6006,7 @@
                   "disposition": "automated"
                 },
                 "remove": {
-                  "compensation": "restore_captured_pre_state",
-                  "disposition": "automated"
+                  "disposition": "operator_action"
                 },
                 "restore": {
                   "disposition": "unavailable"
@@ -6050,7 +6016,7 @@
                 }
               },
               "provenance": {
-                "owner": "manager:claude-plugins/claude-plugins-official"
+                "owner": "manager:claude-plugins/mattpocock-skills@claude-plugins-official"
               },
               "provider": {
                 "kind": "native_plugin",
@@ -6117,7 +6083,7 @@
                 }
               },
               "provenance": {
-                "owner": "source:mattpocock/skills"
+                "owner": "source:mattpocock/standalone"
               },
               "provider": {
                 "canonical_root": "agents_skills",
@@ -6182,7 +6148,7 @@
                 }
               },
               "provenance": {
-                "owner": "source:mattpocock/skills"
+                "owner": "source:mattpocock/standalone"
               },
               "provider": {
                 "canonical_root": "agents_skills",
@@ -6237,8 +6203,7 @@
                   "disposition": "automated"
                 },
                 "remove": {
-                  "compensation": "restore_captured_pre_state",
-                  "disposition": "automated"
+                  "disposition": "operator_action"
                 },
                 "restore": {
                   "disposition": "unavailable"
@@ -6248,7 +6213,7 @@
                 }
               },
               "provenance": {
-                "owner": "manager:claude-plugins/claude-plugins-official"
+                "owner": "manager:claude-plugins/mattpocock-skills@claude-plugins-official"
               },
               "provider": {
                 "kind": "native_plugin",
@@ -6315,7 +6280,7 @@
                 }
               },
               "provenance": {
-                "owner": "source:mattpocock/skills"
+                "owner": "source:mattpocock/standalone"
               },
               "provider": {
                 "canonical_root": "agents_skills",
@@ -6380,7 +6345,7 @@
                 }
               },
               "provenance": {
-                "owner": "source:mattpocock/skills"
+                "owner": "source:mattpocock/standalone"
               },
               "provider": {
                 "canonical_root": "agents_skills",
@@ -6435,8 +6400,7 @@
                   "disposition": "automated"
                 },
                 "remove": {
-                  "compensation": "restore_captured_pre_state",
-                  "disposition": "automated"
+                  "disposition": "operator_action"
                 },
                 "restore": {
                   "disposition": "unavailable"
@@ -6446,7 +6410,7 @@
                 }
               },
               "provenance": {
-                "owner": "manager:claude-plugins/claude-plugins-official"
+                "owner": "manager:claude-plugins/mattpocock-skills@claude-plugins-official"
               },
               "provider": {
                 "kind": "native_plugin",
@@ -6513,7 +6477,7 @@
                 }
               },
               "provenance": {
-                "owner": "source:mattpocock/skills"
+                "owner": "source:mattpocock/standalone"
               },
               "provider": {
                 "canonical_root": "agents_skills",
@@ -6578,7 +6542,7 @@
                 }
               },
               "provenance": {
-                "owner": "source:mattpocock/skills"
+                "owner": "source:mattpocock/standalone"
               },
               "provider": {
                 "canonical_root": "agents_skills",
@@ -6633,8 +6597,7 @@
                   "disposition": "automated"
                 },
                 "remove": {
-                  "compensation": "restore_captured_pre_state",
-                  "disposition": "automated"
+                  "disposition": "operator_action"
                 },
                 "restore": {
                   "disposition": "unavailable"
@@ -6644,7 +6607,7 @@
                 }
               },
               "provenance": {
-                "owner": "manager:claude-plugins/claude-plugins-official"
+                "owner": "manager:claude-plugins/mattpocock-skills@claude-plugins-official"
               },
               "provider": {
                 "kind": "native_plugin",
@@ -6711,7 +6674,7 @@
                 }
               },
               "provenance": {
-                "owner": "source:mattpocock/skills"
+                "owner": "source:mattpocock/standalone"
               },
               "provider": {
                 "canonical_root": "agents_skills",
@@ -6776,7 +6739,7 @@
                 }
               },
               "provenance": {
-                "owner": "source:mattpocock/skills"
+                "owner": "source:mattpocock/standalone"
               },
               "provider": {
                 "canonical_root": "agents_skills",
@@ -6831,8 +6794,7 @@
                   "disposition": "automated"
                 },
                 "remove": {
-                  "compensation": "restore_captured_pre_state",
-                  "disposition": "automated"
+                  "disposition": "operator_action"
                 },
                 "restore": {
                   "disposition": "unavailable"
@@ -6842,7 +6804,7 @@
                 }
               },
               "provenance": {
-                "owner": "manager:claude-plugins/claude-plugins-official"
+                "owner": "manager:claude-plugins/mattpocock-skills@claude-plugins-official"
               },
               "provider": {
                 "kind": "native_plugin",
@@ -6909,7 +6871,7 @@
                 }
               },
               "provenance": {
-                "owner": "source:mattpocock/skills"
+                "owner": "source:mattpocock/standalone"
               },
               "provider": {
                 "canonical_root": "agents_skills",
@@ -6974,7 +6936,7 @@
                 }
               },
               "provenance": {
-                "owner": "source:mattpocock/skills"
+                "owner": "source:mattpocock/standalone"
               },
               "provider": {
                 "canonical_root": "agents_skills",
@@ -7029,8 +6991,7 @@
                   "disposition": "automated"
                 },
                 "remove": {
-                  "compensation": "restore_captured_pre_state",
-                  "disposition": "automated"
+                  "disposition": "operator_action"
                 },
                 "restore": {
                   "disposition": "unavailable"
@@ -7040,7 +7001,7 @@
                 }
               },
               "provenance": {
-                "owner": "manager:claude-plugins/claude-plugins-official"
+                "owner": "manager:claude-plugins/mattpocock-skills@claude-plugins-official"
               },
               "provider": {
                 "kind": "native_plugin",
@@ -7107,7 +7068,7 @@
                 }
               },
               "provenance": {
-                "owner": "source:mattpocock/skills"
+                "owner": "source:mattpocock/standalone"
               },
               "provider": {
                 "canonical_root": "agents_skills",
@@ -7172,7 +7133,7 @@
                 }
               },
               "provenance": {
-                "owner": "source:mattpocock/skills"
+                "owner": "source:mattpocock/standalone"
               },
               "provider": {
                 "canonical_root": "agents_skills",
@@ -7227,8 +7188,7 @@
                   "disposition": "automated"
                 },
                 "remove": {
-                  "compensation": "restore_captured_pre_state",
-                  "disposition": "automated"
+                  "disposition": "operator_action"
                 },
                 "restore": {
                   "disposition": "unavailable"
@@ -7238,7 +7198,7 @@
                 }
               },
               "provenance": {
-                "owner": "manager:claude-plugins/claude-plugins-official"
+                "owner": "manager:claude-plugins/mattpocock-skills@claude-plugins-official"
               },
               "provider": {
                 "kind": "native_plugin",
@@ -7305,7 +7265,7 @@
                 }
               },
               "provenance": {
-                "owner": "source:mattpocock/skills"
+                "owner": "source:mattpocock/standalone"
               },
               "provider": {
                 "canonical_root": "agents_skills",
@@ -7370,7 +7330,7 @@
                 }
               },
               "provenance": {
-                "owner": "source:mattpocock/skills"
+                "owner": "source:mattpocock/standalone"
               },
               "provider": {
                 "canonical_root": "agents_skills",
@@ -7404,6 +7364,12 @@
         "skill:chrome-devtools/troubleshooting"
       ],
       "identity": "distribution:chrome-devtools/claude-plugin",
+      "source": {
+        "channel": "stable",
+        "kind": "native_manager",
+        "manager": "claude",
+        "package": "chrome-devtools-mcp@claude-plugins-official"
+      },
       "restore": {
         "channel": "stable",
         "class": "native_rolling",
@@ -7417,6 +7383,12 @@
         "mcp:chrome-devtools/server"
       ],
       "identity": "distribution:chrome-devtools/direct-mcp",
+      "source": {
+        "channel": "1.7.0",
+        "kind": "native_manager",
+        "manager": "npx",
+        "package": "chrome-devtools-mcp"
+      },
       "restore": {
         "channel": "npm:1.7.0",
         "class": "native_rolling",
@@ -7430,6 +7402,12 @@
         "mcp:context7/server"
       ],
       "identity": "distribution:context7/direct-mcp",
+      "source": {
+        "channel": "3.2.4",
+        "kind": "native_manager",
+        "manager": "npx",
+        "package": "@upstash/context7-mcp"
+      },
       "restore": {
         "channel": "npm:3.2.4",
         "class": "native_rolling",
@@ -7443,6 +7421,12 @@
         "mcp:firecrawl/server"
       ],
       "identity": "distribution:firecrawl/direct-mcp",
+      "source": {
+        "channel": "3.22.3",
+        "kind": "native_manager",
+        "manager": "npx",
+        "package": "firecrawl-mcp"
+      },
       "restore": {
         "channel": "npm:3.22.3",
         "class": "native_rolling",
@@ -7462,6 +7446,12 @@
         "skill:github/yeet"
       ],
       "identity": "distribution:github/codex-plugin",
+      "source": {
+        "channel": "openai-curated",
+        "kind": "native_manager",
+        "manager": "codex",
+        "package": "github@openai-curated"
+      },
       "restore": {
         "channel": "openai-curated",
         "class": "native_rolling",
@@ -7475,6 +7465,12 @@
         "mcp:github/server"
       ],
       "identity": "distribution:github/direct-mcp",
+      "source": {
+        "channel": "0.1.38",
+        "kind": "native_manager",
+        "manager": "npx",
+        "package": "mcp-remote"
+      },
       "restore": {
         "channel": "npm:0.1.38",
         "class": "native_rolling",
@@ -7488,6 +7484,12 @@
         "mcp:greptile/server"
       ],
       "identity": "distribution:greptile/direct-mcp",
+      "source": {
+        "channel": "0.1.38",
+        "kind": "native_manager",
+        "manager": "npx",
+        "package": "mcp-remote"
+      },
       "restore": {
         "channel": "npm:0.1.38",
         "class": "native_rolling",
@@ -7526,6 +7528,12 @@
         "skill:mattpocock/writing-for-agents"
       ],
       "identity": "distribution:mattpocock/claude-plugin",
+      "source": {
+        "channel": "stable",
+        "kind": "native_manager",
+        "manager": "claude",
+        "package": "mattpocock-skills@claude-plugins-official"
+      },
       "restore": {
         "channel": "stable",
         "class": "native_rolling",
@@ -7563,6 +7571,11 @@
         "skill:mattpocock/writing-for-agents"
       ],
       "identity": "distribution:mattpocock/standalone",
+      "source": {
+        "kind": "git",
+        "ref": "84fdeffd12f2ee307994d1eb6feb48173b6e0502",
+        "repository": "https://github.com/mattpocock/skills.git"
+      },
       "restore": {
         "artifact_ref": "git+https://github.com/mattpocock/skills.git@84fdeffd12f2ee307994d1eb6feb48173b6e0502#skills/engineering,skills/productivity",
         "class": "immutable",
@@ -8975,7 +8988,7 @@
         "provider": {
           "arguments": [
             {
-              "literal": "github"
+              "secret_profile_reference": "github"
             },
             {
               "literal": "--"

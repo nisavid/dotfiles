@@ -1,9 +1,14 @@
 {
   "schema_version": "lock/v1",
-  "catalog_digest": "sha256:f5131c6d731c8b86721e0a43875c2fd7b27ec9512e2645876426801dbd312715",
+  "catalog_digest": "sha256:695bc03bd83569a05df55152d8c46e03b3f244c21b96277e8070ac053d8362bd",
   "distributions": [
     {
       "identity": "distribution:example/bundle",
+      "source": {
+        "kind": "git",
+        "repository": "https://example.invalid/bundle.git",
+        "ref": "v1.0.0"
+      },
       "equipment": ["skill:example/grilling"],
       "restore": {
         "class": "immutable",
@@ -15,6 +20,12 @@
     },
     {
       "identity": "distribution:example/native-plugin",
+      "source": {
+        "kind": "native_manager",
+        "manager": "claude",
+        "package": "example-matt@official",
+        "channel": "stable"
+      },
       "equipment": ["plugin:example/matt"],
       "restore": {
         "class": "native_rolling",
@@ -47,7 +58,7 @@
               "activation_group": "activation:example/native-plugin-claude",
               "component_controls": [],
               "control_owner": "operator_owned",
-              "provenance": {"owner": "manager:claude-plugins"},
+              "provenance": {"owner": "manager:claude-plugins/example-matt@official"},
               "restore": {
                 "class": "native_rolling",
                 "channel": "stable",

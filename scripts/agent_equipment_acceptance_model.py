@@ -10,10 +10,13 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 import base64
+import binascii
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
+import re
 import shutil
 import stat
 from typing import Any, Mapping
@@ -21,6 +24,15 @@ from typing import Any, Mapping
 
 JsonValue = Any
 DesiredState = Mapping[str, JsonValue]
+
+
+def _unique_json_object(pairs: list[tuple[str, JsonValue]]) -> dict[str, JsonValue]:
+    document: dict[str, JsonValue] = {}
+    for key, value in pairs:
+        if key in document:
+            raise ValueError("duplicate JSON object member")
+        document[key] = value
+    return document
 
 
 @dataclass(frozen=True)
@@ -42,9 +54,12 @@ class ProviderSwitchResult:
 
 @dataclass(frozen=True)
 class ImportedObservation:
+    observation_identity: str
     surface: str
     value: JsonValue
     digest: str
+    catalog_digest: str
+    inventory_digest: str
 
 
 @dataclass(frozen=True)
@@ -64,6 +79,14 @@ class InjectedFailure(RuntimeError):
 
 class BindingMismatchError(RuntimeError):
     """A durable checkpoint does not bind the supplied retry plan."""
+
+
+class HistoricalCheckpointError(RuntimeError):
+    """A terminal compensated checkpoint cannot authorize forward replay."""
+
+
+class CompensationBlockedError(RuntimeError):
+    """A durable rollback requires operator disposition before recovery."""
 
 
 class PlanValidationError(RuntimeError):
@@ -99,6 +122,13 @@ class NonautomatedReport:
     items: tuple[dict[str, str], ...]
 
 
+@dataclass(frozen=True, order=True)
+class CapabilityBinding:
+    capability_identity: str
+    capability_digest: str
+    manager_version_evidence_digest: str
+
+
 @dataclass(frozen=True)
 class Mutation:
     step_id: str
@@ -107,16 +137,23 @@ class Mutation:
     after: JsonValue
     route: str
     operation: str
+    capability_binding: CapabilityBinding
+    compensation: str = "restore_captured_pre_state"
 
 
 @dataclass(frozen=True)
 class MutationPlan:
     actions: tuple[Mutation, ...]
+    run_identity: str
     candidate_digest: str
+    implementation_manifest_digest: str
     catalog_digest: str
     lock_digest: str
     plan_digest: str
-    capability_digest: str
+    capability_bindings: tuple[CapabilityBinding, ...]
+    capability_set_digest: str
+    captured_state_identity: str
+    captured_state_digest: str
 
 
 @dataclass(frozen=True)
@@ -125,22 +162,84 @@ class ExecutionResult:
     trace: tuple[str, ...]
 
 
-MISSING = {"$state": "missing"}
+class _MissingState:
+    """Internal absence sentinel that cannot collide with valid JSON data."""
+
+    __slots__ = ()
+
+    def __deepcopy__(self, memo: dict[int, object]) -> _MissingState:
+        del memo
+        return self
+
+    def __repr__(self) -> str:
+        return "MISSING"
+
+
+MISSING = _MissingState()
 BINDING_FIELDS = (
+    "step_id",
+    "action_identity",
+    "ordinal",
+    "run_identity",
     "candidate_digest",
+    "implementation_manifest_digest",
     "catalog_digest",
     "lock_digest",
     "plan_digest",
-    "capability_digest",
+    "capability_set_digest",
+    "captured_state_identity",
+    "captured_state_digest",
+    "route_capability_binding",
     "route_digest",
     "operation_digest",
+    "compensation_operation",
     "pre_state_digest",
     "expected_post_state_digest",
+    "pre_state",
+    "expected_post_state",
     "surface",
 )
-MUTATING_OPERATIONS = frozenset(
-    {"install", "configure", "enable", "disable", "remove", "restore"}
+CHECKPOINT_FIELDS = frozenset(
+    (*BINDING_FIELDS, "phase", "phase_history", "invocation_state")
 )
+CHECKPOINT_PHASE_HISTORIES = frozenset(
+    {
+        ("prepared",),
+        ("prepared", "completed"),
+        ("prepared", "compensating"),
+        ("prepared", "completed", "compensating"),
+        ("prepared", "compensating", "compensated"),
+        ("prepared", "completed", "compensating", "compensated"),
+        ("prepared", "compensation_blocked"),
+        ("prepared", "completed", "compensation_blocked"),
+        ("prepared", "compensating", "compensation_blocked"),
+        ("prepared", "completed", "compensating", "compensation_blocked"),
+    }
+)
+MUTATING_OPERATIONS = frozenset(
+    {
+        "install",
+        "configure",
+        "enable",
+        "disable",
+        "remove",
+        "restore",
+        "suppress_native_update",
+    }
+)
+DIGEST_PATTERN = re.compile(r"sha256:[0-9a-f]{64}\Z")
+
+
+def _is_digest(value: object) -> bool:
+    return isinstance(value, str) and DIGEST_PATTERN.fullmatch(value) is not None
+
+
+def _is_prefixed_identity(value: object, prefix: str) -> bool:
+    return (
+        isinstance(value, str)
+        and value.startswith(prefix)
+        and len(value) > len(prefix)
+    )
 
 
 class FakeAdapter:
@@ -168,8 +267,11 @@ def canonical_digest(value: JsonValue) -> str:
 
 
 def canonical_bytes(value: JsonValue) -> bytes:
+    if not _is_json_value(value):
+        raise ValueError("value is outside the closed JSON domain")
     return json.dumps(
         value,
+        allow_nan=False,
         ensure_ascii=False,
         separators=(",", ":"),
         sort_keys=True,
@@ -184,27 +286,144 @@ def deep_copy(value: JsonValue) -> JsonValue:
     return deepcopy(value)
 
 
+def _is_json_value(value: object) -> bool:
+    if value is None or isinstance(value, (str, bool)):
+        return True
+    if isinstance(value, int):
+        return not isinstance(value, bool)
+    if isinstance(value, float):
+        return math.isfinite(value)
+    if isinstance(value, list):
+        return all(_is_json_value(item) for item in value)
+    if isinstance(value, dict):
+        return all(
+            isinstance(key, str) and _is_json_value(item)
+            for key, item in value.items()
+        )
+    return False
+
+
+def _is_state_value(value: object) -> bool:
+    return value is MISSING or _is_json_value(value)
+
+
+def state_payload(value: object) -> dict[str, JsonValue]:
+    """Serialize internal absence or a present JSON value without collision."""
+
+    if value is MISSING:
+        return {"presence": "absent"}
+    if not _is_json_value(value):
+        raise ValueError("state value is outside the closed state domain")
+    return {"presence": "present", "value": value}
+
+
+def states_equal(left: object, right: object) -> bool:
+    """Compare closed state values without Python bool/int coercion."""
+
+    try:
+        return canonical_bytes(state_payload(left)) == canonical_bytes(
+            state_payload(right)
+        )
+    except ValueError:
+        return False
+
+
+def json_values_equal(left: object, right: object) -> bool:
+    """Compare two closed JSON values with canonical type-exact semantics."""
+
+    try:
+        return canonical_bytes(left) == canonical_bytes(right)
+    except ValueError:
+        return False
+
+
+def imported_observation_identity(
+    *,
+    surface: str,
+    digest: str,
+    catalog_digest: str,
+    inventory_digest: str,
+) -> str:
+    payload = {
+        "surface": surface,
+        "digest": digest,
+        "catalog_digest": catalog_digest,
+        "inventory_digest": inventory_digest,
+    }
+    return f"imported-observation:{canonical_digest(payload)}"
+
+
+def capability_binding_payload(binding: CapabilityBinding) -> dict[str, str]:
+    return {
+        "capability_identity": binding.capability_identity,
+        "capability_digest": binding.capability_digest,
+        "manager_version_evidence_digest": (
+            binding.manager_version_evidence_digest
+        ),
+    }
+
+
+def capability_set_digest(bindings: tuple[CapabilityBinding, ...]) -> str:
+    """Bind the complete, canonical capability evidence set."""
+
+    return canonical_digest(
+        [capability_binding_payload(binding) for binding in sorted(bindings)]
+    )
+
+
+def mutation_payload(action: Mutation) -> dict[str, JsonValue]:
+    return {
+        "step_id": action.step_id,
+        "surface": action.surface,
+        "before": state_payload(action.before),
+        "after": state_payload(action.after),
+        "route": action.route,
+        "operation": action.operation,
+        "compensation": action.compensation,
+        "capability_binding": capability_binding_payload(
+            action.capability_binding
+        ),
+    }
+
+
+def mutation_identity(action: Mutation) -> str:
+    return f"action:{canonical_digest(mutation_payload(action))}"
+
+
+def plan_actions_digest(actions: tuple[Mutation, ...]) -> str:
+    """Return the canonical digest of a complete ordered fake action plan."""
+
+    return canonical_digest(
+        [mutation_payload(action) for action in actions]
+    )
+
+
 def migration_initial_state() -> dict[str, JsonValue]:
     return {
         "00/projector": {"mode": "blanket"},
-        "01/matt-link": {"link_text": "../../.agents/skills/create-auth"},
-        "02/matt-plugin-installed": False,
-        "03/matt-plugin-enabled": False,
-        "04/context7-mcp": {"provider": "legacy"},
-        "05/component-selection": {"deferred": True},
-        "06/coverage-verification": {"status": "old"},
+        "01/matt-plugin-installed": False,
+        "02/matt-plugin-enabled": False,
+        "03/matt-winner-activation": {"status": "unverified"},
+        "04/matt-link": {"link_text": "../../.agents/skills/create-auth"},
+        "05/context7-mcp": {"provider": "legacy"},
+        "06/component-selection": {"deferred": True},
+        "07/coverage-verification": {"status": "old"},
     }
 
 
 def migration_desired_state() -> dict[str, JsonValue]:
     return {
         "00/projector": {"mode": "catalog"},
-        "01/matt-link": MISSING,
-        "02/matt-plugin-installed": True,
-        "03/matt-plugin-enabled": True,
-        "04/context7-mcp": {"provider": "selected"},
-        "05/component-selection": {"deferred": False},
-        "06/coverage-verification": {"status": "passed", "duplicates": []},
+        "01/matt-plugin-installed": True,
+        "02/matt-plugin-enabled": True,
+        "03/matt-winner-activation": {
+            "status": "verified",
+            "activation_group": "activation:mattpocock/claude",
+        },
+        "04/matt-link": MISSING,
+        "05/context7-mcp": {"provider": "selected"},
+        "06/component-selection": {"deferred": False},
+        "07/coverage-verification": {"status": "passed", "duplicates": []},
     }
 
 
@@ -227,9 +446,16 @@ def resolve_provider_routes(
 ) -> tuple[str, ...]:
     selected_set = set(selected)
     observed_set = set(observed)
+    overlap = allow_overlap or ()
+    if (
+        len(selected) != len(selected_set)
+        or len(observed) != len(observed_set)
+        or len(overlap) != len(set(overlap))
+    ):
+        raise DuplicateProviderError("provider route sequences must be unique")
     if observed_set != selected_set:
         raise DuplicateProviderError("observed provider set differs from selection")
-    if len(selected_set) > 1 and set(allow_overlap or ()) != selected_set:
+    if len(selected_set) > 1 and set(overlap) != selected_set:
         raise DuplicateProviderError("provider overlap lacks an exact exception")
     return selected
 
@@ -276,17 +502,9 @@ class AcceptanceFixture:
         self.standalone_root = self.sandbox / "standalone"
         self.last_trace: tuple[str, ...] = ()
         self._adopted: dict[str, str] = {}
-
-    def apply(self, desired_state: DesiredState) -> ApplyResult:
-        mutated_surfaces = []
-        for surface, desired in desired_state.items():
-            if self.adapter.state.get(surface) != desired:
-                self.adapter.set(surface, desired)
-                mutated_surfaces.append(surface)
-        return ApplyResult(
-            status="completed" if mutated_surfaces else "no_op",
-            mutated_surfaces=tuple(mutated_surfaces),
-        )
+        self._imports: dict[str, ImportedObservation] = {}
+        self.candidate_digest = f"sha256:{'0' * 64}"
+        self.implementation_manifest_digest = f"sha256:{'9' * 64}"
 
     def checkpoint_bytes(self) -> bytes:
         """Return the durable fixture journal as a comparison-friendly blob."""
@@ -297,17 +515,31 @@ class AcceptanceFixture:
         )
 
     def checkpoints(self) -> dict[str, dict[str, JsonValue]]:
-        return {
-            path.stem: json.loads(path.read_text(encoding="utf-8"))
-            for path in sorted(self.checkpoint_directory.glob("*.json"))
-        }
+        checkpoints: dict[str, dict[str, JsonValue]] = {}
+        for path in sorted(self.checkpoint_directory.glob("*.json")):
+            try:
+                document = json.loads(
+                    path.read_text(encoding="utf-8"),
+                    object_pairs_hook=_unique_json_object,
+                )
+            except (OSError, UnicodeError, ValueError) as error:
+                raise BindingMismatchError(path.stem) from error
+            if not isinstance(document, dict):
+                raise BindingMismatchError(path.stem)
+            checkpoints[path.stem] = document
+        return checkpoints
 
     def plan(self, desired_state: DesiredState) -> MutationPlan:
+        capability_binding = CapabilityBinding(
+            capability_identity="capability:fixture/adapter-v1",
+            capability_digest=f"sha256:{'3' * 64}",
+            manager_version_evidence_digest=f"sha256:{'4' * 64}",
+        )
         actions = []
         for surface in sorted(desired_state):
             before = deepcopy(self.adapter.state.get(surface, MISSING))
             after = deepcopy(desired_state[surface])
-            if before == after:
+            if states_equal(before, after):
                 continue
             actions.append(
                 Mutation(
@@ -317,26 +549,23 @@ class AcceptanceFixture:
                     after=after,
                     route=f"route:fixture/{surface}",
                     operation="configure",
+                    capability_binding=capability_binding,
                 )
             )
-        plan_material = [
-            {
-                "step_id": action.step_id,
-                "surface": action.surface,
-                "before": action.before,
-                "after": action.after,
-                "route": action.route,
-                "operation": action.operation,
-            }
-            for action in actions
-        ]
+        ordered_actions = tuple(actions)
+        capability_bindings = (capability_binding,)
         return MutationPlan(
-            actions=tuple(actions),
-            candidate_digest="sha256:fixture-candidate-v1",
-            catalog_digest="sha256:fixture-catalog-v1",
-            lock_digest="sha256:fixture-lock-v1",
-            plan_digest=canonical_digest(plan_material),
-            capability_digest="sha256:fixture-capabilities-v1",
+            actions=ordered_actions,
+            run_identity="run:fixture/v1",
+            candidate_digest=self.candidate_digest,
+            implementation_manifest_digest=self.implementation_manifest_digest,
+            catalog_digest=f"sha256:{'1' * 64}",
+            lock_digest=f"sha256:{'2' * 64}",
+            plan_digest=plan_actions_digest(ordered_actions),
+            capability_bindings=capability_bindings,
+            capability_set_digest=capability_set_digest(capability_bindings),
+            captured_state_identity="captured-state:fixture/v1",
+            captured_state_digest=f"sha256:{'5' * 64}",
         )
 
     def migration_plan(self, desired_state: DesiredState) -> MutationPlan:
@@ -360,27 +589,22 @@ class AcceptanceFixture:
                 after=action.after,
                 route=action.route,
                 operation=operation,
+                capability_binding=action.capability_binding,
             )
             for action in plan.actions
         )
-        plan_material = [
-            {
-                "step_id": action.step_id,
-                "surface": action.surface,
-                "before": action.before,
-                "after": action.after,
-                "route": action.route,
-                "operation": action.operation,
-            }
-            for action in actions
-        ]
         return MutationPlan(
             actions=actions,
+            run_identity=plan.run_identity,
             candidate_digest=plan.candidate_digest,
+            implementation_manifest_digest=plan.implementation_manifest_digest,
             catalog_digest=plan.catalog_digest,
             lock_digest=plan.lock_digest,
-            plan_digest=canonical_digest(plan_material),
-            capability_digest=plan.capability_digest,
+            plan_digest=plan_actions_digest(actions),
+            capability_bindings=plan.capability_bindings,
+            capability_set_digest=plan.capability_set_digest,
+            captured_state_identity=plan.captured_state_identity,
+            captured_state_digest=plan.captured_state_digest,
         )
 
     def evidence_bundle(self) -> dict[str, JsonValue]:
@@ -402,10 +626,36 @@ class AcceptanceFixture:
         self._validate_plan(plan)
         failures = set(fail_at or ())
         trace = []
+        existing_checkpoints = self.checkpoints()
+        plan_step_ids = {action.step_id for action in plan.actions}
+        unknown_step_ids = set(existing_checkpoints) - plan_step_ids
+        if unknown_step_ids:
+            raise BindingMismatchError(sorted(unknown_step_ids)[0])
+        for action in plan.actions:
+            existing = existing_checkpoints.get(action.step_id)
+            if existing is None:
+                continue
+            self._validate_checkpoint_binding(
+                existing,
+                self._checkpoint(plan, action, "prepared"),
+            )
+            if existing.get("phase") in {
+                "compensating",
+                "compensated",
+                "compensation_blocked",
+            }:
+                raise HistoricalCheckpointError(action.step_id)
+            if (
+                existing.get("phase") == "completed"
+                and existing.get("invocation_state") != "started"
+            ):
+                raise BindingMismatchError(action.step_id)
+            if existing.get("phase") not in {"prepared", "completed"}:
+                raise BindingMismatchError(action.step_id)
         try:
             for action in plan.actions:
                 checkpoint = self._checkpoint(plan, action, "prepared")
-                existing = self.checkpoints().get(action.step_id)
+                existing = existing_checkpoints.get(action.step_id)
                 if existing is None:
                     self._write_checkpoint(
                         checkpoint,
@@ -415,12 +665,20 @@ class AcceptanceFixture:
                     )
                     trace.append(f"prepared:{action.step_id}")
                 else:
-                    self._validate_checkpoint_binding(existing, checkpoint)
                     checkpoint = existing
                 if before_mutation is not None:
                     before_mutation(action)
                 current = deepcopy(self.adapter.state.get(action.surface, MISSING))
-                if current == action.after:
+                if existing is not None and checkpoint.get("phase") == "completed":
+                    if not states_equal(current, action.after):
+                        raise ConcurrentChangeError(action.surface)
+                    trace.append(f"audit:{action.step_id}:post_state")
+                    continue
+                if (
+                    existing is not None
+                    and checkpoint.get("invocation_state") == "started"
+                    and states_equal(current, action.after)
+                ):
                     trace.append(f"audit:{action.step_id}:post_state")
                     self._advance_phase(checkpoint, "completed")
                     self._write_checkpoint(
@@ -431,11 +689,18 @@ class AcceptanceFixture:
                     )
                     trace.append(f"completed:{action.step_id}")
                     continue
-                if current != action.before:
+                if not states_equal(current, action.before):
                     raise ConcurrentChangeError(action.surface)
                 if existing is not None:
                     trace.append(f"audit:{action.step_id}:pre_state")
                 self._raise_fault("before_mutation", action, failures)
+                checkpoint["invocation_state"] = "started"
+                self._write_checkpoint(
+                    checkpoint,
+                    fail="invocation_write",
+                    action=action,
+                    failures=failures,
+                )
                 self._apply_value(action.surface, action.after)
                 self._raise_fault("after_mutation", action, failures)
                 self._advance_phase(checkpoint, "completed")
@@ -456,21 +721,101 @@ class AcceptanceFixture:
                 )
             self.last_trace = tuple(trace)
             raise
-        result = ExecutionResult(status="completed", trace=tuple(trace))
+        result = ExecutionResult(
+            status="completed" if plan.actions else "no_op",
+            trace=tuple(trace),
+        )
         self.last_trace = result.trace
         return result
 
-    @staticmethod
-    def _validate_plan(plan: MutationPlan) -> None:
-        step_ids = [action.step_id for action in plan.actions]
+    def _validate_plan(self, plan: MutationPlan) -> None:
         if (
-            len(step_ids) != len(set(step_ids))
+            not isinstance(plan.actions, tuple)
+            or not all(isinstance(action, Mutation) for action in plan.actions)
+            or not isinstance(plan.capability_bindings, tuple)
+            or not all(
+                isinstance(binding, CapabilityBinding)
+                for binding in plan.capability_bindings
+            )
+        ):
+            raise PlanValidationError("complete plan validation failed")
+
+        if (
+            plan.candidate_digest != self.candidate_digest
+            or plan.implementation_manifest_digest
+            != self.implementation_manifest_digest
+            or not _is_prefixed_identity(plan.run_identity, "run:")
+            or not _is_prefixed_identity(
+                plan.captured_state_identity, "captured-state:"
+            )
+            or any(
+                not isinstance(action.step_id, str)
+                or not isinstance(action.surface, str)
+                or not action.surface
+                or not _is_prefixed_identity(action.route, "route:")
+                or not isinstance(action.operation, str)
+                or not isinstance(action.capability_binding, CapabilityBinding)
+                or action.compensation != "restore_captured_pre_state"
+                or not _is_state_value(action.before)
+                or not _is_state_value(action.after)
+                for action in plan.actions
+            )
+            or any(
+                not _is_prefixed_identity(
+                    binding.capability_identity, "capability:"
+                )
+                or not _is_digest(binding.capability_digest)
+                or not _is_digest(binding.manager_version_evidence_digest)
+                for binding in plan.capability_bindings
+            )
+        ):
+            raise PlanValidationError("complete plan validation failed")
+
+        step_ids = [action.step_id for action in plan.actions]
+        surfaces = [action.surface for action in plan.actions]
+        capability_bindings = plan.capability_bindings
+        plan_bindings = (
+            plan.candidate_digest,
+            plan.implementation_manifest_digest,
+            plan.catalog_digest,
+            plan.lock_digest,
+            plan.plan_digest,
+            plan.capability_set_digest,
+            plan.captured_state_digest,
+        )
+        try:
+            expected_plan_digest = plan_actions_digest(plan.actions)
+            expected_capability_set_digest = capability_set_digest(
+                capability_bindings
+            )
+        except (TypeError, ValueError):
+            raise PlanValidationError("complete plan validation failed") from None
+        if (
+            any(not _is_digest(binding) for binding in plan_bindings)
+            or len(step_ids) != len(set(step_ids))
+            or len(surfaces) != len(set(surfaces))
+            or step_ids != [f"step-{index:03d}" for index in range(len(step_ids))]
+            or plan.plan_digest != expected_plan_digest
+            or not capability_bindings
+            or capability_bindings != tuple(sorted(capability_bindings))
+            or len(capability_bindings) != len(set(capability_bindings))
+            or len({binding.capability_identity for binding in capability_bindings})
+            != len(capability_bindings)
+            or plan.capability_set_digest
+            != expected_capability_set_digest
+            or any(
+                action.capability_binding not in capability_bindings
+                for action in plan.actions
+            )
+            or any(
+                states_equal(action.before, action.after)
+                for action in plan.actions
+            )
             or any(
                 not isinstance(action.operation, str)
                 or action.operation not in MUTATING_OPERATIONS
                 for action in plan.actions
             )
-            or any(not action.surface or not action.route for action in plan.actions)
         ):
             raise PlanValidationError("complete plan validation failed")
 
@@ -492,19 +837,32 @@ class AcceptanceFixture:
     ) -> dict[str, JsonValue]:
         return {
             "step_id": action.step_id,
+            "action_identity": mutation_identity(action),
+            "ordinal": int(action.step_id.removeprefix("step-")),
+            "run_identity": plan.run_identity,
             "phase": phase,
             "phase_history": [phase],
+            "invocation_state": "not_started",
             "candidate_digest": plan.candidate_digest,
+            "implementation_manifest_digest": plan.implementation_manifest_digest,
             "catalog_digest": plan.catalog_digest,
             "lock_digest": plan.lock_digest,
             "plan_digest": plan.plan_digest,
-            "capability_digest": plan.capability_digest,
+            "capability_set_digest": plan.capability_set_digest,
+            "captured_state_identity": plan.captured_state_identity,
+            "captured_state_digest": plan.captured_state_digest,
+            "route_capability_binding": capability_binding_payload(
+                action.capability_binding
+            ),
             "route_digest": canonical_digest(action.route),
             "operation_digest": canonical_digest(action.operation),
-            "pre_state_digest": canonical_digest(action.before),
-            "expected_post_state_digest": canonical_digest(action.after),
-            "pre_state": action.before,
-            "expected_post_state": action.after,
+            "compensation_operation": action.compensation,
+            "pre_state_digest": canonical_digest(state_payload(action.before)),
+            "expected_post_state_digest": canonical_digest(
+                state_payload(action.after)
+            ),
+            "pre_state": state_payload(action.before),
+            "expected_post_state": state_payload(action.after),
             "surface": action.surface,
         }
 
@@ -518,11 +876,26 @@ class AcceptanceFixture:
         actual: Mapping[str, JsonValue],
         expected: Mapping[str, JsonValue],
     ) -> None:
-        if any(actual.get(field) != expected.get(field) for field in BINDING_FIELDS):
+        history = actual.get("phase_history")
+        if (
+            set(actual) != CHECKPOINT_FIELDS
+            or any(
+                not json_values_equal(actual.get(field), expected.get(field))
+                for field in BINDING_FIELDS
+            )
+            or not isinstance(history, list)
+            or actual.get("invocation_state") not in {"not_started", "started"}
+            or (
+                actual.get("phase") == "completed"
+                and actual.get("invocation_state") != "started"
+            )
+            or tuple(history) not in CHECKPOINT_PHASE_HISTORIES
+            or history[-1] != actual.get("phase")
+        ):
             raise BindingMismatchError(str(expected.get("step_id")))
 
     def _apply_value(self, surface: str, value: JsonValue) -> None:
-        if value == MISSING:
+        if value is MISSING:
             self.adapter.remove(surface)
         else:
             self.adapter.set(surface, value)
@@ -543,7 +916,33 @@ class AcceptanceFixture:
             if before_compensation is not None:
                 before_compensation(action)
             current = deepcopy(self.adapter.state.get(action.surface, MISSING))
-            if current not in (action.after, action.before):
+            phase = checkpoint.get("phase")
+            invocation_started = checkpoint.get("invocation_state") == "started"
+            if phase == "prepared" and states_equal(current, action.before):
+                self._advance_phase(checkpoint, "compensating")
+                self._write_checkpoint(
+                    checkpoint,
+                    fail="compensating_write",
+                    action=action,
+                    failures=failures,
+                )
+                trace.append(f"compensating:{action.step_id}")
+                self._advance_phase(checkpoint, "compensated")
+                self._write_checkpoint(
+                    checkpoint,
+                    fail="compensated_write",
+                    action=action,
+                    failures=failures,
+                )
+                trace.append(f"compensated:{action.step_id}")
+                continue
+            if (
+                phase not in {"prepared", "completed"}
+                or not invocation_started
+                or not states_equal(
+                current, action.after
+                )
+            ):
                 self._advance_phase(checkpoint, "compensation_blocked")
                 self._write_checkpoint(
                     checkpoint,
@@ -552,8 +951,6 @@ class AcceptanceFixture:
                     failures=failures,
                 )
                 raise ConcurrentChangeError(action.surface)
-            if current != action.after:
-                continue
             self._advance_phase(checkpoint, "compensating")
             self._write_checkpoint(
                 checkpoint,
@@ -573,22 +970,67 @@ class AcceptanceFixture:
             )
             trace.append(f"compensated:{action.step_id}")
 
-    def recover_compensation(self, plan: MutationPlan) -> ExecutionResult:
-        """Audit and finish a durable compensation without replaying forward work."""
+    def compensate(self, plan: MutationPlan) -> ExecutionResult:
+        """Explicitly authorize rollback when no durable intent was persisted."""
 
+        return self._recover_compensation(plan, allow_initiation=True)
+
+    def recover_compensation(self, plan: MutationPlan) -> ExecutionResult:
+        """Infer and finish rollback only from durable compensation intent."""
+
+        return self._recover_compensation(plan, allow_initiation=False)
+
+    def _recover_compensation(
+        self,
+        plan: MutationPlan,
+        *,
+        allow_initiation: bool,
+    ) -> ExecutionResult:
+        """Audit and finish compensation without replaying forward work."""
+
+        self._validate_plan(plan)
         trace = []
         actions = {action.step_id: action for action in plan.actions}
-        for step_id, checkpoint in sorted(self.checkpoints().items(), reverse=True):
-            if checkpoint["phase"] != "compensating":
-                continue
+        checkpoints = self.checkpoints()
+        unknown_step_ids = set(checkpoints) - set(actions)
+        if unknown_step_ids:
+            raise BindingMismatchError(sorted(unknown_step_ids)[0])
+        for step_id, checkpoint in sorted(checkpoints.items(), reverse=True):
             action = actions[step_id]
+            expected = self._checkpoint(plan, action, "prepared")
+            self._validate_checkpoint_binding(checkpoint, expected)
+        if any(
+            checkpoint["phase"] == "compensation_blocked"
+            for checkpoint in checkpoints.values()
+        ):
+            raise CompensationBlockedError("rollback requires operator disposition")
+        if not allow_initiation and not any(
+            checkpoint["phase"] in {"compensating", "compensated"}
+            for checkpoint in checkpoints.values()
+        ):
+            raise HistoricalCheckpointError("no durable rollback intent")
+
+        for action in reversed(plan.actions):
+            step_id = action.step_id
+            checkpoint = checkpoints.get(step_id)
+            if checkpoint is None:
+                continue
+            phase = checkpoint["phase"]
+            invocation_started = checkpoint.get("invocation_state") == "started"
             current = deepcopy(self.adapter.state.get(action.surface, MISSING))
-            if current == action.after:
-                trace.append(f"audit:{step_id}:post_state")
-                self._apply_value(action.surface, action.before)
-            elif current == action.before:
+
+            if phase == "compensated":
+                if not states_equal(current, action.before):
+                    raise ConcurrentChangeError(action.surface)
                 trace.append(f"audit:{step_id}:pre_state")
-            else:
+                continue
+
+            if phase not in {"prepared", "completed", "compensating"}:
+                raise CompensationBlockedError(step_id)
+            if phase == "completed" and (
+                not invocation_started
+                or not states_equal(current, action.after)
+            ):
                 self._advance_phase(checkpoint, "compensation_blocked")
                 self._write_checkpoint(
                     checkpoint,
@@ -597,6 +1039,52 @@ class AcceptanceFixture:
                     failures=set(),
                 )
                 raise ConcurrentChangeError(action.surface)
+
+            if phase == "prepared" and not (
+                states_equal(current, action.before)
+                or (
+                    invocation_started
+                    and states_equal(current, action.after)
+                )
+            ):
+                self._advance_phase(checkpoint, "compensation_blocked")
+                self._write_checkpoint(
+                    checkpoint,
+                    fail="compensation_blocked_write",
+                    action=action,
+                    failures=set(),
+                )
+                raise ConcurrentChangeError(action.surface)
+
+            if phase == "compensating" and not (
+                states_equal(current, action.before)
+                or (
+                    invocation_started
+                    and states_equal(current, action.after)
+                )
+            ):
+                self._advance_phase(checkpoint, "compensation_blocked")
+                self._write_checkpoint(
+                    checkpoint,
+                    fail="compensation_blocked_write",
+                    action=action,
+                    failures=set(),
+                )
+                raise ConcurrentChangeError(action.surface)
+
+            if phase != "compensating":
+                self._advance_phase(checkpoint, "compensating")
+                self._write_checkpoint(
+                    checkpoint,
+                    fail="compensating_write",
+                    action=action,
+                    failures=set(),
+                )
+            if states_equal(current, action.after):
+                trace.append(f"audit:{step_id}:post_state")
+                self._apply_value(action.surface, action.before)
+            else:
+                trace.append(f"audit:{step_id}:pre_state")
             self._advance_phase(checkpoint, "compensated")
             self._write_checkpoint(
                 checkpoint,
@@ -605,6 +1093,11 @@ class AcceptanceFixture:
                 failures=set(),
             )
             trace.append(f"compensated:{step_id}")
+        if any(
+            checkpoint["phase"] != "compensated"
+            for checkpoint in self.checkpoints().values()
+        ):
+            raise CompensationBlockedError("rollback did not reach a terminal state")
         result = ExecutionResult(status="recovered", trace=tuple(trace))
         self.last_trace = result.trace
         return result
@@ -650,7 +1143,11 @@ class AcceptanceFixture:
             raise ArtifactVerificationError(surface)
         self.adapter.set(
             surface,
-            {"revision": revision, "content": bytes(artifact)},
+            {
+                "revision": revision,
+                "content_base64": base64.b64encode(artifact).decode("ascii"),
+                "content_digest": expected_digest,
+            },
         )
         return ApplyResult(status="completed", mutated_surfaces=(surface,))
 
@@ -671,7 +1168,7 @@ class AcceptanceFixture:
             trace.append(
                 f"control:{component}={'enabled' if enabled else 'disabled'}"
             )
-        if self.adapter.state[winner_surface] != winner_value:
+        if not states_equal(self.adapter.state[winner_surface], winner_value):
             raise RuntimeError("winner provider did not verify")
         trace.append(f"verify:{winner_surface}")
         for projection in losing_projections:
@@ -691,15 +1188,43 @@ class AcceptanceFixture:
 
     def import_unmanaged(self, surface: str) -> ImportedObservation:
         value = deepcopy(self.adapter.state[surface])
-        return ImportedObservation(
+        digest = canonical_digest(state_payload(value))
+        catalog_digest = f"sha256:{'1' * 64}"
+        inventory_digest = f"sha256:{'8' * 64}"
+        observation = ImportedObservation(
+            observation_identity=imported_observation_identity(
+                surface=surface,
+                digest=digest,
+                catalog_digest=catalog_digest,
+                inventory_digest=inventory_digest,
+            ),
             surface=surface,
             value=value,
-            digest=canonical_digest(value),
+            digest=digest,
+            catalog_digest=catalog_digest,
+            inventory_digest=inventory_digest,
         )
+        self._imports[observation.observation_identity] = deepcopy(observation)
+        return observation
 
     def adopt(self, observation: ImportedObservation) -> AdoptionProposal:
-        current = self.adapter.state.get(observation.surface)
-        if canonical_digest(current) != observation.digest:
+        expected_identity = imported_observation_identity(
+            surface=observation.surface,
+            digest=observation.digest,
+            catalog_digest=observation.catalog_digest,
+            inventory_digest=observation.inventory_digest,
+        )
+        registered = self._imports.get(observation.observation_identity)
+        if (
+            observation.observation_identity != expected_identity
+            or registered != observation
+        ):
+            raise BindingMismatchError(observation.surface)
+        current = self.adapter.state.get(observation.surface, MISSING)
+        if (
+            canonical_digest(state_payload(observation.value)) != observation.digest
+            or canonical_digest(state_payload(current)) != observation.digest
+        ):
             raise ConcurrentChangeError(observation.surface)
         return AdoptionProposal(
             surface=observation.surface,
@@ -713,7 +1238,7 @@ class AcceptanceFixture:
 
     def propose_retirement(self, surface: str) -> RetirementProposal:
         current = deepcopy(self.adapter.state.get(surface, MISSING))
-        if self._adopted.get(surface) != canonical_digest(current):
+        if self._adopted.get(surface) != canonical_digest(state_payload(current)):
             return RetirementProposal(status="report_only")
         return RetirementProposal(
             status="proposed",
@@ -722,7 +1247,7 @@ class AcceptanceFixture:
 
     def audit(self, desired_state: DesiredState) -> StatusResult:
         drift = any(
-            self.adapter.state.get(surface, MISSING) != desired
+            not states_equal(self.adapter.state.get(surface, MISSING), desired)
             for surface, desired in desired_state.items()
         )
         return StatusResult(status="drift" if drift else "converged")
@@ -778,8 +1303,7 @@ class AcceptanceFixture:
         )
 
     def capture_standalone(self, path: Path) -> dict[str, JsonValue]:
-        path = Path(path)
-        self._assert_standalone_path(path)
+        path = self._normalized_standalone_path(path)
         self._assert_no_symlink_parent(path)
         return self._capture_node(path)
 
@@ -788,21 +1312,27 @@ class AcceptanceFixture:
         path: Path,
         snapshot: Mapping[str, JsonValue],
     ) -> None:
-        path = Path(path)
-        self._assert_standalone_path(path)
+        path = self._normalized_standalone_path(path)
         self._assert_no_symlink_parent(path)
+        self._validate_snapshot(path, snapshot)
         self._remove_node(path)
         self._restore_node(path, snapshot)
 
-    def _assert_standalone_path(self, path: Path) -> None:
+    def _normalized_standalone_path(self, path: Path) -> Path:
+        normalized = Path(os.path.abspath(os.fspath(path)))
+        root = Path(os.path.abspath(os.fspath(self.standalone_root)))
         try:
-            path.absolute().relative_to(self.standalone_root.absolute())
+            normalized.relative_to(root)
         except ValueError as error:
             raise ValueError("standalone path escaped fixture root") from error
+        return normalized
 
     def _assert_no_symlink_parent(self, path: Path) -> None:
-        relative = path.absolute().relative_to(self.standalone_root.absolute())
-        current = self.standalone_root
+        root = Path(os.path.abspath(os.fspath(self.standalone_root)))
+        if root.is_symlink():
+            raise ConcurrentChangeError(str(root))
+        relative = path.relative_to(root)
+        current = root
         for part in relative.parts[:-1]:
             current /= part
             if current.is_symlink():
@@ -860,6 +1390,8 @@ class AcceptanceFixture:
         path: Path,
         snapshot: Mapping[str, JsonValue],
     ) -> None:
+        path = self._normalized_standalone_path(path)
+        self._assert_no_symlink_parent(path)
         kind = snapshot["kind"]
         path.parent.mkdir(parents=True, exist_ok=True)
         if kind == "regular_file":
@@ -876,3 +1408,91 @@ class AcceptanceFixture:
             os.chmod(path, snapshot["mode"])
             return
         raise ValueError(f"unsupported snapshot kind: {kind}")
+
+    def _validate_snapshot(
+        self,
+        path: Path,
+        snapshot: Mapping[str, JsonValue],
+    ) -> None:
+        path = self._normalized_standalone_path(path)
+        if not isinstance(snapshot, Mapping):
+            raise ValueError("invalid snapshot structure")
+        kind = snapshot.get("kind")
+        mode = snapshot.get("mode")
+        if isinstance(mode, bool) or not isinstance(mode, int) or not 0 <= mode <= 0o7777:
+            raise ValueError("invalid snapshot mode")
+
+        if kind == "regular_file":
+            if set(snapshot) != {
+                "kind",
+                "mode",
+                "content_base64",
+                "content_digest",
+            }:
+                raise ValueError("invalid snapshot regular-file shape")
+            encoded = snapshot.get("content_base64")
+            if not isinstance(encoded, str):
+                raise ValueError("invalid snapshot content")
+            try:
+                base64.b64decode(encoded, validate=True)
+            except (binascii.Error, ValueError) as error:
+                raise ValueError("invalid snapshot content") from error
+            if snapshot.get("content_digest") != canonical_digest(
+                {"content_base64": encoded}
+            ):
+                raise ValueError("invalid snapshot content digest")
+            return
+
+        if kind == "symlink":
+            if set(snapshot) != {
+                "kind",
+                "mode",
+                "link_text",
+                "resolved_target",
+                "broken",
+            }:
+                raise ValueError("invalid snapshot symlink shape")
+            link_text = snapshot.get("link_text")
+            resolved_target = snapshot.get("resolved_target")
+            if (
+                not isinstance(link_text, str)
+                or not link_text
+                or "\x00" in link_text
+                or not isinstance(resolved_target, str)
+                or not isinstance(snapshot.get("broken"), bool)
+                or str((path.parent / link_text).resolve(strict=False))
+                != resolved_target
+            ):
+                raise ValueError("invalid snapshot symlink evidence")
+            captured_target_exists = (path.parent / link_text).exists()
+            if (not captured_target_exists) != snapshot.get("broken"):
+                raise ConcurrentChangeError(str(path))
+            return
+
+        if kind == "directory":
+            if set(snapshot) != {
+                "kind",
+                "mode",
+                "children",
+                "tree_digest",
+            }:
+                raise ValueError("invalid snapshot directory shape")
+            children = snapshot.get("children")
+            if not isinstance(children, Mapping):
+                raise ValueError("invalid snapshot children")
+            if snapshot.get("tree_digest") != canonical_digest(children):
+                raise ValueError("invalid snapshot tree digest")
+            for name, child in children.items():
+                if (
+                    not isinstance(name, str)
+                    or name in {"", ".", ".."}
+                    or "/" in name
+                    or "\\" in name
+                    or "\x00" in name
+                    or not isinstance(child, Mapping)
+                ):
+                    raise ValueError("invalid snapshot child name")
+                self._validate_snapshot(path / name, child)
+            return
+
+        raise ValueError("invalid snapshot kind")

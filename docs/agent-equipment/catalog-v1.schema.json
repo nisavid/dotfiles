@@ -28,6 +28,14 @@
   "$defs": {
     "nonEmptyString": {"type": "string", "minLength": 1},
     "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "publicGitRepository": {
+      "type": "string",
+      "pattern": "^https://[A-Za-z0-9.-]+(?::[0-9]{1,5})?(?:/[A-Za-z0-9._~-]+)+/?$"
+    },
+    "immutableArtifactRef": {
+      "type": "string",
+      "pattern": "^git\\+https://[A-Za-z0-9.-]+(?::[0-9]{1,5})?(?:/[A-Za-z0-9._~-]+)+@[A-Za-z0-9][A-Za-z0-9._/-]*(?:#[A-Za-z0-9][A-Za-z0-9._/-]*(?:,[A-Za-z0-9][A-Za-z0-9._/-]*)*)?$"
+    },
     "harness": {"enum": ["claude", "codex", "cursor"]},
     "equipmentIdentity": {
       "type": "string",
@@ -45,7 +53,7 @@
           "additionalProperties": false,
           "properties": {
             "kind": {"const": "git"},
-            "repository": {"$ref": "#/$defs/nonEmptyString"},
+            "repository": {"$ref": "#/$defs/publicGitRepository"},
             "ref": {"$ref": "#/$defs/nonEmptyString"}
           }
         },
@@ -263,7 +271,10 @@
             "kind": {"const": "direct_mcp"},
             "server_name": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"},
             "transport": {"const": "http"},
-            "url": {"type": "string", "pattern": "^https://"}
+            "url": {
+              "type": "string",
+              "pattern": "^https://[A-Za-z0-9.-]+(?::[0-9]{1,5})?(?:/[A-Za-z0-9._~-]+)*/?$"
+            }
           }
         }
       ]
@@ -283,6 +294,14 @@
           "properties": {
             "secret_reference": {"type": "string", "pattern": "^[A-Z_][A-Z0-9_]*$"},
             "template": {"type": "string", "pattern": "\\{reference\\}"}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["secret_profile_reference"],
+          "additionalProperties": false,
+          "properties": {
+            "secret_profile_reference": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"}
           }
         }
       ]
@@ -365,7 +384,7 @@
           "properties": {
             "class": {"const": "immutable"},
             "revision": {"$ref": "#/$defs/nonEmptyString"},
-            "artifact_ref": {"$ref": "#/$defs/nonEmptyString"},
+            "artifact_ref": {"$ref": "#/$defs/immutableArtifactRef"},
             "content_digest": {"$ref": "#/$defs/digest"},
             "native_update_control": {"const": "not_applicable"}
           }

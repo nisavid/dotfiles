@@ -12,10 +12,11 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["identity", "equipment", "restore"],
+        "required": ["identity", "source", "equipment", "restore"],
         "additionalProperties": false,
         "properties": {
           "identity": {"$ref": "catalog-v1.schema.json#/$defs/distributionIdentity"},
+          "source": {"$ref": "catalog-v1.schema.json#/$defs/source"},
           "equipment": {
             "type": "array",
             "minItems": 1,

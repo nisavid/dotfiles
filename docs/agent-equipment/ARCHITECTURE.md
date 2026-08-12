@@ -98,9 +98,15 @@ Resolution phases are fixed:
 8. Validate route control, provenance, restore, operation, and compensation
    invariants.
 9. Classify runtime state and manager-driven drift from observations.
-10. Derive the selected command's report, proposal, or mutation plan.
-11. Validate the complete result before returning any executable plan.
-12. Sort by equipment identity, harness, route identity, and operation ordinal.
+10. Derive the selected command's report, proposal, or candidate action set.
+11. Derive the complete action-dependency graph, including every required
+    verification prerequisite and provider-switch dependency.
+12. Reject a graph with a missing dependency, orphan action, cycle, or
+    incomplete provider-switch dependency before returning any executable plan.
+13. Produce a deterministic topological action order. Use the canonical
+    equipment, harness, route, operation, and action-identity tuple only to
+    break ties among actions whose dependencies are already satisfied.
+14. Validate the complete result before returning any executable plan.
 
 Every diagnostic has a stable code, equipment identity when applicable,
 harness and route when applicable, a secret-free message, and evidence source.
@@ -108,6 +114,57 @@ An unresolved identity, incomplete route, invalid overlap, coverage-control
 mismatch, stale lock, unknown capability needed by an automated operation,
 operator-owned automated mutation, or missing compensation is fatal for apply.
 Fatal validation yields no mutation plan.
+
+The dependency graph is the ordering authority. An edge means a mutation
+predecessor's post-state must be verified and its action checkpoint completed,
+or a read-only verification predecessor's plan-bound evidence must be accepted
+in the run journal, before the successor can start. A provider switch therefore includes explicit edges from verified
+projector readiness to winner activation, from the winner's complete verified
+active activation group to every losing-route retirement, and from all route
+changes to final coverage verification. Existing desired winner state may
+discharge an activation prerequisite only through a plan-bound fresh
+observation; absence of a mutation does not erase the dependency.
+
+The graph keeps active `equipment_identities` distinct from
+`controlled_equipment_identities`. A disabled controlled identity with
+`intentional_omission` / `no_provider` coverage can name a write surface and a
+retirement dependency, but it is not evidence that the winner's active
+activation group verified. Lexical ordering never substitutes for a dependency
+edge. Reverse compensation uses the reverse topological order, so losing
+projections are restored before the winner is disabled or uninstalled and the
+legacy projector is restored last.
+
+The validated plan binds the complete dependency edge set and its deterministic
+topological result into `plan_digest`. A `PlannedAction.ordinal` is only the
+sealed projection of that result; an action record or lexically sorted action
+array cannot reconstruct or authorize a missing graph. The executor revalidates
+graph closure, acyclicity, topological ordinals, and the required
+winner-verification edges before it creates any checkpoint.
+
+The graph has two closed node kinds:
+
+- A `mutation` node references exactly one validated `PlannedAction`. It owns a
+  durable action checkpoint and participates in reverse compensation.
+- A `verification` node is read-only and has an identity
+  `verification:sha256:<hex>` derived from its canonical definition excluding
+  the identity and runtime result. That definition contains its purpose
+  (`projector_readiness`, `winner_activation`, or `final_coverage`), exact
+  candidate/catalog/lock/plan, route and capability bindings when applicable,
+  active activation membership, read-surface scope, required normalized-state
+  predicate or coverage predicate, and predecessor identities. The complete
+  node definition and graph edges are included in `plan_digest`.
+
+Executing a verification node produces a fresh, secret-free observation or
+coverage report bound to the node identity, its predicate digest, the complete
+plan bindings, and the exact predecessor result digests. The executor accepts
+the node only when its read surfaces and predicate verify after every
+predecessor mutation completed. It persists that evidence in the run journal,
+not an action checkpoint, and performs no native mutation. A converged winner
+therefore discharges its prerequisite through fresh plan-bound evidence without
+creating a mutation checkpoint; final coverage uses the same rule. Reverse
+compensation skips verification nodes while following the reverse topological
+order of mutation nodes. A missing, stale, failed, or misbound verification
+result blocks every dependent action.
 
 ## Coverage and operation invariants
 
@@ -121,7 +178,12 @@ unsupported outcome uses the exact string `no_provider`.
 - `intentional_omission` and `unsupported` select no active route.
 - Every supplementary route is named by one matching `allow_overlap`
   exception. The exception lists the complete active route set and a rationale.
-- Every active route has one provenance owner and one restore class.
+- Every active route has one provenance owner and one restore class. A
+  standalone source owner is exactly `source:<distribution suffix>`; a native
+  plugin owner is exactly `manager:<harness>-plugins/<plugin_id>`; a direct MCP
+  owner is exactly `overlay:<harness>/mcp`; and a Claude projection uses only
+  `projection:claude/standalone-skill`. A plausible but different source,
+  manager namespace, plugin, or overlay is invalid.
 - Every active route carries the exact selected component controls as unique
   equipment identity plus `enabled` or `disabled` state. Conflicting controls
   are invalid; an empty array states that no selective control applies.
@@ -153,6 +215,14 @@ observation identity and changes authored ownership only; a later apply performs
 any runtime reconciliation. `update` advances immutable revisions and reviewed
 native-rolling baselines without installing them. Apply never advances a lock.
 
+An imported observation identity is the canonical digest of its surface,
+observed-state digest, catalog digest, and inventory digest. Adoption accepts
+only a previously emitted observation record whose identity, bindings, value,
+and digest still agree; a newly constructed self-consistent record is not an
+import reference. The production controller persists imported observations as
+authored proposals, while the disposable acceptance fixture keeps the same
+registry in memory.
+
 ## Adapter interface
 
 Each production adapter should satisfy one internal seam:
@@ -171,14 +241,23 @@ diagnostics, lock diffs, and receipts never receive the resolved value.
 
 The authoritative serialized shapes are
 `docs/agent-equipment/adapter-contract-v1.schema.json`; the prose below defines
-their behavioral semantics. The five records are closed, tagged records: every
-named field is required unless this section says otherwise, and an unknown
-field is an error.
+their behavioral semantics. Capability discovery wraps its capability records
+in one closed success-or-error result; requests, observations, actions, and
+receipts use closed tagged record envelopes. Every named field is required
+unless this section says otherwise, and an unknown field is an error.
 Their `contract_version` is `adapter-contract-v1`. Identifiers are non-empty,
 secret-free strings; every `*_digest` is a lowercase SHA-256 digest over the
 canonical JSON of the named object. A digest field is excluded from its own
 digest input. Timestamps are RFC 3339 UTC values and never affect state
 digests.
+
+JSON Schema owns each serialized shape. The pure
+`scripts/agent_equipment_adapter_contract.py` sequence validator additionally
+accepts only one closed `ApplySequence` success proof. It binds the capability
+selected from plural discovery to the route provider, recomputes digests whose
+payloads are embedded, rejects conflicting component identities, and validates
+the capture, action, receipt, and verification records against one authority
+context. Individual valid records do not grant mutation authority.
 
 Every fallible observation or mutation result uses the same tagged envelope.
 An `ok` result contains only the success payload defined for that record. An
@@ -250,7 +329,9 @@ Surface-identity rule v1 is exact. `shared_equipment_identity` emits one
 `route_identity` emits only `surface:<route-identity>`. Identity strings are
 used verbatim after the shown prefix, then sorted by Unicode code point. The
 shared rule therefore maps the same canonical standalone entry to one surface
-across harnesses.
+across harnesses. Requests and actions must carry exactly this derived list;
+copying a coordinated but independently chosen scope through later records does
+not grant access to that scope.
 
 A catalog `automated` disposition requires an exact `automated` capability. A
 catalog `operator_action` disposition accepts `operator_action` or
@@ -270,11 +351,11 @@ state digest, and preserves every binding without loss.
 | --- | --- |
 | `contract_version`, `request_identity`, `correlation_identity` | Record version, one-call identity, and command-run correlation identity. Recovery creates a new request identity under the same run correlation. |
 | `command`, `purpose` | Command is `audit`, `import`, `update`, `adopt`, or `apply`; purpose is `inventory`, `capture_pre_state`, `verify_post_state`, `recovery`, or `verify_compensation`. Neither field grants mutation authority. |
-| `candidate_identity`, `catalog_digest`, `lock_digest`, `plan_digest` | Exact input bindings. Candidate identity is the immutable implementation candidate commit or artifact identity. `plan_digest` is absent only for non-apply inventory before a plan exists; all other binding fields remain required. |
+| `candidate_identity`, `implementation_manifest_digest`, `catalog_digest`, `lock_digest`, `plan_digest` | Exact input bindings. Candidate identity names the immutable implementation candidate commit or artifact; the distinct manifest digest authenticates the canonical installed implementation manifest for that candidate. `plan_digest` is absent only for non-apply inventory before a plan exists; all other binding fields remain required. |
 | `capability_identity`, `capability_digest`, `manager_version_evidence_digest` | Exact discovered capability and manager-version evidence selected by the resolver. A mismatch or disappearance is an error, not a fallback. |
 | `harness`, `route_identity`, `route_digest`, `route_record` | The exact resolved route. `route_record` is complete and must digest to `route_digest`; its harness comes from the coverage record and its `control_owner` remains visible to the adapter. |
-| `equipment_identities`, `activation_group` | Sorted, unique complete membership for the route action or observation. No adapter may add inferred members. |
-| `surface_scope` | Sorted logical surface identities that the adapter may read. Native paths, keys, plugin IDs, or server names derived by the adapter must remain within this scope. |
+| `equipment_identities`, `controlled_equipment_identities`, `activation_group` | `equipment_identities` is sorted active activation membership. `controlled_equipment_identities` is the exact identity projection of `route_record.component_controls` and may include disabled would-be duplicates whose coverage is `intentional_omission` / `no_provider`. Neither set implies membership in the other. |
+| `surface_scope` | Sorted logical surface identities that the adapter may read, derived from the union of active and controlled identities. Native paths, keys, plugin IDs, or server names derived by the adapter must remain within this scope. |
 | `secret_references` | The route's unresolved environment-variable or secret-profile references. The adapter validates names; only the runner resolves values inside the native child boundary. |
 | `expected_state_digest` | Optional only for inventory and pre-state capture. Required for post-state, recovery, and compensation verification. |
 
@@ -285,12 +366,17 @@ timestamps, native ordering, or non-semantic manager output differ.
 ### `RuntimeObservation`
 
 The observation echoes `contract_version`, `request_identity`,
-`correlation_identity`, all available input digests, capability identity,
+`correlation_identity`, candidate identity, installed implementation-manifest
+digest, all other available input digests, capability identity,
 manager-version evidence digest, harness, route identity, route digest, control
-owner, equipment identities, activation group, and surface scope. It adds
+owner, active and controlled equipment identities, activation group, and
+surface scope. It adds
 `observed_at` and a tagged `result`.
 
-An `ok` result contains:
+An `ok` result contains one closed `normalized_state` payload plus observation
+evidence and capture metadata. `state_digest` is recomputed from exactly that
+payload; timestamps, surface-evidence storage, and captured-state object
+metadata are outside the payload. Its fields are:
 
 | Field | Contract |
 | --- | --- |
@@ -304,7 +390,7 @@ An `ok` result contains:
 | `manager_drift` | `none`, `changed_from_reviewed_baseline`, `unobservable`, or `not_applicable`, with the reviewed baseline and observation source when applicable. The resolver, not the adapter, decides the command consequence. |
 | `surface_evidence` | Sorted secret-free references and digests for every surface read, including absence evidence. |
 | `captured_state` | Tagged `captured` with a reference to a validated `captured-state-v1` object when purpose is capture or recovery, or tagged `not_applicable`. |
-| `state_digest` | Digest of the complete normalized state payload excluding timestamps and evidence storage locations. |
+| `state_digest` | Canonical SHA-256 digest of the embedded complete `normalized_state` payload. |
 
 An error result carries the common error shape and echoes the same identities
 and bindings. It has no `state_digest`, and cannot be interpreted as absence,
@@ -325,15 +411,15 @@ capability are both `automated`. The record contains:
 
 | Field | Contract |
 | --- | --- |
-| `contract_version`, `action_identity`, `correlation_identity`, `ordinal` | Version; deterministic identity derived from plan digest, ordinal, route, operation, and desired-state digest; run correlation; and unique deterministic execution order. |
-| `candidate_identity`, `catalog_digest`, `lock_digest`, `plan_digest` | Immutable plan bindings. Any mismatch invalidates the whole plan before checkpointing. |
+| `contract_version`, `action_identity`, `correlation_identity`, `ordinal` | Version; canonical `action:sha256:<digest>` identity derived from plan digest, ordinal, route, operation, and desired-state digest; run correlation; and unique deterministic topological execution order. |
+| `candidate_identity`, `implementation_manifest_digest`, `catalog_digest`, `lock_digest`, `plan_digest` | Immutable implementation and plan bindings. Candidate identity and the distinct installed implementation-manifest digest must both match executor trust inputs; any mismatch invalidates the whole plan before checkpointing. |
 | `capability_identity`, `capability_digest`, `manager_version_evidence_digest`, `adapter_identity`, `adapter_version` | Exact implementation capability and manager-version evidence used to derive the action. Substitution requires re-resolution and a new plan. |
 | `harness`, `route_identity`, `route_digest`, `route_record` | Complete selected route and digest. `route_record.control_owner` must be `reconciler_owned`. |
-| `equipment_identities`, `activation_group`, `surface_scope` | Sorted complete action membership and the exact logical surfaces that this one action may change. One activation group maps to one route identity per harness. |
+| `equipment_identities`, `controlled_equipment_identities`, `activation_group`, `surface_scope` | Sorted active membership, the exact identity projection of selected component controls, and surfaces derived from their union. A disabled `no_provider` duplicate is controlled without becoming active coverage. One activation group maps to one route identity per harness. |
 | `operation`, `operation_disposition` | One required operation and the exact value `automated`. Inspect is never emitted as a mutating action. |
 | `desired_state`, `desired_state_digest` | Non-empty, closed, secret-free normalized target fragment and its digest. It may contain only route presence, enablement, normalized configuration digest, selected component states, and native-update suppression state. |
 | `secret_references` | Unresolved references copied from the route; no value or value-derived digest is allowed. |
-| `preconditions` | Exact catalog, lock, plan, route, capability, adapter, ownership, activation-group, and surface bindings; `prepared_checkpoint_required: true`; and `compare_before_mutate: true`. The executor supplies the captured pre-state digest separately to `apply`. |
+| `preconditions` | Exact candidate, installed implementation-manifest, catalog, lock, plan, route, capability, adapter, ownership, activation-group, and surface bindings; `prepared_checkpoint_required: true`; and `compare_before_mutate: true`. The executor supplies the captured pre-state digest separately to `apply`. |
 | `compensation` | Exact `restore_captured_pre_state`, plus the captured-state version required by the capability. |
 
 The action is a declaration, not runtime authority by itself. Execution also
@@ -343,16 +429,86 @@ pre-state digest. A planned action is immutable. A changed desired state,
 capability, adapter version, activation-group membership, or surface scope
 requires a new action identity and plan digest.
 
+The identity digest is the SHA-256 of canonical JSON for exactly
+`plan_digest`, `ordinal`, `route_id` (from `route_identity`), `operation`, and
+`desired_state_digest`. This is the same formula used by the closed
+`agent-equipment-plan-action-set/v1` projection. The adapter validator
+recomputes it before a sequence can authorize mutation.
+
+### `ApplySequence`
+
+`ApplySequence` is the public semantic-validation boundary for one successful
+apply or compensation attempt. Its closed `sequence` contains one authority
+context, capability discovery, pre-state request and observation, planned
+action, mutation receipt, and post-state request and observation. The executor
+creates the authority context from already validated plan inputs, a validated
+captured-state object, and a durably prepared checkpoint before it invokes the
+adapter. It appends the receipt and verification records, then validates the
+complete success proof before marking the checkpoint completed or compensated.
+The validator requires the candidate identity and installed implementation-
+manifest digest as separate, candidate-independent launcher trust inputs; it
+never derives them from the sequence it is validating. Omitting either input,
+or presenting an internally consistent sequence for a different candidate,
+fails before the proof can authorize a checkpoint transition.
+
+The authority context binds the exact apply command and phase-appropriate
+capture or recovery purpose; request, action, and correlation identities; all
+candidate, installed implementation-manifest, catalog, lock, plan, capability,
+manager-version, adapter, harness,
+route, active and controlled equipment, activation-group, and operation fields;
+independently derived read and write surfaces; selected route controls;
+captured-state object identity and digest; the embedded captured normalized
+pre-state and its canonical digest; immediate expected pre-state guard; the
+embedded expected normalized post-state and its canonical digest; the forward
+post-state digest; and prepared-checkpoint reference. Post-state
+verification must use the same route, equipment, surfaces, and unresolved secret
+references as the action. A different self-consistent route is not valid
+verification of that action.
+
+The validator independently derives surfaces from the selected capability and
+the union of active and controlled identities,
+requires every route control to appear exactly once in desired component state,
+and requires exact automated selected-component support. It also requires
+successful observations with exact component and per-surface evidence coverage,
+the route's native-update classification, an equal mutation pre-state guard,
+complete mutation evidence, an equal post-verification digest, and explicit
+post-observation fields that agree with every target fragment embedded in the
+action. A failed receipt remains a valid standalone record but cannot form an
+`ApplySequence` success proof.
+
+This proof is not an external trust root. The semantic validator requires the
+executor to supply the independently trusted current candidate identity and
+installed implementation-manifest digest; neither value is learned from the
+sequence. It rejects a self-consistent sequence whose implementation bindings
+do not match those inputs. The production executor still proves that the plan
+and checkpoint digests name its validated local artifacts and that the
+checkpoint is durable. JSON Schema validation alone proves only closed shape,
+not installed-implementation trust. `RuntimeObservation.state_digest`,
+`captured_pre_state_digest`, and `expected_post_state_digest` are recomputed
+from their embedded normalized-state payloads. `captured_state_digest` remains
+the separate digest of the complete captured-state object. Apply binds the
+captured normalized pre-state to the capture observation and verifies that the
+desired action fragment matches the full normalized post-state. Compensation
+restores that captured state, while its immediate guard equals the canonical
+full forward-post state digest, not the partial `desired_state_digest`.
+
 ### `MutationReceipt`
 
 `apply` and `compensate` return the same receipt envelope. It echoes
-`contract_version`, action and correlation identities, ordinal, all plan and
+`contract_version`, action and correlation identities, ordinal, candidate and
+installed implementation-manifest bindings, all plan and
 capability bindings, adapter identity and version, harness, route identity and
-digest, control owner, equipment identities, activation group, surface scope,
+digest, control owner, active and controlled equipment identities, activation group, surface scope,
 operation, operation disposition, and `secret_references` as names only. It
 adds `receipt_identity`, `attempt_identity`, `phase` (`apply` or
 `compensate`), `started_at`, `finished_at`, `prepared_checkpoint_reference`,
 and a tagged result.
+
+The closed success proof uses UTC RFC 3339 timestamps ending in `Z` and requires
+`pre_state_observation.observed_at <= started_at <= finished_at <=
+post_state_observation.observed_at`. Equality is allowed for clocks whose
+resolution coalesces adjacent events; any reversal, naive timestamp, or
+non-UTC offset fails the sequence.
 
 An `ok` result contains `effect` (`changed` or `already_satisfied`), the
 expected and immediately observed pre-state digests, `comparison: equal`, the
@@ -360,7 +516,8 @@ observed post-state digest, secret-free native-result and surface-evidence
 digests, and compensation evidence. Apply compensation evidence binds the
 captured pre-state reference and declares `restore_captured_pre_state`;
 successful compensation additionally proves that the restored state digest
-equals that captured pre-state digest. A receipt reports adapter effects only;
+equals `captured_pre_state_digest`, not the captured-state object digest. A
+receipt reports adapter effects only;
 the executor still calls `verify` and durably records `completed` or
 `compensated` before treating the effect as accepted.
 
@@ -368,7 +525,7 @@ the executor still calls `verify` and durably records `completed` or
 | --- | --- |
 | `effect` | `changed` or `already_satisfied`; neither implies executor verification. |
 | `expected_pre_state_digest`, `observed_pre_state_digest`, `comparison` | Echo the executor guard, the adapter's immediate pre-invocation observation, and exact `equal`. |
-| `expected_post_state_digest`, `observed_post_state_digest` | The action-derived normalized target and the adapter's immediate post-invocation observation. A mismatch cannot be hidden by an `ok` result. |
+| `expected_post_state_digest`, `observed_post_state_digest` | For apply, the canonical full normalized post-state matching every desired fragment; for compensation, the canonical captured normalized pre-state. The immediate post-invocation observation must equal that phase-specific full-state target. |
 | `native_result_digest` | Digest of normalized, redacted status fields only; raw or secret-derived native output is excluded. |
 | `surface_evidence` | Sorted secret-free references and digests for every surface the invocation could affect. |
 | `compensation_evidence` | For apply: tagged `prepared` with `restore_captured_pre_state`, captured-state reference and digest, and expected-post-state digest. For compensate: tagged `restored` with the same bindings, restored-state digest, and `comparison: equal`. |
@@ -394,6 +551,12 @@ Selected `component_controls` are desired route state, while adapter capability
 records say whether the harness can realize each control. The resolver rejects
 a selected control without an exact supported capability before it returns an
 executable plan. Adapters do not silently broaden a control to a whole plugin.
+When the route selects component controls, desired component state must contain
+every selected control exactly once and no others. Each must name selected
+action equipment, exactly match the route state, and be covered by an
+`automated` capability with `selected_component` mutation boundary and exact
+identity and state support. Recomputed route, capability, action, or plan
+digests do not broaden this authority.
 
 Adapters may mutate only the surface named by an automated action. They preserve
 unrelated keys and native state, compare the current observation with the
@@ -416,9 +579,9 @@ one. `Controls` covers per-equipment plugin or standalone-suppression state;
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Shared standalone skill under `~/.agents/skills` | A | A | U | U | U | A | A | U | U |
 | Claude skill projection symlink | A | A | U | U | U | A | A | U | U |
-| Claude native plugin | A | A | U | A | A | A | U | I/O/U | O/U |
+| Claude native plugin | A | A | U | A | A | O/U | U | I/O/U | O/U |
 | Claude direct-MCP owned overlay | A | U | A | A | A | A | A | U | U |
-| Codex native plugin | A | A | A | A | A | A | U | A/I/O/U | U |
+| Codex native plugin | A | A | A | A | A | O/U | U | A/I/O/U | U |
 | Codex standalone-skill disable entry | A | U | A | A | A | A | A | A | U |
 | Codex direct-MCP owned overlay | A | U | A | A | A | A | A | U | U |
 | Cursor native plugin | A/U | O/U | O/U | O/U | O/U | O/U | U | O/U | U |
@@ -455,6 +618,12 @@ Similarly, version observation may be automated while update suppression is
 operator-only or unavailable. An observed version outside the reviewed rolling
 baseline is manager-driven drift; `update` may propose a reviewed baseline
 advance, while `apply` neither advances the baseline nor assumes suppression.
+Native-rolling plugin removal is operator-only or unavailable unless the live
+capability proves that the captured artifact can be reconstructed exactly,
+independently of a moving marketplace channel or cache. Compensation for an
+installation that began from confirmed absence may remove that newly installed
+instance; that narrow absence restore does not make general plugin removal an
+automated route capability.
 
 Every row is further constrained by route ownership. `operator_owned` routes
 may use automated `inspect` but all mutating cells become `I`, `O`, or `U`,
@@ -495,26 +664,38 @@ promise global atomicity. For every action it:
 2. Derives the expected post-state and compensation from adapter capabilities.
 3. Atomically persists and fsyncs a `prepared` checkpoint before mutation.
 4. Compares current state with the captured pre-state.
-5. Executes the action.
-6. Verifies the expected post-state.
-7. Atomically persists and fsyncs `completed`.
+5. Atomically advances and fsyncs the checkpoint's invocation intent from
+   `not_started` to `started`. A failed intent write forbids the adapter call.
+6. Executes the action.
+7. Verifies the expected post-state.
+8. Atomically persists and fsyncs `completed`.
 
-On a later failure, completed actions compensate in reverse order. Before each
-restore, current state must equal the post-state written by that action. The
-executor persists `compensating` before restore and `compensated` afterward. A
-mismatch preserves the external change and stops.
+On a later failure, completed actions compensate in reverse topological order.
+Before each restore, current state must equal the post-state written by that
+action. The executor persists `compensating` before restore and `compensated`
+afterward. A mismatch preserves the external change, durably advances that
+action to terminal `compensation_blocked`, marks the run `needs_operator`, and
+stops. Recovery never reports success while any action is blocked.
 
-A surviving `prepared` checkpoint is audited before retry:
+A surviving `prepared` checkpoint is audited before retry. Expected post-state
+can prove this run's effect only when its durable invocation intent is
+`started`:
 
-- observed pre-state: the mutation did not take effect and may be retried;
-- observed expected post-state: record completion without replay;
+- observed pre-state: the mutation did not take effect and may be retried after
+  persisting a new invocation intent;
+- `started` plus observed expected post-state: record completion without replay;
+- `not_started` plus observed expected post-state: preserve it as concurrent
+  target-valued drift; never complete or compensate it as this run's effect;
 - any other state: preserve it, report concurrent or partial drift, and stop.
 
 A completion-checkpoint write failure therefore cannot cause duplicate replay.
 A compensation failure remains durable and requires the same audit before a
 retry. Checkpoint identities bind the canonical catalog digest, lock digest,
-plan digest, route, operation, pre-state, expected post-state, and adapter
-capability digest.
+plan digest, run and candidate identities, installed-implementation manifest
+digest, sealed captured-state identity and digest, capability-set digest, route
+capability and manager-evidence binding, action identity and ordinal, route,
+operation, pre-state digest, and expected post-state digest. This is the
+complete `CHK-10` binding; no subset authorizes replay.
 
 ## Generated outputs
 
