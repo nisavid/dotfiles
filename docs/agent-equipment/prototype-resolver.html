@@ -1,0 +1,610 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent equipment resolver — throwaway logic prototype</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #18202b;
+      --muted: #647080;
+      --paper: #f5f7fa;
+      --panel: #ffffff;
+      --line: #d9e0e8;
+      --accent: #4656d8;
+      --accent-soft: #eef0ff;
+      --good: #14663c;
+      --good-soft: #e9f7ef;
+      --bad: #a12b35;
+      --bad-soft: #fff0f1;
+      --warn: #805b00;
+      --warn-soft: #fff8df;
+      font: 15px/1.45 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: var(--ink); background: var(--paper); }
+    main { width: min(1180px, calc(100% - 32px)); margin: 36px auto 64px; }
+    h1, h2, h3 { line-height: 1.15; margin: 0; }
+    h1 { font-size: clamp(28px, 4vw, 44px); letter-spacing: -.035em; }
+    h2 { font-size: 18px; }
+    h3 { font-size: 14px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+    p { margin: 0; }
+    code { font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .eyebrow { color: var(--accent); font-weight: 700; text-transform: uppercase; letter-spacing: .08em; font-size: 12px; }
+    .intro { display: grid; gap: 12px; max-width: 900px; margin-bottom: 26px; }
+    .question { color: var(--muted); font-size: 17px; }
+    .prototype-mark { display: inline-flex; width: max-content; gap: 7px; align-items: center; padding: 5px 9px; border: 1px solid var(--warn); border-radius: 999px; color: var(--warn); background: var(--warn-soft); font-size: 12px; font-weight: 700; }
+    .stack { display: grid; gap: 18px; }
+    .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 18px; box-shadow: 0 8px 30px rgba(26, 36, 55, .04); }
+    .panel-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 15px; }
+    .phase { display: inline-flex; align-items: center; gap: 7px; padding: 5px 9px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 12px; font-weight: 700; }
+    .status-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .state-card { border: 1px solid var(--line); border-radius: 11px; padding: 14px; min-width: 0; }
+    .state-card.wide { grid-column: 1 / -1; }
+    .state-card h3 { margin-bottom: 10px; }
+    .facts { display: grid; gap: 8px; }
+    .fact { display: grid; grid-template-columns: minmax(120px, .45fr) 1fr; gap: 12px; border-top: 1px solid #edf0f4; padding-top: 8px; }
+    .fact:first-child { border-top: 0; padding-top: 0; }
+    .label { color: var(--muted); }
+    .value { min-width: 0; overflow-wrap: anywhere; }
+    .pill-list { display: flex; flex-wrap: wrap; gap: 7px; }
+    .pill { border: 1px solid var(--line); border-radius: 999px; padding: 4px 8px; font-size: 12px; background: #fafbfc; }
+    .pill.good { color: var(--good); border-color: #a9d8bd; background: var(--good-soft); }
+    .pill.bad { color: var(--bad); border-color: #e6b4ba; background: var(--bad-soft); }
+    .pill.warn { color: var(--warn); border-color: #e3ce85; background: var(--warn-soft); }
+    .routes { display: grid; gap: 9px; }
+    .route { display: grid; grid-template-columns: 140px 110px 1fr; gap: 10px; align-items: start; border-top: 1px solid #edf0f4; padding-top: 9px; }
+    .route:first-child { border-top: 0; padding-top: 0; }
+    .route strong { font-size: 13px; overflow-wrap: anywhere; }
+    .route small { color: var(--muted); }
+    .diagnostic { border-left: 3px solid var(--bad); background: var(--bad-soft); padding: 9px 11px; border-radius: 0 8px 8px 0; margin-top: 8px; }
+    .diagnostic.warning { border-color: var(--warn); background: var(--warn-soft); }
+    .diagnostic code { display: block; font-weight: 700; margin-bottom: 2px; }
+    .empty { color: var(--muted); font-style: italic; }
+    .controls { display: flex; flex-wrap: wrap; gap: 8px; }
+    button { appearance: none; border: 1px solid var(--line); background: #fff; color: var(--ink); border-radius: 9px; padding: 8px 11px; font: inherit; font-weight: 650; cursor: pointer; }
+    button:hover { border-color: var(--accent); color: var(--accent); }
+    button.primary { background: var(--accent); border-color: var(--accent); color: white; }
+    button.danger { color: var(--bad); border-color: #e6b4ba; background: var(--bad-soft); }
+    button:disabled { opacity: .45; cursor: default; }
+    .walkthroughs { display: grid; gap: 14px; }
+    .tabs { display: flex; flex-wrap: wrap; gap: 7px; }
+    .tab.active { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+    .scenario { border: 1px solid var(--line); border-radius: 11px; padding: 14px; }
+    .scenario p { color: var(--muted); margin: 7px 0 13px; max-width: 850px; }
+    .steps { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+    .step-wrap { display: flex; align-items: center; gap: 8px; }
+    .step-wrap:not(:last-child)::after { content: "→"; color: #a0a9b5; }
+    .step.done button { border-color: #a9d8bd; color: var(--good); background: var(--good-soft); }
+    .step.current button { border-color: var(--accent); color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+    .step.future button { color: var(--muted); }
+    .outputs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .output { border: 1px solid var(--line); background: #fbfcfd; border-radius: 9px; padding: 12px; min-height: 80px; }
+    .output h3 { margin-bottom: 8px; }
+    .output pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .trace { list-style: none; margin: 0; padding: 0; display: grid; gap: 7px; counter-reset: trace; }
+    .trace li { display: grid; grid-template-columns: 26px 1fr; gap: 8px; color: var(--muted); }
+    .trace li::before { counter-increment: trace; content: counter(trace); width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; background: #eef1f5; font-size: 11px; color: var(--ink); }
+    @media (max-width: 760px) {
+      .grid, .outputs { grid-template-columns: 1fr; }
+      .state-card.wide { grid-column: auto; }
+      .route { grid-template-columns: 1fr; gap: 3px; }
+      .fact { grid-template-columns: 1fr; gap: 2px; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header class="intro">
+    <div class="eyebrow">Global agent equipment</div>
+    <h1>Provider resolution you can push around</h1>
+    <div class="prototype-mark">Throwaway logic prototype — never applies changes</div>
+    <p class="question">Question: can one resolver make Matt Pocock skills and repeated MCP choices understandable, deterministic, component-aware, restore-honest, and secret-safe before production code exists?</p>
+  </header>
+
+  <div class="stack">
+    <section class="panel" aria-labelledby="current-state-title">
+      <div class="panel-head">
+        <div><h2 id="current-state-title">Current resolver state</h2></div>
+        <div class="phase"><span class="status-dot"></span><span id="phase"></span></div>
+      </div>
+      <div id="state" class="grid"></div>
+    </section>
+
+    <section class="panel" aria-labelledby="free-play-title">
+      <div class="panel-head">
+        <div>
+          <h2 id="free-play-title">Free play</h2>
+          <p class="question">Try actions in any order. Invalid combinations stay visible and block generation.</p>
+        </div>
+      </div>
+      <div id="free-play" class="controls"></div>
+    </section>
+
+    <section class="panel walkthroughs" aria-labelledby="walkthrough-title">
+      <div class="panel-head">
+        <div><h2 id="walkthrough-title">Guided walkthroughs</h2></div>
+      </div>
+      <div id="tabs" class="tabs"></div>
+      <div id="scenario" class="scenario"></div>
+    </section>
+
+    <section class="panel" aria-labelledby="output-title">
+      <div class="panel-head">
+        <div>
+          <h2 id="output-title">Generated proposals</h2>
+          <p class="question">These are preview-only owned fragments. They never contain resolved secret values.</p>
+        </div>
+      </div>
+      <div id="outputs" class="outputs"></div>
+    </section>
+
+    <section class="panel" aria-labelledby="trace-title">
+      <div class="panel-head"><h2 id="trace-title">Decision trace</h2></div>
+      <ol id="trace" class="trace"></ol>
+    </section>
+  </div>
+</main>
+
+<script>
+const ResolverPrototype = (() => {
+  const MATT_SKILLS = [
+    "ask-matt", "diagnosing-bugs", "grill-with-docs", "triage",
+    "improve-codebase-architecture", "setup-matt-pocock-skills", "tdd",
+    "to-spec", "to-tickets", "wayfinder", "implement", "prototype",
+    "research", "domain-modeling", "codebase-design", "code-review",
+    "resolving-merge-conflicts", "wizard", "grill-me", "grilling",
+    "handoff", "teach", "to-questionnaire", "wait-what", "writing-for-agents"
+  ];
+  const MCP_NAMES = ["chrome-devtools", "context7", "firecrawl", "github", "greptile"];
+
+  const blank = () => ({
+    phase: "empty",
+    fixture: "none",
+    inventory: [],
+    componentControls: [],
+    selections: [],
+    conflicts: [],
+    diagnostics: [],
+    secretReferences: [],
+    secretValuesPresent: false,
+    exactRestoreClaim: false,
+    outputs: { overlay: "", lockDiff: "", report: "" },
+    trace: ["Reset to a blank, read-only resolver input."],
+  });
+
+  const route = (equipment, harness, provider, restore, owner = "reconciler_owned") => ({
+    equipment, harness, provider, restore, owner,
+    dispositions: restore === "immutable"
+      ? "inspect/install/configure/enable/disable/remove/restore: automated"
+      : "inspect/install/configure/enable/disable/remove: automated; restore: operator_action",
+  });
+
+  function mattInventory(state) {
+    return {
+      ...blank(),
+      phase: "observed",
+      fixture: "Matt Pocock skills",
+      inventory: [
+        "25 standalone skill directories from mattpocock/skills",
+        "21 Claude symlinks to those standalone directories",
+        "4 absent Claude projections: to-questionnaire, wait-what, wizard, writing-for-agents",
+        "official Claude plugin available but not installed",
+      ],
+      componentControls: ["Claude plugin skills cannot be individually disabled"],
+      trace: [...state.trace, "Loaded the dated Matt fixture without claiming ownership."],
+    };
+  }
+
+  function mcpInventory(state) {
+    return {
+      ...blank(),
+      phase: "observed",
+      fixture: "Repeated MCP providers",
+      inventory: [
+        "Chrome DevTools: Claude plugin plus direct routes",
+        "Context7: direct routes plus installed plugin candidates",
+        "Firecrawl: direct MCP routes; Claude plugin currently contributes skills, not an MCP",
+        "GitHub: direct routes plus Claude and Codex plugin candidates",
+        "Greptile: direct Claude route; no verified Codex or Cursor provider",
+      ],
+      componentControls: [
+        "Codex can control plugin MCPs independently where declared",
+        "Claude plugin component controls vary by component class",
+        "Cursor plugin state has no stable file-backed install contract",
+      ],
+      secretReferences: ["GITHUB_PERSONAL_ACCESS_TOKEN", "GREPTILE_API_KEY"],
+      trace: [...state.trace, "Loaded repeated MCP observations with secret names only."],
+    };
+  }
+
+  function applyControls(state) {
+    if (state.fixture === "Matt Pocock skills") {
+      return {
+        ...state,
+        phase: "controlled",
+        componentControls: [
+          "Claude official plugin: 25 skills remain one activation group",
+          "Standalone route: each of 25 skills remains individually selectable",
+          "No plugin hooks or MCPs are lost by preferring the Claude plugin",
+        ],
+        trace: [...state.trace, "Applied available controls before forming the 25-skill Claude activation group."],
+      };
+    }
+    if (state.fixture === "Repeated MCP providers") {
+      return {
+        ...state,
+        phase: "controlled",
+        componentControls: [
+          "Disable losing direct or plugin MCP only through a supported per-component control",
+          "Treat whole-plugin activation as atomic only after selective controls are exhausted",
+          "Keep Cursor plugin mutation operator-owned while its supported install surface is UI-only",
+        ],
+        trace: [...state.trace, "Applied per-component controls before evaluating remaining provider conflicts."],
+      };
+    }
+    return addDiagnostic(state, "NO_INVENTORY", "Load an observed fixture before applying component controls.");
+  }
+
+  function selectProviders(state) {
+    if (state.fixture === "Matt Pocock skills") {
+      const selections = [
+        route("skill:mattpocock/*", "claude", "official Matt Claude plugin (one 25-skill group)", "native_rolling"),
+        route("skill:mattpocock/*", "codex", "verified standalone artifact", "immutable"),
+        route("skill:mattpocock/*", "cursor", "verified standalone artifact", "immutable"),
+      ];
+      return {
+        ...state,
+        phase: "selected",
+        selections,
+        conflicts: [],
+        exactRestoreClaim: false,
+        trace: [...state.trace, "Selected the Claude plugin and retained standalone providers for Codex and Cursor."],
+      };
+    }
+    if (state.fixture === "Repeated MCP providers") {
+      const selections = [
+        route("mcp:chrome-devtools/server", "claude", "Claude plugin MCP", "native_rolling"),
+        route("mcp:chrome-devtools/server", "codex", "direct MCP overlay", "immutable"),
+        route("mcp:chrome-devtools/server", "cursor", "direct MCP overlay", "immutable"),
+        route("mcp:context7/server", "claude", "direct MCP overlay", "immutable"),
+        route("mcp:context7/server", "codex", "direct MCP overlay", "immutable"),
+        route("mcp:context7/server", "cursor", "direct MCP overlay", "immutable"),
+        route("mcp:firecrawl/server", "claude", "direct MCP overlay", "immutable"),
+        route("mcp:firecrawl/server", "codex", "direct MCP overlay", "immutable"),
+        route("mcp:firecrawl/server", "cursor", "direct MCP overlay", "immutable"),
+        route("mcp:github/server", "claude", "Claude plugin MCP", "native_rolling"),
+        route("mcp:github/server", "codex", "Codex plugin MCP", "native_rolling"),
+        route("mcp:github/server", "cursor", "direct MCP overlay", "immutable"),
+        route("mcp:greptile/server", "claude", "direct MCP overlay", "immutable"),
+        route("mcp:greptile/server", "codex", "no_provider", "unsupported", "operator_owned"),
+        route("mcp:greptile/server", "cursor", "no_provider", "unsupported", "operator_owned"),
+      ];
+      return {
+        ...state,
+        phase: "selected",
+        selections,
+        conflicts: [],
+        exactRestoreClaim: false,
+        trace: [...state.trace, "Selected one preferred route per MCP and harness; unsupported Greptile cells use no_provider."],
+      };
+    }
+    return addDiagnostic(state, "NO_INVENTORY", "Load an observed fixture before selecting providers.");
+  }
+
+  function introduceDuplicate(state) {
+    if (!state.selections.length) return addDiagnostic(state, "NO_SELECTION", "Select providers before adding a losing duplicate.");
+    const conflict = `${state.selections[0].equipment} on ${state.selections[0].harness}: standalone and plugin are both active without allow_overlap`;
+    return {
+      ...state,
+      phase: "invalid",
+      conflicts: [...state.conflicts, conflict],
+      diagnostics: [...state.diagnostics, { code: "UNLISTED_PROVIDER_OVERLAP", message: conflict }],
+      outputs: { overlay: "", lockDiff: "", report: "" },
+      trace: [...state.trace, "Added an unlisted duplicate; complete-plan validation now blocks generation."],
+    };
+  }
+
+  function claimExactNativeRestore(state) {
+    if (!state.selections.some(item => item.restore === "native_rolling")) {
+      return addDiagnostic(state, "NO_ROLLING_ROUTE", "Select a native-rolling route before testing an exact-restore claim.");
+    }
+    return {
+      ...state,
+      phase: "invalid",
+      exactRestoreClaim: true,
+      diagnostics: [...state.diagnostics, {
+        code: "RESTORE_CLAIM_EXCEEDS_PROVIDER",
+        message: "An official marketplace channel cannot promise the exact previously installed artifact.",
+      }],
+      outputs: { overlay: "", lockDiff: "", report: "" },
+      trace: [...state.trace, "Tried to label a native-rolling route immutable; the resolver rejected the claim."],
+    };
+  }
+
+  function correctRestoreClaim(state) {
+    return {
+      ...state,
+      phase: state.selections.length ? "validated" : state.phase,
+      exactRestoreClaim: false,
+      diagnostics: state.diagnostics.filter(item => item.code !== "RESTORE_CLAIM_EXCEEDS_PROVIDER"),
+      trace: [...state.trace, "Restored an honest native-rolling classification with operator_action restore."],
+    };
+  }
+
+  function addSecretReference(state) {
+    const references = [...new Set([...state.secretReferences, "EXAMPLE_API_KEY"])];
+    return {
+      ...state,
+      secretReferences: references,
+      trace: [...state.trace, "Added an environment-variable name; no resolved credential entered resolver state."],
+    };
+  }
+
+  function injectSecretValue(state) {
+    return {
+      ...state,
+      phase: "invalid",
+      secretValuesPresent: true,
+      diagnostics: [...state.diagnostics, {
+        code: "SECRET_VALUE_FORBIDDEN",
+        message: "Generated state received a resolved value instead of an environment-variable name.",
+      }],
+      outputs: { overlay: "", lockDiff: "", report: "" },
+      trace: [...state.trace, "Injected a secret canary value; validation blocked every generated output."],
+    };
+  }
+
+  function validate(state) {
+    let diagnostics = state.diagnostics.filter(item => !["NO_INVENTORY", "NO_SELECTION"].includes(item.code));
+    if (!state.inventory.length) diagnostics.push({ code: "NO_INVENTORY", message: "No runtime observation is loaded." });
+    if (!state.selections.length) diagnostics.push({ code: "NO_SELECTION", message: "No complete provider selection exists." });
+    if (state.conflicts.length && !diagnostics.some(item => item.code === "UNLISTED_PROVIDER_OVERLAP")) {
+      diagnostics.push({ code: "UNLISTED_PROVIDER_OVERLAP", message: "Every supplementary provider requires an exact allow_overlap exception." });
+    }
+    if (state.secretValuesPresent && !diagnostics.some(item => item.code === "SECRET_VALUE_FORBIDDEN")) {
+      diagnostics.push({ code: "SECRET_VALUE_FORBIDDEN", message: "Resolved secret values are outside the resolver contract." });
+    }
+    const valid = diagnostics.length === 0;
+    return {
+      ...state,
+      phase: valid ? "validated" : "invalid",
+      diagnostics,
+      outputs: valid ? state.outputs : { overlay: "", lockDiff: "", report: "" },
+      trace: [...state.trace, valid ? "Validated the complete selection before generating any proposal." : "Complete-plan validation found a fatal diagnostic; generation remains empty."],
+    };
+  }
+
+  function generate(state) {
+    const checked = validate(state);
+    if (checked.diagnostics.length) return checked;
+    const selectedSummary = checked.selections
+      .filter(item => item.provider !== "no_provider")
+      .map(item => `${item.equipment} / ${item.harness} -> ${item.provider}`);
+    const overlay = checked.fixture === "Matt Pocock skills"
+      ? [
+          "claude.enabledPlugins:",
+          "  mattpocock-skills@claude-plugins-official: true",
+          "claude.projections.retire:",
+          "  - only the 21 captured Matt symlinks",
+          "agents.skills.preserve:",
+          "  - all 25 standalone targets",
+        ].join("\n")
+      : [
+          "ownedMcpSelections:",
+          ...MCP_NAMES.map(name => `  ${name}: explicit preferred route per harness`),
+          "secretReferences:",
+          ...checked.secretReferences.map(name => `  - env:${name}`),
+        ].join("\n");
+    const lockDiff = [
+      "+ resolved provider selections:",
+      ...selectedSummary.map(item => `+   ${item}`),
+      "+ native-rolling routes retain reviewed observed baselines",
+      "+ immutable routes require artifact content digests",
+    ].join("\n");
+    return {
+      ...checked,
+      phase: "generated",
+      outputs: {
+        overlay,
+        lockDiff,
+        report: "Read-only proposal generated. Runtime mutations: 0. Secret values present: no.",
+      },
+      trace: [...checked.trace, "Generated owned overlay fragments and a lock diff; runtime stayed untouched."],
+    };
+  }
+
+  function addDiagnostic(state, code, message) {
+    return {
+      ...state,
+      phase: "invalid",
+      diagnostics: [...state.diagnostics, { code, message }],
+      outputs: { overlay: "", lockDiff: "", report: "" },
+      trace: [...state.trace, message],
+    };
+  }
+
+  const reducers = {
+    reset: () => blank(),
+    loadMatt: mattInventory,
+    loadMcps: mcpInventory,
+    applyControls,
+    selectProviders,
+    introduceDuplicate,
+    claimExactNativeRestore,
+    correctRestoreClaim,
+    addSecretReference,
+    injectSecretValue,
+    validate,
+    generate,
+  };
+
+  function reduce(state, action) {
+    const reducer = reducers[action];
+    return reducer ? reducer(state) : addDiagnostic(state, "UNKNOWN_ACTION", `Unknown action: ${action}`);
+  }
+
+  return { initialState: blank, reduce };
+})();
+
+const ACTIONS = [
+  ["reset", "Reset"],
+  ["loadMatt", "Load Matt fixture"],
+  ["loadMcps", "Load MCP fixture"],
+  ["applyControls", "Apply component controls"],
+  ["selectProviders", "Select preferred routes"],
+  ["validate", "Validate complete plan"],
+  ["generate", "Generate proposals"],
+  ["introduceDuplicate", "Add losing duplicate"],
+  ["claimExactNativeRestore", "Claim exact native restore"],
+  ["correctRestoreClaim", "Correct restore class"],
+  ["addSecretReference", "Add secret reference"],
+  ["injectSecretValue", "Inject secret canary"],
+];
+
+const SCENARIOS = [
+  {
+    name: "Matt migration",
+    description: "Watch 25 individually installed skills become one Claude activation group, while Codex and Cursor keep their standalone providers and only known Claude links become retirement candidates.",
+    steps: [["loadMatt", "Load observation"], ["applyControls", "Form activation group"], ["selectProviders", "Choose providers"], ["validate", "Validate"], ["generate", "Preview changes"]],
+  },
+  {
+    name: "MCP deduplication",
+    description: "Apply component controls before choosing direct or plugin MCP routes. Greptile's unsupported cells stay explicit instead of receiving an invented provider.",
+    steps: [["loadMcps", "Load observations"], ["applyControls", "Apply controls"], ["selectProviders", "Choose providers"], ["addSecretReference", "Use secret reference"], ["generate", "Preview overlays"]],
+  },
+  {
+    name: "Native rolling",
+    description: "Try to turn a marketplace channel into an immutable promise. The invalid claim blocks output until its restore class and disposition are honest again.",
+    steps: [["loadMatt", "Load observation"], ["applyControls", "Form group"], ["selectProviders", "Choose providers"], ["claimExactNativeRestore", "Overclaim restore"], ["correctRestoreClaim", "Correct claim"], ["generate", "Preview changes"]],
+  },
+  {
+    name: "Fail closed",
+    description: "Introduce an active losing provider without an overlap exception. Even though it appears last, the complete plan produces no overlay or lock diff.",
+    steps: [["loadMcps", "Load observations"], ["applyControls", "Apply controls"], ["selectProviders", "Choose providers"], ["introduceDuplicate", "Add duplicate"], ["generate", "Attempt generation"]],
+  },
+  {
+    name: "Secret boundary",
+    description: "Environment-variable names are safe authored references. A resolved-value canary is rejected before any generated artifact is emitted.",
+    steps: [["loadMcps", "Load observations"], ["applyControls", "Apply controls"], ["selectProviders", "Choose providers"], ["addSecretReference", "Add reference"], ["injectSecretValue", "Inject value"], ["generate", "Attempt generation"]],
+  },
+];
+
+let state = ResolverPrototype.initialState();
+let activeScenario = 0;
+let scenarioStep = 0;
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"]/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[char]));
+}
+
+function dispatch(action, fromScenario = false) {
+  state = ResolverPrototype.reduce(state, action);
+  if (fromScenario) scenarioStep += 1;
+  render();
+}
+
+function stateCard(title, body, wide = false) {
+  return `<section class="state-card${wide ? " wide" : ""}"><h3>${escapeHtml(title)}</h3>${body}</section>`;
+}
+
+function pills(items, tone = "") {
+  return items.length
+    ? `<div class="pill-list">${items.map(item => `<span class="pill ${tone}">${escapeHtml(item)}</span>`).join("")}</div>`
+    : `<div class="empty">None</div>`;
+}
+
+function renderState() {
+  document.querySelector("#phase").textContent = state.phase.replaceAll("_", " ");
+  const summary = `<div class="facts">
+    <div class="fact"><span class="label">Fixture</span><span class="value">${escapeHtml(state.fixture)}</span></div>
+    <div class="fact"><span class="label">Observed items</span><span class="value">${state.inventory.length}</span></div>
+    <div class="fact"><span class="label">Selected route records</span><span class="value">${state.selections.length}</span></div>
+    <div class="fact"><span class="label">Runtime writes</span><span class="value">0 — prototype is read-only</span></div>
+  </div>`;
+  const inventory = state.inventory.length
+    ? `<div class="facts">${state.inventory.map(item => `<div class="fact"><span class="label">Observation</span><span class="value">${escapeHtml(item)}</span></div>`).join("")}</div>`
+    : `<div class="empty">Load a fixture to begin.</div>`;
+  const controls = pills(state.componentControls);
+  const routeList = state.selections.length
+    ? `<div class="routes">${state.selections.map(item => `<div class="route"><strong>${escapeHtml(item.equipment)}<br><small>${escapeHtml(item.harness)}</small></strong><span class="pill ${item.restore === "immutable" ? "good" : item.restore === "unsupported" ? "warn" : "warn"}">${escapeHtml(item.restore)}</span><span>${escapeHtml(item.provider)}<br><small>${escapeHtml(item.owner)} · ${escapeHtml(item.dispositions)}</small></span></div>`).join("")}</div>`
+    : `<div class="empty">No preferred provider routes selected.</div>`;
+  const diagList = state.diagnostics.length
+    ? state.diagnostics.map(item => `<div class="diagnostic"><code>${escapeHtml(item.code)}</code>${escapeHtml(item.message)}</div>`).join("")
+    : `<div class="pill good">No fatal diagnostics</div>`;
+  const boundaries = `<div class="facts">
+    <div class="fact"><span class="label">Secret references</span><span class="value">${state.secretReferences.length ? state.secretReferences.map(escapeHtml).join(", ") : "none"}</span></div>
+    <div class="fact"><span class="label">Resolved values present</span><span class="value">${state.secretValuesPresent ? "yes — invalid" : "no"}</span></div>
+    <div class="fact"><span class="label">Exact rolling restore claimed</span><span class="value">${state.exactRestoreClaim ? "yes — invalid" : "no"}</span></div>
+  </div>`;
+  document.querySelector("#state").innerHTML = [
+    stateCard("Summary", summary),
+    stateCard("Safety boundaries", boundaries),
+    stateCard("Runtime observations", inventory, true),
+    stateCard("Component controls before activation groups", controls, true),
+    stateCard("Canonical provider selections", routeList, true),
+    stateCard("Diagnostics", diagList, true),
+  ].join("");
+}
+
+function renderFreePlay() {
+  document.querySelector("#free-play").innerHTML = ACTIONS.map(([action, label]) => {
+    const css = ["introduceDuplicate", "claimExactNativeRestore", "injectSecretValue"].includes(action) ? "danger" : action === "generate" ? "primary" : "";
+    return `<button class="${css}" data-action="${action}">${escapeHtml(label)}</button>`;
+  }).join("");
+  document.querySelectorAll("#free-play button").forEach(button => button.addEventListener("click", () => dispatch(button.dataset.action)));
+}
+
+function selectScenario(index) {
+  activeScenario = index;
+  scenarioStep = 0;
+  state = ResolverPrototype.initialState();
+  render();
+}
+
+function renderScenario() {
+  document.querySelector("#tabs").innerHTML = SCENARIOS.map((scenario, index) => `<button class="tab ${index === activeScenario ? "active" : ""}" data-index="${index}">${escapeHtml(scenario.name)}</button>`).join("");
+  document.querySelectorAll("#tabs button").forEach(button => button.addEventListener("click", () => selectScenario(Number(button.dataset.index))));
+  const scenario = SCENARIOS[activeScenario];
+  const steps = scenario.steps.map(([action, label], index) => {
+    const progress = index < scenarioStep ? "done" : index === scenarioStep ? "current" : "future";
+    return `<span class="step-wrap"><span class="step ${progress}"><button data-step="${index}" data-action="${action}">${escapeHtml(label)}</button></span></span>`;
+  }).join("");
+  document.querySelector("#scenario").innerHTML = `<h2>${escapeHtml(scenario.name)}</h2><p>${escapeHtml(scenario.description)}</p><div class="steps">${steps}</div>`;
+  document.querySelectorAll("#scenario button").forEach(button => button.addEventListener("click", () => {
+    const index = Number(button.dataset.step);
+    if (index === 0 && scenarioStep !== 0) {
+      state = ResolverPrototype.initialState();
+      scenarioStep = 0;
+    }
+    dispatch(button.dataset.action, index === scenarioStep);
+  }));
+}
+
+function renderOutputs() {
+  const outputs = [
+    ["Owned overlay", state.outputs.overlay],
+    ["Lock diff", state.outputs.lockDiff],
+    ["Resolver report", state.outputs.report],
+  ];
+  document.querySelector("#outputs").innerHTML = outputs.map(([title, value]) => `<div class="output"><h3>${escapeHtml(title)}</h3>${value ? `<pre>${escapeHtml(value)}</pre>` : `<div class="empty">No output. Validate a complete, conflict-free plan first.</div>`}</div>`).join("");
+}
+
+function renderTrace() {
+  document.querySelector("#trace").innerHTML = state.trace.map(item => `<li>${escapeHtml(item)}</li>`).join("");
+}
+
+function render() {
+  renderState();
+  renderFreePlay();
+  renderScenario();
+  renderOutputs();
+  renderTrace();
+}
+
+render();
+</script>
+</body>
+</html>
