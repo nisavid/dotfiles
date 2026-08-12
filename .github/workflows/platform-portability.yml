@@ -8,6 +8,9 @@ on:
       - "docs/HINDSIGHT.md"
       - "docs/ENCRYPTION.md"
       - "docs/SECRET_INJECTION.md"
+      - "docs/agent-equipment/**"
+      - "docs/research/GLOBAL_AGENT_EQUIPMENT_PRIMARY_SOURCES.md"
+      - "docs/research/MATTPOCOCK_SKILLS_CURRENT_DISTRIBUTION.md"
       - "home/.chezmoiignore"
       - "home/.chezmoidata/git-identity.toml"
       - "home/.chezmoidata/editor-target.toml"
@@ -24,6 +27,7 @@ on:
       - "scripts/private-skill-transaction"
       - "scripts/private-skill-transaction.d/**"
       - "scripts/privacy-scan"
+      - "scripts/agent_equipment_design.py"
       - "tests/claude-skill-sync.zsh"
       - "tests/container-runtime-bindings.zsh"
       - "tests/global-agents-policy.zsh"
@@ -41,6 +45,8 @@ on:
       - "tests/private-skill-transaction.zsh"
       - "tests/private-skill-transaction.d/**"
       - "tests/test_chezmoi_source_ownership.py"
+      - "tests/test_agent_equipment_design.py"
+      - "tests/fixtures/agent-equipment/**"
   push:
     branches:
       - main
@@ -183,6 +189,23 @@ jobs:
             zsh -f tests/hindsight-agents-bindings.zsh
           fi
           python3 -m unittest tests/test_chezmoi_source_ownership.py
+          python3 -m unittest tests/test_agent_equipment_design.py
+          uvx --from check-jsonschema==0.35.0 check-jsonschema --check-metaschema \
+            docs/agent-equipment/catalog-v1.schema.json \
+            docs/agent-equipment/lock-v1.schema.json \
+            docs/agent-equipment/captured-state-v1.schema.json
+          uvx --from check-jsonschema==0.35.0 check-jsonschema \
+            --schemafile docs/agent-equipment/catalog-v1.schema.json \
+            tests/fixtures/agent-equipment/schema/valid-catalog.json \
+            docs/agent-equipment/initial-catalog.proposed.json
+          uvx --from check-jsonschema==0.35.0 check-jsonschema \
+            --base-uri "file://$PWD/docs/agent-equipment/lock-v1.schema.json" \
+            --schemafile docs/agent-equipment/lock-v1.schema.json \
+            tests/fixtures/agent-equipment/schema/valid-lock.json \
+            docs/agent-equipment/initial-lock.proposed.json
+          uvx --from check-jsonschema==0.35.0 check-jsonschema \
+            --schemafile docs/agent-equipment/captured-state-v1.schema.json \
+            tests/fixtures/agent-equipment/schema/valid-captured-state.json
 
       - name: Verify private-skill transaction
         shell: bash

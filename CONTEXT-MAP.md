@@ -7,7 +7,7 @@
 - [Process-Scoped Secret Injection](./docs/secret-injection/CONTEXT.md) —
   grants selected credentials to individual consumer processes without
   creating ambient shell credentials
-- [Global Agent Equipment](./.scratch/global-agent-equipment/CONTEXT.md) —
+- [Global Agent Equipment](./docs/agent-equipment/CONTEXT.md) —
   defines portable desired state, harness coverage outcomes, and operation
   dispositions across global agent harnesses
 
@@ -18,5 +18,6 @@
 - **Global Agent Equipment → managed dotfiles**: the equipment catalog selects
   provider routes; chezmoi deploys their portable source and narrow overlays.
 - **Global Agent Equipment → GitHub Issues**: [#44–#61](https://github.com/nisavid/dotfiles/issues?q=is%3Aissue+label%3Aagent-equipment)
-  record resolved decisions and dependency-ordered open work; the repository
-  retains only the domain context, Wayfinder map, and research evidence.
+  record the decision history and design work; the durable architecture,
+  schemas, evidence, acceptance contract, and implementation handoff live under
+  `docs/agent-equipment/`.
