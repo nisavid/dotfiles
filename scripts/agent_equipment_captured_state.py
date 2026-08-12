@@ -182,6 +182,13 @@ def _canonical_bytes(value: object) -> bytes:
     ).encode("utf-8")
 
 
+def _json_values_equal(left: object, right: object) -> bool:
+    try:
+        return _canonical_bytes(left) == _canonical_bytes(right)
+    except (TypeError, ValueError):
+        return False
+
+
 def _binding_key(binding: JsonObject) -> tuple[str, str, str]:
     return (
         str(binding["capability_identity"]),
@@ -325,30 +332,42 @@ def _unsupported_schema_keyword(
     unsupported = sorted(set(schema) - SUPPORTED_SCHEMA_KEYWORDS)
     if unsupported:
         return f"{path} uses unsupported schema keyword(s): {', '.join(unsupported)}"
+    if "type" in schema and not isinstance(schema["type"], str):
+        return f"{path}.type must be one supported type name"
     for collection_name in ("$defs", "properties"):
+        if collection_name not in schema:
+            continue
         collection = schema.get(collection_name)
-        if isinstance(collection, Mapping):
-            for name, child in collection.items():
-                if isinstance(child, Mapping):
-                    failure = _unsupported_schema_keyword(
-                        child,
-                        f"{path}.{collection_name}.{name}",
-                    )
-                    if failure:
-                        return failure
+        if not isinstance(collection, Mapping):
+            return f"{path}.{collection_name} must be an object of schemas"
+        for name, child in collection.items():
+            if not isinstance(child, Mapping):
+                return f"{path}.{collection_name}.{name} must be a schema object"
+            failure = _unsupported_schema_keyword(
+                child,
+                f"{path}.{collection_name}.{name}",
+            )
+            if failure:
+                return failure
     for collection_name in ("allOf", "oneOf"):
+        if collection_name not in schema:
+            continue
         collection = schema.get(collection_name)
-        if isinstance(collection, list):
-            for index, child in enumerate(collection):
-                if isinstance(child, Mapping):
-                    failure = _unsupported_schema_keyword(
-                        child,
-                        f"{path}.{collection_name}[{index}]",
-                    )
-                    if failure:
-                        return failure
-    items = schema.get("items")
-    if isinstance(items, Mapping):
+        if not isinstance(collection, list) or not collection:
+            return f"{path}.{collection_name} must be a nonempty array of schemas"
+        for index, child in enumerate(collection):
+            if not isinstance(child, Mapping):
+                return f"{path}.{collection_name}[{index}] must be a schema object"
+            failure = _unsupported_schema_keyword(
+                child,
+                f"{path}.{collection_name}[{index}]",
+            )
+            if failure:
+                return failure
+    if "items" in schema:
+        items = schema["items"]
+        if not isinstance(items, Mapping):
+            return f"{path}.items must be a schema object"
         return _unsupported_schema_keyword(items, f"{path}.items")
     return None
 
@@ -437,9 +456,11 @@ def _json_schema_failures(
         failures.append(f"{path} must be of type {expected_type}")
         return failures
 
-    if "const" in schema and instance != schema["const"]:
+    if "const" in schema and not _json_values_equal(instance, schema["const"]):
         failures.append(f"{path} must equal the required constant")
-    if isinstance(schema.get("enum"), list) and instance not in schema["enum"]:
+    if isinstance(schema.get("enum"), list) and not any(
+        _json_values_equal(instance, allowed) for allowed in schema["enum"]
+    ):
         failures.append(f"{path} must be one of the allowed values")
 
     if isinstance(instance, str):

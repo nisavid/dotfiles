@@ -7,7 +7,7 @@
       "source": {
         "kind": "git",
         "repository": "https://example.invalid/bundle.git",
-        "ref": "v1.0.0"
+        "ref": "0123456789abcdef0123456789abcdef01234567"
       },
       "selection": {"all": true},
       "coverage_templates": {
@@ -52,7 +52,7 @@
               "restore": {
                 "class": "immutable",
                 "revision": "0123456789abcdef0123456789abcdef01234567",
-                "artifact_ref": "git+https://example.invalid/bundle.git@v1.0.0",
+                "artifact_ref": "git+https://example.invalid/bundle.git@0123456789abcdef0123456789abcdef01234567",
                 "content_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
                 "native_update_control": "not_applicable"
               },
@@ -65,7 +65,7 @@
                 "disable": {"disposition": "automated", "compensation": "restore_captured_pre_state"},
                 "remove": {"disposition": "automated", "compensation": "restore_captured_pre_state"},
                 "restore": {"disposition": "automated", "compensation": "restore_captured_pre_state"},
-                "suppress_native_update": {"disposition": "automated", "compensation": "restore_captured_pre_state"}
+                "suppress_native_update": {"disposition": "unavailable"}
               }
             }
           ],

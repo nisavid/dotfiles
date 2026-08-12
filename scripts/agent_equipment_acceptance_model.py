@@ -24,6 +24,7 @@ from typing import Any, Mapping
 
 JsonValue = Any
 DesiredState = Mapping[str, JsonValue]
+UpdateValidator = Any
 
 
 def _unique_json_object(pairs: list[tuple[str, JsonValue]]) -> dict[str, JsonValue]:
@@ -43,7 +44,8 @@ class ApplyResult:
 
 @dataclass(frozen=True)
 class UpdateProposal:
-    desired_state: dict[str, JsonValue]
+    catalog: dict[str, JsonValue]
+    lock: dict[str, JsonValue]
 
 
 @dataclass(frozen=True)
@@ -104,11 +106,6 @@ class ArtifactVerificationError(RuntimeError):
 @dataclass(frozen=True)
 class StatusResult:
     status: str
-
-
-@dataclass(frozen=True)
-class NativeRollingProposal:
-    baseline: dict[str, JsonValue]
 
 
 @dataclass(frozen=True)
@@ -712,14 +709,16 @@ class AcceptanceFixture:
                 )
                 trace.append(f"completed:{action.step_id}")
         except (ConcurrentChangeError, InjectedFailure):
-            if compensate_on_failure:
-                self._compensate(
-                    plan,
-                    failures,
-                    trace,
-                    before_compensation=before_compensation,
-                )
-            self.last_trace = tuple(trace)
+            try:
+                if compensate_on_failure:
+                    self._compensate(
+                        plan,
+                        failures,
+                        trace,
+                        before_compensation=before_compensation,
+                    )
+            finally:
+                self.last_trace = tuple(trace)
             raise
         result = ExecutionResult(
             status="completed" if plan.actions else "no_op",
@@ -1123,13 +1122,20 @@ class AcceptanceFixture:
 
     def propose_update(
         self,
-        desired_state: DesiredState,
-        surface: str,
-        replacement: JsonValue,
+        catalog: Mapping[str, JsonValue],
+        lock: Mapping[str, JsonValue],
+        *,
+        validate_pair: UpdateValidator,
     ) -> UpdateProposal:
-        proposed = deepcopy(dict(desired_state))
-        proposed[surface] = deepcopy(replacement)
-        return UpdateProposal(desired_state=proposed)
+        proposed_catalog = deepcopy(dict(catalog))
+        proposed_lock = deepcopy(dict(lock))
+        validation_result = validate_pair(proposed_catalog, proposed_lock)
+        if (
+            proposed_lock.get("catalog_digest") != canonical_digest(proposed_catalog)
+            or validation_result.diagnostics
+        ):
+            raise BindingMismatchError("update catalog/lock digest")
+        return UpdateProposal(catalog=proposed_catalog, lock=proposed_lock)
 
     def apply_immutable_update(
         self,
@@ -1270,11 +1276,16 @@ class AcceptanceFixture:
         surface: str,
         baseline: Mapping[str, JsonValue],
     ) -> StatusResult:
-        observed = self.adapter.state[surface]["observed_version"]
+        if baseline.get("reviewed") is not True:
+            raise BindingMismatchError(surface)
+        state = self.adapter.state.get(surface)
+        if not isinstance(state, dict) or "observed_version" not in state:
+            raise ConcurrentChangeError(surface)
+        observed = state["observed_version"]
         return StatusResult(
             status=(
                 "converged"
-                if observed == baseline["observed_version"]
+                if json_values_equal(observed, baseline.get("observed_version"))
                 else "drift"
             )
         )
@@ -1291,15 +1302,15 @@ class AcceptanceFixture:
 
     def propose_native_rolling_update(
         self,
-        surface: str,
-        baseline: Mapping[str, JsonValue],
-    ) -> NativeRollingProposal:
-        del baseline
-        return NativeRollingProposal(
-            baseline={
-                "observed_version": self.adapter.state[surface]["observed_version"],
-                "reviewed": False,
-            }
+        catalog: Mapping[str, JsonValue],
+        lock: Mapping[str, JsonValue],
+        *,
+        validate_pair: UpdateValidator,
+    ) -> UpdateProposal:
+        return self.propose_update(
+            catalog,
+            lock,
+            validate_pair=validate_pair,
         )
 
     def capture_standalone(self, path: Path) -> dict[str, JsonValue]:

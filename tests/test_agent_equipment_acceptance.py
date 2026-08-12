@@ -21,6 +21,22 @@ assert SPEC is not None and SPEC.loader is not None
 ACCEPTANCE = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = ACCEPTANCE
 SPEC.loader.exec_module(ACCEPTANCE)
+DESIGN_SPEC = importlib.util.spec_from_file_location(
+    "agent_equipment_design_for_acceptance",
+    ROOT / "scripts/agent_equipment_design.py",
+)
+assert DESIGN_SPEC is not None and DESIGN_SPEC.loader is not None
+DESIGN = importlib.util.module_from_spec(DESIGN_SPEC)
+sys.modules[DESIGN_SPEC.name] = DESIGN
+DESIGN_SPEC.loader.exec_module(DESIGN)
+FIXTURES = ROOT / "tests/fixtures/agent-equipment/schema"
+
+
+def valid_catalog_and_lock() -> tuple[dict[str, object], dict[str, object]]:
+    return (
+        json.loads((FIXTURES / "valid-catalog.json").read_text(encoding="utf-8")),
+        json.loads((FIXTURES / "valid-lock.json").read_text(encoding="utf-8")),
+    )
 
 
 class AgentEquipmentAcceptanceTest(unittest.TestCase):
@@ -92,37 +108,45 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
                         {"enabled": True},
                     )
 
-    def test_update_is_an_explicit_proposal_until_apply(self) -> None:
+    def test_update_emits_one_digest_bound_catalog_and_lock_proposal(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             fixture = ACCEPTANCE.AcceptanceFixture(Path(temporary_directory))
             desired = ACCEPTANCE.complete_desired_state()
             fixture.adapter.state = ACCEPTANCE.deep_copy(desired)
             before = fixture.adapter.digest()
+            catalog, lock = valid_catalog_and_lock()
 
             proposal = fixture.propose_update(
-                desired,
-                "standalone/skill:research",
-                {
-                    "kind": "skill",
-                    "revision": "sha256:standalone-research-v2",
-                },
+                catalog,
+                lock,
+                validate_pair=DESIGN.validate_design,
             )
 
             self.assertEqual(fixture.adapter.digest(), before)
-            self.assertEqual(
-                proposal.desired_state["standalone/skill:research"]["revision"],
-                "sha256:standalone-research-v2",
+            self.assertEqual(proposal.catalog, catalog)
+            self.assertEqual(proposal.lock, lock)
+            self.assertEqual(fixture.checkpoints(), {})
+
+            stale_lock = ACCEPTANCE.deep_copy(lock)
+            stale_lock["catalog_digest"] = "sha256:" + "0" * 64
+            with self.assertRaises(ACCEPTANCE.BindingMismatchError):
+                fixture.propose_update(
+                    catalog,
+                    stale_lock,
+                    validate_pair=DESIGN.validate_design,
+                )
+            mismatched_lock = ACCEPTANCE.deep_copy(lock)
+            mismatched_lock["distributions"][0]["restore"]["content_digest"] = (
+                "sha256:" + "f" * 64
             )
-            plan = fixture.plan(proposal.desired_state)
-            self.assertEqual(
-                tuple(action.surface for action in plan.actions),
-                ("standalone/skill:research",),
-            )
-            fixture.execute(plan)
-            self.assertEqual(
-                fixture.adapter.state["standalone/skill:research"]["revision"],
-                "sha256:standalone-research-v2",
-            )
+            with self.assertRaises(ACCEPTANCE.BindingMismatchError):
+                fixture.propose_update(
+                    catalog,
+                    mismatched_lock,
+                    validate_pair=DESIGN.validate_design,
+                )
+            self.assertEqual(fixture.adapter.digest(), before)
+            self.assertEqual(fixture.checkpoints(), {})
 
     def test_immutable_content_is_verified_before_explicit_update_mutates(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -394,15 +418,47 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
 
             audit = fixture.audit_native_rolling(surface, baseline)
             ordinary_apply = fixture.apply_native_rolling(surface, baseline)
-            proposal = fixture.propose_native_rolling_update(surface, baseline)
+            catalog, lock = valid_catalog_and_lock()
+            proposal = fixture.propose_native_rolling_update(
+                catalog,
+                lock,
+                validate_pair=DESIGN.validate_design,
+            )
 
             self.assertEqual(audit.status, "drift")
             self.assertEqual(ordinary_apply.status, "drift_reported")
             self.assertEqual(fixture.adapter.digest(), runtime_before)
+            self.assertEqual(proposal.catalog, catalog)
+            self.assertEqual(proposal.lock, lock)
+            unreviewed_baseline = {
+                "observed_version": "1.2.4",
+                "reviewed": False,
+            }
+            with self.assertRaises(ACCEPTANCE.BindingMismatchError):
+                fixture.audit_native_rolling(surface, unreviewed_baseline)
+            with self.assertRaises(ACCEPTANCE.BindingMismatchError):
+                fixture.apply_native_rolling(surface, unreviewed_baseline)
+            self.assertEqual(fixture.adapter.digest(), runtime_before)
+
+    def test_native_rolling_audit_is_type_exact_and_fails_closed_when_absent(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            fixture = ACCEPTANCE.AcceptanceFixture(Path(temporary_directory))
+            surface = "claude/plugin:fixture"
+            fixture.adapter.state[surface] = {"observed_version": True}
+
             self.assertEqual(
-                proposal.baseline,
-                {"observed_version": "1.2.4", "reviewed": False},
+                fixture.audit_native_rolling(
+                    surface, {"observed_version": 1, "reviewed": True}
+                ).status,
+                "drift",
             )
+            fixture.adapter.state.pop(surface)
+            with self.assertRaises(ACCEPTANCE.ConcurrentChangeError):
+                fixture.audit_native_rolling(
+                    surface, {"observed_version": "1.0.0", "reviewed": True}
+                )
 
     def test_audit_import_and_adopt_commands_are_runtime_read_only(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -571,6 +627,7 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
                 fixture.checkpoints()["step-000"]["phase"],
                 "compensation_blocked",
             )
+            self.assertIn("completed:step-000", fixture.last_trace)
 
     def test_completed_checkpoint_reverted_to_pre_state_blocks_all_compensation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

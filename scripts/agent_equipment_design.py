@@ -94,13 +94,32 @@ def canonical_json_sha256(document: JsonObject) -> str:
     return f"sha256:{hashlib.sha256(payload).hexdigest()}"
 
 
+def _json_values_equal(left: Any, right: Any) -> bool:
+    try:
+        return json.dumps(
+            left,
+            allow_nan=False,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ) == json.dumps(
+            right,
+            allow_nan=False,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+    except (TypeError, ValueError):
+        return False
+
+
 def load_and_validate(catalog_path: Path, lock_path: Path) -> DesignValidationResult:
     """Load a catalog and lock as UTF-8 JSON, then validate them together."""
 
     try:
         catalog = _load_json_without_duplicate_members(Path(catalog_path))
         lock = _load_json_without_duplicate_members(Path(lock_path))
-    except (json.JSONDecodeError, ValueError):
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
         return DesignValidationResult(
             diagnostics=(
                 Diagnostic(
@@ -372,6 +391,7 @@ def validate_design(catalog: JsonObject, lock: JsonObject) -> DesignValidationRe
     retirement_operations = (
         _validate_retirements(
             catalog,
+            lock,
             resolved_membership,
             coverage,
             diagnostics,
@@ -722,12 +742,20 @@ def _document_schema_diagnostics(
 ) -> tuple[Diagnostic, ...]:
     """Validate both public documents against their checked-in JSON Schemas."""
 
-    catalog_schema = json.loads(
-        (SCHEMA_DIRECTORY / "catalog-v1.schema.json").read_text(encoding="utf-8")
-    )
-    lock_schema = json.loads(
-        (SCHEMA_DIRECTORY / "lock-v1.schema.json").read_text(encoding="utf-8")
-    )
+    try:
+        catalog_schema = json.loads(
+            (SCHEMA_DIRECTORY / "catalog-v1.schema.json").read_text(encoding="utf-8")
+        )
+        lock_schema = json.loads(
+            (SCHEMA_DIRECTORY / "lock-v1.schema.json").read_text(encoding="utf-8")
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return (
+            Diagnostic(
+                "CATALOG_SCHEMA_INVALID",
+                "The checked-in catalog and lock schemas could not be loaded.",
+            ),
+        )
     schemas = {
         "catalog-v1.schema.json": catalog_schema,
         "lock-v1.schema.json": lock_schema,
@@ -747,9 +775,19 @@ def _document_schema_diagnostics(
             "lock-v1.schema.json",
         ),
     ):
+        schema = schemas[schema_name]
+        schema_failure = _schema_shape_failure(schema, "$")
+        if schema_failure is not None:
+            diagnostics.append(
+                Diagnostic(
+                    code,
+                    f"The checked-in {schema_name} is unsupported: {schema_failure}",
+                )
+            )
+            continue
         failures = _json_schema_failures(
             document,
-            schemas[schema_name],
+            schema,
             schemas,
             schema_name,
             "$",
@@ -762,6 +800,45 @@ def _document_schema_diagnostics(
                 )
             )
     return tuple(diagnostics)
+
+
+def _schema_shape_failure(schema: Any, path: str) -> str | None:
+    if not isinstance(schema, Mapping):
+        return f"{path} must be a schema object"
+    unsupported_keywords = sorted(set(schema) - SUPPORTED_SCHEMA_KEYWORDS)
+    if unsupported_keywords:
+        return (
+            f"{path} uses unsupported schema keyword(s): "
+            + ", ".join(unsupported_keywords)
+        )
+    if "type" in schema and not isinstance(schema["type"], str):
+        return f"{path}.type must be one supported type name"
+    for collection_name in ("$defs", "properties"):
+        if collection_name not in schema:
+            continue
+        collection = schema[collection_name]
+        if not isinstance(collection, Mapping):
+            return f"{path}.{collection_name} must be an object of schemas"
+        for name, child in collection.items():
+            failure = _schema_shape_failure(
+                child,
+                f"{path}.{collection_name}.{name}",
+            )
+            if failure is not None:
+                return failure
+    if "oneOf" in schema:
+        branches = schema["oneOf"]
+        if not isinstance(branches, list) or not branches:
+            return f"{path}.oneOf must be a nonempty array of schema objects"
+        for index, child in enumerate(branches):
+            failure = _schema_shape_failure(child, f"{path}.oneOf[{index}]")
+            if failure is not None:
+                return failure
+    if "items" in schema:
+        failure = _schema_shape_failure(schema["items"], f"{path}.items")
+        if failure is not None:
+            return failure
+    return None
 
 
 def _literal_secret_diagnostics(
@@ -824,6 +901,8 @@ def _json_schema_failures(
             f"{path} uses unsupported schema keyword(s): "
             + ", ".join(unsupported_keywords)
         ]
+    if "type" in schema and not isinstance(schema["type"], str):
+        return [f"{path} uses an unsupported schema type declaration"]
     reference = schema.get("$ref")
     if isinstance(reference, str):
         reference_file, separator, fragment = reference.partition("#")
@@ -879,9 +958,11 @@ def _json_schema_failures(
         failures.append(f"{path} must be of type {expected_type}")
         return failures
 
-    if "const" in schema and instance != schema["const"]:
+    if "const" in schema and not _json_values_equal(instance, schema["const"]):
         failures.append(f"{path} must equal the required constant")
-    if isinstance(schema.get("enum"), list) and instance not in schema["enum"]:
+    if isinstance(schema.get("enum"), list) and not any(
+        _json_values_equal(instance, allowed) for allowed in schema["enum"]
+    ):
         failures.append(f"{path} must be one of the allowed values")
 
     if isinstance(instance, str):
@@ -1117,6 +1198,40 @@ def _route_is_valid(
             )
         )
         return False
+    native_update_control = (
+        restore.get("native_update_control") if isinstance(restore, dict) else None
+    )
+    suppression_disposition = (
+        operations["suppress_native_update"].get("disposition")
+        if isinstance(operations["suppress_native_update"], dict)
+        else None
+    )
+    native_update_operation_valid = (
+        (
+            native_update_control in {"not_applicable", "unsuppressible"}
+            and suppression_disposition == "unavailable"
+        )
+        or (
+            native_update_control == "unknown"
+            and suppression_disposition in {"operator_action", "unavailable"}
+        )
+        or (
+            native_update_control == "suppressible"
+            and suppression_disposition
+            in {"automated", "operator_action", "unavailable"}
+        )
+    )
+    if not native_update_operation_valid:
+        diagnostics.append(
+            Diagnostic(
+                "NATIVE_UPDATE_OPERATION_INVALID",
+                "Native-update classification and suppression disposition form one coherent capability claim.",
+                equipment_identity=equipment_identity,
+                harness=harness,
+                route_identity=route_identity,
+            )
+        )
+        valid = False
     for operation in OPERATIONS:
         operation_record = operations[operation]
         if (
@@ -1203,12 +1318,12 @@ def _restore_is_valid(restore: Any) -> bool:
         }:
             return False
         return (
-            all(
-                isinstance(restore[field], str) and bool(restore[field].strip())
-                for field in ("revision",)
-            )
+            isinstance(restore["revision"], str)
+            and _git_commit_oid_is_valid(restore["revision"])
             and isinstance(restore["artifact_ref"], str)
             and _immutable_artifact_ref_is_valid(restore["artifact_ref"])
+            and _immutable_artifact_ref_revision(restore["artifact_ref"])
+            == restore["revision"]
             and isinstance(restore["content_digest"], str)
             and bool(re.fullmatch(r"sha256:[0-9a-f]{64}", restore["content_digest"]))
             and restore["native_update_control"] == "not_applicable"
@@ -1285,7 +1400,7 @@ def _catalog_distribution_is_valid(distribution: Any) -> bool:
             and isinstance(source.get("repository"), str)
             and _public_git_repository_is_valid(source["repository"])
             and isinstance(source.get("ref"), str)
-            and _git_revision_is_valid(source["ref"])
+            and _git_commit_oid_is_valid(source["ref"])
         )
     elif source.get("kind") == "native_manager":
         source_valid = (
@@ -1337,19 +1452,8 @@ def _public_git_repository_is_valid(value: str) -> bool:
     return parsed.path not in {"", "/"} and parsed.path.endswith(".git")
 
 
-def _git_revision_is_valid(value: str) -> bool:
-    if (
-        not value
-        or "%" in value
-        or "\\" in value
-        or ".." in value
-        or any(segment.endswith((".", ".lock")) for segment in value.split("/"))
-    ):
-        return False
-    return all(
-        bool(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", segment))
-        for segment in value.split("/")
-    )
+def _git_commit_oid_is_valid(value: str) -> bool:
+    return bool(re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", value))
 
 
 def _artifact_subpath_is_valid(value: str) -> bool:
@@ -1372,11 +1476,17 @@ def _immutable_artifact_ref_is_valid(value: str) -> bool:
     if not _public_git_repository_is_valid(repository):
         return False
     revision, separator, subpaths = selector.partition("#")
-    if not _git_revision_is_valid(revision):
+    if not _git_commit_oid_is_valid(revision):
         return False
     if not separator:
         return True
     return all(_artifact_subpath_is_valid(subpath) for subpath in subpaths.split(","))
+
+
+def _immutable_artifact_ref_revision(value: str) -> str | None:
+    if not _immutable_artifact_ref_is_valid(value):
+        return None
+    return value.rsplit("@", 1)[1].partition("#")[0]
 
 
 def _provider_is_valid(
@@ -1561,6 +1671,7 @@ def _secret_reference_is_valid(reference: Any) -> bool:
 
 def _validate_retirements(
     catalog: JsonObject,
+    lock: JsonObject,
     resolved_membership: Mapping[str, tuple[str, ...]],
     coverage: list[CoverageEntry],
     diagnostics: list[Diagnostic],
@@ -1588,6 +1699,18 @@ def _validate_retirements(
     seen_retirement_ids: set[str] = set()
     seen_surfaces: set[tuple[str, ...]] = set()
     planned: list[PlannedOperation] = []
+    distribution_sources = {
+        distribution.get("identity"): distribution.get("source")
+        for distribution in catalog.get("distributions", [])
+        if isinstance(distribution, dict)
+        and isinstance(distribution.get("identity"), str)
+    }
+    distribution_restores = {
+        distribution.get("identity"): distribution.get("restore")
+        for distribution in lock.get("distributions", [])
+        if isinstance(distribution, dict)
+        and isinstance(distribution.get("identity"), str)
+    }
 
     for retirement in retirements:
         if not isinstance(retirement, dict) or set(retirement) != {
@@ -1655,6 +1778,30 @@ def _validate_retirements(
                 Diagnostic(
                     "RETIREMENT_REFERENCE_INVALID",
                     "The losing route distribution supplies the retired equipment identity in the resolved lock.",
+                    equipment_identity=equipment_identity,
+                    harness=harness,
+                    route_identity=route_identity,
+                )
+            )
+            route_valid = False
+        if not _distribution_source_matches_provider(
+            distribution_sources.get(distribution_identity), route.get("provider")
+        ):
+            diagnostics.append(
+                Diagnostic(
+                    "RETIREMENT_DISTRIBUTION_SOURCE_PROVIDER_MISMATCH",
+                    "The losing provider invokes the exact package, channel, manager, or immutable source bound by its distribution.",
+                    equipment_identity=equipment_identity,
+                    harness=harness,
+                    route_identity=route_identity,
+                )
+            )
+            route_valid = False
+        if route.get("restore") != distribution_restores.get(distribution_identity):
+            diagnostics.append(
+                Diagnostic(
+                    "RETIREMENT_DISTRIBUTION_RESTORE_MISMATCH",
+                    "The losing route restore evidence is the exact restore resolved for its distribution.",
                     equipment_identity=equipment_identity,
                     harness=harness,
                     route_identity=route_identity,
@@ -2198,8 +2345,10 @@ def _distribution_source_matches_restore(source: Any, restore: Any) -> bool:
             return False
         expected = f"git+{source.get('repository')}@{source.get('ref')}"
         artifact_ref = restore.get("artifact_ref")
-        return isinstance(artifact_ref, str) and (
-            artifact_ref == expected or artifact_ref.startswith(f"{expected}#")
+        return (
+            restore.get("revision") == source.get("ref")
+            and isinstance(artifact_ref, str)
+            and (artifact_ref == expected or artifact_ref.startswith(f"{expected}#"))
         )
     if source.get("kind") != "native_manager" or restore.get("class") != "native_rolling":
         return False
@@ -2239,9 +2388,28 @@ def _distribution_source_matches_provider(source: Any, provider: Any) -> bool:
         )
     expected_selector = f"{package}@{channel}"
     arguments = provider.get("arguments")
-    return isinstance(arguments, list) and any(
+    if not isinstance(arguments, list):
+        return False
+    command = provider.get("command")
+    invocation_arguments = arguments
+    if command == "secret-exec":
+        wrapper_boundary = next(
+            (
+                index
+                for index in range(len(arguments) - 1)
+                if arguments[index] == {"literal": "--"}
+                and arguments[index + 1] == {"literal": "npx"}
+            ),
+            None,
+        )
+        if wrapper_boundary is None:
+            return False
+        invocation_arguments = arguments[wrapper_boundary + 2 :]
+    elif command != "npx":
+        return False
+    return any(
         isinstance(argument, dict)
         and set(argument) == {"literal"}
         and argument.get("literal") == expected_selector
-        for argument in arguments
+        for argument in invocation_arguments
     )

@@ -218,7 +218,8 @@ Later steps do not begin until the named evidence passes.
 - `adopt` requires an exact imported observation and emits catalog ownership
   changes only.
 - `update` resolves immutable revisions and reviewed native-rolling baselines
-  into a proposed lock only.
+  into one proposed catalog-and-lock pair. Resolved route evidence in the
+  catalog and the digest-bound lock advance atomically or neither does.
 - None opens a runtime checkpoint store or invokes a mutating adapter method.
 - Evidence: `CMD-02` through `CMD-04` with byte-identical runtime snapshots.
 

@@ -1,19 +1,19 @@
 {
   "schema_version": "lock/v1",
-  "catalog_digest": "sha256:695bc03bd83569a05df55152d8c46e03b3f244c21b96277e8070ac053d8362bd",
+  "catalog_digest": "sha256:953380fe85c59c1ea773ffbc4a04135415ffbaae7f7f25c33877a982ecab64d6",
   "distributions": [
     {
       "identity": "distribution:example/bundle",
       "source": {
         "kind": "git",
         "repository": "https://example.invalid/bundle.git",
-        "ref": "v1.0.0"
+        "ref": "0123456789abcdef0123456789abcdef01234567"
       },
       "equipment": ["skill:example/grilling"],
       "restore": {
         "class": "immutable",
         "revision": "0123456789abcdef0123456789abcdef01234567",
-        "artifact_ref": "git+https://example.invalid/bundle.git@v1.0.0",
+        "artifact_ref": "git+https://example.invalid/bundle.git@0123456789abcdef0123456789abcdef01234567",
         "content_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
         "native_update_control": "not_applicable"
       }
@@ -122,7 +122,7 @@
               "restore": {
                 "class": "immutable",
                 "revision": "0123456789abcdef0123456789abcdef01234567",
-                "artifact_ref": "git+https://example.invalid/bundle.git@v1.0.0",
+                "artifact_ref": "git+https://example.invalid/bundle.git@0123456789abcdef0123456789abcdef01234567",
                 "content_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
                 "native_update_control": "not_applicable"
               },
@@ -135,7 +135,7 @@
                 "disable": {"disposition": "automated", "compensation": "restore_captured_pre_state"},
                 "remove": {"disposition": "automated", "compensation": "restore_captured_pre_state"},
                 "restore": {"disposition": "automated", "compensation": "restore_captured_pre_state"},
-                "suppress_native_update": {"disposition": "automated", "compensation": "restore_captured_pre_state"}
+                "suppress_native_update": {"disposition": "unavailable"}
               }
             }
           ],

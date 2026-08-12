@@ -551,6 +551,11 @@ class AdapterContractSchemaTests(unittest.TestCase):
                 {"additionalProperties": {"unsupportedKeyword": True}}
             )
         )
+        self.assertFalse(
+            CONTRACT._schema_uses_only_supported_keywords(
+                {"type": ["string", "null"]}
+            )
+        )
 
     def test_public_sequence_validation_requires_exact_contract_versions(self) -> None:
         locations = (
@@ -1838,6 +1843,53 @@ class AdapterContractSchemaTests(unittest.TestCase):
                 self.assertEqual(
                     (),
                     validate_adapter_sequence(apply_sequence_document(sequence)),
+                )
+
+    def test_sequence_rejects_out_of_range_http_provider_ports(self) -> None:
+        capability_provider = {
+            "kind": "direct_mcp",
+            "transport": "http",
+            "overlay_family": "claude_json",
+        }
+
+        for port in (1, 443, 65535):
+            with self.subTest(port=port, validity="valid"):
+                sequence = list(copy.deepcopy(valid_sequence()))
+                rebind_sequence_provider(
+                    sequence,
+                    capability_provider,
+                    "direct_mcp",
+                    {
+                        "kind": "direct_mcp",
+                        "server_name": "fixture",
+                        "transport": "http",
+                        "url": f"https://example.invalid:{port}/mcp",
+                    },
+                )
+
+                self.assertEqual(
+                    (),
+                    validate_adapter_sequence(apply_sequence_document(sequence)),
+                )
+
+        for port in (0, 65536, 99999):
+            with self.subTest(port=port, validity="invalid"):
+                sequence = list(copy.deepcopy(valid_sequence()))
+                rebind_sequence_provider(
+                    sequence,
+                    capability_provider,
+                    "direct_mcp",
+                    {
+                        "kind": "direct_mcp",
+                        "server_name": "fixture",
+                        "transport": "http",
+                        "url": f"https://example.invalid:{port}/mcp",
+                    },
+                )
+
+                self.assertIn(
+                    "PROVIDER_CONFIGURATION_INVALID",
+                    document_diagnostic_codes(apply_sequence_document(sequence)),
                 )
 
     def test_sequence_rejects_conflicting_component_states(self) -> None:

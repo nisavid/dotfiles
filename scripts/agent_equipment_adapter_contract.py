@@ -16,6 +16,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
+from urllib.parse import urlsplit
 
 JsonObject = Mapping[str, Any]
 MUTATING_OPERATIONS = frozenset(
@@ -368,6 +369,8 @@ def _resolve_schema_reference(
 def _schema_uses_only_supported_keywords(schema: JsonObject) -> bool:
     if set(schema) - SUPPORTED_SCHEMA_KEYWORDS:
         return False
+    if "type" in schema and not isinstance(schema["type"], str):
+        return False
     for collection_name in ("$defs", "properties"):
         collection = schema.get(collection_name)
         if isinstance(collection, Mapping) and any(
@@ -713,9 +716,18 @@ def _validate_route_binding(
             record.get("harness"),
             native_manager,
         )
+    route_provider = route_record.get("provider")
+    if not _route_provider_configuration_is_valid(route_provider):
+        diagnostics.append(
+            Diagnostic(
+                "PROVIDER_CONFIGURATION_INVALID",
+                f"{label}.record.route_record.provider",
+                "The route provider must satisfy the catalog's semantic provider contract.",
+            )
+        )
     if not _provider_selector_matches(
         capability.get("provider_match"),
-        route_record.get("provider"),
+        route_provider,
         record.get("harness"),
     ):
         diagnostics.append(
@@ -1678,6 +1690,58 @@ def _native_provider_manager(route_record: JsonObject) -> Any:
     if isinstance(provider, dict) and provider.get("kind") == "native_plugin":
         return provider.get("manager")
     return None
+
+
+def _hostname_has_valid_dns_labels(value: str) -> bool:
+    return len(value) <= 253 and all(
+        bool(
+            re.fullmatch(
+                r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?", label
+            )
+        )
+        for label in value.split(".")
+    )
+
+
+def _static_credential_free_https_url_is_valid(value: str) -> bool:
+    """Return whether *value* is a static credential-free HTTPS endpoint URL."""
+
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError:
+        return False
+    path_segments = tuple(segment for segment in parsed.path.split("/") if segment)
+    return (
+        parsed.scheme == "https"
+        and bool(parsed.hostname)
+        and _hostname_has_valid_dns_labels(parsed.hostname or "")
+        and parsed.username is None
+        and parsed.password is None
+        and parsed.query == ""
+        and parsed.fragment == ""
+        and (port is None or 1 <= port <= 65535)
+        and "\\" not in value
+        and "%" not in value
+        and all(
+            segment not in {".", ".."}
+            and bool(re.fullmatch(r"[A-Za-z0-9._~-]+", segment))
+            and not re.fullmatch(
+                r"(?i)(?:bearer|api[-_]?key|access[-_]?token|token|secret|password|client[-_]?secret|credential)(?:[-_.=:].*)?",
+                segment,
+            )
+            for segment in path_segments
+        )
+    )
+
+
+def _route_provider_configuration_is_valid(provider: Any) -> bool:
+    if not isinstance(provider, dict):
+        return False
+    if provider.get("kind") != "direct_mcp" or provider.get("transport") != "http":
+        return True
+    url = provider.get("url")
+    return isinstance(url, str) and _static_credential_free_https_url_is_valid(url)
 
 
 def _provider_selector_matches(
