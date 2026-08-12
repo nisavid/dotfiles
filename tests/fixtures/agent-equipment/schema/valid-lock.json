@@ -1,0 +1,153 @@
+{
+  "schema_version": "lock/v1",
+  "catalog_digest": "sha256:f5131c6d731c8b86721e0a43875c2fd7b27ec9512e2645876426801dbd312715",
+  "distributions": [
+    {
+      "identity": "distribution:example/bundle",
+      "equipment": ["skill:example/grilling"],
+      "restore": {
+        "class": "immutable",
+        "revision": "0123456789abcdef0123456789abcdef01234567",
+        "artifact_ref": "git+https://example.invalid/bundle.git@v1.0.0",
+        "content_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "native_update_control": "not_applicable"
+      }
+    },
+    {
+      "identity": "distribution:example/native-plugin",
+      "equipment": ["plugin:example/matt"],
+      "restore": {
+        "class": "native_rolling",
+        "channel": "stable",
+        "reviewed_baseline": "1.2.3",
+        "observation_source": "claude plugin list",
+        "native_update_control": "unsuppressible"
+      }
+    }
+  ],
+  "coverage": [
+    {
+      "equipment_identity": "plugin:example/matt",
+      "harness": "claude",
+      "record": {
+        "outcome": "manually_managed_provider",
+        "provider_selection": {
+          "preferred_route": "route:example/native-plugin-claude",
+          "supplementary_routes": [],
+          "routes": [
+            {
+              "identity": "route:example/native-plugin-claude",
+              "distribution": "distribution:example/native-plugin",
+              "provider": {
+                "kind": "native_plugin",
+                "manager": "claude",
+                "plugin_id": "example-matt@official",
+                "scope": "user"
+              },
+              "activation_group": "activation:example/native-plugin-claude",
+              "component_controls": [],
+              "control_owner": "operator_owned",
+              "provenance": {"owner": "manager:claude-plugins"},
+              "restore": {
+                "class": "native_rolling",
+                "channel": "stable",
+                "reviewed_baseline": "1.2.3",
+                "observation_source": "claude plugin list",
+                "native_update_control": "unsuppressible"
+              },
+              "secret_references": [],
+              "operations": {
+                "inspect": {"disposition": "automated"},
+                "install": {"disposition": "operator_action"},
+                "configure": {"disposition": "unavailable"},
+                "enable": {"disposition": "operator_action"},
+                "disable": {"disposition": "operator_action"},
+                "remove": {"disposition": "operator_action"},
+                "restore": {"disposition": "unavailable"},
+                "suppress_native_update": {"disposition": "unavailable"}
+              }
+            }
+          ],
+          "allow_overlap": []
+        }
+      }
+    },
+    {
+      "equipment_identity": "plugin:example/matt",
+      "harness": "codex",
+      "record": {
+        "outcome": "intentional_omission",
+        "provider_selection": "no_provider"
+      }
+    },
+    {
+      "equipment_identity": "plugin:example/matt",
+      "harness": "cursor",
+      "record": {
+        "outcome": "unsupported",
+        "provider_selection": "no_provider"
+      }
+    },
+    {
+      "equipment_identity": "skill:example/grilling",
+      "harness": "claude",
+      "record": {
+        "outcome": "managed_provider",
+        "provider_selection": {
+          "preferred_route": "route:example/bundle-claude",
+          "supplementary_routes": [],
+          "routes": [
+            {
+              "identity": "route:example/bundle-claude",
+              "distribution": "distribution:example/bundle",
+              "provider": {
+                "kind": "standalone_skill",
+                "canonical_root": "agents_skills"
+              },
+              "activation_group": "activation:example/bundle-claude",
+              "component_controls": [],
+              "control_owner": "reconciler_owned",
+              "provenance": {"owner": "source:example/bundle"},
+              "restore": {
+                "class": "immutable",
+                "revision": "0123456789abcdef0123456789abcdef01234567",
+                "artifact_ref": "git+https://example.invalid/bundle.git@v1.0.0",
+                "content_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                "native_update_control": "not_applicable"
+              },
+              "secret_references": [],
+              "operations": {
+                "inspect": {"disposition": "automated"},
+                "install": {"disposition": "automated", "compensation": "restore_captured_pre_state"},
+                "configure": {"disposition": "automated", "compensation": "restore_captured_pre_state"},
+                "enable": {"disposition": "automated", "compensation": "restore_captured_pre_state"},
+                "disable": {"disposition": "automated", "compensation": "restore_captured_pre_state"},
+                "remove": {"disposition": "automated", "compensation": "restore_captured_pre_state"},
+                "restore": {"disposition": "automated", "compensation": "restore_captured_pre_state"},
+                "suppress_native_update": {"disposition": "automated", "compensation": "restore_captured_pre_state"}
+              }
+            }
+          ],
+          "allow_overlap": []
+        }
+      }
+    },
+    {
+      "equipment_identity": "skill:example/grilling",
+      "harness": "codex",
+      "record": {
+        "outcome": "intentional_omission",
+        "provider_selection": "no_provider"
+      }
+    },
+    {
+      "equipment_identity": "skill:example/grilling",
+      "harness": "cursor",
+      "record": {
+        "outcome": "unsupported",
+        "provider_selection": "no_provider"
+      }
+    }
+  ],
+  "retirements": []
+}

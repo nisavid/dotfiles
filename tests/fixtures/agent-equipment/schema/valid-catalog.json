@@ -1,0 +1,158 @@
+{
+  "schema_version": "catalog/v1",
+  "active_harnesses": ["claude", "codex", "cursor"],
+  "distributions": [
+    {
+      "identity": "distribution:example/bundle",
+      "source": {
+        "kind": "git",
+        "repository": "https://example.invalid/bundle.git",
+        "ref": "v1.0.0"
+      },
+      "selection": {"all": true},
+      "coverage_templates": {
+        "claude": "template:bundle-claude",
+        "codex": "template:bundle-codex",
+        "cursor": "template:bundle-cursor"
+      }
+    },
+    {
+      "identity": "distribution:example/native-plugin",
+      "source": {
+        "kind": "native_manager",
+        "manager": "claude",
+        "package": "example-matt",
+        "channel": "stable"
+      },
+      "selection": {"equipment": ["plugin:example/matt"]},
+      "coverage_templates": {}
+    }
+  ],
+  "coverage_templates": [
+    {
+      "identity": "template:bundle-claude",
+      "harness": "claude",
+      "record": {
+        "outcome": "managed_provider",
+        "provider_selection": {
+          "preferred_route": "route:example/bundle-claude",
+          "supplementary_routes": [],
+          "routes": [
+            {
+              "identity": "route:example/bundle-claude",
+              "distribution": "distribution:example/bundle",
+              "provider": {
+                "kind": "standalone_skill",
+                "canonical_root": "agents_skills"
+              },
+              "activation_group": "activation:example/bundle-claude",
+              "component_controls": [],
+              "control_owner": "reconciler_owned",
+              "provenance": {"owner": "source:example/bundle"},
+              "restore": {
+                "class": "immutable",
+                "revision": "0123456789abcdef0123456789abcdef01234567",
+                "artifact_ref": "git+https://example.invalid/bundle.git@v1.0.0",
+                "content_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                "native_update_control": "not_applicable"
+              },
+              "secret_references": [],
+              "operations": {
+                "inspect": {"disposition": "automated"},
+                "install": {"disposition": "automated", "compensation": "restore_captured_pre_state"},
+                "configure": {"disposition": "automated", "compensation": "restore_captured_pre_state"},
+                "enable": {"disposition": "automated", "compensation": "restore_captured_pre_state"},
+                "disable": {"disposition": "automated", "compensation": "restore_captured_pre_state"},
+                "remove": {"disposition": "automated", "compensation": "restore_captured_pre_state"},
+                "restore": {"disposition": "automated", "compensation": "restore_captured_pre_state"},
+                "suppress_native_update": {"disposition": "automated", "compensation": "restore_captured_pre_state"}
+              }
+            }
+          ],
+          "allow_overlap": []
+        }
+      }
+    },
+    {
+      "identity": "template:bundle-codex",
+      "harness": "codex",
+      "record": {
+        "outcome": "intentional_omission",
+        "provider_selection": "no_provider"
+      }
+    },
+    {
+      "identity": "template:bundle-cursor",
+      "harness": "cursor",
+      "record": {
+        "outcome": "unsupported",
+        "provider_selection": "no_provider"
+      }
+    }
+  ],
+  "equipment": [
+    {
+      "identity": "plugin:example/matt",
+      "kind": "plugin",
+      "coverage": {
+        "claude": {
+          "record": {
+            "outcome": "manually_managed_provider",
+            "provider_selection": {
+              "preferred_route": "route:example/native-plugin-claude",
+              "supplementary_routes": [],
+              "routes": [
+                {
+                  "identity": "route:example/native-plugin-claude",
+                  "distribution": "distribution:example/native-plugin",
+                  "provider": {
+                    "kind": "native_plugin",
+                    "manager": "claude",
+                    "plugin_id": "example-matt@official",
+                    "scope": "user"
+                  },
+                  "activation_group": "activation:example/native-plugin-claude",
+                  "component_controls": [],
+                  "control_owner": "operator_owned",
+                  "provenance": {"owner": "manager:claude-plugins"},
+                  "restore": {
+                    "class": "native_rolling",
+                    "channel": "stable",
+                    "reviewed_baseline": "1.2.3",
+                    "observation_source": "claude plugin list",
+                    "native_update_control": "unsuppressible"
+                  },
+                  "secret_references": [],
+                  "operations": {
+                    "inspect": {"disposition": "automated"},
+                    "install": {"disposition": "operator_action"},
+                    "configure": {"disposition": "unavailable"},
+                    "enable": {"disposition": "operator_action"},
+                    "disable": {"disposition": "operator_action"},
+                    "remove": {"disposition": "operator_action"},
+                    "restore": {"disposition": "unavailable"},
+                    "suppress_native_update": {"disposition": "unavailable"}
+                  }
+                }
+              ],
+              "allow_overlap": []
+            }
+          }
+        },
+        "codex": {
+          "record": {
+            "outcome": "intentional_omission",
+            "provider_selection": "no_provider"
+          }
+        },
+        "cursor": {
+          "record": {
+            "outcome": "unsupported",
+            "provider_selection": "no_provider"
+          }
+        }
+      }
+    }
+  ],
+  "retirements": []
+}

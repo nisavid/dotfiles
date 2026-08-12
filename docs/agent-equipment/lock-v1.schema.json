@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nisavid.github.io/dotfiles/agent-equipment/lock-v1.schema.json",
+  "title": "Global agent equipment resolved lock v1",
+  "type": "object",
+  "required": ["schema_version", "catalog_digest", "distributions", "coverage", "retirements"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "lock/v1"},
+    "catalog_digest": {"$ref": "catalog-v1.schema.json#/$defs/digest"},
+    "distributions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["identity", "equipment", "restore"],
+        "additionalProperties": false,
+        "properties": {
+          "identity": {"$ref": "catalog-v1.schema.json#/$defs/distributionIdentity"},
+          "equipment": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {"$ref": "catalog-v1.schema.json#/$defs/equipmentIdentity"}
+          },
+          "restore": {"$ref": "catalog-v1.schema.json#/$defs/restore"}
+        }
+      }
+    },
+    "coverage": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["equipment_identity", "harness", "record"],
+        "additionalProperties": false,
+        "properties": {
+          "equipment_identity": {"$ref": "catalog-v1.schema.json#/$defs/equipmentIdentity"},
+          "harness": {"$ref": "catalog-v1.schema.json#/$defs/harness"},
+          "record": {"$ref": "catalog-v1.schema.json#/$defs/coverageRecord"}
+        }
+      }
+    },
+    "retirements": {
+      "type": "array",
+      "items": {"$ref": "catalog-v1.schema.json#/$defs/retirement"}
+    }
+  }
+}

@@ -1,0 +1,444 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nisavid.github.io/dotfiles/agent-equipment/catalog-v1.schema.json",
+  "title": "Global agent equipment authored catalog v1",
+  "type": "object",
+  "required": ["schema_version", "active_harnesses", "distributions", "coverage_templates", "equipment", "retirements"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "catalog/v1"},
+    "active_harnesses": {"const": ["claude", "codex", "cursor"]},
+    "distributions": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/distribution"}
+    },
+    "coverage_templates": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/coverageTemplate"}
+    },
+    "equipment": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/equipment"}
+    },
+    "retirements": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/retirement"}
+    }
+  },
+  "$defs": {
+    "nonEmptyString": {"type": "string", "minLength": 1},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "harness": {"enum": ["claude", "codex", "cursor"]},
+    "equipmentIdentity": {
+      "type": "string",
+      "pattern": "^(skill|plugin|mcp|hook|other):[a-z0-9][a-z0-9._/-]*$"
+    },
+    "distributionIdentity": {"type": "string", "pattern": "^distribution:[a-z0-9][a-z0-9._/-]*$"},
+    "routeIdentity": {"type": "string", "pattern": "^route:[a-z0-9][a-z0-9._/-]*$"},
+    "templateIdentity": {"type": "string", "pattern": "^template:[a-z0-9][a-z0-9._/-]*$"},
+    "retirementIdentity": {"type": "string", "pattern": "^retirement:[a-z0-9][a-z0-9._/-]*$"},
+    "source": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "repository", "ref"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {"const": "git"},
+            "repository": {"$ref": "#/$defs/nonEmptyString"},
+            "ref": {"$ref": "#/$defs/nonEmptyString"}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "manager", "package", "channel"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {"const": "native_manager"},
+            "manager": {"$ref": "#/$defs/nonEmptyString"},
+            "package": {"$ref": "#/$defs/nonEmptyString"},
+            "channel": {"$ref": "#/$defs/nonEmptyString"}
+          }
+        }
+      ]
+    },
+    "selection": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["all"],
+          "additionalProperties": false,
+          "properties": {"all": {"const": true}}
+        },
+        {
+          "type": "object",
+          "required": ["equipment"],
+          "additionalProperties": false,
+          "properties": {
+            "equipment": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {"$ref": "#/$defs/equipmentIdentity"}
+            }
+          }
+        }
+      ]
+    },
+    "distribution": {
+      "type": "object",
+      "required": ["identity", "source", "selection", "coverage_templates"],
+      "additionalProperties": false,
+      "properties": {
+        "identity": {"$ref": "#/$defs/distributionIdentity"},
+        "source": {"$ref": "#/$defs/source"},
+        "selection": {"$ref": "#/$defs/selection"},
+        "coverage_templates": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "claude": {"$ref": "#/$defs/templateIdentity"},
+            "codex": {"$ref": "#/$defs/templateIdentity"},
+            "cursor": {"$ref": "#/$defs/templateIdentity"}
+          }
+        }
+      }
+    },
+    "coverageTemplate": {
+      "type": "object",
+      "required": ["identity", "harness", "record"],
+      "additionalProperties": false,
+      "properties": {
+        "identity": {"$ref": "#/$defs/templateIdentity"},
+        "harness": {"$ref": "#/$defs/harness"},
+        "record": {"$ref": "#/$defs/coverageRecord"}
+      }
+    },
+    "equipment": {
+      "type": "object",
+      "required": ["identity", "kind", "coverage"],
+      "additionalProperties": false,
+      "properties": {
+        "identity": {"$ref": "#/$defs/equipmentIdentity"},
+        "kind": {"enum": ["skill", "plugin", "mcp", "hook", "other"]},
+        "coverage": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "claude": {"$ref": "#/$defs/coverageEntry"},
+            "codex": {"$ref": "#/$defs/coverageEntry"},
+            "cursor": {"$ref": "#/$defs/coverageEntry"}
+          }
+        }
+      }
+    },
+    "coverageEntry": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["record"],
+          "additionalProperties": false,
+          "properties": {"record": {"$ref": "#/$defs/coverageRecord"}}
+        },
+        {
+          "type": "object",
+          "required": ["template"],
+          "additionalProperties": false,
+          "properties": {"template": {"$ref": "#/$defs/templateIdentity"}}
+        }
+      ]
+    },
+    "coverageRecord": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["outcome", "provider_selection"],
+          "additionalProperties": false,
+          "properties": {
+            "outcome": {"enum": ["managed_provider", "manually_managed_provider"]},
+            "provider_selection": {"$ref": "#/$defs/providerSelection"}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["outcome", "provider_selection"],
+          "additionalProperties": false,
+          "properties": {
+            "outcome": {"enum": ["intentional_omission", "unsupported"]},
+            "provider_selection": {"const": "no_provider"}
+          }
+        }
+      ]
+    },
+    "providerSelection": {
+      "type": "object",
+      "required": ["preferred_route", "supplementary_routes", "routes", "allow_overlap"],
+      "additionalProperties": false,
+      "properties": {
+        "preferred_route": {"$ref": "#/$defs/routeIdentity"},
+        "supplementary_routes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/routeIdentity"}
+        },
+        "routes": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/route"}},
+        "allow_overlap": {"type": "array", "items": {"$ref": "#/$defs/allowOverlap"}}
+      }
+    },
+    "allowOverlap": {
+      "type": "object",
+      "required": ["kind", "supplementary_route", "routes", "rationale"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {"const": "allow_overlap"},
+        "supplementary_route": {"$ref": "#/$defs/routeIdentity"},
+        "routes": {
+          "type": "array",
+          "minItems": 2,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/routeIdentity"}
+        },
+        "rationale": {"$ref": "#/$defs/nonEmptyString"}
+      }
+    },
+    "route": {
+      "type": "object",
+      "required": ["identity", "distribution", "provider", "activation_group", "component_controls", "control_owner", "provenance", "restore", "secret_references", "operations"],
+      "additionalProperties": false,
+      "properties": {
+        "identity": {"$ref": "#/$defs/routeIdentity"},
+        "distribution": {"$ref": "#/$defs/distributionIdentity"},
+        "provider": {"$ref": "#/$defs/provider"},
+        "activation_group": {"type": "string", "pattern": "^activation:[a-z0-9][a-z0-9._/-]*$"},
+        "component_controls": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/componentControl"}
+        },
+        "control_owner": {"enum": ["reconciler_owned", "operator_owned"]},
+        "provenance": {"$ref": "#/$defs/provenance"},
+        "restore": {"$ref": "#/$defs/restore"},
+        "secret_references": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/secretReference"}},
+        "operations": {"$ref": "#/$defs/operations"}
+      }
+    },
+    "provider": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "canonical_root"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {"const": "standalone_skill"},
+            "canonical_root": {"const": "agents_skills"}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "manager", "plugin_id", "scope"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {"const": "native_plugin"},
+            "manager": {"enum": ["claude", "codex", "cursor"]},
+            "plugin_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._@/-]*$"},
+            "scope": {"const": "user"}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "server_name", "transport", "command", "arguments"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {"const": "direct_mcp"},
+            "server_name": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"},
+            "transport": {"const": "stdio"},
+            "command": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"},
+            "arguments": {"type": "array", "items": {"$ref": "#/$defs/providerArgument"}}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "server_name", "transport", "url"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {"const": "direct_mcp"},
+            "server_name": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"},
+            "transport": {"const": "http"},
+            "url": {"type": "string", "pattern": "^https://"}
+          }
+        }
+      ]
+    },
+    "providerArgument": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["literal"],
+          "additionalProperties": false,
+          "properties": {"literal": {"type": "string"}}
+        },
+        {
+          "type": "object",
+          "required": ["secret_reference", "template"],
+          "additionalProperties": false,
+          "properties": {
+            "secret_reference": {"type": "string", "pattern": "^[A-Z_][A-Z0-9_]*$"},
+            "template": {"type": "string", "pattern": "\\{reference\\}"}
+          }
+        }
+      ]
+    },
+    "componentControl": {
+      "type": "object",
+      "required": ["equipment_identity", "state"],
+      "additionalProperties": false,
+      "properties": {
+        "equipment_identity": {"$ref": "#/$defs/equipmentIdentity"},
+        "state": {"enum": ["enabled", "disabled"]}
+      }
+    },
+    "retirement": {
+      "type": "object",
+      "required": ["identity", "equipment_identity", "harness", "route", "surface", "desired_state"],
+      "additionalProperties": false,
+      "properties": {
+        "identity": {"$ref": "#/$defs/retirementIdentity"},
+        "equipment_identity": {"$ref": "#/$defs/equipmentIdentity"},
+        "harness": {"$ref": "#/$defs/harness"},
+        "route": {"$ref": "#/$defs/route"},
+        "surface": {"$ref": "#/$defs/retirementSurface"},
+        "desired_state": {"enum": ["absent", "disabled"]}
+      }
+    },
+    "retirementSurface": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "skill_name"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {"const": "claude_skill_projection"},
+            "skill_name": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "server_name"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {"const": "direct_mcp"},
+            "server_name": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "plugin_id"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {"const": "plugin"},
+            "plugin_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._@/-]*$"}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "plugin_id", "component_identity"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {"const": "plugin_component"},
+            "plugin_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._@/-]*$"},
+            "component_identity": {"$ref": "#/$defs/equipmentIdentity"}
+          }
+        }
+      ]
+    },
+    "provenance": {
+      "type": "object",
+      "required": ["owner"],
+      "additionalProperties": false,
+      "properties": {"owner": {"$ref": "#/$defs/nonEmptyString"}}
+    },
+    "restore": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["class", "revision", "artifact_ref", "content_digest", "native_update_control"],
+          "additionalProperties": false,
+          "properties": {
+            "class": {"const": "immutable"},
+            "revision": {"$ref": "#/$defs/nonEmptyString"},
+            "artifact_ref": {"$ref": "#/$defs/nonEmptyString"},
+            "content_digest": {"$ref": "#/$defs/digest"},
+            "native_update_control": {"const": "not_applicable"}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["class", "channel", "reviewed_baseline", "observation_source", "native_update_control"],
+          "additionalProperties": false,
+          "properties": {
+            "class": {"const": "native_rolling"},
+            "channel": {"$ref": "#/$defs/nonEmptyString"},
+            "reviewed_baseline": {"$ref": "#/$defs/nonEmptyString"},
+            "observation_source": {"$ref": "#/$defs/nonEmptyString"},
+            "native_update_control": {"enum": ["unknown", "suppressible", "unsuppressible"]}
+          }
+        }
+      ]
+    },
+    "secretReference": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "name"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {"const": "environment_variable"},
+            "name": {"type": "string", "pattern": "^[A-Z_][A-Z0-9_]*$"}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "name"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {"const": "secret_profile"},
+            "name": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"}
+          }
+        }
+      ]
+    },
+    "operation": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["disposition"],
+          "additionalProperties": false,
+          "properties": {"disposition": {"enum": ["automated", "operator_action", "unavailable"]}}
+        },
+        {
+          "type": "object",
+          "required": ["disposition", "compensation"],
+          "additionalProperties": false,
+          "properties": {
+            "disposition": {"const": "automated"},
+            "compensation": {"const": "restore_captured_pre_state"}
+          }
+        }
+      ]
+    },
+    "operations": {
+      "type": "object",
+      "required": ["inspect", "install", "configure", "enable", "disable", "remove", "restore", "suppress_native_update"],
+      "additionalProperties": false,
+      "properties": {
+        "inspect": {"$ref": "#/$defs/operation"},
+        "install": {"$ref": "#/$defs/operation"},
+        "configure": {"$ref": "#/$defs/operation"},
+        "enable": {"$ref": "#/$defs/operation"},
+        "disable": {"$ref": "#/$defs/operation"},
+        "remove": {"$ref": "#/$defs/operation"},
+        "restore": {"$ref": "#/$defs/operation"},
+        "suppress_native_update": {"$ref": "#/$defs/operation"}
+      }
+    }
+  }
+}

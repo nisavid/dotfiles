@@ -1,0 +1,3726 @@
+{
+  "active_harnesses": [
+    "claude",
+    "codex",
+    "cursor"
+  ],
+  "coverage_templates": [
+    {
+      "harness": "claude",
+      "identity": "template:chrome-devtools/claude-plugin",
+      "record": {
+        "outcome": "managed_provider",
+        "provider_selection": {
+          "allow_overlap": [],
+          "preferred_route": "route:claude/chrome-devtools-plugin",
+          "routes": [
+            {
+              "activation_group": "activation:claude/chrome-devtools-plugin",
+              "component_controls": [],
+              "control_owner": "reconciler_owned",
+              "distribution": "distribution:chrome-devtools/claude-plugin",
+              "identity": "route:claude/chrome-devtools-plugin",
+              "operations": {
+                "configure": {
+                  "disposition": "unavailable"
+                },
+                "disable": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "enable": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "inspect": {
+                  "disposition": "automated"
+                },
+                "install": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "remove": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "restore": {
+                  "disposition": "unavailable"
+                },
+                "suppress_native_update": {
+                  "disposition": "unavailable"
+                }
+              },
+              "provenance": {
+                "owner": "manager:claude-plugins/chrome-devtools"
+              },
+              "provider": {
+                "kind": "native_plugin",
+                "manager": "claude",
+                "plugin_id": "chrome-devtools-mcp@claude-plugins-official",
+                "scope": "user"
+              },
+              "restore": {
+                "channel": "stable",
+                "class": "native_rolling",
+                "native_update_control": "unsuppressible",
+                "observation_source": "claude plugin list and cached manifest",
+                "reviewed_baseline": "1.7.0"
+              },
+              "secret_references": []
+            }
+          ],
+          "supplementary_routes": []
+        }
+      }
+    },
+    {
+      "harness": "codex",
+      "identity": "template:chrome-devtools/direct-codex",
+      "record": {
+        "outcome": "managed_provider",
+        "provider_selection": {
+          "allow_overlap": [],
+          "preferred_route": "route:codex/direct-chrome-devtools",
+          "routes": [
+            {
+              "activation_group": "activation:codex/direct-chrome-devtools",
+              "component_controls": [],
+              "control_owner": "reconciler_owned",
+              "distribution": "distribution:chrome-devtools/direct-mcp",
+              "identity": "route:codex/direct-chrome-devtools",
+              "operations": {
+                "configure": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "disable": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "enable": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "inspect": {
+                  "disposition": "automated"
+                },
+                "install": {
+                  "disposition": "unavailable"
+                },
+                "remove": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "restore": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "suppress_native_update": {
+                  "disposition": "unavailable"
+                }
+              },
+              "provenance": {
+                "owner": "overlay:codex/mcp"
+              },
+              "provider": {
+                "arguments": [
+                  {
+                    "literal": "-y"
+                  },
+                  {
+                    "literal": "chrome-devtools-mcp@1.7.0"
+                  }
+                ],
+                "command": "npx",
+                "kind": "direct_mcp",
+                "server_name": "chrome-devtools",
+                "transport": "stdio"
+              },
+              "restore": {
+                "channel": "npm:1.7.0",
+                "class": "native_rolling",
+                "native_update_control": "suppressible",
+                "observation_source": "reviewed npm selector",
+                "reviewed_baseline": "chrome-devtools-mcp@1.7.0"
+              },
+              "secret_references": []
+            }
+          ],
+          "supplementary_routes": []
+        }
+      }
+    },
+    {
+      "harness": "cursor",
+      "identity": "template:chrome-devtools/direct-cursor",
+      "record": {
+        "outcome": "managed_provider",
+        "provider_selection": {
+          "allow_overlap": [],
+          "preferred_route": "route:cursor/direct-chrome-devtools",
+          "routes": [
+            {
+              "activation_group": "activation:cursor/direct-chrome-devtools",
+              "component_controls": [],
+              "control_owner": "reconciler_owned",
+              "distribution": "distribution:chrome-devtools/direct-mcp",
+              "identity": "route:cursor/direct-chrome-devtools",
+              "operations": {
+                "configure": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "disable": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "enable": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "inspect": {
+                  "disposition": "automated"
+                },
+                "install": {
+                  "disposition": "unavailable"
+                },
+                "remove": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "restore": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "suppress_native_update": {
+                  "disposition": "unavailable"
+                }
+              },
+              "provenance": {
+                "owner": "overlay:cursor/mcp"
+              },
+              "provider": {
+                "arguments": [
+                  {
+                    "literal": "-y"
+                  },
+                  {
+                    "literal": "chrome-devtools-mcp@1.7.0"
+                  }
+                ],
+                "command": "npx",
+                "kind": "direct_mcp",
+                "server_name": "chrome-devtools",
+                "transport": "stdio"
+              },
+              "restore": {
+                "channel": "npm:1.7.0",
+                "class": "native_rolling",
+                "native_update_control": "suppressible",
+                "observation_source": "reviewed npm selector",
+                "reviewed_baseline": "chrome-devtools-mcp@1.7.0"
+              },
+              "secret_references": []
+            }
+          ],
+          "supplementary_routes": []
+        }
+      }
+    },
+    {
+      "harness": "claude",
+      "identity": "template:context7/direct-claude",
+      "record": {
+        "outcome": "managed_provider",
+        "provider_selection": {
+          "allow_overlap": [],
+          "preferred_route": "route:claude/direct-context7",
+          "routes": [
+            {
+              "activation_group": "activation:claude/direct-context7",
+              "component_controls": [],
+              "control_owner": "reconciler_owned",
+              "distribution": "distribution:context7/direct-mcp",
+              "identity": "route:claude/direct-context7",
+              "operations": {
+                "configure": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "disable": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "enable": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "inspect": {
+                  "disposition": "automated"
+                },
+                "install": {
+                  "disposition": "unavailable"
+                },
+                "remove": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "restore": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "suppress_native_update": {
+                  "disposition": "unavailable"
+                }
+              },
+              "provenance": {
+                "owner": "overlay:claude/mcp"
+              },
+              "provider": {
+                "arguments": [
+                  {
+                    "literal": "context7"
+                  },
+                  {
+                    "literal": "--"
+                  },
+                  {
+                    "literal": "npx"
+                  },
+                  {
+                    "literal": "-y"
+                  },
+                  {
+                    "literal": "@upstash/context7-mcp@3.2.4"
+                  }
+                ],
+                "command": "secret-exec",
+                "kind": "direct_mcp",
+                "server_name": "context7",
+                "transport": "stdio"
+              },
+              "restore": {
+                "channel": "npm:3.2.4",
+                "class": "native_rolling",
+                "native_update_control": "suppressible",
+                "observation_source": "managed MCP overlay",
+                "reviewed_baseline": "@upstash/context7-mcp@3.2.4"
+              },
+              "secret_references": [
+                {
+                  "kind": "secret_profile",
+                  "name": "context7"
+                }
+              ]
+            }
+          ],
+          "supplementary_routes": []
+        }
+      }
+    },
+    {
+      "harness": "codex",
+      "identity": "template:context7/direct-codex",
+      "record": {
+        "outcome": "managed_provider",
+        "provider_selection": {
+          "allow_overlap": [],
+          "preferred_route": "route:codex/direct-context7",
+          "routes": [
+            {
+              "activation_group": "activation:codex/direct-context7",
+              "component_controls": [],
+              "control_owner": "reconciler_owned",
+              "distribution": "distribution:context7/direct-mcp",
+              "identity": "route:codex/direct-context7",
+              "operations": {
+                "configure": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "disable": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "enable": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "inspect": {
+                  "disposition": "automated"
+                },
+                "install": {
+                  "disposition": "unavailable"
+                },
+                "remove": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "restore": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "suppress_native_update": {
+                  "disposition": "unavailable"
+                }
+              },
+              "provenance": {
+                "owner": "overlay:codex/mcp"
+              },
+              "provider": {
+                "arguments": [
+                  {
+                    "literal": "context7"
+                  },
+                  {
+                    "literal": "--"
+                  },
+                  {
+                    "literal": "npx"
+                  },
+                  {
+                    "literal": "-y"
+                  },
+                  {
+                    "literal": "@upstash/context7-mcp@3.2.4"
+                  }
+                ],
+                "command": "secret-exec",
+                "kind": "direct_mcp",
+                "server_name": "context7",
+                "transport": "stdio"
+              },
+              "restore": {
+                "channel": "npm:3.2.4",
+                "class": "native_rolling",
+                "native_update_control": "suppressible",
+                "observation_source": "managed MCP overlay",
+                "reviewed_baseline": "@upstash/context7-mcp@3.2.4"
+              },
+              "secret_references": [
+                {
+                  "kind": "secret_profile",
+                  "name": "context7"
+                }
+              ]
+            }
+          ],
+          "supplementary_routes": []
+        }
+      }
+    },
+    {
+      "harness": "cursor",
+      "identity": "template:context7/direct-cursor",
+      "record": {
+        "outcome": "managed_provider",
+        "provider_selection": {
+          "allow_overlap": [],
+          "preferred_route": "route:cursor/direct-context7",
+          "routes": [
+            {
+              "activation_group": "activation:cursor/direct-context7",
+              "component_controls": [],
+              "control_owner": "reconciler_owned",
+              "distribution": "distribution:context7/direct-mcp",
+              "identity": "route:cursor/direct-context7",
+              "operations": {
+                "configure": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "disable": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "enable": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "inspect": {
+                  "disposition": "automated"
+                },
+                "install": {
+                  "disposition": "unavailable"
+                },
+                "remove": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "restore": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "suppress_native_update": {
+                  "disposition": "unavailable"
+                }
+              },
+              "provenance": {
+                "owner": "overlay:cursor/mcp"
+              },
+              "provider": {
+                "arguments": [
+                  {
+                    "literal": "context7"
+                  },
+                  {
+                    "literal": "--"
+                  },
+                  {
+                    "literal": "npx"
+                  },
+                  {
+                    "literal": "-y"
+                  },
+                  {
+                    "literal": "@upstash/context7-mcp@3.2.4"
+                  }
+                ],
+                "command": "secret-exec",
+                "kind": "direct_mcp",
+                "server_name": "context7",
+                "transport": "stdio"
+              },
+              "restore": {
+                "channel": "npm:3.2.4",
+                "class": "native_rolling",
+                "native_update_control": "suppressible",
+                "observation_source": "managed MCP overlay",
+                "reviewed_baseline": "@upstash/context7-mcp@3.2.4"
+              },
+              "secret_references": [
+                {
+                  "kind": "secret_profile",
+                  "name": "context7"
+                }
+              ]
+            }
+          ],
+          "supplementary_routes": []
+        }
+      }
+    },
+    {
+      "harness": "claude",
+      "identity": "template:firecrawl/direct-claude",
+      "record": {
+        "outcome": "managed_provider",
+        "provider_selection": {
+          "allow_overlap": [],
+          "preferred_route": "route:claude/direct-firecrawl",
+          "routes": [
+            {
+              "activation_group": "activation:claude/direct-firecrawl",
+              "component_controls": [],
+              "control_owner": "reconciler_owned",
+              "distribution": "distribution:firecrawl/direct-mcp",
+              "identity": "route:claude/direct-firecrawl",
+              "operations": {
+                "configure": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "disable": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "enable": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "inspect": {
+                  "disposition": "automated"
+                },
+                "install": {
+                  "disposition": "unavailable"
+                },
+                "remove": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "restore": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "suppress_native_update": {
+                  "disposition": "unavailable"
+                }
+              },
+              "provenance": {
+                "owner": "overlay:claude/mcp"
+              },
+              "provider": {
+                "arguments": [
+                  {
+                    "literal": "firecrawl"
+                  },
+                  {
+                    "literal": "--"
+                  },
+                  {
+                    "literal": "npx"
+                  },
+                  {
+                    "literal": "-y"
+                  },
+                  {
+                    "literal": "firecrawl-mcp@3.22.3"
+                  }
+                ],
+                "command": "secret-exec",
+                "kind": "direct_mcp",
+                "server_name": "firecrawl",
+                "transport": "stdio"
+              },
+              "restore": {
+                "channel": "npm:3.22.3",
+                "class": "native_rolling",
+                "native_update_control": "suppressible",
+                "observation_source": "managed MCP overlay",
+                "reviewed_baseline": "firecrawl-mcp@3.22.3"
+              },
+              "secret_references": [
+                {
+                  "kind": "secret_profile",
+                  "name": "firecrawl"
+                }
+              ]
+            }
+          ],
+          "supplementary_routes": []
+        }
+      }
+    },
+    {
+      "harness": "codex",
+      "identity": "template:firecrawl/direct-codex",
+      "record": {
+        "outcome": "managed_provider",
+        "provider_selection": {
+          "allow_overlap": [],
+          "preferred_route": "route:codex/direct-firecrawl",
+          "routes": [
+            {
+              "activation_group": "activation:codex/direct-firecrawl",
+              "component_controls": [],
+              "control_owner": "reconciler_owned",
+              "distribution": "distribution:firecrawl/direct-mcp",
+              "identity": "route:codex/direct-firecrawl",
+              "operations": {
+                "configure": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "disable": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "enable": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "inspect": {
+                  "disposition": "automated"
+                },
+                "install": {
+                  "disposition": "unavailable"
+                },
+                "remove": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "restore": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "suppress_native_update": {
+                  "disposition": "unavailable"
+                }
+              },
+              "provenance": {
+                "owner": "overlay:codex/mcp"
+              },
+              "provider": {
+                "arguments": [
+                  {
+                    "literal": "firecrawl"
+                  },
+                  {
+                    "literal": "--"
+                  },
+                  {
+                    "literal": "npx"
+                  },
+                  {
+                    "literal": "-y"
+                  },
+                  {
+                    "literal": "firecrawl-mcp@3.22.3"
+                  }
+                ],
+                "command": "secret-exec",
+                "kind": "direct_mcp",
+                "server_name": "firecrawl",
+                "transport": "stdio"
+              },
+              "restore": {
+                "channel": "npm:3.22.3",
+                "class": "native_rolling",
+                "native_update_control": "suppressible",
+                "observation_source": "managed MCP overlay",
+                "reviewed_baseline": "firecrawl-mcp@3.22.3"
+              },
+              "secret_references": [
+                {
+                  "kind": "secret_profile",
+                  "name": "firecrawl"
+                }
+              ]
+            }
+          ],
+          "supplementary_routes": []
+        }
+      }
+    },
+    {
+      "harness": "cursor",
+      "identity": "template:firecrawl/direct-cursor",
+      "record": {
+        "outcome": "managed_provider",
+        "provider_selection": {
+          "allow_overlap": [],
+          "preferred_route": "route:cursor/direct-firecrawl",
+          "routes": [
+            {
+              "activation_group": "activation:cursor/direct-firecrawl",
+              "component_controls": [],
+              "control_owner": "reconciler_owned",
+              "distribution": "distribution:firecrawl/direct-mcp",
+              "identity": "route:cursor/direct-firecrawl",
+              "operations": {
+                "configure": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "disable": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "enable": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "inspect": {
+                  "disposition": "automated"
+                },
+                "install": {
+                  "disposition": "unavailable"
+                },
+                "remove": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "restore": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "suppress_native_update": {
+                  "disposition": "unavailable"
+                }
+              },
+              "provenance": {
+                "owner": "overlay:cursor/mcp"
+              },
+              "provider": {
+                "arguments": [
+                  {
+                    "literal": "firecrawl"
+                  },
+                  {
+                    "literal": "--"
+                  },
+                  {
+                    "literal": "npx"
+                  },
+                  {
+                    "literal": "-y"
+                  },
+                  {
+                    "literal": "firecrawl-mcp@3.22.3"
+                  }
+                ],
+                "command": "secret-exec",
+                "kind": "direct_mcp",
+                "server_name": "firecrawl",
+                "transport": "stdio"
+              },
+              "restore": {
+                "channel": "npm:3.22.3",
+                "class": "native_rolling",
+                "native_update_control": "suppressible",
+                "observation_source": "managed MCP overlay",
+                "reviewed_baseline": "firecrawl-mcp@3.22.3"
+              },
+              "secret_references": [
+                {
+                  "kind": "secret_profile",
+                  "name": "firecrawl"
+                }
+              ]
+            }
+          ],
+          "supplementary_routes": []
+        }
+      }
+    },
+    {
+      "harness": "codex",
+      "identity": "template:github/codex-plugin",
+      "record": {
+        "outcome": "managed_provider",
+        "provider_selection": {
+          "allow_overlap": [],
+          "preferred_route": "route:codex/github-plugin",
+          "routes": [
+            {
+              "activation_group": "activation:codex/github-plugin-with-yeet-disabled",
+              "component_controls": [
+                {
+                  "equipment_identity": "other:github/codex-app",
+                  "state": "enabled"
+                },
+                {
+                  "equipment_identity": "mcp:github/server",
+                  "state": "enabled"
+                },
+                {
+                  "equipment_identity": "skill:github/gh-address-comments",
+                  "state": "enabled"
+                },
+                {
+                  "equipment_identity": "skill:github/gh-fix-ci",
+                  "state": "enabled"
+                },
+                {
+                  "equipment_identity": "skill:github/github",
+                  "state": "enabled"
+                },
+                {
+                  "equipment_identity": "skill:github/yeet",
+                  "state": "disabled"
+                }
+              ],
+              "control_owner": "reconciler_owned",
+              "distribution": "distribution:github/codex-plugin",
+              "identity": "route:codex/github-plugin",
+              "operations": {
+                "configure": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "disable": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "enable": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "inspect": {
+                  "disposition": "automated"
+                },
+                "install": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "remove": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "restore": {
+                  "disposition": "unavailable"
+                },
+                "suppress_native_update": {
+                  "disposition": "unavailable"
+                }
+              },
+              "provenance": {
+                "owner": "manager:codex-plugins/github"
+              },
+              "provider": {
+                "kind": "native_plugin",
+                "manager": "codex",
+                "plugin_id": "github@openai-curated",
+                "scope": "user"
+              },
+              "restore": {
+                "channel": "openai-curated",
+                "class": "native_rolling",
+                "native_update_control": "unknown",
+                "observation_source": "codex plugin list",
+                "reviewed_baseline": "11c74d6b"
+              },
+              "secret_references": []
+            }
+          ],
+          "supplementary_routes": []
+        }
+      }
+    },
+    {
+      "harness": "claude",
+      "identity": "template:github/direct-claude",
+      "record": {
+        "outcome": "managed_provider",
+        "provider_selection": {
+          "allow_overlap": [],
+          "preferred_route": "route:claude/direct-github",
+          "routes": [
+            {
+              "activation_group": "activation:claude/direct-github",
+              "component_controls": [],
+              "control_owner": "reconciler_owned",
+              "distribution": "distribution:github/direct-mcp",
+              "identity": "route:claude/direct-github",
+              "operations": {
+                "configure": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "disable": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "enable": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "inspect": {
+                  "disposition": "automated"
+                },
+                "install": {
+                  "disposition": "unavailable"
+                },
+                "remove": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "restore": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "suppress_native_update": {
+                  "disposition": "unavailable"
+                }
+              },
+              "provenance": {
+                "owner": "overlay:claude/mcp"
+              },
+              "provider": {
+                "arguments": [
+                  {
+                    "literal": "github"
+                  },
+                  {
+                    "literal": "--"
+                  },
+                  {
+                    "literal": "npx"
+                  },
+                  {
+                    "literal": "-y"
+                  },
+                  {
+                    "literal": "mcp-remote@0.1.38"
+                  },
+                  {
+                    "literal": "https://api.githubcopilot.com/mcp/"
+                  },
+                  {
+                    "literal": "--header"
+                  },
+                  {
+                    "secret_reference": "GITHUB_PERSONAL_ACCESS_TOKEN",
+                    "template": "Authorization:Bearer ${{reference}}"
+                  }
+                ],
+                "command": "secret-exec",
+                "kind": "direct_mcp",
+                "server_name": "github",
+                "transport": "stdio"
+              },
+              "restore": {
+                "channel": "npm:0.1.38",
+                "class": "native_rolling",
+                "native_update_control": "suppressible",
+                "observation_source": "managed MCP overlay",
+                "reviewed_baseline": "mcp-remote@0.1.38"
+              },
+              "secret_references": [
+                {
+                  "kind": "secret_profile",
+                  "name": "github"
+                },
+                {
+                  "kind": "environment_variable",
+                  "name": "GITHUB_PERSONAL_ACCESS_TOKEN"
+                }
+              ]
+            }
+          ],
+          "supplementary_routes": []
+        }
+      }
+    },
+    {
+      "harness": "cursor",
+      "identity": "template:github/direct-cursor",
+      "record": {
+        "outcome": "managed_provider",
+        "provider_selection": {
+          "allow_overlap": [],
+          "preferred_route": "route:cursor/direct-github",
+          "routes": [
+            {
+              "activation_group": "activation:cursor/direct-github",
+              "component_controls": [],
+              "control_owner": "reconciler_owned",
+              "distribution": "distribution:github/direct-mcp",
+              "identity": "route:cursor/direct-github",
+              "operations": {
+                "configure": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "disable": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "enable": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "inspect": {
+                  "disposition": "automated"
+                },
+                "install": {
+                  "disposition": "unavailable"
+                },
+                "remove": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "restore": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "suppress_native_update": {
+                  "disposition": "unavailable"
+                }
+              },
+              "provenance": {
+                "owner": "overlay:cursor/mcp"
+              },
+              "provider": {
+                "arguments": [
+                  {
+                    "literal": "github"
+                  },
+                  {
+                    "literal": "--"
+                  },
+                  {
+                    "literal": "npx"
+                  },
+                  {
+                    "literal": "-y"
+                  },
+                  {
+                    "literal": "mcp-remote@0.1.38"
+                  },
+                  {
+                    "literal": "https://api.githubcopilot.com/mcp/"
+                  },
+                  {
+                    "literal": "--header"
+                  },
+                  {
+                    "secret_reference": "GITHUB_PERSONAL_ACCESS_TOKEN",
+                    "template": "Authorization:Bearer ${{reference}}"
+                  }
+                ],
+                "command": "secret-exec",
+                "kind": "direct_mcp",
+                "server_name": "github",
+                "transport": "stdio"
+              },
+              "restore": {
+                "channel": "npm:0.1.38",
+                "class": "native_rolling",
+                "native_update_control": "suppressible",
+                "observation_source": "managed MCP overlay",
+                "reviewed_baseline": "mcp-remote@0.1.38"
+              },
+              "secret_references": [
+                {
+                  "kind": "secret_profile",
+                  "name": "github"
+                },
+                {
+                  "kind": "environment_variable",
+                  "name": "GITHUB_PERSONAL_ACCESS_TOKEN"
+                }
+              ]
+            }
+          ],
+          "supplementary_routes": []
+        }
+      }
+    },
+    {
+      "harness": "claude",
+      "identity": "template:greptile/direct-claude",
+      "record": {
+        "outcome": "managed_provider",
+        "provider_selection": {
+          "allow_overlap": [],
+          "preferred_route": "route:claude/direct-greptile",
+          "routes": [
+            {
+              "activation_group": "activation:claude/direct-greptile",
+              "component_controls": [],
+              "control_owner": "reconciler_owned",
+              "distribution": "distribution:greptile/direct-mcp",
+              "identity": "route:claude/direct-greptile",
+              "operations": {
+                "configure": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "disable": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "enable": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "inspect": {
+                  "disposition": "automated"
+                },
+                "install": {
+                  "disposition": "unavailable"
+                },
+                "remove": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "restore": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "suppress_native_update": {
+                  "disposition": "unavailable"
+                }
+              },
+              "provenance": {
+                "owner": "overlay:claude/mcp"
+              },
+              "provider": {
+                "arguments": [
+                  {
+                    "literal": "greptile"
+                  },
+                  {
+                    "literal": "--"
+                  },
+                  {
+                    "literal": "npx"
+                  },
+                  {
+                    "literal": "-y"
+                  },
+                  {
+                    "literal": "mcp-remote@0.1.38"
+                  },
+                  {
+                    "literal": "https://api.greptile.com/mcp"
+                  },
+                  {
+                    "literal": "--header"
+                  },
+                  {
+                    "secret_reference": "GREPTILE_API_KEY",
+                    "template": "Authorization:Bearer ${{reference}}"
+                  }
+                ],
+                "command": "secret-exec",
+                "kind": "direct_mcp",
+                "server_name": "greptile",
+                "transport": "stdio"
+              },
+              "restore": {
+                "channel": "npm:0.1.38",
+                "class": "native_rolling",
+                "native_update_control": "suppressible",
+                "observation_source": "managed MCP overlay",
+                "reviewed_baseline": "mcp-remote@0.1.38"
+              },
+              "secret_references": [
+                {
+                  "kind": "secret_profile",
+                  "name": "greptile"
+                },
+                {
+                  "kind": "environment_variable",
+                  "name": "GREPTILE_API_KEY"
+                }
+              ]
+            }
+          ],
+          "supplementary_routes": []
+        }
+      }
+    },
+    {
+      "harness": "claude",
+      "identity": "template:mattpocock/claude-plugin",
+      "record": {
+        "outcome": "managed_provider",
+        "provider_selection": {
+          "allow_overlap": [],
+          "preferred_route": "route:claude/mattpocock-plugin",
+          "routes": [
+            {
+              "activation_group": "activation:claude/mattpocock-plugin",
+              "component_controls": [],
+              "control_owner": "reconciler_owned",
+              "distribution": "distribution:mattpocock/claude-plugin",
+              "identity": "route:claude/mattpocock-plugin",
+              "operations": {
+                "configure": {
+                  "disposition": "unavailable"
+                },
+                "disable": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "enable": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "inspect": {
+                  "disposition": "automated"
+                },
+                "install": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "remove": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "restore": {
+                  "disposition": "unavailable"
+                },
+                "suppress_native_update": {
+                  "disposition": "operator_action"
+                }
+              },
+              "provenance": {
+                "owner": "manager:claude-plugins/claude-plugins-official"
+              },
+              "provider": {
+                "kind": "native_plugin",
+                "manager": "claude",
+                "plugin_id": "mattpocock-skills@claude-plugins-official",
+                "scope": "user"
+              },
+              "restore": {
+                "channel": "stable",
+                "class": "native_rolling",
+                "native_update_control": "suppressible",
+                "observation_source": "Claude official marketplace and upstream plugin manifest",
+                "reviewed_baseline": "1.2.3"
+              },
+              "secret_references": []
+            }
+          ],
+          "supplementary_routes": []
+        }
+      }
+    },
+    {
+      "harness": "codex",
+      "identity": "template:mattpocock/standalone-codex",
+      "record": {
+        "outcome": "managed_provider",
+        "provider_selection": {
+          "allow_overlap": [],
+          "preferred_route": "route:codex/mattpocock-standalone",
+          "routes": [
+            {
+              "activation_group": "activation:codex/mattpocock-standalone",
+              "component_controls": [],
+              "control_owner": "reconciler_owned",
+              "distribution": "distribution:mattpocock/standalone",
+              "identity": "route:codex/mattpocock-standalone",
+              "operations": {
+                "configure": {
+                  "disposition": "unavailable"
+                },
+                "disable": {
+                  "disposition": "unavailable"
+                },
+                "enable": {
+                  "disposition": "unavailable"
+                },
+                "inspect": {
+                  "disposition": "automated"
+                },
+                "install": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "remove": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "restore": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "suppress_native_update": {
+                  "disposition": "unavailable"
+                }
+              },
+              "provenance": {
+                "owner": "source:mattpocock/skills"
+              },
+              "provider": {
+                "canonical_root": "agents_skills",
+                "kind": "standalone_skill"
+              },
+              "restore": {
+                "artifact_ref": "git+https://github.com/mattpocock/skills.git@84fdeffd12f2ee307994d1eb6feb48173b6e0502#skills/engineering,skills/productivity",
+                "class": "immutable",
+                "content_digest": "sha256:1b3a5b293a2d0e04748c64f6c86af0ed104a7619de68f7e2cdadc6b42b9a0d41",
+                "native_update_control": "not_applicable",
+                "revision": "84fdeffd12f2ee307994d1eb6feb48173b6e0502"
+              },
+              "secret_references": []
+            }
+          ],
+          "supplementary_routes": []
+        }
+      }
+    },
+    {
+      "harness": "cursor",
+      "identity": "template:mattpocock/standalone-cursor",
+      "record": {
+        "outcome": "managed_provider",
+        "provider_selection": {
+          "allow_overlap": [],
+          "preferred_route": "route:cursor/mattpocock-standalone",
+          "routes": [
+            {
+              "activation_group": "activation:cursor/mattpocock-standalone",
+              "component_controls": [],
+              "control_owner": "reconciler_owned",
+              "distribution": "distribution:mattpocock/standalone",
+              "identity": "route:cursor/mattpocock-standalone",
+              "operations": {
+                "configure": {
+                  "disposition": "unavailable"
+                },
+                "disable": {
+                  "disposition": "unavailable"
+                },
+                "enable": {
+                  "disposition": "unavailable"
+                },
+                "inspect": {
+                  "disposition": "automated"
+                },
+                "install": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "remove": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "restore": {
+                  "compensation": "restore_captured_pre_state",
+                  "disposition": "automated"
+                },
+                "suppress_native_update": {
+                  "disposition": "unavailable"
+                }
+              },
+              "provenance": {
+                "owner": "source:mattpocock/skills"
+              },
+              "provider": {
+                "canonical_root": "agents_skills",
+                "kind": "standalone_skill"
+              },
+              "restore": {
+                "artifact_ref": "git+https://github.com/mattpocock/skills.git@84fdeffd12f2ee307994d1eb6feb48173b6e0502#skills/engineering,skills/productivity",
+                "class": "immutable",
+                "content_digest": "sha256:1b3a5b293a2d0e04748c64f6c86af0ed104a7619de68f7e2cdadc6b42b9a0d41",
+                "native_update_control": "not_applicable",
+                "revision": "84fdeffd12f2ee307994d1eb6feb48173b6e0502"
+              },
+              "secret_references": []
+            }
+          ],
+          "supplementary_routes": []
+        }
+      }
+    },
+    {
+      "harness": "claude",
+      "identity": "template:omission/claude",
+      "record": {
+        "outcome": "intentional_omission",
+        "provider_selection": "no_provider"
+      }
+    },
+    {
+      "harness": "codex",
+      "identity": "template:omission/codex",
+      "record": {
+        "outcome": "intentional_omission",
+        "provider_selection": "no_provider"
+      }
+    },
+    {
+      "harness": "cursor",
+      "identity": "template:omission/cursor",
+      "record": {
+        "outcome": "intentional_omission",
+        "provider_selection": "no_provider"
+      }
+    }
+  ],
+  "distributions": [
+    {
+      "coverage_templates": {},
+      "identity": "distribution:chrome-devtools/claude-plugin",
+      "selection": {
+        "equipment": [
+          "mcp:chrome-devtools/server",
+          "plugin:chrome-devtools/claude",
+          "skill:chrome-devtools/a11y-debugging",
+          "skill:chrome-devtools/chrome-devtools",
+          "skill:chrome-devtools/chrome-devtools-cli",
+          "skill:chrome-devtools/debug-optimize-lcp",
+          "skill:chrome-devtools/memory-leak-debugging",
+          "skill:chrome-devtools/troubleshooting"
+        ]
+      },
+      "source": {
+        "channel": "stable",
+        "kind": "native_manager",
+        "manager": "claude",
+        "package": "chrome-devtools-mcp@claude-plugins-official"
+      }
+    },
+    {
+      "coverage_templates": {},
+      "identity": "distribution:chrome-devtools/direct-mcp",
+      "selection": {
+        "equipment": [
+          "mcp:chrome-devtools/server"
+        ]
+      },
+      "source": {
+        "channel": "1.7.0",
+        "kind": "native_manager",
+        "manager": "npx",
+        "package": "chrome-devtools-mcp"
+      }
+    },
+    {
+      "coverage_templates": {},
+      "identity": "distribution:context7/direct-mcp",
+      "selection": {
+        "equipment": [
+          "mcp:context7/server"
+        ]
+      },
+      "source": {
+        "channel": "3.2.4",
+        "kind": "native_manager",
+        "manager": "npx",
+        "package": "@upstash/context7-mcp"
+      }
+    },
+    {
+      "coverage_templates": {},
+      "identity": "distribution:firecrawl/direct-mcp",
+      "selection": {
+        "equipment": [
+          "mcp:firecrawl/server"
+        ]
+      },
+      "source": {
+        "channel": "3.22.3",
+        "kind": "native_manager",
+        "manager": "npx",
+        "package": "firecrawl-mcp"
+      }
+    },
+    {
+      "coverage_templates": {},
+      "identity": "distribution:github/codex-plugin",
+      "selection": {
+        "equipment": [
+          "mcp:github/server",
+          "other:github/codex-app",
+          "plugin:github/codex",
+          "skill:github/gh-address-comments",
+          "skill:github/gh-fix-ci",
+          "skill:github/github",
+          "skill:github/yeet"
+        ]
+      },
+      "source": {
+        "channel": "openai-curated",
+        "kind": "native_manager",
+        "manager": "codex",
+        "package": "github@openai-curated"
+      }
+    },
+    {
+      "coverage_templates": {},
+      "identity": "distribution:github/direct-mcp",
+      "selection": {
+        "equipment": [
+          "mcp:github/server"
+        ]
+      },
+      "source": {
+        "channel": "0.1.38",
+        "kind": "native_manager",
+        "manager": "npx",
+        "package": "mcp-remote"
+      }
+    },
+    {
+      "coverage_templates": {},
+      "identity": "distribution:greptile/direct-mcp",
+      "selection": {
+        "equipment": [
+          "mcp:greptile/server"
+        ]
+      },
+      "source": {
+        "channel": "0.1.38",
+        "kind": "native_manager",
+        "manager": "npx",
+        "package": "mcp-remote"
+      }
+    },
+    {
+      "coverage_templates": {},
+      "identity": "distribution:mattpocock/claude-plugin",
+      "selection": {
+        "equipment": [
+          "plugin:mattpocock/claude",
+          "skill:mattpocock/ask-matt",
+          "skill:mattpocock/code-review",
+          "skill:mattpocock/codebase-design",
+          "skill:mattpocock/diagnosing-bugs",
+          "skill:mattpocock/domain-modeling",
+          "skill:mattpocock/grill-me",
+          "skill:mattpocock/grill-with-docs",
+          "skill:mattpocock/grilling",
+          "skill:mattpocock/handoff",
+          "skill:mattpocock/implement",
+          "skill:mattpocock/improve-codebase-architecture",
+          "skill:mattpocock/prototype",
+          "skill:mattpocock/research",
+          "skill:mattpocock/resolving-merge-conflicts",
+          "skill:mattpocock/setup-matt-pocock-skills",
+          "skill:mattpocock/tdd",
+          "skill:mattpocock/teach",
+          "skill:mattpocock/to-questionnaire",
+          "skill:mattpocock/to-spec",
+          "skill:mattpocock/to-tickets",
+          "skill:mattpocock/triage",
+          "skill:mattpocock/wait-what",
+          "skill:mattpocock/wayfinder",
+          "skill:mattpocock/wizard",
+          "skill:mattpocock/writing-for-agents"
+        ]
+      },
+      "source": {
+        "channel": "stable",
+        "kind": "native_manager",
+        "manager": "claude",
+        "package": "mattpocock-skills@claude-plugins-official"
+      }
+    },
+    {
+      "coverage_templates": {},
+      "identity": "distribution:mattpocock/standalone",
+      "selection": {
+        "equipment": [
+          "skill:mattpocock/ask-matt",
+          "skill:mattpocock/code-review",
+          "skill:mattpocock/codebase-design",
+          "skill:mattpocock/diagnosing-bugs",
+          "skill:mattpocock/domain-modeling",
+          "skill:mattpocock/grill-me",
+          "skill:mattpocock/grill-with-docs",
+          "skill:mattpocock/grilling",
+          "skill:mattpocock/handoff",
+          "skill:mattpocock/implement",
+          "skill:mattpocock/improve-codebase-architecture",
+          "skill:mattpocock/prototype",
+          "skill:mattpocock/research",
+          "skill:mattpocock/resolving-merge-conflicts",
+          "skill:mattpocock/setup-matt-pocock-skills",
+          "skill:mattpocock/tdd",
+          "skill:mattpocock/teach",
+          "skill:mattpocock/to-questionnaire",
+          "skill:mattpocock/to-spec",
+          "skill:mattpocock/to-tickets",
+          "skill:mattpocock/triage",
+          "skill:mattpocock/wait-what",
+          "skill:mattpocock/wayfinder",
+          "skill:mattpocock/wizard",
+          "skill:mattpocock/writing-for-agents"
+        ]
+      },
+      "source": {
+        "kind": "git",
+        "ref": "84fdeffd12f2ee307994d1eb6feb48173b6e0502",
+        "repository": "https://github.com/mattpocock/skills.git"
+      }
+    }
+  ],
+  "equipment": [
+    {
+      "coverage": {
+        "claude": {
+          "template": "template:chrome-devtools/claude-plugin"
+        },
+        "codex": {
+          "template": "template:chrome-devtools/direct-codex"
+        },
+        "cursor": {
+          "template": "template:chrome-devtools/direct-cursor"
+        }
+      },
+      "identity": "mcp:chrome-devtools/server",
+      "kind": "mcp"
+    },
+    {
+      "coverage": {
+        "claude": {
+          "template": "template:context7/direct-claude"
+        },
+        "codex": {
+          "template": "template:context7/direct-codex"
+        },
+        "cursor": {
+          "template": "template:context7/direct-cursor"
+        }
+      },
+      "identity": "mcp:context7/server",
+      "kind": "mcp"
+    },
+    {
+      "coverage": {
+        "claude": {
+          "template": "template:firecrawl/direct-claude"
+        },
+        "codex": {
+          "template": "template:firecrawl/direct-codex"
+        },
+        "cursor": {
+          "template": "template:firecrawl/direct-cursor"
+        }
+      },
+      "identity": "mcp:firecrawl/server",
+      "kind": "mcp"
+    },
+    {
+      "coverage": {
+        "claude": {
+          "template": "template:github/direct-claude"
+        },
+        "codex": {
+          "template": "template:github/codex-plugin"
+        },
+        "cursor": {
+          "template": "template:github/direct-cursor"
+        }
+      },
+      "identity": "mcp:github/server",
+      "kind": "mcp"
+    },
+    {
+      "coverage": {
+        "claude": {
+          "template": "template:greptile/direct-claude"
+        },
+        "codex": {
+          "template": "template:omission/codex"
+        },
+        "cursor": {
+          "template": "template:omission/cursor"
+        }
+      },
+      "identity": "mcp:greptile/server",
+      "kind": "mcp"
+    },
+    {
+      "coverage": {
+        "claude": {
+          "template": "template:omission/claude"
+        },
+        "codex": {
+          "template": "template:github/codex-plugin"
+        },
+        "cursor": {
+          "template": "template:omission/cursor"
+        }
+      },
+      "identity": "other:github/codex-app",
+      "kind": "other"
+    },
+    {
+      "coverage": {
+        "claude": {
+          "template": "template:chrome-devtools/claude-plugin"
+        },
+        "codex": {
+          "template": "template:omission/codex"
+        },
+        "cursor": {
+          "template": "template:omission/cursor"
+        }
+      },
+      "identity": "plugin:chrome-devtools/claude",
+      "kind": "plugin"
+    },
+    {
+      "coverage": {
+        "claude": {
+          "template": "template:omission/claude"
+        },
+        "codex": {
+          "template": "template:github/codex-plugin"
+        },
+        "cursor": {
+          "template": "template:omission/cursor"
+        }
+      },
+      "identity": "plugin:github/codex",
+      "kind": "plugin"
+    },
+    {
+      "coverage": {
+        "claude": {
+          "template": "template:mattpocock/claude-plugin"
+        },
+        "codex": {
+          "template": "template:omission/codex"
+        },
+        "cursor": {
+          "template": "template:omission/cursor"
+        }
+      },
+      "identity": "plugin:mattpocock/claude",
+      "kind": "plugin"
+    },
+    {
+      "coverage": {
+        "claude": {
+          "template": "template:chrome-devtools/claude-plugin"
+        },
+        "codex": {
+          "template": "template:omission/codex"
+        },
+        "cursor": {
+          "template": "template:omission/cursor"
+        }
+      },
+      "identity": "skill:chrome-devtools/a11y-debugging",
+      "kind": "skill"
+    },
+    {
+      "coverage": {
+        "claude": {
+          "template": "template:chrome-devtools/claude-plugin"
+        },
+        "codex": {
+          "template": "template:omission/codex"
+        },
+        "cursor": {
+          "template": "template:omission/cursor"
+        }
+      },
+      "identity": "skill:chrome-devtools/chrome-devtools",
+      "kind": "skill"
+    },
+    {
+      "coverage": {
+        "claude": {
+          "template": "template:chrome-devtools/claude-plugin"
+        },
+        "codex": {
+          "template": "template:omission/codex"
+        },
+        "cursor": {
+          "template": "template:omission/cursor"
+        }
+      },
+      "identity": "skill:chrome-devtools/chrome-devtools-cli",
+      "kind": "skill"
+    },
+    {
+      "coverage": {
+        "claude": {
+          "template": "template:chrome-devtools/claude-plugin"
+        },
+        "codex": {
+          "template": "template:omission/codex"
+        },
+        "cursor": {
+          "template": "template:omission/cursor"
+        }
+      },
+      "identity": "skill:chrome-devtools/debug-optimize-lcp",
+      "kind": "skill"
+    },
+    {
+      "coverage": {
+        "claude": {
+          "template": "template:chrome-devtools/claude-plugin"
+        },
+        "codex": {
+          "template": "template:omission/codex"
+        },
+        "cursor": {
+          "template": "template:omission/cursor"
+        }
+      },
+      "identity": "skill:chrome-devtools/memory-leak-debugging",
+      "kind": "skill"
+    },
+    {
+      "coverage": {
+        "claude": {
+          "template": "template:chrome-devtools/claude-plugin"
+        },
+        "codex": {
+          "template": "template:omission/codex"
+        },
+        "cursor": {
+          "template": "template:omission/cursor"
+        }
+      },
+      "identity": "skill:chrome-devtools/troubleshooting",
+      "kind": "skill"
+    },
+    {
+      "coverage": {
+        "claude": {
+          "template": "template:omission/claude"
+        },
+        "codex": {
+          "template": "template:github/codex-plugin"
+        },
+        "cursor": {
+          "template": "template:omission/cursor"
+        }
+      },
+      "identity": "skill:github/gh-address-comments",
+      "kind": "skill"
+    },
+    {
+      "coverage": {
+        "claude": {
+          "template": "template:omission/claude"
+        },
+        "codex": {
+          "template": "template:github/codex-plugin"
+        },
+        "cursor": {
+          "template": "template:omission/cursor"
+        }
+      },
+      "identity": "skill:github/gh-fix-ci",
+      "kind": "skill"
+    },
+    {
+      "coverage": {
+        "claude": {
+          "template": "template:omission/claude"
+        },
+        "codex": {
+          "template": "template:github/codex-plugin"
+        },
+        "cursor": {
+          "template": "template:omission/cursor"
+        }
+      },
+      "identity": "skill:github/github",
+      "kind": "skill"
+    },
+    {
+      "coverage": {
+        "claude": {
+          "template": "template:omission/claude"
+        },
+        "codex": {
+          "template": "template:omission/codex"
+        },
+        "cursor": {
+          "template": "template:omission/cursor"
+        }
+      },
+      "identity": "skill:github/yeet",
+      "kind": "skill"
+    },
+    {
+      "coverage": {
+        "claude": {
+          "template": "template:mattpocock/claude-plugin"
+        },
+        "codex": {
+          "template": "template:mattpocock/standalone-codex"
+        },
+        "cursor": {
+          "template": "template:mattpocock/standalone-cursor"
+        }
+      },
+      "identity": "skill:mattpocock/ask-matt",
+      "kind": "skill"
+    },
+    {
+      "coverage": {
+        "claude": {
+          "template": "template:mattpocock/claude-plugin"
+        },
+        "codex": {
+          "template": "template:mattpocock/standalone-codex"
+        },
+        "cursor": {
+          "template": "template:mattpocock/standalone-cursor"
+        }
+      },
+      "identity": "skill:mattpocock/code-review",
+      "kind": "skill"
+    },
+    {
+      "coverage": {
+        "claude": {
+          "template": "template:mattpocock/claude-plugin"
+        },
+        "codex": {
+          "template": "template:mattpocock/standalone-codex"
+        },
+        "cursor": {
+          "template": "template:mattpocock/standalone-cursor"
+        }
+      },
+      "identity": "skill:mattpocock/codebase-design",
+      "kind": "skill"
+    },
+    {
+      "coverage": {
+        "claude": {
+          "template": "template:mattpocock/claude-plugin"
+        },
+        "codex": {
+          "template": "template:mattpocock/standalone-codex"
+        },
+        "cursor": {
+          "template": "template:mattpocock/standalone-cursor"
+        }
+      },
+      "identity": "skill:mattpocock/diagnosing-bugs",
+      "kind": "skill"
+    },
+    {
+      "coverage": {
+        "claude": {
+          "template": "template:mattpocock/claude-plugin"
+        },
+        "codex": {
+          "template": "template:mattpocock/standalone-codex"
+        },
+        "cursor": {
+          "template": "template:mattpocock/standalone-cursor"
+        }
+      },
+      "identity": "skill:mattpocock/domain-modeling",
+      "kind": "skill"
+    },
+    {
+      "coverage": {
+        "claude": {
+          "template": "template:mattpocock/claude-plugin"
+        },
+        "codex": {
+          "template": "template:mattpocock/standalone-codex"
+        },
+        "cursor": {
+          "template": "template:mattpocock/standalone-cursor"
+        }
+      },
+      "identity": "skill:mattpocock/grill-me",
+      "kind": "skill"
+    },
+    {
+      "coverage": {
+        "claude": {
+          "template": "template:mattpocock/claude-plugin"
+        },
+        "codex": {
+          "template": "template:mattpocock/standalone-codex"
+        },
+        "cursor": {
+          "template": "template:mattpocock/standalone-cursor"
+        }
+      },
+      "identity": "skill:mattpocock/grill-with-docs",
+      "kind": "skill"
+    },
+    {
+      "coverage": {
+        "claude": {
+          "template": "template:mattpocock/claude-plugin"
+        },
+        "codex": {
+          "template": "template:mattpocock/standalone-codex"
+        },
+        "cursor": {
+          "template": "template:mattpocock/standalone-cursor"
+        }
+      },
+      "identity": "skill:mattpocock/grilling",
+      "kind": "skill"
+    },
+    {
+      "coverage": {
+        "claude": {
+          "template": "template:mattpocock/claude-plugin"
+        },
+        "codex": {
+          "template": "template:mattpocock/standalone-codex"
+        },
+        "cursor": {
+          "template": "template:mattpocock/standalone-cursor"
+        }
+      },
+      "identity": "skill:mattpocock/handoff",
+      "kind": "skill"
+    },
+    {
+      "coverage": {
+        "claude": {
+          "template": "template:mattpocock/claude-plugin"
+        },
+        "codex": {
+          "template": "template:mattpocock/standalone-codex"
+        },
+        "cursor": {
+          "template": "template:mattpocock/standalone-cursor"
+        }
+      },
+      "identity": "skill:mattpocock/implement",
+      "kind": "skill"
+    },
+    {
+      "coverage": {
+        "claude": {
+          "template": "template:mattpocock/claude-plugin"
+        },
+        "codex": {
+          "template": "template:mattpocock/standalone-codex"
+        },
+        "cursor": {
+          "template": "template:mattpocock/standalone-cursor"
+        }
+      },
+      "identity": "skill:mattpocock/improve-codebase-architecture",
+      "kind": "skill"
+    },
+    {
+      "coverage": {
+        "claude": {
+          "template": "template:mattpocock/claude-plugin"
+        },
+        "codex": {
+          "template": "template:mattpocock/standalone-codex"
+        },
+        "cursor": {
+          "template": "template:mattpocock/standalone-cursor"
+        }
+      },
+      "identity": "skill:mattpocock/prototype",
+      "kind": "skill"
+    },
+    {
+      "coverage": {
+        "claude": {
+          "template": "template:mattpocock/claude-plugin"
+        },
+        "codex": {
+          "template": "template:mattpocock/standalone-codex"
+        },
+        "cursor": {
+          "template": "template:mattpocock/standalone-cursor"
+        }
+      },
+      "identity": "skill:mattpocock/research",
+      "kind": "skill"
+    },
+    {
+      "coverage": {
+        "claude": {
+          "template": "template:mattpocock/claude-plugin"
+        },
+        "codex": {
+          "template": "template:mattpocock/standalone-codex"
+        },
+        "cursor": {
+          "template": "template:mattpocock/standalone-cursor"
+        }
+      },
+      "identity": "skill:mattpocock/resolving-merge-conflicts",
+      "kind": "skill"
+    },
+    {
+      "coverage": {
+        "claude": {
+          "template": "template:mattpocock/claude-plugin"
+        },
+        "codex": {
+          "template": "template:mattpocock/standalone-codex"
+        },
+        "cursor": {
+          "template": "template:mattpocock/standalone-cursor"
+        }
+      },
+      "identity": "skill:mattpocock/setup-matt-pocock-skills",
+      "kind": "skill"
+    },
+    {
+      "coverage": {
+        "claude": {
+          "template": "template:mattpocock/claude-plugin"
+        },
+        "codex": {
+          "template": "template:mattpocock/standalone-codex"
+        },
+        "cursor": {
+          "template": "template:mattpocock/standalone-cursor"
+        }
+      },
+      "identity": "skill:mattpocock/tdd",
+      "kind": "skill"
+    },
+    {
+      "coverage": {
+        "claude": {
+          "template": "template:mattpocock/claude-plugin"
+        },
+        "codex": {
+          "template": "template:mattpocock/standalone-codex"
+        },
+        "cursor": {
+          "template": "template:mattpocock/standalone-cursor"
+        }
+      },
+      "identity": "skill:mattpocock/teach",
+      "kind": "skill"
+    },
+    {
+      "coverage": {
+        "claude": {
+          "template": "template:mattpocock/claude-plugin"
+        },
+        "codex": {
+          "template": "template:mattpocock/standalone-codex"
+        },
+        "cursor": {
+          "template": "template:mattpocock/standalone-cursor"
+        }
+      },
+      "identity": "skill:mattpocock/to-questionnaire",
+      "kind": "skill"
+    },
+    {
+      "coverage": {
+        "claude": {
+          "template": "template:mattpocock/claude-plugin"
+        },
+        "codex": {
+          "template": "template:mattpocock/standalone-codex"
+        },
+        "cursor": {
+          "template": "template:mattpocock/standalone-cursor"
+        }
+      },
+      "identity": "skill:mattpocock/to-spec",
+      "kind": "skill"
+    },
+    {
+      "coverage": {
+        "claude": {
+          "template": "template:mattpocock/claude-plugin"
+        },
+        "codex": {
+          "template": "template:mattpocock/standalone-codex"
+        },
+        "cursor": {
+          "template": "template:mattpocock/standalone-cursor"
+        }
+      },
+      "identity": "skill:mattpocock/to-tickets",
+      "kind": "skill"
+    },
+    {
+      "coverage": {
+        "claude": {
+          "template": "template:mattpocock/claude-plugin"
+        },
+        "codex": {
+          "template": "template:mattpocock/standalone-codex"
+        },
+        "cursor": {
+          "template": "template:mattpocock/standalone-cursor"
+        }
+      },
+      "identity": "skill:mattpocock/triage",
+      "kind": "skill"
+    },
+    {
+      "coverage": {
+        "claude": {
+          "template": "template:mattpocock/claude-plugin"
+        },
+        "codex": {
+          "template": "template:mattpocock/standalone-codex"
+        },
+        "cursor": {
+          "template": "template:mattpocock/standalone-cursor"
+        }
+      },
+      "identity": "skill:mattpocock/wait-what",
+      "kind": "skill"
+    },
+    {
+      "coverage": {
+        "claude": {
+          "template": "template:mattpocock/claude-plugin"
+        },
+        "codex": {
+          "template": "template:mattpocock/standalone-codex"
+        },
+        "cursor": {
+          "template": "template:mattpocock/standalone-cursor"
+        }
+      },
+      "identity": "skill:mattpocock/wayfinder",
+      "kind": "skill"
+    },
+    {
+      "coverage": {
+        "claude": {
+          "template": "template:mattpocock/claude-plugin"
+        },
+        "codex": {
+          "template": "template:mattpocock/standalone-codex"
+        },
+        "cursor": {
+          "template": "template:mattpocock/standalone-cursor"
+        }
+      },
+      "identity": "skill:mattpocock/wizard",
+      "kind": "skill"
+    },
+    {
+      "coverage": {
+        "claude": {
+          "template": "template:mattpocock/claude-plugin"
+        },
+        "codex": {
+          "template": "template:mattpocock/standalone-codex"
+        },
+        "cursor": {
+          "template": "template:mattpocock/standalone-cursor"
+        }
+      },
+      "identity": "skill:mattpocock/writing-for-agents",
+      "kind": "skill"
+    }
+  ],
+  "retirements": [
+    {
+      "desired_state": "absent",
+      "equipment_identity": "mcp:chrome-devtools/server",
+      "harness": "claude",
+      "identity": "retirement:claude/direct-chrome-devtools",
+      "route": {
+        "activation_group": "activation:claude/retire-direct-chrome-devtools",
+        "component_controls": [],
+        "control_owner": "reconciler_owned",
+        "distribution": "distribution:chrome-devtools/direct-mcp",
+        "identity": "route:claude/retire-direct-chrome-devtools",
+        "operations": {
+          "configure": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "disable": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "enable": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "inspect": {
+            "disposition": "automated"
+          },
+          "install": {
+            "disposition": "unavailable"
+          },
+          "remove": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "restore": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "suppress_native_update": {
+            "disposition": "unavailable"
+          }
+        },
+        "provenance": {
+          "owner": "overlay:claude/mcp"
+        },
+        "provider": {
+          "arguments": [
+            {
+              "literal": "-y"
+            },
+            {
+              "literal": "chrome-devtools-mcp@1.7.0"
+            }
+          ],
+          "command": "npx",
+          "kind": "direct_mcp",
+          "server_name": "chrome-devtools",
+          "transport": "stdio"
+        },
+        "restore": {
+          "channel": "npm:1.7.0",
+          "class": "native_rolling",
+          "native_update_control": "suppressible",
+          "observation_source": "reviewed npm selector",
+          "reviewed_baseline": "chrome-devtools-mcp@1.7.0"
+        },
+        "secret_references": []
+      },
+      "surface": {
+        "kind": "direct_mcp",
+        "server_name": "chrome-devtools"
+      }
+    },
+    {
+      "desired_state": "absent",
+      "equipment_identity": "skill:mattpocock/ask-matt",
+      "harness": "claude",
+      "identity": "retirement:claude/matt-ask-matt-projection",
+      "route": {
+        "activation_group": "activation:claude/retire-matt-ask-matt",
+        "component_controls": [],
+        "control_owner": "reconciler_owned",
+        "distribution": "distribution:mattpocock/standalone",
+        "identity": "route:claude/retire-matt-ask-matt",
+        "operations": {
+          "configure": {
+            "disposition": "unavailable"
+          },
+          "disable": {
+            "disposition": "unavailable"
+          },
+          "enable": {
+            "disposition": "unavailable"
+          },
+          "inspect": {
+            "disposition": "automated"
+          },
+          "install": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "remove": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "restore": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "suppress_native_update": {
+            "disposition": "unavailable"
+          }
+        },
+        "provenance": {
+          "owner": "projection:claude/standalone-skill"
+        },
+        "provider": {
+          "canonical_root": "agents_skills",
+          "kind": "standalone_skill"
+        },
+        "restore": {
+          "artifact_ref": "git+https://github.com/mattpocock/skills.git@84fdeffd12f2ee307994d1eb6feb48173b6e0502#skills/engineering,skills/productivity",
+          "class": "immutable",
+          "content_digest": "sha256:1b3a5b293a2d0e04748c64f6c86af0ed104a7619de68f7e2cdadc6b42b9a0d41",
+          "native_update_control": "not_applicable",
+          "revision": "84fdeffd12f2ee307994d1eb6feb48173b6e0502"
+        },
+        "secret_references": []
+      },
+      "surface": {
+        "kind": "claude_skill_projection",
+        "skill_name": "ask-matt"
+      }
+    },
+    {
+      "desired_state": "absent",
+      "equipment_identity": "skill:mattpocock/code-review",
+      "harness": "claude",
+      "identity": "retirement:claude/matt-code-review-projection",
+      "route": {
+        "activation_group": "activation:claude/retire-matt-code-review",
+        "component_controls": [],
+        "control_owner": "reconciler_owned",
+        "distribution": "distribution:mattpocock/standalone",
+        "identity": "route:claude/retire-matt-code-review",
+        "operations": {
+          "configure": {
+            "disposition": "unavailable"
+          },
+          "disable": {
+            "disposition": "unavailable"
+          },
+          "enable": {
+            "disposition": "unavailable"
+          },
+          "inspect": {
+            "disposition": "automated"
+          },
+          "install": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "remove": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "restore": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "suppress_native_update": {
+            "disposition": "unavailable"
+          }
+        },
+        "provenance": {
+          "owner": "projection:claude/standalone-skill"
+        },
+        "provider": {
+          "canonical_root": "agents_skills",
+          "kind": "standalone_skill"
+        },
+        "restore": {
+          "artifact_ref": "git+https://github.com/mattpocock/skills.git@84fdeffd12f2ee307994d1eb6feb48173b6e0502#skills/engineering,skills/productivity",
+          "class": "immutable",
+          "content_digest": "sha256:1b3a5b293a2d0e04748c64f6c86af0ed104a7619de68f7e2cdadc6b42b9a0d41",
+          "native_update_control": "not_applicable",
+          "revision": "84fdeffd12f2ee307994d1eb6feb48173b6e0502"
+        },
+        "secret_references": []
+      },
+      "surface": {
+        "kind": "claude_skill_projection",
+        "skill_name": "code-review"
+      }
+    },
+    {
+      "desired_state": "absent",
+      "equipment_identity": "skill:mattpocock/codebase-design",
+      "harness": "claude",
+      "identity": "retirement:claude/matt-codebase-design-projection",
+      "route": {
+        "activation_group": "activation:claude/retire-matt-codebase-design",
+        "component_controls": [],
+        "control_owner": "reconciler_owned",
+        "distribution": "distribution:mattpocock/standalone",
+        "identity": "route:claude/retire-matt-codebase-design",
+        "operations": {
+          "configure": {
+            "disposition": "unavailable"
+          },
+          "disable": {
+            "disposition": "unavailable"
+          },
+          "enable": {
+            "disposition": "unavailable"
+          },
+          "inspect": {
+            "disposition": "automated"
+          },
+          "install": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "remove": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "restore": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "suppress_native_update": {
+            "disposition": "unavailable"
+          }
+        },
+        "provenance": {
+          "owner": "projection:claude/standalone-skill"
+        },
+        "provider": {
+          "canonical_root": "agents_skills",
+          "kind": "standalone_skill"
+        },
+        "restore": {
+          "artifact_ref": "git+https://github.com/mattpocock/skills.git@84fdeffd12f2ee307994d1eb6feb48173b6e0502#skills/engineering,skills/productivity",
+          "class": "immutable",
+          "content_digest": "sha256:1b3a5b293a2d0e04748c64f6c86af0ed104a7619de68f7e2cdadc6b42b9a0d41",
+          "native_update_control": "not_applicable",
+          "revision": "84fdeffd12f2ee307994d1eb6feb48173b6e0502"
+        },
+        "secret_references": []
+      },
+      "surface": {
+        "kind": "claude_skill_projection",
+        "skill_name": "codebase-design"
+      }
+    },
+    {
+      "desired_state": "absent",
+      "equipment_identity": "skill:mattpocock/diagnosing-bugs",
+      "harness": "claude",
+      "identity": "retirement:claude/matt-diagnosing-bugs-projection",
+      "route": {
+        "activation_group": "activation:claude/retire-matt-diagnosing-bugs",
+        "component_controls": [],
+        "control_owner": "reconciler_owned",
+        "distribution": "distribution:mattpocock/standalone",
+        "identity": "route:claude/retire-matt-diagnosing-bugs",
+        "operations": {
+          "configure": {
+            "disposition": "unavailable"
+          },
+          "disable": {
+            "disposition": "unavailable"
+          },
+          "enable": {
+            "disposition": "unavailable"
+          },
+          "inspect": {
+            "disposition": "automated"
+          },
+          "install": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "remove": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "restore": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "suppress_native_update": {
+            "disposition": "unavailable"
+          }
+        },
+        "provenance": {
+          "owner": "projection:claude/standalone-skill"
+        },
+        "provider": {
+          "canonical_root": "agents_skills",
+          "kind": "standalone_skill"
+        },
+        "restore": {
+          "artifact_ref": "git+https://github.com/mattpocock/skills.git@84fdeffd12f2ee307994d1eb6feb48173b6e0502#skills/engineering,skills/productivity",
+          "class": "immutable",
+          "content_digest": "sha256:1b3a5b293a2d0e04748c64f6c86af0ed104a7619de68f7e2cdadc6b42b9a0d41",
+          "native_update_control": "not_applicable",
+          "revision": "84fdeffd12f2ee307994d1eb6feb48173b6e0502"
+        },
+        "secret_references": []
+      },
+      "surface": {
+        "kind": "claude_skill_projection",
+        "skill_name": "diagnosing-bugs"
+      }
+    },
+    {
+      "desired_state": "absent",
+      "equipment_identity": "skill:mattpocock/domain-modeling",
+      "harness": "claude",
+      "identity": "retirement:claude/matt-domain-modeling-projection",
+      "route": {
+        "activation_group": "activation:claude/retire-matt-domain-modeling",
+        "component_controls": [],
+        "control_owner": "reconciler_owned",
+        "distribution": "distribution:mattpocock/standalone",
+        "identity": "route:claude/retire-matt-domain-modeling",
+        "operations": {
+          "configure": {
+            "disposition": "unavailable"
+          },
+          "disable": {
+            "disposition": "unavailable"
+          },
+          "enable": {
+            "disposition": "unavailable"
+          },
+          "inspect": {
+            "disposition": "automated"
+          },
+          "install": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "remove": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "restore": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "suppress_native_update": {
+            "disposition": "unavailable"
+          }
+        },
+        "provenance": {
+          "owner": "projection:claude/standalone-skill"
+        },
+        "provider": {
+          "canonical_root": "agents_skills",
+          "kind": "standalone_skill"
+        },
+        "restore": {
+          "artifact_ref": "git+https://github.com/mattpocock/skills.git@84fdeffd12f2ee307994d1eb6feb48173b6e0502#skills/engineering,skills/productivity",
+          "class": "immutable",
+          "content_digest": "sha256:1b3a5b293a2d0e04748c64f6c86af0ed104a7619de68f7e2cdadc6b42b9a0d41",
+          "native_update_control": "not_applicable",
+          "revision": "84fdeffd12f2ee307994d1eb6feb48173b6e0502"
+        },
+        "secret_references": []
+      },
+      "surface": {
+        "kind": "claude_skill_projection",
+        "skill_name": "domain-modeling"
+      }
+    },
+    {
+      "desired_state": "absent",
+      "equipment_identity": "skill:mattpocock/grill-me",
+      "harness": "claude",
+      "identity": "retirement:claude/matt-grill-me-projection",
+      "route": {
+        "activation_group": "activation:claude/retire-matt-grill-me",
+        "component_controls": [],
+        "control_owner": "reconciler_owned",
+        "distribution": "distribution:mattpocock/standalone",
+        "identity": "route:claude/retire-matt-grill-me",
+        "operations": {
+          "configure": {
+            "disposition": "unavailable"
+          },
+          "disable": {
+            "disposition": "unavailable"
+          },
+          "enable": {
+            "disposition": "unavailable"
+          },
+          "inspect": {
+            "disposition": "automated"
+          },
+          "install": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "remove": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "restore": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "suppress_native_update": {
+            "disposition": "unavailable"
+          }
+        },
+        "provenance": {
+          "owner": "projection:claude/standalone-skill"
+        },
+        "provider": {
+          "canonical_root": "agents_skills",
+          "kind": "standalone_skill"
+        },
+        "restore": {
+          "artifact_ref": "git+https://github.com/mattpocock/skills.git@84fdeffd12f2ee307994d1eb6feb48173b6e0502#skills/engineering,skills/productivity",
+          "class": "immutable",
+          "content_digest": "sha256:1b3a5b293a2d0e04748c64f6c86af0ed104a7619de68f7e2cdadc6b42b9a0d41",
+          "native_update_control": "not_applicable",
+          "revision": "84fdeffd12f2ee307994d1eb6feb48173b6e0502"
+        },
+        "secret_references": []
+      },
+      "surface": {
+        "kind": "claude_skill_projection",
+        "skill_name": "grill-me"
+      }
+    },
+    {
+      "desired_state": "absent",
+      "equipment_identity": "skill:mattpocock/grill-with-docs",
+      "harness": "claude",
+      "identity": "retirement:claude/matt-grill-with-docs-projection",
+      "route": {
+        "activation_group": "activation:claude/retire-matt-grill-with-docs",
+        "component_controls": [],
+        "control_owner": "reconciler_owned",
+        "distribution": "distribution:mattpocock/standalone",
+        "identity": "route:claude/retire-matt-grill-with-docs",
+        "operations": {
+          "configure": {
+            "disposition": "unavailable"
+          },
+          "disable": {
+            "disposition": "unavailable"
+          },
+          "enable": {
+            "disposition": "unavailable"
+          },
+          "inspect": {
+            "disposition": "automated"
+          },
+          "install": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "remove": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "restore": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "suppress_native_update": {
+            "disposition": "unavailable"
+          }
+        },
+        "provenance": {
+          "owner": "projection:claude/standalone-skill"
+        },
+        "provider": {
+          "canonical_root": "agents_skills",
+          "kind": "standalone_skill"
+        },
+        "restore": {
+          "artifact_ref": "git+https://github.com/mattpocock/skills.git@84fdeffd12f2ee307994d1eb6feb48173b6e0502#skills/engineering,skills/productivity",
+          "class": "immutable",
+          "content_digest": "sha256:1b3a5b293a2d0e04748c64f6c86af0ed104a7619de68f7e2cdadc6b42b9a0d41",
+          "native_update_control": "not_applicable",
+          "revision": "84fdeffd12f2ee307994d1eb6feb48173b6e0502"
+        },
+        "secret_references": []
+      },
+      "surface": {
+        "kind": "claude_skill_projection",
+        "skill_name": "grill-with-docs"
+      }
+    },
+    {
+      "desired_state": "absent",
+      "equipment_identity": "skill:mattpocock/grilling",
+      "harness": "claude",
+      "identity": "retirement:claude/matt-grilling-projection",
+      "route": {
+        "activation_group": "activation:claude/retire-matt-grilling",
+        "component_controls": [],
+        "control_owner": "reconciler_owned",
+        "distribution": "distribution:mattpocock/standalone",
+        "identity": "route:claude/retire-matt-grilling",
+        "operations": {
+          "configure": {
+            "disposition": "unavailable"
+          },
+          "disable": {
+            "disposition": "unavailable"
+          },
+          "enable": {
+            "disposition": "unavailable"
+          },
+          "inspect": {
+            "disposition": "automated"
+          },
+          "install": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "remove": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "restore": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "suppress_native_update": {
+            "disposition": "unavailable"
+          }
+        },
+        "provenance": {
+          "owner": "projection:claude/standalone-skill"
+        },
+        "provider": {
+          "canonical_root": "agents_skills",
+          "kind": "standalone_skill"
+        },
+        "restore": {
+          "artifact_ref": "git+https://github.com/mattpocock/skills.git@84fdeffd12f2ee307994d1eb6feb48173b6e0502#skills/engineering,skills/productivity",
+          "class": "immutable",
+          "content_digest": "sha256:1b3a5b293a2d0e04748c64f6c86af0ed104a7619de68f7e2cdadc6b42b9a0d41",
+          "native_update_control": "not_applicable",
+          "revision": "84fdeffd12f2ee307994d1eb6feb48173b6e0502"
+        },
+        "secret_references": []
+      },
+      "surface": {
+        "kind": "claude_skill_projection",
+        "skill_name": "grilling"
+      }
+    },
+    {
+      "desired_state": "absent",
+      "equipment_identity": "skill:mattpocock/handoff",
+      "harness": "claude",
+      "identity": "retirement:claude/matt-handoff-projection",
+      "route": {
+        "activation_group": "activation:claude/retire-matt-handoff",
+        "component_controls": [],
+        "control_owner": "reconciler_owned",
+        "distribution": "distribution:mattpocock/standalone",
+        "identity": "route:claude/retire-matt-handoff",
+        "operations": {
+          "configure": {
+            "disposition": "unavailable"
+          },
+          "disable": {
+            "disposition": "unavailable"
+          },
+          "enable": {
+            "disposition": "unavailable"
+          },
+          "inspect": {
+            "disposition": "automated"
+          },
+          "install": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "remove": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "restore": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "suppress_native_update": {
+            "disposition": "unavailable"
+          }
+        },
+        "provenance": {
+          "owner": "projection:claude/standalone-skill"
+        },
+        "provider": {
+          "canonical_root": "agents_skills",
+          "kind": "standalone_skill"
+        },
+        "restore": {
+          "artifact_ref": "git+https://github.com/mattpocock/skills.git@84fdeffd12f2ee307994d1eb6feb48173b6e0502#skills/engineering,skills/productivity",
+          "class": "immutable",
+          "content_digest": "sha256:1b3a5b293a2d0e04748c64f6c86af0ed104a7619de68f7e2cdadc6b42b9a0d41",
+          "native_update_control": "not_applicable",
+          "revision": "84fdeffd12f2ee307994d1eb6feb48173b6e0502"
+        },
+        "secret_references": []
+      },
+      "surface": {
+        "kind": "claude_skill_projection",
+        "skill_name": "handoff"
+      }
+    },
+    {
+      "desired_state": "absent",
+      "equipment_identity": "skill:mattpocock/implement",
+      "harness": "claude",
+      "identity": "retirement:claude/matt-implement-projection",
+      "route": {
+        "activation_group": "activation:claude/retire-matt-implement",
+        "component_controls": [],
+        "control_owner": "reconciler_owned",
+        "distribution": "distribution:mattpocock/standalone",
+        "identity": "route:claude/retire-matt-implement",
+        "operations": {
+          "configure": {
+            "disposition": "unavailable"
+          },
+          "disable": {
+            "disposition": "unavailable"
+          },
+          "enable": {
+            "disposition": "unavailable"
+          },
+          "inspect": {
+            "disposition": "automated"
+          },
+          "install": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "remove": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "restore": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "suppress_native_update": {
+            "disposition": "unavailable"
+          }
+        },
+        "provenance": {
+          "owner": "projection:claude/standalone-skill"
+        },
+        "provider": {
+          "canonical_root": "agents_skills",
+          "kind": "standalone_skill"
+        },
+        "restore": {
+          "artifact_ref": "git+https://github.com/mattpocock/skills.git@84fdeffd12f2ee307994d1eb6feb48173b6e0502#skills/engineering,skills/productivity",
+          "class": "immutable",
+          "content_digest": "sha256:1b3a5b293a2d0e04748c64f6c86af0ed104a7619de68f7e2cdadc6b42b9a0d41",
+          "native_update_control": "not_applicable",
+          "revision": "84fdeffd12f2ee307994d1eb6feb48173b6e0502"
+        },
+        "secret_references": []
+      },
+      "surface": {
+        "kind": "claude_skill_projection",
+        "skill_name": "implement"
+      }
+    },
+    {
+      "desired_state": "absent",
+      "equipment_identity": "skill:mattpocock/improve-codebase-architecture",
+      "harness": "claude",
+      "identity": "retirement:claude/matt-improve-codebase-architecture-projection",
+      "route": {
+        "activation_group": "activation:claude/retire-matt-improve-codebase-architecture",
+        "component_controls": [],
+        "control_owner": "reconciler_owned",
+        "distribution": "distribution:mattpocock/standalone",
+        "identity": "route:claude/retire-matt-improve-codebase-architecture",
+        "operations": {
+          "configure": {
+            "disposition": "unavailable"
+          },
+          "disable": {
+            "disposition": "unavailable"
+          },
+          "enable": {
+            "disposition": "unavailable"
+          },
+          "inspect": {
+            "disposition": "automated"
+          },
+          "install": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "remove": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "restore": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "suppress_native_update": {
+            "disposition": "unavailable"
+          }
+        },
+        "provenance": {
+          "owner": "projection:claude/standalone-skill"
+        },
+        "provider": {
+          "canonical_root": "agents_skills",
+          "kind": "standalone_skill"
+        },
+        "restore": {
+          "artifact_ref": "git+https://github.com/mattpocock/skills.git@84fdeffd12f2ee307994d1eb6feb48173b6e0502#skills/engineering,skills/productivity",
+          "class": "immutable",
+          "content_digest": "sha256:1b3a5b293a2d0e04748c64f6c86af0ed104a7619de68f7e2cdadc6b42b9a0d41",
+          "native_update_control": "not_applicable",
+          "revision": "84fdeffd12f2ee307994d1eb6feb48173b6e0502"
+        },
+        "secret_references": []
+      },
+      "surface": {
+        "kind": "claude_skill_projection",
+        "skill_name": "improve-codebase-architecture"
+      }
+    },
+    {
+      "desired_state": "absent",
+      "equipment_identity": "skill:mattpocock/prototype",
+      "harness": "claude",
+      "identity": "retirement:claude/matt-prototype-projection",
+      "route": {
+        "activation_group": "activation:claude/retire-matt-prototype",
+        "component_controls": [],
+        "control_owner": "reconciler_owned",
+        "distribution": "distribution:mattpocock/standalone",
+        "identity": "route:claude/retire-matt-prototype",
+        "operations": {
+          "configure": {
+            "disposition": "unavailable"
+          },
+          "disable": {
+            "disposition": "unavailable"
+          },
+          "enable": {
+            "disposition": "unavailable"
+          },
+          "inspect": {
+            "disposition": "automated"
+          },
+          "install": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "remove": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "restore": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "suppress_native_update": {
+            "disposition": "unavailable"
+          }
+        },
+        "provenance": {
+          "owner": "projection:claude/standalone-skill"
+        },
+        "provider": {
+          "canonical_root": "agents_skills",
+          "kind": "standalone_skill"
+        },
+        "restore": {
+          "artifact_ref": "git+https://github.com/mattpocock/skills.git@84fdeffd12f2ee307994d1eb6feb48173b6e0502#skills/engineering,skills/productivity",
+          "class": "immutable",
+          "content_digest": "sha256:1b3a5b293a2d0e04748c64f6c86af0ed104a7619de68f7e2cdadc6b42b9a0d41",
+          "native_update_control": "not_applicable",
+          "revision": "84fdeffd12f2ee307994d1eb6feb48173b6e0502"
+        },
+        "secret_references": []
+      },
+      "surface": {
+        "kind": "claude_skill_projection",
+        "skill_name": "prototype"
+      }
+    },
+    {
+      "desired_state": "absent",
+      "equipment_identity": "skill:mattpocock/research",
+      "harness": "claude",
+      "identity": "retirement:claude/matt-research-projection",
+      "route": {
+        "activation_group": "activation:claude/retire-matt-research",
+        "component_controls": [],
+        "control_owner": "reconciler_owned",
+        "distribution": "distribution:mattpocock/standalone",
+        "identity": "route:claude/retire-matt-research",
+        "operations": {
+          "configure": {
+            "disposition": "unavailable"
+          },
+          "disable": {
+            "disposition": "unavailable"
+          },
+          "enable": {
+            "disposition": "unavailable"
+          },
+          "inspect": {
+            "disposition": "automated"
+          },
+          "install": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "remove": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "restore": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "suppress_native_update": {
+            "disposition": "unavailable"
+          }
+        },
+        "provenance": {
+          "owner": "projection:claude/standalone-skill"
+        },
+        "provider": {
+          "canonical_root": "agents_skills",
+          "kind": "standalone_skill"
+        },
+        "restore": {
+          "artifact_ref": "git+https://github.com/mattpocock/skills.git@84fdeffd12f2ee307994d1eb6feb48173b6e0502#skills/engineering,skills/productivity",
+          "class": "immutable",
+          "content_digest": "sha256:1b3a5b293a2d0e04748c64f6c86af0ed104a7619de68f7e2cdadc6b42b9a0d41",
+          "native_update_control": "not_applicable",
+          "revision": "84fdeffd12f2ee307994d1eb6feb48173b6e0502"
+        },
+        "secret_references": []
+      },
+      "surface": {
+        "kind": "claude_skill_projection",
+        "skill_name": "research"
+      }
+    },
+    {
+      "desired_state": "absent",
+      "equipment_identity": "skill:mattpocock/resolving-merge-conflicts",
+      "harness": "claude",
+      "identity": "retirement:claude/matt-resolving-merge-conflicts-projection",
+      "route": {
+        "activation_group": "activation:claude/retire-matt-resolving-merge-conflicts",
+        "component_controls": [],
+        "control_owner": "reconciler_owned",
+        "distribution": "distribution:mattpocock/standalone",
+        "identity": "route:claude/retire-matt-resolving-merge-conflicts",
+        "operations": {
+          "configure": {
+            "disposition": "unavailable"
+          },
+          "disable": {
+            "disposition": "unavailable"
+          },
+          "enable": {
+            "disposition": "unavailable"
+          },
+          "inspect": {
+            "disposition": "automated"
+          },
+          "install": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "remove": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "restore": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "suppress_native_update": {
+            "disposition": "unavailable"
+          }
+        },
+        "provenance": {
+          "owner": "projection:claude/standalone-skill"
+        },
+        "provider": {
+          "canonical_root": "agents_skills",
+          "kind": "standalone_skill"
+        },
+        "restore": {
+          "artifact_ref": "git+https://github.com/mattpocock/skills.git@84fdeffd12f2ee307994d1eb6feb48173b6e0502#skills/engineering,skills/productivity",
+          "class": "immutable",
+          "content_digest": "sha256:1b3a5b293a2d0e04748c64f6c86af0ed104a7619de68f7e2cdadc6b42b9a0d41",
+          "native_update_control": "not_applicable",
+          "revision": "84fdeffd12f2ee307994d1eb6feb48173b6e0502"
+        },
+        "secret_references": []
+      },
+      "surface": {
+        "kind": "claude_skill_projection",
+        "skill_name": "resolving-merge-conflicts"
+      }
+    },
+    {
+      "desired_state": "absent",
+      "equipment_identity": "skill:mattpocock/setup-matt-pocock-skills",
+      "harness": "claude",
+      "identity": "retirement:claude/matt-setup-matt-pocock-skills-projection",
+      "route": {
+        "activation_group": "activation:claude/retire-matt-setup-matt-pocock-skills",
+        "component_controls": [],
+        "control_owner": "reconciler_owned",
+        "distribution": "distribution:mattpocock/standalone",
+        "identity": "route:claude/retire-matt-setup-matt-pocock-skills",
+        "operations": {
+          "configure": {
+            "disposition": "unavailable"
+          },
+          "disable": {
+            "disposition": "unavailable"
+          },
+          "enable": {
+            "disposition": "unavailable"
+          },
+          "inspect": {
+            "disposition": "automated"
+          },
+          "install": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "remove": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "restore": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "suppress_native_update": {
+            "disposition": "unavailable"
+          }
+        },
+        "provenance": {
+          "owner": "projection:claude/standalone-skill"
+        },
+        "provider": {
+          "canonical_root": "agents_skills",
+          "kind": "standalone_skill"
+        },
+        "restore": {
+          "artifact_ref": "git+https://github.com/mattpocock/skills.git@84fdeffd12f2ee307994d1eb6feb48173b6e0502#skills/engineering,skills/productivity",
+          "class": "immutable",
+          "content_digest": "sha256:1b3a5b293a2d0e04748c64f6c86af0ed104a7619de68f7e2cdadc6b42b9a0d41",
+          "native_update_control": "not_applicable",
+          "revision": "84fdeffd12f2ee307994d1eb6feb48173b6e0502"
+        },
+        "secret_references": []
+      },
+      "surface": {
+        "kind": "claude_skill_projection",
+        "skill_name": "setup-matt-pocock-skills"
+      }
+    },
+    {
+      "desired_state": "absent",
+      "equipment_identity": "skill:mattpocock/tdd",
+      "harness": "claude",
+      "identity": "retirement:claude/matt-tdd-projection",
+      "route": {
+        "activation_group": "activation:claude/retire-matt-tdd",
+        "component_controls": [],
+        "control_owner": "reconciler_owned",
+        "distribution": "distribution:mattpocock/standalone",
+        "identity": "route:claude/retire-matt-tdd",
+        "operations": {
+          "configure": {
+            "disposition": "unavailable"
+          },
+          "disable": {
+            "disposition": "unavailable"
+          },
+          "enable": {
+            "disposition": "unavailable"
+          },
+          "inspect": {
+            "disposition": "automated"
+          },
+          "install": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "remove": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "restore": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "suppress_native_update": {
+            "disposition": "unavailable"
+          }
+        },
+        "provenance": {
+          "owner": "projection:claude/standalone-skill"
+        },
+        "provider": {
+          "canonical_root": "agents_skills",
+          "kind": "standalone_skill"
+        },
+        "restore": {
+          "artifact_ref": "git+https://github.com/mattpocock/skills.git@84fdeffd12f2ee307994d1eb6feb48173b6e0502#skills/engineering,skills/productivity",
+          "class": "immutable",
+          "content_digest": "sha256:1b3a5b293a2d0e04748c64f6c86af0ed104a7619de68f7e2cdadc6b42b9a0d41",
+          "native_update_control": "not_applicable",
+          "revision": "84fdeffd12f2ee307994d1eb6feb48173b6e0502"
+        },
+        "secret_references": []
+      },
+      "surface": {
+        "kind": "claude_skill_projection",
+        "skill_name": "tdd"
+      }
+    },
+    {
+      "desired_state": "absent",
+      "equipment_identity": "skill:mattpocock/teach",
+      "harness": "claude",
+      "identity": "retirement:claude/matt-teach-projection",
+      "route": {
+        "activation_group": "activation:claude/retire-matt-teach",
+        "component_controls": [],
+        "control_owner": "reconciler_owned",
+        "distribution": "distribution:mattpocock/standalone",
+        "identity": "route:claude/retire-matt-teach",
+        "operations": {
+          "configure": {
+            "disposition": "unavailable"
+          },
+          "disable": {
+            "disposition": "unavailable"
+          },
+          "enable": {
+            "disposition": "unavailable"
+          },
+          "inspect": {
+            "disposition": "automated"
+          },
+          "install": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "remove": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "restore": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "suppress_native_update": {
+            "disposition": "unavailable"
+          }
+        },
+        "provenance": {
+          "owner": "projection:claude/standalone-skill"
+        },
+        "provider": {
+          "canonical_root": "agents_skills",
+          "kind": "standalone_skill"
+        },
+        "restore": {
+          "artifact_ref": "git+https://github.com/mattpocock/skills.git@84fdeffd12f2ee307994d1eb6feb48173b6e0502#skills/engineering,skills/productivity",
+          "class": "immutable",
+          "content_digest": "sha256:1b3a5b293a2d0e04748c64f6c86af0ed104a7619de68f7e2cdadc6b42b9a0d41",
+          "native_update_control": "not_applicable",
+          "revision": "84fdeffd12f2ee307994d1eb6feb48173b6e0502"
+        },
+        "secret_references": []
+      },
+      "surface": {
+        "kind": "claude_skill_projection",
+        "skill_name": "teach"
+      }
+    },
+    {
+      "desired_state": "absent",
+      "equipment_identity": "skill:mattpocock/to-spec",
+      "harness": "claude",
+      "identity": "retirement:claude/matt-to-spec-projection",
+      "route": {
+        "activation_group": "activation:claude/retire-matt-to-spec",
+        "component_controls": [],
+        "control_owner": "reconciler_owned",
+        "distribution": "distribution:mattpocock/standalone",
+        "identity": "route:claude/retire-matt-to-spec",
+        "operations": {
+          "configure": {
+            "disposition": "unavailable"
+          },
+          "disable": {
+            "disposition": "unavailable"
+          },
+          "enable": {
+            "disposition": "unavailable"
+          },
+          "inspect": {
+            "disposition": "automated"
+          },
+          "install": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "remove": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "restore": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "suppress_native_update": {
+            "disposition": "unavailable"
+          }
+        },
+        "provenance": {
+          "owner": "projection:claude/standalone-skill"
+        },
+        "provider": {
+          "canonical_root": "agents_skills",
+          "kind": "standalone_skill"
+        },
+        "restore": {
+          "artifact_ref": "git+https://github.com/mattpocock/skills.git@84fdeffd12f2ee307994d1eb6feb48173b6e0502#skills/engineering,skills/productivity",
+          "class": "immutable",
+          "content_digest": "sha256:1b3a5b293a2d0e04748c64f6c86af0ed104a7619de68f7e2cdadc6b42b9a0d41",
+          "native_update_control": "not_applicable",
+          "revision": "84fdeffd12f2ee307994d1eb6feb48173b6e0502"
+        },
+        "secret_references": []
+      },
+      "surface": {
+        "kind": "claude_skill_projection",
+        "skill_name": "to-spec"
+      }
+    },
+    {
+      "desired_state": "absent",
+      "equipment_identity": "skill:mattpocock/to-tickets",
+      "harness": "claude",
+      "identity": "retirement:claude/matt-to-tickets-projection",
+      "route": {
+        "activation_group": "activation:claude/retire-matt-to-tickets",
+        "component_controls": [],
+        "control_owner": "reconciler_owned",
+        "distribution": "distribution:mattpocock/standalone",
+        "identity": "route:claude/retire-matt-to-tickets",
+        "operations": {
+          "configure": {
+            "disposition": "unavailable"
+          },
+          "disable": {
+            "disposition": "unavailable"
+          },
+          "enable": {
+            "disposition": "unavailable"
+          },
+          "inspect": {
+            "disposition": "automated"
+          },
+          "install": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "remove": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "restore": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "suppress_native_update": {
+            "disposition": "unavailable"
+          }
+        },
+        "provenance": {
+          "owner": "projection:claude/standalone-skill"
+        },
+        "provider": {
+          "canonical_root": "agents_skills",
+          "kind": "standalone_skill"
+        },
+        "restore": {
+          "artifact_ref": "git+https://github.com/mattpocock/skills.git@84fdeffd12f2ee307994d1eb6feb48173b6e0502#skills/engineering,skills/productivity",
+          "class": "immutable",
+          "content_digest": "sha256:1b3a5b293a2d0e04748c64f6c86af0ed104a7619de68f7e2cdadc6b42b9a0d41",
+          "native_update_control": "not_applicable",
+          "revision": "84fdeffd12f2ee307994d1eb6feb48173b6e0502"
+        },
+        "secret_references": []
+      },
+      "surface": {
+        "kind": "claude_skill_projection",
+        "skill_name": "to-tickets"
+      }
+    },
+    {
+      "desired_state": "absent",
+      "equipment_identity": "skill:mattpocock/triage",
+      "harness": "claude",
+      "identity": "retirement:claude/matt-triage-projection",
+      "route": {
+        "activation_group": "activation:claude/retire-matt-triage",
+        "component_controls": [],
+        "control_owner": "reconciler_owned",
+        "distribution": "distribution:mattpocock/standalone",
+        "identity": "route:claude/retire-matt-triage",
+        "operations": {
+          "configure": {
+            "disposition": "unavailable"
+          },
+          "disable": {
+            "disposition": "unavailable"
+          },
+          "enable": {
+            "disposition": "unavailable"
+          },
+          "inspect": {
+            "disposition": "automated"
+          },
+          "install": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "remove": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "restore": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "suppress_native_update": {
+            "disposition": "unavailable"
+          }
+        },
+        "provenance": {
+          "owner": "projection:claude/standalone-skill"
+        },
+        "provider": {
+          "canonical_root": "agents_skills",
+          "kind": "standalone_skill"
+        },
+        "restore": {
+          "artifact_ref": "git+https://github.com/mattpocock/skills.git@84fdeffd12f2ee307994d1eb6feb48173b6e0502#skills/engineering,skills/productivity",
+          "class": "immutable",
+          "content_digest": "sha256:1b3a5b293a2d0e04748c64f6c86af0ed104a7619de68f7e2cdadc6b42b9a0d41",
+          "native_update_control": "not_applicable",
+          "revision": "84fdeffd12f2ee307994d1eb6feb48173b6e0502"
+        },
+        "secret_references": []
+      },
+      "surface": {
+        "kind": "claude_skill_projection",
+        "skill_name": "triage"
+      }
+    },
+    {
+      "desired_state": "absent",
+      "equipment_identity": "skill:mattpocock/wayfinder",
+      "harness": "claude",
+      "identity": "retirement:claude/matt-wayfinder-projection",
+      "route": {
+        "activation_group": "activation:claude/retire-matt-wayfinder",
+        "component_controls": [],
+        "control_owner": "reconciler_owned",
+        "distribution": "distribution:mattpocock/standalone",
+        "identity": "route:claude/retire-matt-wayfinder",
+        "operations": {
+          "configure": {
+            "disposition": "unavailable"
+          },
+          "disable": {
+            "disposition": "unavailable"
+          },
+          "enable": {
+            "disposition": "unavailable"
+          },
+          "inspect": {
+            "disposition": "automated"
+          },
+          "install": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "remove": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "restore": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "suppress_native_update": {
+            "disposition": "unavailable"
+          }
+        },
+        "provenance": {
+          "owner": "projection:claude/standalone-skill"
+        },
+        "provider": {
+          "canonical_root": "agents_skills",
+          "kind": "standalone_skill"
+        },
+        "restore": {
+          "artifact_ref": "git+https://github.com/mattpocock/skills.git@84fdeffd12f2ee307994d1eb6feb48173b6e0502#skills/engineering,skills/productivity",
+          "class": "immutable",
+          "content_digest": "sha256:1b3a5b293a2d0e04748c64f6c86af0ed104a7619de68f7e2cdadc6b42b9a0d41",
+          "native_update_control": "not_applicable",
+          "revision": "84fdeffd12f2ee307994d1eb6feb48173b6e0502"
+        },
+        "secret_references": []
+      },
+      "surface": {
+        "kind": "claude_skill_projection",
+        "skill_name": "wayfinder"
+      }
+    },
+    {
+      "desired_state": "absent",
+      "equipment_identity": "mcp:github/server",
+      "harness": "codex",
+      "identity": "retirement:codex/direct-github",
+      "route": {
+        "activation_group": "activation:codex/retire-direct-github",
+        "component_controls": [],
+        "control_owner": "reconciler_owned",
+        "distribution": "distribution:github/direct-mcp",
+        "identity": "route:codex/retire-direct-github",
+        "operations": {
+          "configure": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "disable": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "enable": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "inspect": {
+            "disposition": "automated"
+          },
+          "install": {
+            "disposition": "unavailable"
+          },
+          "remove": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "restore": {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated"
+          },
+          "suppress_native_update": {
+            "disposition": "unavailable"
+          }
+        },
+        "provenance": {
+          "owner": "overlay:codex/mcp"
+        },
+        "provider": {
+          "arguments": [
+            {
+              "literal": "github"
+            },
+            {
+              "literal": "--"
+            },
+            {
+              "literal": "npx"
+            },
+            {
+              "literal": "-y"
+            },
+            {
+              "literal": "mcp-remote@0.1.38"
+            },
+            {
+              "literal": "https://api.githubcopilot.com/mcp/"
+            },
+            {
+              "literal": "--header"
+            },
+            {
+              "secret_reference": "GITHUB_PERSONAL_ACCESS_TOKEN",
+              "template": "Authorization:Bearer ${{reference}}"
+            }
+          ],
+          "command": "secret-exec",
+          "kind": "direct_mcp",
+          "server_name": "github",
+          "transport": "stdio"
+        },
+        "restore": {
+          "channel": "npm:0.1.38",
+          "class": "native_rolling",
+          "native_update_control": "suppressible",
+          "observation_source": "managed MCP overlay",
+          "reviewed_baseline": "mcp-remote@0.1.38"
+        },
+        "secret_references": [
+          {
+            "kind": "secret_profile",
+            "name": "github"
+          },
+          {
+            "kind": "environment_variable",
+            "name": "GITHUB_PERSONAL_ACCESS_TOKEN"
+          }
+        ]
+      },
+      "surface": {
+        "kind": "direct_mcp",
+        "server_name": "github"
+      }
+    }
+  ],
+  "schema_version": "catalog/v1"
+}

@@ -1,0 +1,3171 @@
+{
+  "claude_plugins": {
+    "classification_groups": [
+      {
+        "classification": "proposed_managed_equipment_slice",
+        "ids": [
+          "chrome-devtools-mcp@claude-plugins-official"
+        ],
+        "ownership_intent": "propose_catalog_adoption",
+        "runtime_retirement_intent": "none"
+      },
+      {
+        "classification": "explicitly_retained_unmanaged_runtime_observation",
+        "ids": [
+          "github@claude-plugins-official"
+        ],
+        "ownership_intent": "none",
+        "runtime_retirement_intent": "none"
+      },
+      {
+        "classification": "explicitly_retained_unmanaged_runtime_observation",
+        "ids": [
+          "clangd-lsp@claude-plugins-official",
+          "claude-code-setup@claude-plugins-official",
+          "claude-md-management@claude-plugins-official",
+          "cloudflare@claude-plugins-official",
+          "code-simplifier@claude-plugins-official",
+          "duckdb-skills@claude-plugins-official",
+          "explanatory-output-style@claude-plugins-official",
+          "gopls-lsp@claude-plugins-official",
+          "hindsight-memory@hindsight",
+          "huggingface-skills@claude-plugins-official",
+          "keystone@keystone",
+          "learning-output-style@claude-plugins-official",
+          "lua-lsp@claude-plugins-official",
+          "mcp-apps@claude-plugins-official",
+          "nvidia-skills@claude-plugins-official",
+          "oz-harness-support@claude-code-warp",
+          "prisma@claude-plugins-official",
+          "pyright-lsp@claude-plugins-official",
+          "qdrant-skills@claude-plugins-official",
+          "ralph-loop@claude-plugins-official",
+          "remember@claude-plugins-official",
+          "rust-analyzer-lsp@claude-plugins-official",
+          "security-guidance@claude-plugins-official",
+          "slack@claude-plugins-official",
+          "thermos@nisavid-agents",
+          "typescript-lsp@claude-plugins-official",
+          "warp@claude-code-warp"
+        ],
+        "ownership_intent": "none",
+        "runtime_retirement_intent": "none"
+      },
+      {
+        "classification": "duplicate_overlap_candidate",
+        "ids": [
+          "coderabbit@claude-plugins-official",
+          "context7@claude-plugins-official",
+          "firecrawl@claude-plugins-official",
+          "greptile@claude-plugins-official",
+          "hyperframes@claude-plugins-official",
+          "superpowers@claude-plugins-official"
+        ],
+        "ownership_intent": "none_pending_identity_and_provider_decision",
+        "runtime_retirement_intent": "none_without_explicit_adoption"
+      },
+      {
+        "classification": "stale_unverifiable_observation",
+        "ids": [
+          "agent-sdk-dev@claude-plugins-official",
+          "code-review@claude-plugins-official",
+          "commit-commands@claude-plugins-official",
+          "feature-dev@claude-plugins-official",
+          "hookify@claude-plugins-official",
+          "mcp-server-dev@claude-plugins-official",
+          "playground@claude-plugins-official",
+          "playwright@claude-plugins-official",
+          "plugin-dev@claude-plugins-official",
+          "pr-review-toolkit@claude-plugins-official",
+          "skill-creator@claude-plugins-official",
+          "terraform@claude-plugins-official"
+        ],
+        "ownership_intent": "none",
+        "runtime_retirement_intent": "none"
+      }
+    ],
+    "count": 47,
+    "ownership_and_retirement_rule": "only proposed-managed IDs may be adopted; no other plugin may be mutated or retired without later explicit adoption",
+    "provenance": "claude_native_plugin_manager",
+    "states": [
+      {
+        "enabled": false,
+        "id": "agent-sdk-dev@claude-plugins-official",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 0,
+        "version": "unknown"
+      },
+      {
+        "enabled": true,
+        "id": "chrome-devtools-mcp@claude-plugins-official",
+        "overlapping_direct_mcp_names": [
+          "chrome-devtools"
+        ],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [
+          "chrome-devtools"
+        ],
+        "provided_skill_count": 6,
+        "version": "1.7.0"
+      },
+      {
+        "enabled": true,
+        "id": "clangd-lsp@claude-plugins-official",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 0,
+        "version": "1.0.0"
+      },
+      {
+        "enabled": true,
+        "id": "claude-code-setup@claude-plugins-official",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 1,
+        "version": "1.0.0"
+      },
+      {
+        "enabled": false,
+        "id": "claude-md-management@claude-plugins-official",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 1,
+        "version": "1.0.0"
+      },
+      {
+        "enabled": true,
+        "id": "cloudflare@claude-plugins-official",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [
+          "cloudflare-api",
+          "cloudflare-bindings",
+          "cloudflare-builds",
+          "cloudflare-docs",
+          "cloudflare-observability"
+        ],
+        "provided_skill_count": 11,
+        "version": "1.0.0"
+      },
+      {
+        "enabled": true,
+        "id": "code-review@claude-plugins-official",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 0,
+        "version": "unknown"
+      },
+      {
+        "enabled": true,
+        "id": "code-simplifier@claude-plugins-official",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 0,
+        "version": "1.0.0"
+      },
+      {
+        "enabled": true,
+        "id": "coderabbit@claude-plugins-official",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [
+          "code-review"
+        ],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 2,
+        "version": "1.1.1"
+      },
+      {
+        "enabled": true,
+        "id": "commit-commands@claude-plugins-official",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 0,
+        "version": "unknown"
+      },
+      {
+        "enabled": false,
+        "id": "context7@claude-plugins-official",
+        "overlapping_direct_mcp_names": [
+          "context7"
+        ],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [
+          "context7"
+        ],
+        "provided_skill_count": 0,
+        "version": "unknown"
+      },
+      {
+        "enabled": true,
+        "id": "duckdb-skills@claude-plugins-official",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 9,
+        "version": "0.2.4"
+      },
+      {
+        "enabled": true,
+        "id": "explanatory-output-style@claude-plugins-official",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 0,
+        "version": "1.0.0"
+      },
+      {
+        "enabled": true,
+        "id": "feature-dev@claude-plugins-official",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 0,
+        "version": "unknown"
+      },
+      {
+        "enabled": true,
+        "id": "firecrawl@claude-plugins-official",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [
+          "firecrawl-agent",
+          "firecrawl-crawl",
+          "firecrawl-download",
+          "firecrawl-interact",
+          "firecrawl-map",
+          "firecrawl-monitor",
+          "firecrawl-parse",
+          "firecrawl-scrape",
+          "firecrawl-search"
+        ],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 10,
+        "version": "1.0.9"
+      },
+      {
+        "enabled": false,
+        "id": "github@claude-plugins-official",
+        "overlapping_direct_mcp_names": [
+          "github"
+        ],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [
+          "github"
+        ],
+        "provided_skill_count": 0,
+        "version": "unknown"
+      },
+      {
+        "enabled": true,
+        "id": "gopls-lsp@claude-plugins-official",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 0,
+        "version": "1.0.0"
+      },
+      {
+        "enabled": false,
+        "id": "greptile@claude-plugins-official",
+        "overlapping_direct_mcp_names": [
+          "greptile"
+        ],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [
+          "greptile"
+        ],
+        "provided_skill_count": 0,
+        "version": "unknown"
+      },
+      {
+        "enabled": true,
+        "id": "hindsight-memory@hindsight",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [
+          "hindsight"
+        ],
+        "provided_skill_count": 1,
+        "version": "0.7.5"
+      },
+      {
+        "enabled": false,
+        "id": "hookify@claude-plugins-official",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 1,
+        "version": "unknown"
+      },
+      {
+        "enabled": true,
+        "id": "huggingface-skills@claude-plugins-official",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [
+          "huggingface-skills"
+        ],
+        "provided_skill_count": 25,
+        "version": "1.0.23"
+      },
+      {
+        "enabled": true,
+        "id": "hyperframes@claude-plugins-official",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [
+          "hyperframes",
+          "hyperframes-animation",
+          "hyperframes-cli",
+          "hyperframes-core",
+          "hyperframes-creative",
+          "hyperframes-keyframes",
+          "hyperframes-registry",
+          "media-use"
+        ],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 19,
+        "version": "0.7.105"
+      },
+      {
+        "enabled": true,
+        "id": "keystone@keystone",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 9,
+        "version": "2.0.4"
+      },
+      {
+        "enabled": true,
+        "id": "learning-output-style@claude-plugins-official",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 0,
+        "version": "1.0.0"
+      },
+      {
+        "enabled": true,
+        "id": "lua-lsp@claude-plugins-official",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 0,
+        "version": "1.0.0"
+      },
+      {
+        "enabled": false,
+        "id": "mcp-apps@claude-plugins-official",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 4,
+        "version": "0.1.0"
+      },
+      {
+        "enabled": false,
+        "id": "mcp-server-dev@claude-plugins-official",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 3,
+        "version": "unknown"
+      },
+      {
+        "enabled": true,
+        "id": "nvidia-skills@claude-plugins-official",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 1,
+        "version": "1.4.0"
+      },
+      {
+        "enabled": true,
+        "id": "oz-harness-support@claude-code-warp",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 5,
+        "version": "1.1.2"
+      },
+      {
+        "enabled": true,
+        "id": "playground@claude-plugins-official",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 1,
+        "version": "unknown"
+      },
+      {
+        "enabled": true,
+        "id": "playwright@claude-plugins-official",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [
+          "playwright"
+        ],
+        "provided_skill_count": 0,
+        "version": "unknown"
+      },
+      {
+        "enabled": false,
+        "id": "plugin-dev@claude-plugins-official",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 7,
+        "version": "unknown"
+      },
+      {
+        "enabled": true,
+        "id": "pr-review-toolkit@claude-plugins-official",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 0,
+        "version": "unknown"
+      },
+      {
+        "enabled": true,
+        "id": "prisma@claude-plugins-official",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [
+          "Prisma-Local",
+          "Prisma-Remote"
+        ],
+        "provided_skill_count": 0,
+        "version": "815dbc4a045a"
+      },
+      {
+        "enabled": true,
+        "id": "pyright-lsp@claude-plugins-official",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 0,
+        "version": "1.0.0"
+      },
+      {
+        "enabled": true,
+        "id": "qdrant-skills@claude-plugins-official",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 8,
+        "version": "1.0.0"
+      },
+      {
+        "enabled": true,
+        "id": "ralph-loop@claude-plugins-official",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 0,
+        "version": "1.0.0"
+      },
+      {
+        "enabled": true,
+        "id": "remember@claude-plugins-official",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 1,
+        "version": "0.19.0"
+      },
+      {
+        "enabled": true,
+        "id": "rust-analyzer-lsp@claude-plugins-official",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 0,
+        "version": "1.0.0"
+      },
+      {
+        "enabled": true,
+        "id": "security-guidance@claude-plugins-official",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 0,
+        "version": "2.0.6"
+      },
+      {
+        "enabled": true,
+        "id": "skill-creator@claude-plugins-official",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 1,
+        "version": "unknown"
+      },
+      {
+        "enabled": true,
+        "id": "slack@claude-plugins-official",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [
+          "slack"
+        ],
+        "provided_skill_count": 7,
+        "version": "1.2.0"
+      },
+      {
+        "enabled": true,
+        "id": "superpowers@claude-plugins-official",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [
+          "brainstorming",
+          "dispatching-parallel-agents",
+          "executing-plans",
+          "finishing-a-development-branch",
+          "receiving-code-review",
+          "requesting-code-review",
+          "subagent-driven-development",
+          "systematic-debugging",
+          "test-driven-development",
+          "using-git-worktrees",
+          "using-superpowers",
+          "verification-before-completion",
+          "writing-plans",
+          "writing-skills"
+        ],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 14,
+        "version": "6.2.0"
+      },
+      {
+        "enabled": true,
+        "id": "terraform@claude-plugins-official",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [
+          "terraform"
+        ],
+        "provided_skill_count": 0,
+        "version": "unknown"
+      },
+      {
+        "enabled": true,
+        "id": "thermos@nisavid-agents",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 3,
+        "version": "1.0.4+claude.20260711030014"
+      },
+      {
+        "enabled": true,
+        "id": "typescript-lsp@claude-plugins-official",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 0,
+        "version": "1.0.0"
+      },
+      {
+        "enabled": true,
+        "id": "warp@claude-code-warp",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 0,
+        "version": "2.2.0"
+      }
+    ]
+  },
+  "claude_standalone_skill_directories": [
+    {
+      "classification": "proposed_managed_equipment_slice",
+      "name": "hyperframes-creative",
+      "ownership_intent": "none_pending_identity_and_provider_decision",
+      "runtime_retirement_intent": "none_without_explicit_adoption"
+    },
+    {
+      "classification": "duplicate_overlap_candidate",
+      "name": "hyperframes-keyframes",
+      "ownership_intent": "none_pending_identity_and_provider_decision",
+      "runtime_retirement_intent": "none_without_explicit_adoption"
+    },
+    {
+      "classification": "duplicate_overlap_candidate",
+      "name": "impeccable",
+      "ownership_intent": "none_pending_identity_and_provider_decision",
+      "runtime_retirement_intent": "none_without_explicit_adoption"
+    }
+  ],
+  "codex_plugins": {
+    "classification_groups": [
+      {
+        "classification": "proposed_managed_equipment_slice",
+        "ids": [
+          "github@openai-curated"
+        ],
+        "ownership_intent": "propose_catalog_adoption",
+        "runtime_retirement_intent": "none"
+      },
+      {
+        "classification": "explicitly_retained_unmanaged_runtime_observation",
+        "ids": [
+          "browser@openai-bundled",
+          "build-web-apps@openai-curated",
+          "chrome@openai-bundled",
+          "cloudflare@openai-curated",
+          "coderabbit@openai-curated",
+          "codex-security@openai-curated",
+          "documents@openai-primary-runtime",
+          "hugging-face@openai-curated",
+          "keystone@keystone",
+          "latex@openai-bundled",
+          "orchestration@codex-warp",
+          "pdf@openai-primary-runtime",
+          "plugin-eval@openai-curated",
+          "presentations@openai-primary-runtime",
+          "record-and-replay@openai-bundled",
+          "remotion@openai-curated",
+          "sites@openai-bundled",
+          "spreadsheets@openai-primary-runtime",
+          "stitch-build@stitch-skills",
+          "stitch-design@stitch-skills",
+          "stitch-utilities@stitch-skills",
+          "template-creator@openai-primary-runtime",
+          "thermos@nisavid-agents",
+          "visualize@openai-bundled",
+          "warp@codex-warp"
+        ],
+        "ownership_intent": "none",
+        "runtime_retirement_intent": "none"
+      },
+      {
+        "classification": "duplicate_overlap_candidate",
+        "ids": [
+          "computer-use@openai-bundled",
+          "hyperframes@openai-curated",
+          "superpowers@openai-curated"
+        ],
+        "ownership_intent": "none_pending_identity_and_provider_decision",
+        "runtime_retirement_intent": "none_without_explicit_adoption"
+      },
+      {
+        "classification": "stale_unverifiable_observation",
+        "ids": [
+          "agent-sdk-dev@claude-plugins-official",
+          "browser-use@openai-bundled",
+          "chatgpt-apps@openai-curated",
+          "claude-code-setup@claude-plugins-official",
+          "claude-md-management@claude-plugins-official",
+          "cloudflare@claude-plugins-official",
+          "code-review@claude-plugins-official",
+          "code-simplifier@claude-plugins-official",
+          "commit-commands@claude-plugins-official",
+          "explanatory-output-style@claude-plugins-official",
+          "feature-dev@claude-plugins-official",
+          "frontend-design@claude-plugins-official",
+          "github@claude-plugins-official",
+          "hookify@claude-plugins-official",
+          "huggingface-skills@claude-plugins-official",
+          "playground@claude-plugins-official",
+          "playwright@claude-plugins-official",
+          "plugin-dev@claude-plugins-official",
+          "pr-review-toolkit@claude-plugins-official",
+          "prisma@claude-plugins-official",
+          "product-tracking-skills@claude-plugins-official",
+          "railway@claude-plugins-official",
+          "ralph-loop@claude-plugins-official",
+          "read-aloud@openai-bundled",
+          "remember@claude-plugins-official",
+          "security-guidance@claude-plugins-official",
+          "skill-creator@claude-plugins-official",
+          "supabase@claude-plugins-official",
+          "telegram@claude-plugins-official",
+          "vercel@claude-plugins-official"
+        ],
+        "ownership_intent": "none",
+        "runtime_retirement_intent": "none"
+      }
+    ],
+    "configured_only_count": 30,
+    "count": 59,
+    "ownership_and_retirement_rule": "configured-only entries remain stale observations; only proposed-managed IDs may be adopted",
+    "provenance": "codex_user_config_plus_native_plugin_manager",
+    "reported_installed_count": 29,
+    "states": [
+      {
+        "configured_enabled": false,
+        "id": "agent-sdk-dev@claude-plugins-official",
+        "native_enabled": null,
+        "observed_state": "configured_only_not_reported_installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": null,
+        "version": null
+      },
+      {
+        "configured_enabled": true,
+        "id": "browser-use@openai-bundled",
+        "native_enabled": null,
+        "observed_state": "configured_only_not_reported_installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": null,
+        "version": null
+      },
+      {
+        "configured_enabled": true,
+        "id": "browser@openai-bundled",
+        "native_enabled": true,
+        "observed_state": "installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 1,
+        "version": "26.803.61601"
+      },
+      {
+        "configured_enabled": true,
+        "id": "build-web-apps@openai-curated",
+        "native_enabled": true,
+        "observed_state": "installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 6,
+        "version": "11c74d6b"
+      },
+      {
+        "configured_enabled": true,
+        "id": "chatgpt-apps@openai-curated",
+        "native_enabled": null,
+        "observed_state": "configured_only_not_reported_installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": null,
+        "version": null
+      },
+      {
+        "configured_enabled": true,
+        "id": "chrome@openai-bundled",
+        "native_enabled": true,
+        "observed_state": "installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 1,
+        "version": "26.803.61601"
+      },
+      {
+        "configured_enabled": false,
+        "id": "claude-code-setup@claude-plugins-official",
+        "native_enabled": null,
+        "observed_state": "configured_only_not_reported_installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": null,
+        "version": null
+      },
+      {
+        "configured_enabled": false,
+        "id": "claude-md-management@claude-plugins-official",
+        "native_enabled": null,
+        "observed_state": "configured_only_not_reported_installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": null,
+        "version": null
+      },
+      {
+        "configured_enabled": false,
+        "id": "cloudflare@claude-plugins-official",
+        "native_enabled": null,
+        "observed_state": "configured_only_not_reported_installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": null,
+        "version": null
+      },
+      {
+        "configured_enabled": true,
+        "id": "cloudflare@openai-curated",
+        "native_enabled": true,
+        "observed_state": "installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [
+          "cloudflare-api"
+        ],
+        "provided_skill_count": 9,
+        "version": "11c74d6b"
+      },
+      {
+        "configured_enabled": false,
+        "id": "code-review@claude-plugins-official",
+        "native_enabled": null,
+        "observed_state": "configured_only_not_reported_installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": null,
+        "version": null
+      },
+      {
+        "configured_enabled": false,
+        "id": "code-simplifier@claude-plugins-official",
+        "native_enabled": null,
+        "observed_state": "configured_only_not_reported_installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": null,
+        "version": null
+      },
+      {
+        "configured_enabled": true,
+        "id": "coderabbit@openai-curated",
+        "native_enabled": true,
+        "observed_state": "installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 1,
+        "version": "11c74d6b"
+      },
+      {
+        "configured_enabled": true,
+        "id": "codex-security@openai-curated",
+        "native_enabled": true,
+        "observed_state": "installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [
+          "codex-security"
+        ],
+        "provided_skill_count": 12,
+        "version": "11c74d6b"
+      },
+      {
+        "configured_enabled": false,
+        "id": "commit-commands@claude-plugins-official",
+        "native_enabled": null,
+        "observed_state": "configured_only_not_reported_installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": null,
+        "version": null
+      },
+      {
+        "configured_enabled": true,
+        "id": "computer-use@openai-bundled",
+        "native_enabled": true,
+        "observed_state": "installed",
+        "overlapping_direct_mcp_names": [
+          "computer-use"
+        ],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [
+          "computer-use"
+        ],
+        "provided_skill_count": 1,
+        "version": "1.0.1000633"
+      },
+      {
+        "configured_enabled": true,
+        "id": "documents@openai-primary-runtime",
+        "native_enabled": true,
+        "observed_state": "installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 1,
+        "version": "26.805.11740"
+      },
+      {
+        "configured_enabled": false,
+        "id": "explanatory-output-style@claude-plugins-official",
+        "native_enabled": null,
+        "observed_state": "configured_only_not_reported_installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": null,
+        "version": null
+      },
+      {
+        "configured_enabled": false,
+        "id": "feature-dev@claude-plugins-official",
+        "native_enabled": null,
+        "observed_state": "configured_only_not_reported_installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": null,
+        "version": null
+      },
+      {
+        "configured_enabled": false,
+        "id": "frontend-design@claude-plugins-official",
+        "native_enabled": null,
+        "observed_state": "configured_only_not_reported_installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": null,
+        "version": null
+      },
+      {
+        "configured_enabled": false,
+        "id": "github@claude-plugins-official",
+        "native_enabled": null,
+        "observed_state": "configured_only_not_reported_installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": null,
+        "version": null
+      },
+      {
+        "configured_enabled": true,
+        "id": "github@openai-curated",
+        "native_enabled": true,
+        "observed_state": "installed",
+        "overlapping_direct_mcp_names": [
+          "github"
+        ],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [
+          "github"
+        ],
+        "provided_skill_count": 4,
+        "version": "11c74d6b"
+      },
+      {
+        "configured_enabled": false,
+        "id": "hookify@claude-plugins-official",
+        "native_enabled": null,
+        "observed_state": "configured_only_not_reported_installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": null,
+        "version": null
+      },
+      {
+        "configured_enabled": true,
+        "id": "hugging-face@openai-curated",
+        "native_enabled": true,
+        "observed_state": "installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 11,
+        "version": "11c74d6b"
+      },
+      {
+        "configured_enabled": false,
+        "id": "huggingface-skills@claude-plugins-official",
+        "native_enabled": null,
+        "observed_state": "configured_only_not_reported_installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": null,
+        "version": null
+      },
+      {
+        "configured_enabled": true,
+        "id": "hyperframes@openai-curated",
+        "native_enabled": true,
+        "observed_state": "installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [
+          "hyperframes",
+          "hyperframes-cli",
+          "hyperframes-registry"
+        ],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 5,
+        "version": "11c74d6b"
+      },
+      {
+        "configured_enabled": true,
+        "id": "keystone@keystone",
+        "native_enabled": true,
+        "observed_state": "installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 9,
+        "version": "2.0.4"
+      },
+      {
+        "configured_enabled": true,
+        "id": "latex@openai-bundled",
+        "native_enabled": true,
+        "observed_state": "installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 3,
+        "version": "0.2.4"
+      },
+      {
+        "configured_enabled": true,
+        "id": "orchestration@codex-warp",
+        "native_enabled": true,
+        "observed_state": "installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 5,
+        "version": "0.4.0"
+      },
+      {
+        "configured_enabled": true,
+        "id": "pdf@openai-primary-runtime",
+        "native_enabled": true,
+        "observed_state": "installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 1,
+        "version": "26.805.11740"
+      },
+      {
+        "configured_enabled": false,
+        "id": "playground@claude-plugins-official",
+        "native_enabled": null,
+        "observed_state": "configured_only_not_reported_installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": null,
+        "version": null
+      },
+      {
+        "configured_enabled": false,
+        "id": "playwright@claude-plugins-official",
+        "native_enabled": null,
+        "observed_state": "configured_only_not_reported_installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": null,
+        "version": null
+      },
+      {
+        "configured_enabled": false,
+        "id": "plugin-dev@claude-plugins-official",
+        "native_enabled": null,
+        "observed_state": "configured_only_not_reported_installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": null,
+        "version": null
+      },
+      {
+        "configured_enabled": true,
+        "id": "plugin-eval@openai-curated",
+        "native_enabled": true,
+        "observed_state": "installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 5,
+        "version": "11c74d6b"
+      },
+      {
+        "configured_enabled": false,
+        "id": "pr-review-toolkit@claude-plugins-official",
+        "native_enabled": null,
+        "observed_state": "configured_only_not_reported_installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": null,
+        "version": null
+      },
+      {
+        "configured_enabled": true,
+        "id": "presentations@openai-primary-runtime",
+        "native_enabled": true,
+        "observed_state": "installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 1,
+        "version": "26.805.11740"
+      },
+      {
+        "configured_enabled": false,
+        "id": "prisma@claude-plugins-official",
+        "native_enabled": null,
+        "observed_state": "configured_only_not_reported_installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": null,
+        "version": null
+      },
+      {
+        "configured_enabled": false,
+        "id": "product-tracking-skills@claude-plugins-official",
+        "native_enabled": null,
+        "observed_state": "configured_only_not_reported_installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": null,
+        "version": null
+      },
+      {
+        "configured_enabled": false,
+        "id": "railway@claude-plugins-official",
+        "native_enabled": null,
+        "observed_state": "configured_only_not_reported_installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": null,
+        "version": null
+      },
+      {
+        "configured_enabled": false,
+        "id": "ralph-loop@claude-plugins-official",
+        "native_enabled": null,
+        "observed_state": "configured_only_not_reported_installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": null,
+        "version": null
+      },
+      {
+        "configured_enabled": true,
+        "id": "read-aloud@openai-bundled",
+        "native_enabled": null,
+        "observed_state": "configured_only_not_reported_installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": null,
+        "version": null
+      },
+      {
+        "configured_enabled": true,
+        "id": "record-and-replay@openai-bundled",
+        "native_enabled": true,
+        "observed_state": "installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [
+          "event-stream"
+        ],
+        "provided_skill_count": 1,
+        "version": "1.0.1000633"
+      },
+      {
+        "configured_enabled": false,
+        "id": "remember@claude-plugins-official",
+        "native_enabled": null,
+        "observed_state": "configured_only_not_reported_installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": null,
+        "version": null
+      },
+      {
+        "configured_enabled": true,
+        "id": "remotion@openai-curated",
+        "native_enabled": true,
+        "observed_state": "installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 1,
+        "version": "11c74d6b"
+      },
+      {
+        "configured_enabled": false,
+        "id": "security-guidance@claude-plugins-official",
+        "native_enabled": null,
+        "observed_state": "configured_only_not_reported_installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": null,
+        "version": null
+      },
+      {
+        "configured_enabled": true,
+        "id": "sites@openai-bundled",
+        "native_enabled": true,
+        "observed_state": "installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 2,
+        "version": "0.1.34"
+      },
+      {
+        "configured_enabled": false,
+        "id": "skill-creator@claude-plugins-official",
+        "native_enabled": null,
+        "observed_state": "configured_only_not_reported_installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": null,
+        "version": null
+      },
+      {
+        "configured_enabled": true,
+        "id": "spreadsheets@openai-primary-runtime",
+        "native_enabled": true,
+        "observed_state": "installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 2,
+        "version": "26.805.11740"
+      },
+      {
+        "configured_enabled": true,
+        "id": "stitch-build@stitch-skills",
+        "native_enabled": true,
+        "observed_state": "installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 5,
+        "version": "1.0.0"
+      },
+      {
+        "configured_enabled": true,
+        "id": "stitch-design@stitch-skills",
+        "native_enabled": true,
+        "observed_state": "installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 6,
+        "version": "1.0.0"
+      },
+      {
+        "configured_enabled": true,
+        "id": "stitch-utilities@stitch-skills",
+        "native_enabled": true,
+        "observed_state": "installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 4,
+        "version": "1.0.0"
+      },
+      {
+        "configured_enabled": false,
+        "id": "supabase@claude-plugins-official",
+        "native_enabled": null,
+        "observed_state": "configured_only_not_reported_installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": null,
+        "version": null
+      },
+      {
+        "configured_enabled": true,
+        "id": "superpowers@openai-curated",
+        "native_enabled": true,
+        "observed_state": "installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [
+          "brainstorming",
+          "dispatching-parallel-agents",
+          "executing-plans",
+          "finishing-a-development-branch",
+          "receiving-code-review",
+          "requesting-code-review",
+          "subagent-driven-development",
+          "systematic-debugging",
+          "test-driven-development",
+          "using-git-worktrees",
+          "using-superpowers",
+          "verification-before-completion",
+          "writing-plans",
+          "writing-skills"
+        ],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 14,
+        "version": "11c74d6b"
+      },
+      {
+        "configured_enabled": false,
+        "id": "telegram@claude-plugins-official",
+        "native_enabled": null,
+        "observed_state": "configured_only_not_reported_installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": null,
+        "version": null
+      },
+      {
+        "configured_enabled": true,
+        "id": "template-creator@openai-primary-runtime",
+        "native_enabled": true,
+        "observed_state": "installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 1,
+        "version": "26.805.11740"
+      },
+      {
+        "configured_enabled": true,
+        "id": "thermos@nisavid-agents",
+        "native_enabled": true,
+        "observed_state": "installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 3,
+        "version": "1.0.4+codex.20260711030014"
+      },
+      {
+        "configured_enabled": false,
+        "id": "vercel@claude-plugins-official",
+        "native_enabled": null,
+        "observed_state": "configured_only_not_reported_installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": null,
+        "version": null
+      },
+      {
+        "configured_enabled": true,
+        "id": "visualize@openai-bundled",
+        "native_enabled": true,
+        "observed_state": "installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 1,
+        "version": "1.0.20"
+      },
+      {
+        "configured_enabled": true,
+        "id": "warp@codex-warp",
+        "native_enabled": true,
+        "observed_state": "installed",
+        "overlapping_direct_mcp_names": [],
+        "overlapping_standalone_skill_names": [],
+        "provided_mcp_server_names": [],
+        "provided_skill_count": 0,
+        "version": "0.4.0"
+      }
+    ]
+  },
+  "counts": {
+    "claude_plugins": 47,
+    "claude_skill_absent_projections": 7,
+    "claude_skill_separate_directories": 3,
+    "claude_skill_symlinks": 112,
+    "codex_configured_only_plugins": 30,
+    "codex_plugin_config_observations": 59,
+    "codex_plugins_reported_installed": 29,
+    "cursor_plugin_observations": 1,
+    "direct_mcp_by_harness": {
+      "claude": 5,
+      "codex": 8,
+      "cursor": 4
+    },
+    "direct_mcp_observations": 17,
+    "plugin_provided_mcp_by_harness": {
+      "claude": 16,
+      "codex": 5,
+      "cursor": 0
+    },
+    "plugin_provided_mcp_observations": 21,
+    "standalone_by_classification": {
+      "duplicate_overlap_candidate": 33,
+      "explicitly_retained_unmanaged_runtime_observation": 64,
+      "opaque_runtime_state": 0,
+      "proposed_managed_equipment_slice": 25,
+      "stale_unverifiable_observation": 0
+    },
+    "standalone_skills": 122
+  },
+  "cursor_plugins": {
+    "count": 1,
+    "observations": [
+      {
+        "classification": "opaque_runtime_state",
+        "id": "*",
+        "observed_state": "not_enumerable_through_installed_cli",
+        "ownership_intent": "none",
+        "reason": "Cursor Agent exposes marketplace management but no user-plugin list; opaque application data was not read",
+        "runtime_retirement_intent": "none"
+      }
+    ]
+  },
+  "direct_mcps": [
+    {
+      "classification": "proposed_managed_equipment_slice",
+      "enabled": true,
+      "harness": "claude",
+      "name": "chrome-devtools",
+      "ownership_intent": "propose_catalog_adoption_for_retirement",
+      "provenance_evidence": "claude_stable_user_mcp_config",
+      "runtime_retirement_intent": "remove_after_claude_plugin_verification",
+      "transport_kind": "stdio"
+    },
+    {
+      "classification": "proposed_managed_equipment_slice",
+      "enabled": true,
+      "harness": "claude",
+      "name": "context7",
+      "ownership_intent": "propose_catalog_adoption",
+      "provenance_evidence": "claude_stable_user_mcp_config",
+      "runtime_retirement_intent": "none",
+      "transport_kind": "stdio"
+    },
+    {
+      "classification": "proposed_managed_equipment_slice",
+      "enabled": true,
+      "harness": "claude",
+      "name": "firecrawl",
+      "ownership_intent": "propose_catalog_adoption",
+      "provenance_evidence": "claude_stable_user_mcp_config",
+      "runtime_retirement_intent": "none",
+      "transport_kind": "stdio"
+    },
+    {
+      "classification": "proposed_managed_equipment_slice",
+      "enabled": true,
+      "harness": "claude",
+      "name": "github",
+      "ownership_intent": "propose_catalog_adoption",
+      "provenance_evidence": "claude_stable_user_mcp_config",
+      "runtime_retirement_intent": "none",
+      "transport_kind": "stdio"
+    },
+    {
+      "classification": "proposed_managed_equipment_slice",
+      "enabled": true,
+      "harness": "claude",
+      "name": "greptile",
+      "ownership_intent": "propose_catalog_adoption",
+      "provenance_evidence": "claude_stable_user_mcp_config",
+      "runtime_retirement_intent": "none",
+      "transport_kind": "stdio"
+    },
+    {
+      "classification": "proposed_managed_equipment_slice",
+      "enabled": true,
+      "harness": "codex",
+      "name": "chrome-devtools",
+      "ownership_intent": "propose_catalog_adoption",
+      "provenance_evidence": "codex_stable_user_mcp_config",
+      "runtime_retirement_intent": "none",
+      "transport_kind": "stdio"
+    },
+    {
+      "classification": "proposed_managed_equipment_slice",
+      "enabled": false,
+      "harness": "codex",
+      "name": "computer-use",
+      "ownership_intent": "propose_catalog_adoption_for_retirement",
+      "provenance_evidence": "codex_stable_user_mcp_config",
+      "runtime_retirement_intent": "remove_after_codex_plugin_component_verification",
+      "transport_kind": "stdio"
+    },
+    {
+      "classification": "explicitly_retained_unmanaged_runtime_observation",
+      "enabled": true,
+      "harness": "codex",
+      "name": "context7",
+      "ownership_intent": "none",
+      "provenance_evidence": "codex_stable_user_mcp_config",
+      "runtime_retirement_intent": "none",
+      "transport_kind": "stdio"
+    },
+    {
+      "classification": "explicitly_retained_unmanaged_runtime_observation",
+      "enabled": true,
+      "harness": "codex",
+      "name": "eraser",
+      "ownership_intent": "none",
+      "provenance_evidence": "codex_stable_user_mcp_config",
+      "runtime_retirement_intent": "none",
+      "transport_kind": "http"
+    },
+    {
+      "classification": "proposed_managed_equipment_slice",
+      "enabled": true,
+      "harness": "codex",
+      "name": "firecrawl",
+      "ownership_intent": "propose_catalog_adoption",
+      "provenance_evidence": "codex_stable_user_mcp_config",
+      "runtime_retirement_intent": "none",
+      "transport_kind": "stdio"
+    },
+    {
+      "classification": "proposed_managed_equipment_slice",
+      "enabled": true,
+      "harness": "codex",
+      "name": "github",
+      "ownership_intent": "propose_catalog_adoption_for_retirement",
+      "provenance_evidence": "codex_stable_user_mcp_config",
+      "runtime_retirement_intent": "remove_after_codex_plugin_component_verification",
+      "transport_kind": "stdio"
+    },
+    {
+      "classification": "explicitly_retained_unmanaged_runtime_observation",
+      "enabled": true,
+      "harness": "codex",
+      "name": "node_repl",
+      "ownership_intent": "none",
+      "provenance_evidence": "codex_stable_user_mcp_config",
+      "runtime_retirement_intent": "none",
+      "transport_kind": "stdio"
+    },
+    {
+      "classification": "explicitly_retained_unmanaged_runtime_observation",
+      "enabled": true,
+      "harness": "codex",
+      "name": "openaiDeveloperDocs",
+      "ownership_intent": "none",
+      "provenance_evidence": "codex_stable_user_mcp_config",
+      "runtime_retirement_intent": "none",
+      "transport_kind": "http"
+    },
+    {
+      "classification": "proposed_managed_equipment_slice",
+      "enabled": true,
+      "harness": "cursor",
+      "name": "chrome-devtools",
+      "ownership_intent": "propose_catalog_adoption",
+      "provenance_evidence": "cursor_stable_user_mcp_config",
+      "runtime_retirement_intent": "none",
+      "transport_kind": "stdio"
+    },
+    {
+      "classification": "proposed_managed_equipment_slice",
+      "enabled": true,
+      "harness": "cursor",
+      "name": "context7",
+      "ownership_intent": "propose_catalog_adoption",
+      "provenance_evidence": "cursor_stable_user_mcp_config",
+      "runtime_retirement_intent": "none",
+      "transport_kind": "http"
+    },
+    {
+      "classification": "explicitly_retained_unmanaged_runtime_observation",
+      "enabled": true,
+      "harness": "cursor",
+      "name": "eraser",
+      "ownership_intent": "none",
+      "provenance_evidence": "cursor_stable_user_mcp_config",
+      "runtime_retirement_intent": "none",
+      "transport_kind": "http"
+    },
+    {
+      "classification": "proposed_managed_equipment_slice",
+      "enabled": true,
+      "harness": "cursor",
+      "name": "firecrawl",
+      "ownership_intent": "propose_catalog_adoption",
+      "provenance_evidence": "cursor_stable_user_mcp_config",
+      "runtime_retirement_intent": "none",
+      "transport_kind": "http"
+    }
+  ],
+  "plugin_provided_mcps": [
+    {
+      "classification": "proposed_managed_equipment_slice",
+      "harness": "claude",
+      "name": "chrome-devtools",
+      "ownership_intent": "propose_catalog_adoption",
+      "plugin_enabled": true,
+      "plugin_id": "chrome-devtools-mcp@claude-plugins-official",
+      "runtime_retirement_intent": "none"
+    },
+    {
+      "classification": "explicitly_retained_unmanaged_runtime_observation",
+      "harness": "claude",
+      "name": "cloudflare-api",
+      "ownership_intent": "none",
+      "plugin_enabled": true,
+      "plugin_id": "cloudflare@claude-plugins-official",
+      "runtime_retirement_intent": "none"
+    },
+    {
+      "classification": "explicitly_retained_unmanaged_runtime_observation",
+      "harness": "claude",
+      "name": "cloudflare-bindings",
+      "ownership_intent": "none",
+      "plugin_enabled": true,
+      "plugin_id": "cloudflare@claude-plugins-official",
+      "runtime_retirement_intent": "none"
+    },
+    {
+      "classification": "explicitly_retained_unmanaged_runtime_observation",
+      "harness": "claude",
+      "name": "cloudflare-builds",
+      "ownership_intent": "none",
+      "plugin_enabled": true,
+      "plugin_id": "cloudflare@claude-plugins-official",
+      "runtime_retirement_intent": "none"
+    },
+    {
+      "classification": "explicitly_retained_unmanaged_runtime_observation",
+      "harness": "claude",
+      "name": "cloudflare-docs",
+      "ownership_intent": "none",
+      "plugin_enabled": true,
+      "plugin_id": "cloudflare@claude-plugins-official",
+      "runtime_retirement_intent": "none"
+    },
+    {
+      "classification": "explicitly_retained_unmanaged_runtime_observation",
+      "harness": "claude",
+      "name": "cloudflare-observability",
+      "ownership_intent": "none",
+      "plugin_enabled": true,
+      "plugin_id": "cloudflare@claude-plugins-official",
+      "runtime_retirement_intent": "none"
+    },
+    {
+      "classification": "duplicate_overlap_candidate",
+      "harness": "claude",
+      "name": "context7",
+      "ownership_intent": "none_pending_provider_decision",
+      "plugin_enabled": false,
+      "plugin_id": "context7@claude-plugins-official",
+      "runtime_retirement_intent": "none_without_explicit_adoption"
+    },
+    {
+      "classification": "explicitly_retained_unmanaged_runtime_observation",
+      "harness": "claude",
+      "name": "github",
+      "ownership_intent": "none",
+      "plugin_enabled": false,
+      "plugin_id": "github@claude-plugins-official",
+      "runtime_retirement_intent": "none"
+    },
+    {
+      "classification": "duplicate_overlap_candidate",
+      "harness": "claude",
+      "name": "greptile",
+      "ownership_intent": "none_pending_provider_decision",
+      "plugin_enabled": false,
+      "plugin_id": "greptile@claude-plugins-official",
+      "runtime_retirement_intent": "none_without_explicit_adoption"
+    },
+    {
+      "classification": "explicitly_retained_unmanaged_runtime_observation",
+      "harness": "claude",
+      "name": "hindsight",
+      "ownership_intent": "none",
+      "plugin_enabled": true,
+      "plugin_id": "hindsight-memory@hindsight",
+      "runtime_retirement_intent": "none"
+    },
+    {
+      "classification": "explicitly_retained_unmanaged_runtime_observation",
+      "harness": "claude",
+      "name": "huggingface-skills",
+      "ownership_intent": "none",
+      "plugin_enabled": true,
+      "plugin_id": "huggingface-skills@claude-plugins-official",
+      "runtime_retirement_intent": "none"
+    },
+    {
+      "classification": "explicitly_retained_unmanaged_runtime_observation",
+      "harness": "claude",
+      "name": "playwright",
+      "ownership_intent": "none",
+      "plugin_enabled": true,
+      "plugin_id": "playwright@claude-plugins-official",
+      "runtime_retirement_intent": "none"
+    },
+    {
+      "classification": "explicitly_retained_unmanaged_runtime_observation",
+      "harness": "claude",
+      "name": "Prisma-Local",
+      "ownership_intent": "none",
+      "plugin_enabled": true,
+      "plugin_id": "prisma@claude-plugins-official",
+      "runtime_retirement_intent": "none"
+    },
+    {
+      "classification": "explicitly_retained_unmanaged_runtime_observation",
+      "harness": "claude",
+      "name": "Prisma-Remote",
+      "ownership_intent": "none",
+      "plugin_enabled": true,
+      "plugin_id": "prisma@claude-plugins-official",
+      "runtime_retirement_intent": "none"
+    },
+    {
+      "classification": "explicitly_retained_unmanaged_runtime_observation",
+      "harness": "claude",
+      "name": "slack",
+      "ownership_intent": "none",
+      "plugin_enabled": true,
+      "plugin_id": "slack@claude-plugins-official",
+      "runtime_retirement_intent": "none"
+    },
+    {
+      "classification": "explicitly_retained_unmanaged_runtime_observation",
+      "harness": "claude",
+      "name": "terraform",
+      "ownership_intent": "none",
+      "plugin_enabled": true,
+      "plugin_id": "terraform@claude-plugins-official",
+      "runtime_retirement_intent": "none"
+    },
+    {
+      "classification": "explicitly_retained_unmanaged_runtime_observation",
+      "harness": "codex",
+      "name": "cloudflare-api",
+      "ownership_intent": "none",
+      "plugin_enabled": true,
+      "plugin_id": "cloudflare@openai-curated",
+      "runtime_retirement_intent": "none"
+    },
+    {
+      "classification": "explicitly_retained_unmanaged_runtime_observation",
+      "harness": "codex",
+      "name": "codex-security",
+      "ownership_intent": "none",
+      "plugin_enabled": true,
+      "plugin_id": "codex-security@openai-curated",
+      "runtime_retirement_intent": "none"
+    },
+    {
+      "classification": "duplicate_overlap_candidate",
+      "harness": "codex",
+      "name": "computer-use",
+      "ownership_intent": "none_pending_provider_decision",
+      "plugin_enabled": true,
+      "plugin_id": "computer-use@openai-bundled",
+      "runtime_retirement_intent": "none_without_explicit_adoption"
+    },
+    {
+      "classification": "proposed_managed_equipment_slice",
+      "harness": "codex",
+      "name": "github",
+      "ownership_intent": "propose_catalog_adoption",
+      "plugin_enabled": true,
+      "plugin_id": "github@openai-curated",
+      "runtime_retirement_intent": "none"
+    },
+    {
+      "classification": "explicitly_retained_unmanaged_runtime_observation",
+      "harness": "codex",
+      "name": "event-stream",
+      "ownership_intent": "none",
+      "plugin_enabled": true,
+      "plugin_id": "record-and-replay@openai-bundled",
+      "runtime_retirement_intent": "none"
+    }
+  ],
+  "proposed_managed_slice": {
+    "active_overlap_exceptions": [],
+    "coverage_templates": {
+      "matt-skill": {
+        "claude": {
+          "outcome": "managed_provider",
+          "provider_selection": {
+            "preferred_route": "claude-plugin:mattpocock-skills-official",
+            "supplementary_routes": []
+          }
+        },
+        "codex": {
+          "outcome": "managed_provider",
+          "provider_selection": {
+            "preferred_route": "shared-standalone:mattpocock-skills",
+            "supplementary_routes": []
+          }
+        },
+        "cursor": {
+          "outcome": "managed_provider",
+          "provider_selection": {
+            "preferred_route": "shared-standalone:mattpocock-skills",
+            "supplementary_routes": []
+          }
+        }
+      }
+    },
+    "matt_skill_identities": [
+      {
+        "coverage_template": "matt-skill",
+        "equipment_identity": "skill:mattpocock/ask-matt"
+      },
+      {
+        "coverage_template": "matt-skill",
+        "equipment_identity": "skill:mattpocock/code-review"
+      },
+      {
+        "coverage_template": "matt-skill",
+        "equipment_identity": "skill:mattpocock/codebase-design"
+      },
+      {
+        "coverage_template": "matt-skill",
+        "equipment_identity": "skill:mattpocock/diagnosing-bugs"
+      },
+      {
+        "coverage_template": "matt-skill",
+        "equipment_identity": "skill:mattpocock/domain-modeling"
+      },
+      {
+        "coverage_template": "matt-skill",
+        "equipment_identity": "skill:mattpocock/grill-me"
+      },
+      {
+        "coverage_template": "matt-skill",
+        "equipment_identity": "skill:mattpocock/grill-with-docs"
+      },
+      {
+        "coverage_template": "matt-skill",
+        "equipment_identity": "skill:mattpocock/grilling"
+      },
+      {
+        "coverage_template": "matt-skill",
+        "equipment_identity": "skill:mattpocock/handoff"
+      },
+      {
+        "coverage_template": "matt-skill",
+        "equipment_identity": "skill:mattpocock/implement"
+      },
+      {
+        "coverage_template": "matt-skill",
+        "equipment_identity": "skill:mattpocock/improve-codebase-architecture"
+      },
+      {
+        "coverage_template": "matt-skill",
+        "equipment_identity": "skill:mattpocock/prototype"
+      },
+      {
+        "coverage_template": "matt-skill",
+        "equipment_identity": "skill:mattpocock/research"
+      },
+      {
+        "coverage_template": "matt-skill",
+        "equipment_identity": "skill:mattpocock/resolving-merge-conflicts"
+      },
+      {
+        "coverage_template": "matt-skill",
+        "equipment_identity": "skill:mattpocock/setup-matt-pocock-skills"
+      },
+      {
+        "coverage_template": "matt-skill",
+        "equipment_identity": "skill:mattpocock/tdd"
+      },
+      {
+        "coverage_template": "matt-skill",
+        "equipment_identity": "skill:mattpocock/teach"
+      },
+      {
+        "coverage_template": "matt-skill",
+        "equipment_identity": "skill:mattpocock/to-questionnaire"
+      },
+      {
+        "coverage_template": "matt-skill",
+        "equipment_identity": "skill:mattpocock/to-spec"
+      },
+      {
+        "coverage_template": "matt-skill",
+        "equipment_identity": "skill:mattpocock/to-tickets"
+      },
+      {
+        "coverage_template": "matt-skill",
+        "equipment_identity": "skill:mattpocock/triage"
+      },
+      {
+        "coverage_template": "matt-skill",
+        "equipment_identity": "skill:mattpocock/wait-what"
+      },
+      {
+        "coverage_template": "matt-skill",
+        "equipment_identity": "skill:mattpocock/wayfinder"
+      },
+      {
+        "coverage_template": "matt-skill",
+        "equipment_identity": "skill:mattpocock/wizard"
+      },
+      {
+        "coverage_template": "matt-skill",
+        "equipment_identity": "skill:mattpocock/writing-for-agents"
+      }
+    ],
+    "mcp_decisions": [
+      {
+        "coverage": {
+          "claude": {
+            "outcome": "managed_provider",
+            "provider_selection": {
+              "preferred_route": "claude-plugin:chrome-devtools-mcp",
+              "supplementary_routes": []
+            }
+          },
+          "codex": {
+            "outcome": "managed_provider",
+            "provider_selection": {
+              "preferred_route": "codex-direct-mcp:chrome-devtools",
+              "supplementary_routes": []
+            }
+          },
+          "cursor": {
+            "outcome": "managed_provider",
+            "provider_selection": {
+              "preferred_route": "cursor-direct-mcp:chrome-devtools",
+              "supplementary_routes": []
+            }
+          }
+        },
+        "decision_state": "recommended_with_explicit_skill_omissions",
+        "equipment_identity": "mcp:chrome-devtools",
+        "finding": "Claude keeps the atomic MCP-plus-six-skill plugin; Codex and Cursor use direct MCP routes and explicitly omit the six skills in this slice."
+      },
+      {
+        "coverage": {
+          "claude": {
+            "outcome": "managed_provider",
+            "provider_selection": {
+              "preferred_route": "claude-direct-mcp:context7",
+              "supplementary_routes": []
+            }
+          },
+          "codex": {
+            "outcome": "managed_provider",
+            "provider_selection": {
+              "preferred_route": "codex-direct-mcp:context7",
+              "supplementary_routes": []
+            }
+          },
+          "cursor": {
+            "outcome": "managed_provider",
+            "provider_selection": {
+              "preferred_route": "cursor-direct-mcp:context7",
+              "supplementary_routes": []
+            }
+          }
+        },
+        "decision_state": "recommended",
+        "equipment_identity": "mcp:context7",
+        "finding": "The installed disabled Claude plugin is MCP-only; portable direct routes cover all harnesses."
+      },
+      {
+        "coverage": {
+          "claude": {
+            "outcome": "managed_provider",
+            "provider_selection": {
+              "preferred_route": "claude-direct-mcp:firecrawl",
+              "supplementary_routes": []
+            }
+          },
+          "codex": {
+            "outcome": "managed_provider",
+            "provider_selection": {
+              "preferred_route": "codex-direct-mcp:firecrawl",
+              "supplementary_routes": []
+            }
+          },
+          "cursor": {
+            "outcome": "managed_provider",
+            "provider_selection": {
+              "preferred_route": "cursor-direct-mcp:firecrawl",
+              "supplementary_routes": []
+            }
+          }
+        },
+        "decision_state": "recommended",
+        "equipment_identity": "mcp:firecrawl",
+        "finding": "The enabled Claude Firecrawl plugin exposes ten skills and no MCP server."
+      },
+      {
+        "coverage": {
+          "claude": {
+            "outcome": "managed_provider",
+            "provider_selection": {
+              "preferred_route": "claude-direct-mcp:github",
+              "supplementary_routes": []
+            }
+          },
+          "codex": {
+            "outcome": "managed_provider",
+            "provider_selection": {
+              "preferred_route": "codex-plugin:github",
+              "supplementary_routes": []
+            }
+          },
+          "cursor": {
+            "outcome": "managed_provider",
+            "provider_selection": {
+              "preferred_route": "cursor-direct-mcp:github",
+              "supplementary_routes": []
+            }
+          }
+        },
+        "decision_state": "recommended_with_codex_component_controls",
+        "equipment_identity": "mcp:github",
+        "finding": "Claude keeps process-scoped direct authentication; Codex keeps the plugin app, MCP, and three enabled skills while disabling yeet; Cursor uses a direct route."
+      },
+      {
+        "coverage": {
+          "claude": {
+            "outcome": "managed_provider",
+            "provider_selection": {
+              "preferred_route": "claude-direct-mcp:greptile",
+              "supplementary_routes": []
+            }
+          },
+          "codex": {
+            "outcome": "intentional_omission",
+            "provider_selection": "no_provider"
+          },
+          "cursor": {
+            "outcome": "intentional_omission",
+            "provider_selection": "no_provider"
+          }
+        },
+        "decision_state": "recommended_with_explicit_omissions",
+        "equipment_identity": "mcp:greptile",
+        "finding": "Claude has a disabled plugin and active direct route; no Codex or Cursor route was observed."
+      }
+    ],
+    "pending_decisions": [
+      {
+        "id": "firecrawl-skill-provider-map",
+        "reason": "map nine exact skill overlaps and the firecrawl versus firecrawl-cli semantic candidate"
+      },
+      {
+        "id": "code-review-skill-identity",
+        "reason": "decide whether same-name components from Matt and CodeRabbit are one logical identity"
+      },
+      {
+        "id": "cursor-plugin-state",
+        "reason": "user-scope plugin and component state is not enumerable through the installed CLI"
+      }
+    ],
+    "provider_routes": [
+      {
+        "activation_group": "single-server:context7",
+        "component_control": "single_server_record",
+        "distribution": "direct-mcp:context7",
+        "harness": "claude",
+        "id": "claude-direct-mcp:context7",
+        "native_update_control": "manager_or_channel_dependent",
+        "operation_template": "direct-mcp-overlay",
+        "provenance_owner": "claude_user_mcp_config",
+        "secret_references": [
+          "secret-profile:context7"
+        ]
+      },
+      {
+        "activation_group": "single-server:firecrawl",
+        "component_control": "single_server_record",
+        "distribution": "direct-mcp:firecrawl",
+        "harness": "claude",
+        "id": "claude-direct-mcp:firecrawl",
+        "native_update_control": "manager_or_channel_dependent",
+        "operation_template": "direct-mcp-overlay",
+        "provenance_owner": "claude_user_mcp_config",
+        "secret_references": [
+          "secret-profile:firecrawl"
+        ]
+      },
+      {
+        "activation_group": "single-server:greptile",
+        "component_control": "single_server_record",
+        "distribution": "direct-mcp:greptile",
+        "harness": "claude",
+        "id": "claude-direct-mcp:greptile",
+        "native_update_control": "manager_or_channel_dependent",
+        "operation_template": "direct-mcp-overlay",
+        "provenance_owner": "claude_user_mcp_config",
+        "secret_references": [
+          "secret-profile:greptile"
+        ]
+      },
+      {
+        "activation_group": "whole-plugin-including-six-skills-and-one-mcp",
+        "component_control": "whole_plugin_only",
+        "distribution": "chrome-devtools-mcp@claude-plugins-official",
+        "harness": "claude",
+        "id": "claude-plugin:chrome-devtools-mcp",
+        "native_update_control": "manager_or_channel_dependent",
+        "operation_template": "native-plugin-rolling",
+        "provenance_owner": "claude_official_marketplace",
+        "secret_references": []
+      },
+      {
+        "activation_group": "single-server:github",
+        "component_control": "single_server_record",
+        "distribution": "direct-mcp:github",
+        "harness": "claude",
+        "id": "claude-direct-mcp:github",
+        "native_update_control": "remote_service_unsuppressible",
+        "operation_template": "direct-mcp-overlay",
+        "provenance_owner": "claude_user_mcp_config",
+        "secret_references": [
+          "secret-profile:github"
+        ]
+      },
+      {
+        "activation_group": "all-25-matt-skills",
+        "component_control": "whole_plugin_only",
+        "distribution": "mattpocock-skills@claude-plugins-official",
+        "harness": "claude",
+        "id": "claude-plugin:mattpocock-skills-official",
+        "native_update_control": "manager_or_channel_dependent",
+        "operation_template": "native-plugin-rolling",
+        "provenance_owner": "claude_official_marketplace",
+        "secret_references": []
+      },
+      {
+        "activation_group": "single-server:chrome-devtools",
+        "component_control": "single_server_record",
+        "distribution": "direct-mcp:chrome-devtools",
+        "harness": "codex",
+        "id": "codex-direct-mcp:chrome-devtools",
+        "native_update_control": "manager_or_channel_dependent",
+        "operation_template": "direct-mcp-overlay",
+        "provenance_owner": "codex_user_mcp_config",
+        "secret_references": []
+      },
+      {
+        "activation_group": "single-server:context7",
+        "component_control": "single_server_record",
+        "distribution": "direct-mcp:context7",
+        "harness": "codex",
+        "id": "codex-direct-mcp:context7",
+        "native_update_control": "manager_or_channel_dependent",
+        "operation_template": "direct-mcp-overlay",
+        "provenance_owner": "codex_user_mcp_config",
+        "secret_references": [
+          "secret-profile:context7"
+        ]
+      },
+      {
+        "activation_group": "single-server:firecrawl",
+        "component_control": "single_server_record",
+        "distribution": "direct-mcp:firecrawl",
+        "harness": "codex",
+        "id": "codex-direct-mcp:firecrawl",
+        "native_update_control": "manager_or_channel_dependent",
+        "operation_template": "direct-mcp-overlay",
+        "provenance_owner": "codex_user_mcp_config",
+        "secret_references": [
+          "secret-profile:firecrawl"
+        ]
+      },
+      {
+        "activation_group": "whole-plugin-including-four-skills-and-one-mcp",
+        "component_control": "app_mcp_and_three_skills_enabled_yeet_disabled",
+        "distribution": "github@openai-curated",
+        "harness": "codex",
+        "id": "codex-plugin:github",
+        "native_update_control": "manager_or_channel_dependent",
+        "operation_template": "native-plugin-rolling",
+        "provenance_owner": "codex_curated_marketplace",
+        "secret_references": [
+          "secret-profile:github"
+        ]
+      },
+      {
+        "activation_group": "single-server:chrome-devtools",
+        "component_control": "single_server_record",
+        "distribution": "direct-mcp:chrome-devtools",
+        "harness": "cursor",
+        "id": "cursor-direct-mcp:chrome-devtools",
+        "native_update_control": "manager_or_channel_dependent",
+        "operation_template": "direct-mcp-overlay",
+        "provenance_owner": "cursor_user_mcp_config",
+        "secret_references": []
+      },
+      {
+        "activation_group": "single-server:context7",
+        "component_control": "single_server_record",
+        "distribution": "direct-mcp:context7",
+        "harness": "cursor",
+        "id": "cursor-direct-mcp:context7",
+        "native_update_control": "manager_or_channel_dependent",
+        "operation_template": "direct-mcp-overlay",
+        "provenance_owner": "cursor_user_mcp_config",
+        "secret_references": [
+          "secret-profile:context7"
+        ]
+      },
+      {
+        "activation_group": "single-server:firecrawl",
+        "component_control": "single_server_record",
+        "distribution": "direct-mcp:firecrawl",
+        "harness": "cursor",
+        "id": "cursor-direct-mcp:firecrawl",
+        "native_update_control": "manager_or_channel_dependent",
+        "operation_template": "direct-mcp-overlay",
+        "provenance_owner": "cursor_user_mcp_config",
+        "secret_references": [
+          "secret-profile:firecrawl"
+        ]
+      },
+      {
+        "activation_group": "single-server:github",
+        "component_control": "single_server_record",
+        "distribution": "direct-mcp:github",
+        "harness": "cursor",
+        "id": "cursor-direct-mcp:github",
+        "native_update_control": "manager_or_channel_dependent",
+        "operation_template": "direct-mcp-overlay",
+        "provenance_owner": "cursor_user_mcp_config",
+        "secret_references": [
+          "secret-profile:github"
+        ]
+      },
+      {
+        "activation_group": "per-skill-from-one-verified-distribution",
+        "component_control": "individual_skill_selection",
+        "distribution": "mattpocock/skills",
+        "harness": [
+          "codex",
+          "cursor"
+        ],
+        "id": "shared-standalone:mattpocock-skills",
+        "native_update_control": "controller_locked",
+        "operation_template": "standalone-immutable",
+        "provenance_owner": "dotfiles_reconciler_verified_artifact",
+        "secret_references": []
+      }
+    ],
+    "reviewed_inputs": {
+      "matt_plugin_version": "1.2.3",
+      "matt_skill_count": 25,
+      "matt_skill_folder_hash_algorithm": "skills_cli_1_5_22_folder_hash",
+      "matt_skill_folder_hashes": {
+        "ask-matt": "c9c83b11b1a0c91c555ed6ade5ba67f6d6b103d4",
+        "code-review": "7a2057dcc514dc024d4e6bf8ad78021b97f229ae",
+        "codebase-design": "20b7cd1dd1fe5b0bd37ba72649f3a29375574b5b",
+        "diagnosing-bugs": "463c81def888fefa77b894837d301d9ed70e0994",
+        "domain-modeling": "959e63161ff78b4b1cd553b2c0e09e0c68418e5f",
+        "grill-me": "c817f6f36acd483294144694a935a76d3e3eb101",
+        "grill-with-docs": "5fdcdeedf2d0c73b3ecb1da0a464dd885590f8d6",
+        "grilling": "fd99bcbb818f7ef766b83656fb5fac0b58e223ad",
+        "handoff": "184d485ae68a2132893a94239b2b85d253e6152b",
+        "implement": "f07d230f645fc9ac390cf13a450bbff12ad791a3",
+        "improve-codebase-architecture": "6a971d1f5b109ac817e18c0f0419c2a32d60f26a",
+        "prototype": "57569dda16077a016b8fb82494dbf9f6430d7cc4",
+        "research": "972a34cd8128b7952b7eb279b06715862db906a7",
+        "resolving-merge-conflicts": "6aa1ed0b40fac0ebea5c0cf6f2addf82c99b6323",
+        "setup-matt-pocock-skills": "abf20c04a4aa8a37ff20aa7286f28857150f8b8d",
+        "tdd": "423f3cc2bccf3b0ed426fb35eeb4b38d9188a343",
+        "teach": "15f8c86d39ef834e643d092733ca899b59049067",
+        "to-questionnaire": "7c4d04fb4d77824d7d98433ee7a8b17dde5efa13",
+        "to-spec": "dc32a36159f99c854cb470f371106cd38513a15f",
+        "to-tickets": "80c1bedbdaa72a4abd524055013accb4fe0ea8c4",
+        "triage": "b20940845332f540e3f17b0cb32d45fd8c2298bf",
+        "wait-what": "6abe708f1bf253158a037ac49faea2944e2809dc",
+        "wayfinder": "48c3a8b0a9705d6310d37f7f9b53bcb2c55955c7",
+        "wizard": "359db2fb13dc168346632556185252cab9dbec77",
+        "writing-for-agents": "bd9c9c4762db0a9a094fd419316ebd4b0444d06e"
+      },
+      "matt_skill_folder_hashes_verified_against_upstream_commit": true,
+      "matt_upstream_commit": "84fdeffd12f2ee307994d1eb6feb48173b6e0502"
+    },
+    "route_operation_templates": {
+      "direct-mcp-overlay": {
+        "operations": [
+          {
+            "disposition": "automated",
+            "operation": "inspect"
+          },
+          {
+            "disposition": "unavailable",
+            "operation": "install"
+          },
+          {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated",
+            "operation": "configure"
+          },
+          {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated",
+            "operation": "enable"
+          },
+          {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated",
+            "operation": "disable"
+          },
+          {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated",
+            "operation": "remove"
+          },
+          {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated",
+            "operation": "restore"
+          },
+          {
+            "disposition": "unavailable",
+            "operation": "suppress_native_update"
+          }
+        ],
+        "restore_class": "native_rolling",
+        "route_control_owner": "reconciler_owned"
+      },
+      "native-plugin-rolling": {
+        "operations": [
+          {
+            "disposition": "automated",
+            "operation": "inspect"
+          },
+          {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated",
+            "operation": "install"
+          },
+          {
+            "disposition": "unavailable",
+            "operation": "configure"
+          },
+          {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated",
+            "operation": "enable"
+          },
+          {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated",
+            "operation": "disable"
+          },
+          {
+            "disposition": "operator_action",
+            "operation": "remove"
+          },
+          {
+            "disposition": "unavailable",
+            "operation": "restore"
+          },
+          {
+            "disposition": "operator_action",
+            "operation": "suppress_native_update"
+          }
+        ],
+        "restore_class": "native_rolling",
+        "route_control_owner": "reconciler_owned"
+      },
+      "standalone-immutable": {
+        "operations": [
+          {
+            "disposition": "automated",
+            "operation": "inspect"
+          },
+          {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated",
+            "operation": "install"
+          },
+          {
+            "disposition": "unavailable",
+            "operation": "configure"
+          },
+          {
+            "disposition": "unavailable",
+            "operation": "enable"
+          },
+          {
+            "disposition": "unavailable",
+            "operation": "disable"
+          },
+          {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated",
+            "operation": "remove"
+          },
+          {
+            "compensation": "restore_captured_pre_state",
+            "disposition": "automated",
+            "operation": "restore"
+          },
+          {
+            "disposition": "unavailable",
+            "operation": "suppress_native_update"
+          }
+        ],
+        "restore_class": "immutable",
+        "route_control_owner": "reconciler_owned"
+      }
+    },
+    "status": "proposal_only_no_runtime_authority"
+  },
+  "retained_unmanaged_exceptions": [
+    {
+      "id": "outside-proposed-slice",
+      "policy": "verify and report only; no adoption, mutation, or deletion"
+    },
+    {
+      "id": "configured-only-codex-plugins",
+      "policy": "retain as stale observations until native state and intended ownership are reconciled"
+    },
+    {
+      "id": "cursor-plugin-state",
+      "policy": "treat as opaque and operator-owned until a stable supported contract exists"
+    }
+  ],
+  "schema_version": 1,
+  "snapshot": {
+    "active_harnesses": [
+      "claude",
+      "codex",
+      "cursor"
+    ],
+    "classification_values": [
+      "proposed_managed_equipment_slice",
+      "explicitly_retained_unmanaged_runtime_observation",
+      "duplicate_overlap_candidate",
+      "stale_unverifiable_observation",
+      "opaque_runtime_state"
+    ],
+    "method": "read_only_supported_files_and_cli_surfaces",
+    "observed_date": "2026-08-12",
+    "runtime_mutation_authorized": false,
+    "secret_safety": "Names, booleans, versions, source identities, and secret-reference labels only; no credential values, environment values, local absolute paths, or opaque database content."
+  },
+  "standalone_skills": {
+    "classification_groups": [
+      {
+        "classification": "proposed_managed_equipment_slice",
+        "names": [
+          "ask-matt",
+          "code-review",
+          "codebase-design",
+          "diagnosing-bugs",
+          "domain-modeling",
+          "grill-me",
+          "grill-with-docs",
+          "grilling",
+          "handoff",
+          "implement",
+          "improve-codebase-architecture",
+          "prototype",
+          "research",
+          "resolving-merge-conflicts",
+          "setup-matt-pocock-skills",
+          "tdd",
+          "teach",
+          "to-questionnaire",
+          "to-spec",
+          "to-tickets",
+          "triage",
+          "wait-what",
+          "wayfinder",
+          "wizard",
+          "writing-for-agents"
+        ],
+        "ownership_intent": "propose_catalog_adoption",
+        "runtime_retirement_intent": "only the 21 observed Claude projections, after adoption and plugin verification"
+      },
+      {
+        "classification": "duplicate_overlap_candidate",
+        "names": [
+          "brainstorming",
+          "dispatching-parallel-agents",
+          "executing-plans",
+          "finishing-a-development-branch",
+          "firecrawl",
+          "firecrawl-agent",
+          "firecrawl-crawl",
+          "firecrawl-download",
+          "firecrawl-interact",
+          "firecrawl-map",
+          "firecrawl-monitor",
+          "firecrawl-parse",
+          "firecrawl-scrape",
+          "firecrawl-search",
+          "hyperframes",
+          "hyperframes-animation",
+          "hyperframes-cli",
+          "hyperframes-core",
+          "hyperframes-creative",
+          "hyperframes-keyframes",
+          "hyperframes-registry",
+          "impeccable",
+          "media-use",
+          "receiving-code-review",
+          "requesting-code-review",
+          "subagent-driven-development",
+          "systematic-debugging",
+          "test-driven-development",
+          "using-git-worktrees",
+          "using-superpowers",
+          "verification-before-completion",
+          "writing-plans",
+          "writing-skills"
+        ],
+        "ownership_intent": "none_pending_identity_and_provider_decision",
+        "runtime_retirement_intent": "none_without_explicit_adoption"
+      },
+      {
+        "classification": "explicitly_retained_unmanaged_runtime_observation",
+        "names": [
+          "adapting-skill-creator-to-harnesses",
+          "applying-diataxis",
+          "checkpointing-and-publishing-git-work",
+          "choosing-agent-models",
+          "context7-mcp",
+          "delegating-cross-agent-work",
+          "developing-shell-scripts",
+          "extending-managed-skills",
+          "find-skills",
+          "firecrawl-build-interact",
+          "firecrawl-build-onboarding",
+          "firecrawl-build-scrape",
+          "firecrawl-build-search",
+          "firecrawl-company-directories",
+          "firecrawl-competitive-intel",
+          "firecrawl-dashboard-reporting",
+          "firecrawl-deep-research",
+          "firecrawl-demo-walkthrough",
+          "firecrawl-knowledge-base",
+          "firecrawl-knowledge-ingest",
+          "firecrawl-lead-gen",
+          "firecrawl-lead-research",
+          "firecrawl-market-research",
+          "firecrawl-qa",
+          "firecrawl-research-index",
+          "firecrawl-research-papers",
+          "firecrawl-seo-audit",
+          "firecrawl-shop",
+          "firecrawl-website-design-clone",
+          "firecrawl-workflows",
+          "getting-prs-merged",
+          "getting-prs-ready-for-review",
+          "graphite",
+          "handling-privileged-steps",
+          "here-now",
+          "hindsight-architect",
+          "hindsight-cloud",
+          "hindsight-docs",
+          "hindsight-local",
+          "hindsight-memory-import",
+          "hindsight-memory-onboarding",
+          "hindsight-memory-runtime",
+          "hindsight-self-hosted",
+          "honing-agent-facing-docs",
+          "honing-human-facing-docs",
+          "managing-arch-install-reasons",
+          "onboarding-forks-for-agent-maintenance",
+          "pr-review-orchestration",
+          "publishing-reviewable-prs",
+          "publishing-systalyze-sites",
+          "ralph-review-until-clean",
+          "resolving-workflow-ownership",
+          "resuming-reviewed-prs",
+          "reviewing-before-finalizing",
+          "reviewing-others-prs",
+          "stacking-pr-fixups",
+          "syncing-forks-with-upstream",
+          "tightening-code-for-review",
+          "triaging-agent-armory-issues",
+          "triaging-sandboxed-cli-failures",
+          "using-persistent-git-worktrees",
+          "working-in-systalyze-worktrees",
+          "writing-clearly-and-concisely",
+          "writing-reviewable-pr-descriptions"
+        ],
+        "ownership_intent": "none",
+        "runtime_retirement_intent": "none"
+      }
+    ],
+    "claude_visibility_groups": [
+      {
+        "names": [
+          "hindsight-memory-import",
+          "hindsight-memory-onboarding",
+          "hindsight-memory-runtime",
+          "to-questionnaire",
+          "wait-what",
+          "wizard",
+          "writing-for-agents"
+        ],
+        "observed_kind": "absent"
+      },
+      {
+        "names": [
+          "applying-diataxis",
+          "ask-matt",
+          "brainstorming",
+          "code-review",
+          "codebase-design",
+          "diagnosing-bugs",
+          "dispatching-parallel-agents",
+          "domain-modeling",
+          "executing-plans",
+          "find-skills",
+          "finishing-a-development-branch",
+          "firecrawl",
+          "firecrawl-agent",
+          "firecrawl-build-interact",
+          "firecrawl-build-onboarding",
+          "firecrawl-build-scrape",
+          "firecrawl-build-search",
+          "firecrawl-company-directories",
+          "firecrawl-competitive-intel",
+          "firecrawl-crawl",
+          "firecrawl-dashboard-reporting",
+          "firecrawl-deep-research",
+          "firecrawl-demo-walkthrough",
+          "firecrawl-download",
+          "firecrawl-interact",
+          "firecrawl-knowledge-base",
+          "firecrawl-knowledge-ingest",
+          "firecrawl-lead-gen",
+          "firecrawl-lead-research",
+          "firecrawl-map",
+          "firecrawl-market-research",
+          "firecrawl-monitor",
+          "firecrawl-parse",
+          "firecrawl-qa",
+          "firecrawl-research-index",
+          "firecrawl-research-papers",
+          "firecrawl-scrape",
+          "firecrawl-search",
+          "firecrawl-seo-audit",
+          "firecrawl-shop",
+          "firecrawl-website-design-clone",
+          "firecrawl-workflows",
+          "grill-me",
+          "grill-with-docs",
+          "grilling",
+          "handoff",
+          "here-now",
+          "hindsight-architect",
+          "hindsight-cloud",
+          "hindsight-docs",
+          "hindsight-local",
+          "hindsight-self-hosted",
+          "hyperframes",
+          "hyperframes-animation",
+          "hyperframes-cli",
+          "hyperframes-core",
+          "hyperframes-registry",
+          "implement",
+          "improve-codebase-architecture",
+          "media-use",
+          "prototype",
+          "publishing-systalyze-sites",
+          "receiving-code-review",
+          "requesting-code-review",
+          "research",
+          "resolving-merge-conflicts",
+          "reviewing-others-prs",
+          "setup-matt-pocock-skills",
+          "subagent-driven-development",
+          "systematic-debugging",
+          "tdd",
+          "teach",
+          "test-driven-development",
+          "to-spec",
+          "to-tickets",
+          "triage",
+          "using-git-worktrees",
+          "using-superpowers",
+          "verification-before-completion",
+          "wayfinder",
+          "working-in-systalyze-worktrees",
+          "writing-clearly-and-concisely",
+          "writing-plans",
+          "writing-skills"
+        ],
+        "observed_kind": "blanket_projector_output"
+      },
+      {
+        "names": [
+          "adapting-skill-creator-to-harnesses",
+          "checkpointing-and-publishing-git-work",
+          "choosing-agent-models",
+          "context7-mcp",
+          "delegating-cross-agent-work",
+          "developing-shell-scripts",
+          "extending-managed-skills",
+          "getting-prs-merged",
+          "getting-prs-ready-for-review",
+          "graphite",
+          "handling-privileged-steps",
+          "honing-agent-facing-docs",
+          "honing-human-facing-docs",
+          "managing-arch-install-reasons",
+          "onboarding-forks-for-agent-maintenance",
+          "pr-review-orchestration",
+          "publishing-reviewable-prs",
+          "ralph-review-until-clean",
+          "resolving-workflow-ownership",
+          "resuming-reviewed-prs",
+          "reviewing-before-finalizing",
+          "stacking-pr-fixups",
+          "syncing-forks-with-upstream",
+          "tightening-code-for-review",
+          "triaging-agent-armory-issues",
+          "triaging-sandboxed-cli-failures",
+          "using-persistent-git-worktrees",
+          "writing-reviewable-pr-descriptions"
+        ],
+        "observed_kind": "dotfiles_explicit_symlink"
+      },
+      {
+        "names": [
+          "hyperframes-creative",
+          "hyperframes-keyframes",
+          "impeccable"
+        ],
+        "observed_kind": "separate_directory_same_name"
+      }
+    ],
+    "count": 122,
+    "entry_kind_groups": {
+      "directory": [
+        "adapting-skill-creator-to-harnesses",
+        "applying-diataxis",
+        "ask-matt",
+        "brainstorming",
+        "checkpointing-and-publishing-git-work",
+        "choosing-agent-models",
+        "code-review",
+        "codebase-design",
+        "context7-mcp",
+        "delegating-cross-agent-work",
+        "developing-shell-scripts",
+        "diagnosing-bugs",
+        "dispatching-parallel-agents",
+        "domain-modeling",
+        "executing-plans",
+        "extending-managed-skills",
+        "find-skills",
+        "finishing-a-development-branch",
+        "firecrawl",
+        "firecrawl-agent",
+        "firecrawl-build-interact",
+        "firecrawl-build-onboarding",
+        "firecrawl-build-scrape",
+        "firecrawl-build-search",
+        "firecrawl-company-directories",
+        "firecrawl-competitive-intel",
+        "firecrawl-crawl",
+        "firecrawl-dashboard-reporting",
+        "firecrawl-deep-research",
+        "firecrawl-demo-walkthrough",
+        "firecrawl-download",
+        "firecrawl-interact",
+        "firecrawl-knowledge-base",
+        "firecrawl-knowledge-ingest",
+        "firecrawl-lead-gen",
+        "firecrawl-lead-research",
+        "firecrawl-map",
+        "firecrawl-market-research",
+        "firecrawl-monitor",
+        "firecrawl-parse",
+        "firecrawl-qa",
+        "firecrawl-research-index",
+        "firecrawl-research-papers",
+        "firecrawl-scrape",
+        "firecrawl-search",
+        "firecrawl-seo-audit",
+        "firecrawl-shop",
+        "firecrawl-website-design-clone",
+        "firecrawl-workflows",
+        "getting-prs-merged",
+        "getting-prs-ready-for-review",
+        "graphite",
+        "grill-me",
+        "grill-with-docs",
+        "grilling",
+        "handling-privileged-steps",
+        "handoff",
+        "here-now",
+        "hindsight-architect",
+        "hindsight-cloud",
+        "hindsight-docs",
+        "hindsight-local",
+        "hindsight-self-hosted",
+        "honing-agent-facing-docs",
+        "honing-human-facing-docs",
+        "hyperframes",
+        "hyperframes-animation",
+        "hyperframes-cli",
+        "hyperframes-core",
+        "hyperframes-creative",
+        "hyperframes-keyframes",
+        "hyperframes-registry",
+        "impeccable",
+        "implement",
+        "improve-codebase-architecture",
+        "managing-arch-install-reasons",
+        "media-use",
+        "onboarding-forks-for-agent-maintenance",
+        "pr-review-orchestration",
+        "prototype",
+        "publishing-reviewable-prs",
+        "publishing-systalyze-sites",
+        "ralph-review-until-clean",
+        "receiving-code-review",
+        "requesting-code-review",
+        "research",
+        "resolving-merge-conflicts",
+        "resolving-workflow-ownership",
+        "resuming-reviewed-prs",
+        "reviewing-before-finalizing",
+        "reviewing-others-prs",
+        "setup-matt-pocock-skills",
+        "stacking-pr-fixups",
+        "subagent-driven-development",
+        "syncing-forks-with-upstream",
+        "systematic-debugging",
+        "tdd",
+        "teach",
+        "test-driven-development",
+        "tightening-code-for-review",
+        "to-questionnaire",
+        "to-spec",
+        "to-tickets",
+        "triage",
+        "triaging-agent-armory-issues",
+        "triaging-sandboxed-cli-failures",
+        "using-git-worktrees",
+        "using-persistent-git-worktrees",
+        "using-superpowers",
+        "verification-before-completion",
+        "wait-what",
+        "wayfinder",
+        "wizard",
+        "working-in-systalyze-worktrees",
+        "writing-clearly-and-concisely",
+        "writing-for-agents",
+        "writing-plans",
+        "writing-reviewable-pr-descriptions",
+        "writing-skills"
+      ],
+      "symlink": [
+        "hindsight-memory-import",
+        "hindsight-memory-onboarding",
+        "hindsight-memory-runtime"
+      ]
+    },
+    "overlap_evidence": [
+      {
+        "names": [
+          "code-review"
+        ],
+        "provider": "claude-plugin:coderabbit@claude-plugins-official"
+      },
+      {
+        "names": [
+          "firecrawl-agent",
+          "firecrawl-crawl",
+          "firecrawl-download",
+          "firecrawl-interact",
+          "firecrawl-map",
+          "firecrawl-monitor",
+          "firecrawl-parse",
+          "firecrawl-scrape",
+          "firecrawl-search"
+        ],
+        "provider": "claude-plugin:firecrawl@claude-plugins-official"
+      },
+      {
+        "names": [
+          "hyperframes",
+          "hyperframes-animation",
+          "hyperframes-cli",
+          "hyperframes-core",
+          "hyperframes-creative",
+          "hyperframes-keyframes",
+          "hyperframes-registry",
+          "media-use"
+        ],
+        "provider": "claude-plugin:hyperframes@claude-plugins-official"
+      },
+      {
+        "names": [
+          "brainstorming",
+          "dispatching-parallel-agents",
+          "executing-plans",
+          "finishing-a-development-branch",
+          "receiving-code-review",
+          "requesting-code-review",
+          "subagent-driven-development",
+          "systematic-debugging",
+          "test-driven-development",
+          "using-git-worktrees",
+          "using-superpowers",
+          "verification-before-completion",
+          "writing-plans",
+          "writing-skills"
+        ],
+        "provider": "claude-plugin:superpowers@claude-plugins-official"
+      },
+      {
+        "names": [
+          "hyperframes-creative",
+          "hyperframes-keyframes",
+          "impeccable"
+        ],
+        "provider": "claude-separate-same-name-directory"
+      },
+      {
+        "names": [
+          "hyperframes",
+          "hyperframes-cli",
+          "hyperframes-registry"
+        ],
+        "provider": "codex-plugin:hyperframes@openai-curated"
+      },
+      {
+        "names": [
+          "brainstorming",
+          "dispatching-parallel-agents",
+          "executing-plans",
+          "finishing-a-development-branch",
+          "receiving-code-review",
+          "requesting-code-review",
+          "subagent-driven-development",
+          "systematic-debugging",
+          "test-driven-development",
+          "using-git-worktrees",
+          "using-superpowers",
+          "verification-before-completion",
+          "writing-plans",
+          "writing-skills"
+        ],
+        "provider": "codex-plugin:superpowers@openai-curated"
+      },
+      {
+        "names": [
+          "firecrawl"
+        ],
+        "provider": "semantic-review:firecrawl-cli@firecrawl@claude-plugins-official"
+      }
+    ],
+    "provenance_groups": [
+      {
+        "evidence": "dotfiles-repository",
+        "names": [
+          "adapting-skill-creator-to-harnesses",
+          "checkpointing-and-publishing-git-work",
+          "choosing-agent-models",
+          "context7-mcp",
+          "delegating-cross-agent-work",
+          "developing-shell-scripts",
+          "extending-managed-skills",
+          "getting-prs-merged",
+          "getting-prs-ready-for-review",
+          "graphite",
+          "handling-privileged-steps",
+          "hindsight-memory-import",
+          "hindsight-memory-onboarding",
+          "hindsight-memory-runtime",
+          "honing-agent-facing-docs",
+          "honing-human-facing-docs",
+          "managing-arch-install-reasons",
+          "onboarding-forks-for-agent-maintenance",
+          "pr-review-orchestration",
+          "publishing-reviewable-prs",
+          "ralph-review-until-clean",
+          "resolving-workflow-ownership",
+          "resuming-reviewed-prs",
+          "reviewing-before-finalizing",
+          "reviewing-others-prs",
+          "stacking-pr-fixups",
+          "syncing-forks-with-upstream",
+          "tightening-code-for-review",
+          "triaging-agent-armory-issues",
+          "triaging-sandboxed-cli-failures",
+          "using-persistent-git-worktrees",
+          "writing-reviewable-pr-descriptions"
+        ]
+      },
+      {
+        "evidence": "global-skills-lock:firecrawl/cli",
+        "names": [
+          "firecrawl",
+          "firecrawl-agent",
+          "firecrawl-crawl",
+          "firecrawl-download",
+          "firecrawl-interact",
+          "firecrawl-map",
+          "firecrawl-monitor",
+          "firecrawl-parse",
+          "firecrawl-scrape",
+          "firecrawl-search"
+        ]
+      },
+      {
+        "evidence": "global-skills-lock:firecrawl/firecrawl-workflows",
+        "names": [
+          "firecrawl-company-directories",
+          "firecrawl-competitive-intel",
+          "firecrawl-dashboard-reporting",
+          "firecrawl-deep-research",
+          "firecrawl-demo-walkthrough",
+          "firecrawl-knowledge-base",
+          "firecrawl-knowledge-ingest",
+          "firecrawl-lead-gen",
+          "firecrawl-lead-research",
+          "firecrawl-market-research",
+          "firecrawl-qa",
+          "firecrawl-research-papers",
+          "firecrawl-seo-audit",
+          "firecrawl-shop",
+          "firecrawl-website-design-clone",
+          "firecrawl-workflows"
+        ]
+      },
+      {
+        "evidence": "global-skills-lock:firecrawl/skills",
+        "names": [
+          "firecrawl-build-interact",
+          "firecrawl-build-onboarding",
+          "firecrawl-build-scrape",
+          "firecrawl-build-search",
+          "firecrawl-research-index"
+        ]
+      },
+      {
+        "evidence": "global-skills-lock:heredotnow/skill",
+        "names": [
+          "here-now"
+        ]
+      },
+      {
+        "evidence": "global-skills-lock:heygen-com/hyperframes",
+        "names": [
+          "hyperframes",
+          "hyperframes-animation",
+          "hyperframes-cli",
+          "hyperframes-core",
+          "hyperframes-creative",
+          "hyperframes-keyframes",
+          "hyperframes-registry",
+          "media-use"
+        ]
+      },
+      {
+        "evidence": "global-skills-lock:mattpocock/skills",
+        "names": [
+          "ask-matt",
+          "code-review",
+          "codebase-design",
+          "diagnosing-bugs",
+          "domain-modeling",
+          "grill-me",
+          "grill-with-docs",
+          "grilling",
+          "handoff",
+          "implement",
+          "improve-codebase-architecture",
+          "prototype",
+          "research",
+          "resolving-merge-conflicts",
+          "setup-matt-pocock-skills",
+          "tdd",
+          "teach",
+          "to-questionnaire",
+          "to-spec",
+          "to-tickets",
+          "triage",
+          "wait-what",
+          "wayfinder",
+          "wizard",
+          "writing-for-agents"
+        ]
+      },
+      {
+        "evidence": "global-skills-lock:obra/superpowers",
+        "names": [
+          "brainstorming",
+          "dispatching-parallel-agents",
+          "executing-plans",
+          "finishing-a-development-branch",
+          "receiving-code-review",
+          "requesting-code-review",
+          "subagent-driven-development",
+          "systematic-debugging",
+          "test-driven-development",
+          "using-git-worktrees",
+          "using-superpowers",
+          "verification-before-completion",
+          "writing-plans",
+          "writing-skills"
+        ]
+      },
+      {
+        "evidence": "global-skills-lock:obra/the-elements-of-style",
+        "names": [
+          "writing-clearly-and-concisely"
+        ]
+      },
+      {
+        "evidence": "global-skills-lock:vectorize-io/hindsight",
+        "names": [
+          "hindsight-architect",
+          "hindsight-cloud",
+          "hindsight-docs",
+          "hindsight-local",
+          "hindsight-self-hosted"
+        ]
+      },
+      {
+        "evidence": "global-skills-lock:vercel-labs/skills",
+        "names": [
+          "find-skills"
+        ]
+      },
+      {
+        "evidence": "global-skills-lock:withgraphite/agent-skills",
+        "names": [
+          "graphite"
+        ]
+      },
+      {
+        "evidence": "hindsight-control-plane-active-release",
+        "names": [
+          "hindsight-memory-import",
+          "hindsight-memory-onboarding",
+          "hindsight-memory-runtime"
+        ]
+      },
+      {
+        "evidence": "source-unverified",
+        "names": [
+          "applying-diataxis",
+          "impeccable",
+          "publishing-systalyze-sites",
+          "working-in-systalyze-worktrees"
+        ]
+      }
+    ]
+  }
+}

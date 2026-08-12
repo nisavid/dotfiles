@@ -1,0 +1,72 @@
+{
+  "schema_version": "agent-equipment-captured-state/v1",
+  "migration_id": "fixture-native-plugin-install",
+  "captured_at": "2026-08-12T00:00:00Z",
+  "bindings": {
+    "catalog_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "lock_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "plan_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "capability_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+  },
+  "provider_routes": [
+    {
+      "route_id": "route:fixture/claude-plugin",
+      "harness": "claude",
+      "equipment_identities": [
+        "plugin:fixture/example"
+      ],
+      "control_owner": "reconciler_owned",
+      "provenance_owner": "source:fixture/claude-marketplace",
+      "restore_evidence": {
+        "restore_class": "native_rolling",
+        "channel": "official-marketplace",
+        "observed_version": {
+          "status": "route_absent"
+        },
+        "observation_source": "claude plugin list",
+        "native_update_control": "unknown",
+        "exact_prior_artifact_restore": false
+      },
+      "surface_references": {
+        "installation": {
+          "status": "captured",
+          "surface_id": "surface:fixture/claude-plugin-installation"
+        },
+        "enablement": {
+          "status": "not_applicable"
+        },
+        "mcp_selections": [],
+        "plugin_selections": []
+      }
+    }
+  ],
+  "surfaces": [
+    {
+      "surface_id": "surface:fixture/claude-plugin-installation",
+      "kind": "plugin_installation",
+      "route_id": "route:fixture/claude-plugin",
+      "mutation_policy": "reconciler_owned",
+      "provenance": {
+        "classification": "native_manager",
+        "evidence": [
+          {
+            "source": "claude plugin list",
+            "state_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+          }
+        ]
+      },
+      "locator": {
+        "manager": "claude",
+        "native_identity": "example@fixture",
+        "scope": "user"
+      },
+      "observation": {
+        "installed": false
+      },
+      "recovery": {
+        "kind": "none",
+        "reason": "absent_noop"
+      }
+    }
+  ]
+}
