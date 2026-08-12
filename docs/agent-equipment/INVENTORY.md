@@ -16,6 +16,10 @@ schema-valid [`initial-catalog.proposed.json`](initial-catalog.proposed.json)
 and catalog-digest-bound
 [`initial-lock.proposed.json`](initial-lock.proposed.json). Those files are a
 review proposal, not live adoption or migration authorization.
+`initial-inventory.json` references those canonical proposal artifacts and does
+not redeclare their coverage templates, provider routes, operation matrices, or
+lock decisions. It retains only dated observation evidence and unresolved
+classification questions alongside that reference.
 
 ## Snapshot
 
@@ -121,6 +125,9 @@ These are the provider choices in the proposed catalog, not production
 adoption. Each selected route has complete ownership, provenance, restore,
 component-control, operation, and compensation data. No supplementary route is
 selected, so the desired slice contains no accepted overlap exception.
+Native-rolling plugin removal remains `operator_action`: without an
+independently retained exact artifact, an automated uninstall could not restore
+the captured pre-state if the manager channel advanced.
 
 | Equipment | Claude | Codex | Cursor | Disposition |
 | --- | --- | --- | --- | --- |
@@ -129,6 +136,11 @@ selected, so the desired slice contains no accepted overlap exception.
 | Firecrawl | Direct MCP | Direct MCP | Direct MCP | Recommended: the enabled Claude Firecrawl plugin contributes ten skills and **no MCP server** |
 | GitHub | Direct MCP | Native plugin | Direct MCP | Reviewed proposal: Claude retains process-scoped `secret-exec`; Codex keeps its app, MCP, and three skills while `yeet` is disabled; Cursor gains the direct route |
 | Greptile | Direct MCP | Intentional omission | Intentional omission | Recommended with explicit omissions: only the Claude route is currently observed |
+
+Every already-observed direct MCP selected by this proposal is classified for
+catalog adoption in the inventory. This includes the existing Codex Context7
+route; `explicitly_retained_unmanaged_runtime_observation` is reserved for
+observed routes outside the selected proposal.
 
 The current duplicate candidates are preserved until their winning routes are
 adopted. The proposed retirement set owns only the observed direct Claude
@@ -218,6 +230,7 @@ python3 -m json.tool docs/agent-equipment/initial-inventory.json >/dev/null
 jq '.counts' docs/agent-equipment/initial-inventory.json
 jq '.plugin_component_inventory.summary' docs/agent-equipment/initial-inventory.json
 jq '[.plugin_component_inventory.observed_plugins[] | {harness, plugin_id}] | length' docs/agent-equipment/initial-inventory.json
+jq '.proposed_managed_slice.canonical_proposal' docs/agent-equipment/initial-inventory.json
 rg -n '/Users/|ivan@|Bearer [A-Za-z0-9]|"(token|api_key|secret|password)"[[:space:]]*:' docs/agent-equipment/initial-inventory.json
 python3 -m unittest tests/test_agent_equipment_design.py
 ```

@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 import re
 from typing import Any
+from urllib.parse import urlsplit
 
 
 JsonObject = Mapping[str, Any]
@@ -58,6 +59,7 @@ class CoverageEntry:
 @dataclass(frozen=True, order=True)
 class PlannedOperation:
     equipment_identities: tuple[str, ...]
+    controlled_equipment_identities: tuple[str, ...]
     harness: str
     route_identity: str
     activation_group: str
@@ -95,9 +97,35 @@ def canonical_json_sha256(document: JsonObject) -> str:
 def load_and_validate(catalog_path: Path, lock_path: Path) -> DesignValidationResult:
     """Load a catalog and lock as UTF-8 JSON, then validate them together."""
 
-    catalog = json.loads(Path(catalog_path).read_text(encoding="utf-8"))
-    lock = json.loads(Path(lock_path).read_text(encoding="utf-8"))
+    try:
+        catalog = _load_json_without_duplicate_members(Path(catalog_path))
+        lock = _load_json_without_duplicate_members(Path(lock_path))
+    except (json.JSONDecodeError, ValueError):
+        return DesignValidationResult(
+            diagnostics=(
+                Diagnostic(
+                    "DOCUMENT_PARSE_INVALID",
+                    "Catalog and lock inputs must be valid JSON with unique object member names.",
+                ),
+            ),
+            coverage=(),
+            mutation_plan=None,
+        )
     return validate_design(catalog, lock)
+
+
+def _load_json_without_duplicate_members(path: Path) -> Any:
+    def reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate JSON object member")
+            result[key] = value
+        return result
+
+    return json.loads(
+        path.read_text(encoding="utf-8"), object_pairs_hook=reject_duplicates
+    )
 
 
 def validate_design(catalog: JsonObject, lock: JsonObject) -> DesignValidationResult:
@@ -353,6 +381,7 @@ def validate_design(catalog: JsonObject, lock: JsonObject) -> DesignValidationRe
     grouped_operations: dict[
         tuple[str, str, str, str], set[str]
     ] = {}
+    grouped_controls: dict[tuple[str, str, str, str], set[str]] = {}
     active_routes: dict[tuple[str, str], JsonObject] = {}
     activation_groups: dict[tuple[str, str], str] = {}
     for entry in coverage:
@@ -404,6 +433,10 @@ def validate_design(catalog: JsonObject, lock: JsonObject) -> DesignValidationRe
                     grouped_operations.setdefault(key, set()).add(
                         entry.equipment_identity
                     )
+                    grouped_controls.setdefault(key, set()).update(
+                        control["equipment_identity"]
+                        for control in route["component_controls"]
+                    )
     for retirement_operation in retirement_operations:
         activation_key = (
             retirement_operation.harness,
@@ -434,9 +467,15 @@ def validate_design(catalog: JsonObject, lock: JsonObject) -> DesignValidationRe
         grouped_operations.setdefault(key, set()).update(
             retirement_operation.equipment_identities
         )
+        grouped_controls.setdefault(key, set()).update(
+            retirement_operation.controlled_equipment_identities
+        )
     planned = [
         PlannedOperation(
             equipment_identities=tuple(sorted(equipment_identities)),
+            controlled_equipment_identities=tuple(
+                sorted(grouped_controls.get((harness, route_identity, activation_group, operation), ()))
+            ),
             harness=harness,
             route_identity=route_identity,
             activation_group=activation_group,
@@ -473,6 +512,7 @@ def validate_design(catalog: JsonObject, lock: JsonObject) -> DesignValidationRe
                     planned,
                     key=lambda item: (
                         item.equipment_identities,
+                        item.controlled_equipment_identities,
                         item.harness,
                         item.route_identity,
                         item.activation_group,
@@ -985,6 +1025,21 @@ def _route_is_valid(
             )
         )
         valid = False
+    elif not _provenance_matches_provider(
+        provenance["owner"],
+        route.get("provider"),
+        harness,
+        route.get("distribution"),
+    ):
+        diagnostics.append(
+            Diagnostic(
+                "PROVENANCE_OWNER_INVALID",
+                "The provenance owner must name the selected distribution source, exact native plugin, or matching harness overlay.",
+                equipment_identity=equipment_identity,
+                harness=harness,
+                route_identity=route_identity,
+            )
+        )
     restore = route.get("restore")
     if not _restore_is_valid(restore):
         restore_class = restore.get("class") if isinstance(restore, dict) else None
@@ -1017,12 +1072,14 @@ def _route_is_valid(
             )
         )
         valid = False
-    declared_secret_names = {
-        reference["name"]
+    declared_secret_references = {
+        (reference["kind"], reference["name"])
         for reference in secret_references
         if _secret_reference_is_valid(reference)
     } if isinstance(secret_references, list) else set()
-    if not _provider_is_valid(route.get("provider"), harness, declared_secret_names):
+    if not _provider_is_valid(
+        route.get("provider"), harness, declared_secret_references
+    ):
         diagnostics.append(
             Diagnostic(
                 "PROVIDER_CONFIGURATION_INVALID",
@@ -1091,6 +1148,22 @@ def _route_is_valid(
                     )
                 )
                 valid = False
+            if (
+                operation == "remove"
+                and route.get("provider", {}).get("kind") == "native_plugin"
+                and isinstance(restore, dict)
+                and restore.get("class") == "native_rolling"
+            ):
+                diagnostics.append(
+                    Diagnostic(
+                        "NATIVE_ROLLING_PLUGIN_REMOVAL_INVALID",
+                        "A native-rolling plugin cannot be removed automatically when its exact captured artifact cannot be restored.",
+                        equipment_identity=equipment_identity,
+                        harness=harness,
+                        route_identity=route_identity,
+                    )
+                )
+                valid = False
             if route.get("control_owner") == "operator_owned":
                 diagnostics.append(
                     Diagnostic(
@@ -1132,8 +1205,10 @@ def _restore_is_valid(restore: Any) -> bool:
         return (
             all(
                 isinstance(restore[field], str) and bool(restore[field].strip())
-                for field in ("revision", "artifact_ref")
+                for field in ("revision",)
             )
+            and isinstance(restore["artifact_ref"], str)
+            and _immutable_artifact_ref_is_valid(restore["artifact_ref"])
             and isinstance(restore["content_digest"], str)
             and bool(re.fullmatch(r"sha256:[0-9a-f]{64}", restore["content_digest"]))
             and restore["native_update_control"] == "not_applicable"
@@ -1158,6 +1233,36 @@ def _restore_is_valid(restore: Any) -> bool:
     return False
 
 
+def _provenance_matches_provider(
+    owner: str,
+    provider: Any,
+    harness: str,
+    distribution: Any,
+) -> bool:
+    if not isinstance(provider, dict):
+        return False
+    kind = provider.get("kind")
+    if kind == "direct_mcp":
+        return owner == f"overlay:{harness}/mcp"
+    if kind == "native_plugin":
+        plugin_id = provider.get("plugin_id")
+        return (
+            isinstance(plugin_id, str)
+            and owner == f"manager:{harness}-plugins/{plugin_id}"
+        )
+    if kind != "standalone_skill":
+        return False
+    source_owner = (
+        f"source:{distribution.removeprefix('distribution:')}"
+        if isinstance(distribution, str)
+        and distribution.startswith("distribution:")
+        else None
+    )
+    return owner == source_owner or (
+        harness == "claude" and owner == "projection:claude/standalone-skill"
+    )
+
+
 def _catalog_distribution_is_valid(distribution: Any) -> bool:
     if not isinstance(distribution, dict) or set(distribution) != {
         "identity",
@@ -1177,10 +1282,10 @@ def _catalog_distribution_is_valid(distribution: Any) -> bool:
     if source.get("kind") == "git":
         source_valid = (
             set(source) == {"kind", "repository", "ref"}
-            and all(
-                isinstance(source.get(field), str) and bool(source[field].strip())
-                for field in ("repository", "ref")
-            )
+            and isinstance(source.get("repository"), str)
+            and _public_git_repository_is_valid(source["repository"])
+            and isinstance(source.get("ref"), str)
+            and bool(source["ref"].strip())
         )
     elif source.get("kind") == "native_manager":
         source_valid = (
@@ -1225,21 +1330,52 @@ def _catalog_distribution_is_valid(distribution: Any) -> bool:
     return source_valid and selection_valid and templates_valid
 
 
+def _public_git_repository_is_valid(value: str) -> bool:
+    if not _public_https_url_is_valid(value):
+        return False
+    parsed = urlsplit(value)
+    return parsed.path not in {"", "/"} and parsed.path.endswith(".git")
+
+
+def _immutable_artifact_ref_is_valid(value: str) -> bool:
+    if not value.startswith("git+"):
+        return False
+    repository_and_selector = value[4:]
+    if "@" not in repository_and_selector:
+        return False
+    repository, selector = repository_and_selector.rsplit("@", 1)
+    if not _public_git_repository_is_valid(repository):
+        return False
+    revision, separator, subpaths = selector.partition("#")
+    if not revision or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]*", revision):
+        return False
+    if not separator:
+        return True
+    return bool(subpaths) and all(
+        bool(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]*", subpath))
+        for subpath in subpaths.split(",")
+    )
+
+
 def _provider_is_valid(
     provider: Any,
     harness: str,
-    declared_secret_names: set[str],
+    declared_secret_references: set[tuple[str, str]],
 ) -> bool:
     if not isinstance(provider, dict):
         return False
     kind = provider.get("kind")
     if kind == "standalone_skill":
-        return set(provider) == {"kind", "canonical_root"} and provider.get(
-            "canonical_root"
-        ) == "agents_skills"
+        return (
+            not declared_secret_references
+            and set(provider) == {"kind", "canonical_root"}
+            and provider.get("canonical_root") == "agents_skills"
+        )
     if kind == "native_plugin":
         plugin_id = provider.get("plugin_id")
         return (
+            not declared_secret_references
+            and
             set(provider) == {"kind", "manager", "plugin_id", "scope"}
             and provider.get("manager") == harness
             and provider.get("scope") == "user"
@@ -1255,9 +1391,10 @@ def _provider_is_valid(
         return False
     if provider.get("transport") == "http":
         return (
-            set(provider) == {"kind", "server_name", "transport", "url"}
+            not declared_secret_references
+            and set(provider) == {"kind", "server_name", "transport", "url"}
             and isinstance(provider.get("url"), str)
-            and provider["url"].startswith("https://")
+            and _public_https_url_is_valid(provider["url"])
         )
     if provider.get("transport") != "stdio" or set(provider) != {
         "kind",
@@ -1276,7 +1413,8 @@ def _provider_is_valid(
     ):
         return False
     secret_value_expected = False
-    for argument in arguments:
+    consumed_secret_references: list[tuple[str, str]] = []
+    for index, argument in enumerate(arguments):
         if not isinstance(argument, dict):
             return False
         if set(argument) == {"literal"} and isinstance(argument.get("literal"), str):
@@ -1288,14 +1426,76 @@ def _provider_is_valid(
             continue
         if (
             set(argument) == {"secret_reference", "template"}
-            and argument.get("secret_reference") in declared_secret_names
+            and (
+                "environment_variable",
+                argument.get("secret_reference"),
+            ) in declared_secret_references
             and isinstance(argument.get("template"), str)
             and argument["template"].count("{reference}") == 1
         ):
+            consumed_secret_references.append(
+                ("environment_variable", argument["secret_reference"])
+            )
+            secret_value_expected = False
+            continue
+        if (
+            set(argument) == {"secret_profile_reference"}
+            and isinstance(argument.get("secret_profile_reference"), str)
+            and (
+                "secret_profile",
+                argument["secret_profile_reference"],
+            ) in declared_secret_references
+            and command == "secret-exec"
+            and index == 0
+        ):
+            consumed_secret_references.append(
+                ("secret_profile", argument["secret_profile_reference"])
+            )
             secret_value_expected = False
             continue
         return False
-    return not secret_value_expected
+    return (
+        not secret_value_expected
+        and len(consumed_secret_references) == len(set(consumed_secret_references))
+        and set(consumed_secret_references) == declared_secret_references
+        and (
+            command != "secret-exec"
+            or bool(consumed_secret_references)
+            and consumed_secret_references[0][0] == "secret_profile"
+        )
+    )
+
+
+def _public_https_url_is_valid(value: str) -> bool:
+    """Return whether *value* is a static public HTTPS endpoint URL."""
+
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError:
+        return False
+    path_segments = tuple(segment for segment in parsed.path.split("/") if segment)
+    return (
+        parsed.scheme == "https"
+        and bool(parsed.hostname)
+        and bool(re.fullmatch(r"[A-Za-z0-9.-]+", parsed.hostname or ""))
+        and parsed.username is None
+        and parsed.password is None
+        and parsed.query == ""
+        and parsed.fragment == ""
+        and (port is None or 1 <= port <= 65535)
+        and "\\" not in value
+        and "%" not in value
+        and all(
+            segment not in {".", ".."}
+            and bool(re.fullmatch(r"[A-Za-z0-9._~-]+", segment))
+            and not re.fullmatch(
+                r"(?i)(?:bearer|api[-_]?key|access[-_]?token|token|secret|password|client[-_]?secret|credential)(?:[-_.=:].*)?",
+                segment,
+            )
+            for segment in path_segments
+        )
+    )
 
 
 def _literal_expects_secret_argument(value: str) -> bool:
@@ -1468,6 +1668,19 @@ def _validate_retirements(
                 )
             )
             route_valid = False
+        elif not _retirement_surface_matches_provider(
+            retirement.get("surface"), route.get("provider"), equipment_identity, harness
+        ):
+            diagnostics.append(
+                Diagnostic(
+                    "RETIREMENT_SURFACE_PROVIDER_MISMATCH",
+                    "The losing surface locator is the canonical physical surface selected by its route provider and equipment identity.",
+                    equipment_identity=equipment_identity,
+                    harness=harness,
+                    route_identity=route_identity,
+                )
+            )
+            route_valid = False
         elif surface_key in seen_surfaces:
             diagnostics.append(
                 Diagnostic(
@@ -1503,6 +1716,7 @@ def _validate_retirements(
             planned.append(
                 PlannedOperation(
                     equipment_identities=(equipment_identity,),
+                    controlled_equipment_identities=(),
                     harness=harness,
                     route_identity=route_identity,
                     activation_group=route["activation_group"],
@@ -1510,6 +1724,41 @@ def _validate_retirements(
                 )
             )
     return planned
+
+
+def _retirement_surface_matches_provider(
+    surface: Any,
+    provider: Any,
+    equipment_identity: str,
+    harness: str,
+) -> bool:
+    if not isinstance(surface, dict) or not isinstance(provider, dict):
+        return False
+    kind = surface.get("kind")
+    if kind == "claude_skill_projection":
+        expected_name = equipment_identity.split(":", 1)[-1].rsplit("/", 1)[-1]
+        return (
+            harness == "claude"
+            and provider.get("kind") == "standalone_skill"
+            and surface.get("skill_name") == expected_name
+        )
+    if kind == "direct_mcp":
+        return (
+            provider.get("kind") == "direct_mcp"
+            and surface.get("server_name") == provider.get("server_name")
+        )
+    if kind == "plugin":
+        return (
+            provider.get("kind") == "native_plugin"
+            and surface.get("plugin_id") == provider.get("plugin_id")
+        )
+    if kind == "plugin_component":
+        return (
+            provider.get("kind") == "native_plugin"
+            and surface.get("plugin_id") == provider.get("plugin_id")
+            and surface.get("component_identity") == equipment_identity
+        )
+    return False
 
 
 def _retirement_surface_key(
@@ -1693,6 +1942,17 @@ def _validate_lock(
             )
         )
 
+    active_route_membership: dict[tuple[str, str], set[str]] = {}
+    for entry in coverage:
+        selection = entry.record.get("provider_selection")
+        if not isinstance(selection, dict):
+            continue
+        for route in selection.get("routes", []):
+            if isinstance(route, dict) and isinstance(route.get("identity"), str):
+                active_route_membership.setdefault(
+                    (entry.harness, route["identity"]), set()
+                ).add(entry.equipment_identity)
+
     lock_retirements = lock.get("retirements")
     catalog_retirements = catalog.get("retirements")
     if not isinstance(lock_retirements, list) or not isinstance(catalog_retirements, list):
@@ -1732,11 +1992,12 @@ def _validate_lock(
         )
         return
     distribution_records: dict[str, JsonObject] = {}
+    distribution_sources: dict[str, JsonObject] = {}
     distribution_memberships: dict[str, tuple[str, ...]] = {}
     for item in lock_distributions:
         if (
             not isinstance(item, dict)
-            or set(item) != {"identity", "equipment", "restore"}
+            or set(item) != {"identity", "source", "equipment", "restore"}
             or not isinstance(item.get("identity"), str)
             or not isinstance(item.get("equipment"), list)
             or not item.get("equipment")
@@ -1753,6 +2014,7 @@ def _validate_lock(
             )
             continue
         distribution_records[item["identity"]] = item["restore"]
+        distribution_sources[item["identity"]] = item["source"]
         distribution_memberships[item["identity"]] = tuple(item["equipment"])
     catalog_distribution_ids = {
         item.get("identity")
@@ -1779,6 +2041,24 @@ def _validate_lock(
             continue
         selection = distribution.get("selection")
         membership = distribution_memberships.get(distribution["identity"], ())
+        if distribution_sources.get(distribution["identity"]) != distribution.get(
+            "source"
+        ):
+            diagnostics.append(
+                Diagnostic(
+                    "LOCK_DISTRIBUTION_SOURCE_MISMATCH",
+                    "The lock binds every distribution to the exact authored source selector.",
+                )
+            )
+        source = distribution.get("source")
+        restore = distribution_records.get(distribution["identity"])
+        if not _distribution_source_matches_restore(source, restore):
+            diagnostics.append(
+                Diagnostic(
+                    "DISTRIBUTION_SOURCE_RESTORE_MISMATCH",
+                    "The resolved restore channel and artifact are exact consequences of the bound distribution source.",
+                )
+            )
         selection_valid = (
             isinstance(selection, dict)
             and (
@@ -1807,6 +2087,19 @@ def _validate_lock(
             route_membership = distribution_memberships.get(
                 route.get("distribution"), ()
             )
+            route_source = distribution_sources.get(route.get("distribution"))
+            if not _distribution_source_matches_provider(
+                route_source, route.get("provider")
+            ):
+                diagnostics.append(
+                    Diagnostic(
+                        "DISTRIBUTION_SOURCE_PROVIDER_MISMATCH",
+                        "The selected provider invokes the exact package, channel, manager, or immutable source bound by its distribution.",
+                        equipment_identity=entry.equipment_identity,
+                        harness=entry.harness,
+                        route_identity=route.get("identity"),
+                    )
+                )
             if entry.equipment_identity not in route_membership:
                 diagnostics.append(
                     Diagnostic(
@@ -1834,6 +2127,24 @@ def _validate_lock(
                                 route_identity=route.get("identity"),
                             )
                         )
+                    if (
+                        isinstance(control, dict)
+                        and control.get("state") == "enabled"
+                        and isinstance(control.get("equipment_identity"), str)
+                        and control["equipment_identity"]
+                        not in active_route_membership.get(
+                            (entry.harness, route.get("identity")), set()
+                        )
+                    ):
+                        diagnostics.append(
+                            Diagnostic(
+                                "ENABLED_COMPONENT_CONTROL_COVERAGE_INVALID",
+                                "An enabled component control must have active coverage on the same route and harness; disabled no-provider duplicates remain controlled but inactive.",
+                                equipment_identity=entry.equipment_identity,
+                                harness=entry.harness,
+                                route_identity=route.get("identity"),
+                            )
+                        )
             if distribution_records.get(route.get("distribution")) != route.get("restore"):
                 diagnostics.append(
                     Diagnostic(
@@ -1844,3 +2155,60 @@ def _validate_lock(
                         route_identity=route.get("identity"),
                     )
                 )
+
+
+def _distribution_source_matches_restore(source: Any, restore: Any) -> bool:
+    if not isinstance(source, dict) or not isinstance(restore, dict):
+        return False
+    if source.get("kind") == "git":
+        if restore.get("class") != "immutable":
+            return False
+        expected = f"git+{source.get('repository')}@{source.get('ref')}"
+        artifact_ref = restore.get("artifact_ref")
+        return isinstance(artifact_ref, str) and (
+            artifact_ref == expected or artifact_ref.startswith(f"{expected}#")
+        )
+    if source.get("kind") != "native_manager" or restore.get("class") != "native_rolling":
+        return False
+    manager = source.get("manager")
+    package = source.get("package")
+    channel = source.get("channel")
+    if manager == "npx":
+        return (
+            restore.get("channel") == f"npm:{channel}"
+            and restore.get("reviewed_baseline") == f"{package}@{channel}"
+        )
+    return restore.get("channel") == channel
+
+
+def _distribution_source_matches_provider(source: Any, provider: Any) -> bool:
+    if not isinstance(source, dict) or not isinstance(provider, dict):
+        return False
+    if source.get("kind") == "git":
+        return provider.get("kind") == "standalone_skill"
+    if source.get("kind") != "native_manager":
+        return False
+    manager = source.get("manager")
+    package = source.get("package")
+    channel = source.get("channel")
+    if provider.get("kind") == "native_plugin":
+        return (
+            provider.get("manager") == manager
+            and provider.get("plugin_id") == package
+        )
+    if provider.get("kind") != "direct_mcp" or manager != "npx":
+        return (
+            provider.get("kind") == "direct_mcp"
+            and provider.get("transport") == "http"
+            and manager == "http"
+            and provider.get("url") == package
+            and channel == "static"
+        )
+    expected_selector = f"{package}@{channel}"
+    arguments = provider.get("arguments")
+    return isinstance(arguments, list) and any(
+        isinstance(argument, dict)
+        and set(argument) == {"literal"}
+        and argument.get("literal") == expected_selector
+        for argument in arguments
+    )

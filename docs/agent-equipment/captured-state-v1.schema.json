@@ -47,16 +47,118 @@
       "type": "string",
       "pattern": "^sha256:[0-9a-f]{64}$"
     },
+    "capabilityBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "capability_identity",
+        "capability_digest",
+        "manager_version_evidence_digest"
+      ],
+      "properties": {
+        "capability_identity": {
+          "type": "string",
+          "pattern": "^capability:[a-z0-9][a-z0-9._:/+-]*$"
+        },
+        "capability_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "manager_version_evidence_digest": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "plannedActionReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action_identity",
+        "action_digest",
+        "write_bindings",
+        "verification_dependency_bindings"
+      ],
+      "properties": {
+        "action_identity": {
+          "type": "string",
+          "pattern": "^action:sha256:[0-9a-f]{64}$"
+        },
+        "action_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "write_bindings": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/actionWriteBinding"
+          }
+        },
+        "verification_dependency_bindings": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/verificationDependencyBinding"
+          }
+        }
+      }
+    },
+    "actionWriteBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target_identity",
+        "surface_id"
+      ],
+      "properties": {
+        "target_identity": {
+          "type": "string",
+          "pattern": "^target:sha256:[0-9a-f]{64}$"
+        },
+        "surface_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "verificationDependencyBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dependency_identity",
+        "surface_id"
+      ],
+      "properties": {
+        "dependency_identity": {
+          "type": "string",
+          "minLength": 1
+        },
+        "surface_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
     "bindings": {
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "candidate_identity",
+        "implementation_manifest_digest",
         "catalog_digest",
         "lock_digest",
         "plan_digest",
-        "capability_digest"
+        "plan_action_set_digest",
+        "capability_bindings",
+        "capability_set_digest"
       ],
       "properties": {
+        "candidate_identity": {
+          "type": "string",
+          "minLength": 1
+        },
+        "implementation_manifest_digest": {
+          "$ref": "#/$defs/digest"
+        },
         "catalog_digest": {
           "$ref": "#/$defs/digest"
         },
@@ -66,7 +168,17 @@
         "plan_digest": {
           "$ref": "#/$defs/digest"
         },
-        "capability_digest": {
+        "plan_action_set_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "capability_bindings": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/capabilityBinding"
+          }
+        },
+        "capability_set_digest": {
           "$ref": "#/$defs/digest"
         }
       }
@@ -110,14 +222,20 @@
       "required": [
         "installation",
         "enablement",
+        "projector",
         "mcp_selections",
-        "plugin_selections"
+        "plugin_selections",
+        "skill_entries",
+        "canonical_skill_dependencies"
       ],
       "properties": {
         "installation": {
           "$ref": "#/$defs/surfaceReference"
         },
         "enablement": {
+          "$ref": "#/$defs/surfaceReference"
+        },
+        "projector": {
           "$ref": "#/$defs/surfaceReference"
         },
         "mcp_selections": {
@@ -127,6 +245,18 @@
           }
         },
         "plugin_selections": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/surfaceReference"
+          }
+        },
+        "skill_entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/surfaceReference"
+          }
+        },
+        "canonical_skill_dependencies": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/surfaceReference"
@@ -237,10 +367,14 @@
       "additionalProperties": false,
       "required": [
         "route_id",
+        "route_digest",
         "harness",
         "equipment_identities",
+        "controlled_equipment_identities",
         "control_owner",
         "provenance_owner",
+        "capability_binding",
+        "planned_actions",
         "restore_evidence",
         "surface_references"
       ],
@@ -248,6 +382,9 @@
         "route_id": {
           "type": "string",
           "minLength": 1
+        },
+        "route_digest": {
+          "$ref": "#/$defs/digest"
         },
         "harness": {
           "enum": [
@@ -265,6 +402,14 @@
             "minLength": 1
           }
         },
+        "controlled_equipment_identities": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
         "control_owner": {
           "enum": [
             "reconciler_owned",
@@ -274,6 +419,16 @@
         "provenance_owner": {
           "type": "string",
           "minLength": 1
+        },
+        "capability_binding": {
+          "$ref": "#/$defs/capabilityBinding"
+        },
+        "planned_actions": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/plannedActionReference"
+          }
         },
         "restore_evidence": {
           "$ref": "#/$defs/restoreEvidence"
@@ -619,7 +774,23 @@
         }
       ]
     },
-    "pathLocator": {
+    "verificationOnlyRecovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "reason"
+      ],
+      "properties": {
+        "kind": {
+          "const": "none"
+        },
+        "reason": {
+          "const": "verification_only"
+        }
+      }
+    },
+    "canonicalSkillLocator": {
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -628,7 +799,20 @@
       "properties": {
         "path": {
           "type": "string",
-          "pattern": "^~/\\.(agents|claude)/skills/[^/]+$"
+          "pattern": "^~/\\.agents/skills/(?!\\.{1,2}$)[^/\\\\\u0000]+$"
+        }
+      }
+    },
+    "claudeSkillLocator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^~/\\.claude/skills/(?!\\.{1,2}$)[^/\\\\\u0000]+$"
         }
       }
     },
@@ -902,13 +1086,48 @@
               ],
               "properties": {
                 "kind": {
+                  "const": "canonical_skill_entry"
+                },
+                "mutation_policy": {
+                  "const": "forbidden"
+                },
+                "locator": {
+                  "$ref": "#/$defs/canonicalSkillLocator"
+                },
+                "observation": {
+                  "$ref": "#/$defs/pathEntryObservation"
+                },
+                "recovery": {
+                  "$ref": "#/$defs/verificationOnlyRecovery"
+                }
+              }
+            }
+          ],
+          "unevaluatedProperties": false
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/surfaceBase"
+            },
+            {
+              "type": "object",
+              "required": [
+                "route_id",
+                "equipment_identity"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "claude_skill_entry"
+                },
+                "mutation_policy": {
                   "enum": [
-                    "canonical_skill_entry",
-                    "claude_skill_entry"
+                    "reconciler_owned",
+                    "operator_owned"
                   ]
                 },
                 "locator": {
-                  "$ref": "#/$defs/pathLocator"
+                  "$ref": "#/$defs/claudeSkillLocator"
                 },
                 "observation": {
                   "$ref": "#/$defs/pathEntryObservation"
@@ -998,7 +1217,8 @@
             {
               "type": "object",
               "required": [
-                "route_id"
+                "route_id",
+                "equipment_identity"
               ],
               "properties": {
                 "kind": {

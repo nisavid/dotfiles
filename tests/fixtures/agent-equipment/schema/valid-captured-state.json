@@ -3,20 +3,60 @@
   "migration_id": "fixture-native-plugin-install",
   "captured_at": "2026-08-12T00:00:00Z",
   "bindings": {
+    "candidate_identity": "candidate:fixture/controller-v1",
+    "implementation_manifest_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "catalog_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
     "lock_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
     "plan_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
-    "capability_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+    "plan_action_set_digest": "sha256:9bb22725fddc7dc0487f33b92c589b1ab2214b4632ee7ac3f958f5f49daeebb7",
+    "capability_bindings": [
+      {
+        "capability_identity": "capability:claude-native-plugin-v1",
+        "capability_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+        "manager_version_evidence_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+      }
+    ],
+    "capability_set_digest": "sha256:7a13e2a65f207f4cd99b9d85186bf3b87241befbc11fbfd959c1f925bddfeb41"
   },
   "provider_routes": [
     {
       "route_id": "route:fixture/claude-plugin",
+      "route_digest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
       "harness": "claude",
       "equipment_identities": [
-        "plugin:fixture/example"
+        "plugin:fixture/example",
+        "skill:fixture/example"
       ],
+      "controlled_equipment_identities": [],
       "control_owner": "reconciler_owned",
       "provenance_owner": "source:fixture/claude-marketplace",
+      "capability_binding": {
+        "capability_identity": "capability:claude-native-plugin-v1",
+        "capability_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+        "manager_version_evidence_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+      },
+      "planned_actions": [
+        {
+          "action_identity": "action:sha256:8b668d90aa623f6dcb459a029ee8af002d434a3a4ba3991c61c158a135268a35",
+          "action_digest": "sha256:fcf1a7236d2e4f41dc1b427e74f8551ad1230a2362c3ed404e1f1cdd8d6091c2",
+          "write_bindings": [
+            {
+              "target_identity": "target:sha256:49f1077c7da53464e95128bd0db26571dc3f7a27499daf326c6244bd6683e68b",
+              "surface_id": "surface:fixture/plugin-installation"
+            },
+            {
+              "target_identity": "target:sha256:a0fb563ad0ccb7e62865f02dd6643574ce285ef7eced23e85c31d9ebec3541b7",
+              "surface_id": "surface:fixture/claude-skill"
+            }
+          ],
+          "verification_dependency_bindings": [
+            {
+              "dependency_identity": "dependency:fixture/canonical-skill",
+              "surface_id": "surface:fixture/canonical-skill"
+            }
+          ]
+        }
+      ],
       "restore_evidence": {
         "restore_class": "native_rolling",
         "channel": "official-marketplace",
@@ -30,19 +70,34 @@
       "surface_references": {
         "installation": {
           "status": "captured",
-          "surface_id": "surface:fixture/claude-plugin-installation"
+          "surface_id": "surface:fixture/plugin-installation"
         },
         "enablement": {
           "status": "not_applicable"
         },
+        "projector": {
+          "status": "not_applicable"
+        },
         "mcp_selections": [],
-        "plugin_selections": []
+        "plugin_selections": [],
+        "skill_entries": [
+          {
+            "status": "captured",
+            "surface_id": "surface:fixture/claude-skill"
+          }
+        ],
+        "canonical_skill_dependencies": [
+          {
+            "status": "captured",
+            "surface_id": "surface:fixture/canonical-skill"
+          }
+        ]
       }
     }
   ],
   "surfaces": [
     {
-      "surface_id": "surface:fixture/claude-plugin-installation",
+      "surface_id": "surface:fixture/plugin-installation",
       "kind": "plugin_installation",
       "route_id": "route:fixture/claude-plugin",
       "mutation_policy": "reconciler_owned",
@@ -51,7 +106,7 @@
         "evidence": [
           {
             "source": "claude plugin list",
-            "state_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+            "state_digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
           }
         ]
       },
@@ -62,6 +117,59 @@
       },
       "observation": {
         "installed": false
+      },
+      "recovery": {
+        "kind": "native_inverse",
+        "inverse_operation": "remove",
+      "expected_pre_state_digest": "sha256:9999999999999999999999999999999999999999999999999999999999999999"
+      }
+    },
+    {
+      "surface_id": "surface:fixture/canonical-skill",
+      "kind": "canonical_skill_entry",
+      "route_id": "route:fixture/claude-plugin",
+      "equipment_identity": "skill:fixture/example",
+      "mutation_policy": "forbidden",
+      "provenance": {
+        "classification": "unmanaged",
+        "evidence": [
+          {
+            "source": "lstat",
+            "state_digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666"
+          }
+        ]
+      },
+      "locator": {
+        "path": "~/.agents/skills/example"
+      },
+      "observation": {
+        "entry_type": "absent"
+      },
+      "recovery": {
+        "kind": "none",
+        "reason": "verification_only"
+      }
+    },
+    {
+      "surface_id": "surface:fixture/claude-skill",
+      "kind": "claude_skill_entry",
+      "route_id": "route:fixture/claude-plugin",
+      "equipment_identity": "skill:fixture/example",
+      "mutation_policy": "reconciler_owned",
+      "provenance": {
+        "classification": "catalog_owned_projection",
+        "evidence": [
+          {
+            "source": "lstat",
+            "state_digest": "sha256:7777777777777777777777777777777777777777777777777777777777777777"
+          }
+        ]
+      },
+      "locator": {
+        "path": "~/.claude/skills/example"
+      },
+      "observation": {
+        "entry_type": "absent"
       },
       "recovery": {
         "kind": "none",

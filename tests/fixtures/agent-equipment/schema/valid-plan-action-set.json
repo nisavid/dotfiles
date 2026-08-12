@@ -1,0 +1,109 @@
+{
+  "schema_version": "agent-equipment-plan-action-set/v1",
+  "candidate_identity": "candidate:fixture/controller-v1",
+  "implementation_manifest_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "plan_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+  "actions": [
+    {
+      "action_payload": {
+        "action_identity": "action:sha256:8b668d90aa623f6dcb459a029ee8af002d434a3a4ba3991c61c158a135268a35",
+        "ordinal": 0,
+        "candidate_identity": "candidate:fixture/controller-v1",
+        "implementation_manifest_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "catalog_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "lock_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "plan_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "capability_identity": "capability:claude-native-plugin-v1",
+        "capability_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+        "manager_version_evidence_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+        "adapter_identity": "adapter:fixture/claude-plugin",
+        "adapter_version": "1.0.0",
+        "harness": "claude",
+        "route_identity": "route:fixture/claude-plugin",
+        "route_digest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+        "provider": {
+          "kind": "native_plugin",
+          "manager": "claude",
+          "plugin_id": "example@fixture",
+          "scope": "user"
+        },
+        "equipment_identities": [
+          "plugin:fixture/example",
+          "skill:fixture/example"
+        ],
+        "controlled_equipment_identities": [],
+        "activation_group": "activation:fixture/claude-plugin",
+        "surface_scope": [
+          "surface:route:fixture/claude-plugin/plugin:fixture/example",
+          "surface:route:fixture/claude-plugin/skill:fixture/example"
+        ],
+        "write_targets": [
+          {
+            "target_identity": "target:sha256:49f1077c7da53464e95128bd0db26571dc3f7a27499daf326c6244bd6683e68b",
+            "write_surface_identity": "surface:route:fixture/claude-plugin/plugin:fixture/example",
+            "surface_kind": "plugin_installation",
+            "locator": {
+              "manager": "claude",
+              "native_identity": "example@fixture",
+              "scope": "user"
+            }
+          },
+          {
+            "target_identity": "target:sha256:a0fb563ad0ccb7e62865f02dd6643574ce285ef7eced23e85c31d9ebec3541b7",
+            "write_surface_identity": "surface:route:fixture/claude-plugin/skill:fixture/example",
+            "surface_kind": "claude_skill_entry",
+            "equipment_identity": "skill:fixture/example",
+            "locator": {
+              "path": "~/.claude/skills/example"
+            }
+          }
+        ],
+        "operation": "install",
+        "operation_disposition": "automated",
+        "desired_state": {
+          "route_presence": "present"
+        },
+        "desired_state_digest": "sha256:3551741a7b3b074876114f983f07b523d180ab1d82bd088875eb390d1e838ede",
+        "expected_post_state_digest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+        "secret_references": [],
+        "preconditions": {
+          "candidate_identity": "candidate:fixture/controller-v1",
+          "implementation_manifest_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "catalog_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+          "lock_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "plan_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+          "route_digest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+          "capability_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+          "manager_version_evidence_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+          "adapter_identity": "adapter:fixture/claude-plugin",
+          "adapter_version": "1.0.0",
+          "control_owner": "reconciler_owned",
+          "activation_group": "activation:fixture/claude-plugin",
+          "surface_scope": [
+            "surface:route:fixture/claude-plugin/plugin:fixture/example",
+            "surface:route:fixture/claude-plugin/skill:fixture/example"
+          ],
+          "prepared_checkpoint_required": true,
+          "compare_before_mutate": true
+        },
+        "verification_dependencies": [
+          {
+            "relationship": "canonical_skill_projection",
+            "dependency_identity": "dependency:fixture/canonical-skill",
+            "write_surface_identity": "surface:route:fixture/claude-plugin/skill:fixture/example",
+            "equipment_identity": "skill:fixture/example",
+            "target_locator": {
+              "path": "~/.agents/skills/example"
+            }
+          }
+        ],
+        "compensation": {
+          "kind": "restore_captured_pre_state",
+          "captured_state_version": "agent-equipment-captured-state/v1"
+        }
+      },
+      "action_digest": "sha256:fcf1a7236d2e4f41dc1b427e74f8551ad1230a2362c3ed404e1f1cdd8d6091c2"
+    }
+  ],
+  "action_set_digest": "sha256:9bb22725fddc7dc0487f33b92c589b1ab2214b4632ee7ac3f958f5f49daeebb7"
+}

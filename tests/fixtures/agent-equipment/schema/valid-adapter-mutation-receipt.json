@@ -4,25 +4,27 @@
     "contract_version": "adapter-contract-v1",
     "receipt_identity": "receipt:install-mattpocock-skills",
     "attempt_identity": "attempt:001",
-    "action_identity": "action:install-mattpocock-skills",
+    "action_identity": "action:sha256:1eebde95b789dcfd2063ca359ac993ed0b82435c4e1fc051b9ac4243bad0facc",
     "correlation_identity": "correlation:candidate-001",
     "ordinal": 0,
     "candidate_identity": "candidate:001",
+    "implementation_manifest_digest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
     "catalog_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "lock_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     "plan_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     "capability_identity": "capability:claude-native-plugin-v1",
-    "capability_digest": "sha256:c0aad6935698f92f477aa2cd9969f83256d13e9c2db4e43ddd6345e3f75c7677",
+    "capability_digest": "sha256:52ddfe33697f159dca8d1d170259f430071760c22e0a10b46404ac4e11c05844",
     "manager_version_evidence_digest": "sha256:c4a5a1878eff82ef30703ca6a3da147e4b94b66dc2b337867e04e3d4ebf1935d",
     "adapter_identity": "adapter:claude-native-plugin",
     "adapter_version": "1.0.0",
     "harness": "claude",
     "route_identity": "route:claude/mattpocock-plugin",
-    "route_digest": "sha256:942290fc6dd339c0bb1bae03b5f7163c03adb475ff9147110b8791d903359bbf",
+    "route_digest": "sha256:8dae6009e89f333a632ca158cafc03c5d6f416238c696deef534b09c3801140a",
     "control_owner": "reconciler_owned",
     "equipment_identities": [
       "plugin:mattpocock/claude"
     ],
+    "controlled_equipment_identities": [],
     "activation_group": "activation:claude/mattpocock-plugin",
     "surface_scope": [
       "surface:route:claude/mattpocock-plugin/plugin:mattpocock/claude"
@@ -37,11 +39,11 @@
     "result": {
       "status": "ok",
       "effect": "changed",
-      "expected_pre_state_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-      "observed_pre_state_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "expected_pre_state_digest": "sha256:5f1e1002517a1c11e2a97f743123e0a8030e2971bdf621e42fd9421696894335",
+      "observed_pre_state_digest": "sha256:5f1e1002517a1c11e2a97f743123e0a8030e2971bdf621e42fd9421696894335",
       "comparison": "equal",
-      "expected_post_state_digest": "sha256:42176224e7ed4c5db475b4d9f40e7ad59b15e1d407e0c335e697b6e97e612a2d",
-      "observed_post_state_digest": "sha256:42176224e7ed4c5db475b4d9f40e7ad59b15e1d407e0c335e697b6e97e612a2d",
+      "expected_post_state_digest": "sha256:7c049b2642875ca097c3dbe659a22465da5a9b74cb69d64a7478639b5fa97f3d",
+      "observed_post_state_digest": "sha256:7c049b2642875ca097c3dbe659a22465da5a9b74cb69d64a7478639b5fa97f3d",
       "native_result_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
       "surface_evidence": [
         {
@@ -54,8 +56,8 @@
         "status": "prepared",
         "kind": "restore_captured_pre_state",
         "captured_state_identity": "captured-state:candidate-001/action-001",
-        "captured_state_digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
-        "expected_post_state_digest": "sha256:42176224e7ed4c5db475b4d9f40e7ad59b15e1d407e0c335e697b6e97e612a2d"
+        "captured_state_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+        "expected_post_state_digest": "sha256:7c049b2642875ca097c3dbe659a22465da5a9b74cb69d64a7478639b5fa97f3d"
       }
     }
   }

@@ -56,7 +56,9 @@ _Avoid_: Provenance owner, artifact owner
 
 **Provenance owner**:
 The one source or native manager responsible for the artifact and restore
-evidence of an active provider route.
+evidence of an active provider route. It is an exact reference derived from the
+selected distribution and provider, not a free-form label within the same
+manager or source namespace.
 _Avoid_: Logical package owner, runtime cache
 
 **Restore class**:

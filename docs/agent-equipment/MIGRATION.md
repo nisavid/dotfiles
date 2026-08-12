@@ -28,7 +28,9 @@ Complete all of these before the executor opens an action checkpoint:
 3. Validate the complete plan, including the last action, before creating the
    first action checkpoint. Every automated mutation must be on a
    `reconciler_owned` route, have supported compare and verification
-   capabilities, and declare `restore_captured_pre_state` compensation.
+   capabilities, and declare `restore_captured_pre_state` compensation. Validate
+   the complete dependency graph for closure, required provider-switch edges,
+   and acyclicity; lexical order alone is not execution authority.
 4. Reject stale catalog or lock digests, unresolved provenance, an unknown
    capability needed by the plan, a native-rolling version outside the reviewed
    baseline, and any operator-owned mutating action.
@@ -42,9 +44,27 @@ Complete all of these before the executor opens an action checkpoint:
 7. Acquire the reconciler's exclusive apply lease. Native managers and external
    editors remain outside that lease, so the compare guards below remain
    mandatory.
-8. Present the secret-free dry-run, catalog digest, lock digest, plan digest,
-   capability digest, exact surface set, and native-rolling limitations for
-   operator review. Obtain separate authorization for that exact plan.
+8. After complete-plan validation, emit and validate the closed
+   `agent-equipment-plan-action-set/v1` projection described below. Capture every
+   route and affected surface, close every route over the exact adapter
+   capability and manager-version evidence it requires, validate both JSON
+   Schemas and cross-record semantics against that separately supplied action
+   set, and atomically seal the action set, captured-state manifest, and private
+   recovery blobs. Resolve again against that capture; a changed plan or action
+   projection must be regenerated, recaptured, and resealed.
+9. Present the secret-free dry-run, exact candidate implementation identity and
+   complete installed-implementation manifest digest, catalog digest, lock
+   digest, plan digest, plan-action-set digest, capability-set digest, sealed
+   captured-state identity and digest, exact surface set, and native-rolling
+   limitations for operator review. Obtain separate authorization naming that
+   complete exact tuple.
+10. After authorization and before any action checkpoint or mutation, observe
+    every affected live surface and every bound capability and manager-version
+    evidence source, and recompute the installed-implementation manifest digest
+    under the same candidate identity. Require the complete authorized tuple and
+    live evidence to equal the sealed capture. Any drift invalidates the
+    authorization: mutate nothing, recapture, resolve, reseal, and obtain new
+    authorization for the new exact tuple.
 
 Planning, inventory, import, update, and adopt remain runtime-read-only. Only an
 authorized `apply` may execute this runbook. Authorization for one plan does not
@@ -53,19 +73,33 @@ carry to a recomputed plan.
 ## Captured state
 
 `captured-state-v1.schema.json` defines the secret-free manifest for one
-migration run. The executor seals it after authorization and immediately before
-the first mutation. Its four bindings make the capture unusable with another
-catalog, lock, plan, or adapter capability set.
+migration run. The executor validates and seals it before requesting
+authorization. Its candidate implementation identity, complete installed-
+implementation manifest digest, catalog, lock, plan, plan-action-set, and
+capability-set digest bindings make the capture unusable with another
+controller, resolution, action projection, or adapter capability set.
+
+`capability_bindings` is a closed array of objects containing only
+`capability_identity`, `capability_digest`, and
+`manager_version_evidence_digest`. Sort the objects by that three-field tuple,
+serialize the array as UTF-8 canonical JSON with sorted object keys and no
+insignificant whitespace, and SHA-256 digest those bytes to produce
+`capability_set_digest`. Every provider route repeats the one applicable closed
+binding, which must exactly match a member of the top-level set.
 
 The manifest records every affected provider route with:
 
 - its route identity, harness, and complete equipment identity set;
-- its route control owner and single provenance owner;
+- its route control owner, single provenance owner, and exact capability and
+  manager-version evidence binding;
+- when absence will be changed by install, a reference by exact identity and
+  digest to the separately supplied validated plan-action set;
 - immutable revision, artifact reference, and content digest, or the
   native-rolling channel, observed version or absence, observation source, and
   native update control; and
-- explicit captured or `not_applicable` references for installation,
-  enablement, MCP-selection, and plugin-selection surfaces.
+- explicit captured or `not_applicable` references for singleton installation,
+  singleton enablement, and projector surfaces, plus complete reference arrays
+  for MCP selections, plugin selections, and mutable Claude skill entries.
 
 It records these surfaces separately:
 
@@ -87,11 +121,135 @@ It records these surfaces separately:
 - **Plugin selection:** Narrow owning source and key path, presence,
   secret-redacted structural state, and private exact recovery material.
 
-Surface and route identifiers are unique. Every route reference resolves to
-exactly one surface of the required kind, every route named by a surface exists,
-and the surface's route and equipment identities agree with the resolved plan.
-These cross-reference checks are semantic validation in addition to JSON Schema
-validation.
+Surface and route identifiers are unique. A surface's canonical logical
+identity is its kind, route, canonical locator, and equipment identity when the
+surface carries one; logical identities are also unique. Every mutable routed
+surface is referenced exactly once from its owning route's kind-specific slot.
+Independently, `(kind, canonical locator)` is unique across all mutable
+surfaces, regardless of route or equipment labels. One physical surface cannot
+receive competing mutation owners, captures, or recovery records. A deliberately
+shared verification-only observation remains one `forbidden` record or follows
+another explicit nonmutable rule; it does not create duplicate mutable records.
+Installation and enablement are singleton slots and must reference the route's
+only surface of that kind. Each routed skill has exactly one
+`canonical_skill_dependencies` reference to its verification-only
+`~/.agents/skills` counterpart. Every route reference resolves to exactly one
+surface of the required kind, every route named by a surface exists, and the
+surface's route and equipment identities agree with the resolved plan. Orphan,
+duplicate, contradictory, dangling, wrong-kind, and wrong-route surfaces
+invalidate the capture.
+
+The public `validate_captured_state` API and CLI load and enforce both checked-in
+JSON Schemas before running these semantic checks. Schema-invalid input has no
+semantic interpretation. CI also runs the pinned independent schema checker to
+validate the schemas themselves and their fixtures. The CLI parses strict JSON:
+duplicate object keys and non-JSON numeric constants are read failures, not
+alternate spellings of a sealed artifact.
+
+`plan-action-set-v1.schema.json` defines a separate, closed, secret-free
+projection emitted only after the resolver validates the complete plan. It
+contains every automated action from that plan, across install, configure,
+enable, disable, remove, restore, and native-update suppression. The plan
+validator owns exact membership and supplies the artifact independently; it
+must not derive the artifact from captured state or route references.
+
+Each projected payload preserves action identity and ordinal; catalog, lock,
+and plan digests; capability, manager-version, adapter, and harness executor
+bindings; route identity and digest; the exact closed provider target; active
+equipment identities; distinct controlled equipment identities; activation
+group; the exact write-surface scope; operation and automated disposition;
+desired state and its target-fragment digest; the canonical full normalized
+expected-post-state digest; secret-reference names without values; complete
+compare/checkpoint preconditions; verification-only read dependencies; and
+compensation. The action's surface authority derives from the union of active
+and controlled equipment; disabled controlled equipment does not become active
+coverage.
+
+`surface_scope` retains the adapter contract's sorted logical surface
+identities. A separate closed `write_targets` set binds every logical identity
+to its exact physical target kind, applicable equipment identity, and
+secret-free locator. Derive each `target_identity` by canonicalizing that
+descriptor without `target_identity` and SHA-256 digesting it. Captured action
+references bind every target identity exactly once to one captured surface ID;
+the surface must match the target's kind, equipment, locator, route, route slot,
+and reconciler ownership. MCP and plugin selections always carry equipment
+identity in both the target and capture; the route-wide legacy projector does
+not. This preserves the authoritative adapter vocabulary
+without treating a capture-local record ID as plan authority.
+
+The provider projection uses the same closed standalone-skill, native-plugin,
+and direct-MCP variants as the catalog. Direct-MCP arguments retain literals,
+environment-reference templates, or opaque secret-profile references, never
+resolved values. Public HTTP MCP endpoints use the same static HTTPS grammar:
+no userinfo, query, fragment, encoded or platform separators, traversal, or
+credential-shaped path segments.
+
+Recompute `desired_state_digest` over canonical desired-state JSON and
+`action_digest` over the complete canonical projection. Derive
+`action_identity` as `action:sha256:<hex>` over canonical JSON containing
+exactly `plan_digest`, `ordinal`, `route_id`, `operation`, and
+`desired_state_digest`. Serialize actions by the topological ordinal already
+bound by the authoritative validated plan, then identity. This serialization
+rule does not derive or validate dependencies. The complete plan owns the
+closed, acyclic dependency graph and binds it into `plan_digest`; the executor
+must validate that graph and every ordinal before emitting this projection.
+Produce `action_set_digest` by canonicalizing exactly `schema_version`,
+`plan_digest`, and that ordered `actions` array, then SHA-256 digesting those
+bytes.
+
+The captured manifest stores only `bindings.plan_action_set_digest` and each
+route's closed `planned_actions` identity/digest references. Semantic
+validation takes
+the independently supplied action set as a required second input. It recomputes
+the set, action, identity, and desired-state digests; requires the set's
+`plan_digest` to equal `bindings.plan_digest`; requires the captured set digest
+binding to match; and requires exact one-to-one ownership between supplied
+actions and route references. Every reconciler-owned captured surface belongs
+to exactly one action's write scope, and every write scope names only captured
+reconciler-owned surfaces on its route. An operator-owned route cannot reference
+an automated action or carry native inverse compensation. A self-consistent
+action invented in captured state therefore cannot validate against the sealed
+plan projection.
+
+For a Claude skill projection, the action also binds the projection write
+surface identity to exactly one canonical read dependency identity. The
+captured action reference maps that dependency to one canonical surface record.
+Route, equipment identity, canonical target locator, and skill basename all
+match. The canonical surface remains `forbidden` and verification-only; it
+never enters an action's write scope.
+
+This captured-state validator does not establish that its second input came
+from the authoritative complete plan. The caller must first validate the plan
+and its exact projected membership, then pass and seal that independently
+produced artifact. Supplying a newly invented action set and changing the
+captured binding to match is not authority.
+
+Every native-rolling route references exactly one plugin-installation surface.
+`route_absent` restore evidence agrees only with `installed: false`; without a
+forward install, that surface carries `none/absent_noop` recovery. Only an
+absent-to-present transition resolved through the independently validated
+plan-action set may carry `native_inverse/remove`. That same install action must
+own the exact plugin-installation physical target and its captured write
+binding; an install action for another surface cannot authorize compensation.
+Presence, resolved
+forward-install evidence, and destructive inverse eligibility are checked
+before restore-class handling,
+so an immutable route cannot use remove compensation. An observed native
+version agrees only with `installed: true` and identical version, channel, and
+observation source, and uses non-mutating `already_desired` or `operator_owned`
+recovery. Any contradiction invalidates the capture before authorization.
+For a guarded remove inverse, `recovery.expected_pre_state_digest` equals the
+forward action's `expected_post_state_digest`, the canonical digest of the
+complete normalized forward post-state. It is distinct from
+`desired_state_digest`, which binds only the planned target fragment.
+Compensation may run only while the complete expected post-install state still
+matches.
+
+Recovery material agrees with observation state. An absent mutable entry or
+selection uses `absent_noop`; a present Claude entry or secret-redacted
+selection requires sealed private recovery material; and a present structured
+surface requires a bound structured or private snapshot. A capture that claims
+present state while retaining absence recovery is invalid.
 
 ### Filesystem observation
 
@@ -102,6 +260,12 @@ path order without traversing directory symlinks. For every entry it records
 type and applicable metadata; it records regular-file size and byte digest,
 directory metadata, and symlink text plus resolved or broken state. The
 canonical JSON digest of that manifest is the directory content claim.
+
+A captured Agent or Claude skill path is exactly one direct child of its stated
+skills root. Its basename is non-empty, is neither `.` nor `..`, and contains no
+NUL, slash, backslash, or platform path separator. Production execution still
+performs containment checks at the filesystem boundary; a sealed manifest does
+not defer lexical validation until execution.
 
 The metadata record states the capture platform and records mode, uid, gid,
 nanosecond mtime, flags when supported, and digests or explicit
@@ -173,20 +337,44 @@ external change to make rollback appear complete.
 ## Ordered migration
 
 Each numbered mutation is a separately checkpointed action or a deterministic
-series of separately checkpointed actions. A completion criterion follows each
-step.
+series of separately checkpointed actions. The authorized plan represents these
+actions as a closed dependency graph. It rejects missing references, orphan
+actions, incomplete provider-switch dependencies, and cycles before opening the
+checkpoint store. Execution uses a deterministic topological order; the
+canonical equipment, harness, route, operation, and action-identity tuple is
+only a tie-break among actions whose dependencies are already satisfied.
 
-### 1. Resolve, authorize, capture, and seal
+Projector readiness precedes official Matt activation. Installation precedes
+enablement; verified enablement and the complete active Matt activation group
+precede every losing Claude-link retirement. All route changes precede final
+coverage verification. Reverse compensation walks the reverse topological
+order, which restores every removed link before disabling or uninstalling the
+winner and restores the legacy projector last. A completion criterion follows
+each step.
 
-Resolve and validate the entire plan, obtain exact-plan authorization, acquire
-the apply lease, recapture every route and surface, and resolve again against
-that capture. If the recapture changes the plan, release the lease and return a
-new proposal for separate authorization. Atomically seal the captured-state
-manifest and its private recovery blobs.
+### 1. Resolve, capture, seal, authorize, and compare
 
-Completion: the authorized plan and sealed capture have identical bindings;
-all route and surface cross-references validate; no harness state has changed;
-no action checkpoint exists yet.
+Resolve and validate the entire plan, emit and independently validate its exact
+complete automated-action projection, acquire the apply lease, capture every
+route and surface, validate the capture against the separately supplied action
+set, and resolve again against it. If the capture changes the plan or action
+projection, regenerate and recapture until the plan, action set, and capture
+agree. Atomically seal the plan-action set, captured-state manifest, and private
+recovery blobs, then obtain authorization naming the complete candidate,
+implementation-manifest, catalog, lock, plan, action-set, capability-set, and
+captured-state tuple.
+
+After authorization, recompute the installed implementation manifest and reread
+every affected surface and bound capability and manager-version evidence source.
+Proceed only when the candidate identity, implementation digest, and all live
+evidence equal the authorized sealed capture. Otherwise release the proposal
+without mutation, recapture, resolve, reseal, and obtain new authorization.
+
+Completion: the authorized plan, sealed action set, and sealed capture have
+identical bindings; the post-authorization live comparison is exact; all route
+and surface
+cross-references validate; no harness state has changed; no action checkpoint
+exists yet.
 
 ### 2. Replace the blanket Claude projector
 
@@ -202,34 +390,7 @@ remove, or rewrite a Claude skill entry as a side effect of installation.
 Completion: a verified catalog-driven projector owns future projections; every
 candidate Claude and canonical Agent Skills entry still equals captured state.
 
-### 3. Remove only identified Matt projections
-
-Iterate the resolved Matt equipment identities in canonical order. For each
-`~/.claude/skills/<name>` candidate:
-
-- an absent captured entry is a verified no-op;
-- a captured symlink is eligible only when its exact link text, target or
-  broken state, catalog identity, route, and provenance prove it is the
-  catalog-owned standalone projection for that identity; and
-- a regular file, directory, unknown-provenance link, or link to an unexpected
-  target is fatal drift and is not removed.
-
-For each eligible link, reverify its canonical Agent Skills entry, persist a
-prepared checkpoint, compare the link with captured state, and unlink the link
-entry itself. Do not resolve the path before unlinking and do not use recursive
-removal. Verify the Claude path is absent, then persist completion before
-advancing to the next link.
-
-The current research fixture observes 21 eligible links and four absent
-projections among 25 Matt identities. Those counts are dated evidence, not an
-execution constant; the refreshed catalog-identified set controls the run.
-
-Completion: every eligible Claude projection is absent, every ineligible entry
-was preserved or stopped the run, the projector remains catalog-driven, and all
-25 canonical Agent Skills entries remain byte-, type-, link-, and
-metadata-equivalent to capture.
-
-### 4. Install the official Matt plugin when absent
+### 3. Install the official Matt plugin when absent
 
 Compare the captured plugin installation surface. If the official plugin is
 absent, run the locked install operation for
@@ -246,18 +407,57 @@ reinstalls a pre-existing native-rolling artifact.
 Completion: the reviewed official plugin route is installed once, or the
 pre-existing reviewed installation remains untouched. The installation
 checkpoint's expected post-state includes every native surface changed by the
-install command.
+install command. The projector remains catalog-driven and every candidate
+Claude link still equals captured state.
 
-### 5. Enable the Matt plugin
+### 4. Enable and verify the official Matt winner
 
 Compare against captured state or the installation checkpoint's expected state,
 whichever is newer. Enable the plugin only when installed and disabled. If
 installation already enabled it, or it was enabled before migration, record a
-verified no-op. Verify all 25 exported skills are active as one inseparable
-activation group; this Claude route has no supported per-skill suppression.
+verified no-op. Then obtain a fresh supported-runtime observation and verify all
+25 exported skills are active as one inseparable activation group; this Claude
+route has no supported per-skill suppression. The active
+`equipment_identities` must equal the resolved preferred activation group.
+Disabled `controlled_equipment_identities` remain control targets and do not
+count as active winner coverage.
 
-Completion: the official Matt plugin is enabled, and a completed enablement
-checkpoint exists only when this step changed enablement.
+Completion: the official Matt plugin is installed and enabled, its complete
+active activation group is freshly verified against the authorized plan, and a
+completed enablement checkpoint exists only when this step changed enablement.
+No losing projection has been removed.
+
+### 5. Remove only identified Matt projections
+
+Every removal action depends on the completed winner-verification prerequisite
+from step 4. The executor stops without unlinking anything if the official Matt
+activation group is incomplete, stale, or no longer enabled.
+
+Iterate the resolved Matt equipment identities in canonical order. For each
+`~/.claude/skills/<name>` candidate:
+
+- an absent captured entry is a verified no-op;
+- a captured symlink is eligible only when its exact link text, target or
+  broken state, catalog identity, route, and provenance prove it is the
+  catalog-owned standalone projection for that identity; and
+- a regular file, directory, unknown-provenance link, or link to an unexpected
+  target is fatal drift and is not removed.
+
+For each eligible link, reverify the winner prerequisite and its canonical
+Agent Skills entry, persist a prepared checkpoint, compare the link with
+captured state, and unlink the link entry itself. Do not resolve the path before
+unlinking and do not use recursive removal. Verify the Claude path is absent,
+then persist completion before advancing to the next link.
+
+The current research fixture observes 21 eligible links and four absent
+projections among 25 Matt identities. Those counts are dated evidence, not an
+execution constant; the refreshed catalog-identified set controls the run.
+
+Completion: every eligible Claude projection is absent, every ineligible entry
+was preserved or stopped the run, the verified official Matt activation group
+remains active, the projector remains catalog-driven, and all 25 canonical
+Agent Skills entries remain byte-, type-, link-, and metadata-equivalent to
+capture.
 
 ### 6. Reconcile MCP selections component by component
 
@@ -326,27 +526,46 @@ recovery procedure.
 ## Checkpoints and idempotence
 
 One checkpoint binds a single adapter action and every surface that action can
-change. It records the run and action identity, deterministic ordinal, four
-plan bindings, adapter and capability identity, captured pre-state reference,
-expected post-state, compensation operation, attempt receipts, and phase.
+change. It records the complete `CHK-10` tuple: run and candidate identities;
+installed-implementation manifest digest; catalog, lock, plan, capability-set,
+and sealed captured-state identity/digest bindings; the route's closed
+capability and manager-evidence binding; action identity and deterministic
+ordinal; route and operation; captured pre-state and expected post-state
+digests; and compensation operation. It additionally records attempt receipts,
+phase, and durable invocation intent (`not_started` or `started`).
 
 The action state machine is:
 
 ```text
 prepared -> completed -> compensating -> compensated
+    |          |              |
+    +----------+--------------+-> compensation_blocked
 ```
 
-Persist and fsync `prepared` before the adapter runs. Persist and fsync
-`completed` only after post-state verification. Before rollback, persist and
-fsync `compensating`; after restoration and verification, persist and fsync
-`compensated`. Records are append-only state transitions or compare-and-swap
-replacements; an older writer cannot overwrite a newer phase.
+Persist and fsync `prepared` with `invocation_state: not_started`, then compare
+current state with the captured pre-state. Immediately before the adapter call,
+persist and fsync `invocation_state: started`; failure to persist that intent
+forbids the call. Persist and fsync `completed` only after post-state
+verification. Before rollback, persist and fsync `compensating`; after
+restoration and verification, persist and fsync `compensated`. Records are
+append-only state transitions or compare-and-swap replacements; an older writer
+cannot overwrite a newer phase or invocation intent.
+
+`compensation_blocked` is terminal for automatic recovery. It records an exact
+compare-before-restore or ambiguous-effect mismatch, preserves the observed
+external state, durably moves the run to `needs_operator`, and prevents partial
+rollback from being labeled recovered. Only a separately authorized operator
+disposition can supersede it; the existing checkpoint remains historical
+evidence.
 
 Recover a surviving `prepared` checkpoint by audit:
 
-- observed pre-state means the action did not take effect and can be retried;
-- observed expected post-state means it took effect, so record completion
-  without replay; and
+- observed pre-state means the action did not take effect and can be retried
+  only through a newly persisted invocation intent;
+- `started` plus observed expected post-state means the attempted invocation
+  took effect, so record completion without replay;
+- `not_started` plus observed expected post-state is concurrent target-valued
+  drift, not this run's effect; preserve it and stop; and
 - any other observation is partial or concurrent drift, which is preserved and
   requires operator recovery.
 
@@ -356,13 +575,16 @@ the restore guard passes; any other state is preserved and stops recovery.
 
 A completed run whose live state still equals its expected state is a no-op on
 rerun. A compensated run is historical evidence, not a license to replay; a new
-apply requires a fresh capture and exact-plan authorization.
+apply requires a fresh sealed capture and authorization naming the complete
+candidate implementation identity/manifest digest, catalog, lock, plan,
+plan-action-set, capability-set, and captured-state identity/digest tuple.
 
 ## Step-level compensation
 
-Rollback processes completed actions in reverse ordinal order. An ambiguous
-prepared or compensating action is audited and classified before rollback
-continues.
+Rollback processes completed actions in reverse topological order. The ordinal
+is the sealed result of the validated dependency graph, not an independently
+sorted execution rule. An ambiguous prepared or compensating action is audited
+and classified before rollback continues.
 
 - **Install the catalog-driven projector.** No-op when the exact implementation
   digest and control state are already present. Compensation restores captured
@@ -375,9 +597,11 @@ continues.
   through the link. The guard requires the Claude path to remain absent and its
   canonical Agent Skills entry to equal capture.
 - **Install the Matt plugin.** No-op when the reviewed route was already
-  installed. Compensation uninstalls only when installation was absent before
-  migration. The guard covers plugin installation and every install-coupled
-  surface in this action's expected post-state.
+  installed. Compensation may uninstall only the instance this action installed
+  from confirmed captured absence. The guard covers plugin installation and
+  every install-coupled surface in this action's expected post-state. This is a
+  narrow inverse for the just-created instance, not general native-plugin
+  removal.
 - **Enable the Matt plugin.** No-op when it was already enabled or installation
   coupled the desired enablement. Compensation restores captured enablement and
   retains a pre-existing plugin. The guard requires enablement to still equal
@@ -391,13 +615,17 @@ continues.
   standalone suppression entry. Every owned key and affected activation group
   must still equal this action's expected post-state.
 
-If the Matt plugin was absent initially, reverse enablement first when it was a
-separate action, then uninstall it. If installation itself enabled the plugin,
-the installation checkpoint owns both surfaces and uninstall is its one
-compensation. If the plugin existed initially, rollback never uninstalls it and
-restores its exact prior enablement. A native-rolling route never claims an
-exact old artifact restore; this migration avoids changing an existing
-artifact so rollback needs only presence and enablement restoration.
+If the Matt plugin was confirmed absent initially, restore and verify every
+Claude link retired after winner verification first. Then reverse enablement
+when it was a separate action and uninstall the instance created by this run
+only while its exact restore guard passes. If installation itself enabled the
+plugin, the installation checkpoint owns both surfaces and uninstall is its one
+compensation after those links are restored. If the plugin existed initially,
+rollback never uninstalls it and restores its exact prior enablement. Restore
+the legacy projector only after links and native winner state equal captured
+pre-state. A native-rolling route never claims an exact old artifact restore. It
+cannot restore a prior artifact, and it has no general removal guarantee beyond
+the guarded inverse of an install that began from confirmed absence.
 
 Canonical Agent Skills entries have no compensation because they have no
 authorized mutation. Their mismatch is a hard stop, not an invitation to repair
@@ -434,7 +662,8 @@ forward completion or compensation is idempotent.
 - **After projector replacement:** Restore every captured surface and restore
   the projector last.
 - **After each individual Claude-link removal:** Restore that link and every
-  earlier link exactly. Canonical Agent Skills entries never change.
+  earlier link exactly before disabling or uninstalling the winner; restore the
+  projector last. Canonical Agent Skills entries never change.
 - **After plugin installation:** Uninstall only when initially absent; retain a
   pre-existing installation.
 - **After plugin enablement:** Restore prior enablement without uninstalling a
@@ -465,15 +694,17 @@ output for seeded secret values.
 
 1. Stop new applies and retain the exclusive lease. Do not rerun native manager
    commands, chezmoi projection hooks, or ad hoc link repair.
-2. Locate the newest nonterminal run and verify its catalog, lock, plan, and
-   capability digests against the authorized receipt. A mismatch requires a
-   new read-only investigation, not checkpoint editing.
+2. Locate the newest nonterminal run and verify its candidate implementation
+   identity/manifest digest, catalog, lock, plan, plan-action-set,
+   capability-set, and captured-state identity/digest plus every route
+   capability binding against the authorized receipt. A mismatch requires a new
+   read-only investigation, not checkpoint editing.
 3. Audit every `prepared` and `compensating` checkpoint from supported surfaces.
    Record whether each surface equals captured pre-state, the action's expected
    post-state, or neither.
 4. Resume forward only when the exact authorized plan remains valid, every
    ambiguous action is classified, and all next-action compare guards pass.
-   Otherwise compensate completed actions in reverse order.
+   Otherwise compensate completed actions in reverse topological order.
 5. At a compare-before-restore mismatch, preserve the external state and stop.
    Report the exact surface, expected secret-free state, observation source,
    and checkpoint. Obtain an explicit decision to retain the external change

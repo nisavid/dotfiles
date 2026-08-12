@@ -1,9 +1,9 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://nisavid.github.io/dotfiles/agent-equipment/adapter-contract-v1.schema.json",
   "title": "Global agent equipment adapter contract v1",
   "oneOf": [
-    {"$ref": "#/$defs/capabilityEnvelope"},
+    {"$ref": "#/$defs/applySequenceEnvelope"},
+    {"$ref": "#/$defs/capabilityDiscoveryEnvelope"},
     {"$ref": "#/$defs/observeRequestEnvelope"},
     {"$ref": "#/$defs/runtimeObservationEnvelope"},
     {"$ref": "#/$defs/plannedActionEnvelope"},
@@ -12,6 +12,7 @@
   "$defs": {
     "nonEmptyString": {"type": "string", "minLength": 1},
     "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "actionIdentity": {"type": "string", "pattern": "^action:sha256:[0-9a-f]{64}$"},
     "nullableDigest": {
       "oneOf": [
         {"$ref": "#/$defs/digest"},
@@ -39,6 +40,14 @@
     "equipmentSet": {
       "type": "array",
       "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^(skill|plugin|mcp|hook|other):[a-z0-9][a-z0-9._/-]*$"
+      }
+    },
+    "controlledEquipmentSet": {
+      "type": "array",
       "uniqueItems": true,
       "items": {
         "type": "string",
@@ -122,6 +131,125 @@
             "kind": {"const": "direct_mcp"},
             "transport": {"enum": ["stdio", "http"]},
             "overlay_family": {"enum": ["claude_json", "codex_toml", "cursor_json"]}
+          }
+        }
+      ]
+    },
+    "capabilityProviderBinding": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "provider_match": {
+              "type": "object",
+              "properties": {"kind": {"const": "standalone_skill"}}
+            },
+            "manager_version_evidence": {
+              "type": "object",
+              "properties": {"manager": {"const": "standalone_skills"}}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "properties": {
+            "harness": {"const": "claude"},
+            "provider_match": {
+              "type": "object",
+              "properties": {
+                "kind": {"const": "native_plugin"},
+                "manager": {"const": "claude"}
+              }
+            },
+            "manager_version_evidence": {
+              "type": "object",
+              "properties": {"manager": {"const": "claude"}}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "properties": {
+            "harness": {"const": "codex"},
+            "provider_match": {
+              "type": "object",
+              "properties": {
+                "kind": {"const": "native_plugin"},
+                "manager": {"const": "codex"}
+              }
+            },
+            "manager_version_evidence": {
+              "type": "object",
+              "properties": {"manager": {"const": "codex"}}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "properties": {
+            "harness": {"const": "cursor"},
+            "provider_match": {
+              "type": "object",
+              "properties": {
+                "kind": {"const": "native_plugin"},
+                "manager": {"const": "cursor"}
+              }
+            },
+            "manager_version_evidence": {
+              "type": "object",
+              "properties": {"manager": {"const": "cursor"}}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "properties": {
+            "harness": {"const": "claude"},
+            "provider_match": {
+              "type": "object",
+              "properties": {
+                "kind": {"const": "direct_mcp"},
+                "overlay_family": {"const": "claude_json"}
+              }
+            },
+            "manager_version_evidence": {
+              "type": "object",
+              "properties": {"manager": {"const": "direct_mcp"}}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "properties": {
+            "harness": {"const": "codex"},
+            "provider_match": {
+              "type": "object",
+              "properties": {
+                "kind": {"const": "direct_mcp"},
+                "overlay_family": {"const": "codex_toml"}
+              }
+            },
+            "manager_version_evidence": {
+              "type": "object",
+              "properties": {"manager": {"const": "direct_mcp"}}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "properties": {
+            "harness": {"const": "cursor"},
+            "provider_match": {
+              "type": "object",
+              "properties": {
+                "kind": {"const": "direct_mcp"},
+                "overlay_family": {"const": "cursor_json"}
+              }
+            },
+            "manager_version_evidence": {
+              "type": "object",
+              "properties": {"manager": {"const": "direct_mcp"}}
+            }
           }
         }
       ]
@@ -294,7 +422,7 @@
         "runtime_observation": {"const": "adapter-contract-v1"},
         "planned_action": {"const": "adapter-contract-v1"},
         "mutation_receipt": {"const": "adapter-contract-v1"},
-        "captured_state": {"const": "captured-state/v1"}
+        "captured_state": {"const": "agent-equipment-captured-state/v1"}
       }
     },
     "capabilityRecord": {
@@ -316,14 +444,125 @@
         "record_versions": {"$ref": "#/$defs/recordVersions"},
         "automated_control_owners": {"const": ["reconciler_owned"]},
         "capability_digest": {"$ref": "#/$defs/digest"}
-      }
+      },
+      "allOf": [
+        {"$ref": "#/$defs/capabilityProviderBinding"},
+        {
+          "if": {
+            "properties": {
+              "operation_support": {
+                "type": "object",
+                "required": ["suppress_native_update"],
+                "properties": {
+                  "suppress_native_update": {
+                    "type": "object",
+                    "required": ["mode"],
+                    "properties": {"mode": {"const": "automated"}}
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "native_update_support": {
+                "type": "object",
+                "properties": {
+                  "suppression": {"$ref": "#/$defs/automatedMutation"}
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "operation_support": {
+                "type": "object",
+                "required": ["suppress_native_update"],
+                "properties": {
+                  "suppress_native_update": {
+                    "type": "object",
+                    "required": ["mode"],
+                    "properties": {"mode": {"const": "inspect_only"}}
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "native_update_support": {
+                "type": "object",
+                "properties": {
+                  "suppression": {"$ref": "#/$defs/inspectOnly"}
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "operation_support": {
+                "type": "object",
+                "required": ["suppress_native_update"],
+                "properties": {
+                  "suppress_native_update": {
+                    "type": "object",
+                    "required": ["mode"],
+                    "properties": {"mode": {"const": "operator_action"}}
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "native_update_support": {
+                "type": "object",
+                "properties": {
+                  "suppression": {"$ref": "#/$defs/operatorAction"}
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "operation_support": {
+                "type": "object",
+                "required": ["suppress_native_update"],
+                "properties": {
+                  "suppress_native_update": {
+                    "type": "object",
+                    "required": ["mode"],
+                    "properties": {"mode": {"const": "unavailable"}}
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "native_update_support": {
+                "type": "object",
+                "properties": {
+                  "suppression": {"$ref": "#/$defs/unavailable"}
+                }
+              }
+            }
+          }
+        }
+      ]
     },
     "routeRecord": {
       "$ref": "catalog-v1.schema.json#/$defs/route"
     },
     "requestBindings": {
       "type": "object",
-      "required": ["contract_version", "request_identity", "correlation_identity", "command", "purpose", "candidate_identity", "catalog_digest", "lock_digest", "plan_digest", "capability_identity", "capability_digest", "manager_version_evidence_digest", "harness", "route_identity", "route_digest", "route_record", "equipment_identities", "activation_group", "surface_scope", "secret_references", "expected_state_digest"],
+      "required": ["contract_version", "request_identity", "correlation_identity", "command", "purpose", "candidate_identity", "implementation_manifest_digest", "catalog_digest", "lock_digest", "plan_digest", "capability_identity", "capability_digest", "manager_version_evidence_digest", "harness", "route_identity", "route_digest", "route_record", "equipment_identities", "controlled_equipment_identities", "activation_group", "surface_scope", "secret_references", "expected_state_digest"],
       "additionalProperties": false,
       "properties": {
         "contract_version": {"const": "adapter-contract-v1"},
@@ -332,6 +571,7 @@
         "command": {"enum": ["audit", "import", "update", "adopt", "apply"]},
         "purpose": {"enum": ["inventory", "capture_pre_state", "verify_post_state", "recovery", "verify_compensation"]},
         "candidate_identity": {"$ref": "#/$defs/nonEmptyString"},
+        "implementation_manifest_digest": {"$ref": "#/$defs/digest"},
         "catalog_digest": {"$ref": "#/$defs/digest"},
         "lock_digest": {"$ref": "#/$defs/digest"},
         "plan_digest": {"$ref": "#/$defs/nullableDigest"},
@@ -343,6 +583,7 @@
         "route_digest": {"$ref": "#/$defs/digest"},
         "route_record": {"$ref": "#/$defs/routeRecord"},
         "equipment_identities": {"$ref": "#/$defs/equipmentSet"},
+        "controlled_equipment_identities": {"$ref": "#/$defs/controlledEquipmentSet"},
         "activation_group": {"type": "string", "pattern": "^activation:[a-z0-9][a-z0-9._/-]*$"},
         "surface_scope": {"$ref": "#/$defs/stringSet"},
         "secret_references": {
@@ -467,12 +708,11 @@
         "observation_source": {"oneOf": [{"$ref": "#/$defs/nonEmptyString"}, {"type": "null"}]}
       }
     },
-    "observationSuccess": {
+    "normalizedState": {
       "type": "object",
-      "required": ["status", "route_presence", "enablement", "configuration", "component_states", "observed_version", "native_update_control", "native_update_suppression_state", "manager_drift", "surface_evidence", "captured_state", "state_digest"],
+      "required": ["route_presence", "enablement", "configuration", "component_states", "observed_version", "native_update_control", "native_update_suppression_state", "manager_drift"],
       "additionalProperties": false,
       "properties": {
-        "status": {"const": "ok"},
         "route_presence": {"enum": ["present", "absent", "partial", "unknown"]},
         "enablement": {"enum": ["enabled", "disabled", "mixed", "not_applicable", "unknown"]},
         "configuration": {"$ref": "#/$defs/configurationObservation"},
@@ -492,29 +732,7 @@
         "observed_version": {"$ref": "#/$defs/observedVersion"},
         "native_update_control": {"enum": ["unknown", "suppressible", "unsuppressible", "not_applicable"]},
         "native_update_suppression_state": {"enum": ["enabled", "disabled", "unavailable", "unknown", "not_applicable"]},
-        "manager_drift": {"$ref": "#/$defs/managerDrift"},
-        "surface_evidence": {"type": "array", "items": {"$ref": "#/$defs/evidenceReference"}},
-        "captured_state": {
-          "oneOf": [
-            {
-              "type": "object",
-              "required": ["status", "identity", "digest"],
-              "additionalProperties": false,
-              "properties": {
-                "status": {"const": "captured"},
-                "identity": {"$ref": "#/$defs/nonEmptyString"},
-                "digest": {"$ref": "#/$defs/digest"}
-              }
-            },
-            {
-              "type": "object",
-              "required": ["status"],
-              "additionalProperties": false,
-              "properties": {"status": {"const": "not_applicable"}}
-            }
-          ]
-        },
-        "state_digest": {"$ref": "#/$defs/digest"}
+        "manager_drift": {"$ref": "#/$defs/managerDrift"}
       },
       "allOf": [
         {
@@ -557,15 +775,55 @@
         }
       ]
     },
+    "observationSuccess": {
+      "type": "object",
+      "required": ["status", "normalized_state", "surface_evidence", "captured_state", "state_digest"],
+      "additionalProperties": false,
+      "properties": {
+        "status": {"const": "ok"},
+        "normalized_state": {"$ref": "#/$defs/normalizedState"},
+        "surface_evidence": {
+          "type": "array",
+          "items": {
+            "allOf": [
+              {"$ref": "#/$defs/evidenceReference"},
+              {"properties": {"kind": {"enum": ["surface", "manager"]}}}
+            ]
+          }
+        },
+        "captured_state": {
+          "oneOf": [
+            {
+              "type": "object",
+              "required": ["status", "identity", "digest"],
+              "additionalProperties": false,
+              "properties": {
+                "status": {"const": "captured"},
+                "identity": {"$ref": "#/$defs/nonEmptyString"},
+                "digest": {"$ref": "#/$defs/digest"}
+              }
+            },
+            {
+              "type": "object",
+              "required": ["status"],
+              "additionalProperties": false,
+              "properties": {"status": {"const": "not_applicable"}}
+            }
+          ]
+        },
+        "state_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
     "runtimeObservation": {
       "type": "object",
-      "required": ["contract_version", "request_identity", "correlation_identity", "candidate_identity", "catalog_digest", "lock_digest", "plan_digest", "capability_identity", "capability_digest", "manager_version_evidence_digest", "harness", "route_identity", "route_digest", "control_owner", "equipment_identities", "activation_group", "surface_scope", "observed_at", "result"],
+      "required": ["contract_version", "request_identity", "correlation_identity", "candidate_identity", "implementation_manifest_digest", "catalog_digest", "lock_digest", "plan_digest", "capability_identity", "capability_digest", "manager_version_evidence_digest", "harness", "route_identity", "route_digest", "control_owner", "equipment_identities", "controlled_equipment_identities", "activation_group", "surface_scope", "observed_at", "result"],
       "additionalProperties": false,
       "properties": {
         "contract_version": {"const": "adapter-contract-v1"},
         "request_identity": {"$ref": "#/$defs/nonEmptyString"},
         "correlation_identity": {"$ref": "#/$defs/nonEmptyString"},
         "candidate_identity": {"$ref": "#/$defs/nonEmptyString"},
+        "implementation_manifest_digest": {"$ref": "#/$defs/digest"},
         "catalog_digest": {"$ref": "#/$defs/digest"},
         "lock_digest": {"$ref": "#/$defs/digest"},
         "plan_digest": {"$ref": "#/$defs/nullableDigest"},
@@ -577,6 +835,7 @@
         "route_digest": {"$ref": "#/$defs/digest"},
         "control_owner": {"$ref": "#/$defs/controlOwner"},
         "equipment_identities": {"$ref": "#/$defs/equipmentSet"},
+        "controlled_equipment_identities": {"$ref": "#/$defs/controlledEquipmentSet"},
         "activation_group": {"type": "string", "pattern": "^activation:[a-z0-9][a-z0-9._/-]*$"},
         "surface_scope": {"$ref": "#/$defs/stringSet"},
         "observed_at": {"type": "string", "format": "date-time"},
@@ -585,9 +844,11 @@
     },
     "preconditions": {
       "type": "object",
-      "required": ["catalog_digest", "lock_digest", "plan_digest", "route_digest", "capability_digest", "manager_version_evidence_digest", "adapter_identity", "adapter_version", "control_owner", "activation_group", "surface_scope", "prepared_checkpoint_required", "compare_before_mutate"],
+      "required": ["candidate_identity", "implementation_manifest_digest", "catalog_digest", "lock_digest", "plan_digest", "route_digest", "capability_digest", "manager_version_evidence_digest", "adapter_identity", "adapter_version", "control_owner", "activation_group", "surface_scope", "prepared_checkpoint_required", "compare_before_mutate"],
       "additionalProperties": false,
       "properties": {
+        "candidate_identity": {"$ref": "#/$defs/nonEmptyString"},
+        "implementation_manifest_digest": {"$ref": "#/$defs/digest"},
         "catalog_digest": {"$ref": "#/$defs/digest"},
         "lock_digest": {"$ref": "#/$defs/digest"},
         "plan_digest": {"$ref": "#/$defs/digest"},
@@ -605,14 +866,15 @@
     },
     "plannedAction": {
       "type": "object",
-      "required": ["contract_version", "action_identity", "correlation_identity", "ordinal", "candidate_identity", "catalog_digest", "lock_digest", "plan_digest", "capability_identity", "capability_digest", "manager_version_evidence_digest", "adapter_identity", "adapter_version", "harness", "route_identity", "route_digest", "route_record", "equipment_identities", "activation_group", "surface_scope", "operation", "operation_disposition", "desired_state", "desired_state_digest", "secret_references", "preconditions", "compensation"],
+      "required": ["contract_version", "action_identity", "correlation_identity", "ordinal", "candidate_identity", "implementation_manifest_digest", "catalog_digest", "lock_digest", "plan_digest", "capability_identity", "capability_digest", "manager_version_evidence_digest", "adapter_identity", "adapter_version", "harness", "route_identity", "route_digest", "route_record", "equipment_identities", "controlled_equipment_identities", "activation_group", "surface_scope", "operation", "operation_disposition", "desired_state", "desired_state_digest", "secret_references", "preconditions", "compensation"],
       "additionalProperties": false,
       "properties": {
         "contract_version": {"const": "adapter-contract-v1"},
-        "action_identity": {"$ref": "#/$defs/nonEmptyString"},
+        "action_identity": {"$ref": "#/$defs/actionIdentity"},
         "correlation_identity": {"$ref": "#/$defs/nonEmptyString"},
         "ordinal": {"type": "integer", "minimum": 0},
         "candidate_identity": {"$ref": "#/$defs/nonEmptyString"},
+        "implementation_manifest_digest": {"$ref": "#/$defs/digest"},
         "catalog_digest": {"$ref": "#/$defs/digest"},
         "lock_digest": {"$ref": "#/$defs/digest"},
         "plan_digest": {"$ref": "#/$defs/digest"},
@@ -626,6 +888,7 @@
         "route_digest": {"$ref": "#/$defs/digest"},
         "route_record": {"$ref": "#/$defs/routeRecord"},
         "equipment_identities": {"$ref": "#/$defs/equipmentSet"},
+        "controlled_equipment_identities": {"$ref": "#/$defs/controlledEquipmentSet"},
         "activation_group": {"type": "string", "pattern": "^activation:[a-z0-9][a-z0-9._/-]*$"},
         "surface_scope": {"$ref": "#/$defs/stringSet"},
         "operation": {"$ref": "#/$defs/operation"},
@@ -644,7 +907,7 @@
           "additionalProperties": false,
           "properties": {
             "kind": {"const": "restore_captured_pre_state"},
-            "captured_state_version": {"const": "captured-state/v1"}
+            "captured_state_version": {"const": "agent-equipment-captured-state/v1"}
           }
         }
       },
@@ -720,7 +983,15 @@
         "expected_post_state_digest": {"$ref": "#/$defs/digest"},
         "observed_post_state_digest": {"$ref": "#/$defs/digest"},
         "native_result_digest": {"$ref": "#/$defs/digest"},
-        "surface_evidence": {"type": "array", "items": {"$ref": "#/$defs/evidenceReference"}},
+        "surface_evidence": {
+          "type": "array",
+          "items": {
+            "allOf": [
+              {"$ref": "#/$defs/evidenceReference"},
+              {"properties": {"kind": {"const": "surface"}}}
+            ]
+          }
+        },
         "compensation_evidence": {
           "oneOf": [
             {
@@ -774,16 +1045,17 @@
     },
     "mutationReceipt": {
       "type": "object",
-      "required": ["contract_version", "receipt_identity", "attempt_identity", "action_identity", "correlation_identity", "ordinal", "candidate_identity", "catalog_digest", "lock_digest", "plan_digest", "capability_identity", "capability_digest", "manager_version_evidence_digest", "adapter_identity", "adapter_version", "harness", "route_identity", "route_digest", "control_owner", "equipment_identities", "activation_group", "surface_scope", "operation", "operation_disposition", "secret_references", "phase", "started_at", "finished_at", "prepared_checkpoint_reference", "result"],
+      "required": ["contract_version", "receipt_identity", "attempt_identity", "action_identity", "correlation_identity", "ordinal", "candidate_identity", "implementation_manifest_digest", "catalog_digest", "lock_digest", "plan_digest", "capability_identity", "capability_digest", "manager_version_evidence_digest", "adapter_identity", "adapter_version", "harness", "route_identity", "route_digest", "control_owner", "equipment_identities", "controlled_equipment_identities", "activation_group", "surface_scope", "operation", "operation_disposition", "secret_references", "phase", "started_at", "finished_at", "prepared_checkpoint_reference", "result"],
       "additionalProperties": false,
       "properties": {
         "contract_version": {"const": "adapter-contract-v1"},
         "receipt_identity": {"$ref": "#/$defs/nonEmptyString"},
         "attempt_identity": {"$ref": "#/$defs/nonEmptyString"},
-        "action_identity": {"$ref": "#/$defs/nonEmptyString"},
+        "action_identity": {"$ref": "#/$defs/actionIdentity"},
         "correlation_identity": {"$ref": "#/$defs/nonEmptyString"},
         "ordinal": {"type": "integer", "minimum": 0},
         "candidate_identity": {"$ref": "#/$defs/nonEmptyString"},
+        "implementation_manifest_digest": {"$ref": "#/$defs/digest"},
         "catalog_digest": {"$ref": "#/$defs/digest"},
         "lock_digest": {"$ref": "#/$defs/digest"},
         "plan_digest": {"$ref": "#/$defs/digest"},
@@ -797,6 +1069,7 @@
         "route_digest": {"$ref": "#/$defs/digest"},
         "control_owner": {"const": "reconciler_owned"},
         "equipment_identities": {"$ref": "#/$defs/equipmentSet"},
+        "controlled_equipment_identities": {"$ref": "#/$defs/controlledEquipmentSet"},
         "activation_group": {"type": "string", "pattern": "^activation:[a-z0-9][a-z0-9._/-]*$"},
         "surface_scope": {"$ref": "#/$defs/stringSet"},
         "operation": {"$ref": "#/$defs/operation"},
@@ -865,13 +1138,114 @@
         }
       ]
     },
-    "capabilityEnvelope": {
+    "applyAuthority": {
       "type": "object",
-      "required": ["record_type", "record"],
+      "required": ["contract_version", "command", "purpose", "phase", "request_identity", "action_identity", "correlation_identity", "candidate_identity", "implementation_manifest_digest", "catalog_digest", "lock_digest", "plan_digest", "capability_identity", "capability_digest", "manager_version_evidence_digest", "adapter_identity", "adapter_version", "harness", "route_identity", "route_digest", "equipment_identities", "controlled_equipment_identities", "activation_group", "operation", "read_surface_scope", "write_surface_scope", "selected_component_controls", "captured_state_identity", "captured_state_digest", "captured_pre_state", "captured_pre_state_digest", "expected_pre_state_digest", "expected_post_state", "expected_post_state_digest", "forward_post_state_digest", "prepared_checkpoint_reference"],
       "additionalProperties": false,
       "properties": {
-        "record_type": {"const": "CapabilityRecord"},
-        "record": {"$ref": "#/$defs/capabilityRecord"}
+        "contract_version": {"const": "adapter-contract-v1"},
+        "command": {"const": "apply"},
+        "purpose": {"enum": ["capture_pre_state", "recovery"]},
+        "phase": {"enum": ["apply", "compensate"]},
+        "request_identity": {"$ref": "#/$defs/nonEmptyString"},
+        "action_identity": {"$ref": "#/$defs/actionIdentity"},
+        "correlation_identity": {"$ref": "#/$defs/nonEmptyString"},
+        "candidate_identity": {"$ref": "#/$defs/nonEmptyString"},
+        "implementation_manifest_digest": {"$ref": "#/$defs/digest"},
+        "catalog_digest": {"$ref": "#/$defs/digest"},
+        "lock_digest": {"$ref": "#/$defs/digest"},
+        "plan_digest": {"$ref": "#/$defs/digest"},
+        "capability_identity": {"$ref": "#/$defs/nonEmptyString"},
+        "capability_digest": {"$ref": "#/$defs/digest"},
+        "manager_version_evidence_digest": {"$ref": "#/$defs/digest"},
+        "adapter_identity": {"$ref": "#/$defs/nonEmptyString"},
+        "adapter_version": {"$ref": "#/$defs/nonEmptyString"},
+        "harness": {"$ref": "#/$defs/harness"},
+        "route_identity": {"type": "string", "pattern": "^route:[a-z0-9][a-z0-9._/-]*$"},
+        "route_digest": {"$ref": "#/$defs/digest"},
+        "equipment_identities": {"$ref": "#/$defs/equipmentSet"},
+        "controlled_equipment_identities": {"$ref": "#/$defs/controlledEquipmentSet"},
+        "activation_group": {"type": "string", "pattern": "^activation:[a-z0-9][a-z0-9._/-]*$"},
+        "operation": {"$ref": "#/$defs/operation"},
+        "read_surface_scope": {
+          "allOf": [{"$ref": "#/$defs/stringSet"}, {"minItems": 1}]
+        },
+        "write_surface_scope": {
+          "allOf": [{"$ref": "#/$defs/stringSet"}, {"minItems": 1}]
+        },
+        "selected_component_controls": {
+          "type": "array",
+          "items": {"$ref": "catalog-v1.schema.json#/$defs/componentControl"}
+        },
+        "captured_state_identity": {"$ref": "#/$defs/nonEmptyString"},
+        "captured_state_digest": {"$ref": "#/$defs/digest"},
+        "captured_pre_state": {"$ref": "#/$defs/normalizedState"},
+        "captured_pre_state_digest": {"$ref": "#/$defs/digest"},
+        "expected_pre_state_digest": {"$ref": "#/$defs/digest"},
+        "expected_post_state": {"$ref": "#/$defs/normalizedState"},
+        "expected_post_state_digest": {"$ref": "#/$defs/digest"},
+        "forward_post_state_digest": {"$ref": "#/$defs/digest"},
+        "prepared_checkpoint_reference": {"$ref": "#/$defs/nonEmptyString"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"phase": {"const": "apply"}}},
+          "then": {"properties": {"purpose": {"const": "capture_pre_state"}}}
+        },
+        {
+          "if": {"properties": {"phase": {"const": "compensate"}}},
+          "then": {"properties": {"purpose": {"const": "recovery"}}}
+        }
+      ]
+    },
+    "applySequenceEnvelope": {
+      "type": "object",
+      "required": ["record_type", "sequence"],
+      "additionalProperties": false,
+      "properties": {
+        "record_type": {"const": "ApplySequence"},
+        "sequence": {
+          "type": "object",
+          "required": ["authority", "capability_discovery", "pre_state_request", "pre_state_observation", "planned_action", "mutation_receipt", "post_state_request", "post_state_observation"],
+          "additionalProperties": false,
+          "properties": {
+            "authority": {"$ref": "#/$defs/applyAuthority"},
+            "capability_discovery": {"$ref": "#/$defs/capabilityDiscoveryEnvelope"},
+            "pre_state_request": {"$ref": "#/$defs/observeRequestEnvelope"},
+            "pre_state_observation": {"$ref": "#/$defs/runtimeObservationEnvelope"},
+            "planned_action": {"$ref": "#/$defs/plannedActionEnvelope"},
+            "mutation_receipt": {"$ref": "#/$defs/mutationReceiptEnvelope"},
+            "post_state_request": {"$ref": "#/$defs/observeRequestEnvelope"},
+            "post_state_observation": {"$ref": "#/$defs/runtimeObservationEnvelope"}
+          }
+        }
+      }
+    },
+    "capabilityDiscoveryEnvelope": {
+      "type": "object",
+      "required": ["record_type", "result"],
+      "additionalProperties": false,
+      "properties": {
+        "record_type": {"const": "CapabilityDiscovery"},
+        "result": {
+          "oneOf": [
+            {
+              "type": "object",
+              "required": ["status", "records"],
+              "additionalProperties": false,
+              "properties": {
+                "status": {"const": "ok"},
+                "records": {
+                  "type": "array",
+                  "minItems": 1,
+                  "uniqueItems": true,
+                  "items": {"$ref": "#/$defs/capabilityRecord"}
+                }
+              }
+            },
+            {"$ref": "#/$defs/observationError"}
+          ]
+        }
       }
     },
     "observeRequestEnvelope": {

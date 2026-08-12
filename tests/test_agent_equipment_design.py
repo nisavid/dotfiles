@@ -55,7 +55,7 @@ def valid_retirement(catalog: dict[str, object]) -> dict[str, object]:
         "route": route,
         "surface": {
             "kind": "claude_skill_projection",
-            "skill_name": "legacy-grilling",
+            "skill_name": "grilling",
         },
         "desired_state": "absent",
     }
@@ -78,7 +78,142 @@ def locked_managed_route(lock: dict[str, object]) -> dict[str, object]:
     return locked_record(lock)["provider_selection"]["routes"][0]
 
 
+def bind_managed_distribution_to_direct_mcp(
+    catalog: dict[str, object],
+    lock: dict[str, object],
+    *,
+    package: str,
+    channel: str,
+) -> None:
+    source = {
+        "kind": "native_manager",
+        "manager": "npx",
+        "package": package,
+        "channel": channel,
+    }
+    restore = {
+        "class": "native_rolling",
+        "channel": f"npm:{channel}",
+        "reviewed_baseline": f"{package}@{channel}",
+        "observation_source": "fixture provider selector",
+        "native_update_control": "suppressible",
+    }
+    catalog["distributions"][0]["source"] = deepcopy(source)
+    lock["distributions"][0]["source"] = deepcopy(source)
+    lock["distributions"][0]["restore"] = deepcopy(restore)
+    managed_route(catalog)["restore"] = deepcopy(restore)
+    locked_managed_route(lock)["restore"] = deepcopy(restore)
+
+
+def bind_managed_distribution_to_public_http(
+    catalog: dict[str, object], lock: dict[str, object], *, url: str
+) -> None:
+    source = {
+        "kind": "native_manager",
+        "manager": "http",
+        "package": url,
+        "channel": "static",
+    }
+    restore = {
+        "class": "native_rolling",
+        "channel": "static",
+        "reviewed_baseline": url,
+        "observation_source": "fixture public endpoint",
+        "native_update_control": "unsuppressible",
+    }
+    catalog["distributions"][0]["source"] = deepcopy(source)
+    lock["distributions"][0]["source"] = deepcopy(source)
+    lock["distributions"][0]["restore"] = deepcopy(restore)
+    managed_route(catalog)["restore"] = deepcopy(restore)
+    locked_managed_route(lock)["restore"] = deepcopy(restore)
+
+
+def iter_routes(value: object):
+    if isinstance(value, dict):
+        if {
+            "identity",
+            "distribution",
+            "provider",
+            "component_controls",
+            "operations",
+        }.issubset(value):
+            yield value
+        for item in value.values():
+            yield from iter_routes(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from iter_routes(item)
+
+
 class AgentEquipmentDesignTest(unittest.TestCase):
+    def test_inventory_references_the_canonical_proposal_without_redeclaring_it(
+        self,
+    ) -> None:
+        inventory = json.loads(
+            (ROOT / "docs/agent-equipment/initial-inventory.json").read_text(
+                encoding="utf-8"
+            )
+        )
+
+        proposed_slice = inventory["proposed_managed_slice"]
+        self.assertEqual(
+            proposed_slice["canonical_proposal"],
+            {
+                "catalog": "initial-catalog.proposed.json",
+                "lock": "initial-lock.proposed.json",
+            },
+        )
+        self.assertEqual(
+            set(proposed_slice),
+            {"canonical_proposal", "pending_decisions", "reviewed_inputs", "status"},
+        )
+
+    def test_selected_observed_direct_mcps_are_classified_for_adoption(self) -> None:
+        inventory = json.loads(
+            (ROOT / "docs/agent-equipment/initial-inventory.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        result = DESIGN.load_and_validate(
+            ROOT / "docs/agent-equipment/initial-catalog.proposed.json",
+            ROOT / "docs/agent-equipment/initial-lock.proposed.json",
+        )
+        observed = {
+            (item["harness"], item["name"]): item
+            for item in inventory["direct_mcps"]
+        }
+        selected_observed: dict[tuple[str, str], dict[str, object]] = {}
+        for coverage in result.coverage:
+            selection = coverage.record["provider_selection"]
+            if selection == "no_provider":
+                continue
+            preferred_route = next(
+                route
+                for route in selection["routes"]
+                if route["identity"] == selection["preferred_route"]
+            )
+            provider = preferred_route["provider"]
+            if provider["kind"] != "direct_mcp":
+                continue
+            observation_key = (coverage.harness, provider["server_name"])
+            if observation_key in observed:
+                selected_observed[observation_key] = observed[observation_key]
+
+        self.assertTrue(selected_observed)
+        for observation_key, observation in selected_observed.items():
+            with self.subTest(observation=observation_key):
+                self.assertEqual(
+                    observation["classification"],
+                    "proposed_managed_equipment_slice",
+                )
+                self.assertIn(
+                    observation["ownership_intent"],
+                    {
+                        "propose_catalog_adoption",
+                        "propose_catalog_adoption_for_retirement",
+                    },
+                )
+
     def test_initial_inventory_counts_and_classifications_are_complete(self) -> None:
         inventory = json.loads(
             (ROOT / "docs/agent-equipment/initial-inventory.json").read_text(
@@ -122,11 +257,15 @@ class AgentEquipmentDesignTest(unittest.TestCase):
             len(inventory["plugin_provided_mcps"]),
             counts["plugin_provided_mcp_observations"],
         )
-        self.assertFalse(
-            any(
-                item["decision_state"].startswith("provisional")
-                for item in inventory["proposed_managed_slice"]["mcp_decisions"]
-            )
+        self.assertEqual(
+            {
+                harness: sum(
+                    item["harness"] == harness
+                    for item in inventory["plugin_provided_mcps"]
+                )
+                for harness in ("claude", "codex", "cursor")
+            },
+            counts["plugin_provided_mcp_by_harness"],
         )
         self.assertTrue(
             {
@@ -261,6 +400,55 @@ class AgentEquipmentDesignTest(unittest.TestCase):
             ),
             25,
         )
+
+    def test_disabled_no_provider_component_is_controlled_but_not_active(self) -> None:
+        result = DESIGN.load_and_validate(
+            ROOT / "docs/agent-equipment/initial-catalog.proposed.json",
+            ROOT / "docs/agent-equipment/initial-lock.proposed.json",
+        )
+
+        github_actions = tuple(
+            action
+            for action in result.mutation_plan or ()
+            if action.route_identity == "route:codex/github-plugin"
+        )
+
+        self.assertTrue(github_actions)
+        for action in github_actions:
+            self.assertNotIn("skill:github/yeet", action.equipment_identities)
+            self.assertIn(
+                "skill:github/yeet", action.controlled_equipment_identities
+            )
+
+    def test_enabled_component_control_requires_active_same_route_coverage(self) -> None:
+        catalog = json.loads(
+            (ROOT / "docs/agent-equipment/initial-catalog.proposed.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        lock = json.loads(
+            (ROOT / "docs/agent-equipment/initial-lock.proposed.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        for document in (catalog, lock):
+            for route in iter_routes(document):
+                if route.get("identity") != "route:codex/github-plugin":
+                    continue
+                next(
+                    control
+                    for control in route["component_controls"]
+                    if control["equipment_identity"] == "skill:github/yeet"
+                )["state"] = "enabled"
+        lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
+
+        result = DESIGN.validate_design(catalog, lock)
+
+        self.assertIn(
+            "ENABLED_COMPONENT_CONTROL_COVERAGE_INVALID",
+            {diagnostic.code for diagnostic in result.diagnostics},
+        )
+        self.assertIsNone(result.mutation_plan)
         self.assertEqual(len(catalog["retirements"]), 23)
 
         matt_record = next(
@@ -351,6 +539,38 @@ class AgentEquipmentDesignTest(unittest.TestCase):
             {diagnostic.code for diagnostic in result.diagnostics},
         )
         self.assertIsNone(result.mutation_plan)
+
+    def test_loader_rejects_duplicate_object_members_before_validation(self) -> None:
+        for before, after in (
+            (
+                '"schema_version": "catalog/v1"',
+                '"schema_version": "catalog/v1", "schema_version": "catalog/v1"',
+            ),
+            (
+                '"canonical_root": "agents_skills"',
+                '"canonical_root": "agents_skills", "canonical_root": "agents_skills"',
+            ),
+        ):
+            with self.subTest(member=before):
+                catalog, lock = valid_pair()
+                with TemporaryDirectory() as temporary_directory:
+                    directory = Path(temporary_directory)
+                    catalog_path = directory / "catalog.json"
+                    lock_path = directory / "lock.json"
+                    catalog_path.write_text(
+                        json.dumps(catalog).replace(before, after, 1),
+                        encoding="utf-8",
+                    )
+                    lock_path.write_text(json.dumps(lock), encoding="utf-8")
+
+                    result = DESIGN.load_and_validate(catalog_path, lock_path)
+
+                self.assertIn(
+                    "DOCUMENT_PARSE_INVALID",
+                    {diagnostic.code for diagnostic in result.diagnostics},
+                )
+                self.assertEqual(result.coverage, ())
+                self.assertIsNone(result.mutation_plan)
 
     def test_public_validator_rejects_nested_lock_schema_extensions(self) -> None:
         catalog, lock = valid_pair()
@@ -799,11 +1019,9 @@ class AgentEquipmentDesignTest(unittest.TestCase):
             "kind": "direct_mcp",
             "server_name": "context7",
             "transport": "stdio",
-            "command": "secret-exec",
+            "command": "npx",
             "arguments": [
-                {"literal": "context7"},
-                {"literal": "--"},
-                {"literal": "npx"},
+                {"literal": "-y"},
                 {"literal": "@upstash/context7-mcp@3.2.4"},
                 {
                     "secret_reference": "EXAMPLE_API_KEY",
@@ -812,15 +1030,55 @@ class AgentEquipmentDesignTest(unittest.TestCase):
             ],
         }
         managed_route(catalog)["provider"] = provider
+        managed_route(catalog)["provenance"] = {"owner": "overlay:claude/mcp"}
         managed_route(catalog)["secret_references"] = [
             {"kind": "environment_variable", "name": "EXAMPLE_API_KEY"}
         ]
         locked_managed_route(lock)["provider"] = deepcopy(provider)
+        locked_managed_route(lock)["provenance"] = deepcopy(
+            managed_route(catalog)["provenance"]
+        )
         locked_managed_route(lock)["secret_references"] = deepcopy(
             managed_route(catalog)["secret_references"]
         )
+        bind_managed_distribution_to_direct_mcp(
+            catalog, lock, package="@upstash/context7-mcp", channel="3.2.4"
+        )
         lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
         self.assertEqual(DESIGN.validate_design(catalog, lock).diagnostics, ())
+
+        for invalid_arguments in (
+            [
+                {"secret_profile_reference": "github"},
+                {"literal": "--"},
+                {"literal": "npx"},
+            ],
+            [
+                {"literal": "context7"},
+                {"literal": "--"},
+                {"literal": "npx"},
+            ],
+        ):
+            with self.subTest(arguments=invalid_arguments):
+                invalid_catalog = deepcopy(catalog)
+                invalid_lock = deepcopy(lock)
+                managed_route(invalid_catalog)["provider"]["arguments"] = (
+                    invalid_arguments
+                )
+                locked_managed_route(invalid_lock)["provider"] = deepcopy(
+                    managed_route(invalid_catalog)["provider"]
+                )
+                invalid_lock["catalog_digest"] = DESIGN.canonical_json_sha256(
+                    invalid_catalog
+                )
+
+                result = DESIGN.validate_design(invalid_catalog, invalid_lock)
+
+                self.assertIn(
+                    "PROVIDER_CONFIGURATION_INVALID",
+                    {diagnostic.code for diagnostic in result.diagnostics},
+                )
+                self.assertIsNone(result.mutation_plan)
 
         managed_route(catalog)["provider"]["arguments"][-1][
             "secret_reference"
@@ -835,6 +1093,39 @@ class AgentEquipmentDesignTest(unittest.TestCase):
         self.assertIn("PROVIDER_CONFIGURATION_INVALID", {item.code for item in result.diagnostics})
         self.assertIsNone(result.mutation_plan)
 
+    def test_secret_exec_profile_is_a_typed_consumed_reference(self) -> None:
+        catalog, lock = valid_pair()
+        provider = {
+            "kind": "direct_mcp",
+            "server_name": "context7",
+            "transport": "stdio",
+            "command": "secret-exec",
+            "arguments": [
+                {"secret_profile_reference": "context7"},
+                {"literal": "--"},
+                {"literal": "npx"},
+                {"literal": "@upstash/context7-mcp@3.2.4"},
+            ],
+        }
+        managed_route(catalog)["provider"] = deepcopy(provider)
+        managed_route(catalog)["provenance"] = {"owner": "overlay:claude/mcp"}
+        managed_route(catalog)["secret_references"] = [
+            {"kind": "secret_profile", "name": "context7"}
+        ]
+        locked_managed_route(lock)["provider"] = deepcopy(provider)
+        locked_managed_route(lock)["provenance"] = deepcopy(
+            managed_route(catalog)["provenance"]
+        )
+        locked_managed_route(lock)["secret_references"] = deepcopy(
+            managed_route(catalog)["secret_references"]
+        )
+        bind_managed_distribution_to_direct_mcp(
+            catalog, lock, package="@upstash/context7-mcp", channel="3.2.4"
+        )
+        lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
+
+        self.assertEqual(DESIGN.validate_design(catalog, lock).diagnostics, ())
+
     def test_literal_secret_material_fails_closed_without_echoing_it(self) -> None:
         catalog, lock = valid_pair()
         secret_canary = "Authorization: Bearer secret-canary-value"  # noqa: S105
@@ -846,7 +1137,11 @@ class AgentEquipmentDesignTest(unittest.TestCase):
             "arguments": [{"literal": secret_canary}],
         }
         managed_route(catalog)["provider"] = deepcopy(provider)
+        managed_route(catalog)["provenance"] = {"owner": "overlay:claude/mcp"}
         locked_managed_route(lock)["provider"] = deepcopy(provider)
+        locked_managed_route(lock)["provenance"] = deepcopy(
+            managed_route(catalog)["provenance"]
+        )
         lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
 
         result = DESIGN.validate_design(catalog, lock)
@@ -887,9 +1182,123 @@ class AgentEquipmentDesignTest(unittest.TestCase):
                 )
                 self.assertIsNone(result.mutation_plan)
 
+    def test_provider_without_secret_channel_rejects_unused_references(self) -> None:
+        catalog, lock = valid_pair()
+        route = manual_route(catalog)
+        route["secret_references"] = [
+            {"kind": "secret_profile", "name": "unused"}
+        ]
+        locked_route = locked_record(
+            lock, "plugin:example/matt", "claude"
+        )["provider_selection"]["routes"][0]
+        locked_route["secret_references"] = deepcopy(route["secret_references"])
+        lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
+
+        result = DESIGN.validate_design(catalog, lock)
+
+        self.assertIn(
+            "PROVIDER_CONFIGURATION_INVALID",
+            {diagnostic.code for diagnostic in result.diagnostics},
+        )
+        self.assertIsNone(result.mutation_plan)
+
+    def test_http_mcp_url_rejects_embedded_credentials(self) -> None:
+        catalog, lock = valid_pair()
+        provider = {
+            "kind": "direct_mcp",
+            "server_name": "context7",
+            "transport": "http",
+            "url": "https://alice:secret-canary-value@example.invalid/mcp",
+        }
+        managed_route(catalog)["provider"] = deepcopy(provider)
+        managed_route(catalog)["provenance"] = {"owner": "overlay:claude/mcp"}
+        locked_managed_route(lock)["provider"] = deepcopy(provider)
+        locked_managed_route(lock)["provenance"] = deepcopy(
+            managed_route(catalog)["provenance"]
+        )
+        lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
+
+        result = DESIGN.validate_design(catalog, lock)
+
+        self.assertIn("CATALOG_SCHEMA_INVALID", {d.code for d in result.diagnostics})
+        self.assertIsNone(result.mutation_plan)
+
+    def test_public_https_mcp_endpoint_is_supported_without_secret_references(self) -> None:
+        catalog, lock = valid_pair()
+        provider = {
+            "kind": "direct_mcp",
+            "server_name": "public-docs",
+            "transport": "http",
+            "url": "https://mcp.example.invalid/v1/public-docs",
+        }
+        managed_route(catalog)["provider"] = deepcopy(provider)
+        managed_route(catalog)["provenance"] = {"owner": "overlay:claude/mcp"}
+        locked_managed_route(lock)["provider"] = deepcopy(provider)
+        locked_managed_route(lock)["provenance"] = deepcopy(
+            managed_route(catalog)["provenance"]
+        )
+        bind_managed_distribution_to_public_http(
+            catalog, lock, url=provider["url"]
+        )
+        lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
+
+        self.assertEqual(DESIGN.validate_design(catalog, lock).diagnostics, ())
+
+    def test_http_mcp_url_rejects_credential_path_segments(self) -> None:
+        catalog, lock = valid_pair()
+        provider = {
+            "kind": "direct_mcp",
+            "server_name": "context7",
+            "transport": "http",
+            "url": "https://example.invalid/bearer-secret-canary-value",
+        }
+        managed_route(catalog)["provider"] = deepcopy(provider)
+        locked_managed_route(lock)["provider"] = deepcopy(provider)
+        lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
+
+        result = DESIGN.validate_design(catalog, lock)
+
+        self.assertIn(
+            "PROVIDER_CONFIGURATION_INVALID",
+            {diagnostic.code for diagnostic in result.diagnostics},
+        )
+        self.assertIsNone(result.mutation_plan)
+
+    def test_public_repository_uri_rejects_embedded_credentials(self) -> None:
+        catalog, lock = valid_pair()
+        catalog["distributions"][0]["source"]["repository"] = (
+            "https://alice:secret-canary-value@example.invalid/bundle.git"
+        )
+        lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
+
+        result = DESIGN.validate_design(catalog, lock)
+
+        self.assertIn("CATALOG_SCHEMA_INVALID", {d.code for d in result.diagnostics})
+        self.assertIsNone(result.mutation_plan)
+
+    def test_immutable_artifact_uri_rejects_credential_path_segments(self) -> None:
+        catalog, lock = valid_pair()
+        artifact_ref = (
+            "git+https://example.invalid/bearer-secret-canary-value@v1.0.0"
+        )
+        managed_route(catalog)["restore"]["artifact_ref"] = artifact_ref
+        locked_managed_route(lock)["restore"]["artifact_ref"] = artifact_ref
+        lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
+
+        result = DESIGN.validate_design(catalog, lock)
+
+        self.assertTrue(
+            {"CATALOG_SCHEMA_INVALID", "IMMUTABLE_RESTORE_INVALID"}
+            & {diagnostic.code for diagnostic in result.diagnostics}
+        )
+        self.assertIsNone(result.mutation_plan)
+
     def test_benign_canary_label_is_not_treated_as_secret_material(self) -> None:
         catalog, lock = valid_pair()
-        catalog["distributions"][0]["source"]["ref"] = "canary"
+        managed_route(catalog)["activation_group"] = "activation:example/canary-label"
+        locked_managed_route(lock)["activation_group"] = (
+            "activation:example/canary-label"
+        )
         lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
 
         self.assertEqual(DESIGN.validate_design(catalog, lock).diagnostics, ())
@@ -922,6 +1331,76 @@ class AgentEquipmentDesignTest(unittest.TestCase):
 
                 self.assertIn(expected, {item.code for item in result.diagnostics})
                 self.assertIsNone(result.mutation_plan)
+
+    def test_lock_distribution_source_is_an_exact_catalog_binding(self) -> None:
+        for field, value in (
+            ("repository", "https://other.example.invalid/bundle.git"),
+            ("ref", "v2.0.0"),
+        ):
+            with self.subTest(field=field):
+                catalog, lock = valid_pair()
+                catalog["distributions"][0]["source"][field] = value
+                lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
+
+                result = DESIGN.validate_design(catalog, lock)
+
+                self.assertIn(
+                    "LOCK_DISTRIBUTION_SOURCE_MISMATCH",
+                    {diagnostic.code for diagnostic in result.diagnostics},
+                )
+                self.assertIsNone(result.mutation_plan)
+
+    def test_immutable_distribution_restore_matches_bound_git_source(self) -> None:
+        for field, value in (
+            ("repository", "https://other.example.invalid/bundle.git"),
+            ("ref", "v2.0.0"),
+        ):
+            with self.subTest(field=field):
+                catalog, lock = valid_pair()
+                catalog["distributions"][0]["source"][field] = value
+                lock["distributions"][0]["source"][field] = value
+                lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
+
+                result = DESIGN.validate_design(catalog, lock)
+
+                self.assertIn(
+                    "DISTRIBUTION_SOURCE_RESTORE_MISMATCH",
+                    {diagnostic.code for diagnostic in result.diagnostics},
+                )
+                self.assertIsNone(result.mutation_plan)
+
+    def test_native_distribution_source_matches_selected_provider(self) -> None:
+        catalog = json.loads(
+            (ROOT / "docs/agent-equipment/initial-catalog.proposed.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        lock = json.loads(
+            (ROOT / "docs/agent-equipment/initial-lock.proposed.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        distribution = next(
+            item
+            for item in catalog["distributions"]
+            if item["identity"] == "distribution:context7/direct-mcp"
+        )
+        locked_distribution = next(
+            item
+            for item in lock["distributions"]
+            if item["identity"] == distribution["identity"]
+        )
+        distribution["source"]["package"] = "unrelated-package"
+        locked_distribution["source"] = deepcopy(distribution["source"])
+        lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
+
+        result = DESIGN.validate_design(catalog, lock)
+
+        self.assertIn(
+            "DISTRIBUTION_SOURCE_PROVIDER_MISMATCH",
+            {diagnostic.code for diagnostic in result.diagnostics},
+        )
+        self.assertIsNone(result.mutation_plan)
 
     def test_bare_outcome_and_single_route_shorthand_are_rejected(self) -> None:
         for invalid_record in (
@@ -968,6 +1447,7 @@ class AgentEquipmentDesignTest(unittest.TestCase):
         self.assertIn(
             DESIGN.PlannedOperation(
                 equipment_identities=("skill:example/grilling",),
+                controlled_equipment_identities=(),
                 harness="claude",
                 route_identity="route:example/legacy-claude-projection",
                 activation_group="activation:example/legacy-claude-projection",
@@ -1015,6 +1495,77 @@ class AgentEquipmentDesignTest(unittest.TestCase):
 
                 self.assertIn(expected, {item.code for item in result.diagnostics})
                 self.assertIsNone(result.mutation_plan)
+
+    def test_retirement_locator_must_match_losing_provider_and_equipment(self) -> None:
+        for surface_kind, field in (
+            ("direct_mcp", "server_name"),
+            ("claude_skill_projection", "skill_name"),
+        ):
+            with self.subTest(surface_kind=surface_kind):
+                catalog = json.loads(
+                    (ROOT / "docs/agent-equipment/initial-catalog.proposed.json").read_text(
+                        encoding="utf-8"
+                    )
+                )
+                lock = json.loads(
+                    (ROOT / "docs/agent-equipment/initial-lock.proposed.json").read_text(
+                        encoding="utf-8"
+                    )
+                )
+                catalog_retirement = next(
+                    item
+                    for item in catalog["retirements"]
+                    if item["surface"]["kind"] == surface_kind
+                )
+                lock_retirement = next(
+                    item
+                    for item in lock["retirements"]
+                    if item["identity"] == catalog_retirement["identity"]
+                )
+                catalog_retirement["surface"][field] = "unrelated-owned-key"
+                lock_retirement["surface"][field] = "unrelated-owned-key"
+                lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
+
+                result = DESIGN.validate_design(catalog, lock)
+
+                self.assertIn(
+                    "RETIREMENT_SURFACE_PROVIDER_MISMATCH",
+                    {diagnostic.code for diagnostic in result.diagnostics},
+                )
+                self.assertIsNone(result.mutation_plan)
+
+    def test_plugin_retirement_locator_matches_native_plugin_identity(self) -> None:
+        catalog, lock = valid_pair()
+        route = deepcopy(manual_route(catalog))
+        route["identity"] = "route:example/legacy-native-plugin"
+        route["activation_group"] = "activation:example/legacy-native-plugin"
+        route["control_owner"] = "reconciler_owned"
+        route["operations"]["disable"] = {
+            "disposition": "automated",
+            "compensation": "restore_captured_pre_state",
+        }
+        retirement = {
+            "identity": "retirement:example/legacy-native-plugin",
+            "equipment_identity": "plugin:example/matt",
+            "harness": "claude",
+            "route": route,
+            "surface": {
+                "kind": "plugin",
+                "plugin_id": "unrelated-victim@official",
+            },
+            "desired_state": "disabled",
+        }
+        catalog["retirements"].append(retirement)
+        lock["retirements"].append(deepcopy(retirement))
+        lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
+
+        result = DESIGN.validate_design(catalog, lock)
+
+        self.assertIn(
+            "RETIREMENT_SURFACE_PROVIDER_MISMATCH",
+            {diagnostic.code for diagnostic in result.diagnostics},
+        )
+        self.assertIsNone(result.mutation_plan)
 
     def test_retirement_lock_must_match_catalog_exactly(self) -> None:
         catalog, lock = valid_pair()
@@ -1229,6 +1780,64 @@ class AgentEquipmentDesignTest(unittest.TestCase):
                 )
                 self.assertIsNone(result.mutation_plan)
 
+    def test_provenance_owner_matches_provider_and_harness(self) -> None:
+        catalog, lock = valid_pair()
+        route = manual_route(catalog)
+        route["provenance"]["owner"] = "overlay:cursor/mcp"
+        locked_route = locked_record(
+            lock, "plugin:example/matt", "claude"
+        )["provider_selection"]["routes"][0]
+        locked_route["provenance"]["owner"] = "overlay:cursor/mcp"
+        lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
+
+        result = DESIGN.validate_design(catalog, lock)
+
+        self.assertIn(
+            "PROVENANCE_OWNER_INVALID",
+            {diagnostic.code for diagnostic in result.diagnostics},
+        )
+        self.assertIsNone(result.mutation_plan)
+
+    def test_standalone_provenance_owner_matches_selected_distribution(self) -> None:
+        catalog, lock = valid_pair()
+        managed_route(catalog)["provenance"]["owner"] = (
+            "source:completely-unrelated"
+        )
+        locked_managed_route(lock)["provenance"]["owner"] = (
+            "source:completely-unrelated"
+        )
+        lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
+
+        result = DESIGN.validate_design(catalog, lock)
+
+        self.assertIn(
+            "PROVENANCE_OWNER_INVALID",
+            {diagnostic.code for diagnostic in result.diagnostics},
+        )
+        self.assertIsNone(result.mutation_plan)
+
+    def test_native_plugin_provenance_owner_matches_exact_plugin(self) -> None:
+        catalog, lock = valid_pair()
+        route = manual_route(catalog)
+        route["provenance"]["owner"] = (
+            "manager:claude-plugins/completely-unrelated"
+        )
+        locked_route = locked_record(
+            lock, "plugin:example/matt", "claude"
+        )["provider_selection"]["routes"][0]
+        locked_route["provenance"]["owner"] = (
+            "manager:claude-plugins/completely-unrelated"
+        )
+        lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
+
+        result = DESIGN.validate_design(catalog, lock)
+
+        self.assertIn(
+            "PROVENANCE_OWNER_INVALID",
+            {diagnostic.code for diagnostic in result.diagnostics},
+        )
+        self.assertIsNone(result.mutation_plan)
+
     def test_immutable_restore_requires_revision_reference_digest_and_update_control(self) -> None:
         for missing_field in (
             "revision",
@@ -1281,8 +1890,45 @@ class AgentEquipmentDesignTest(unittest.TestCase):
                 )
                 self.assertIsNone(result.mutation_plan)
 
+    def test_native_rolling_plugin_remove_requires_an_exact_restore_route(self) -> None:
+        catalog, lock = valid_pair()
+        route = manual_route(catalog)
+        route["operations"]["remove"] = {
+            "disposition": "automated",
+            "compensation": "restore_captured_pre_state",
+        }
+        locked_record(lock, "plugin:example/matt", "claude").clear()
+        locked_record(lock, "plugin:example/matt", "claude").update(
+            deepcopy(catalog["equipment"][0]["coverage"]["claude"]["record"])
+        )
+        lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
+
+        result = DESIGN.validate_design(catalog, lock)
+
+        self.assertIn(
+            "NATIVE_ROLLING_PLUGIN_REMOVAL_INVALID",
+            {diagnostic.code for diagnostic in result.diagnostics},
+        )
+        self.assertIsNone(result.mutation_plan)
+
     def test_secret_references_accept_environment_variables_and_opaque_profiles(self) -> None:
         catalog, lock = valid_pair()
+        managed_route(catalog)["provider"] = {
+            "kind": "direct_mcp",
+            "server_name": "example",
+            "transport": "stdio",
+            "command": "secret-exec",
+            "arguments": [
+                {"secret_profile_reference": "context7"},
+                {"literal": "--"},
+                {"literal": "example-mcp@1.0.0"},
+                {
+                    "secret_reference": "EXAMPLE_API_KEY",
+                    "template": "Authorization:Bearer {reference}",
+                },
+            ],
+        }
+        managed_route(catalog)["provenance"] = {"owner": "overlay:claude/mcp"}
         managed_route(catalog)["secret_references"] = [
             {"kind": "environment_variable", "name": "EXAMPLE_API_KEY"},
             {"kind": "secret_profile", "name": "context7"},
@@ -1291,6 +1937,9 @@ class AgentEquipmentDesignTest(unittest.TestCase):
         locked_record(lock).update(deepcopy(
             catalog["coverage_templates"][0]["record"]
         ))
+        bind_managed_distribution_to_direct_mcp(
+            catalog, lock, package="example-mcp", channel="1.0.0"
+        )
         lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
         self.assertEqual(DESIGN.validate_design(catalog, lock).diagnostics, ())
 

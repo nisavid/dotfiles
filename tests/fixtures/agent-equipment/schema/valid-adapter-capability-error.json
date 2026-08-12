@@ -1,0 +1,12 @@
+{
+  "record_type": "CapabilityDiscovery",
+  "result": {
+    "status": "error",
+    "code": "NATIVE_FAILURE",
+    "classification": "native_failure",
+    "message": "The manager version could not be observed.",
+    "retry": "after_audit",
+    "mutation_state": "not_started",
+    "evidence_references": []
+  }
+}
