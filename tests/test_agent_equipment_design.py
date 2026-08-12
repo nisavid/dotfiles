@@ -105,7 +105,7 @@ def bind_managed_distribution_to_direct_mcp(
     locked_managed_route(lock)["restore"] = deepcopy(restore)
 
 
-def bind_managed_distribution_to_public_http(
+def bind_managed_distribution_to_static_https(
     catalog: dict[str, object], lock: dict[str, object], *, url: str
 ) -> None:
     source = {
@@ -118,7 +118,7 @@ def bind_managed_distribution_to_public_http(
         "class": "native_rolling",
         "channel": "static",
         "reviewed_baseline": url,
-        "observation_source": "fixture public endpoint",
+        "observation_source": "fixture static credential-free endpoint",
         "native_update_control": "unsuppressible",
     }
     catalog["distributions"][0]["source"] = deepcopy(source)
@@ -400,6 +400,42 @@ class AgentEquipmentDesignTest(unittest.TestCase):
             ),
             25,
         )
+
+    def test_claude_chrome_devtools_proposal_uses_marketplace_update_control(
+        self,
+    ) -> None:
+        catalog = json.loads(
+            (ROOT / "docs/agent-equipment/initial-catalog.proposed.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        lock = json.loads(
+            (ROOT / "docs/agent-equipment/initial-lock.proposed.json").read_text(
+                encoding="utf-8"
+            )
+        )
+
+        route_groups = tuple(
+            tuple(
+                route
+                for route in iter_routes(document)
+                if route.get("identity")
+                == "route:claude/chrome-devtools-plugin"
+            )
+            for document in (catalog, lock)
+        )
+
+        self.assertEqual(tuple(map(len, route_groups)), (1, 8))
+        for routes in route_groups:
+            for route in routes:
+                self.assertEqual(route["restore"]["class"], "native_rolling")
+                self.assertEqual(
+                    route["restore"]["native_update_control"], "suppressible"
+                )
+                self.assertEqual(
+                    route["operations"]["suppress_native_update"]["disposition"],
+                    "operator_action",
+                )
 
     def test_disabled_no_provider_component_is_controlled_but_not_active(self) -> None:
         result = DESIGN.load_and_validate(
@@ -1223,7 +1259,7 @@ class AgentEquipmentDesignTest(unittest.TestCase):
         self.assertIn("CATALOG_SCHEMA_INVALID", {d.code for d in result.diagnostics})
         self.assertIsNone(result.mutation_plan)
 
-    def test_public_https_mcp_endpoint_is_supported_without_secret_references(self) -> None:
+    def test_static_credential_free_https_mcp_endpoint_is_supported(self) -> None:
         catalog, lock = valid_pair()
         provider = {
             "kind": "direct_mcp",
@@ -1237,32 +1273,102 @@ class AgentEquipmentDesignTest(unittest.TestCase):
         locked_managed_route(lock)["provenance"] = deepcopy(
             managed_route(catalog)["provenance"]
         )
-        bind_managed_distribution_to_public_http(
+        bind_managed_distribution_to_static_https(
             catalog, lock, url=provider["url"]
         )
         lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
 
         self.assertEqual(DESIGN.validate_design(catalog, lock).diagnostics, ())
 
+    def test_static_https_host_policy_allows_private_endpoints_and_rejects_bad_labels(
+        self,
+    ) -> None:
+        for valid_url in (
+            "https://localhost/mcp",
+            "https://127.0.0.1/mcp",
+            "https://10.0.0.1/mcp",
+            "https://169.254.169.254/latest/meta-data",
+            "https://token.example.com/mcp",
+            "https://secret.example.com/mcp",
+        ):
+            with self.subTest(valid_url=valid_url):
+                catalog, lock = valid_pair()
+                provider = {
+                    "kind": "direct_mcp",
+                    "server_name": "fixture",
+                    "transport": "http",
+                    "url": valid_url,
+                }
+                managed_route(catalog)["provider"] = deepcopy(provider)
+                managed_route(catalog)["provenance"] = {"owner": "overlay:claude/mcp"}
+                locked_managed_route(lock)["provider"] = deepcopy(provider)
+                locked_managed_route(lock)["provenance"] = deepcopy(
+                    managed_route(catalog)["provenance"]
+                )
+                bind_managed_distribution_to_static_https(
+                    catalog, lock, url=valid_url
+                )
+                lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
+
+                self.assertEqual(DESIGN.validate_design(catalog, lock).diagnostics, ())
+
+        for invalid_url in (
+            "https://-.example.invalid/mcp",
+            "https://example-.invalid/mcp",
+            "https://example..invalid/mcp",
+        ):
+            with self.subTest(invalid_url=invalid_url):
+                catalog, lock = valid_pair()
+                provider = {
+                    "kind": "direct_mcp",
+                    "server_name": "fixture",
+                    "transport": "http",
+                    "url": invalid_url,
+                }
+                managed_route(catalog)["provider"] = deepcopy(provider)
+                managed_route(catalog)["provenance"] = {"owner": "overlay:claude/mcp"}
+                locked_managed_route(lock)["provider"] = deepcopy(provider)
+                locked_managed_route(lock)["provenance"] = deepcopy(
+                    managed_route(catalog)["provenance"]
+                )
+                bind_managed_distribution_to_static_https(
+                    catalog, lock, url=invalid_url
+                )
+                lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
+
+                result = DESIGN.validate_design(catalog, lock)
+
+                self.assertIn(
+                    "CATALOG_SCHEMA_INVALID",
+                    {diagnostic.code for diagnostic in result.diagnostics},
+                )
+                self.assertIsNone(result.mutation_plan)
+
     def test_http_mcp_url_rejects_credential_path_segments(self) -> None:
-        catalog, lock = valid_pair()
-        provider = {
-            "kind": "direct_mcp",
-            "server_name": "context7",
-            "transport": "http",
-            "url": "https://example.invalid/bearer-secret-canary-value",
-        }
-        managed_route(catalog)["provider"] = deepcopy(provider)
-        locked_managed_route(lock)["provider"] = deepcopy(provider)
-        lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
+        for url in (
+            "https://example.invalid/token/secret-value",
+            "https://example.invalid/Token/secret-value",
+            "https://example.invalid/CLIENT-SECRET/value",
+        ):
+            with self.subTest(url=url):
+                catalog, lock = valid_pair()
+                provider = {
+                    "kind": "direct_mcp",
+                    "server_name": "context7",
+                    "transport": "http",
+                    "url": url,
+                }
+                managed_route(catalog)["provider"] = deepcopy(provider)
+                locked_managed_route(lock)["provider"] = deepcopy(provider)
+                lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
 
-        result = DESIGN.validate_design(catalog, lock)
+                result = DESIGN.validate_design(catalog, lock)
 
-        self.assertIn(
-            "PROVIDER_CONFIGURATION_INVALID",
-            {diagnostic.code for diagnostic in result.diagnostics},
-        )
-        self.assertIsNone(result.mutation_plan)
+                self.assertIn(
+                    "CATALOG_SCHEMA_INVALID",
+                    {diagnostic.code for diagnostic in result.diagnostics},
+                )
+                self.assertIsNone(result.mutation_plan)
 
     def test_public_repository_uri_rejects_embedded_credentials(self) -> None:
         catalog, lock = valid_pair()
@@ -1292,6 +1398,58 @@ class AgentEquipmentDesignTest(unittest.TestCase):
             & {diagnostic.code for diagnostic in result.diagnostics}
         )
         self.assertIsNone(result.mutation_plan)
+
+    def test_immutable_artifact_selector_rejects_unsafe_subpaths(self) -> None:
+        base_ref = "git+https://example.invalid/bundle.git@v1.0.0"
+        for suffix in (
+            "#skills/../../etc",
+            "#skills/./engineering",
+            "#skills//engineering",
+            "#skills/engineering,",
+            "#skills/%2e%2e/%2E%2E/etc",
+            "#skills%2fengineering",
+            "#skills%5cengineering",
+            r"#skills\engineering",
+            "#skills/engineering?ref=other",
+        ):
+            with self.subTest(suffix=suffix):
+                catalog, lock = valid_pair()
+                unsafe_ref = base_ref + suffix
+                managed_route(catalog)["restore"]["artifact_ref"] = unsafe_ref
+                locked_managed_route(lock)["restore"]["artifact_ref"] = unsafe_ref
+                lock["distributions"][0]["restore"]["artifact_ref"] = unsafe_ref
+                lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
+
+                result = DESIGN.validate_design(catalog, lock)
+
+                self.assertTrue(
+                    {"CATALOG_SCHEMA_INVALID", "IMMUTABLE_RESTORE_INVALID"}
+                    & {diagnostic.code for diagnostic in result.diagnostics}
+                )
+                self.assertIsNone(result.mutation_plan)
+
+    def test_git_distribution_source_rejects_unsafe_revisions(self) -> None:
+        for unsafe_ref in (
+            "refs//heads/main",
+            "../other",
+            "--option",
+            "feature..branch",
+            "release.",
+            "release.lock",
+            "refs/heads/name.lock",
+        ):
+            with self.subTest(unsafe_ref=unsafe_ref):
+                catalog, lock = valid_pair()
+                catalog["distributions"][0]["source"]["ref"] = unsafe_ref
+                lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
+
+                result = DESIGN.validate_design(catalog, lock)
+
+                self.assertIn(
+                    "CATALOG_SCHEMA_INVALID",
+                    {diagnostic.code for diagnostic in result.diagnostics},
+                )
+                self.assertIsNone(result.mutation_plan)
 
     def test_benign_canary_label_is_not_treated_as_secret_material(self) -> None:
         catalog, lock = valid_pair()

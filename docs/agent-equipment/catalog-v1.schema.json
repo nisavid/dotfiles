@@ -28,13 +28,17 @@
   "$defs": {
     "nonEmptyString": {"type": "string", "minLength": 1},
     "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "gitRevision": {
+      "type": "string",
+      "pattern": "^(?!.*\\.\\.)(?!.*(?:\\.lock|\\.)(?:/|$))[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*$"
+    },
     "publicGitRepository": {
       "type": "string",
-      "pattern": "^https://[A-Za-z0-9.-]+(?::[0-9]{1,5})?(?:/[A-Za-z0-9._~-]+)+/?$"
+      "pattern": "^https://[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*(?::[0-9]{1,5})?(?:/(?!\\.{1,2}(?:/|$))[A-Za-z0-9._~-]+)+/?$"
     },
     "immutableArtifactRef": {
       "type": "string",
-      "pattern": "^git\\+https://[A-Za-z0-9.-]+(?::[0-9]{1,5})?(?:/[A-Za-z0-9._~-]+)+@[A-Za-z0-9][A-Za-z0-9._/-]*(?:#[A-Za-z0-9][A-Za-z0-9._/-]*(?:,[A-Za-z0-9][A-Za-z0-9._/-]*)*)?$"
+      "pattern": "^git\\+https://[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*(?::[0-9]{1,5})?(?:/(?!\\.{1,2}(?:/|$))[A-Za-z0-9._~-]+)+/?@[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*(?:#(?!\\.{1,2}(?:/|,|$))[A-Za-z0-9._~-]+(?:/(?!\\.{1,2}(?:/|,|$))[A-Za-z0-9._~-]+)*(?:,(?!\\.{1,2}(?:/|,|$))[A-Za-z0-9._~-]+(?:/(?!\\.{1,2}(?:/|,|$))[A-Za-z0-9._~-]+)*)*)?$"
     },
     "harness": {"enum": ["claude", "codex", "cursor"]},
     "equipmentIdentity": {
@@ -54,7 +58,7 @@
           "properties": {
             "kind": {"const": "git"},
             "repository": {"$ref": "#/$defs/publicGitRepository"},
-            "ref": {"$ref": "#/$defs/nonEmptyString"}
+            "ref": {"$ref": "#/$defs/gitRevision"}
           }
         },
         {
@@ -273,7 +277,7 @@
             "transport": {"const": "http"},
             "url": {
               "type": "string",
-              "pattern": "^https://[A-Za-z0-9.-]+(?::[0-9]{1,5})?(?:/[A-Za-z0-9._~-]+)*/?$"
+              "pattern": "^https://[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*(?::[0-9]{1,5})?(?:/(?!\\.{1,2}(?:/|$))(?![Bb][Ee][Aa][Rr][Ee][Rr](?:[-_.=:]|/|$))(?![Aa][Pp][Ii][-_]?[Kk][Ee][Yy](?:[-_.=:]|/|$))(?![Aa][Cc][Cc][Ee][Ss][Ss][-_]?[Tt][Oo][Kk][Ee][Nn](?:[-_.=:]|/|$))(?![Tt][Oo][Kk][Ee][Nn](?:[-_.=:]|/|$))(?![Ss][Ee][Cc][Rr][Ee][Tt](?:[-_.=:]|/|$))(?![Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd](?:[-_.=:]|/|$))(?![Cc][Ll][Ii][Ee][Nn][Tt][-_]?[Ss][Ee][Cc][Rr][Ee][Tt](?:[-_.=:]|/|$))(?![Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll](?:[-_.=:]|/|$))[A-Za-z0-9._~-]+)*/?$"
             }
           }
         }

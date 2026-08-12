@@ -180,9 +180,11 @@ without treating a capture-local record ID as plan authority.
 The provider projection uses the same closed standalone-skill, native-plugin,
 and direct-MCP variants as the catalog. Direct-MCP arguments retain literals,
 environment-reference templates, or opaque secret-profile references, never
-resolved values. Public HTTP MCP endpoints use the same static HTTPS grammar:
-no userinfo, query, fragment, encoded or platform separators, traversal, or
-credential-shaped path segments.
+resolved values. HTTP MCP endpoints use the same static credential-free HTTPS
+grammar: no userinfo, query, fragment, encoded or platform separators,
+traversal, malformed host labels, or credential-shaped path segments. The
+executor applies separately reviewed network-destination policy; the serialized
+grammar does not classify a syntactically valid private endpoint as public.
 
 Recompute `desired_state_digest` over canonical desired-state JSON and
 `action_digest` over the complete canonical projection. Derive
@@ -194,8 +196,10 @@ rule does not derive or validate dependencies. The complete plan owns the
 closed, acyclic dependency graph and binds it into `plan_digest`; the executor
 must validate that graph and every ordinal before emitting this projection.
 Produce `action_set_digest` by canonicalizing exactly `schema_version`,
-`plan_digest`, and that ordered `actions` array, then SHA-256 digesting those
-bytes.
+`candidate_identity`, `implementation_manifest_digest`, `plan_digest`, and
+that ordered `actions` array, then SHA-256 digesting those bytes. The golden
+vectors in `tests/test_agent_equipment_captured_state.py` bind both candidate
+fields, including the empty-action-set case.
 
 The captured manifest stores only `bindings.plan_action_set_digest` and each
 route's closed `planned_actions` identity/digest references. Semantic

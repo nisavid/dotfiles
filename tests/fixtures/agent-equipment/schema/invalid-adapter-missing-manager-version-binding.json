@@ -5,6 +5,7 @@
     "request_identity": "request:observe-missing-manager-binding",
     "correlation_identity": "correlation:candidate-missing-manager-binding",
     "candidate_identity": "candidate:missing-manager-binding",
+    "implementation_manifest_digest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
     "catalog_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "lock_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     "plan_digest": null,
@@ -17,6 +18,7 @@
     "equipment_identities": [
       "plugin:mattpocock/claude"
     ],
+    "controlled_equipment_identities": [],
     "activation_group": "activation:claude/mattpocock-plugin",
     "surface_scope": [
       "surface:route:claude/mattpocock-plugin/plugin:mattpocock/claude"

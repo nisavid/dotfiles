@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
+from pathlib import Path
+import re
 from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass
@@ -26,6 +29,40 @@ MUTATING_OPERATIONS = frozenset(
         "suppress_native_update",
     }
 )
+SCHEMA_DIRECTORY = Path(__file__).resolve().parent.parent / "docs/agent-equipment"
+ADAPTER_SCHEMA_NAME = "adapter-contract-v1.schema.json"
+# This boundary loads only the adapter and catalog schemas; any keyword outside
+# this evaluator's closed set fails as ADAPTER_SCHEMA_INVALID. Captured-state
+# validation is owned by agent_equipment_captured_state.py.
+SUPPORTED_SCHEMA_KEYWORDS = frozenset(
+    {
+        "$defs",
+        "$id",
+        "$ref",
+        "$schema",
+        "additionalProperties",
+        "allOf",
+        "const",
+        "else",
+        "enum",
+        "format",
+        "if",
+        "items",
+        "maxItems",
+        "minItems",
+        "minLength",
+        "minProperties",
+        "minimum",
+        "oneOf",
+        "pattern",
+        "properties",
+        "required",
+        "then",
+        "title",
+        "type",
+        "uniqueItems",
+    }
+)
 
 
 @dataclass(frozen=True, order=True)
@@ -38,6 +75,7 @@ class Diagnostic:
 def canonical_json_sha256(document: Any) -> str:
     payload = json.dumps(
         document,
+        allow_nan=False,
         ensure_ascii=False,
         separators=(",", ":"),
         sort_keys=True,
@@ -65,6 +103,15 @@ def validate_sequence(
     trusted_implementation_manifest_digest: str,
 ) -> tuple[Diagnostic, ...]:
     """Validate one closed ApplySequence against the installed implementation."""
+
+    if not _matches_checked_in_adapter_schema(document):
+        return (
+            Diagnostic(
+                "ADAPTER_SCHEMA_INVALID",
+                "ApplySequence",
+                "The adapter sequence must satisfy the checked-in closed contract.",
+            ),
+        )
 
     diagnostics: list[Diagnostic] = []
     unpacked = _apply_sequence(document, diagnostics)
@@ -224,6 +271,288 @@ def validate_sequence(
     )
 
     return tuple(sorted(set(diagnostics)))
+
+
+def _canonical_json_bytes(value: Any) -> bytes:
+    return json.dumps(
+        value,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+
+
+def _is_json_value(value: Any) -> bool:
+    if value is None or isinstance(value, (str, bool)):
+        return True
+    if isinstance(value, int):
+        return not isinstance(value, bool)
+    if isinstance(value, float):
+        return math.isfinite(value)
+    if isinstance(value, list):
+        return all(_is_json_value(item) for item in value)
+    if isinstance(value, Mapping):
+        return all(
+            isinstance(key, str) and _is_json_value(item)
+            for key, item in value.items()
+        )
+    return False
+
+
+def _json_values_equal(left: Any, right: Any) -> bool:
+    try:
+        return _canonical_json_bytes(left) == _canonical_json_bytes(right)
+    except (TypeError, ValueError):
+        return False
+
+
+def _reject_duplicate_schema_members(
+    pairs: list[tuple[str, Any]],
+) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, member in pairs:
+        if key in value:
+            raise ValueError("duplicate JSON schema object member")
+        value[key] = member
+    return value
+
+
+def _reject_non_json_constant(_: str) -> Any:
+    raise ValueError("non-JSON numeric constant")
+
+
+def _load_local_schema(name: str) -> JsonObject | None:
+    if name not in {ADAPTER_SCHEMA_NAME, "catalog-v1.schema.json"}:
+        return None
+    try:
+        document = json.loads(
+            (SCHEMA_DIRECTORY / name).read_text(encoding="utf-8"),
+            object_pairs_hook=_reject_duplicate_schema_members,
+            parse_constant=_reject_non_json_constant,
+        )
+    except (OSError, UnicodeError, ValueError):
+        return None
+    return document if isinstance(document, Mapping) else None
+
+
+def _schema_target(root_schema: JsonObject, fragment: str) -> JsonObject | None:
+    if not fragment.startswith("#/"):
+        return None
+    target: Any = root_schema
+    for encoded_part in fragment[2:].split("/"):
+        part = encoded_part.replace("~1", "/").replace("~0", "~")
+        if not isinstance(target, Mapping) or part not in target:
+            return None
+        target = target[part]
+    return target if isinstance(target, Mapping) else None
+
+
+def _resolve_schema_reference(
+    reference: str,
+    root_schema: JsonObject,
+) -> tuple[JsonObject, JsonObject] | None:
+    if reference.startswith("#/"):
+        target = _schema_target(root_schema, reference)
+        return (target, root_schema) if target is not None else None
+    name, separator, fragment = reference.partition("#")
+    if separator != "#" or Path(name).name != name:
+        return None
+    referenced_root = _load_local_schema(name)
+    if referenced_root is None:
+        return None
+    target = _schema_target(referenced_root, f"#{fragment}")
+    return (target, referenced_root) if target is not None else None
+
+
+def _schema_uses_only_supported_keywords(schema: JsonObject) -> bool:
+    if set(schema) - SUPPORTED_SCHEMA_KEYWORDS:
+        return False
+    for collection_name in ("$defs", "properties"):
+        collection = schema.get(collection_name)
+        if isinstance(collection, Mapping) and any(
+            not isinstance(child, Mapping)
+            or not _schema_uses_only_supported_keywords(child)
+            for child in collection.values()
+        ):
+            return False
+    for collection_name in ("allOf", "oneOf"):
+        collection = schema.get(collection_name)
+        if isinstance(collection, list) and any(
+            not isinstance(child, Mapping)
+            or not _schema_uses_only_supported_keywords(child)
+            for child in collection
+        ):
+            return False
+    for child_name in ("additionalProperties", "items", "if", "then", "else"):
+        child = schema.get(child_name)
+        if isinstance(child, Mapping) and not _schema_uses_only_supported_keywords(child):
+            return False
+    return True
+
+
+def _is_rfc3339_date_time(value: str) -> bool:
+    if re.fullmatch(
+        r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})",
+        value,
+    ) is None:
+        return False
+    try:
+        datetime.fromisoformat(
+            value.removesuffix("Z") + ("+00:00" if value.endswith("Z") else "")
+        )
+    except ValueError:
+        return False
+    return True
+
+
+def _matches_json_schema(
+    instance: Any,
+    schema: JsonObject,
+    root_schema: JsonObject,
+) -> bool:
+    reference = schema.get("$ref")
+    if isinstance(reference, str):
+        resolved = _resolve_schema_reference(reference, root_schema)
+        if resolved is None:
+            return False
+        target, referenced_root = resolved
+        if not _matches_json_schema(instance, target, referenced_root):
+            return False
+
+    all_of = schema.get("allOf")
+    if isinstance(all_of, list) and not all(
+        isinstance(branch, Mapping)
+        and _matches_json_schema(instance, branch, root_schema)
+        for branch in all_of
+    ):
+        return False
+
+    one_of = schema.get("oneOf")
+    if isinstance(one_of, list) and sum(
+        isinstance(branch, Mapping)
+        and _matches_json_schema(instance, branch, root_schema)
+        for branch in one_of
+    ) != 1:
+        return False
+
+    expected_type = schema.get("type")
+    type_matches = {
+        "object": isinstance(instance, Mapping),
+        "array": isinstance(instance, list),
+        "string": isinstance(instance, str),
+        "boolean": isinstance(instance, bool),
+        "integer": isinstance(instance, int) and not isinstance(instance, bool),
+        "number": isinstance(instance, (int, float))
+        and not isinstance(instance, bool)
+        and (not isinstance(instance, float) or math.isfinite(instance)),
+        "null": instance is None,
+    }
+    if isinstance(expected_type, str) and not type_matches.get(expected_type, False):
+        return False
+
+    if "const" in schema and not _json_values_equal(instance, schema["const"]):
+        return False
+    enum = schema.get("enum")
+    if isinstance(enum, list) and not any(
+        _json_values_equal(instance, allowed) for allowed in enum
+    ):
+        return False
+
+    if isinstance(instance, str):
+        minimum_length = schema.get("minLength")
+        if isinstance(minimum_length, int) and len(instance) < minimum_length:
+            return False
+        pattern = schema.get("pattern")
+        if isinstance(pattern, str):
+            try:
+                if re.search(pattern, instance) is None:
+                    return False
+            except re.error:
+                return False
+        if schema.get("format") == "date-time" and not _is_rfc3339_date_time(instance):
+            return False
+
+    if isinstance(instance, (int, float)) and not isinstance(instance, bool):
+        minimum = schema.get("minimum")
+        if isinstance(minimum, (int, float)) and instance < minimum:
+            return False
+
+    if isinstance(instance, list):
+        minimum_items = schema.get("minItems")
+        maximum_items = schema.get("maxItems")
+        if isinstance(minimum_items, int) and len(instance) < minimum_items:
+            return False
+        if isinstance(maximum_items, int) and len(instance) > maximum_items:
+            return False
+        if schema.get("uniqueItems") is True:
+            try:
+                serialized = [_canonical_json_bytes(item) for item in instance]
+            except (TypeError, ValueError):
+                return False
+            if len(serialized) != len(set(serialized)):
+                return False
+        item_schema = schema.get("items")
+        if isinstance(item_schema, Mapping) and not all(
+            _matches_json_schema(item, item_schema, root_schema) for item in instance
+        ):
+            return False
+
+    if isinstance(instance, Mapping):
+        minimum_properties = schema.get("minProperties")
+        if isinstance(minimum_properties, int) and len(instance) < minimum_properties:
+            return False
+        required = schema.get("required")
+        if isinstance(required, list) and any(name not in instance for name in required):
+            return False
+        properties = schema.get("properties")
+        if isinstance(properties, Mapping):
+            for name, property_schema in properties.items():
+                if (
+                    name in instance
+                    and isinstance(property_schema, Mapping)
+                    and not _matches_json_schema(
+                        instance[name], property_schema, root_schema
+                    )
+                ):
+                    return False
+        additional = schema.get("additionalProperties")
+        declared = set(properties) if isinstance(properties, Mapping) else set()
+        extras = set(instance) - declared
+        if additional is False and extras:
+            return False
+        if isinstance(additional, Mapping) and any(
+            not _matches_json_schema(instance[name], additional, root_schema)
+            for name in extras
+        ):
+            return False
+
+    condition = schema.get("if")
+    if isinstance(condition, Mapping):
+        branch_name = "then" if _matches_json_schema(instance, condition, root_schema) else "else"
+        branch = schema.get(branch_name)
+        if isinstance(branch, Mapping) and not _matches_json_schema(
+            instance, branch, root_schema
+        ):
+            return False
+    return True
+
+
+def _matches_checked_in_adapter_schema(document: Any) -> bool:
+    try:
+        if not _is_json_value(document):
+            return False
+        schema = _load_local_schema(ADAPTER_SCHEMA_NAME)
+        catalog_schema = _load_local_schema("catalog-v1.schema.json")
+        return (
+            schema is not None
+            and catalog_schema is not None
+            and _schema_uses_only_supported_keywords(schema)
+            and _schema_uses_only_supported_keywords(catalog_schema)
+            and _matches_json_schema(document, schema, schema)
+        )
+    except RecursionError:
+        return False
 
 
 def _apply_sequence(
@@ -736,6 +1065,15 @@ def _validate_action_preconditions(
             preconditions.get(field),
             action.get(field),
         )
+    for field in ("prepared_checkpoint_required", "compare_before_mutate"):
+        if preconditions.get(field) is not True:
+            diagnostics.append(
+                Diagnostic(
+                    "MUTATION_PRECONDITION_INVALID",
+                    f"PlannedAction.record.preconditions.{field}",
+                    "Mutation authority requires this safety precondition to be true.",
+                )
+            )
     _expect_equal(
         diagnostics,
         "ECHO_BINDING_MISMATCH",

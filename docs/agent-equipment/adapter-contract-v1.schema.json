@@ -838,7 +838,7 @@
         "controlled_equipment_identities": {"$ref": "#/$defs/controlledEquipmentSet"},
         "activation_group": {"type": "string", "pattern": "^activation:[a-z0-9][a-z0-9._/-]*$"},
         "surface_scope": {"$ref": "#/$defs/stringSet"},
-        "observed_at": {"type": "string", "format": "date-time"},
+        "observed_at": {"type": "string", "format": "date-time", "pattern": "Z$"},
         "result": {"oneOf": [{"$ref": "#/$defs/observationSuccess"}, {"$ref": "#/$defs/observationError"}]}
       }
     },
@@ -1080,8 +1080,8 @@
           "items": {"$ref": "#/$defs/secretReference"}
         },
         "phase": {"enum": ["apply", "compensate"]},
-        "started_at": {"type": "string", "format": "date-time"},
-        "finished_at": {"type": "string", "format": "date-time"},
+        "started_at": {"type": "string", "format": "date-time", "pattern": "Z$"},
+        "finished_at": {"type": "string", "format": "date-time", "pattern": "Z$"},
         "prepared_checkpoint_reference": {"$ref": "#/$defs/nonEmptyString"},
         "result": {"oneOf": [{"$ref": "#/$defs/receiptSuccess"}, {"$ref": "#/$defs/receiptError"}]}
       },

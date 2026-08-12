@@ -1285,7 +1285,7 @@ def _catalog_distribution_is_valid(distribution: Any) -> bool:
             and isinstance(source.get("repository"), str)
             and _public_git_repository_is_valid(source["repository"])
             and isinstance(source.get("ref"), str)
-            and bool(source["ref"].strip())
+            and _git_revision_is_valid(source["ref"])
         )
     elif source.get("kind") == "native_manager":
         source_valid = (
@@ -1331,10 +1331,35 @@ def _catalog_distribution_is_valid(distribution: Any) -> bool:
 
 
 def _public_git_repository_is_valid(value: str) -> bool:
-    if not _public_https_url_is_valid(value):
+    if not _static_credential_free_https_url_is_valid(value):
         return False
     parsed = urlsplit(value)
     return parsed.path not in {"", "/"} and parsed.path.endswith(".git")
+
+
+def _git_revision_is_valid(value: str) -> bool:
+    if (
+        not value
+        or "%" in value
+        or "\\" in value
+        or ".." in value
+        or any(segment.endswith((".", ".lock")) for segment in value.split("/"))
+    ):
+        return False
+    return all(
+        bool(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", segment))
+        for segment in value.split("/")
+    )
+
+
+def _artifact_subpath_is_valid(value: str) -> bool:
+    if not value or "%" in value or "\\" in value:
+        return False
+    return all(
+        segment not in {"", ".", ".."}
+        and bool(re.fullmatch(r"[A-Za-z0-9._~-]+", segment))
+        for segment in value.split("/")
+    )
 
 
 def _immutable_artifact_ref_is_valid(value: str) -> bool:
@@ -1347,14 +1372,11 @@ def _immutable_artifact_ref_is_valid(value: str) -> bool:
     if not _public_git_repository_is_valid(repository):
         return False
     revision, separator, subpaths = selector.partition("#")
-    if not revision or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]*", revision):
+    if not _git_revision_is_valid(revision):
         return False
     if not separator:
         return True
-    return bool(subpaths) and all(
-        bool(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]*", subpath))
-        for subpath in subpaths.split(",")
-    )
+    return all(_artifact_subpath_is_valid(subpath) for subpath in subpaths.split(","))
 
 
 def _provider_is_valid(
@@ -1394,7 +1416,7 @@ def _provider_is_valid(
             not declared_secret_references
             and set(provider) == {"kind", "server_name", "transport", "url"}
             and isinstance(provider.get("url"), str)
-            and _public_https_url_is_valid(provider["url"])
+            and _static_credential_free_https_url_is_valid(provider["url"])
         )
     if provider.get("transport") != "stdio" or set(provider) != {
         "kind",
@@ -1466,8 +1488,19 @@ def _provider_is_valid(
     )
 
 
-def _public_https_url_is_valid(value: str) -> bool:
-    """Return whether *value* is a static public HTTPS endpoint URL."""
+def _hostname_has_valid_dns_labels(value: str) -> bool:
+    return len(value) <= 253 and all(
+        bool(
+            re.fullmatch(
+                r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?", label
+            )
+        )
+        for label in value.split(".")
+    )
+
+
+def _static_credential_free_https_url_is_valid(value: str) -> bool:
+    """Return whether *value* is a static credential-free HTTPS endpoint URL."""
 
     try:
         parsed = urlsplit(value)
@@ -1478,7 +1511,7 @@ def _public_https_url_is_valid(value: str) -> bool:
     return (
         parsed.scheme == "https"
         and bool(parsed.hostname)
-        and bool(re.fullmatch(r"[A-Za-z0-9.-]+", parsed.hostname or ""))
+        and _hostname_has_valid_dns_labels(parsed.hostname or "")
         and parsed.username is None
         and parsed.password is None
         and parsed.query == ""
