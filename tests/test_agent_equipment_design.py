@@ -5,6 +5,7 @@ from copy import deepcopy
 import json
 from pathlib import Path
 import sys
+from tempfile import TemporaryDirectory
 import unittest
 
 
@@ -60,8 +61,21 @@ def valid_retirement(catalog: dict[str, object]) -> dict[str, object]:
     }
 
 
+def locked_record(
+    lock: dict[str, object],
+    equipment_identity: str = "skill:example/grilling",
+    harness: str = "claude",
+) -> dict[str, object]:
+    return next(
+        item["record"]
+        for item in lock["coverage"]
+        if item["equipment_identity"] == equipment_identity
+        and item["harness"] == harness
+    )
+
+
 def locked_managed_route(lock: dict[str, object]) -> dict[str, object]:
-    return lock["coverage"][3]["record"]["provider_selection"]["routes"][0]
+    return locked_record(lock)["provider_selection"]["routes"][0]
 
 
 class AgentEquipmentDesignTest(unittest.TestCase):
@@ -128,6 +142,87 @@ class AgentEquipmentDesignTest(unittest.TestCase):
             )
         )
 
+        component_inventory = inventory["plugin_component_inventory"]
+        observed_components = component_inventory["observed_plugins"]
+        observed_plugin_keys = {
+            (item["harness"], item["plugin_id"]) for item in observed_components
+        }
+        expected_plugin_keys = {
+            ("claude", item["id"])
+            for item in inventory["claude_plugins"]["states"]
+        } | {
+            ("codex", item["id"])
+            for item in inventory["codex_plugins"]["states"]
+        } | {("cursor", "*")}
+        self.assertEqual(observed_plugin_keys, expected_plugin_keys)
+        self.assertEqual(len(observed_components), len(observed_plugin_keys))
+        self.assertEqual(
+            component_inventory["summary"]["observed_plugin_records"],
+            len(observed_components),
+        )
+        component_kinds = set(component_inventory["component_kinds"])
+        named_component_ids: list[str] = []
+        named_count = sum(
+            len(plugin["components"]["known"])
+            for plugin in observed_components
+        )
+        unnamed_count = sum(
+            item["count"]
+            for plugin in observed_components
+            for item in plugin["components"]["counted_but_unnamed"]
+        )
+        for plugin in observed_components + component_inventory[
+            "reviewed_not_installed_distributions"
+        ]:
+            components = plugin["components"]
+            named = components["known"]
+            named_component_ids.extend(
+                item["component_identity"] for item in named
+            )
+            positive_kinds = {item["kind"] for item in named} | {
+                item["kind"] for item in components["counted_but_unnamed"]
+            }
+            absent_kinds = set(components["confirmed_absent_kinds"])
+            unknown_kinds = set(components["unknown_kinds"])
+            self.assertEqual(
+                positive_kinds | absent_kinds | unknown_kinds,
+                component_kinds,
+            )
+            self.assertFalse(positive_kinds & absent_kinds)
+            self.assertFalse(positive_kinds & unknown_kinds)
+            self.assertFalse(absent_kinds & unknown_kinds)
+        self.assertEqual(len(named_component_ids), len(set(named_component_ids)))
+        self.assertEqual(
+            component_inventory["summary"]["named_component_observations"],
+            named_count,
+        )
+        self.assertEqual(
+            component_inventory["summary"][
+                "counted_but_unnamed_component_observations"
+            ],
+            unnamed_count,
+        )
+
+        standalone_classification = {
+            name: group["classification"]
+            for group in inventory["standalone_skills"]["classification_groups"]
+            for name in group["names"]
+        }
+        self.assertEqual(
+            standalone_classification["hyperframes-creative"],
+            "duplicate_overlap_candidate",
+        )
+        computer_use = next(
+            item
+            for item in inventory["direct_mcps"]
+            if item["harness"] == "codex" and item["name"] == "computer-use"
+        )
+        self.assertEqual(computer_use["classification"], "duplicate_overlap_candidate")
+        self.assertEqual(
+            computer_use["runtime_retirement_intent"],
+            "none_without_explicit_adoption",
+        )
+
     def test_proposed_initial_catalog_and_lock_are_complete_and_valid(self) -> None:
         catalog_path = ROOT / "docs/agent-equipment/initial-catalog.proposed.json"
         lock_path = ROOT / "docs/agent-equipment/initial-lock.proposed.json"
@@ -181,6 +276,10 @@ class AgentEquipmentDesignTest(unittest.TestCase):
         )
         self.assertEqual(
             matt_route["restore"]["native_update_control"], "suppressible"
+        )
+        self.assertIn(
+            "auto-update documentation",
+            matt_route["restore"]["observation_source"],
         )
         self.assertEqual(
             matt_route["operations"]["suppress_native_update"]["disposition"],
@@ -263,6 +362,35 @@ class AgentEquipmentDesignTest(unittest.TestCase):
             "LOCK_SCHEMA_INVALID",
             {diagnostic.code for diagnostic in result.diagnostics},
         )
+        self.assertIsNone(result.mutation_plan)
+
+    def test_public_validator_rejects_unimplemented_schema_keywords(self) -> None:
+        catalog, lock = valid_pair()
+        with TemporaryDirectory() as temporary_directory:
+            schema_directory = Path(temporary_directory)
+            for name in ("catalog-v1.schema.json", "lock-v1.schema.json"):
+                schema = json.loads(
+                    (ROOT / "docs/agent-equipment" / name).read_text(
+                        encoding="utf-8"
+                    )
+                )
+                if name == "catalog-v1.schema.json":
+                    schema["futureAssertion"] = True
+                (schema_directory / name).write_text(
+                    json.dumps(schema), encoding="utf-8"
+                )
+            original_directory = DESIGN.SCHEMA_DIRECTORY
+            DESIGN.SCHEMA_DIRECTORY = schema_directory
+            try:
+                result = DESIGN.validate_design(catalog, lock)
+            finally:
+                DESIGN.SCHEMA_DIRECTORY = original_directory
+
+        self.assertIn(
+            "CATALOG_SCHEMA_INVALID",
+            {diagnostic.code for diagnostic in result.diagnostics},
+        )
+        self.assertIn("unsupported schema keyword", result.diagnostics[0].message)
         self.assertIsNone(result.mutation_plan)
 
     def test_public_validator_schema_fails_route_missing_identity_without_crashing(self) -> None:
@@ -350,6 +478,15 @@ class AgentEquipmentDesignTest(unittest.TestCase):
             },
         )
         self.assertEqual(
+            {entry.record["outcome"] for entry in result.coverage},
+            {
+                "managed_provider",
+                "manually_managed_provider",
+                "intentional_omission",
+                "unsupported",
+            },
+        )
+        self.assertEqual(
             [operation.operation for operation in result.mutation_plan],
             [
                 "install",
@@ -361,6 +498,60 @@ class AgentEquipmentDesignTest(unittest.TestCase):
                 "suppress_native_update",
             ],
         )
+
+    def test_every_declared_equipment_kind_has_valid_and_invalid_examples(self) -> None:
+        kinds = ("skill", "plugin", "mcp", "hook", "other")
+        for kind in kinds:
+            with self.subTest(kind=kind, validity="valid"):
+                catalog, lock = valid_pair()
+                identity = f"{kind}:example/additional"
+                catalog["equipment"].append(
+                    {"identity": identity, "kind": kind, "coverage": {}}
+                )
+                lock["distributions"][0]["equipment"].append(identity)
+                for template in catalog["coverage_templates"]:
+                    lock["coverage"].append(
+                        {
+                            "equipment_identity": identity,
+                            "harness": template["harness"],
+                            "record": deepcopy(template["record"]),
+                        }
+                    )
+                lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
+
+                self.assertEqual(
+                    DESIGN.validate_design(catalog, lock).diagnostics, ()
+                )
+
+            with self.subTest(kind=kind, validity="invalid"):
+                catalog, lock = valid_pair()
+                identity = f"{kind}:example/mismatched"
+                mismatched_kind = "hook" if kind != "hook" else "other"
+                catalog["equipment"].append(
+                    {
+                        "identity": identity,
+                        "kind": mismatched_kind,
+                        "coverage": {},
+                    }
+                )
+                lock["distributions"][0]["equipment"].append(identity)
+                for template in catalog["coverage_templates"]:
+                    lock["coverage"].append(
+                        {
+                            "equipment_identity": identity,
+                            "harness": template["harness"],
+                            "record": deepcopy(template["record"]),
+                        }
+                    )
+                lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
+
+                result = DESIGN.validate_design(catalog, lock)
+
+                self.assertIn(
+                    "EQUIPMENT_IDENTITY_INVALID",
+                    {diagnostic.code for diagnostic in result.diagnostics},
+                )
+                self.assertIsNone(result.mutation_plan)
 
     def test_shared_activation_group_produces_one_action_per_route_operation(self) -> None:
         catalog, lock = valid_pair()
@@ -566,9 +757,10 @@ class AgentEquipmentDesignTest(unittest.TestCase):
                 "state": "disabled",
             }
         ]
-        lock["coverage"][3]["record"] = deepcopy(
+        locked_record(lock).clear()
+        locked_record(lock).update(deepcopy(
             catalog["coverage_templates"][0]["record"]
-        )
+        ))
         lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
 
         result = DESIGN.validate_design(catalog, lock)
@@ -587,9 +779,10 @@ class AgentEquipmentDesignTest(unittest.TestCase):
                 "state": "enabled",
             }
         ]
-        lock["coverage"][3]["record"] = deepcopy(
+        locked_record(lock).clear()
+        locked_record(lock).update(deepcopy(
             catalog["coverage_templates"][0]["record"]
-        )
+        ))
         lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
 
         result = DESIGN.validate_design(catalog, lock)
@@ -644,7 +837,7 @@ class AgentEquipmentDesignTest(unittest.TestCase):
 
     def test_literal_secret_material_fails_closed_without_echoing_it(self) -> None:
         catalog, lock = valid_pair()
-        secret_canary = "Authorization: Bearer secret-canary-value"
+        secret_canary = "Authorization: Bearer secret-canary-value"  # noqa: S105
         provider = {
             "kind": "direct_mcp",
             "server_name": "context7",
@@ -671,6 +864,7 @@ class AgentEquipmentDesignTest(unittest.TestCase):
         for flag in ("--api-key", "--token", "Authorization", "X-Api-Key"):
             with self.subTest(flag=flag):
                 catalog, lock = valid_pair()
+                literal_secret = "supersecretvalue"  # noqa: S105
                 provider = {
                     "kind": "direct_mcp",
                     "server_name": "context7",
@@ -678,7 +872,7 @@ class AgentEquipmentDesignTest(unittest.TestCase):
                     "command": "npx",
                     "arguments": [
                         {"literal": flag},
-                        {"literal": "supersecretvalue"},
+                        {"literal": literal_secret},
                     ],
                 }
                 managed_route(catalog)["provider"] = deepcopy(provider)
@@ -692,6 +886,13 @@ class AgentEquipmentDesignTest(unittest.TestCase):
                     {diagnostic.code for diagnostic in result.diagnostics},
                 )
                 self.assertIsNone(result.mutation_plan)
+
+    def test_benign_canary_label_is_not_treated_as_secret_material(self) -> None:
+        catalog, lock = valid_pair()
+        catalog["distributions"][0]["source"]["ref"] = "canary"
+        lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
+
+        self.assertEqual(DESIGN.validate_design(catalog, lock).diagnostics, ())
 
     def test_catalog_source_and_namespaced_identities_are_validated(self) -> None:
         mutations = (
@@ -899,6 +1100,43 @@ class AgentEquipmentDesignTest(unittest.TestCase):
         self.assertIn("DUPLICATE_ROUTE_IDENTITY", {item.code for item in result.diagnostics})
         self.assertIsNone(result.mutation_plan)
 
+    def test_shared_route_identity_requires_one_complete_route_record(self) -> None:
+        catalog, lock = valid_pair()
+        second_identity = "skill:example/route-conflict"
+        second_record = deepcopy(catalog["coverage_templates"][0]["record"])
+        second_record["provider_selection"]["routes"][0]["provenance"] = {
+            "owner": "source:example/different-owner"
+        }
+        catalog["equipment"].append(
+            {
+                "identity": second_identity,
+                "kind": "skill",
+                "coverage": {"claude": {"record": second_record}},
+            }
+        )
+        lock["distributions"][0]["equipment"].append(second_identity)
+        for harness, record in (
+            ("claude", deepcopy(second_record)),
+            ("codex", deepcopy(catalog["coverage_templates"][1]["record"])),
+            ("cursor", deepcopy(catalog["coverage_templates"][2]["record"])),
+        ):
+            lock["coverage"].append(
+                {
+                    "equipment_identity": second_identity,
+                    "harness": harness,
+                    "record": record,
+                }
+            )
+        lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
+
+        result = DESIGN.validate_design(catalog, lock)
+
+        self.assertIn(
+            "ROUTE_IDENTITY_CONFLICT",
+            {diagnostic.code for diagnostic in result.diagnostics},
+        )
+        self.assertIsNone(result.mutation_plan)
+
     def test_supplementary_route_requires_exact_allow_overlap(self) -> None:
         catalog, lock = valid_pair()
         selection = managed_selection(catalog)
@@ -1049,15 +1287,16 @@ class AgentEquipmentDesignTest(unittest.TestCase):
             {"kind": "environment_variable", "name": "EXAMPLE_API_KEY"},
             {"kind": "secret_profile", "name": "context7"},
         ]
-        lock["coverage"][3]["record"] = deepcopy(
+        locked_record(lock).clear()
+        locked_record(lock).update(deepcopy(
             catalog["coverage_templates"][0]["record"]
-        )
+        ))
         lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
         self.assertEqual(DESIGN.validate_design(catalog, lock).diagnostics, ())
 
         for invalid_reference in (
             {"kind": "literal", "value": "not-a-secret-fixture"},
-            {"kind": "file", "path": "/tmp/secret"},
+            {"kind": "file", "path": "fixture-secret-path"},
             {"kind": "secret_profile", "name": "Context 7"},
             {"kind": "environment_variable", "name": "lowercase"},
         ):

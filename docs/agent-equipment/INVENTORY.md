@@ -28,6 +28,7 @@ Observed on 2026-08-12 through supported files and read-only CLI surfaces.
 | Claude plugins | 47 installed: 38 enabled and 9 disabled |
 | Codex plugins | 59 configured entries: 29 reported installed and enabled, and 30 config-only observations |
 | Cursor plugins | Installation state is opaque through the installed CLI; no cache or database was inspected |
+| Normalized plugin records | 107 observed records: 47 Claude, 59 Codex, and one opaque Cursor wildcard; plus one reviewed, not-installed Matt distribution |
 | Direct MCPs | Claude 5, Codex 8, Cursor 4 |
 | Plugin-provided MCP components | Claude 16 and Codex 5; Cursor is not enumerable, so zero is not claimed |
 
@@ -43,6 +44,48 @@ sets. Four live skills have neither source: `applying-diataxis`, `impeccable`,
 retained observations rather than inferred adoptions. The three canonical
 Hindsight symlinks additionally identify the Hindsight control plane as their
 active-release source.
+
+## Normalized plugin components
+
+`plugin_component_inventory` records every observed Claude, Codex, and Cursor
+plugin entry independently of the provider decisions below. Each record has a
+distribution-local component identity when a name is known, a component kind,
+and either an evidenced selective state, an inseparable activation group, or
+an explicit `unknown` control state. A distribution-local identity does not by
+itself assert that a same-name component from another provider is the same
+logical equipment identity.
+
+The inventory distinguishes three evidence cases:
+
+- `known` names a positively observed component.
+- `counted_but_unnamed` preserves an observed count while leaving the component
+  identity null. It does not manufacture names from plugin titles or skill
+  overlaps.
+- `confirmed_absent_kinds` means a supported list or reviewed manifest proved
+  zero components of that kind. `unknown_kinds` means neither presence nor
+  absence was established; an empty `known` array never means zero.
+
+This representation has 82 named component observations and 206
+counted-but-unnamed observations across the 107 runtime plugin records. The
+counts are observations, not 288 logical capabilities: identity reconciliation
+and provider precedence happen later.
+
+| Distribution evidence | Positively known components | Control and completeness |
+| --- | --- | --- |
+| Reviewed Matt `1.2.3` candidate | All 25 named skills; no MCP, hook, agent, command, LSP, app, or other equipment | Complete upstream manifest; the 25 skills form one inseparable Claude activation group |
+| Claude Chrome DevTools `1.7.0` | MCP `chrome-devtools` and six named skills | Whole-plugin control; the seven components are inseparable; hooks, agents, and commands are confirmed absent while uninspected kinds remain unknown |
+| Claude Firecrawl `1.0.9` | Ten named skills including `firecrawl-cli`; no MCP | Whole-plugin control; other component kinds remain unknown |
+| Claude GitHub | One HTTP MCP; no skills, hooks, or commands | Whole-plugin control; uninspected kinds remain unknown |
+| Codex GitHub curated baseline `11c74d6b` | App/connector, HTTP MCP, and four named skills | Observed selective state keeps the app, MCP, and three skills enabled and `yeet` disabled; the live adapter must still prove those controls |
+| Codex GitHub remote `0.1.8` comparison | No MCP | This is a different channel payload and cannot substitute for the observed curated baseline |
+| Cursor wildcard | Nothing enumerable through the supported CLI | Every component kind and control remains unknown; no absence is claimed |
+
+For every other plugin, the JSON carries only the names and counts present in
+the snapshot evidence. Config-only Codex entries and opaque Cursor state have
+no inferred payload. This is what makes the plugin-versus-standalone policy
+case-specific: a plugin may replace standalone equipment only after its entire
+positive and unknown component surface is qualified, and selective controls
+may split that decision only when their live capability is proved.
 
 ## Matt Pocock correction and proposal
 
@@ -113,6 +156,18 @@ deletion instruction.
   user-plugin list, install, enable, or disable surface. Stable `mcp.json` input
   is observable; user-plugin state remains opaque and operator-owned.
 
+## Review dispositions
+
+- `hyperframes-creative` remains a duplicate/overlap candidate everywhere in
+  this inventory. Its separate Claude directory is no longer mislabeled as a
+  proposed-managed observation; it has two plugin overlaps and still needs an
+  identity and provider decision alongside the other Hyperframes skills.
+- The disabled direct Codex `computer-use` MCP and the enabled
+  MCP-plus-one-skill plugin are both duplicate/overlap candidates. There is no
+  complete provider decision in the first slice, so the direct route has no
+  adoption or retirement authority and `computer-use-provider-map` stays
+  pending. The proposed catalog is intentionally not expanded for it.
+
 ## Classification policy
 
 `proposed_managed_equipment_slice` means that a later catalog may adopt the
@@ -161,6 +216,8 @@ The artifact checks are:
 ```sh
 python3 -m json.tool docs/agent-equipment/initial-inventory.json >/dev/null
 jq '.counts' docs/agent-equipment/initial-inventory.json
+jq '.plugin_component_inventory.summary' docs/agent-equipment/initial-inventory.json
+jq '[.plugin_component_inventory.observed_plugins[] | {harness, plugin_id}] | length' docs/agent-equipment/initial-inventory.json
 rg -n '/Users/|ivan@|Bearer [A-Za-z0-9]|"(token|api_key|secret|password)"[[:space:]]*:' docs/agent-equipment/initial-inventory.json
 python3 -m unittest tests/test_agent_equipment_design.py
 ```

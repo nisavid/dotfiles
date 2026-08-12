@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/nisavid/dotfiles/docs/agent-equipment/captured-state-v1.schema.json",
+  "$id": "https://nisavid.github.io/dotfiles/agent-equipment/captured-state-v1.schema.json",
   "title": "Global agent equipment migration captured state v1",
   "type": "object",
   "additionalProperties": false,
@@ -220,10 +220,9 @@
             },
             "native_update_control": {
               "enum": [
-                "enabled",
-                "disabled",
-                "unavailable",
-                "unknown"
+                "unknown",
+                "suppressible",
+                "unsuppressible"
               ]
             },
             "exact_prior_artifact_restore": {

@@ -1,0 +1,57 @@
+{
+  "record_type": "RuntimeObservation",
+  "record": {
+    "contract_version": "adapter-contract-v1",
+    "request_identity": "request:observe-misnamed-native-update-state",
+    "correlation_identity": "correlation:candidate-misnamed-native-update-state",
+    "candidate_identity": "candidate:misnamed-native-update-state",
+    "catalog_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "lock_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "plan_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "capability_identity": "capability:claude-native-plugin-v1",
+    "capability_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "manager_version_evidence_digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "harness": "claude",
+    "route_identity": "route:claude/mattpocock-plugin",
+    "route_digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "control_owner": "reconciler_owned",
+    "equipment_identities": [
+      "plugin:mattpocock/claude"
+    ],
+    "activation_group": "activation:claude/mattpocock-plugin",
+    "surface_scope": [
+      "surface:route:claude/mattpocock-plugin/plugin:mattpocock/claude"
+    ],
+    "observed_at": "2026-08-12T15:00:00Z",
+    "result": {
+      "status": "ok",
+      "route_presence": "present",
+      "enablement": "enabled",
+      "configuration": {
+        "status": "not_applicable"
+      },
+      "component_states": [
+        {
+          "equipment_identity": "plugin:mattpocock/claude",
+          "state": "enabled"
+        }
+      ],
+      "observed_version": {
+        "status": "observed",
+        "value": "1.2.3"
+      },
+      "native_update_control": "suppressible",
+      "native_update_state": "disabled",
+      "manager_drift": {
+        "status": "none",
+        "reviewed_baseline": "1.0.0",
+        "observation_source": "claude --version"
+      },
+      "surface_evidence": [],
+      "captured_state": {
+        "status": "not_applicable"
+      },
+      "state_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+    }
+  }
+}

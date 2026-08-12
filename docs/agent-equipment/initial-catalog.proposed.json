@@ -1240,7 +1240,7 @@
                 "channel": "stable",
                 "class": "native_rolling",
                 "native_update_control": "suppressible",
-                "observation_source": "Claude official marketplace and upstream plugin manifest",
+                "observation_source": "Claude official marketplace, auto-update documentation, and upstream plugin manifest",
                 "reviewed_baseline": "1.2.3"
               },
               "secret_references": []

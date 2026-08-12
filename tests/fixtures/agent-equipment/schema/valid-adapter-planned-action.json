@@ -1,0 +1,91 @@
+{
+  "record_type": "PlannedAction",
+  "record": {
+    "contract_version": "adapter-contract-v1",
+    "action_identity": "action:install-mattpocock-skills",
+    "correlation_identity": "correlation:candidate-001",
+    "ordinal": 0,
+    "candidate_identity": "candidate:001",
+    "catalog_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "lock_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "plan_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "capability_identity": "capability:claude-native-plugin-v1",
+    "capability_digest": "sha256:c0aad6935698f92f477aa2cd9969f83256d13e9c2db4e43ddd6345e3f75c7677",
+    "manager_version_evidence_digest": "sha256:c4a5a1878eff82ef30703ca6a3da147e4b94b66dc2b337867e04e3d4ebf1935d",
+    "adapter_identity": "adapter:claude-native-plugin",
+    "adapter_version": "1.0.0",
+    "harness": "claude",
+    "route_identity": "route:claude/mattpocock-plugin",
+    "route_digest": "sha256:942290fc6dd339c0bb1bae03b5f7163c03adb475ff9147110b8791d903359bbf",
+    "route_record": {
+      "identity": "route:claude/mattpocock-plugin",
+      "distribution": "distribution:mattpocock/claude-plugin",
+      "provider": {
+        "kind": "native_plugin",
+        "manager": "claude",
+        "plugin_id": "mattpocock-skills@claude-plugins-official",
+        "scope": "user"
+      },
+      "activation_group": "activation:claude/mattpocock-plugin",
+      "component_controls": [],
+      "control_owner": "reconciler_owned",
+      "provenance": {
+        "owner": "manager:claude-plugins/claude-plugins-official"
+      },
+      "restore": {
+        "channel": "stable",
+        "class": "native_rolling",
+        "native_update_control": "suppressible",
+        "observation_source": "Claude official marketplace and upstream plugin manifest",
+        "reviewed_baseline": "1.2.3"
+      },
+      "operations": {
+        "inspect": {"disposition": "automated"},
+        "install": {"disposition": "automated", "compensation": "restore_captured_pre_state"},
+        "configure": {"disposition": "unavailable"},
+        "enable": {"disposition": "automated", "compensation": "restore_captured_pre_state"},
+        "disable": {"disposition": "automated", "compensation": "restore_captured_pre_state"},
+        "remove": {"disposition": "automated", "compensation": "restore_captured_pre_state"},
+        "restore": {"disposition": "unavailable"},
+        "suppress_native_update": {"disposition": "operator_action"}
+      },
+      "secret_references": []
+    },
+    "equipment_identities": [
+      "plugin:mattpocock/claude"
+    ],
+    "activation_group": "activation:claude/mattpocock-plugin",
+    "surface_scope": [
+      "surface:route:claude/mattpocock-plugin/plugin:mattpocock/claude"
+    ],
+    "operation": "install",
+    "operation_disposition": "automated",
+    "desired_state": {
+      "route_presence": "present",
+      "enablement": "enabled"
+    },
+    "desired_state_digest": "sha256:42176224e7ed4c5db475b4d9f40e7ad59b15e1d407e0c335e697b6e97e612a2d",
+    "secret_references": [],
+    "preconditions": {
+      "catalog_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "lock_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "plan_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "route_digest": "sha256:942290fc6dd339c0bb1bae03b5f7163c03adb475ff9147110b8791d903359bbf",
+      "capability_digest": "sha256:c0aad6935698f92f477aa2cd9969f83256d13e9c2db4e43ddd6345e3f75c7677",
+      "manager_version_evidence_digest": "sha256:c4a5a1878eff82ef30703ca6a3da147e4b94b66dc2b337867e04e3d4ebf1935d",
+      "adapter_identity": "adapter:claude-native-plugin",
+      "adapter_version": "1.0.0",
+      "control_owner": "reconciler_owned",
+      "activation_group": "activation:claude/mattpocock-plugin",
+      "surface_scope": [
+        "surface:route:claude/mattpocock-plugin/plugin:mattpocock/claude"
+      ],
+      "prepared_checkpoint_required": true,
+      "compare_before_mutate": true
+    },
+    "compensation": {
+      "kind": "restore_captured_pre_state",
+      "captured_state_version": "captured-state/v1"
+    }
+  }
+}

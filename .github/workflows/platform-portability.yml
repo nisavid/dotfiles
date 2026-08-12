@@ -27,6 +27,7 @@ on:
       - "scripts/private-skill-transaction"
       - "scripts/private-skill-transaction.d/**"
       - "scripts/privacy-scan"
+      - "scripts/agent_equipment_acceptance_model.py"
       - "scripts/agent_equipment_design.py"
       - "tests/claude-skill-sync.zsh"
       - "tests/container-runtime-bindings.zsh"
@@ -45,6 +46,8 @@ on:
       - "tests/private-skill-transaction.zsh"
       - "tests/private-skill-transaction.d/**"
       - "tests/test_chezmoi_source_ownership.py"
+      - "tests/test_agent_equipment_acceptance.py"
+      - "tests/test_agent_equipment_adapter_contract.py"
       - "tests/test_agent_equipment_design.py"
       - "tests/fixtures/agent-equipment/**"
   push:
@@ -184,16 +187,27 @@ jobs:
           zsh -f tests/secret-exec-migrate.zsh
           zsh -f tests/secret-injection-bindings.zsh
           zsh -f tests/proton-pass-session.zsh
-          GLOBAL_AGENTS_POLICY_PUBLIC_ONLY=1 zsh -f tests/global-agents-policy.zsh
+          GLOBAL_AGENTS_POLICY_PUBLIC_ONLY=1 \
+            zsh -f tests/global-agents-policy.zsh
           if [[ "$RUNNER_OS" == Linux ]]; then
             zsh -f tests/hindsight-agents-bindings.zsh
           fi
           python3 -m unittest tests/test_chezmoi_source_ownership.py
+          python3 -m unittest tests/test_agent_equipment_acceptance.py
+          python3 -m unittest tests/test_agent_equipment_adapter_contract.py
           python3 -m unittest tests/test_agent_equipment_design.py
-          uvx --from check-jsonschema==0.35.0 check-jsonschema --check-metaschema \
+          uvx --from check-jsonschema==0.35.0 \
+            check-jsonschema --check-metaschema \
+            docs/agent-equipment/adapter-contract-v1.schema.json \
             docs/agent-equipment/catalog-v1.schema.json \
             docs/agent-equipment/lock-v1.schema.json \
             docs/agent-equipment/captured-state-v1.schema.json
+          adapter_schema=docs/agent-equipment/adapter-contract-v1.schema.json
+          adapter_base_uri="file://${PWD}/${adapter_schema}"
+          uvx --from check-jsonschema==0.35.0 check-jsonschema \
+            --schemafile "$adapter_schema" \
+            --base-uri "$adapter_base_uri" \
+            tests/fixtures/agent-equipment/schema/valid-adapter-*.json
           uvx --from check-jsonschema==0.35.0 check-jsonschema \
             --schemafile docs/agent-equipment/catalog-v1.schema.json \
             tests/fixtures/agent-equipment/schema/valid-catalog.json \

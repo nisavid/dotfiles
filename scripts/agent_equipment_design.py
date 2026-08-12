@@ -3,12 +3,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 import hashlib
 import json
 from pathlib import Path
 import re
-from typing import Any, Mapping
+from typing import Any
 
 
 JsonObject = Mapping[str, Any]
@@ -24,6 +25,27 @@ OPERATIONS = (
 )
 MUTATING_OPERATIONS = frozenset(OPERATIONS) - {"inspect"}
 SCHEMA_DIRECTORY = Path(__file__).resolve().parent.parent / "docs/agent-equipment"
+SUPPORTED_SCHEMA_KEYWORDS = frozenset(
+    {
+        "$defs",
+        "$id",
+        "$ref",
+        "$schema",
+        "additionalProperties",
+        "const",
+        "enum",
+        "items",
+        "minItems",
+        "minLength",
+        "oneOf",
+        "pattern",
+        "properties",
+        "required",
+        "title",
+        "type",
+        "uniqueItems",
+    }
+)
 
 
 @dataclass(frozen=True, order=True)
@@ -737,7 +759,6 @@ def _iter_string_leaves(value: Any):
 def _string_looks_like_secret_material(value: str) -> bool:
     candidate = value.replace("${{reference}}", "").replace("{reference}", "")
     patterns = (
-        r"(?i)\bcanary\b",
         r"(?i)\b(?:authorization|proxy-authorization|x-api-key|api[_-]?key|access[_-]?token|password|client[_-]?secret)\s*[:=]\s*(?:bearer\s+\S+|(?!bearer(?:\s|$))\S+)",
         r"(?i)\bbearer\s+[A-Za-z0-9._~+/-]+",
         r"\bgh[pousr]_[A-Za-z0-9]{20,}\b",
@@ -757,6 +778,12 @@ def _json_schema_failures(
     """Evaluate the JSON Schema keywords used by the v1 catalog and lock."""
 
     failures: list[str] = []
+    unsupported_keywords = sorted(set(schema) - SUPPORTED_SCHEMA_KEYWORDS)
+    if unsupported_keywords:
+        return [
+            f"{path} uses unsupported schema keyword(s): "
+            + ", ".join(unsupported_keywords)
+        ]
     reference = schema.get("$ref")
     if isinstance(reference, str):
         reference_file, separator, fragment = reference.partition("#")
@@ -868,11 +895,12 @@ def _json_schema_failures(
                             f"{path}.{property_name}",
                         )
                     )
-            if schema.get("additionalProperties") is False:
-                for property_name in instance.keys() - properties.keys():
-                    failures.append(
-                        f"{path}.{property_name} is not an allowed property"
-                    )
+        if schema.get("additionalProperties") is False:
+            allowed_properties = properties.keys() if isinstance(properties, dict) else ()
+            for property_name in instance.keys() - allowed_properties:
+                failures.append(
+                    f"{path}.{property_name} is not an allowed property"
+                )
     return failures
 
 

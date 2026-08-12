@@ -1,0 +1,37 @@
+{
+  "record_type": "RuntimeObservation",
+  "record": {
+    "contract_version": "adapter-contract-v1",
+    "request_identity": "request:observe-unknown-key",
+    "correlation_identity": "correlation:candidate-unknown-key",
+    "candidate_identity": "candidate:unknown-key",
+    "catalog_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "lock_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "plan_digest": null,
+    "capability_identity": "capability:claude-native-plugin-v1",
+    "capability_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "manager_version_evidence_digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "harness": "claude",
+    "route_identity": "route:claude/mattpocock-plugin",
+    "route_digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "control_owner": "reconciler_owned",
+    "equipment_identities": [
+      "plugin:mattpocock/claude"
+    ],
+    "activation_group": "activation:claude/mattpocock-plugin",
+    "surface_scope": [
+      "surface:route:claude/mattpocock-plugin/plugin:mattpocock/claude"
+    ],
+    "observed_at": "2026-08-12T15:00:00Z",
+    "result": {
+      "status": "error",
+      "code": "NATIVE_FAILURE",
+      "classification": "native_failure",
+      "message": "The manager rejected the inspection request.",
+      "retry": "after_audit",
+      "mutation_state": "not_started",
+      "evidence_references": [],
+      "details": "This unknown nested key must fail closed."
+    }
+  }
+}
