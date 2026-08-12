@@ -189,6 +189,11 @@ unsupported outcome uses the exact string `no_provider`.
   are invalid; an empty array states that no selective control applies.
 - Every active route has exactly one disposition for every operation in the
   operation matrix.
+- `suppress_native_update` is `unavailable` for `not_applicable` and
+  `unsuppressible` routes; `operator_action` or `unavailable` while the route
+  classification is `unknown`; and `automated`, `operator_action`, or
+  `unavailable` only when the route is `suppressible`. Automated suppression
+  retains the ordinary captured-pre-state compensation requirement.
 - `operator_owned` routes are verify-and-report-only. Their mutating operations
   are `operator_action` or `unavailable`.
 - Every automated mutating operation declares
@@ -206,14 +211,16 @@ operations rather than additional operation kinds.
 | --- | --- | --- | --- | --- |
 | `audit` | Yes | No by default | None | None |
 | `import` | Yes | No by default | Emits a proposal only | None |
-| `update` | Yes | Allowed for source resolution | Proposed resolved lock | None |
+| `update` | Yes | Allowed for source resolution | Proposed atomic catalog and resolved-lock pair | None |
 | `adopt` | Yes | No by default | Proposed catalog ownership transfer | None |
 | `apply` | Yes | Allowed only for locked restore | Checkpoint ledger only | Automated operations on reconciler-owned routes |
 
 `import` does not claim ownership. `adopt` requires the exact imported
 observation identity and changes authored ownership only; a later apply performs
-any runtime reconciliation. `update` advances immutable revisions and reviewed
-native-rolling baselines without installing them. Apply never advances a lock.
+any runtime reconciliation. `update` advances the catalog's resolved route
+evidence and the digest-bound lock together for immutable revisions or reviewed
+native-rolling baselines, without installing them. Apply never advances either
+artifact.
 
 An imported observation identity is the canonical digest of its surface,
 observed-state digest, catalog digest, and inventory digest. Adoption accepts

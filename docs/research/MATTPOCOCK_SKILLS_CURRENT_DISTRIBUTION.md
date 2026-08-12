@@ -170,14 +170,19 @@ observations until the new catalog explicitly imports or adopts them.
 
 ## Catalog and prototype implications
 
-Use one equipment identity per logical skill and three provider distributions:
+Use one equipment identity per logical skill. The initial proposal selects two
+provider distributions:
 
 - `standalone:mattpocock/skills`, with individually selectable skill routes;
 - `claude-plugin:mattpocock-skills@claude-plugins-official`, the requested
   preferred Claude route, with one 25-skill activation group and a
-  component-to-equipment mapping for every exported skill;
-- `claude-plugin:mattpocock-skills@mattpocock`, a currently unselected
-  alternative distribution of the same activation group.
+  component-to-equipment mapping for every exported skill.
+
+The publisher route `claude-plugin:mattpocock-skills@mattpocock` is a known
+alternative distribution of the same activation group, but it is deferred
+from the initial catalog because the official route is selected and no current
+exception requires both. Add it only with an explicit provider-choice or
+overlap decision.
 
 For Claude, select the plugin route as preferred for all 25 identities and
 retire only the corresponding catalog-owned standalone projections. Keep the
@@ -198,9 +203,11 @@ Fixture the following independently:
    preferred as one activation group; the resolver proposes removing only the
    21 positively identified symlinks after the catalog-driven projector is in
    place.
-5. Restore classes: official/publisher plugin channels and ref-less or tag-only
-   standalone routes are `native_rolling`; a separately verified
-   commit-and-digest artifact is `immutable`.
+5. Restore classes: official/publisher plugin channels are `native_rolling`.
+   Ref-less or tag-only standalone observations also have rolling semantics,
+   but v1 does not admit them as selected standalone routes; retain them as
+   import evidence until `update` resolves a separately verified commit and
+   content digest, which the controller can model as `immutable`.
 6. Operation dispositions: Claude plugin install, enable, disable, update, and
    uninstall are whole-plugin operations; selective skill suppression is
    `unavailable`; global standalone restore is controller reconciliation rather

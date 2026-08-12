@@ -472,6 +472,130 @@ class CapturedStateValidationTest(unittest.TestCase):
             (),
         )
 
+    def test_public_schema_gate_distinguishes_booleans_from_integers(self) -> None:
+        captured_document = valid_document()
+        captured_document["provider_routes"][0]["restore_evidence"][
+            "exact_prior_artifact_restore"
+        ] = 0
+        diagnostics = CAPTURED_STATE.validate_captured_state(
+            captured_document,
+            authoritative_plan_action_set(),
+            expected_candidate_identity=CANDIDATE_IDENTITY,
+            expected_implementation_manifest_digest=IMPLEMENTATION_MANIFEST_DIGEST,
+        )
+        self.assertEqual(
+            [diagnostic.code for diagnostic in diagnostics],
+            ["CAPTURED_STATE_SCHEMA_INVALID"],
+        )
+
+        authoritative = authoritative_plan_action_set()
+        authoritative["actions"][0]["action_payload"]["preconditions"][
+            "prepared_checkpoint_required"
+        ] = 1
+        diagnostics = CAPTURED_STATE.validate_captured_state(
+            valid_document(),
+            authoritative,
+            expected_candidate_identity=CANDIDATE_IDENTITY,
+            expected_implementation_manifest_digest=IMPLEMENTATION_MANIFEST_DIGEST,
+        )
+        self.assertEqual(
+            [diagnostic.code for diagnostic in diagnostics],
+            ["AUTHORITATIVE_PLAN_ACTION_SET_SCHEMA_INVALID"],
+        )
+
+    def test_public_schema_gate_rejects_unsupported_array_valued_types(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            schema_directory = Path(temporary_directory)
+            captured_schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
+            captured_schema["type"] = ["object", "null"]
+            (schema_directory / SCHEMA.name).write_text(
+                json.dumps(captured_schema), encoding="utf-8"
+            )
+            (schema_directory / PLAN_ACTION_SET_SCHEMA.name).write_text(
+                PLAN_ACTION_SET_SCHEMA.read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            original_directory = CAPTURED_STATE.SCHEMA_DIRECTORY
+            CAPTURED_STATE.SCHEMA_DIRECTORY = schema_directory
+            try:
+                diagnostics = CAPTURED_STATE.validate_captured_state(
+                    valid_document(),
+                    authoritative_plan_action_set(),
+                    expected_candidate_identity=CANDIDATE_IDENTITY,
+                    expected_implementation_manifest_digest=(
+                        IMPLEMENTATION_MANIFEST_DIGEST
+                    ),
+                )
+            finally:
+                CAPTURED_STATE.SCHEMA_DIRECTORY = original_directory
+
+        self.assertEqual(
+            [diagnostic.code for diagnostic in diagnostics],
+            ["CAPTURED_STATE_SCHEMA_INVALID"],
+        )
+
+    def test_public_schema_gate_rejects_non_object_schema_roots(self) -> None:
+        for invalid_schema in ([], None):
+            with self.subTest(invalid_schema=invalid_schema):
+                with tempfile.TemporaryDirectory() as temporary_directory:
+                    schema_directory = Path(temporary_directory)
+                    (schema_directory / SCHEMA.name).write_text(
+                        json.dumps(invalid_schema), encoding="utf-8"
+                    )
+                    (schema_directory / PLAN_ACTION_SET_SCHEMA.name).write_text(
+                        PLAN_ACTION_SET_SCHEMA.read_text(encoding="utf-8"),
+                        encoding="utf-8",
+                    )
+                    original_directory = CAPTURED_STATE.SCHEMA_DIRECTORY
+                    CAPTURED_STATE.SCHEMA_DIRECTORY = schema_directory
+                    try:
+                        diagnostics = CAPTURED_STATE.validate_captured_state(
+                            valid_document(),
+                            authoritative_plan_action_set(),
+                            expected_candidate_identity=CANDIDATE_IDENTITY,
+                            expected_implementation_manifest_digest=(
+                                IMPLEMENTATION_MANIFEST_DIGEST
+                            ),
+                        )
+                    finally:
+                        CAPTURED_STATE.SCHEMA_DIRECTORY = original_directory
+
+                self.assertEqual(
+                    [diagnostic.code for diagnostic in diagnostics],
+                    ["CAPTURED_STATE_SCHEMA_INVALID"],
+                )
+
+    def test_public_schema_gate_rejects_malformed_nested_schemas(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            schema_directory = Path(temporary_directory)
+            captured_schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
+            captured_schema["properties"]["schema_version"] = []
+            (schema_directory / SCHEMA.name).write_text(
+                json.dumps(captured_schema), encoding="utf-8"
+            )
+            (schema_directory / PLAN_ACTION_SET_SCHEMA.name).write_text(
+                PLAN_ACTION_SET_SCHEMA.read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            original_directory = CAPTURED_STATE.SCHEMA_DIRECTORY
+            CAPTURED_STATE.SCHEMA_DIRECTORY = schema_directory
+            try:
+                diagnostics = CAPTURED_STATE.validate_captured_state(
+                    valid_document(),
+                    authoritative_plan_action_set(),
+                    expected_candidate_identity=CANDIDATE_IDENTITY,
+                    expected_implementation_manifest_digest=(
+                        IMPLEMENTATION_MANIFEST_DIGEST
+                    ),
+                )
+            finally:
+                CAPTURED_STATE.SCHEMA_DIRECTORY = original_directory
+
+        self.assertEqual(
+            [diagnostic.code for diagnostic in diagnostics],
+            ["CAPTURED_STATE_SCHEMA_INVALID"],
+        )
+
     def test_schema_rejects_skill_root_and_ownership_conflation(self) -> None:
         cases: list[dict[str, object]] = []
         fixture_document = json.loads(FIXTURE.read_text(encoding="utf-8"))

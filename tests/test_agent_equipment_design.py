@@ -563,6 +563,28 @@ class AgentEquipmentDesignTest(unittest.TestCase):
         self.assertEqual(result.diagnostics, ())
         self.assertIsNotNone(result.mutation_plan)
 
+    def test_public_loader_rejects_a_missing_catalog_or_lock(self) -> None:
+        catalog, lock = valid_pair()
+        for missing_document in ("catalog", "lock"):
+            with self.subTest(missing_document=missing_document):
+                with TemporaryDirectory() as temporary_directory:
+                    directory = Path(temporary_directory)
+                    catalog_path = directory / "catalog.json"
+                    lock_path = directory / "lock.json"
+                    if missing_document != "catalog":
+                        catalog_path.write_text(json.dumps(catalog), encoding="utf-8")
+                    if missing_document != "lock":
+                        lock_path.write_text(json.dumps(lock), encoding="utf-8")
+
+                    result = DESIGN.load_and_validate(catalog_path, lock_path)
+
+                self.assertEqual(
+                    {diagnostic.code for diagnostic in result.diagnostics},
+                    {"DOCUMENT_PARSE_INVALID"},
+                )
+                self.assertEqual(result.coverage, ())
+                self.assertIsNone(result.mutation_plan)
+
     def test_public_validator_rejects_nested_catalog_schema_extensions(self) -> None:
         catalog, lock = valid_pair()
         catalog["coverage_templates"][0]["undocumented_extension"] = True
@@ -649,6 +671,136 @@ class AgentEquipmentDesignTest(unittest.TestCase):
         self.assertIn("unsupported schema keyword", result.diagnostics[0].message)
         self.assertIsNone(result.mutation_plan)
 
+    def test_public_validator_fails_closed_when_checked_in_schemas_are_unavailable(
+        self,
+    ) -> None:
+        catalog, lock = valid_pair()
+        with TemporaryDirectory() as temporary_directory:
+            original_directory = DESIGN.SCHEMA_DIRECTORY
+            DESIGN.SCHEMA_DIRECTORY = Path(temporary_directory)
+            try:
+                result = DESIGN.validate_design(catalog, lock)
+            finally:
+                DESIGN.SCHEMA_DIRECTORY = original_directory
+
+        self.assertIn(
+            "CATALOG_SCHEMA_INVALID",
+            {diagnostic.code for diagnostic in result.diagnostics},
+        )
+        self.assertEqual(result.coverage, ())
+        self.assertIsNone(result.mutation_plan)
+
+    def test_public_validator_fails_closed_on_non_object_schema_roots(self) -> None:
+        catalog, lock = valid_pair()
+        for invalid_schema in ([], None):
+            with self.subTest(invalid_schema=invalid_schema):
+                with TemporaryDirectory() as temporary_directory:
+                    schema_directory = Path(temporary_directory)
+                    (schema_directory / "catalog-v1.schema.json").write_text(
+                        json.dumps(invalid_schema), encoding="utf-8"
+                    )
+                    (schema_directory / "lock-v1.schema.json").write_text(
+                        (ROOT / "docs/agent-equipment/lock-v1.schema.json").read_text(
+                            encoding="utf-8"
+                        ),
+                        encoding="utf-8",
+                    )
+                    original_directory = DESIGN.SCHEMA_DIRECTORY
+                    DESIGN.SCHEMA_DIRECTORY = schema_directory
+                    try:
+                        result = DESIGN.validate_design(catalog, lock)
+                    finally:
+                        DESIGN.SCHEMA_DIRECTORY = original_directory
+
+                self.assertIn(
+                    "CATALOG_SCHEMA_INVALID",
+                    {diagnostic.code for diagnostic in result.diagnostics},
+                )
+                self.assertEqual(result.coverage, ())
+                self.assertIsNone(result.mutation_plan)
+
+    def test_public_validator_rejects_unsupported_array_valued_schema_types(
+        self,
+    ) -> None:
+        catalog, lock = valid_pair()
+        with TemporaryDirectory() as temporary_directory:
+            schema_directory = Path(temporary_directory)
+            catalog_schema = json.loads(
+                (ROOT / "docs/agent-equipment/catalog-v1.schema.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            catalog_schema["type"] = ["object", "null"]
+            (schema_directory / "catalog-v1.schema.json").write_text(
+                json.dumps(catalog_schema), encoding="utf-8"
+            )
+            (schema_directory / "lock-v1.schema.json").write_text(
+                (ROOT / "docs/agent-equipment/lock-v1.schema.json").read_text(
+                    encoding="utf-8"
+                ),
+                encoding="utf-8",
+            )
+            original_directory = DESIGN.SCHEMA_DIRECTORY
+            DESIGN.SCHEMA_DIRECTORY = schema_directory
+            try:
+                result = DESIGN.validate_design(catalog, lock)
+            finally:
+                DESIGN.SCHEMA_DIRECTORY = original_directory
+
+        self.assertEqual(
+            {diagnostic.code for diagnostic in result.diagnostics},
+            {"CATALOG_SCHEMA_INVALID"},
+        )
+        self.assertEqual(result.coverage, ())
+        self.assertIsNone(result.mutation_plan)
+
+    def test_public_validator_rejects_malformed_nested_schemas(self) -> None:
+        catalog, lock = valid_pair()
+        with TemporaryDirectory() as temporary_directory:
+            schema_directory = Path(temporary_directory)
+            catalog_schema = json.loads(
+                (ROOT / "docs/agent-equipment/catalog-v1.schema.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            catalog_schema["properties"]["schema_version"] = []
+            (schema_directory / "catalog-v1.schema.json").write_text(
+                json.dumps(catalog_schema), encoding="utf-8"
+            )
+            (schema_directory / "lock-v1.schema.json").write_text(
+                (ROOT / "docs/agent-equipment/lock-v1.schema.json").read_text(
+                    encoding="utf-8"
+                ),
+                encoding="utf-8",
+            )
+            original_directory = DESIGN.SCHEMA_DIRECTORY
+            DESIGN.SCHEMA_DIRECTORY = schema_directory
+            try:
+                result = DESIGN.validate_design(catalog, lock)
+            finally:
+                DESIGN.SCHEMA_DIRECTORY = original_directory
+
+        self.assertEqual(
+            {diagnostic.code for diagnostic in result.diagnostics},
+            {"CATALOG_SCHEMA_INVALID"},
+        )
+        self.assertEqual(result.coverage, ())
+        self.assertIsNone(result.mutation_plan)
+
+    def test_public_schema_gate_distinguishes_booleans_from_integers(self) -> None:
+        catalog, lock = valid_pair()
+        catalog["distributions"][0]["selection"]["all"] = 1
+        lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
+
+        result = DESIGN.validate_design(catalog, lock)
+
+        self.assertIn(
+            "CATALOG_SCHEMA_INVALID",
+            {diagnostic.code for diagnostic in result.diagnostics},
+        )
+        self.assertEqual(result.coverage, ())
+        self.assertIsNone(result.mutation_plan)
+
     def test_public_validator_schema_fails_route_missing_identity_without_crashing(self) -> None:
         catalog, lock = valid_pair()
         managed_route(catalog).pop("identity")
@@ -730,7 +882,6 @@ class AgentEquipmentDesignTest(unittest.TestCase):
                 "disable",
                 "remove",
                 "restore",
-                "suppress_native_update",
             },
         )
         self.assertEqual(
@@ -751,7 +902,6 @@ class AgentEquipmentDesignTest(unittest.TestCase):
                 "disable",
                 "remove",
                 "restore",
-                "suppress_native_update",
             ],
         )
 
@@ -829,7 +979,7 @@ class AgentEquipmentDesignTest(unittest.TestCase):
         result = DESIGN.validate_design(catalog, lock)
 
         self.assertEqual(result.diagnostics, ())
-        self.assertEqual(len(result.mutation_plan), 7)
+        self.assertEqual(len(result.mutation_plan), 6)
         self.assertTrue(
             all(
                 operation.equipment_identities
@@ -1385,7 +1535,8 @@ class AgentEquipmentDesignTest(unittest.TestCase):
     def test_immutable_artifact_uri_rejects_credential_path_segments(self) -> None:
         catalog, lock = valid_pair()
         artifact_ref = (
-            "git+https://example.invalid/bearer-secret-canary-value@v1.0.0"
+            "git+https://example.invalid/bearer-secret-canary-value@"
+            "0123456789abcdef0123456789abcdef01234567"
         )
         managed_route(catalog)["restore"]["artifact_ref"] = artifact_ref
         locked_managed_route(lock)["restore"]["artifact_ref"] = artifact_ref
@@ -1400,7 +1551,10 @@ class AgentEquipmentDesignTest(unittest.TestCase):
         self.assertIsNone(result.mutation_plan)
 
     def test_immutable_artifact_selector_rejects_unsafe_subpaths(self) -> None:
-        base_ref = "git+https://example.invalid/bundle.git@v1.0.0"
+        base_ref = (
+            "git+https://example.invalid/bundle.git@"
+            "0123456789abcdef0123456789abcdef01234567"
+        )
         for suffix in (
             "#skills/../../etc",
             "#skills/./engineering",
@@ -1493,7 +1647,7 @@ class AgentEquipmentDesignTest(unittest.TestCase):
     def test_lock_distribution_source_is_an_exact_catalog_binding(self) -> None:
         for field, value in (
             ("repository", "https://other.example.invalid/bundle.git"),
-            ("ref", "v2.0.0"),
+            ("ref", "f" * 40),
         ):
             with self.subTest(field=field):
                 catalog, lock = valid_pair()
@@ -1511,7 +1665,7 @@ class AgentEquipmentDesignTest(unittest.TestCase):
     def test_immutable_distribution_restore_matches_bound_git_source(self) -> None:
         for field, value in (
             ("repository", "https://other.example.invalid/bundle.git"),
-            ("ref", "v2.0.0"),
+            ("ref", "f" * 40),
         ):
             with self.subTest(field=field):
                 catalog, lock = valid_pair()
@@ -1528,6 +1682,53 @@ class AgentEquipmentDesignTest(unittest.TestCase):
                 self.assertIsNone(result.mutation_plan)
 
     def test_native_distribution_source_matches_selected_provider(self) -> None:
+        for mutation in ("package", "executable"):
+            with self.subTest(mutation=mutation):
+                catalog, lock = valid_pair()
+                bind_managed_distribution_to_direct_mcp(
+                    catalog, lock, package="example-mcp", channel="1.0.0"
+                )
+                provider = {
+                    "kind": "direct_mcp",
+                    "server_name": "example",
+                    "transport": "stdio",
+                    "command": "npx",
+                    "arguments": [
+                        {"literal": "-y"},
+                        {"literal": "example-mcp@1.0.0"},
+                    ],
+                }
+                managed_route(catalog)["provider"] = deepcopy(provider)
+                managed_route(catalog)["provenance"] = {"owner": "overlay:claude/mcp"}
+                managed_route(catalog)["secret_references"] = []
+                locked_managed_route(lock)["provider"] = deepcopy(provider)
+                locked_managed_route(lock)["provenance"] = {
+                    "owner": "overlay:claude/mcp"
+                }
+                locked_managed_route(lock)["secret_references"] = []
+                if mutation == "package":
+                    catalog["distributions"][0]["source"]["package"] = (
+                        "unrelated-package"
+                    )
+                    lock["distributions"][0]["source"] = deepcopy(
+                        catalog["distributions"][0]["source"]
+                    )
+                else:
+                    managed_route(catalog)["provider"]["command"] = "echo"
+                    locked_managed_route(lock)["provider"] = deepcopy(
+                        managed_route(catalog)["provider"]
+                    )
+                lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
+
+                result = DESIGN.validate_design(catalog, lock)
+
+                self.assertIn(
+                    "DISTRIBUTION_SOURCE_PROVIDER_MISMATCH",
+                    {diagnostic.code for diagnostic in result.diagnostics},
+                )
+                self.assertIsNone(result.mutation_plan)
+
+    def test_retirement_native_source_matches_selected_executable(self) -> None:
         catalog = json.loads(
             (ROOT / "docs/agent-equipment/initial-catalog.proposed.json").read_text(
                 encoding="utf-8"
@@ -1538,24 +1739,26 @@ class AgentEquipmentDesignTest(unittest.TestCase):
                 encoding="utf-8"
             )
         )
-        distribution = next(
+        retirement = next(
             item
-            for item in catalog["distributions"]
-            if item["identity"] == "distribution:context7/direct-mcp"
+            for item in catalog["retirements"]
+            if item["identity"] == "retirement:claude/direct-chrome-devtools"
         )
-        locked_distribution = next(
+        locked_retirement = next(
             item
-            for item in lock["distributions"]
-            if item["identity"] == distribution["identity"]
+            for item in lock["retirements"]
+            if item["identity"] == retirement["identity"]
         )
-        distribution["source"]["package"] = "unrelated-package"
-        locked_distribution["source"] = deepcopy(distribution["source"])
+        retirement["route"]["provider"]["command"] = "echo"
+        locked_retirement["route"]["provider"] = deepcopy(
+            retirement["route"]["provider"]
+        )
         lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
 
         result = DESIGN.validate_design(catalog, lock)
 
         self.assertIn(
-            "DISTRIBUTION_SOURCE_PROVIDER_MISMATCH",
+            "RETIREMENT_DISTRIBUTION_SOURCE_PROVIDER_MISMATCH",
             {diagnostic.code for diagnostic in result.diagnostics},
         )
         self.assertIsNone(result.mutation_plan)
@@ -1721,6 +1924,77 @@ class AgentEquipmentDesignTest(unittest.TestCase):
 
         self.assertIn(
             "RETIREMENT_SURFACE_PROVIDER_MISMATCH",
+            {diagnostic.code for diagnostic in result.diagnostics},
+        )
+        self.assertIsNone(result.mutation_plan)
+
+    def test_retirement_provider_and_restore_match_selected_distribution(self) -> None:
+        catalog, lock = valid_pair()
+        route = deepcopy(manual_route(catalog))
+        route["identity"] = "route:example/legacy-native-plugin"
+        route["activation_group"] = "activation:example/legacy-native-plugin"
+        route["control_owner"] = "reconciler_owned"
+        route["provider"]["plugin_id"] = "unrelated-victim@official"
+        route["provenance"]["owner"] = (
+            "manager:claude-plugins/unrelated-victim@official"
+        )
+        route["operations"]["disable"] = {
+            "disposition": "automated",
+            "compensation": "restore_captured_pre_state",
+        }
+        retirement = {
+            "identity": "retirement:example/legacy-native-plugin",
+            "equipment_identity": "plugin:example/matt",
+            "harness": "claude",
+            "route": route,
+            "surface": {
+                "kind": "plugin",
+                "plugin_id": "unrelated-victim@official",
+            },
+            "desired_state": "disabled",
+        }
+        catalog["retirements"].append(retirement)
+        lock["retirements"].append(deepcopy(retirement))
+        lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
+
+        result = DESIGN.validate_design(catalog, lock)
+
+        self.assertIn(
+            "RETIREMENT_DISTRIBUTION_SOURCE_PROVIDER_MISMATCH",
+            {diagnostic.code for diagnostic in result.diagnostics},
+        )
+        self.assertIsNone(result.mutation_plan)
+
+        catalog, lock = valid_pair()
+        retirement = {
+            "identity": "retirement:example/legacy-native-plugin",
+            "equipment_identity": "plugin:example/matt",
+            "harness": "claude",
+            "route": deepcopy(manual_route(catalog)),
+            "surface": {
+                "kind": "plugin",
+                "plugin_id": "example-matt@official",
+            },
+            "desired_state": "disabled",
+        }
+        retirement["route"]["identity"] = "route:example/legacy-native-plugin"
+        retirement["route"]["activation_group"] = (
+            "activation:example/legacy-native-plugin"
+        )
+        retirement["route"]["control_owner"] = "reconciler_owned"
+        retirement["route"]["restore"]["reviewed_baseline"] = "9.9.9"
+        retirement["route"]["operations"]["disable"] = {
+            "disposition": "automated",
+            "compensation": "restore_captured_pre_state",
+        }
+        catalog["retirements"].append(retirement)
+        lock["retirements"].append(deepcopy(retirement))
+        lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
+
+        result = DESIGN.validate_design(catalog, lock)
+
+        self.assertIn(
+            "RETIREMENT_DISTRIBUTION_RESTORE_MISMATCH",
             {diagnostic.code for diagnostic in result.diagnostics},
         )
         self.assertIsNone(result.mutation_plan)
@@ -2069,6 +2343,152 @@ class AgentEquipmentDesignTest(unittest.TestCase):
         )
         self.assertIsNone(result.mutation_plan)
 
+    def test_immutable_restore_binds_a_commit_selector_to_its_revision(self) -> None:
+        for mutation in ("tag_revision", "different_commit_selector"):
+            with self.subTest(mutation=mutation):
+                catalog, lock = valid_pair()
+                restore_records = (
+                    managed_route(catalog)["restore"],
+                    locked_managed_route(lock)["restore"],
+                    lock["distributions"][0]["restore"],
+                )
+                if mutation == "tag_revision":
+                    for restore in restore_records:
+                        restore["revision"] = "v1.0.0"
+                        restore["artifact_ref"] = (
+                            "git+https://example.invalid/bundle.git@v1.0.0"
+                        )
+                else:
+                    mismatched_commit = "f" * 40
+                    for restore in restore_records:
+                        restore["artifact_ref"] = (
+                            "git+https://example.invalid/bundle.git@"
+                            f"{mismatched_commit}"
+                        )
+                lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
+
+                result = DESIGN.validate_design(catalog, lock)
+
+                self.assertTrue(
+                    {"CATALOG_SCHEMA_INVALID", "IMMUTABLE_RESTORE_INVALID"}
+                    & {diagnostic.code for diagnostic in result.diagnostics}
+                )
+                self.assertIsNone(result.mutation_plan)
+
+    def test_digest_bound_catalog_and_lock_pair_accepts_reviewed_advance(self) -> None:
+        catalog, lock = valid_pair()
+        next_commit = "f" * 40
+        next_artifact_ref = f"git+https://example.invalid/bundle.git@{next_commit}"
+        next_digest = "sha256:" + "e" * 64
+        for restore in (
+            managed_route(catalog)["restore"],
+            locked_managed_route(lock)["restore"],
+            lock["distributions"][0]["restore"],
+        ):
+            restore["revision"] = next_commit
+            restore["artifact_ref"] = next_artifact_ref
+            restore["content_digest"] = next_digest
+        catalog["distributions"][0]["source"]["ref"] = next_commit
+        lock["distributions"][0]["source"]["ref"] = next_commit
+        lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
+
+        result = DESIGN.validate_design(catalog, lock)
+
+        self.assertEqual(result.diagnostics, ())
+        self.assertEqual(lock["catalog_digest"], DESIGN.canonical_json_sha256(catalog))
+
+    def test_native_update_control_matches_suppression_disposition(self) -> None:
+        allowed = {
+            ("not_applicable", "unavailable"),
+            ("unknown", "operator_action"),
+            ("unknown", "unavailable"),
+            ("suppressible", "automated"),
+            ("suppressible", "operator_action"),
+            ("suppressible", "unavailable"),
+            ("unsuppressible", "unavailable"),
+        }
+        for control in (
+            "not_applicable",
+            "unknown",
+            "suppressible",
+            "unsuppressible",
+        ):
+            for disposition in ("automated", "operator_action", "unavailable"):
+                with self.subTest(control=control, disposition=disposition):
+                    catalog, lock = valid_pair()
+                    route = managed_route(catalog)
+                    locked_route = locked_managed_route(lock)
+                    restore_class = (
+                        "immutable"
+                        if control == "not_applicable"
+                        else "native_rolling"
+                    )
+                    if restore_class == "native_rolling":
+                        restore = {
+                            "class": "native_rolling",
+                            "channel": "stable",
+                            "reviewed_baseline": "1.2.3",
+                            "observation_source": "fixture manager",
+                            "native_update_control": control,
+                        }
+                        source = {
+                            "kind": "native_manager",
+                            "manager": "claude",
+                            "package": "example-matt@official",
+                            "channel": "stable",
+                        }
+                        provider = {
+                            "kind": "native_plugin",
+                            "manager": "claude",
+                            "plugin_id": "example-matt@official",
+                            "scope": "user",
+                        }
+                        catalog["distributions"][0]["source"] = deepcopy(source)
+                        lock["distributions"][0]["source"] = deepcopy(source)
+                        route["provider"] = deepcopy(provider)
+                        locked_route["provider"] = deepcopy(provider)
+                        route["provenance"] = {
+                            "owner": "manager:claude-plugins/example-matt@official"
+                        }
+                        locked_route["provenance"] = deepcopy(route["provenance"])
+                        route["control_owner"] = "reconciler_owned"
+                        locked_route["control_owner"] = "reconciler_owned"
+                        route["operations"]["remove"] = {
+                            "disposition": "operator_action"
+                        }
+                        locked_route["operations"]["remove"] = {
+                            "disposition": "operator_action"
+                        }
+                    else:
+                        restore = deepcopy(route["restore"])
+                    route["restore"] = deepcopy(restore)
+                    locked_route["restore"] = deepcopy(restore)
+                    lock["distributions"][0]["restore"] = deepcopy(restore)
+                    route["operations"]["suppress_native_update"] = {
+                        "disposition": disposition,
+                        **(
+                            {"compensation": "restore_captured_pre_state"}
+                            if disposition == "automated"
+                            else {}
+                        ),
+                    }
+                    locked_route["operations"]["suppress_native_update"] = deepcopy(
+                        route["operations"]["suppress_native_update"]
+                    )
+                    lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
+
+                    result = DESIGN.validate_design(catalog, lock)
+
+                    if (control, disposition) in allowed:
+                        self.assertEqual(result.diagnostics, ())
+                        self.assertIsNotNone(result.mutation_plan)
+                    else:
+                        self.assertIn(
+                            "NATIVE_UPDATE_OPERATION_INVALID",
+                            {diagnostic.code for diagnostic in result.diagnostics},
+                        )
+                        self.assertIsNone(result.mutation_plan)
+
     def test_secret_references_accept_environment_variables_and_opaque_profiles(self) -> None:
         catalog, lock = valid_pair()
         managed_route(catalog)["provider"] = {
@@ -2079,6 +2499,7 @@ class AgentEquipmentDesignTest(unittest.TestCase):
             "arguments": [
                 {"secret_profile_reference": "context7"},
                 {"literal": "--"},
+                {"literal": "npx"},
                 {"literal": "example-mcp@1.0.0"},
                 {
                     "secret_reference": "EXAMPLE_API_KEY",

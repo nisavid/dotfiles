@@ -5,6 +5,7 @@
     "request_identity": "request:observe-unknown-key",
     "correlation_identity": "correlation:candidate-unknown-key",
     "candidate_identity": "candidate:unknown-key",
+    "implementation_manifest_digest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
     "catalog_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "lock_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     "plan_digest": null,
@@ -18,6 +19,7 @@
     "equipment_identities": [
       "plugin:mattpocock/claude"
     ],
+    "controlled_equipment_identities": [],
     "activation_group": "activation:claude/mattpocock-plugin",
     "surface_scope": [
       "surface:route:claude/mattpocock-plugin/plugin:mattpocock/claude"
