@@ -1,5 +1,5 @@
 {
-  "catalog_digest": "sha256:6356f86481f7d5b27f9576e8f35e963018fc2fec08d2c037eabb4ec9f81b7c41",
+  "catalog_digest": "sha256:b0441be716f89c98df131b7cd86e3e9f5cdc492c92aae77245c15a95dac9e071",
   "coverage": [
     {
       "equipment_identity": "mcp:chrome-devtools/server",
@@ -1556,7 +1556,7 @@
                 "channel": "stable",
                 "class": "native_rolling",
                 "native_update_control": "suppressible",
-                "observation_source": "Claude official marketplace and upstream plugin manifest",
+                "observation_source": "Claude official marketplace, auto-update documentation, and upstream plugin manifest",
                 "reviewed_baseline": "1.2.3"
               },
               "secret_references": []
@@ -2498,7 +2498,7 @@
                 "channel": "stable",
                 "class": "native_rolling",
                 "native_update_control": "suppressible",
-                "observation_source": "Claude official marketplace and upstream plugin manifest",
+                "observation_source": "Claude official marketplace, auto-update documentation, and upstream plugin manifest",
                 "reviewed_baseline": "1.2.3"
               },
               "secret_references": []
@@ -2696,7 +2696,7 @@
                 "channel": "stable",
                 "class": "native_rolling",
                 "native_update_control": "suppressible",
-                "observation_source": "Claude official marketplace and upstream plugin manifest",
+                "observation_source": "Claude official marketplace, auto-update documentation, and upstream plugin manifest",
                 "reviewed_baseline": "1.2.3"
               },
               "secret_references": []
@@ -2894,7 +2894,7 @@
                 "channel": "stable",
                 "class": "native_rolling",
                 "native_update_control": "suppressible",
-                "observation_source": "Claude official marketplace and upstream plugin manifest",
+                "observation_source": "Claude official marketplace, auto-update documentation, and upstream plugin manifest",
                 "reviewed_baseline": "1.2.3"
               },
               "secret_references": []
@@ -3092,7 +3092,7 @@
                 "channel": "stable",
                 "class": "native_rolling",
                 "native_update_control": "suppressible",
-                "observation_source": "Claude official marketplace and upstream plugin manifest",
+                "observation_source": "Claude official marketplace, auto-update documentation, and upstream plugin manifest",
                 "reviewed_baseline": "1.2.3"
               },
               "secret_references": []
@@ -3290,7 +3290,7 @@
                 "channel": "stable",
                 "class": "native_rolling",
                 "native_update_control": "suppressible",
-                "observation_source": "Claude official marketplace and upstream plugin manifest",
+                "observation_source": "Claude official marketplace, auto-update documentation, and upstream plugin manifest",
                 "reviewed_baseline": "1.2.3"
               },
               "secret_references": []
@@ -3488,7 +3488,7 @@
                 "channel": "stable",
                 "class": "native_rolling",
                 "native_update_control": "suppressible",
-                "observation_source": "Claude official marketplace and upstream plugin manifest",
+                "observation_source": "Claude official marketplace, auto-update documentation, and upstream plugin manifest",
                 "reviewed_baseline": "1.2.3"
               },
               "secret_references": []
@@ -3686,7 +3686,7 @@
                 "channel": "stable",
                 "class": "native_rolling",
                 "native_update_control": "suppressible",
-                "observation_source": "Claude official marketplace and upstream plugin manifest",
+                "observation_source": "Claude official marketplace, auto-update documentation, and upstream plugin manifest",
                 "reviewed_baseline": "1.2.3"
               },
               "secret_references": []
@@ -3884,7 +3884,7 @@
                 "channel": "stable",
                 "class": "native_rolling",
                 "native_update_control": "suppressible",
-                "observation_source": "Claude official marketplace and upstream plugin manifest",
+                "observation_source": "Claude official marketplace, auto-update documentation, and upstream plugin manifest",
                 "reviewed_baseline": "1.2.3"
               },
               "secret_references": []
@@ -4082,7 +4082,7 @@
                 "channel": "stable",
                 "class": "native_rolling",
                 "native_update_control": "suppressible",
-                "observation_source": "Claude official marketplace and upstream plugin manifest",
+                "observation_source": "Claude official marketplace, auto-update documentation, and upstream plugin manifest",
                 "reviewed_baseline": "1.2.3"
               },
               "secret_references": []
@@ -4280,7 +4280,7 @@
                 "channel": "stable",
                 "class": "native_rolling",
                 "native_update_control": "suppressible",
-                "observation_source": "Claude official marketplace and upstream plugin manifest",
+                "observation_source": "Claude official marketplace, auto-update documentation, and upstream plugin manifest",
                 "reviewed_baseline": "1.2.3"
               },
               "secret_references": []
@@ -4478,7 +4478,7 @@
                 "channel": "stable",
                 "class": "native_rolling",
                 "native_update_control": "suppressible",
-                "observation_source": "Claude official marketplace and upstream plugin manifest",
+                "observation_source": "Claude official marketplace, auto-update documentation, and upstream plugin manifest",
                 "reviewed_baseline": "1.2.3"
               },
               "secret_references": []
@@ -4676,7 +4676,7 @@
                 "channel": "stable",
                 "class": "native_rolling",
                 "native_update_control": "suppressible",
-                "observation_source": "Claude official marketplace and upstream plugin manifest",
+                "observation_source": "Claude official marketplace, auto-update documentation, and upstream plugin manifest",
                 "reviewed_baseline": "1.2.3"
               },
               "secret_references": []
@@ -4874,7 +4874,7 @@
                 "channel": "stable",
                 "class": "native_rolling",
                 "native_update_control": "suppressible",
-                "observation_source": "Claude official marketplace and upstream plugin manifest",
+                "observation_source": "Claude official marketplace, auto-update documentation, and upstream plugin manifest",
                 "reviewed_baseline": "1.2.3"
               },
               "secret_references": []
@@ -5072,7 +5072,7 @@
                 "channel": "stable",
                 "class": "native_rolling",
                 "native_update_control": "suppressible",
-                "observation_source": "Claude official marketplace and upstream plugin manifest",
+                "observation_source": "Claude official marketplace, auto-update documentation, and upstream plugin manifest",
                 "reviewed_baseline": "1.2.3"
               },
               "secret_references": []
@@ -5270,7 +5270,7 @@
                 "channel": "stable",
                 "class": "native_rolling",
                 "native_update_control": "suppressible",
-                "observation_source": "Claude official marketplace and upstream plugin manifest",
+                "observation_source": "Claude official marketplace, auto-update documentation, and upstream plugin manifest",
                 "reviewed_baseline": "1.2.3"
               },
               "secret_references": []
@@ -5468,7 +5468,7 @@
                 "channel": "stable",
                 "class": "native_rolling",
                 "native_update_control": "suppressible",
-                "observation_source": "Claude official marketplace and upstream plugin manifest",
+                "observation_source": "Claude official marketplace, auto-update documentation, and upstream plugin manifest",
                 "reviewed_baseline": "1.2.3"
               },
               "secret_references": []
@@ -5666,7 +5666,7 @@
                 "channel": "stable",
                 "class": "native_rolling",
                 "native_update_control": "suppressible",
-                "observation_source": "Claude official marketplace and upstream plugin manifest",
+                "observation_source": "Claude official marketplace, auto-update documentation, and upstream plugin manifest",
                 "reviewed_baseline": "1.2.3"
               },
               "secret_references": []
@@ -5864,7 +5864,7 @@
                 "channel": "stable",
                 "class": "native_rolling",
                 "native_update_control": "suppressible",
-                "observation_source": "Claude official marketplace and upstream plugin manifest",
+                "observation_source": "Claude official marketplace, auto-update documentation, and upstream plugin manifest",
                 "reviewed_baseline": "1.2.3"
               },
               "secret_references": []
@@ -6062,7 +6062,7 @@
                 "channel": "stable",
                 "class": "native_rolling",
                 "native_update_control": "suppressible",
-                "observation_source": "Claude official marketplace and upstream plugin manifest",
+                "observation_source": "Claude official marketplace, auto-update documentation, and upstream plugin manifest",
                 "reviewed_baseline": "1.2.3"
               },
               "secret_references": []
@@ -6260,7 +6260,7 @@
                 "channel": "stable",
                 "class": "native_rolling",
                 "native_update_control": "suppressible",
-                "observation_source": "Claude official marketplace and upstream plugin manifest",
+                "observation_source": "Claude official marketplace, auto-update documentation, and upstream plugin manifest",
                 "reviewed_baseline": "1.2.3"
               },
               "secret_references": []
@@ -6458,7 +6458,7 @@
                 "channel": "stable",
                 "class": "native_rolling",
                 "native_update_control": "suppressible",
-                "observation_source": "Claude official marketplace and upstream plugin manifest",
+                "observation_source": "Claude official marketplace, auto-update documentation, and upstream plugin manifest",
                 "reviewed_baseline": "1.2.3"
               },
               "secret_references": []
@@ -6656,7 +6656,7 @@
                 "channel": "stable",
                 "class": "native_rolling",
                 "native_update_control": "suppressible",
-                "observation_source": "Claude official marketplace and upstream plugin manifest",
+                "observation_source": "Claude official marketplace, auto-update documentation, and upstream plugin manifest",
                 "reviewed_baseline": "1.2.3"
               },
               "secret_references": []
@@ -6854,7 +6854,7 @@
                 "channel": "stable",
                 "class": "native_rolling",
                 "native_update_control": "suppressible",
-                "observation_source": "Claude official marketplace and upstream plugin manifest",
+                "observation_source": "Claude official marketplace, auto-update documentation, and upstream plugin manifest",
                 "reviewed_baseline": "1.2.3"
               },
               "secret_references": []
@@ -7052,7 +7052,7 @@
                 "channel": "stable",
                 "class": "native_rolling",
                 "native_update_control": "suppressible",
-                "observation_source": "Claude official marketplace and upstream plugin manifest",
+                "observation_source": "Claude official marketplace, auto-update documentation, and upstream plugin manifest",
                 "reviewed_baseline": "1.2.3"
               },
               "secret_references": []
@@ -7250,7 +7250,7 @@
                 "channel": "stable",
                 "class": "native_rolling",
                 "native_update_control": "suppressible",
-                "observation_source": "Claude official marketplace and upstream plugin manifest",
+                "observation_source": "Claude official marketplace, auto-update documentation, and upstream plugin manifest",
                 "reviewed_baseline": "1.2.3"
               },
               "secret_references": []
@@ -7530,7 +7530,7 @@
         "channel": "stable",
         "class": "native_rolling",
         "native_update_control": "suppressible",
-        "observation_source": "Claude official marketplace and upstream plugin manifest",
+        "observation_source": "Claude official marketplace, auto-update documentation, and upstream plugin manifest",
         "reviewed_baseline": "1.2.3"
       }
     },

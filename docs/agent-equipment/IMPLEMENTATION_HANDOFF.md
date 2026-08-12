@@ -34,6 +34,7 @@ deferred.
 | `docs/agent-equipment/catalog-v1.schema.json` | Authored catalog serialization contract |
 | `docs/agent-equipment/lock-v1.schema.json` | Expanded lock serialization contract |
 | `docs/agent-equipment/captured-state-v1.schema.json` | Pre-mutation runtime capture and recovery-evidence contract |
+| `docs/agent-equipment/adapter-contract-v1.schema.json` | Closed capability, request, observation, action, and receipt serialization contract |
 | `docs/agent-equipment/initial-catalog.proposed.json` | Schema-valid initial desired-state proposal; no live authority |
 | `docs/agent-equipment/initial-lock.proposed.json` | Generated 132-record lock bound to the proposed catalog digest |
 | `docs/agent-equipment/INVENTORY.md` and `initial-inventory.json` | Dated, secret-free read-only observation and initial classification |
@@ -41,6 +42,8 @@ deferred.
 | `docs/agent-equipment/MIGRATION.md` | Separately authorized migration and rollback contract |
 | `docs/agent-equipment/ACCEPTANCE.md` | Requirement-to-fixture production release gate |
 | `scripts/agent_equipment_design.py` and `tests/test_agent_equipment_design.py` | Executable schema, expansion, and fail-closed design model |
+| `scripts/agent_equipment_acceptance_model.py` and `tests/test_agent_equipment_acceptance.py` | Disposable fake-manager convergence, checkpoint, compensation, and migration-boundary evidence |
+| `tests/test_agent_equipment_adapter_contract.py` and `tests/fixtures/agent-equipment/schema/*-adapter-*.json` | Executable positive and fail-closed adapter-contract examples |
 
 Research notes are dated evidence, not desired state. Native locks, runtime
 files, caches, credentials, application databases, and manager timestamps are
@@ -50,6 +53,13 @@ The executable design model has no adapters, checkpoint store, or command that
 can mutate runtime state. Its `mutation_plan` is a deterministic grouping of
 declared automated operations used to prove all-or-nothing validation; it is
 not a state-diff plan and must not be promoted as the production resolver.
+
+The executable acceptance model has only in-memory fake-manager state,
+fixture-local files, and fixture-local durable checkpoints. It exercises the
+production contract's convergence and recovery semantics without reading or
+mutating a real harness, user home, native manager, or credential store. It is
+evidence for the handoff, not the production controller or runtime-migration
+authority.
 
 ## Production source shape
 
@@ -114,16 +124,20 @@ execute(validated_plan, adapters, checkpoint_store) -> ApplyReport
 Every adapter implements:
 
 ```python
-capabilities() -> tuple[CapabilityRecord, ...]
+capabilities() -> tuple[CapabilityRecord, ...] | AdapterError
 observe(request: ObserveRequest) -> RuntimeObservation
 apply(action: PlannedAction, expected_pre_state: StateDigest) -> MutationReceipt
-verify(action: PlannedAction) -> RuntimeObservation
+verify(request: ObserveRequest) -> RuntimeObservation
 compensate(
     action: PlannedAction,
     expected_post_state: StateDigest,
     captured_pre_state: CapturedState,
 ) -> MutationReceipt
 ```
+
+`AdapterError` is the closed common error object defined by
+`adapter-contract-v1.schema.json`; capability discovery is all-or-error and
+returns no partial capability tuple.
 
 Adapters receive resolved complete route records. They do not choose providers,
 merge coverage defaults, rewrite outcomes, resolve secret values into returned

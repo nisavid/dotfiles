@@ -1,0 +1,35 @@
+{
+  "record_type": "RuntimeObservation",
+  "record": {
+    "contract_version": "adapter-contract-v1",
+    "request_identity": "request:observe-missing-manager-binding",
+    "correlation_identity": "correlation:candidate-missing-manager-binding",
+    "candidate_identity": "candidate:missing-manager-binding",
+    "catalog_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "lock_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "plan_digest": null,
+    "capability_identity": "capability:claude-native-plugin-v1",
+    "capability_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "harness": "claude",
+    "route_identity": "route:claude/mattpocock-plugin",
+    "route_digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "control_owner": "reconciler_owned",
+    "equipment_identities": [
+      "plugin:mattpocock/claude"
+    ],
+    "activation_group": "activation:claude/mattpocock-plugin",
+    "surface_scope": [
+      "surface:route:claude/mattpocock-plugin/plugin:mattpocock/claude"
+    ],
+    "observed_at": "2026-08-12T15:00:00Z",
+    "result": {
+      "status": "error",
+      "code": "CAPABILITY_CHANGED",
+      "classification": "capability_changed",
+      "message": "The manager version no longer matches the reviewed capability.",
+      "retry": "after_audit",
+      "mutation_state": "not_started",
+      "evidence_references": []
+    }
+  }
+}

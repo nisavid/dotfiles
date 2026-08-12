@@ -1,0 +1,62 @@
+{
+  "record_type": "MutationReceipt",
+  "record": {
+    "contract_version": "adapter-contract-v1",
+    "receipt_identity": "receipt:install-mattpocock-skills",
+    "attempt_identity": "attempt:001",
+    "action_identity": "action:install-mattpocock-skills",
+    "correlation_identity": "correlation:candidate-001",
+    "ordinal": 0,
+    "candidate_identity": "candidate:001",
+    "catalog_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "lock_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "plan_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "capability_identity": "capability:claude-native-plugin-v1",
+    "capability_digest": "sha256:c0aad6935698f92f477aa2cd9969f83256d13e9c2db4e43ddd6345e3f75c7677",
+    "manager_version_evidence_digest": "sha256:c4a5a1878eff82ef30703ca6a3da147e4b94b66dc2b337867e04e3d4ebf1935d",
+    "adapter_identity": "adapter:claude-native-plugin",
+    "adapter_version": "1.0.0",
+    "harness": "claude",
+    "route_identity": "route:claude/mattpocock-plugin",
+    "route_digest": "sha256:942290fc6dd339c0bb1bae03b5f7163c03adb475ff9147110b8791d903359bbf",
+    "control_owner": "reconciler_owned",
+    "equipment_identities": [
+      "plugin:mattpocock/claude"
+    ],
+    "activation_group": "activation:claude/mattpocock-plugin",
+    "surface_scope": [
+      "surface:route:claude/mattpocock-plugin/plugin:mattpocock/claude"
+    ],
+    "operation": "install",
+    "operation_disposition": "automated",
+    "secret_references": [],
+    "phase": "apply",
+    "started_at": "2026-08-12T15:00:00Z",
+    "finished_at": "2026-08-12T15:00:01Z",
+    "prepared_checkpoint_reference": "checkpoint:candidate-001/action-001",
+    "result": {
+      "status": "ok",
+      "effect": "changed",
+      "expected_pre_state_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "observed_pre_state_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "comparison": "equal",
+      "expected_post_state_digest": "sha256:42176224e7ed4c5db475b4d9f40e7ad59b15e1d407e0c335e697b6e97e612a2d",
+      "observed_post_state_digest": "sha256:42176224e7ed4c5db475b4d9f40e7ad59b15e1d407e0c335e697b6e97e612a2d",
+      "native_result_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+      "surface_evidence": [
+        {
+          "kind": "surface",
+          "identity": "surface:route:claude/mattpocock-plugin/plugin:mattpocock/claude",
+          "digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+        }
+      ],
+      "compensation_evidence": {
+        "status": "prepared",
+        "kind": "restore_captured_pre_state",
+        "captured_state_identity": "captured-state:candidate-001/action-001",
+        "captured_state_digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+        "expected_post_state_digest": "sha256:42176224e7ed4c5db475b4d9f40e7ad59b15e1d407e0c335e697b6e97e612a2d"
+      }
+    }
+  }
+}

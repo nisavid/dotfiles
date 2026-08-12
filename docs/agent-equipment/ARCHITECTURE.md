@@ -158,16 +158,237 @@ native-rolling baselines without installing them. Apply never advances a lock.
 Each production adapter should satisfy one internal seam:
 
 ```text
-capabilities() -> capability records
+capabilities() -> capability records or discovery error
 observe(request) -> runtime observation
 apply(action, expected_pre_state) -> mutation receipt
-verify(action) -> runtime observation
+verify(request) -> runtime observation
 compensate(action, expected_post_state, captured_pre_state) -> mutation receipt
 ```
 
 Requests carry only resolved route data and secret references. The runner
 resolves secret references inside the child process boundary; adapters, logs,
 diagnostics, lock diffs, and receipts never receive the resolved value.
+
+The authoritative serialized shapes are
+`docs/agent-equipment/adapter-contract-v1.schema.json`; the prose below defines
+their behavioral semantics. The five records are closed, tagged records: every
+named field is required unless this section says otherwise, and an unknown
+field is an error.
+Their `contract_version` is `adapter-contract-v1`. Identifiers are non-empty,
+secret-free strings; every `*_digest` is a lowercase SHA-256 digest over the
+canonical JSON of the named object. A digest field is excluded from its own
+digest input. Timestamps are RFC 3339 UTC values and never affect state
+digests.
+
+Every fallible observation or mutation result uses the same tagged envelope.
+An `ok` result contains only the success payload defined for that record. An
+`error` result
+contains `code`, `classification`, `message`, `retry`, `mutation_state`, and
+`evidence_references`. `code` is stable and machine-readable;
+`classification` is one of `invalid_request`, `unsupported`,
+`capability_changed`, `concurrent_change`, `secret_resolution_failed`,
+`native_failure`, or `partial_change`; `retry` is `never` or
+`after_audit`; and `mutation_state` is `not_started`, `possibly_changed`, or
+`unknown`. Observation failures use `not_started`. Capability discovery is
+all-or-error: on discovery failure it returns this error envelope and no
+partial records. Messages and referenced evidence are redacted by
+construction. Native stdout, stderr, environment, and resolved secret values
+are not record fields.
+
+### `CapabilityRecord`
+
+One record describes one adapter's support for one exact harness and route
+family. `capabilities()` returns records sorted by harness, provider kind,
+route-family selector, and capability identity. Capability discovery may run
+only the manager's narrow, read-only version query needed to populate
+`manager_version_evidence`; it is not permission to inspect equipment state or
+mutate runtime state. The evidence record contains the manager identity,
+observed version, observation source, and its canonical digest. Any changed
+manager-version evidence changes the enclosing capability digest.
+
+| Field | Contract |
+| --- | --- |
+| `contract_version` | Exact adapter record version. |
+| `capability_identity` | Stable identity for this adapter and route-family capability; it does not change merely because a process restarts. |
+| `adapter_identity`, `adapter_version` | Implementation provenance. The version identifies the exact executable implementation used for planning and execution. |
+| `harness` | Exactly one of `claude`, `codex`, or `cursor`. |
+| `provider_match` | A closed, secret-free selector over the catalog provider discriminant: standalone canonical root, native manager and scope, or direct-MCP transport and overlay family. Values are literal; regex and glob matching are forbidden. It never selects an equipment identity or preferred provider. |
+| `manager_version_evidence` | Narrow read-only manager-version observation, source, and digest. The manager-version evidence digest is echoed separately by every request, observation, action, and receipt. |
+| `surface_identity_rule` | Closed `rule` and `version`. V1 supports `shared_equipment_identity`, `route_and_equipment_identity`, and `route_identity`; it maps resolved identities to sorted logical surface identities without reading runtime state. |
+| `operation_support` | Exactly one entry for each required operation. Each entry has `mode`; automated mutations additionally have `compare_before_mutate: true`, `idempotency: state_convergent`, and `compensation: restore_captured_pre_state`. |
+| `component_control_support` | `mode`; exact `selector_granularity: equipment_identity`; sorted supported equipment identities; supported states drawn from `enabled` and `disabled`; and `mutation_boundary`, which is `selected_component` for automation and `none` otherwise. |
+| `native_update_support` | `version_observation` and `baseline_comparison`, each `automated`, `inspect_only`, or `unavailable`; `suppression`, using any operation-support mode; and `suppression_scope`, exactly `route`, `manager`, or `none`. It distinguishes observing manager drift from preventing it. |
+| `record_versions` | The exact `ObserveRequest`, `RuntimeObservation`, `PlannedAction`, `MutationReceipt`, and captured-state major versions accepted or emitted. |
+| `automated_control_owners` | Exact one-element array `["reconciler_owned"]`. An adapter must never advertise automated mutation for `operator_owned`. |
+| `capability_digest` | Digest of the complete record excluding this field. It binds resolution, plans, requests, receipts, and checkpoints. |
+
+An operation-support `mode` is one of:
+
+- `automated`: the adapter implements the operation. For `inspect` this is
+  read-only; for every other operation the capability must declare the three
+  mutation guarantees in the table.
+- `inspect_only`: the adapter can observe and verify the state associated with
+  the operation but cannot initiate it. The entry includes the exact normalized
+  state fields it can observe.
+- `operator_action`: the adapter can return a stable, secret-free description
+  of an operator procedure, but cannot execute it. The entry includes a stable
+  `operator_action_reference`, not an interpolated shell command.
+- `unavailable`: the adapter can neither execute the operation nor claim an
+  operator procedure. It may still report that the route or state is opaque.
+
+Entries are closed by mode. Automated `inspect` has only `mode` and its
+normalized observed fields. Automated mutations have `mode` and the three
+guarantees above. Inspect-only and operator-action entries have only `mode` and
+their respective field. Unavailable has only `mode`. The map contains exactly
+`inspect`, `install`, `configure`, `enable`, `disable`, `remove`, `restore`,
+and `suppress_native_update`.
+
+Surface-identity rule v1 is exact. `shared_equipment_identity` emits one
+`surface:shared/<equipment-identity>` per selected equipment identity;
+`route_and_equipment_identity` emits one
+`surface:<route-identity>/<equipment-identity>` per selected identity; and
+`route_identity` emits only `surface:<route-identity>`. Identity strings are
+used verbatim after the shown prefix, then sorted by Unicode code point. The
+shared rule therefore maps the same canonical standalone entry to one surface
+across harnesses.
+
+A catalog `automated` disposition requires an exact `automated` capability. A
+catalog `operator_action` disposition accepts `operator_action` or
+`inspect_only`; neither produces a `PlannedAction`. A catalog `unavailable`
+disposition never produces an action even if a newer adapter could automate
+it. Thus capability discovery can reject or report a route, but cannot broaden
+its operation dispositions or change its provider selection.
+
+### `ObserveRequest`
+
+`observe` and `verify` receive the same request shape. A verifier accepts only
+`verify_post_state` or `verify_compensation`; the executor derives that request
+from the action or receipt, supplies a new request identity and exact expected
+state digest, and preserves every binding without loss.
+
+| Field | Contract |
+| --- | --- |
+| `contract_version`, `request_identity`, `correlation_identity` | Record version, one-call identity, and command-run correlation identity. Recovery creates a new request identity under the same run correlation. |
+| `command`, `purpose` | Command is `audit`, `import`, `update`, `adopt`, or `apply`; purpose is `inventory`, `capture_pre_state`, `verify_post_state`, `recovery`, or `verify_compensation`. Neither field grants mutation authority. |
+| `candidate_identity`, `catalog_digest`, `lock_digest`, `plan_digest` | Exact input bindings. Candidate identity is the immutable implementation candidate commit or artifact identity. `plan_digest` is absent only for non-apply inventory before a plan exists; all other binding fields remain required. |
+| `capability_identity`, `capability_digest`, `manager_version_evidence_digest` | Exact discovered capability and manager-version evidence selected by the resolver. A mismatch or disappearance is an error, not a fallback. |
+| `harness`, `route_identity`, `route_digest`, `route_record` | The exact resolved route. `route_record` is complete and must digest to `route_digest`; its harness comes from the coverage record and its `control_owner` remains visible to the adapter. |
+| `equipment_identities`, `activation_group` | Sorted, unique complete membership for the route action or observation. No adapter may add inferred members. |
+| `surface_scope` | Sorted logical surface identities that the adapter may read. Native paths, keys, plugin IDs, or server names derived by the adapter must remain within this scope. |
+| `secret_references` | The route's unresolved environment-variable or secret-profile references. The adapter validates names; only the runner resolves values inside the native child boundary. |
+| `expected_state_digest` | Optional only for inventory and pre-state capture. Required for post-state, recovery, and compensation verification. |
+
+An observation request is idempotent and read-only. Repeating it against
+unchanged runtime state must produce the same normalized state digest even when
+timestamps, native ordering, or non-semantic manager output differ.
+
+### `RuntimeObservation`
+
+The observation echoes `contract_version`, `request_identity`,
+`correlation_identity`, all available input digests, capability identity,
+manager-version evidence digest, harness, route identity, route digest, control
+owner, equipment identities, activation group, and surface scope. It adds
+`observed_at` and a tagged `result`.
+
+An `ok` result contains:
+
+| Field | Contract |
+| --- | --- |
+| `route_presence` | `present`, `absent`, `partial`, or `unknown`. Partial and unknown are never silently normalized to absence. |
+| `enablement` | `enabled`, `disabled`, `mixed`, `not_applicable`, or `unknown`. |
+| `configuration` | Tagged `observed` with the digest of the adapter-owned normalized configuration, or tagged `not_applicable` or `unknown`; never raw secret-bearing configuration. |
+| `component_states` | Sorted exact equipment-identity records with `enabled`, `disabled`, `absent`, or `unknown`. The list covers every selected control and does not invent controls. |
+| `observed_version` | Tagged `observed` with a value, `route_absent`, or `unknown`. Unknown version makes a native-rolling route ineligible for mutation and cannot be written as captured-state restore evidence. |
+| `native_update_control` | Route classification: `unknown`, `suppressible`, `unsuppressible`, or `not_applicable`. It echoes the reviewed route classification; it is not observed toggle state. |
+| `native_update_suppression_state` | Observed toggle state: `enabled`, `disabled`, `unavailable`, `unknown`, or `not_applicable`. This does not claim suppression can be automated. |
+| `manager_drift` | `none`, `changed_from_reviewed_baseline`, `unobservable`, or `not_applicable`, with the reviewed baseline and observation source when applicable. The resolver, not the adapter, decides the command consequence. |
+| `surface_evidence` | Sorted secret-free references and digests for every surface read, including absence evidence. |
+| `captured_state` | Tagged `captured` with a reference to a validated `captured-state-v1` object when purpose is capture or recovery, or tagged `not_applicable`. |
+| `state_digest` | Digest of the complete normalized state payload excluding timestamps and evidence storage locations. |
+
+An error result carries the common error shape and echoes the same identities
+and bindings. It has no `state_digest`, and cannot be interpreted as absence,
+an empty component set, or permission to proceed.
+
+The two native-update fields have one interpretation: `not_applicable` control
+maps to `not_applicable` state; `unsuppressible` maps to `unavailable`;
+`suppressible` may be `enabled`, `disabled`, `unknown`, or `unavailable` when
+the setting cannot be observed; and `unknown` control may report only
+`unknown` or `unavailable`. The adapter-contract schema rejects other pairings
+even when each leaf value is individually well formed.
+
+### `PlannedAction`
+
+Only the resolver creates planned actions, only after complete-plan validation,
+and only for a route operation whose catalog disposition and matching adapter
+capability are both `automated`. The record contains:
+
+| Field | Contract |
+| --- | --- |
+| `contract_version`, `action_identity`, `correlation_identity`, `ordinal` | Version; deterministic identity derived from plan digest, ordinal, route, operation, and desired-state digest; run correlation; and unique deterministic execution order. |
+| `candidate_identity`, `catalog_digest`, `lock_digest`, `plan_digest` | Immutable plan bindings. Any mismatch invalidates the whole plan before checkpointing. |
+| `capability_identity`, `capability_digest`, `manager_version_evidence_digest`, `adapter_identity`, `adapter_version` | Exact implementation capability and manager-version evidence used to derive the action. Substitution requires re-resolution and a new plan. |
+| `harness`, `route_identity`, `route_digest`, `route_record` | Complete selected route and digest. `route_record.control_owner` must be `reconciler_owned`. |
+| `equipment_identities`, `activation_group`, `surface_scope` | Sorted complete action membership and the exact logical surfaces that this one action may change. One activation group maps to one route identity per harness. |
+| `operation`, `operation_disposition` | One required operation and the exact value `automated`. Inspect is never emitted as a mutating action. |
+| `desired_state`, `desired_state_digest` | Non-empty, closed, secret-free normalized target fragment and its digest. It may contain only route presence, enablement, normalized configuration digest, selected component states, and native-update suppression state. |
+| `secret_references` | Unresolved references copied from the route; no value or value-derived digest is allowed. |
+| `preconditions` | Exact catalog, lock, plan, route, capability, adapter, ownership, activation-group, and surface bindings; `prepared_checkpoint_required: true`; and `compare_before_mutate: true`. The executor supplies the captured pre-state digest separately to `apply`. |
+| `compensation` | Exact `restore_captured_pre_state`, plus the captured-state version required by the capability. |
+
+The action is a declaration, not runtime authority by itself. Execution also
+requires an apply command, the still-valid complete plan, a durable prepared
+checkpoint, and a current observation equal to the executor-supplied expected
+pre-state digest. A planned action is immutable. A changed desired state,
+capability, adapter version, activation-group membership, or surface scope
+requires a new action identity and plan digest.
+
+### `MutationReceipt`
+
+`apply` and `compensate` return the same receipt envelope. It echoes
+`contract_version`, action and correlation identities, ordinal, all plan and
+capability bindings, adapter identity and version, harness, route identity and
+digest, control owner, equipment identities, activation group, surface scope,
+operation, operation disposition, and `secret_references` as names only. It
+adds `receipt_identity`, `attempt_identity`, `phase` (`apply` or
+`compensate`), `started_at`, `finished_at`, `prepared_checkpoint_reference`,
+and a tagged result.
+
+An `ok` result contains `effect` (`changed` or `already_satisfied`), the
+expected and immediately observed pre-state digests, `comparison: equal`, the
+observed post-state digest, secret-free native-result and surface-evidence
+digests, and compensation evidence. Apply compensation evidence binds the
+captured pre-state reference and declares `restore_captured_pre_state`;
+successful compensation additionally proves that the restored state digest
+equals that captured pre-state digest. A receipt reports adapter effects only;
+the executor still calls `verify` and durably records `completed` or
+`compensated` before treating the effect as accepted.
+
+| Success field | Contract |
+| --- | --- |
+| `effect` | `changed` or `already_satisfied`; neither implies executor verification. |
+| `expected_pre_state_digest`, `observed_pre_state_digest`, `comparison` | Echo the executor guard, the adapter's immediate pre-invocation observation, and exact `equal`. |
+| `expected_post_state_digest`, `observed_post_state_digest` | The action-derived normalized target and the adapter's immediate post-invocation observation. A mismatch cannot be hidden by an `ok` result. |
+| `native_result_digest` | Digest of normalized, redacted status fields only; raw or secret-derived native output is excluded. |
+| `surface_evidence` | Sorted secret-free references and digests for every surface the invocation could affect. |
+| `compensation_evidence` | For apply: tagged `prepared` with `restore_captured_pre_state`, captured-state reference and digest, and expected-post-state digest. For compensate: tagged `restored` with the same bindings, restored-state digest, and `comparison: equal`. |
+
+An error result uses the common error shape and includes the expected and
+observed pre-state digests when observation succeeded, any observed post-state
+digest, and secret-free evidence. A pre-state mismatch is
+`concurrent_change` with `mutation_state: not_started`. A native failure after
+invocation is `native_failure` or `partial_change` with
+`mutation_state: possibly_changed` or `unknown`; the executor stops and audits
+before retry or compensation. An adapter must never return `ok` after a
+compare-before-mutate mismatch.
+
+`action_identity` is the idempotency key. Repeating an observation is safe;
+repeating a mutation is permitted only after checkpoint recovery observes the
+captured pre-state. If recovery observes the expected post-state, the executor
+records completion without replay. An adapter invoked on already satisfied
+state may return `already_satisfied` only when that state also satisfies the
+action's explicit precondition; it cannot use that result to hide concurrent
+change.
 
 Selected `component_controls` are desired route state, while adapter capability
 records say whether the harness can realize each control. The resolver rejects
@@ -179,19 +400,85 @@ unrelated keys and native state, compare the current observation with the
 expected observation immediately before mutation, and return observed evidence
 rather than changing the provider selection.
 
-### Initial capability table
+### Route and control capability matrix
 
-| Surface | Observation | Automated mutation | Required ownership note |
-| --- | --- | --- | --- |
-| Standalone `~/.agents/skills` entry | File type, metadata, symlink text/target, or directory tree digest | Pinned install/repair only after catalog adoption | Canonical entries are shared; never follow an existing symlink for a write |
-| Claude skill projection | Directory entry and symlink text/target | Create/remove exact catalog-owned link | Replace the blanket projector before selective removal |
-| Claude plugin | Native plugin list/details | Install, enable, disable, uninstall through native CLI | Native rolling unless exact artifact restore is proven |
-| Claude direct MCP | Narrow `.claude.json` overlay | Configure/remove owned server fields | Preserve unrelated runtime fields |
-| Codex plugin and plugin MCP controls | Native plugin list plus supported config | Supported plugin and component controls | Exact plugin restore remains capability-dependent |
-| Codex standalone skill suppression | `skills.config` path entries | Add/remove exact catalog-owned disable entry | Never disable by inferred name |
-| Codex direct MCP | Narrow TOML overlay | Configure/remove owned server fields | Preserve unrelated keys and plugin-provided effective servers |
-| Cursor direct MCP | Stable `~/.cursor/mcp.json` input | Configure/remove owned server fields | Preserve unrelated servers and secret references |
-| Cursor plugin | Supported UI/CLI observation when available | Operator action until a stable install contract exists | Opaque application databases are never edited |
+This matrix is the v1 implementation baseline, not evidence that a capability
+exists on the current machine. Each adapter must emit the narrower live
+`CapabilityRecord`; it cannot promote a catalog disposition. `A` means the
+adapter may advertise automated support after its exact contract is proven;
+`I` means inspect and verify only; `O` means operator action only; and `U`
+means unavailable. A slash means the exact route, manager version, or selected
+control decides between the listed modes and the capability record must choose
+one. `Controls` covers per-equipment plugin or standalone-suppression state;
+`Update` covers `suppress_native_update`, separately from version observation.
+
+| Route or control surface | Inspect | Install | Configure | Enable | Disable | Remove | Restore | Controls | Update |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Shared standalone skill under `~/.agents/skills` | A | A | U | U | U | A | A | U | U |
+| Claude skill projection symlink | A | A | U | U | U | A | A | U | U |
+| Claude native plugin | A | A | U | A | A | A | U | I/O/U | O/U |
+| Claude direct-MCP owned overlay | A | U | A | A | A | A | A | U | U |
+| Codex native plugin | A | A | A | A | A | A | U | A/I/O/U | U |
+| Codex standalone-skill disable entry | A | U | A | A | A | A | A | A | U |
+| Codex direct-MCP owned overlay | A | U | A | A | A | A | A | U | U |
+| Cursor native plugin | A/U | O/U | O/U | O/U | O/U | O/U | U | O/U | U |
+| Cursor standalone-skill suppression | A/U | U | U | U | U | U | U | U | U |
+| Cursor direct-MCP owned overlay | A | U | A | A | A | A | A | U | U |
+
+The shared standalone adapter owns the canonical entry once, not one copy per
+harness. Claude projection and Codex suppression are separate control-surface
+adapters and never rewrite that canonical entry. Cursor standalone suppression
+remains unavailable until a stable public control surface is proven; discovery
+alone does not authorize an application-database edit.
+
+Complete-plan validation permits at most one mutating action for a logical
+surface. When several harness routes require the same canonical standalone
+state, the resolver coalesces an otherwise identical operation under the first
+route in the fixed plan order and emits read-only verification for every
+dependent route. Different desired states, surface preconditions, or operations
+over an overlapping surface are fatal. Coalescing changes neither route
+coverage nor provenance; it only prevents duplicate writes and checkpoints.
+
+For direct MCP, `configure`, `enable`, `disable`, `remove`, and `restore` are
+narrow overlay transitions over the exact server entry. `install` remains
+unavailable because package acquisition is a locked provider argument, not a
+separate runtime surface. JSON and TOML adapters preserve unrelated keys and
+plugin-provided effective servers. Stdio and HTTP transports use the same
+record contracts; only their provider selector and normalized evidence differ.
+
+For native plugins, component control is independent of whole-plugin
+enablement. The capability record lists each selected equipment identity and
+state it can realize. If one selected control is only inspectable or operator
+owned, the resolver must use that narrower mode or reject an automated route;
+it must not broaden the action to the activation group or whole plugin.
+Similarly, version observation may be automated while update suppression is
+operator-only or unavailable. An observed version outside the reviewed rolling
+baseline is manager-driven drift; `update` may propose a reviewed baseline
+advance, while `apply` neither advances the baseline nor assumes suppression.
+
+Every row is further constrained by route ownership. `operator_owned` routes
+may use automated `inspect` but all mutating cells become `I`, `O`, or `U`,
+regardless of what the native manager can technically do. Capability or native
+manager drift after resolution invalidates the plan; adapters never select a
+different row as a fallback.
+
+### Adapter contract compatibility
+
+Adapter-contract majors are independently versioned from catalog, lock,
+captured-state, and evidence majors. A producer and consumer must agree on the
+exact record major and on every `record_versions` entry before resolution. V1
+records are closed shapes: an added, removed, renamed, or reinterpreted field;
+a changed enum; a changed canonicalization rule; or weaker precondition,
+ownership, idempotency, compensation, or redaction semantics requires a new
+major. A catalog-schema change requires a new adapter-contract major only when
+the resolved route projection or any adapter semantic changes.
+
+Changing `adapter_version` or any live capability produces a new
+`capability_digest`. Existing observations may remain historical evidence, but
+existing plans, actions, and prepared checkpoints cannot execute under the new
+digest. There is no implicit downgrade, field dropping, or best-effort record
+conversion. A future converter must be pure, explicit, one major at a time,
+and produce reviewable before-and-after records; apply never converts records.
 
 ## Apply and recovery interface
 

@@ -586,7 +586,7 @@
   },
   "claude_standalone_skill_directories": [
     {
-      "classification": "proposed_managed_equipment_slice",
+      "classification": "duplicate_overlap_candidate",
       "name": "hyperframes-creative",
       "ownership_intent": "none_pending_identity_and_provider_decision",
       "runtime_retirement_intent": "none_without_explicit_adoption"
@@ -1393,6 +1393,13 @@
     "codex_plugin_config_observations": 59,
     "codex_plugins_reported_installed": 29,
     "cursor_plugin_observations": 1,
+    "plugin_component_inventory_records": 107,
+    "plugin_component_inventory_records_by_harness": {
+      "claude": 47,
+      "codex": 59,
+      "cursor": 1
+    },
+    "reviewed_not_installed_plugin_distributions": 1,
     "direct_mcp_by_harness": {
       "claude": 5,
       "codex": 8,
@@ -1489,13 +1496,13 @@
       "transport_kind": "stdio"
     },
     {
-      "classification": "proposed_managed_equipment_slice",
+      "classification": "duplicate_overlap_candidate",
       "enabled": false,
       "harness": "codex",
       "name": "computer-use",
-      "ownership_intent": "propose_catalog_adoption_for_retirement",
+      "ownership_intent": "none_pending_provider_decision",
       "provenance_evidence": "codex_stable_user_mcp_config",
-      "runtime_retirement_intent": "remove_after_codex_plugin_component_verification",
+      "runtime_retirement_intent": "none_without_explicit_adoption",
       "transport_kind": "stdio"
     },
     {
@@ -1790,6 +1797,4549 @@
       "runtime_retirement_intent": "none"
     }
   ],
+  "plugin_component_inventory": {
+    "component_kinds": [
+      "skill",
+      "mcp",
+      "hook",
+      "agent",
+      "command",
+      "lsp",
+      "app",
+      "other"
+    ],
+    "component_identity_scope": "Distribution-local observation identity. Logical equipment identity and provider precedence remain separate review decisions.",
+    "evidence_semantics": {
+      "confirmed_absent": "A supported list or reviewed manifest positively established zero components of that kind.",
+      "unknown": "No positive presence or absence evidence was available. Unknown never means zero.",
+      "counted_but_unnamed": "A supported observation established a component count, but this snapshot did not retain names; no identity is fabricated.",
+      "control": "A component is either tied to an evidenced inseparable activation group, records an observed selective state, or remains unknown pending live adapter proof."
+    },
+    "summary": {
+      "observed_plugin_records": 107,
+      "observed_plugin_records_by_harness": {
+        "claude": 47,
+        "codex": 59,
+        "cursor": 1
+      },
+      "reviewed_not_installed_distributions": 1,
+      "named_component_observations": 82,
+      "counted_but_unnamed_component_observations": 206
+    },
+    "observed_plugins": [
+      {
+        "harness": "claude",
+        "plugin_id": "agent-sdk-dev@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "enabled": false,
+          "version": "unknown"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": "activation:claude/plugin/agent-sdk-dev@claude-plugins-official",
+          "component_control_evidence": "whole_plugin_only_observed",
+          "member_controllability": "inseparable"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [
+            "mcp"
+          ],
+          "unknown_kinds": [
+            "skill",
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "claude",
+        "plugin_id": "chrome-devtools-mcp@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "enabled": true,
+          "version": "1.7.0"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": "activation:claude/plugin/chrome-devtools-mcp@claude-plugins-official",
+          "component_control_evidence": "whole_plugin_only_observed",
+          "member_controllability": "inseparable"
+        },
+        "components": {
+          "known": [
+            {
+              "component_identity": "claude-plugin:chrome-devtools-mcp@claude-plugins-official/mcp:chrome-devtools",
+              "kind": "mcp",
+              "name": "chrome-devtools",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/chrome-devtools-mcp@claude-plugins-official"
+            },
+            {
+              "component_identity": "claude-plugin:chrome-devtools-mcp@claude-plugins-official/skill:a11y-debugging",
+              "kind": "skill",
+              "name": "a11y-debugging",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/chrome-devtools-mcp@claude-plugins-official"
+            },
+            {
+              "component_identity": "claude-plugin:chrome-devtools-mcp@claude-plugins-official/skill:chrome-devtools",
+              "kind": "skill",
+              "name": "chrome-devtools",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/chrome-devtools-mcp@claude-plugins-official"
+            },
+            {
+              "component_identity": "claude-plugin:chrome-devtools-mcp@claude-plugins-official/skill:chrome-devtools-cli",
+              "kind": "skill",
+              "name": "chrome-devtools-cli",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/chrome-devtools-mcp@claude-plugins-official"
+            },
+            {
+              "component_identity": "claude-plugin:chrome-devtools-mcp@claude-plugins-official/skill:debug-optimize-lcp",
+              "kind": "skill",
+              "name": "debug-optimize-lcp",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/chrome-devtools-mcp@claude-plugins-official"
+            },
+            {
+              "component_identity": "claude-plugin:chrome-devtools-mcp@claude-plugins-official/skill:memory-leak-debugging",
+              "kind": "skill",
+              "name": "memory-leak-debugging",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/chrome-devtools-mcp@claude-plugins-official"
+            },
+            {
+              "component_identity": "claude-plugin:chrome-devtools-mcp@claude-plugins-official/skill:troubleshooting",
+              "kind": "skill",
+              "name": "troubleshooting",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/chrome-devtools-mcp@claude-plugins-official"
+            }
+          ],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [
+            "agent",
+            "command",
+            "hook"
+          ],
+          "unknown_kinds": [
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "claude",
+        "plugin_id": "clangd-lsp@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "enabled": true,
+          "version": "1.0.0"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": "activation:claude/plugin/clangd-lsp@claude-plugins-official",
+          "component_control_evidence": "whole_plugin_only_observed",
+          "member_controllability": "inseparable"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [
+            "mcp",
+            "skill"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "claude",
+        "plugin_id": "claude-code-setup@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "enabled": true,
+          "version": "1.0.0"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": "activation:claude/plugin/claude-code-setup@claude-plugins-official",
+          "component_control_evidence": "whole_plugin_only_observed",
+          "member_controllability": "inseparable"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [
+            {
+              "kind": "skill",
+              "count": 1,
+              "component_identity": null,
+              "identity_evidence": "count_observed_names_not_observed",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/claude-code-setup@claude-plugins-official"
+            }
+          ],
+          "confirmed_absent_kinds": [
+            "mcp"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "claude",
+        "plugin_id": "claude-md-management@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "enabled": false,
+          "version": "1.0.0"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": "activation:claude/plugin/claude-md-management@claude-plugins-official",
+          "component_control_evidence": "whole_plugin_only_observed",
+          "member_controllability": "inseparable"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [
+            {
+              "kind": "skill",
+              "count": 1,
+              "component_identity": null,
+              "identity_evidence": "count_observed_names_not_observed",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/claude-md-management@claude-plugins-official"
+            }
+          ],
+          "confirmed_absent_kinds": [
+            "mcp"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "claude",
+        "plugin_id": "cloudflare@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "enabled": true,
+          "version": "1.0.0"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": "activation:claude/plugin/cloudflare@claude-plugins-official",
+          "component_control_evidence": "whole_plugin_only_observed",
+          "member_controllability": "inseparable"
+        },
+        "components": {
+          "known": [
+            {
+              "component_identity": "claude-plugin:cloudflare@claude-plugins-official/mcp:cloudflare-api",
+              "kind": "mcp",
+              "name": "cloudflare-api",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/cloudflare@claude-plugins-official"
+            },
+            {
+              "component_identity": "claude-plugin:cloudflare@claude-plugins-official/mcp:cloudflare-bindings",
+              "kind": "mcp",
+              "name": "cloudflare-bindings",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/cloudflare@claude-plugins-official"
+            },
+            {
+              "component_identity": "claude-plugin:cloudflare@claude-plugins-official/mcp:cloudflare-builds",
+              "kind": "mcp",
+              "name": "cloudflare-builds",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/cloudflare@claude-plugins-official"
+            },
+            {
+              "component_identity": "claude-plugin:cloudflare@claude-plugins-official/mcp:cloudflare-docs",
+              "kind": "mcp",
+              "name": "cloudflare-docs",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/cloudflare@claude-plugins-official"
+            },
+            {
+              "component_identity": "claude-plugin:cloudflare@claude-plugins-official/mcp:cloudflare-observability",
+              "kind": "mcp",
+              "name": "cloudflare-observability",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/cloudflare@claude-plugins-official"
+            }
+          ],
+          "counted_but_unnamed": [
+            {
+              "kind": "skill",
+              "count": 11,
+              "component_identity": null,
+              "identity_evidence": "count_observed_names_not_observed",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/cloudflare@claude-plugins-official"
+            }
+          ],
+          "confirmed_absent_kinds": [],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "claude",
+        "plugin_id": "code-review@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "enabled": true,
+          "version": "unknown"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": "activation:claude/plugin/code-review@claude-plugins-official",
+          "component_control_evidence": "whole_plugin_only_observed",
+          "member_controllability": "inseparable"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [
+            "mcp"
+          ],
+          "unknown_kinds": [
+            "skill",
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "claude",
+        "plugin_id": "code-simplifier@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "enabled": true,
+          "version": "1.0.0"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": "activation:claude/plugin/code-simplifier@claude-plugins-official",
+          "component_control_evidence": "whole_plugin_only_observed",
+          "member_controllability": "inseparable"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [
+            "mcp",
+            "skill"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "claude",
+        "plugin_id": "coderabbit@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "enabled": true,
+          "version": "1.1.1"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": "activation:claude/plugin/coderabbit@claude-plugins-official",
+          "component_control_evidence": "whole_plugin_only_observed",
+          "member_controllability": "inseparable"
+        },
+        "components": {
+          "known": [
+            {
+              "component_identity": "claude-plugin:coderabbit@claude-plugins-official/skill:code-review",
+              "kind": "skill",
+              "name": "code-review",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/coderabbit@claude-plugins-official"
+            }
+          ],
+          "counted_but_unnamed": [
+            {
+              "kind": "skill",
+              "count": 1,
+              "component_identity": null,
+              "identity_evidence": "count_observed_names_not_observed",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/coderabbit@claude-plugins-official"
+            }
+          ],
+          "confirmed_absent_kinds": [
+            "mcp"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "claude",
+        "plugin_id": "commit-commands@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "enabled": true,
+          "version": "unknown"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": "activation:claude/plugin/commit-commands@claude-plugins-official",
+          "component_control_evidence": "whole_plugin_only_observed",
+          "member_controllability": "inseparable"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [
+            "mcp"
+          ],
+          "unknown_kinds": [
+            "skill",
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "claude",
+        "plugin_id": "context7@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "enabled": false,
+          "version": "unknown"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": "activation:claude/plugin/context7@claude-plugins-official",
+          "component_control_evidence": "whole_plugin_only_observed",
+          "member_controllability": "inseparable"
+        },
+        "components": {
+          "known": [
+            {
+              "component_identity": "claude-plugin:context7@claude-plugins-official/mcp:context7",
+              "kind": "mcp",
+              "name": "context7",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/context7@claude-plugins-official"
+            }
+          ],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [
+            "skill"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "claude",
+        "plugin_id": "duckdb-skills@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "enabled": true,
+          "version": "0.2.4"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": "activation:claude/plugin/duckdb-skills@claude-plugins-official",
+          "component_control_evidence": "whole_plugin_only_observed",
+          "member_controllability": "inseparable"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [
+            {
+              "kind": "skill",
+              "count": 9,
+              "component_identity": null,
+              "identity_evidence": "count_observed_names_not_observed",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/duckdb-skills@claude-plugins-official"
+            }
+          ],
+          "confirmed_absent_kinds": [
+            "mcp"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "claude",
+        "plugin_id": "explanatory-output-style@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "enabled": true,
+          "version": "1.0.0"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": "activation:claude/plugin/explanatory-output-style@claude-plugins-official",
+          "component_control_evidence": "whole_plugin_only_observed",
+          "member_controllability": "inseparable"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [
+            "mcp",
+            "skill"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "claude",
+        "plugin_id": "feature-dev@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "enabled": true,
+          "version": "unknown"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": "activation:claude/plugin/feature-dev@claude-plugins-official",
+          "component_control_evidence": "whole_plugin_only_observed",
+          "member_controllability": "inseparable"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [
+            "mcp"
+          ],
+          "unknown_kinds": [
+            "skill",
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "claude",
+        "plugin_id": "firecrawl@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "enabled": true,
+          "version": "1.0.9"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": "activation:claude/plugin/firecrawl@claude-plugins-official",
+          "component_control_evidence": "whole_plugin_only_observed",
+          "member_controllability": "inseparable"
+        },
+        "components": {
+          "known": [
+            {
+              "component_identity": "claude-plugin:firecrawl@claude-plugins-official/skill:firecrawl-agent",
+              "kind": "skill",
+              "name": "firecrawl-agent",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/firecrawl@claude-plugins-official"
+            },
+            {
+              "component_identity": "claude-plugin:firecrawl@claude-plugins-official/skill:firecrawl-cli",
+              "kind": "skill",
+              "name": "firecrawl-cli",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/firecrawl@claude-plugins-official"
+            },
+            {
+              "component_identity": "claude-plugin:firecrawl@claude-plugins-official/skill:firecrawl-crawl",
+              "kind": "skill",
+              "name": "firecrawl-crawl",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/firecrawl@claude-plugins-official"
+            },
+            {
+              "component_identity": "claude-plugin:firecrawl@claude-plugins-official/skill:firecrawl-download",
+              "kind": "skill",
+              "name": "firecrawl-download",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/firecrawl@claude-plugins-official"
+            },
+            {
+              "component_identity": "claude-plugin:firecrawl@claude-plugins-official/skill:firecrawl-interact",
+              "kind": "skill",
+              "name": "firecrawl-interact",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/firecrawl@claude-plugins-official"
+            },
+            {
+              "component_identity": "claude-plugin:firecrawl@claude-plugins-official/skill:firecrawl-map",
+              "kind": "skill",
+              "name": "firecrawl-map",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/firecrawl@claude-plugins-official"
+            },
+            {
+              "component_identity": "claude-plugin:firecrawl@claude-plugins-official/skill:firecrawl-monitor",
+              "kind": "skill",
+              "name": "firecrawl-monitor",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/firecrawl@claude-plugins-official"
+            },
+            {
+              "component_identity": "claude-plugin:firecrawl@claude-plugins-official/skill:firecrawl-parse",
+              "kind": "skill",
+              "name": "firecrawl-parse",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/firecrawl@claude-plugins-official"
+            },
+            {
+              "component_identity": "claude-plugin:firecrawl@claude-plugins-official/skill:firecrawl-scrape",
+              "kind": "skill",
+              "name": "firecrawl-scrape",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/firecrawl@claude-plugins-official"
+            },
+            {
+              "component_identity": "claude-plugin:firecrawl@claude-plugins-official/skill:firecrawl-search",
+              "kind": "skill",
+              "name": "firecrawl-search",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/firecrawl@claude-plugins-official"
+            }
+          ],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [
+            "mcp"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "claude",
+        "plugin_id": "github@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "enabled": false,
+          "version": "unknown"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": "activation:claude/plugin/github@claude-plugins-official",
+          "component_control_evidence": "whole_plugin_only_observed",
+          "member_controllability": "inseparable"
+        },
+        "components": {
+          "known": [
+            {
+              "component_identity": "claude-plugin:github@claude-plugins-official/mcp:github",
+              "kind": "mcp",
+              "name": "github",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/github@claude-plugins-official",
+              "transport_kind": "http"
+            }
+          ],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [
+            "command",
+            "hook",
+            "skill"
+          ],
+          "unknown_kinds": [
+            "agent",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "claude",
+        "plugin_id": "gopls-lsp@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "enabled": true,
+          "version": "1.0.0"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": "activation:claude/plugin/gopls-lsp@claude-plugins-official",
+          "component_control_evidence": "whole_plugin_only_observed",
+          "member_controllability": "inseparable"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [
+            "mcp",
+            "skill"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "claude",
+        "plugin_id": "greptile@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "enabled": false,
+          "version": "unknown"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": "activation:claude/plugin/greptile@claude-plugins-official",
+          "component_control_evidence": "whole_plugin_only_observed",
+          "member_controllability": "inseparable"
+        },
+        "components": {
+          "known": [
+            {
+              "component_identity": "claude-plugin:greptile@claude-plugins-official/mcp:greptile",
+              "kind": "mcp",
+              "name": "greptile",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/greptile@claude-plugins-official"
+            }
+          ],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [],
+          "unknown_kinds": [
+            "skill",
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "claude",
+        "plugin_id": "hindsight-memory@hindsight",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "enabled": true,
+          "version": "0.7.5"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": "activation:claude/plugin/hindsight-memory@hindsight",
+          "component_control_evidence": "whole_plugin_only_observed",
+          "member_controllability": "inseparable"
+        },
+        "components": {
+          "known": [
+            {
+              "component_identity": "claude-plugin:hindsight-memory@hindsight/mcp:hindsight",
+              "kind": "mcp",
+              "name": "hindsight",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/hindsight-memory@hindsight"
+            }
+          ],
+          "counted_but_unnamed": [
+            {
+              "kind": "skill",
+              "count": 1,
+              "component_identity": null,
+              "identity_evidence": "count_observed_names_not_observed",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/hindsight-memory@hindsight"
+            }
+          ],
+          "confirmed_absent_kinds": [],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "claude",
+        "plugin_id": "hookify@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "enabled": false,
+          "version": "unknown"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": "activation:claude/plugin/hookify@claude-plugins-official",
+          "component_control_evidence": "whole_plugin_only_observed",
+          "member_controllability": "inseparable"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [
+            {
+              "kind": "skill",
+              "count": 1,
+              "component_identity": null,
+              "identity_evidence": "count_observed_names_not_observed",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/hookify@claude-plugins-official"
+            }
+          ],
+          "confirmed_absent_kinds": [
+            "mcp"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "claude",
+        "plugin_id": "huggingface-skills@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "enabled": true,
+          "version": "1.0.23"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": "activation:claude/plugin/huggingface-skills@claude-plugins-official",
+          "component_control_evidence": "whole_plugin_only_observed",
+          "member_controllability": "inseparable"
+        },
+        "components": {
+          "known": [
+            {
+              "component_identity": "claude-plugin:huggingface-skills@claude-plugins-official/mcp:huggingface-skills",
+              "kind": "mcp",
+              "name": "huggingface-skills",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/huggingface-skills@claude-plugins-official"
+            }
+          ],
+          "counted_but_unnamed": [
+            {
+              "kind": "skill",
+              "count": 25,
+              "component_identity": null,
+              "identity_evidence": "count_observed_names_not_observed",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/huggingface-skills@claude-plugins-official"
+            }
+          ],
+          "confirmed_absent_kinds": [],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "claude",
+        "plugin_id": "hyperframes@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "enabled": true,
+          "version": "0.7.105"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": "activation:claude/plugin/hyperframes@claude-plugins-official",
+          "component_control_evidence": "whole_plugin_only_observed",
+          "member_controllability": "inseparable"
+        },
+        "components": {
+          "known": [
+            {
+              "component_identity": "claude-plugin:hyperframes@claude-plugins-official/skill:hyperframes",
+              "kind": "skill",
+              "name": "hyperframes",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/hyperframes@claude-plugins-official"
+            },
+            {
+              "component_identity": "claude-plugin:hyperframes@claude-plugins-official/skill:hyperframes-animation",
+              "kind": "skill",
+              "name": "hyperframes-animation",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/hyperframes@claude-plugins-official"
+            },
+            {
+              "component_identity": "claude-plugin:hyperframes@claude-plugins-official/skill:hyperframes-cli",
+              "kind": "skill",
+              "name": "hyperframes-cli",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/hyperframes@claude-plugins-official"
+            },
+            {
+              "component_identity": "claude-plugin:hyperframes@claude-plugins-official/skill:hyperframes-core",
+              "kind": "skill",
+              "name": "hyperframes-core",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/hyperframes@claude-plugins-official"
+            },
+            {
+              "component_identity": "claude-plugin:hyperframes@claude-plugins-official/skill:hyperframes-creative",
+              "kind": "skill",
+              "name": "hyperframes-creative",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/hyperframes@claude-plugins-official"
+            },
+            {
+              "component_identity": "claude-plugin:hyperframes@claude-plugins-official/skill:hyperframes-keyframes",
+              "kind": "skill",
+              "name": "hyperframes-keyframes",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/hyperframes@claude-plugins-official"
+            },
+            {
+              "component_identity": "claude-plugin:hyperframes@claude-plugins-official/skill:hyperframes-registry",
+              "kind": "skill",
+              "name": "hyperframes-registry",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/hyperframes@claude-plugins-official"
+            },
+            {
+              "component_identity": "claude-plugin:hyperframes@claude-plugins-official/skill:media-use",
+              "kind": "skill",
+              "name": "media-use",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/hyperframes@claude-plugins-official"
+            }
+          ],
+          "counted_but_unnamed": [
+            {
+              "kind": "skill",
+              "count": 11,
+              "component_identity": null,
+              "identity_evidence": "count_observed_names_not_observed",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/hyperframes@claude-plugins-official"
+            }
+          ],
+          "confirmed_absent_kinds": [
+            "mcp"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "claude",
+        "plugin_id": "keystone@keystone",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "enabled": true,
+          "version": "2.0.4"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": "activation:claude/plugin/keystone@keystone",
+          "component_control_evidence": "whole_plugin_only_observed",
+          "member_controllability": "inseparable"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [
+            {
+              "kind": "skill",
+              "count": 9,
+              "component_identity": null,
+              "identity_evidence": "count_observed_names_not_observed",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/keystone@keystone"
+            }
+          ],
+          "confirmed_absent_kinds": [
+            "mcp"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "claude",
+        "plugin_id": "learning-output-style@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "enabled": true,
+          "version": "1.0.0"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": "activation:claude/plugin/learning-output-style@claude-plugins-official",
+          "component_control_evidence": "whole_plugin_only_observed",
+          "member_controllability": "inseparable"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [
+            "mcp",
+            "skill"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "claude",
+        "plugin_id": "lua-lsp@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "enabled": true,
+          "version": "1.0.0"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": "activation:claude/plugin/lua-lsp@claude-plugins-official",
+          "component_control_evidence": "whole_plugin_only_observed",
+          "member_controllability": "inseparable"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [
+            "mcp",
+            "skill"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "claude",
+        "plugin_id": "mcp-apps@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "enabled": false,
+          "version": "0.1.0"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": "activation:claude/plugin/mcp-apps@claude-plugins-official",
+          "component_control_evidence": "whole_plugin_only_observed",
+          "member_controllability": "inseparable"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [
+            {
+              "kind": "skill",
+              "count": 4,
+              "component_identity": null,
+              "identity_evidence": "count_observed_names_not_observed",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/mcp-apps@claude-plugins-official"
+            }
+          ],
+          "confirmed_absent_kinds": [
+            "mcp"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "claude",
+        "plugin_id": "mcp-server-dev@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "enabled": false,
+          "version": "unknown"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": "activation:claude/plugin/mcp-server-dev@claude-plugins-official",
+          "component_control_evidence": "whole_plugin_only_observed",
+          "member_controllability": "inseparable"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [
+            {
+              "kind": "skill",
+              "count": 3,
+              "component_identity": null,
+              "identity_evidence": "count_observed_names_not_observed",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/mcp-server-dev@claude-plugins-official"
+            }
+          ],
+          "confirmed_absent_kinds": [
+            "mcp"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "claude",
+        "plugin_id": "nvidia-skills@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "enabled": true,
+          "version": "1.4.0"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": "activation:claude/plugin/nvidia-skills@claude-plugins-official",
+          "component_control_evidence": "whole_plugin_only_observed",
+          "member_controllability": "inseparable"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [
+            {
+              "kind": "skill",
+              "count": 1,
+              "component_identity": null,
+              "identity_evidence": "count_observed_names_not_observed",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/nvidia-skills@claude-plugins-official"
+            }
+          ],
+          "confirmed_absent_kinds": [
+            "mcp"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "claude",
+        "plugin_id": "oz-harness-support@claude-code-warp",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "enabled": true,
+          "version": "1.1.2"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": "activation:claude/plugin/oz-harness-support@claude-code-warp",
+          "component_control_evidence": "whole_plugin_only_observed",
+          "member_controllability": "inseparable"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [
+            {
+              "kind": "skill",
+              "count": 5,
+              "component_identity": null,
+              "identity_evidence": "count_observed_names_not_observed",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/oz-harness-support@claude-code-warp"
+            }
+          ],
+          "confirmed_absent_kinds": [
+            "mcp"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "claude",
+        "plugin_id": "playground@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "enabled": true,
+          "version": "unknown"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": "activation:claude/plugin/playground@claude-plugins-official",
+          "component_control_evidence": "whole_plugin_only_observed",
+          "member_controllability": "inseparable"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [
+            {
+              "kind": "skill",
+              "count": 1,
+              "component_identity": null,
+              "identity_evidence": "count_observed_names_not_observed",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/playground@claude-plugins-official"
+            }
+          ],
+          "confirmed_absent_kinds": [
+            "mcp"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "claude",
+        "plugin_id": "playwright@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "enabled": true,
+          "version": "unknown"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": "activation:claude/plugin/playwright@claude-plugins-official",
+          "component_control_evidence": "whole_plugin_only_observed",
+          "member_controllability": "inseparable"
+        },
+        "components": {
+          "known": [
+            {
+              "component_identity": "claude-plugin:playwright@claude-plugins-official/mcp:playwright",
+              "kind": "mcp",
+              "name": "playwright",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/playwright@claude-plugins-official"
+            }
+          ],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [],
+          "unknown_kinds": [
+            "skill",
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "claude",
+        "plugin_id": "plugin-dev@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "enabled": false,
+          "version": "unknown"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": "activation:claude/plugin/plugin-dev@claude-plugins-official",
+          "component_control_evidence": "whole_plugin_only_observed",
+          "member_controllability": "inseparable"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [
+            {
+              "kind": "skill",
+              "count": 7,
+              "component_identity": null,
+              "identity_evidence": "count_observed_names_not_observed",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/plugin-dev@claude-plugins-official"
+            }
+          ],
+          "confirmed_absent_kinds": [
+            "mcp"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "claude",
+        "plugin_id": "pr-review-toolkit@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "enabled": true,
+          "version": "unknown"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": "activation:claude/plugin/pr-review-toolkit@claude-plugins-official",
+          "component_control_evidence": "whole_plugin_only_observed",
+          "member_controllability": "inseparable"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [
+            "mcp"
+          ],
+          "unknown_kinds": [
+            "skill",
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "claude",
+        "plugin_id": "prisma@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "enabled": true,
+          "version": "815dbc4a045a"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": "activation:claude/plugin/prisma@claude-plugins-official",
+          "component_control_evidence": "whole_plugin_only_observed",
+          "member_controllability": "inseparable"
+        },
+        "components": {
+          "known": [
+            {
+              "component_identity": "claude-plugin:prisma@claude-plugins-official/mcp:Prisma-Local",
+              "kind": "mcp",
+              "name": "Prisma-Local",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/prisma@claude-plugins-official"
+            },
+            {
+              "component_identity": "claude-plugin:prisma@claude-plugins-official/mcp:Prisma-Remote",
+              "kind": "mcp",
+              "name": "Prisma-Remote",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/prisma@claude-plugins-official"
+            }
+          ],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [
+            "skill"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "claude",
+        "plugin_id": "pyright-lsp@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "enabled": true,
+          "version": "1.0.0"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": "activation:claude/plugin/pyright-lsp@claude-plugins-official",
+          "component_control_evidence": "whole_plugin_only_observed",
+          "member_controllability": "inseparable"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [
+            "mcp",
+            "skill"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "claude",
+        "plugin_id": "qdrant-skills@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "enabled": true,
+          "version": "1.0.0"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": "activation:claude/plugin/qdrant-skills@claude-plugins-official",
+          "component_control_evidence": "whole_plugin_only_observed",
+          "member_controllability": "inseparable"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [
+            {
+              "kind": "skill",
+              "count": 8,
+              "component_identity": null,
+              "identity_evidence": "count_observed_names_not_observed",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/qdrant-skills@claude-plugins-official"
+            }
+          ],
+          "confirmed_absent_kinds": [
+            "mcp"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "claude",
+        "plugin_id": "ralph-loop@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "enabled": true,
+          "version": "1.0.0"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": "activation:claude/plugin/ralph-loop@claude-plugins-official",
+          "component_control_evidence": "whole_plugin_only_observed",
+          "member_controllability": "inseparable"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [
+            "mcp",
+            "skill"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "claude",
+        "plugin_id": "remember@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "enabled": true,
+          "version": "0.19.0"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": "activation:claude/plugin/remember@claude-plugins-official",
+          "component_control_evidence": "whole_plugin_only_observed",
+          "member_controllability": "inseparable"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [
+            {
+              "kind": "skill",
+              "count": 1,
+              "component_identity": null,
+              "identity_evidence": "count_observed_names_not_observed",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/remember@claude-plugins-official"
+            }
+          ],
+          "confirmed_absent_kinds": [
+            "mcp"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "claude",
+        "plugin_id": "rust-analyzer-lsp@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "enabled": true,
+          "version": "1.0.0"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": "activation:claude/plugin/rust-analyzer-lsp@claude-plugins-official",
+          "component_control_evidence": "whole_plugin_only_observed",
+          "member_controllability": "inseparable"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [
+            "mcp",
+            "skill"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "claude",
+        "plugin_id": "security-guidance@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "enabled": true,
+          "version": "2.0.6"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": "activation:claude/plugin/security-guidance@claude-plugins-official",
+          "component_control_evidence": "whole_plugin_only_observed",
+          "member_controllability": "inseparable"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [
+            "mcp",
+            "skill"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "claude",
+        "plugin_id": "skill-creator@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "enabled": true,
+          "version": "unknown"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": "activation:claude/plugin/skill-creator@claude-plugins-official",
+          "component_control_evidence": "whole_plugin_only_observed",
+          "member_controllability": "inseparable"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [
+            {
+              "kind": "skill",
+              "count": 1,
+              "component_identity": null,
+              "identity_evidence": "count_observed_names_not_observed",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/skill-creator@claude-plugins-official"
+            }
+          ],
+          "confirmed_absent_kinds": [
+            "mcp"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "claude",
+        "plugin_id": "slack@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "enabled": true,
+          "version": "1.2.0"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": "activation:claude/plugin/slack@claude-plugins-official",
+          "component_control_evidence": "whole_plugin_only_observed",
+          "member_controllability": "inseparable"
+        },
+        "components": {
+          "known": [
+            {
+              "component_identity": "claude-plugin:slack@claude-plugins-official/mcp:slack",
+              "kind": "mcp",
+              "name": "slack",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/slack@claude-plugins-official"
+            }
+          ],
+          "counted_but_unnamed": [
+            {
+              "kind": "skill",
+              "count": 7,
+              "component_identity": null,
+              "identity_evidence": "count_observed_names_not_observed",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/slack@claude-plugins-official"
+            }
+          ],
+          "confirmed_absent_kinds": [],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "claude",
+        "plugin_id": "superpowers@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "enabled": true,
+          "version": "6.2.0"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": "activation:claude/plugin/superpowers@claude-plugins-official",
+          "component_control_evidence": "whole_plugin_only_observed",
+          "member_controllability": "inseparable"
+        },
+        "components": {
+          "known": [
+            {
+              "component_identity": "claude-plugin:superpowers@claude-plugins-official/skill:brainstorming",
+              "kind": "skill",
+              "name": "brainstorming",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/superpowers@claude-plugins-official"
+            },
+            {
+              "component_identity": "claude-plugin:superpowers@claude-plugins-official/skill:dispatching-parallel-agents",
+              "kind": "skill",
+              "name": "dispatching-parallel-agents",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/superpowers@claude-plugins-official"
+            },
+            {
+              "component_identity": "claude-plugin:superpowers@claude-plugins-official/skill:executing-plans",
+              "kind": "skill",
+              "name": "executing-plans",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/superpowers@claude-plugins-official"
+            },
+            {
+              "component_identity": "claude-plugin:superpowers@claude-plugins-official/skill:finishing-a-development-branch",
+              "kind": "skill",
+              "name": "finishing-a-development-branch",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/superpowers@claude-plugins-official"
+            },
+            {
+              "component_identity": "claude-plugin:superpowers@claude-plugins-official/skill:receiving-code-review",
+              "kind": "skill",
+              "name": "receiving-code-review",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/superpowers@claude-plugins-official"
+            },
+            {
+              "component_identity": "claude-plugin:superpowers@claude-plugins-official/skill:requesting-code-review",
+              "kind": "skill",
+              "name": "requesting-code-review",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/superpowers@claude-plugins-official"
+            },
+            {
+              "component_identity": "claude-plugin:superpowers@claude-plugins-official/skill:subagent-driven-development",
+              "kind": "skill",
+              "name": "subagent-driven-development",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/superpowers@claude-plugins-official"
+            },
+            {
+              "component_identity": "claude-plugin:superpowers@claude-plugins-official/skill:systematic-debugging",
+              "kind": "skill",
+              "name": "systematic-debugging",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/superpowers@claude-plugins-official"
+            },
+            {
+              "component_identity": "claude-plugin:superpowers@claude-plugins-official/skill:test-driven-development",
+              "kind": "skill",
+              "name": "test-driven-development",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/superpowers@claude-plugins-official"
+            },
+            {
+              "component_identity": "claude-plugin:superpowers@claude-plugins-official/skill:using-git-worktrees",
+              "kind": "skill",
+              "name": "using-git-worktrees",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/superpowers@claude-plugins-official"
+            },
+            {
+              "component_identity": "claude-plugin:superpowers@claude-plugins-official/skill:using-superpowers",
+              "kind": "skill",
+              "name": "using-superpowers",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/superpowers@claude-plugins-official"
+            },
+            {
+              "component_identity": "claude-plugin:superpowers@claude-plugins-official/skill:verification-before-completion",
+              "kind": "skill",
+              "name": "verification-before-completion",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/superpowers@claude-plugins-official"
+            },
+            {
+              "component_identity": "claude-plugin:superpowers@claude-plugins-official/skill:writing-plans",
+              "kind": "skill",
+              "name": "writing-plans",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/superpowers@claude-plugins-official"
+            },
+            {
+              "component_identity": "claude-plugin:superpowers@claude-plugins-official/skill:writing-skills",
+              "kind": "skill",
+              "name": "writing-skills",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/superpowers@claude-plugins-official"
+            }
+          ],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [
+            "mcp"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "claude",
+        "plugin_id": "terraform@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "enabled": true,
+          "version": "unknown"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": "activation:claude/plugin/terraform@claude-plugins-official",
+          "component_control_evidence": "whole_plugin_only_observed",
+          "member_controllability": "inseparable"
+        },
+        "components": {
+          "known": [
+            {
+              "component_identity": "claude-plugin:terraform@claude-plugins-official/mcp:terraform",
+              "kind": "mcp",
+              "name": "terraform",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/terraform@claude-plugins-official"
+            }
+          ],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [],
+          "unknown_kinds": [
+            "skill",
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "claude",
+        "plugin_id": "thermos@nisavid-agents",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "enabled": true,
+          "version": "1.0.4+claude.20260711030014"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": "activation:claude/plugin/thermos@nisavid-agents",
+          "component_control_evidence": "whole_plugin_only_observed",
+          "member_controllability": "inseparable"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [
+            {
+              "kind": "skill",
+              "count": 3,
+              "component_identity": null,
+              "identity_evidence": "count_observed_names_not_observed",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/thermos@nisavid-agents"
+            }
+          ],
+          "confirmed_absent_kinds": [
+            "mcp"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "claude",
+        "plugin_id": "typescript-lsp@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "enabled": true,
+          "version": "1.0.0"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": "activation:claude/plugin/typescript-lsp@claude-plugins-official",
+          "component_control_evidence": "whole_plugin_only_observed",
+          "member_controllability": "inseparable"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [
+            "mcp",
+            "skill"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "claude",
+        "plugin_id": "warp@claude-code-warp",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "enabled": true,
+          "version": "2.2.0"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": "activation:claude/plugin/warp@claude-code-warp",
+          "component_control_evidence": "whole_plugin_only_observed",
+          "member_controllability": "inseparable"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [
+            "mcp",
+            "skill"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "agent-sdk-dev@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "configured_only_not_reported_installed",
+          "configured_enabled": false,
+          "native_enabled": null,
+          "version": null
+        },
+        "enumeration_status": "not_observed",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [],
+          "unknown_kinds": [
+            "skill",
+            "mcp",
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "browser-use@openai-bundled",
+        "plugin_observation": {
+          "observed_state": "configured_only_not_reported_installed",
+          "configured_enabled": true,
+          "native_enabled": null,
+          "version": null
+        },
+        "enumeration_status": "not_observed",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [],
+          "unknown_kinds": [
+            "skill",
+            "mcp",
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "browser@openai-bundled",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "configured_enabled": true,
+          "native_enabled": true,
+          "version": "26.803.61601"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "plugin_enablement_observed_component_controls_not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [
+            {
+              "kind": "skill",
+              "count": 1,
+              "component_identity": null,
+              "identity_evidence": "count_observed_names_not_observed",
+              "controllability": "unknown",
+              "activation_group": null
+            }
+          ],
+          "confirmed_absent_kinds": [
+            "mcp"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "build-web-apps@openai-curated",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "configured_enabled": true,
+          "native_enabled": true,
+          "version": "11c74d6b"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "plugin_enablement_observed_component_controls_not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [
+            {
+              "kind": "skill",
+              "count": 6,
+              "component_identity": null,
+              "identity_evidence": "count_observed_names_not_observed",
+              "controllability": "unknown",
+              "activation_group": null
+            }
+          ],
+          "confirmed_absent_kinds": [
+            "mcp"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "chatgpt-apps@openai-curated",
+        "plugin_observation": {
+          "observed_state": "configured_only_not_reported_installed",
+          "configured_enabled": true,
+          "native_enabled": null,
+          "version": null
+        },
+        "enumeration_status": "not_observed",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [],
+          "unknown_kinds": [
+            "skill",
+            "mcp",
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "chrome@openai-bundled",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "configured_enabled": true,
+          "native_enabled": true,
+          "version": "26.803.61601"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "plugin_enablement_observed_component_controls_not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [
+            {
+              "kind": "skill",
+              "count": 1,
+              "component_identity": null,
+              "identity_evidence": "count_observed_names_not_observed",
+              "controllability": "unknown",
+              "activation_group": null
+            }
+          ],
+          "confirmed_absent_kinds": [
+            "mcp"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "claude-code-setup@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "configured_only_not_reported_installed",
+          "configured_enabled": false,
+          "native_enabled": null,
+          "version": null
+        },
+        "enumeration_status": "not_observed",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [],
+          "unknown_kinds": [
+            "skill",
+            "mcp",
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "claude-md-management@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "configured_only_not_reported_installed",
+          "configured_enabled": false,
+          "native_enabled": null,
+          "version": null
+        },
+        "enumeration_status": "not_observed",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [],
+          "unknown_kinds": [
+            "skill",
+            "mcp",
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "cloudflare@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "configured_only_not_reported_installed",
+          "configured_enabled": false,
+          "native_enabled": null,
+          "version": null
+        },
+        "enumeration_status": "not_observed",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [],
+          "unknown_kinds": [
+            "skill",
+            "mcp",
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "cloudflare@openai-curated",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "configured_enabled": true,
+          "native_enabled": true,
+          "version": "11c74d6b"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "plugin_enablement_observed_component_controls_not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [
+            {
+              "component_identity": "codex-plugin:cloudflare@openai-curated/mcp:cloudflare-api",
+              "kind": "mcp",
+              "name": "cloudflare-api",
+              "controllability": "unknown",
+              "activation_group": null
+            }
+          ],
+          "counted_but_unnamed": [
+            {
+              "kind": "skill",
+              "count": 9,
+              "component_identity": null,
+              "identity_evidence": "count_observed_names_not_observed",
+              "controllability": "unknown",
+              "activation_group": null
+            }
+          ],
+          "confirmed_absent_kinds": [],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "code-review@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "configured_only_not_reported_installed",
+          "configured_enabled": false,
+          "native_enabled": null,
+          "version": null
+        },
+        "enumeration_status": "not_observed",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [],
+          "unknown_kinds": [
+            "skill",
+            "mcp",
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "code-simplifier@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "configured_only_not_reported_installed",
+          "configured_enabled": false,
+          "native_enabled": null,
+          "version": null
+        },
+        "enumeration_status": "not_observed",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [],
+          "unknown_kinds": [
+            "skill",
+            "mcp",
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "coderabbit@openai-curated",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "configured_enabled": true,
+          "native_enabled": true,
+          "version": "11c74d6b"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "plugin_enablement_observed_component_controls_not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [
+            {
+              "kind": "skill",
+              "count": 1,
+              "component_identity": null,
+              "identity_evidence": "count_observed_names_not_observed",
+              "controllability": "unknown",
+              "activation_group": null
+            }
+          ],
+          "confirmed_absent_kinds": [
+            "mcp"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "codex-security@openai-curated",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "configured_enabled": true,
+          "native_enabled": true,
+          "version": "11c74d6b"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "plugin_enablement_observed_component_controls_not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [
+            {
+              "component_identity": "codex-plugin:codex-security@openai-curated/mcp:codex-security",
+              "kind": "mcp",
+              "name": "codex-security",
+              "controllability": "unknown",
+              "activation_group": null
+            }
+          ],
+          "counted_but_unnamed": [
+            {
+              "kind": "skill",
+              "count": 12,
+              "component_identity": null,
+              "identity_evidence": "count_observed_names_not_observed",
+              "controllability": "unknown",
+              "activation_group": null
+            }
+          ],
+          "confirmed_absent_kinds": [],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "commit-commands@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "configured_only_not_reported_installed",
+          "configured_enabled": false,
+          "native_enabled": null,
+          "version": null
+        },
+        "enumeration_status": "not_observed",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [],
+          "unknown_kinds": [
+            "skill",
+            "mcp",
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "computer-use@openai-bundled",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "configured_enabled": true,
+          "native_enabled": true,
+          "version": "1.0.1000633"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "plugin_enablement_observed_component_controls_not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [
+            {
+              "component_identity": "codex-plugin:computer-use@openai-bundled/mcp:computer-use",
+              "kind": "mcp",
+              "name": "computer-use",
+              "controllability": "unknown",
+              "activation_group": null
+            }
+          ],
+          "counted_but_unnamed": [
+            {
+              "kind": "skill",
+              "count": 1,
+              "component_identity": null,
+              "identity_evidence": "count_observed_names_not_observed",
+              "controllability": "unknown",
+              "activation_group": null
+            }
+          ],
+          "confirmed_absent_kinds": [],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "documents@openai-primary-runtime",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "configured_enabled": true,
+          "native_enabled": true,
+          "version": "26.805.11740"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "plugin_enablement_observed_component_controls_not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [
+            {
+              "kind": "skill",
+              "count": 1,
+              "component_identity": null,
+              "identity_evidence": "count_observed_names_not_observed",
+              "controllability": "unknown",
+              "activation_group": null
+            }
+          ],
+          "confirmed_absent_kinds": [
+            "mcp"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "explanatory-output-style@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "configured_only_not_reported_installed",
+          "configured_enabled": false,
+          "native_enabled": null,
+          "version": null
+        },
+        "enumeration_status": "not_observed",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [],
+          "unknown_kinds": [
+            "skill",
+            "mcp",
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "feature-dev@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "configured_only_not_reported_installed",
+          "configured_enabled": false,
+          "native_enabled": null,
+          "version": null
+        },
+        "enumeration_status": "not_observed",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [],
+          "unknown_kinds": [
+            "skill",
+            "mcp",
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "frontend-design@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "configured_only_not_reported_installed",
+          "configured_enabled": false,
+          "native_enabled": null,
+          "version": null
+        },
+        "enumeration_status": "not_observed",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [],
+          "unknown_kinds": [
+            "skill",
+            "mcp",
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "github@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "configured_only_not_reported_installed",
+          "configured_enabled": false,
+          "native_enabled": null,
+          "version": null
+        },
+        "enumeration_status": "not_observed",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [],
+          "unknown_kinds": [
+            "skill",
+            "mcp",
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "github@openai-curated",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "configured_enabled": true,
+          "native_enabled": true,
+          "version": "11c74d6b"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": "activation:codex/github-plugin-with-yeet-disabled",
+          "component_control_evidence": "selective_component_configuration_observed_live_adapter_proof_required",
+          "member_controllability": "selective_state"
+        },
+        "components": {
+          "known": [
+            {
+              "component_identity": "codex-plugin:github@openai-curated/app:github-connector",
+              "kind": "app",
+              "name": "github-connector",
+              "controllability": "selective_state_observed_live_adapter_proof_required",
+              "activation_group": "activation:codex/github-plugin-with-yeet-disabled",
+              "observed_state": "enabled"
+            },
+            {
+              "component_identity": "codex-plugin:github@openai-curated/mcp:github",
+              "kind": "mcp",
+              "name": "github",
+              "controllability": "selective_state_observed_live_adapter_proof_required",
+              "activation_group": "activation:codex/github-plugin-with-yeet-disabled",
+              "transport_kind": "http",
+              "observed_state": "enabled"
+            },
+            {
+              "component_identity": "codex-plugin:github@openai-curated/skill:gh-address-comments",
+              "kind": "skill",
+              "name": "gh-address-comments",
+              "controllability": "selective_state_observed_live_adapter_proof_required",
+              "activation_group": "activation:codex/github-plugin-with-yeet-disabled",
+              "observed_state": "enabled"
+            },
+            {
+              "component_identity": "codex-plugin:github@openai-curated/skill:gh-fix-ci",
+              "kind": "skill",
+              "name": "gh-fix-ci",
+              "controllability": "selective_state_observed_live_adapter_proof_required",
+              "activation_group": "activation:codex/github-plugin-with-yeet-disabled",
+              "observed_state": "enabled"
+            },
+            {
+              "component_identity": "codex-plugin:github@openai-curated/skill:github",
+              "kind": "skill",
+              "name": "github",
+              "controllability": "selective_state_observed_live_adapter_proof_required",
+              "activation_group": "activation:codex/github-plugin-with-yeet-disabled",
+              "observed_state": "enabled"
+            },
+            {
+              "component_identity": "codex-plugin:github@openai-curated/skill:yeet",
+              "kind": "skill",
+              "name": "yeet",
+              "controllability": "selective_state_observed_live_adapter_proof_required",
+              "activation_group": null,
+              "observed_state": "disabled"
+            }
+          ],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "other"
+          ]
+        },
+        "channel_drift": {
+          "observed_distribution": {
+            "channel": "openai-curated",
+            "reviewed_baseline": "11c74d6b",
+            "positive_components": "app/connector, HTTP MCP, and four named skills"
+          },
+          "compared_remote_distribution": {
+            "version": "0.1.8",
+            "mcp_component": "confirmed_absent"
+          },
+          "rule": "Component evidence is distribution-and-revision specific; do not substitute the remote release for the observed curated payload."
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "hookify@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "configured_only_not_reported_installed",
+          "configured_enabled": false,
+          "native_enabled": null,
+          "version": null
+        },
+        "enumeration_status": "not_observed",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [],
+          "unknown_kinds": [
+            "skill",
+            "mcp",
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "hugging-face@openai-curated",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "configured_enabled": true,
+          "native_enabled": true,
+          "version": "11c74d6b"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "plugin_enablement_observed_component_controls_not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [
+            {
+              "kind": "skill",
+              "count": 11,
+              "component_identity": null,
+              "identity_evidence": "count_observed_names_not_observed",
+              "controllability": "unknown",
+              "activation_group": null
+            }
+          ],
+          "confirmed_absent_kinds": [
+            "mcp"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "huggingface-skills@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "configured_only_not_reported_installed",
+          "configured_enabled": false,
+          "native_enabled": null,
+          "version": null
+        },
+        "enumeration_status": "not_observed",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [],
+          "unknown_kinds": [
+            "skill",
+            "mcp",
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "hyperframes@openai-curated",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "configured_enabled": true,
+          "native_enabled": true,
+          "version": "11c74d6b"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "plugin_enablement_observed_component_controls_not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [
+            {
+              "component_identity": "codex-plugin:hyperframes@openai-curated/skill:hyperframes",
+              "kind": "skill",
+              "name": "hyperframes",
+              "controllability": "unknown",
+              "activation_group": null
+            },
+            {
+              "component_identity": "codex-plugin:hyperframes@openai-curated/skill:hyperframes-cli",
+              "kind": "skill",
+              "name": "hyperframes-cli",
+              "controllability": "unknown",
+              "activation_group": null
+            },
+            {
+              "component_identity": "codex-plugin:hyperframes@openai-curated/skill:hyperframes-registry",
+              "kind": "skill",
+              "name": "hyperframes-registry",
+              "controllability": "unknown",
+              "activation_group": null
+            }
+          ],
+          "counted_but_unnamed": [
+            {
+              "kind": "skill",
+              "count": 2,
+              "component_identity": null,
+              "identity_evidence": "count_observed_names_not_observed",
+              "controllability": "unknown",
+              "activation_group": null
+            }
+          ],
+          "confirmed_absent_kinds": [
+            "mcp"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "keystone@keystone",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "configured_enabled": true,
+          "native_enabled": true,
+          "version": "2.0.4"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "plugin_enablement_observed_component_controls_not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [
+            {
+              "kind": "skill",
+              "count": 9,
+              "component_identity": null,
+              "identity_evidence": "count_observed_names_not_observed",
+              "controllability": "unknown",
+              "activation_group": null
+            }
+          ],
+          "confirmed_absent_kinds": [
+            "mcp"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "latex@openai-bundled",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "configured_enabled": true,
+          "native_enabled": true,
+          "version": "0.2.4"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "plugin_enablement_observed_component_controls_not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [
+            {
+              "kind": "skill",
+              "count": 3,
+              "component_identity": null,
+              "identity_evidence": "count_observed_names_not_observed",
+              "controllability": "unknown",
+              "activation_group": null
+            }
+          ],
+          "confirmed_absent_kinds": [
+            "mcp"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "orchestration@codex-warp",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "configured_enabled": true,
+          "native_enabled": true,
+          "version": "0.4.0"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "plugin_enablement_observed_component_controls_not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [
+            {
+              "kind": "skill",
+              "count": 5,
+              "component_identity": null,
+              "identity_evidence": "count_observed_names_not_observed",
+              "controllability": "unknown",
+              "activation_group": null
+            }
+          ],
+          "confirmed_absent_kinds": [
+            "mcp"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "pdf@openai-primary-runtime",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "configured_enabled": true,
+          "native_enabled": true,
+          "version": "26.805.11740"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "plugin_enablement_observed_component_controls_not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [
+            {
+              "kind": "skill",
+              "count": 1,
+              "component_identity": null,
+              "identity_evidence": "count_observed_names_not_observed",
+              "controllability": "unknown",
+              "activation_group": null
+            }
+          ],
+          "confirmed_absent_kinds": [
+            "mcp"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "playground@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "configured_only_not_reported_installed",
+          "configured_enabled": false,
+          "native_enabled": null,
+          "version": null
+        },
+        "enumeration_status": "not_observed",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [],
+          "unknown_kinds": [
+            "skill",
+            "mcp",
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "playwright@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "configured_only_not_reported_installed",
+          "configured_enabled": false,
+          "native_enabled": null,
+          "version": null
+        },
+        "enumeration_status": "not_observed",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [],
+          "unknown_kinds": [
+            "skill",
+            "mcp",
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "plugin-dev@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "configured_only_not_reported_installed",
+          "configured_enabled": false,
+          "native_enabled": null,
+          "version": null
+        },
+        "enumeration_status": "not_observed",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [],
+          "unknown_kinds": [
+            "skill",
+            "mcp",
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "plugin-eval@openai-curated",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "configured_enabled": true,
+          "native_enabled": true,
+          "version": "11c74d6b"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "plugin_enablement_observed_component_controls_not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [
+            {
+              "kind": "skill",
+              "count": 5,
+              "component_identity": null,
+              "identity_evidence": "count_observed_names_not_observed",
+              "controllability": "unknown",
+              "activation_group": null
+            }
+          ],
+          "confirmed_absent_kinds": [
+            "mcp"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "pr-review-toolkit@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "configured_only_not_reported_installed",
+          "configured_enabled": false,
+          "native_enabled": null,
+          "version": null
+        },
+        "enumeration_status": "not_observed",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [],
+          "unknown_kinds": [
+            "skill",
+            "mcp",
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "presentations@openai-primary-runtime",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "configured_enabled": true,
+          "native_enabled": true,
+          "version": "26.805.11740"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "plugin_enablement_observed_component_controls_not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [
+            {
+              "kind": "skill",
+              "count": 1,
+              "component_identity": null,
+              "identity_evidence": "count_observed_names_not_observed",
+              "controllability": "unknown",
+              "activation_group": null
+            }
+          ],
+          "confirmed_absent_kinds": [
+            "mcp"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "prisma@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "configured_only_not_reported_installed",
+          "configured_enabled": false,
+          "native_enabled": null,
+          "version": null
+        },
+        "enumeration_status": "not_observed",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [],
+          "unknown_kinds": [
+            "skill",
+            "mcp",
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "product-tracking-skills@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "configured_only_not_reported_installed",
+          "configured_enabled": false,
+          "native_enabled": null,
+          "version": null
+        },
+        "enumeration_status": "not_observed",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [],
+          "unknown_kinds": [
+            "skill",
+            "mcp",
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "railway@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "configured_only_not_reported_installed",
+          "configured_enabled": false,
+          "native_enabled": null,
+          "version": null
+        },
+        "enumeration_status": "not_observed",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [],
+          "unknown_kinds": [
+            "skill",
+            "mcp",
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "ralph-loop@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "configured_only_not_reported_installed",
+          "configured_enabled": false,
+          "native_enabled": null,
+          "version": null
+        },
+        "enumeration_status": "not_observed",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [],
+          "unknown_kinds": [
+            "skill",
+            "mcp",
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "read-aloud@openai-bundled",
+        "plugin_observation": {
+          "observed_state": "configured_only_not_reported_installed",
+          "configured_enabled": true,
+          "native_enabled": null,
+          "version": null
+        },
+        "enumeration_status": "not_observed",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [],
+          "unknown_kinds": [
+            "skill",
+            "mcp",
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "record-and-replay@openai-bundled",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "configured_enabled": true,
+          "native_enabled": true,
+          "version": "1.0.1000633"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "plugin_enablement_observed_component_controls_not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [
+            {
+              "component_identity": "codex-plugin:record-and-replay@openai-bundled/mcp:event-stream",
+              "kind": "mcp",
+              "name": "event-stream",
+              "controllability": "unknown",
+              "activation_group": null
+            }
+          ],
+          "counted_but_unnamed": [
+            {
+              "kind": "skill",
+              "count": 1,
+              "component_identity": null,
+              "identity_evidence": "count_observed_names_not_observed",
+              "controllability": "unknown",
+              "activation_group": null
+            }
+          ],
+          "confirmed_absent_kinds": [],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "remember@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "configured_only_not_reported_installed",
+          "configured_enabled": false,
+          "native_enabled": null,
+          "version": null
+        },
+        "enumeration_status": "not_observed",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [],
+          "unknown_kinds": [
+            "skill",
+            "mcp",
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "remotion@openai-curated",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "configured_enabled": true,
+          "native_enabled": true,
+          "version": "11c74d6b"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "plugin_enablement_observed_component_controls_not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [
+            {
+              "kind": "skill",
+              "count": 1,
+              "component_identity": null,
+              "identity_evidence": "count_observed_names_not_observed",
+              "controllability": "unknown",
+              "activation_group": null
+            }
+          ],
+          "confirmed_absent_kinds": [
+            "mcp"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "security-guidance@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "configured_only_not_reported_installed",
+          "configured_enabled": false,
+          "native_enabled": null,
+          "version": null
+        },
+        "enumeration_status": "not_observed",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [],
+          "unknown_kinds": [
+            "skill",
+            "mcp",
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "sites@openai-bundled",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "configured_enabled": true,
+          "native_enabled": true,
+          "version": "0.1.34"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "plugin_enablement_observed_component_controls_not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [
+            {
+              "kind": "skill",
+              "count": 2,
+              "component_identity": null,
+              "identity_evidence": "count_observed_names_not_observed",
+              "controllability": "unknown",
+              "activation_group": null
+            }
+          ],
+          "confirmed_absent_kinds": [
+            "mcp"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "skill-creator@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "configured_only_not_reported_installed",
+          "configured_enabled": false,
+          "native_enabled": null,
+          "version": null
+        },
+        "enumeration_status": "not_observed",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [],
+          "unknown_kinds": [
+            "skill",
+            "mcp",
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "spreadsheets@openai-primary-runtime",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "configured_enabled": true,
+          "native_enabled": true,
+          "version": "26.805.11740"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "plugin_enablement_observed_component_controls_not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [
+            {
+              "kind": "skill",
+              "count": 2,
+              "component_identity": null,
+              "identity_evidence": "count_observed_names_not_observed",
+              "controllability": "unknown",
+              "activation_group": null
+            }
+          ],
+          "confirmed_absent_kinds": [
+            "mcp"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "stitch-build@stitch-skills",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "configured_enabled": true,
+          "native_enabled": true,
+          "version": "1.0.0"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "plugin_enablement_observed_component_controls_not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [
+            {
+              "kind": "skill",
+              "count": 5,
+              "component_identity": null,
+              "identity_evidence": "count_observed_names_not_observed",
+              "controllability": "unknown",
+              "activation_group": null
+            }
+          ],
+          "confirmed_absent_kinds": [
+            "mcp"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "stitch-design@stitch-skills",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "configured_enabled": true,
+          "native_enabled": true,
+          "version": "1.0.0"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "plugin_enablement_observed_component_controls_not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [
+            {
+              "kind": "skill",
+              "count": 6,
+              "component_identity": null,
+              "identity_evidence": "count_observed_names_not_observed",
+              "controllability": "unknown",
+              "activation_group": null
+            }
+          ],
+          "confirmed_absent_kinds": [
+            "mcp"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "stitch-utilities@stitch-skills",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "configured_enabled": true,
+          "native_enabled": true,
+          "version": "1.0.0"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "plugin_enablement_observed_component_controls_not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [
+            {
+              "kind": "skill",
+              "count": 4,
+              "component_identity": null,
+              "identity_evidence": "count_observed_names_not_observed",
+              "controllability": "unknown",
+              "activation_group": null
+            }
+          ],
+          "confirmed_absent_kinds": [
+            "mcp"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "supabase@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "configured_only_not_reported_installed",
+          "configured_enabled": false,
+          "native_enabled": null,
+          "version": null
+        },
+        "enumeration_status": "not_observed",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [],
+          "unknown_kinds": [
+            "skill",
+            "mcp",
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "superpowers@openai-curated",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "configured_enabled": true,
+          "native_enabled": true,
+          "version": "11c74d6b"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "plugin_enablement_observed_component_controls_not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [
+            {
+              "component_identity": "codex-plugin:superpowers@openai-curated/skill:brainstorming",
+              "kind": "skill",
+              "name": "brainstorming",
+              "controllability": "unknown",
+              "activation_group": null
+            },
+            {
+              "component_identity": "codex-plugin:superpowers@openai-curated/skill:dispatching-parallel-agents",
+              "kind": "skill",
+              "name": "dispatching-parallel-agents",
+              "controllability": "unknown",
+              "activation_group": null
+            },
+            {
+              "component_identity": "codex-plugin:superpowers@openai-curated/skill:executing-plans",
+              "kind": "skill",
+              "name": "executing-plans",
+              "controllability": "unknown",
+              "activation_group": null
+            },
+            {
+              "component_identity": "codex-plugin:superpowers@openai-curated/skill:finishing-a-development-branch",
+              "kind": "skill",
+              "name": "finishing-a-development-branch",
+              "controllability": "unknown",
+              "activation_group": null
+            },
+            {
+              "component_identity": "codex-plugin:superpowers@openai-curated/skill:receiving-code-review",
+              "kind": "skill",
+              "name": "receiving-code-review",
+              "controllability": "unknown",
+              "activation_group": null
+            },
+            {
+              "component_identity": "codex-plugin:superpowers@openai-curated/skill:requesting-code-review",
+              "kind": "skill",
+              "name": "requesting-code-review",
+              "controllability": "unknown",
+              "activation_group": null
+            },
+            {
+              "component_identity": "codex-plugin:superpowers@openai-curated/skill:subagent-driven-development",
+              "kind": "skill",
+              "name": "subagent-driven-development",
+              "controllability": "unknown",
+              "activation_group": null
+            },
+            {
+              "component_identity": "codex-plugin:superpowers@openai-curated/skill:systematic-debugging",
+              "kind": "skill",
+              "name": "systematic-debugging",
+              "controllability": "unknown",
+              "activation_group": null
+            },
+            {
+              "component_identity": "codex-plugin:superpowers@openai-curated/skill:test-driven-development",
+              "kind": "skill",
+              "name": "test-driven-development",
+              "controllability": "unknown",
+              "activation_group": null
+            },
+            {
+              "component_identity": "codex-plugin:superpowers@openai-curated/skill:using-git-worktrees",
+              "kind": "skill",
+              "name": "using-git-worktrees",
+              "controllability": "unknown",
+              "activation_group": null
+            },
+            {
+              "component_identity": "codex-plugin:superpowers@openai-curated/skill:using-superpowers",
+              "kind": "skill",
+              "name": "using-superpowers",
+              "controllability": "unknown",
+              "activation_group": null
+            },
+            {
+              "component_identity": "codex-plugin:superpowers@openai-curated/skill:verification-before-completion",
+              "kind": "skill",
+              "name": "verification-before-completion",
+              "controllability": "unknown",
+              "activation_group": null
+            },
+            {
+              "component_identity": "codex-plugin:superpowers@openai-curated/skill:writing-plans",
+              "kind": "skill",
+              "name": "writing-plans",
+              "controllability": "unknown",
+              "activation_group": null
+            },
+            {
+              "component_identity": "codex-plugin:superpowers@openai-curated/skill:writing-skills",
+              "kind": "skill",
+              "name": "writing-skills",
+              "controllability": "unknown",
+              "activation_group": null
+            }
+          ],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [
+            "mcp"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "telegram@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "configured_only_not_reported_installed",
+          "configured_enabled": false,
+          "native_enabled": null,
+          "version": null
+        },
+        "enumeration_status": "not_observed",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [],
+          "unknown_kinds": [
+            "skill",
+            "mcp",
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "template-creator@openai-primary-runtime",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "configured_enabled": true,
+          "native_enabled": true,
+          "version": "26.805.11740"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "plugin_enablement_observed_component_controls_not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [
+            {
+              "kind": "skill",
+              "count": 1,
+              "component_identity": null,
+              "identity_evidence": "count_observed_names_not_observed",
+              "controllability": "unknown",
+              "activation_group": null
+            }
+          ],
+          "confirmed_absent_kinds": [
+            "mcp"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "thermos@nisavid-agents",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "configured_enabled": true,
+          "native_enabled": true,
+          "version": "1.0.4+codex.20260711030014"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "plugin_enablement_observed_component_controls_not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [
+            {
+              "kind": "skill",
+              "count": 3,
+              "component_identity": null,
+              "identity_evidence": "count_observed_names_not_observed",
+              "controllability": "unknown",
+              "activation_group": null
+            }
+          ],
+          "confirmed_absent_kinds": [
+            "mcp"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "vercel@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "configured_only_not_reported_installed",
+          "configured_enabled": false,
+          "native_enabled": null,
+          "version": null
+        },
+        "enumeration_status": "not_observed",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [],
+          "unknown_kinds": [
+            "skill",
+            "mcp",
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "visualize@openai-bundled",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "configured_enabled": true,
+          "native_enabled": true,
+          "version": "1.0.20"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "plugin_enablement_observed_component_controls_not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [
+            {
+              "kind": "skill",
+              "count": 1,
+              "component_identity": null,
+              "identity_evidence": "count_observed_names_not_observed",
+              "controllability": "unknown",
+              "activation_group": null
+            }
+          ],
+          "confirmed_absent_kinds": [
+            "mcp"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "codex",
+        "plugin_id": "warp@codex-warp",
+        "plugin_observation": {
+          "observed_state": "installed",
+          "configured_enabled": true,
+          "native_enabled": true,
+          "version": "0.4.0"
+        },
+        "enumeration_status": "partial_positive_and_absence_evidence",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "plugin_enablement_observed_component_controls_not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [
+            "mcp",
+            "skill"
+          ],
+          "unknown_kinds": [
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        }
+      },
+      {
+        "harness": "cursor",
+        "plugin_id": "*",
+        "plugin_observation": {
+          "observed_state": "not_enumerable_through_installed_cli",
+          "version": null
+        },
+        "enumeration_status": "not_observed",
+        "control": {
+          "activation_group": null,
+          "component_control_evidence": "not_observed",
+          "member_controllability": "unknown"
+        },
+        "components": {
+          "known": [],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [],
+          "unknown_kinds": [
+            "skill",
+            "mcp",
+            "hook",
+            "agent",
+            "command",
+            "lsp",
+            "app",
+            "other"
+          ]
+        },
+        "evidence": "No supported user-plugin list was available; an empty known-component list does not mean that Cursor has no plugins or components."
+      }
+    ],
+    "reviewed_not_installed_distributions": [
+      {
+        "harness": "claude",
+        "plugin_id": "mattpocock-skills@claude-plugins-official",
+        "plugin_observation": {
+          "observed_state": "reviewed_not_installed",
+          "version": "1.2.3",
+          "revision": "84fdeffd12f2ee307994d1eb6feb48173b6e0502"
+        },
+        "enumeration_status": "complete_upstream_manifest",
+        "control": {
+          "activation_group": "activation:claude/plugin/mattpocock-skills",
+          "component_control_evidence": "whole_plugin_only_reviewed",
+          "member_controllability": "inseparable"
+        },
+        "components": {
+          "known": [
+            {
+              "component_identity": "claude-plugin:mattpocock-skills@claude-plugins-official/skill:ask-matt",
+              "kind": "skill",
+              "name": "ask-matt",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/mattpocock-skills"
+            },
+            {
+              "component_identity": "claude-plugin:mattpocock-skills@claude-plugins-official/skill:code-review",
+              "kind": "skill",
+              "name": "code-review",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/mattpocock-skills"
+            },
+            {
+              "component_identity": "claude-plugin:mattpocock-skills@claude-plugins-official/skill:codebase-design",
+              "kind": "skill",
+              "name": "codebase-design",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/mattpocock-skills"
+            },
+            {
+              "component_identity": "claude-plugin:mattpocock-skills@claude-plugins-official/skill:diagnosing-bugs",
+              "kind": "skill",
+              "name": "diagnosing-bugs",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/mattpocock-skills"
+            },
+            {
+              "component_identity": "claude-plugin:mattpocock-skills@claude-plugins-official/skill:domain-modeling",
+              "kind": "skill",
+              "name": "domain-modeling",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/mattpocock-skills"
+            },
+            {
+              "component_identity": "claude-plugin:mattpocock-skills@claude-plugins-official/skill:grill-me",
+              "kind": "skill",
+              "name": "grill-me",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/mattpocock-skills"
+            },
+            {
+              "component_identity": "claude-plugin:mattpocock-skills@claude-plugins-official/skill:grill-with-docs",
+              "kind": "skill",
+              "name": "grill-with-docs",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/mattpocock-skills"
+            },
+            {
+              "component_identity": "claude-plugin:mattpocock-skills@claude-plugins-official/skill:grilling",
+              "kind": "skill",
+              "name": "grilling",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/mattpocock-skills"
+            },
+            {
+              "component_identity": "claude-plugin:mattpocock-skills@claude-plugins-official/skill:handoff",
+              "kind": "skill",
+              "name": "handoff",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/mattpocock-skills"
+            },
+            {
+              "component_identity": "claude-plugin:mattpocock-skills@claude-plugins-official/skill:implement",
+              "kind": "skill",
+              "name": "implement",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/mattpocock-skills"
+            },
+            {
+              "component_identity": "claude-plugin:mattpocock-skills@claude-plugins-official/skill:improve-codebase-architecture",
+              "kind": "skill",
+              "name": "improve-codebase-architecture",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/mattpocock-skills"
+            },
+            {
+              "component_identity": "claude-plugin:mattpocock-skills@claude-plugins-official/skill:prototype",
+              "kind": "skill",
+              "name": "prototype",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/mattpocock-skills"
+            },
+            {
+              "component_identity": "claude-plugin:mattpocock-skills@claude-plugins-official/skill:research",
+              "kind": "skill",
+              "name": "research",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/mattpocock-skills"
+            },
+            {
+              "component_identity": "claude-plugin:mattpocock-skills@claude-plugins-official/skill:resolving-merge-conflicts",
+              "kind": "skill",
+              "name": "resolving-merge-conflicts",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/mattpocock-skills"
+            },
+            {
+              "component_identity": "claude-plugin:mattpocock-skills@claude-plugins-official/skill:setup-matt-pocock-skills",
+              "kind": "skill",
+              "name": "setup-matt-pocock-skills",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/mattpocock-skills"
+            },
+            {
+              "component_identity": "claude-plugin:mattpocock-skills@claude-plugins-official/skill:tdd",
+              "kind": "skill",
+              "name": "tdd",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/mattpocock-skills"
+            },
+            {
+              "component_identity": "claude-plugin:mattpocock-skills@claude-plugins-official/skill:teach",
+              "kind": "skill",
+              "name": "teach",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/mattpocock-skills"
+            },
+            {
+              "component_identity": "claude-plugin:mattpocock-skills@claude-plugins-official/skill:to-questionnaire",
+              "kind": "skill",
+              "name": "to-questionnaire",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/mattpocock-skills"
+            },
+            {
+              "component_identity": "claude-plugin:mattpocock-skills@claude-plugins-official/skill:to-spec",
+              "kind": "skill",
+              "name": "to-spec",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/mattpocock-skills"
+            },
+            {
+              "component_identity": "claude-plugin:mattpocock-skills@claude-plugins-official/skill:to-tickets",
+              "kind": "skill",
+              "name": "to-tickets",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/mattpocock-skills"
+            },
+            {
+              "component_identity": "claude-plugin:mattpocock-skills@claude-plugins-official/skill:triage",
+              "kind": "skill",
+              "name": "triage",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/mattpocock-skills"
+            },
+            {
+              "component_identity": "claude-plugin:mattpocock-skills@claude-plugins-official/skill:wait-what",
+              "kind": "skill",
+              "name": "wait-what",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/mattpocock-skills"
+            },
+            {
+              "component_identity": "claude-plugin:mattpocock-skills@claude-plugins-official/skill:wayfinder",
+              "kind": "skill",
+              "name": "wayfinder",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/mattpocock-skills"
+            },
+            {
+              "component_identity": "claude-plugin:mattpocock-skills@claude-plugins-official/skill:wizard",
+              "kind": "skill",
+              "name": "wizard",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/mattpocock-skills"
+            },
+            {
+              "component_identity": "claude-plugin:mattpocock-skills@claude-plugins-official/skill:writing-for-agents",
+              "kind": "skill",
+              "name": "writing-for-agents",
+              "controllability": "inseparable",
+              "activation_group": "activation:claude/plugin/mattpocock-skills"
+            }
+          ],
+          "counted_but_unnamed": [],
+          "confirmed_absent_kinds": [
+            "agent",
+            "app",
+            "command",
+            "hook",
+            "lsp",
+            "mcp",
+            "other"
+          ],
+          "unknown_kinds": []
+        },
+        "qualification": "The full reviewed plugin payload is replaceable by the same 25 standalone skills for harnesses that do not use the Claude plugin; no hook, MCP, agent, command, LSP, app, or other plugin equipment would be lost."
+      }
+    ]
+  },
   "proposed_managed_slice": {
     "active_overlap_exceptions": [],
     "coverage_templates": {
@@ -2063,6 +6613,10 @@
       {
         "id": "code-review-skill-identity",
         "reason": "decide whether same-name components from Matt and CodeRabbit are one logical identity"
+      },
+      {
+        "id": "computer-use-provider-map",
+        "reason": "decide whether the disabled direct Codex MCP or the MCP-plus-skill plugin is preferred after complete component and control qualification"
       },
       {
         "id": "cursor-plugin-state",

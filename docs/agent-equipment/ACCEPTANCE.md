@@ -123,15 +123,54 @@ authorizing runtime migration.
 | `LIVE-05` | Direct MCP startup for every selected harness route using secret references. | Server starts and authenticates while logs, diagnostics, diffs, and evidence contain no resolved secret values. |
 | `LIVE-06` | Native manager drift. | Change or observe a rolling provider version and prove audit reports drift while update alone proposes the reviewed baseline advancement. |
 
-## Current design-slice evidence
+## Current executable design evidence
 
-The repository's schema fixtures and design validator satisfy only the
-`CAT-*` shape and cross-field assertions they explicitly exercise. The
-disposable prototype supplies exploratory evidence for `RES-02` through
-`RES-05`; it is not a production resolver and is not merged into the production
-branch. The inventory is a read-only observation. No `CON-*`, `CHK-*`,
-`MIG-*`, or `LIVE-*` result may be marked passed until the production candidate
-and separately authorized migration exist.
+The following tests are executable design fixtures. They establish the named
+semantics without inspecting or mutating a real harness. They do not mark a
+release requirement `pass`; the production candidate must rerun the same
+contract through its real adapters and evidence writer.
+
+| Requirements | Exact executable evidence |
+| --- | --- |
+| `CAT-01` | `AgentEquipmentDesignTest.test_every_declared_equipment_kind_has_valid_and_invalid_examples` |
+| `CAT-02`, `CAT-03` | `AgentEquipmentDesignTest.test_valid_provider_and_no_provider_outcomes_resolve`; `AgentEquipmentDesignTest.test_bare_outcome_and_single_route_shorthand_are_rejected` |
+| `CAT-04`, `CAT-05` | `AgentEquipmentDesignTest.test_missing_harness_coverage_fails_closed`; `AgentEquipmentDesignTest.test_duplicate_or_incomplete_lock_coverage_is_rejected`; `AgentEquipmentDesignTest.test_template_reference_must_match_target_harness` |
+| `CAT-06` | `AgentEquipmentDesignTest.test_supplementary_route_requires_exact_allow_overlap` |
+| `CAT-07` | `AgentEquipmentDesignTest.test_operation_matrix_is_exact_and_complete`; `AgentEquipmentDesignTest.test_provenance_has_exactly_one_owner`; the immutable and native-rolling restore tests named below |
+| `CAT-08`, `CAT-09` | `AgentEquipmentDesignTest.test_provider_outcome_must_match_route_control_owners`; `AgentEquipmentDesignTest.test_operator_owned_route_rejects_automated_mutation` |
+| `CAT-10` | `AgentEquipmentDesignTest.test_automated_mutation_requires_pre_state_compensation`; `AgentEquipmentDesignTest.test_an_invalid_final_entry_yields_no_plan` |
+| `CAT-11`, `CAT-12` | `AgentEquipmentDesignTest.test_immutable_restore_requires_revision_reference_digest_and_update_control`; `AgentEquipmentDesignTest.test_native_rolling_restore_requires_reviewed_update_state` |
+| `CAT-13`, `CAT-14` | `AgentEquipmentDesignTest.test_canonical_digest_is_utf8_compact_and_key_sorted`; `AgentEquipmentDesignTest.test_stale_catalog_lock_digest_is_rejected`; `AgentEquipmentDesignTest.test_provider_configuration_is_typed_and_secret_safe`; `AgentEquipmentDesignTest.test_literal_secret_material_fails_closed_without_echoing_it`; `AgentEquipmentDesignTest.test_secret_references_accept_environment_variables_and_opaque_profiles` |
+| `RES-01` | `AgentEquipmentDesignTest.test_resolution_is_deterministic_under_input_ordering` |
+| `RES-02` | `AgentEquipmentDesignTest.test_component_controls_have_one_exact_non_conflicting_shape`; `AgentEquipmentDesignTest.test_shared_activation_group_produces_one_action_per_route_operation`; `AgentEquipmentAcceptanceTest.test_route_switch_controls_components_and_retires_only_owned_duplicates` |
+| `RES-03`, `RES-04` | `AgentEquipmentDesignTest.test_proposed_initial_catalog_and_lock_are_complete_and_valid`; `AgentEquipmentDesignTest.test_initial_inventory_counts_and_classifications_are_complete` |
+| `RES-05` | `AgentEquipmentDesignTest.test_provider_configuration_is_typed_and_secret_safe`; `AgentEquipmentAcceptanceTest.test_durable_artifacts_contain_secret_references_but_no_secret_values` |
+| `CMD-01`, `CMD-02`, `CMD-03` | `AgentEquipmentAcceptanceTest.test_audit_import_and_adopt_commands_are_runtime_read_only`; `AgentEquipmentAcceptanceTest.test_adoption_requires_an_exact_import_and_never_mutates_runtime` |
+| `CMD-04` | `AgentEquipmentAcceptanceTest.test_update_is_an_explicit_proposal_until_apply`; `AgentEquipmentAcceptanceTest.test_native_rolling_drift_requires_reviewed_baseline_update` |
+| `CMD-05` | `AgentEquipmentAcceptanceTest.test_invalid_final_action_fails_before_the_checkpoint_store_changes`; `AgentEquipmentAcceptanceTest.test_fresh_home_converges_to_the_complete_desired_state` |
+| `CMD-06` | `AgentEquipmentAcceptanceTest.test_nonautomated_operations_are_reported_without_adapter_mutation` |
+| `CON-01`, `CON-02`, `CON-03` | `AgentEquipmentAcceptanceTest.test_fresh_home_converges_to_the_complete_desired_state`; `AgentEquipmentAcceptanceTest.test_reapply_is_a_steady_state_no_op`; `AgentEquipmentAcceptanceTest.test_each_missing_owned_item_is_repaired_without_touching_other_state` |
+| `CON-04` | `AgentEquipmentAcceptanceTest.test_immutable_content_is_verified_before_explicit_update_mutates` |
+| `CON-05`, `CON-06`, `CON-07` | `AgentEquipmentAcceptanceTest.test_route_switch_controls_components_and_retires_only_owned_duplicates`; `AgentEquipmentAcceptanceTest.test_duplicate_routes_fail_closed_unless_the_exact_overlap_is_declared`; `AgentEquipmentAcceptanceTest.test_adoption_requires_an_exact_import_and_never_mutates_runtime` |
+| `CON-08`, `CON-09` | `AgentEquipmentAcceptanceTest.test_retirement_mutates_only_exact_adopted_owned_state_through_apply`; `AgentEquipmentAcceptanceTest.test_native_rolling_drift_requires_reviewed_baseline_update` |
+| `CON-10`, `CON-11` | `AgentEquipmentAcceptanceTest.test_standalone_capture_restores_files_trees_and_links_without_following`; `AgentEquipmentAcceptanceTest.test_compare_before_mutate_preserves_concurrent_changes_on_every_surface` |
+| `CHK-01`, `CHK-02`, `CHK-03` | `AgentEquipmentAcceptanceTest.test_invalid_final_action_fails_before_the_checkpoint_store_changes`; `AgentEquipmentAcceptanceTest.test_prepared_write_failure_has_no_runtime_effect_and_retry_is_valid`; `AgentEquipmentAcceptanceTest.test_prepared_failure_before_mutation_audits_then_retries_once` |
+| `CHK-04`, `CHK-05` | `AgentEquipmentAcceptanceTest.test_mutated_but_uncompleted_step_is_audited_without_replay` |
+| `CHK-06`, `CHK-07`, `CHK-08` | `AgentEquipmentAcceptanceTest.test_later_failure_compensates_completed_steps_in_reverse_order`; `AgentEquipmentAcceptanceTest.test_compare_before_restore_preserves_an_external_change`; `AgentEquipmentAcceptanceTest.test_failed_compensation_is_durable_and_recovery_audits_before_retry` |
+| `CHK-09`, `CHK-10` | `AgentEquipmentAcceptanceTest.test_compare_before_mutate_preserves_concurrent_changes_on_every_surface`; `AgentEquipmentAcceptanceTest.test_checkpoint_replay_rejects_every_changed_binding` |
+| `CHK-02` through `CHK-09`, all automated mutating operations | `AgentEquipmentAcceptanceTest.test_checkpoint_fault_contract_covers_every_mutating_operation` supplements the focused fault tests above with the complete operation matrix. |
+| `MIG-01` through `MIG-05`, `MIG-07` | `AgentEquipmentAcceptanceTest.test_every_migration_boundary_compensates_to_the_exact_initial_state`; `AgentEquipmentAcceptanceTest.test_successful_migration_retains_winners_and_removes_only_owned_losers`; for link-type preservation, `AgentEquipmentAcceptanceTest.test_standalone_capture_restores_files_trees_and_links_without_following` |
+| `MIG-06` | `AgentEquipmentAcceptanceTest.test_every_migration_surface_preserves_changes_before_mutate_and_restore` |
+
+Production command parsing, sandbox enforcement, human-facing report rendering,
+and the complete real-adapter operation matrix remain production-candidate
+requirements. The fake migration matrix does not authorize or perform runtime
+migration.
+
+All `LIVE-*` checks remain live-only. They require the real native managers,
+disposable or operator-approved accounts, current harness versions, secret
+resolution at process boundaries, and explicit human sign-off. No schema,
+prototype, or fake-manager result substitutes for those observations.
 
 The future production release command must fail unless the evidence bundle has
 one passing result for every ID in this document and no extra unknown result.
