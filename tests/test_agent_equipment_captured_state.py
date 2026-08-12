@@ -672,7 +672,13 @@ class CapturedStateValidationTest(unittest.TestCase):
         for hostile_url in (
             "https://user@example.com/mcp",
             "https://example.com/token-secret",
+            "https://example.com/Token/secret-value",
+            "https://example.com/CLIENT-SECRET/value",
             "https://example.com/mcp?api_key=x",
+            "https://-.example/mcp",
+            "https://example..com/mcp",
+            "https://example.com/./mcp",
+            "https://example.com/../mcp",
         ):
             with self.subTest(hostile_url=hostile_url):
                 http = copy.deepcopy(PLAN_ACTION_PAYLOAD)
@@ -693,14 +699,22 @@ class CapturedStateValidationTest(unittest.TestCase):
                     codes,
                 )
 
-        safe_http = copy.deepcopy(PLAN_ACTION_PAYLOAD)
-        safe_http["provider"] = {
-            "kind": "direct_mcp",
-            "server_name": "context7",
-            "transport": "http",
-            "url": "https://example.com/mcp",
-        }
-        self.assertTrue(CAPTURED_STATE.plan_action_digest(safe_http))
+        for safe_url in (
+            "https://example.com/mcp",
+            "https://localhost/mcp",
+            "https://127.0.0.1/mcp",
+            "https://token.example.com/mcp",
+            "https://secret.example.com/mcp",
+        ):
+            with self.subTest(safe_url=safe_url):
+                safe_http = copy.deepcopy(PLAN_ACTION_PAYLOAD)
+                safe_http["provider"] = {
+                    "kind": "direct_mcp",
+                    "server_name": "context7",
+                    "transport": "http",
+                    "url": safe_url,
+                }
+                self.assertTrue(CAPTURED_STATE.plan_action_digest(safe_http))
 
     def test_capability_set_digest_uses_sorted_closed_bindings(self) -> None:
         bindings = [

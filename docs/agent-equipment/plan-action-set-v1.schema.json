@@ -91,7 +91,7 @@
             "kind": {"const": "direct_mcp"},
             "server_name": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"},
             "transport": {"const": "http"},
-            "url": {"type": "string", "pattern": "^(?!.*(?:^|/)(?:bearer|api[-_]?key|access[-_]?token|token|secret|password|client[-_]?secret|credential)(?:[-_.=:]|/|$))https://[A-Za-z0-9.-]+(?::[0-9]{1,5})?(?:/[A-Za-z0-9._~-]+)*/?$"}
+            "url": {"type": "string", "pattern": "^https://[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*(?::[0-9]{1,5})?(?:/(?!\\.{1,2}(?:/|$))(?![Bb][Ee][Aa][Rr][Ee][Rr](?:[-_.=:]|/|$))(?![Aa][Pp][Ii][-_]?[Kk][Ee][Yy](?:[-_.=:]|/|$))(?![Aa][Cc][Cc][Ee][Ss][Ss][-_]?[Tt][Oo][Kk][Ee][Nn](?:[-_.=:]|/|$))(?![Tt][Oo][Kk][Ee][Nn](?:[-_.=:]|/|$))(?![Ss][Ee][Cc][Rr][Ee][Tt](?:[-_.=:]|/|$))(?![Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd](?:[-_.=:]|/|$))(?![Cc][Ll][Ii][Ee][Nn][Tt][-_]?[Ss][Ee][Cc][Rr][Ee][Tt](?:[-_.=:]|/|$))(?![Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll](?:[-_.=:]|/|$))[A-Za-z0-9._~-]+)*/?$"}
           }
         }
       ]

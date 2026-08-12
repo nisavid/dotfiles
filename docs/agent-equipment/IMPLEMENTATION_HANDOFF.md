@@ -271,9 +271,11 @@ Later steps do not begin until the named evidence passes.
   equipment identity on MCP and plugin selections; omit it only for the
   route-wide legacy projector.
 - Mirror the catalog provider variants in the projection, including
-  `secret_profile_reference` arguments and the hardened static public-HTTPS
-  grammar for HTTP MCPs. Match provider-consumed secret reference names exactly
-  to the action's declared names; persist no resolved values.
+  `secret_profile_reference` arguments and the hardened static
+  credential-free HTTPS grammar for HTTP MCPs. Match provider-consumed secret
+  reference names exactly to the action's declared names; persist no resolved
+  values. Treat destination allow/deny policy as a separate executor
+  capability so reviewed private MCP endpoints remain representable.
 - Give every mutable routed surface exactly one reference in the owning route's
   kind-specific slot. Installation and enablement are singleton slots;
   projector, MCP-selection, plugin-selection, and Claude-skill slots close the

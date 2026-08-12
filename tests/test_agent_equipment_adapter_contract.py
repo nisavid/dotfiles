@@ -4,6 +4,7 @@ import copy
 import hashlib
 import importlib.util
 import json
+import math
 import subprocess
 import sys
 import tempfile
@@ -62,6 +63,49 @@ def canonical_action_identity(action: dict[str, object]) -> str:
         "desired_state_digest": action["desired_state_digest"],
     }
     return f"action:{canonical_digest(identity_payload)}"
+
+
+def schema_valid_mismatch(field: str, current: object) -> object:
+    """Return a different value that still satisfies the field's schema shape."""
+    if field in {
+        "implementation_manifest_digest",
+        "catalog_digest",
+        "lock_digest",
+        "plan_digest",
+        "capability_digest",
+        "manager_version_evidence_digest",
+        "route_digest",
+    }:
+        replacement = "sha256:" + "0" * 64
+        return "sha256:" + "1" * 64 if current == replacement else replacement
+    if field == "action_identity":
+        replacement = "action:sha256:" + "0" * 64
+        return "action:sha256:" + "1" * 64 if current == replacement else replacement
+    if field == "ordinal":
+        return 1 if current != 1 else 2
+    if field == "harness":
+        return "codex" if current != "codex" else "claude"
+    if field == "route_identity":
+        return "route:claude/schema-valid-mismatch"
+    if field == "activation_group":
+        return "activation:claude/schema-valid-mismatch"
+    if field == "equipment_identities":
+        return ["skill:fixture/schema-valid-mismatch"]
+    if field == "controlled_equipment_identities":
+        return ["skill:fixture/schema-valid-controlled-mismatch"]
+    if field == "surface_scope":
+        return ["surface:fixture/schema-valid-mismatch"]
+    if field == "secret_references":
+        return [{"kind": "environment_variable", "name": "FIXTURE_SECRET"}]
+    if field == "route_record":
+        replacement = copy.deepcopy(current)
+        replacement["identity"] = "route:claude/schema-valid-mismatch"
+        return replacement
+    if field == "operation":
+        return "configure" if current != "configure" else "enable"
+    if isinstance(current, str):
+        return f"schema-valid-mismatch:{field}"
+    raise AssertionError(f"No schema-valid mismatch is defined for {field!r}")
 
 
 def expected_post_normalized_state(
@@ -449,6 +493,123 @@ class AdapterContractSchemaTests(unittest.TestCase):
 
                 self.assertIn(expected_code, document_diagnostic_codes(document))
 
+    def test_public_sequence_validation_requires_mutation_safety_preconditions(
+        self,
+    ) -> None:
+        for field in ("prepared_checkpoint_required", "compare_before_mutate"):
+            for defect in ("false", "missing"):
+                with self.subTest(field=field, defect=defect):
+                    document = apply_sequence_document(valid_sequence())
+                    preconditions = document["sequence"]["planned_action"]["record"][
+                        "preconditions"
+                    ]
+                    if defect == "false":
+                        preconditions[field] = False
+                    else:
+                        preconditions.pop(field)
+
+                    self.assertIn(
+                        "ADAPTER_SCHEMA_INVALID",
+                        document_diagnostic_codes(document),
+                    )
+
+    def test_public_sequence_validation_rejects_unknown_nested_members(self) -> None:
+        locations = (
+            ("authority",),
+            ("planned_action", "record"),
+            ("planned_action", "record", "preconditions"),
+            ("pre_state_request", "record", "route_record"),
+        )
+        for location in locations:
+            with self.subTest(location=location):
+                document = apply_sequence_document(valid_sequence())
+                target = document["sequence"]
+                for name in location:
+                    target = target[name]
+                target["attacker_unknown"] = True
+
+                self.assertIn(
+                    "ADAPTER_SCHEMA_INVALID",
+                    document_diagnostic_codes(document),
+                )
+
+    def test_public_sequence_validation_rejects_excessive_nesting(self) -> None:
+        document = apply_sequence_document(valid_sequence())
+        nested: object = None
+        for _ in range(2_000):
+            nested = [nested]
+        document["sequence"]["authority"]["attacker_unknown"] = nested
+
+        self.assertIn(
+            "ADAPTER_SCHEMA_INVALID",
+            document_diagnostic_codes(document),
+        )
+
+    def test_schema_keyword_allowlist_checks_additional_properties(self) -> None:
+        self.assertFalse(
+            CONTRACT._schema_uses_only_supported_keywords(
+                {"additionalProperties": {"unsupportedKeyword": True}}
+            )
+        )
+
+    def test_public_sequence_validation_requires_exact_contract_versions(self) -> None:
+        locations = (
+            ("authority",),
+            ("capability_discovery", "result", "records", 0),
+            ("pre_state_request", "record"),
+            ("pre_state_observation", "record"),
+            ("planned_action", "record"),
+            ("mutation_receipt", "record"),
+            ("post_state_request", "record"),
+            ("post_state_observation", "record"),
+        )
+        for location in locations:
+            for defect in ("missing", "wrong"):
+                with self.subTest(location=location, defect=defect):
+                    document = apply_sequence_document(valid_sequence())
+                    target = document["sequence"]
+                    for name in location:
+                        target = target[name]
+                    if defect == "missing":
+                        target.pop("contract_version")
+                    else:
+                        target["contract_version"] = "adapter-contract-v0"
+
+                    self.assertIn(
+                        "ADAPTER_SCHEMA_INVALID",
+                        document_diagnostic_codes(document),
+                    )
+
+    def test_public_sequence_validation_rejects_non_json_numbers(self) -> None:
+        for value in (math.nan, math.inf, -math.inf):
+            with self.subTest(value=value):
+                document = apply_sequence_document(valid_sequence())
+                document["sequence"]["planned_action"]["record"]["ordinal"] = value
+
+                self.assertIn(
+                    "ADAPTER_SCHEMA_INVALID",
+                    document_diagnostic_codes(document),
+                )
+
+    def test_public_sequence_validation_requires_utc_z_timestamps(self) -> None:
+        locations = (
+            ("pre_state_observation", "observed_at"),
+            ("mutation_receipt", "started_at"),
+            ("mutation_receipt", "finished_at"),
+            ("post_state_observation", "observed_at"),
+        )
+        for record_name, field in locations:
+            with self.subTest(record_name=record_name, field=field):
+                document = apply_sequence_document(valid_sequence())
+                document["sequence"][record_name]["record"][field] = (
+                    "2026-08-12T15:00:00+00:00"
+                )
+
+                self.assertIn(
+                    "ADAPTER_SCHEMA_INVALID",
+                    document_diagnostic_codes(document),
+                )
+
     def test_schema_is_valid_draft_2020_12(self) -> None:
         result = run_check_jsonschema("--check-metaschema", str(SCHEMA))
 
@@ -663,6 +824,26 @@ class AdapterContractSchemaTests(unittest.TestCase):
                     result.stdout + result.stderr,
                 )
 
+    def test_named_invalid_runtime_observations_have_only_the_named_defect(
+        self,
+    ) -> None:
+        misnamed = load_document(
+            "invalid-adapter-misnamed-native-update-state.json"
+        )
+        normalized_state = misnamed["record"]["result"]["normalized_state"]
+        normalized_state["native_update_suppression_state"] = normalized_state.pop(
+            "native_update_state"
+        )
+        self.assertTrue(CONTRACT._matches_checked_in_adapter_schema(misnamed))
+
+        missing_binding = load_document(
+            "invalid-adapter-missing-manager-version-binding.json"
+        )
+        missing_binding["record"]["manager_version_evidence_digest"] = (
+            "sha256:" + "e" * 64
+        )
+        self.assertTrue(CONTRACT._matches_checked_in_adapter_schema(missing_binding))
+
     def test_valid_sequence_has_canonical_embedded_payload_digests_and_exact_bindings(
         self,
     ) -> None:
@@ -686,7 +867,7 @@ class AdapterContractSchemaTests(unittest.TestCase):
         non_apply["sequence"]["authority"]["purpose"] = "inventory"
         non_apply["sequence"]["pre_state_request"]["record"]["command"] = "audit"
         non_apply["sequence"]["pre_state_request"]["record"]["purpose"] = "inventory"
-        cases.append(("non-apply command", "COMMAND_BOUNDARY_MISMATCH", non_apply))
+        cases.append(("non-apply command", "ADAPTER_SCHEMA_INVALID", non_apply))
 
         changed_pre_state = apply_sequence_document(valid_sequence())
         changed_pre_state["sequence"]["authority"]["expected_pre_state_digest"] = (
@@ -757,9 +938,11 @@ class AdapterContractSchemaTests(unittest.TestCase):
 
         update_mismatch = apply_sequence_document(valid_sequence())
         for observation_name in ("pre_state_observation", "post_state_observation"):
-            update_mismatch["sequence"][observation_name]["record"]["result"][
-                "normalized_state"
-            ]["native_update_control"] = "not_applicable"
+            normalized_state = update_mismatch["sequence"][observation_name][
+                "record"
+            ]["result"]["normalized_state"]
+            normalized_state["native_update_control"] = "not_applicable"
+            normalized_state["native_update_suppression_state"] = "not_applicable"
         cases.append(
             (
                 "native-update classification",
@@ -790,7 +973,7 @@ class AdapterContractSchemaTests(unittest.TestCase):
         cases.append(
             (
                 "observation evidence kind",
-                "OBSERVATION_EVIDENCE_KIND_MISMATCH",
+                "ADAPTER_SCHEMA_INVALID",
                 wrong_observation_evidence_kind,
             )
         )
@@ -802,7 +985,7 @@ class AdapterContractSchemaTests(unittest.TestCase):
         cases.append(
             (
                 "mutation evidence kind",
-                "MUTATION_EVIDENCE_KIND_MISMATCH",
+                "ADAPTER_SCHEMA_INVALID",
                 wrong_mutation_evidence_kind,
             )
         )
@@ -1040,6 +1223,9 @@ class AdapterContractSchemaTests(unittest.TestCase):
                 "suppression_scope": "none",
             }
         )
+        capability["operation_support"]["suppress_native_update"] = {
+            "mode": "unavailable"
+        }
 
         for index in (1, 3):
             sequence[index]["record"]["route_record"] = copy.deepcopy(route)
@@ -1108,7 +1294,7 @@ class AdapterContractSchemaTests(unittest.TestCase):
         )
 
         self.assertIn(
-            "PROVIDER_MANAGER_MISMATCH",
+            "ADAPTER_SCHEMA_INVALID",
             diagnostic_codes(tuple(sequence)),
         )
 
@@ -1146,24 +1332,33 @@ class AdapterContractSchemaTests(unittest.TestCase):
             valid_compensation_sequence_document,
         )
         mutations = (
-            lambda document: document["sequence"]["pre_state_observation"][
-                "record"
-            ].__setitem__("observed_at", "2099-01-01T00:00:00Z"),
-            lambda document: document["sequence"]["post_state_observation"][
-                "record"
-            ].__setitem__("observed_at", "2000-01-01T00:00:00Z"),
-            lambda document: document["sequence"]["post_state_observation"][
-                "record"
-            ].__setitem__("observed_at", "2026-08-12T15:00:02"),
+            (
+                lambda document: document["sequence"]["pre_state_observation"][
+                    "record"
+                ].__setitem__("observed_at", "2099-01-01T00:00:00Z"),
+                "TIMESTAMP_ORDER_INVALID",
+            ),
+            (
+                lambda document: document["sequence"]["post_state_observation"][
+                    "record"
+                ].__setitem__("observed_at", "2000-01-01T00:00:00Z"),
+                "TIMESTAMP_ORDER_INVALID",
+            ),
+            (
+                lambda document: document["sequence"]["post_state_observation"][
+                    "record"
+                ].__setitem__("observed_at", "2026-08-12T15:00:02"),
+                "ADAPTER_SCHEMA_INVALID",
+            ),
         )
         for build in builders:
-            for mutate in mutations:
+            for mutate, expected_code in mutations:
                 with self.subTest(build=build, mutate=mutate):
                     document = build()
                     mutate(document)
 
                     self.assertIn(
-                        "TIMESTAMP_ORDER_INVALID",
+                        expected_code,
                         document_diagnostic_codes(document),
                     )
 
@@ -1332,7 +1527,8 @@ class AdapterContractSchemaTests(unittest.TestCase):
         for field in fields:
             with self.subTest(field=field):
                 sequence = list(copy.deepcopy(valid_sequence()))
-                sequence[2]["record"][field] = f"mismatch:{field}"
+                current = sequence[2]["record"][field]
+                sequence[2]["record"][field] = schema_valid_mismatch(field, current)
                 self.assertIn(
                     "ECHO_BINDING_MISMATCH", diagnostic_codes(tuple(sequence))
                 )
@@ -1389,9 +1585,17 @@ class AdapterContractSchemaTests(unittest.TestCase):
             for field in fields:
                 with self.subTest(record=index, field=field):
                     sequence = list(copy.deepcopy(valid_sequence()))
-                    sequence[index]["record"][field] = f"mismatch:{field}"
+                    current = sequence[index]["record"][field]
+                    if field == "operation_disposition":
+                        sequence[index]["record"][field] = "operator_action"
+                        expected_code = "ADAPTER_SCHEMA_INVALID"
+                    else:
+                        sequence[index]["record"][field] = schema_valid_mismatch(
+                            field, current
+                        )
+                        expected_code = "ECHO_BINDING_MISMATCH"
                     self.assertIn(
-                        "ECHO_BINDING_MISMATCH",
+                        expected_code,
                         diagnostic_codes(tuple(sequence)),
                     )
 
@@ -1437,9 +1641,17 @@ class AdapterContractSchemaTests(unittest.TestCase):
         ):
             with self.subTest(precondition=field):
                 sequence = list(copy.deepcopy(valid_sequence()))
-                sequence[3]["record"]["preconditions"][field] = f"mismatch:{field}"
+                current = sequence[3]["record"]["preconditions"][field]
+                if field == "control_owner":
+                    sequence[3]["record"]["preconditions"][field] = "operator_owned"
+                    expected_code = "ADAPTER_SCHEMA_INVALID"
+                else:
+                    sequence[3]["record"]["preconditions"][field] = (
+                        schema_valid_mismatch(field, current)
+                    )
+                    expected_code = "ECHO_BINDING_MISMATCH"
                 self.assertIn(
-                    "ECHO_BINDING_MISMATCH", diagnostic_codes(tuple(sequence))
+                    expected_code, diagnostic_codes(tuple(sequence))
                 )
 
     def test_sequence_rejects_ok_state_and_compensation_restore_mismatches(
@@ -1558,7 +1770,10 @@ class AdapterContractSchemaTests(unittest.TestCase):
             "server_name": "context7",
             "transport": "stdio",
             "command": "npx",
-            "arguments": ["-y", "@upstash/context7-mcp"],
+            "arguments": [
+                {"literal": "-y"},
+                {"literal": "@upstash/context7-mcp"},
+            ],
         }
         for index in (1, 3):
             sequence[index]["record"]["route_record"]["provider"] = provider
@@ -1604,7 +1819,10 @@ class AdapterContractSchemaTests(unittest.TestCase):
                     "server_name": "context7",
                     "transport": "stdio",
                     "command": "npx",
-                    "arguments": ["-y", "@upstash/context7-mcp"],
+                    "arguments": [
+                        {"literal": "-y"},
+                        {"literal": "@upstash/context7-mcp"},
+                    ],
                 },
             ),
         )
@@ -1893,7 +2111,7 @@ class AdapterContractSchemaTests(unittest.TestCase):
                     sequence[4]["record"]["operation"] = operation
 
                 self.assertIn(
-                    "ACTION_OPERATION_UNAUTHORIZED",
+                    "ADAPTER_SCHEMA_INVALID",
                     diagnostic_codes(tuple(sequence)),
                 )
 

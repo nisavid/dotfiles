@@ -7,6 +7,7 @@ import argparse
 from dataclasses import dataclass
 from datetime import datetime
 import hashlib
+import ipaddress
 import json
 from pathlib import Path
 import re
@@ -742,7 +743,7 @@ def _has_provider_shape(value: object) -> bool:
         and isinstance(value.get("server_name"), str)
         and bool(value.get("server_name"))
         and isinstance(value.get("url"), str)
-        and _public_https_url_is_valid(str(value.get("url")))
+        and _credential_free_https_url_is_valid(str(value.get("url")))
     )
 
 
@@ -765,7 +766,7 @@ def _has_provider_argument_shape(value: object) -> bool:
     )
 
 
-def _public_https_url_is_valid(value: str) -> bool:
+def _credential_free_https_url_is_valid(value: str) -> bool:
     try:
         parsed = urlsplit(value)
         port = parsed.port
@@ -775,7 +776,7 @@ def _public_https_url_is_valid(value: str) -> bool:
     return (
         parsed.scheme == "https"
         and bool(parsed.hostname)
-        and bool(re.fullmatch(r"[A-Za-z0-9.-]+", parsed.hostname or ""))
+        and _static_https_hostname_is_valid(parsed.hostname or "")
         and parsed.username is None
         and parsed.password is None
         and parsed.query == ""
@@ -793,6 +794,20 @@ def _public_https_url_is_valid(value: str) -> bool:
             for segment in path_segments
         )
     )
+
+
+def _static_https_hostname_is_valid(value: str) -> bool:
+    try:
+        ipaddress.ip_address(value)
+    except ValueError:
+        labels = value.split(".")
+        return len(value) <= 253 and all(
+            1 <= len(label) <= 63
+            and re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?", label)
+            is not None
+            for label in labels
+        )
+    return True
 
 
 def _has_secret_references_shape(value: object) -> bool:

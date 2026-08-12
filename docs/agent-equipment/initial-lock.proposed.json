@@ -1,5 +1,5 @@
 {
-  "catalog_digest": "sha256:c8e9141c8ced058c8d533f8cfdd026166a2b80b1c96484a366adae4c5c65ac67",
+  "catalog_digest": "sha256:72c06dd6869c4cd10bcfe8cff3f9a2b269fd21eab0917974f34d70671af696bd",
   "coverage": [
     {
       "equipment_identity": "mcp:chrome-devtools/server",
@@ -42,7 +42,7 @@
                   "disposition": "unavailable"
                 },
                 "suppress_native_update": {
-                  "disposition": "unavailable"
+                  "disposition": "operator_action"
                 }
               },
               "provenance": {
@@ -57,8 +57,8 @@
               "restore": {
                 "channel": "stable",
                 "class": "native_rolling",
-                "native_update_control": "unsuppressible",
-                "observation_source": "claude plugin list and cached manifest",
+                "native_update_control": "suppressible",
+                "observation_source": "claude marketplace auto-update documentation, plugin list, and cached manifest",
                 "reviewed_baseline": "1.7.0"
               },
               "secret_references": []
@@ -1342,7 +1342,7 @@
                   "disposition": "unavailable"
                 },
                 "suppress_native_update": {
-                  "disposition": "unavailable"
+                  "disposition": "operator_action"
                 }
               },
               "provenance": {
@@ -1357,8 +1357,8 @@
               "restore": {
                 "channel": "stable",
                 "class": "native_rolling",
-                "native_update_control": "unsuppressible",
-                "observation_source": "claude plugin list and cached manifest",
+                "native_update_control": "suppressible",
+                "observation_source": "claude marketplace auto-update documentation, plugin list, and cached manifest",
                 "reviewed_baseline": "1.7.0"
               },
               "secret_references": []
@@ -1617,7 +1617,7 @@
                   "disposition": "unavailable"
                 },
                 "suppress_native_update": {
-                  "disposition": "unavailable"
+                  "disposition": "operator_action"
                 }
               },
               "provenance": {
@@ -1632,8 +1632,8 @@
               "restore": {
                 "channel": "stable",
                 "class": "native_rolling",
-                "native_update_control": "unsuppressible",
-                "observation_source": "claude plugin list and cached manifest",
+                "native_update_control": "suppressible",
+                "observation_source": "claude marketplace auto-update documentation, plugin list, and cached manifest",
                 "reviewed_baseline": "1.7.0"
               },
               "secret_references": []
@@ -1700,7 +1700,7 @@
                   "disposition": "unavailable"
                 },
                 "suppress_native_update": {
-                  "disposition": "unavailable"
+                  "disposition": "operator_action"
                 }
               },
               "provenance": {
@@ -1715,8 +1715,8 @@
               "restore": {
                 "channel": "stable",
                 "class": "native_rolling",
-                "native_update_control": "unsuppressible",
-                "observation_source": "claude plugin list and cached manifest",
+                "native_update_control": "suppressible",
+                "observation_source": "claude marketplace auto-update documentation, plugin list, and cached manifest",
                 "reviewed_baseline": "1.7.0"
               },
               "secret_references": []
@@ -1783,7 +1783,7 @@
                   "disposition": "unavailable"
                 },
                 "suppress_native_update": {
-                  "disposition": "unavailable"
+                  "disposition": "operator_action"
                 }
               },
               "provenance": {
@@ -1798,8 +1798,8 @@
               "restore": {
                 "channel": "stable",
                 "class": "native_rolling",
-                "native_update_control": "unsuppressible",
-                "observation_source": "claude plugin list and cached manifest",
+                "native_update_control": "suppressible",
+                "observation_source": "claude marketplace auto-update documentation, plugin list, and cached manifest",
                 "reviewed_baseline": "1.7.0"
               },
               "secret_references": []
@@ -1866,7 +1866,7 @@
                   "disposition": "unavailable"
                 },
                 "suppress_native_update": {
-                  "disposition": "unavailable"
+                  "disposition": "operator_action"
                 }
               },
               "provenance": {
@@ -1881,8 +1881,8 @@
               "restore": {
                 "channel": "stable",
                 "class": "native_rolling",
-                "native_update_control": "unsuppressible",
-                "observation_source": "claude plugin list and cached manifest",
+                "native_update_control": "suppressible",
+                "observation_source": "claude marketplace auto-update documentation, plugin list, and cached manifest",
                 "reviewed_baseline": "1.7.0"
               },
               "secret_references": []
@@ -1949,7 +1949,7 @@
                   "disposition": "unavailable"
                 },
                 "suppress_native_update": {
-                  "disposition": "unavailable"
+                  "disposition": "operator_action"
                 }
               },
               "provenance": {
@@ -1964,8 +1964,8 @@
               "restore": {
                 "channel": "stable",
                 "class": "native_rolling",
-                "native_update_control": "unsuppressible",
-                "observation_source": "claude plugin list and cached manifest",
+                "native_update_control": "suppressible",
+                "observation_source": "claude marketplace auto-update documentation, plugin list, and cached manifest",
                 "reviewed_baseline": "1.7.0"
               },
               "secret_references": []
@@ -2032,7 +2032,7 @@
                   "disposition": "unavailable"
                 },
                 "suppress_native_update": {
-                  "disposition": "unavailable"
+                  "disposition": "operator_action"
                 }
               },
               "provenance": {
@@ -2047,8 +2047,8 @@
               "restore": {
                 "channel": "stable",
                 "class": "native_rolling",
-                "native_update_control": "unsuppressible",
-                "observation_source": "claude plugin list and cached manifest",
+                "native_update_control": "suppressible",
+                "observation_source": "claude marketplace auto-update documentation, plugin list, and cached manifest",
                 "reviewed_baseline": "1.7.0"
               },
               "secret_references": []
@@ -7373,8 +7373,8 @@
       "restore": {
         "channel": "stable",
         "class": "native_rolling",
-        "native_update_control": "unsuppressible",
-        "observation_source": "claude plugin list and cached manifest",
+        "native_update_control": "suppressible",
+        "observation_source": "claude marketplace auto-update documentation, plugin list, and cached manifest",
         "reviewed_baseline": "1.7.0"
       }
     },

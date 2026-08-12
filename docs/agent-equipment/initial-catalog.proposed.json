@@ -46,7 +46,7 @@
                   "disposition": "unavailable"
                 },
                 "suppress_native_update": {
-                  "disposition": "unavailable"
+                  "disposition": "operator_action"
                 }
               },
               "provenance": {
@@ -61,8 +61,8 @@
               "restore": {
                 "channel": "stable",
                 "class": "native_rolling",
-                "native_update_control": "unsuppressible",
-                "observation_source": "claude plugin list and cached manifest",
+                "native_update_control": "suppressible",
+                "observation_source": "claude marketplace auto-update documentation, plugin list, and cached manifest",
                 "reviewed_baseline": "1.7.0"
               },
               "secret_references": []
