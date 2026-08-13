@@ -596,6 +596,81 @@ class CapturedStateValidationTest(unittest.TestCase):
             ["CAPTURED_STATE_SCHEMA_INVALID"],
         )
 
+    def test_public_schema_gate_rejects_malformed_supported_keyword_values(
+        self,
+    ) -> None:
+        for schema_path, expected_code in (
+            (SCHEMA, "CAPTURED_STATE_SCHEMA_INVALID"),
+            (PLAN_ACTION_SET_SCHEMA, "AUTHORITATIVE_PLAN_ACTION_SET_SCHEMA_INVALID"),
+        ):
+            with self.subTest(schema=schema_path.name):
+                with tempfile.TemporaryDirectory() as temporary_directory:
+                    schema_directory = Path(temporary_directory)
+                    for source in (SCHEMA, PLAN_ACTION_SET_SCHEMA):
+                        schema = json.loads(source.read_text(encoding="utf-8"))
+                        if source == schema_path:
+                            schema["required"] = {}
+                        (schema_directory / source.name).write_text(
+                            json.dumps(schema), encoding="utf-8"
+                        )
+                    original_directory = CAPTURED_STATE.SCHEMA_DIRECTORY
+                    CAPTURED_STATE.SCHEMA_DIRECTORY = schema_directory
+                    try:
+                        diagnostics = CAPTURED_STATE.validate_captured_state(
+                            valid_document(),
+                            authoritative_plan_action_set(),
+                            expected_candidate_identity=CANDIDATE_IDENTITY,
+                            expected_implementation_manifest_digest=(
+                                IMPLEMENTATION_MANIFEST_DIGEST
+                            ),
+                        )
+                    finally:
+                        CAPTURED_STATE.SCHEMA_DIRECTORY = original_directory
+
+                self.assertIn(
+                    expected_code,
+                    {diagnostic.code for diagnostic in diagnostics},
+                )
+
+    def test_legacy_projector_surface_requires_an_owning_route(self) -> None:
+        document = valid_document()
+        document["surfaces"].append(
+            {
+                "surface_id": "surface:fixture/legacy-projector",
+                "kind": "legacy_projector",
+                "mutation_policy": "operator_owned",
+                "provenance": {
+                    "classification": "unmanaged",
+                    "evidence": [
+                        {
+                            "source": "fixture",
+                            "state_digest": "sha256:" + "8" * 64,
+                        }
+                    ],
+                },
+                "locator": {
+                    "owner": "claude",
+                    "source": "fixture",
+                    "key_path": ["projector"],
+                },
+                "observation": {
+                    "present": True,
+                    "mode": "blanket",
+                    "enabled": True,
+                    "implementation_digest": "sha256:" + "9" * 64,
+                },
+                "recovery": {"kind": "none", "reason": "operator_owned"},
+            }
+        )
+
+        self.assertIn(
+            "CAPTURED_STATE_SCHEMA_INVALID",
+            {
+                diagnostic.code
+                for diagnostic in validate_document(document)
+            },
+        )
+
     def test_schema_rejects_skill_root_and_ownership_conflation(self) -> None:
         cases: list[dict[str, object]] = []
         fixture_document = json.loads(FIXTURE.read_text(encoding="utf-8"))
@@ -2412,7 +2487,7 @@ class CapturedStateValidationTest(unittest.TestCase):
         duplicate_capability["bindings"]["capability_bindings"].append(
             copy.deepcopy(CAPABILITY_BINDING)
         )
-        cases.append(("DUPLICATE_CAPABILITY_IDENTITY", duplicate_capability))
+        cases.append(("CAPTURED_STATE_SCHEMA_INVALID", duplicate_capability))
 
         for expected_code, document in cases:
             with self.subTest(expected_code=expected_code):

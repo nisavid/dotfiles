@@ -231,7 +231,7 @@ jq '.counts' docs/agent-equipment/initial-inventory.json
 jq '.plugin_component_inventory.summary' docs/agent-equipment/initial-inventory.json
 jq '[.plugin_component_inventory.observed_plugins[] | {harness, plugin_id}] | length' docs/agent-equipment/initial-inventory.json
 jq '.proposed_managed_slice.canonical_proposal' docs/agent-equipment/initial-inventory.json
-rg -n '/Users/|ivan@|Bearer [A-Za-z0-9]|"(token|api_key|secret|password)"[[:space:]]*:' docs/agent-equipment/initial-inventory.json
+python3 scripts/privacy-scan --root .
 python3 -m unittest tests/test_agent_equipment_design.py
 ```
 

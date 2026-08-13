@@ -224,6 +224,7 @@
         "activation_group": {"type": "string", "pattern": "^activation:[a-z0-9][a-z0-9._/-]*$"},
         "component_controls": {
           "type": "array",
+          "uniqueItems": true,
           "items": {"$ref": "#/$defs/componentControl"}
         },
         "control_owner": {"enum": ["reconciler_owned", "operator_owned"]},
@@ -429,13 +430,25 @@
         }
       ]
     },
-    "operation": {
+    "inspectOperation": {
+      "type": "object",
+      "required": ["disposition"],
+      "additionalProperties": false,
+      "properties": {
+        "disposition": {
+          "enum": ["automated", "operator_action", "unavailable"]
+        }
+      }
+    },
+    "mutationOperation": {
       "oneOf": [
         {
           "type": "object",
           "required": ["disposition"],
           "additionalProperties": false,
-          "properties": {"disposition": {"enum": ["automated", "operator_action", "unavailable"]}}
+          "properties": {
+            "disposition": {"enum": ["operator_action", "unavailable"]}
+          }
         },
         {
           "type": "object",
@@ -453,14 +466,14 @@
       "required": ["inspect", "install", "configure", "enable", "disable", "remove", "restore", "suppress_native_update"],
       "additionalProperties": false,
       "properties": {
-        "inspect": {"$ref": "#/$defs/operation"},
-        "install": {"$ref": "#/$defs/operation"},
-        "configure": {"$ref": "#/$defs/operation"},
-        "enable": {"$ref": "#/$defs/operation"},
-        "disable": {"$ref": "#/$defs/operation"},
-        "remove": {"$ref": "#/$defs/operation"},
-        "restore": {"$ref": "#/$defs/operation"},
-        "suppress_native_update": {"$ref": "#/$defs/operation"}
+        "inspect": {"$ref": "#/$defs/inspectOperation"},
+        "install": {"$ref": "#/$defs/mutationOperation"},
+        "configure": {"$ref": "#/$defs/mutationOperation"},
+        "enable": {"$ref": "#/$defs/mutationOperation"},
+        "disable": {"$ref": "#/$defs/mutationOperation"},
+        "remove": {"$ref": "#/$defs/mutationOperation"},
+        "restore": {"$ref": "#/$defs/mutationOperation"},
+        "suppress_native_update": {"$ref": "#/$defs/mutationOperation"}
       }
     }
   }
