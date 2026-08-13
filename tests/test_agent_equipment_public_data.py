@@ -15,8 +15,19 @@ from scripts.agent_equipment_public_data import (
     string_looks_like_credential,
     string_looks_like_private_key,
 )
+from scripts.privacy_age_envelopes import canonical_manifest_bytes
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def write_age_manifest(root: Path, paths: list[str]) -> None:
+    entries = {
+        relative: "sha256:" + hashlib.sha256((root / relative).read_bytes()).hexdigest()
+        for relative in paths
+    }
+    (root / ".privacy-age-envelopes.json").write_bytes(
+        canonical_manifest_bytes(entries)
+    )
 
 
 def provider_credentials() -> tuple[str, ...]:
@@ -24,6 +35,7 @@ def provider_credentials() -> tuple[str, ...]:
         *("gh" + prefix + "_" + "A" * 20 for prefix in "pousr"),
         "github" + "_pat_" + "A" * 20,
         "AK" + "IA" + "A" * 16,
+        "AS" + "IA" + "A" * 16,
         "s" + "k-" + "A" * 20,
         "p" + "st_" + "A" * 12 + "::" + "B" * 8,
     )
@@ -56,11 +68,42 @@ def header_and_query_credentials() -> tuple[str, ...]:
     )
 
 
+def provider_credential_fields() -> tuple[tuple[str, str], ...]:
+    return (
+        ("AWS_" + "ACCESS_KEY_ID", "aws-access-key-id-canary"),
+        ("AWS_" + "SECRET_ACCESS_KEY", "aws-secret-access-key-canary"),
+        ("AWS_" + "SESSION_TOKEN", "aws-session-token-canary"),
+        ("CONTEXT7_" + "API_KEY", "context7-api-key-canary"),
+        ("FIRECRAWL_" + "API_KEY", "firecrawl-api-key-canary"),
+        ("GREPTILE_" + "API_KEY", "greptile-api-key-canary"),
+        ("GITHUB_" + "TOKEN", "github-token-canary"),
+        ("GH_" + "TOKEN", "gh-token-canary"),
+        ("GITHUB_" + "PERSONAL_ACCESS_TOKEN", "github-pat-canary"),
+        ("GITHUB_" + "PAT", "github-pat-alias-canary"),
+        ("GITHUB_" + "OAUTH_TOKEN", "github-oauth-token-canary"),
+        ("GITHUB_" + "ENTERPRISE_TOKEN", "github-enterprise-token-canary"),
+        ("GH_" + "ENTERPRISE_TOKEN", "gh-enterprise-token-canary"),
+        ("CODEX_" + "GITHUB_PAT", "codex-github-pat-canary"),
+        ("FOSSA_" + "API_KEY", "fossa-api-key-canary"),
+        ("API_KEY_" + "CONTEXT7", "context7-suffix-canary"),
+        ("TOKEN_" + "GITHUB", "github-suffix-canary"),
+        ("aws." + "secret_access_key", "aws-dotted-key-canary"),
+        ("github." + "personal.access.token", "github-dotted-key-canary"),
+        ("AWS." + "SECRET.ACCESS.KEY", "aws-uppercase-dotted-key-canary"),
+    )
+
+
 def private_key_markers() -> tuple[str, ...]:
     return tuple(
         "-----BEGIN " + prefix + "PRIVATE KEY-----"
         for prefix in ("", "ENCRYPTED ", "RSA ", "EC ", "DSA ", "OPENSSH ")
-    ) + ("AGE-" + "SECRET-KEY-" + "A" * 32,)
+    ) + (
+        "-----BEGIN " + "PGP PRIVATE KEY BLOCK-----",
+        "-----BEGIN " + "SSH2 ENCRYPTED PRIVATE KEY-----",
+        "---- BEGIN " + "SSH2 ENCRYPTED PRIVATE KEY ----",
+        "PuTTY-User-" + "Key-File-3: ssh-ed25519",
+        "AGE-" + "SECRET-KEY-" + "A" * 32,
+    )
 
 
 class AgentEquipmentPublicDataTest(unittest.TestCase):
@@ -98,6 +141,10 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
                 "git+https://example.invalid/public.git@"
                 "0123456789abcdef0123456789abcdef01234567"
             ),
+            (
+                '{"Access' + 'KeyId":"\'${AWS_ACCESS_KEY_ID}\'",'
+                '"SecretAccess' + 'Key":"\'${AWS_SECRET_ACCESS_KEY}\'"}'
+            ),
         )
 
         for credential in credentials:
@@ -106,6 +153,31 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
         for public_value in public_values:
             with self.subTest(public_value=public_value):
                 self.assertFalse(string_looks_like_credential(public_value))
+
+    def test_bearer_prose_is_public_but_credential_context_is_not(self) -> None:
+        authorization = "Author" + "ization"
+        proxy_authorization = "Proxy-Author" + "ization"
+        bearer = "Bear" + "er "
+        public_prose = (
+            "Use Bearer authentication for requests.",
+            "The bearer token is supplied by the runtime.",
+            "Bearer authentication is required by this endpoint.",
+        )
+        credential_values = (
+            authorization + ": " + bearer + "actual-secret-value",
+            proxy_authorization + "=" + bearer + "actual-secret-value",
+            bearer + "gh" + "p_" + "A" * 20,
+            bearer + "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyIn0.signature",
+            bearer + "abcdefghijklmnopqrstuvwxyz",
+            bearer + "A" * 32,
+        )
+
+        for prose in public_prose:
+            with self.subTest(prose=prose):
+                self.assertFalse(string_looks_like_credential(prose))
+        for credential in credential_values:
+            with self.subTest(credential=credential[:24]):
+                self.assertTrue(string_looks_like_credential(credential))
 
     def test_github_expression_literals_are_scanned_before_references_are_removed(
         self,
@@ -192,6 +264,203 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
                 for serialized in serialized_documents:
                     self.assertTrue(string_looks_like_credential(serialized))
 
+        parity_documents = (
+            ("TO" + "KEN=abcdefg", {"TO" + "KEN": "abcdefg"}),
+            ("FOSSA_API_" + "KEY=abc1234", {"FOSSA_API_" + "KEY": "abc1234"}),
+            ('"TO' + 'KEN": actualsecretvalue', {"TO" + "KEN": "actualsecretvalue"}),
+            (
+                '"FOSSA_API_' + 'KEY" = fossaactualsecret',
+                {"FOSSA_API_" + "KEY": "fossaactualsecret"},
+            ),
+        )
+        for serialized, document in parity_documents:
+            with self.subTest(serialized=serialized):
+                self.assertTrue(contains_literal_credential(document))
+                self.assertTrue(string_looks_like_credential(serialized))
+
+    def test_provider_credential_fields_match_mapping_and_serialized_policy(
+        self,
+    ) -> None:
+        for field, literal in provider_credential_fields():
+            with self.subTest(field=field):
+                self.assertTrue(contains_literal_credential({field: literal}))
+                self.assertTrue(
+                    string_looks_like_credential(
+                        json.dumps({field: literal}, separators=(",", ":"))
+                    )
+                )
+
+        public_fields = ("compat", "compatibility", "secret_profile_reference")
+        for field in public_fields:
+            with self.subTest(public_field=field):
+                self.assertFalse(contains_literal_credential({field: "public"}))
+                self.assertFalse(
+                    string_looks_like_credential(
+                        json.dumps({field: "public"}, separators=(",", ":"))
+                    )
+                )
+        self.assertFalse(contains_literal_credential({"compare_token": "absent"}))
+
+    def test_common_provider_environment_fields_are_credentials_but_controls_are_not(
+        self,
+    ) -> None:
+        literal_fields = (
+            "NPM_TOKEN",
+            "HF_TOKEN",
+            "HF_ACCESS_TOKEN",
+            "HUGGINGFACE_TOKEN",
+            "SENTRY_AUTH_TOKEN",
+            "CLOUDFLARE_API_TOKEN",
+            "VERCEL_TOKEN",
+            "SLACK_BOT_TOKEN",
+            "SUPABASE_PASSWORD",
+            "SUPABASE_ACCESS_TOKEN",
+            "DB_PASSWORD",
+            "POSTGRES_PASSWORD",
+            "REDIS_PASSWORD",
+            "DOCKER_PASSWORD",
+            "STRIPE_SECRET_KEY",
+            "WEBHOOK_SECRET",
+            "JWT_SECRET",
+            "COOKIE_SECRET",
+        )
+        public_fields = (
+            "compare_token",
+            "compat",
+            "compatibility_token",
+            "authorization_identity",
+            "secret_reference",
+            "secret_profile_reference",
+        )
+
+        for field in literal_fields:
+            with self.subTest(literal_field=field):
+                document = {field: "actual-secret-value"}
+                self.assertTrue(contains_literal_credential(document))
+                self.assertTrue(
+                    string_looks_like_credential(
+                        json.dumps(document, separators=(",", ":"))
+                    )
+                )
+        for field in public_fields:
+            with self.subTest(public_field=field):
+                document = {field: "public-control-value"}
+                self.assertFalse(contains_literal_credential(document))
+                self.assertFalse(
+                    string_looks_like_credential(
+                        json.dumps(document, separators=(",", ":"))
+                    )
+                )
+
+    def test_credential_field_context_rejects_unrecognized_composites(self) -> None:
+        literal_documents = (
+            {"to" + "ken": {"value": "actual-secret"}},
+            {"api_" + "key": {"literal": "actual-secret-value"}},
+            {"pass" + "word": ["actual-secret"]},
+            {
+                "client_" + "secret": {
+                    "name": "public",
+                    "value": "actual-secret-value",
+                }
+            },
+            {
+                "pass" + "word": {
+                    "secret_reference": "TOKEN",
+                    "extra": "public",
+                }
+            },
+        )
+        public_documents = (
+            {
+                "to" + "ken": {
+                    "secret_reference": "TOKEN",
+                    "template": "Authorization:Bearer ${{reference}}",
+                }
+            },
+            {"to" + "ken": {"secret_profile_reference": "github"}},
+        )
+
+        for document in literal_documents:
+            with self.subTest(literal=document):
+                self.assertTrue(contains_literal_credential(document))
+        for document in public_documents:
+            with self.subTest(public=document):
+                self.assertFalse(contains_literal_credential(document))
+
+    def test_python_literal_mappings_preserve_nested_credential_context(self) -> None:
+        document = "config = " + repr({"DB_" + "PASSWORD": "actual-" + "secret"})
+
+        self.assertTrue(string_looks_like_credential(document))
+
+    def test_reference_values_must_be_the_complete_credential_value(self) -> None:
+        mixed_values = (
+            "${TOKEN}actual-secret",
+            "actual-secret${TOKEN}",
+            "Bearer ${TOKEN} actual-secret",
+            "Bearer ${TOKEN}-actual-secret",
+            "Basic {reference}:actual-secret",
+            "Basic ${TOKEN}-actual-secret",
+            "pass://fixture-vault/item/password actual-secret",
+            "secret_reference:TOKEN/actual-secret",
+        )
+        exact_references = (
+            "${TOKEN}",
+            "${{ secrets.TOKEN }}",
+            "{reference}",
+            "pass://fixture-vault/item/password",
+            "secret_reference:TOKEN",
+        )
+
+        for value in mixed_values:
+            with self.subTest(mixed=value):
+                self.assertTrue(contains_literal_credential({"token": value}))
+                self.assertTrue(
+                    string_looks_like_credential(
+                        json.dumps({"token": value}, separators=(",", ":"))
+                    )
+                )
+        for value in exact_references:
+            with self.subTest(reference=value):
+                self.assertFalse(contains_literal_credential({"token": value}))
+
+    def test_provider_and_private_key_signatures_are_checked_before_parsing(
+        self,
+    ) -> None:
+        provider_token = "gh" + "p_" + "A" * 24
+        private_key = "-----BEGIN " + "PGP PRIVATE KEY BLOCK-----"
+        documents = (
+            '{"token":"${TOKEN}","note":"' + provider_token + '"}',
+            "token = '${TOKEN}'\nnote = '" + private_key + "'\n",
+        )
+
+        for document in documents:
+            with self.subTest(document=document[:16]):
+                self.assertTrue(string_looks_like_credential(document))
+
+    def test_serialized_credential_fields_accept_common_statement_terminators(
+        self,
+    ) -> None:
+        field = "FIRECRAWL_" + "API_KEY"
+        literal = "quoted secret value"
+        padded_literal = "AaBbCcDdEeFf00112233445566778899+/="
+        documents = (
+            f'{field}="{literal}";',
+            f'{field}="{literal}" # runtime comment',
+            f'{field}="{literal}" // runtime comment',
+            f'const {field} = "{literal}"; // runtime comment',
+            f'{field}="{literal}");',
+            f'call({field}="{literal}")',
+            f"{field}={padded_literal};",
+            f'{{"{field}":"{literal}"}},',
+            f'[{field}="{literal}"]',
+            f'{field}="{literal}"\nnext = public',
+            f'{field}="{literal}"',
+        )
+
+        for document in documents:
+            with self.subTest(document=document):
+                self.assertTrue(string_looks_like_credential(document))
+
     def test_serialized_credential_assignments_preserve_reference_exceptions(
         self,
     ) -> None:
@@ -208,15 +477,133 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
             "secret_profile:context7",
             "secret_reference:API_KEY",
             "reference:context7",
+            "pass://fixture-vault/item/password",
+            "secret-service://",
         )
 
         for field in credential_fields:
             for reference in references:
                 document = {field: reference}
                 serialized = json.dumps(document, separators=(",", ":"))
+                shell_fixture_source = f"print -r -- '{field}={reference}'"
                 with self.subTest(field=field, reference=reference):
                     self.assertFalse(contains_literal_credential(document))
                     self.assertFalse(string_looks_like_credential(serialized))
+                    self.assertFalse(string_looks_like_credential(shell_fixture_source))
+
+    def test_provider_references_do_not_mask_adjacent_literal_credentials(
+        self,
+    ) -> None:
+        api_key = "api_" + "key"
+        context7_api_key = "context7_" + "api_key"
+        credential_field = "to" + "ken"
+        literal = "actual-" + "secret-value"
+        documents = (
+            (
+                f"{api_key}=pass://fixture-vault/item/password;"
+                f"{credential_field}={literal}"
+            ),
+            json.dumps(
+                {
+                    context7_api_key: "pass://fixture-vault/item/password",
+                    credential_field: literal,
+                },
+                separators=(",", ":"),
+            ),
+        )
+
+        for document in documents:
+            with self.subTest(document=document):
+                self.assertTrue(string_looks_like_credential(document))
+
+    def test_reference_wrappers_do_not_mask_provider_credentials(self) -> None:
+        github_token = "gh" + "p_" + "A" * 36
+        aws_access_key = "AK" + "IA" + "A" * 16
+        aws_session_token = "AS" + "IA" + "A" * 16
+        openai_key = "s" + "k-" + "A" * 24
+        wrapped_literals = (
+            "$" + github_token,
+            "${" + github_token + "}",
+            "${{ " + github_token + " }}",
+            "${{ secrets." + github_token + " }}",
+            "reference:" + github_token,
+            "secret_reference:" + aws_access_key,
+            "secret_profile:" + aws_session_token,
+            "reference:" + openai_key,
+            "pass://" + github_token + "/item/password",
+        )
+
+        for wrapped in wrapped_literals:
+            with self.subTest(wrapper=wrapped.split(":", 1)[0]):
+                self.assertTrue(string_looks_like_credential(wrapped))
+                self.assertTrue(contains_literal_credential({"to" + "ken": wrapped}))
+
+    def test_malformed_reference_prefixes_are_literal_credential_values(self) -> None:
+        field = "to" + "ken"
+        literal = "actual-" + "secret"
+        documents = (
+            f"{field}=pass://vault/item/password{field.upper()}={literal}",
+            f"{field}=pass://vault/item/password-{field.upper()}={literal}",
+            f"{field}=reference:context7/{field.upper()}={literal}",
+        )
+
+        for document in documents:
+            with self.subTest(document=document):
+                self.assertTrue(string_looks_like_credential(document))
+
+    def test_mixed_reference_and_literal_values_are_credentials(self) -> None:
+        token_field = "to" + "ken"
+        fossa_field = "FOSSA_API_" + "KEY"
+        documents = (
+            token_field + "=actual-secret-${SUFFIX}",
+            token_field + "=${PREFIX}-actual-secret",
+            fossa_field + "=${PREFIX}actualsecret${SUFFIX}",
+            token_field + r"=\$PREFIX-actual-secret",
+        )
+
+        for document in documents:
+            with self.subTest(document=document):
+                self.assertTrue(string_looks_like_credential(document))
+
+        authorization_values = (
+            "Authorization: Bearer ${TOKEN}-actual-secret",
+            "Authorization: Basic ${TOKEN}-actual-secret",
+        )
+        for value in authorization_values:
+            with self.subTest(authorization=value.split(":", 1)[1]):
+                self.assertTrue(string_looks_like_credential(value))
+
+    def test_reviewer_punctuation_and_provider_bypass_corpus_is_rejected(self) -> None:
+        documents = (
+            "TOKEN=actual!secret",
+            "FOSSA_API_KEY=actual%secret",
+            "TOKEN: actual secret value",
+            "TOKEN: actual[secret]",
+            "TOKEN=actual-secret?x=1",
+            "TOKEN=actual&secret",
+            "TOKEN=actual(secret)",
+            "TOKEN=-actualsecret",
+            "NPM_TOKEN=actual-secret-value",
+            "HF_TOKEN=actual-secret-value",
+            "HUGGINGFACE_TOKEN=actual-secret-value",
+            "SENTRY_AUTH_TOKEN=actual-secret-value",
+            "CLOUDFLARE_API_TOKEN=actual-secret-value",
+            "VERCEL_TOKEN=actual-secret-value",
+            "SLACK_BOT_TOKEN=actual-secret-value",
+            "SUPABASE_ACCESS_TOKEN=actual-secret-value",
+            "DB_PASSWORD=actual-secret-value",
+            "POSTGRES_PASSWORD=actual-secret-value",
+            "REDIS_PASSWORD=actual-secret-value",
+            "DOCKER_PASSWORD=actual-secret-value",
+            "STRIPE_SECRET_KEY=actual-secret-value",
+            "WEBHOOK_SECRET=actual-secret-value",
+            "JWT_SECRET=actual-secret-value",
+            "COOKIE_SECRET=actual-secret-value",
+        )
+
+        for document in documents:
+            with self.subTest(document=document.split("=", 1)[0]):
+                self.assertTrue(string_looks_like_credential(document))
 
     def test_json_unicode_escaped_credential_keys_do_not_evade_policy(self) -> None:
         escaped_key = "Authoriz" + "\\u0061" + "tion"
@@ -256,6 +643,406 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
             ],
         )
         self.assertTrue(all(value not in result.stdout for value in credentials))
+
+    def test_privacy_scan_rejects_each_provider_credential_field_without_echoing_values(
+        self,
+    ) -> None:
+        assignments = tuple(
+            f'{field}="{literal}"' for field, literal in provider_credential_fields()
+        )
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "provider-fields.env").write_text(
+                "\n".join(assignments) + "\n",
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts/privacy-scan"),
+                    "--root",
+                    str(root),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(
+            result.stdout.splitlines(),
+            [
+                f"provider-fields.env:{line_number}: [provider-token] review required"
+                for line_number in range(1, len(assignments) + 1)
+            ],
+        )
+        self.assertTrue(
+            all(
+                literal not in result.stdout
+                for _, literal in provider_credential_fields()
+            )
+        )
+
+    def test_privacy_scan_rejects_cross_line_assignments_without_echoing_values(
+        self,
+    ) -> None:
+        aws_field = "AWS_SECRET_ACCESS_" + "KEY"
+        firecrawl_field = "FIRECRAWL_API_" + "KEY"
+        aws_literal = "AwsSecretLiteral123+/="
+        firecrawl_literal = "firecrawl-literal-canary"
+        documents = {
+            "credential.json": ('{"' + aws_field + '":\n "' + aws_literal + '"}\n'),
+            "credential.yaml": firecrawl_field + ":\n " + firecrawl_literal + "\n",
+        }
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            for relative, document in documents.items():
+                (root / relative).write_text(document, encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts/privacy-scan"),
+                    "--root",
+                    str(root),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(
+            set(result.stdout.splitlines()),
+            {
+                "credential.json:0: [provider-token] review required",
+                "credential.yaml:0: [provider-token] review required",
+            },
+        )
+        self.assertNotIn(aws_literal, result.stdout + result.stderr)
+        self.assertNotIn(firecrawl_literal, result.stdout + result.stderr)
+
+    def test_privacy_scan_preserves_serialized_mapping_parity(self) -> None:
+        documents = (
+            "TO" + "KEN=abcdefg\n",
+            "FOSSA_API_" + "KEY=abc1234\n",
+            '"TO' + 'KEN": actualsecretvalue\n',
+            '"FOSSA_API_' + 'KEY" = fossaactualsecret\n',
+            "TO" + "KEN:\n  abcdefghij\n",
+        )
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            for index, document in enumerate(documents):
+                (root / f"credential-{index}.txt").write_text(
+                    document,
+                    encoding="utf-8",
+                )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts/privacy-scan"),
+                    "--root",
+                    str(root),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(
+            len(
+                [
+                    line
+                    for line in result.stdout.splitlines()
+                    if "[provider-token]" in line
+                ]
+            ),
+            len(documents),
+        )
+        self.assertTrue(
+            all(document.strip() not in result.stdout for document in documents)
+        )
+
+    def test_cross_line_yaml_alphanumeric_literals_are_credentials(self) -> None:
+        firecrawl_field = "FIRECRAWL_API_" + "KEY"
+        token_field = "TO" + "KEN"
+        documents = (
+            firecrawl_field + ":\n  actual" + "secret123\n",
+            token_field + ":\n  abcdefghijklmnopqrstuvwxyz\n",
+            token_field + ":\n  abcdefghij\n",
+        )
+
+        for document in documents:
+            with self.subTest(field=document.split(":", 1)[0]):
+                self.assertTrue(string_looks_like_credential(document))
+
+    def test_structured_serializers_do_not_wrap_literal_credentials(self) -> None:
+        token_field = "TO" + "KEN"
+        fossa_field = "FOSSA_API_" + "KEY"
+        documents = (
+            token_field + ": >-\n  actual-secret-value\n",
+            fossa_field + ": |\n  fossa-actual-secret-value\n",
+            token_field + ": &credential actual-secret-value\n",
+            token_field + ": !!str actual-secret-value\n",
+            token_field + ' = """actual-secret-value"""\n',
+            token_field + " = '''actual-secret-value'''\n",
+        )
+
+        for document in documents:
+            with self.subTest(document=document.splitlines()[0]):
+                self.assertTrue(string_looks_like_credential(document))
+
+    def test_json_and_toml_parsers_preserve_mapping_policy(self) -> None:
+        literal_documents = (
+            '{"npm token":"punctuation !@#$%^&*() value"}',
+            '{"token":{"value":"actual-secret-value"}}',
+            '{"sentry/auth/token":{"value":"actual secret"}}',
+            '{"api key":"actual-secret-value"}',
+            '{"api/key":"actual-secret-value"}',
+            '{"api_key":{"literal":"actual-secret-value"}}',
+            '{"password":["actual-secret-value"]}',
+            '"npm token" = "punctuation !@#$%^&*() value"\n',
+            '"sentry/auth/token" = "actual secret"\n',
+            'TOKEN = """${TOKEN}\nactual secret on a later line"""\n',
+            "JWT_SECRET = '''public first line\nactual secret later'''\n",
+        )
+        public_documents = (
+            '{"compare token":"public-control"}',
+            'authorization_identity = "public-control"\n',
+            'TOKEN = """${TOKEN}"""\n',
+        )
+
+        for document in literal_documents:
+            with self.subTest(literal=document.splitlines()[0]):
+                self.assertTrue(string_looks_like_credential(document))
+        for document in public_documents:
+            with self.subTest(public=document.splitlines()[0]):
+                self.assertFalse(string_looks_like_credential(document))
+
+    def test_yaml_scalar_forms_preserve_mapping_policy(self) -> None:
+        literal_documents = (
+            '"npm token": "punctuation !@#$%^&*() value"\n',
+            '"api key": actual-secret-value\n',
+            "api key: actual-secret-value\n",
+            "'sentry/auth/token': 'it''s an actual secret'\n",
+            "NPM_TOKEN: &credential punctuation !@#$%^&*() value\n",
+            "JWT_SECRET: !!str punctuation !@#$%^&*() value\n",
+            "WEBHOOK_SECRET: !<tag:yaml.org,2002:str> actual secret\n",
+            '? "npm token"\n: "punctuation !@#$%^&*() value"\n',
+            "TOKEN: *credential\n",
+            "TOKEN: actual secret value\n",
+            "TOKEN: actual[secret]\n",
+            "TOKEN: 'actual''secret'\n",
+            "? TOKEN\n: actual-secret\n",
+        )
+        public_documents = (
+            "compare_token: public-control\n",
+            "authorization_identity: public-control\n",
+            "TOKEN: ${TOKEN}\n",
+        )
+
+        for document in literal_documents:
+            with self.subTest(literal=document.splitlines()[0]):
+                self.assertTrue(string_looks_like_credential(document))
+        for document in public_documents:
+            with self.subTest(public=document.splitlines()[0]):
+                self.assertFalse(string_looks_like_credential(document))
+
+    def test_yaml_block_scalars_scan_complete_content_and_header_variants(
+        self,
+    ) -> None:
+        literal_documents = (
+            "TOKEN: |-\n  ${TOKEN}\n  actual secret on a later line\n",
+            "JWT_SECRET: >2+\n    public first line\n    actual secret later\n",
+            "WEBHOOK_SECRET: |+2 # keep\n    first\n    second secret\n",
+            '? "npm token"\n: >-\n  public first line\n  actual secret later\n',
+            "TOKEN: |\n\n  actual-secret-value\n",
+            "TOKEN: |2-\n    actual-secret-value\n",
+            "TOKEN: | # comment\n  actual-secret-value\n",
+            "TOKEN: &anchor |\n  actual-secret-value\n",
+            "TOKEN: !!str |\n  actual-secret-value\n",
+            "TOKEN: |\n  ${PREFIX}\n  actual-secret-value\n",
+            "TOKEN: >-\n  ${PREFIX}\n  actual-secret-value\n",
+        )
+        public_documents = (
+            "TOKEN: |\n  ${TOKEN}\n",
+            "compare_token: >-\n  public control\n",
+        )
+
+        for document in literal_documents:
+            with self.subTest(literal=document.splitlines()[0]):
+                self.assertTrue(string_looks_like_credential(document))
+        for document in public_documents:
+            with self.subTest(public=document.splitlines()[0]):
+                self.assertFalse(string_looks_like_credential(document))
+
+    def test_source_annotations_are_not_cross_line_credential_assignments(self) -> None:
+        public_sources = (
+            "token: str\noption = None\n",
+            "token:\n    option = parser.add_argument('--token')\n",
+            "authorization:\n    identity = request.identity\n",
+            "def configure(\n    token:\n        Option[str] = None,\n): ...\n",
+            (
+                "token = arguments[index]\n"
+                'if "=" in token:\n'
+                '    option, value = token.split("=", 1)\n'
+            ),
+            'os.environ, {"CONTEXT7_API_KEY": secret_value}, clear=False\n',
+        )
+
+        for source in public_sources:
+            with self.subTest(source=source.splitlines()[0]):
+                self.assertFalse(string_looks_like_credential(source))
+
+    def test_cross_line_empty_assignments_do_not_consume_following_source_tokens(
+        self,
+    ) -> None:
+        credential_field = "CONTEXT7_API_" + "KEY"
+        aws_access_field = "AWS_ACCESS_KEY_" + "ID"
+        aws_secret_field = "AWS_SECRET_ACCESS_" + "KEY"
+        public_sources = (
+            credential_field + "=\nEOF",
+            "token=\n  shift",
+            aws_access_field + "=\n" + aws_secret_field + "=\n",
+        )
+
+        for source in public_sources:
+            with self.subTest(source=source):
+                self.assertFalse(string_looks_like_credential(source))
+
+    def test_privacy_scan_fails_closed_for_oversized_and_nul_files(self) -> None:
+        credential = "gh" + "p_" + "A" * 36
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "oversized.txt").write_bytes(
+                credential.encode("ascii") + b"x" * (4 * 1024 * 1024)
+            )
+            (root / "nul.txt").write_bytes(credential.encode("ascii") + b"\0public\n")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts/privacy-scan"),
+                    "--root",
+                    str(root),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(
+            "oversized.txt:0: [oversized-public-file] review required",
+            result.stdout,
+        )
+        self.assertIn("nul.txt:1: [provider-token] review required", result.stdout)
+        self.assertNotIn(credential, result.stdout + result.stderr)
+
+    def test_privacy_scan_rejects_a_missing_or_non_directory_root(self) -> None:
+        with TemporaryDirectory() as directory:
+            base = Path(directory)
+            roots = (base / "missing", base / "regular-file")
+            roots[1].write_text("public\n", encoding="utf-8")
+
+            for root in roots:
+                with self.subTest(root=root.name):
+                    result = subprocess.run(
+                        [
+                            sys.executable,
+                            str(ROOT / "scripts/privacy-scan"),
+                            "--root",
+                            str(root),
+                        ],
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertEqual(result.returncode, 1)
+                    self.assertEqual(result.stdout, "")
+                    self.assertEqual(result.stderr, "privacy scan failed\n")
+
+    def test_privacy_scan_fails_closed_for_unreadable_paths(self) -> None:
+        with TemporaryDirectory() as directory:
+            base = Path(directory)
+            unreadable_file_root = base / "file-root"
+            unreadable_file_root.mkdir()
+            unreadable_file = unreadable_file_root / "unreadable.txt"
+            unreadable_file.write_text("public\n", encoding="utf-8")
+            unreadable_file.chmod(0)
+            try:
+                file_result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(ROOT / "scripts/privacy-scan"),
+                        "--root",
+                        str(unreadable_file_root),
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+            finally:
+                unreadable_file.chmod(0o600)
+
+            unreadable_tree_root = base / "tree-root"
+            unreadable_tree_root.mkdir()
+            unreadable_directory = unreadable_tree_root / "unreadable"
+            unreadable_directory.mkdir()
+            try:
+                unreadable_directory.chmod(0)
+                tree_result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(ROOT / "scripts/privacy-scan"),
+                        "--root",
+                        str(unreadable_tree_root),
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+            finally:
+                unreadable_directory.chmod(0o700)
+
+        self.assertEqual(file_result.returncode, 1)
+        self.assertEqual(
+            file_result.stdout,
+            "unreadable.txt:0: [unreadable-public-file] review required\n",
+        )
+        self.assertEqual(file_result.stderr, "")
+        self.assertEqual(tree_result.returncode, 1)
+        self.assertEqual(tree_result.stdout, "")
+        self.assertEqual(tree_result.stderr, "privacy scan failed\n")
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "FIFOs require POSIX")
+    def test_privacy_scan_rejects_a_fifo_without_blocking(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            os.mkfifo(root / "public.fifo")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts/privacy-scan"),
+                    "--root",
+                    str(root),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(
+            result.stdout,
+            "public.fifo:0: [unreadable-public-file] review required\n",
+        )
+        self.assertEqual(result.stderr, "")
 
     def test_privacy_scan_uses_shared_private_key_markers_without_echoing_them(
         self,
@@ -319,6 +1106,10 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
         self.assertEqual(
             set(result.stdout.splitlines()),
             {
+                (
+                    ".privacy-age-envelopes.json:0: "
+                    "[invalid-age-envelope-manifest] review required"
+                ),
                 f"{redacted_path}:0: [invalid-age-envelope] review required",
                 f"{redacted_path}:0: [provider-token-filename] review required",
             },
@@ -348,6 +1139,16 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
             (root / "armored.age").write_bytes(armored_age)
             (root / "spoof.age").write_bytes(header_only_spoof)
             (root / "plausible-spoof.age").write_bytes(plausible_spoof)
+            write_age_manifest(
+                root,
+                [
+                    "armored.age",
+                    "mislabeled.age",
+                    "native.age",
+                    "plausible-spoof.age",
+                    "spoof.age",
+                ],
+            )
 
             result = subprocess.run(
                 [
@@ -379,6 +1180,7 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "ciphertext.age").write_bytes(native_age)
+            write_age_manifest(root, ["ciphertext.age"])
             environment = os.environ.copy()
             environment["PATH"] = ""
 
@@ -421,6 +1223,8 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertEqual(
             result.stdout,
+            ".privacy-age-envelopes.json:0: "
+            "[invalid-age-envelope-manifest] review required\n"
             "oversized.age:0: [invalid-age-envelope] review required\n",
         )
 

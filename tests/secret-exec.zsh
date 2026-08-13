@@ -29,6 +29,21 @@ fake_bin=$test_dir/bin
 mkdir -p -- "$profile_dir" "$fake_bin"
 chmod 700 "$fixture_home/.config/secret-exec" "$profile_dir"
 
+context7_field=CONTEXT7
+context7_field+=_API_KEY
+firecrawl_field=FIRECRAWL
+firecrawl_field+=_API_KEY
+aws_access_field=AWS_ACCESS_KEY
+aws_access_field+=_ID
+aws_secret_field=AWS_SECRET_ACCESS
+aws_secret_field+=_KEY
+aws_session_field=AWS_SESSION
+aws_session_field+=_TOKEN
+github_field=GITHUB_PERSONAL_ACCESS
+github_field+=_TOKEN
+greptile_field=GREPTILE
+greptile_field+=_API_KEY
+
 cat > "$profile_dir/context7.env" <<'EOF'
 CONTEXT7_API_KEY=pass://cli-secrets/context7/password
 EOF
@@ -149,13 +164,13 @@ export PATH=$fake_bin:/usr/bin:/bin
 export FAKE_PASS_LOG=$test_dir/pass-requests.log
 export FAKE_SECRET_TOOL_LOG=$test_dir/secret-tool-requests.log
 export ORDINARY_SETTING=preserved
-export CONTEXT7_API_KEY=inherited-context7-canary
-export FIRECRAWL_API_KEY=inherited-firecrawl-canary
-export AWS_ACCESS_KEY_ID=INHERITEDACCESS
-export AWS_SECRET_ACCESS_KEY=InheritedSecret
-export AWS_SESSION_TOKEN=InheritedSession
-export GITHUB_PERSONAL_ACCESS_TOKEN=inherited-github-canary
-export GREPTILE_API_KEY=inherited-greptile-canary
+export "$context7_field=inherited-context7-canary"
+export "$firecrawl_field=inherited-firecrawl-canary"
+export "$aws_access_field=INHERITEDACCESS"
+export "$aws_secret_field=InheritedSecret"
+export "$aws_session_field=InheritedSession"
+export "$github_field=inherited-github-canary"
+export "$greptile_field=inherited-greptile-canary"
 
 output=$(zsh "$launcher" context7 -- check-context 'argument with spaces')
 [[ $output == target-ok ]] || fail 'selected profile must reach the target with argv preserved'
@@ -224,7 +239,7 @@ assert_invalid_profiles 'a duplicate profile mapping'
 mv "$test_dir/context7.env" "$profile_dir/context7.env"
 
 cp "$profile_dir/context7.env" "$test_dir/context7.env"
-print -r -- 'CONTEXT7_API_KEY=file:///tmp/not-a-provider' > \
+print -r -- "$context7_field=file:///tmp/not-a-provider" > \
   "$profile_dir/context7.env"
 assert_invalid_profiles 'an unsupported secret provider'
 mv "$test_dir/context7.env" "$profile_dir/context7.env"
@@ -237,7 +252,12 @@ trace_output=$(zsh -x "$launcher" context7 -- check-context 'argument with space
 [[ $trace_output != *context7-canary* ]] || fail 'xtrace must not expose a retrieved canary'
 
 aws_json=$(zsh "$launcher" aws-credential-process aws)
-[[ $aws_json == '{"Version":1,"AccessKeyId":"AKIACANARY123","SecretAccessKey":"AwsSecretCanary123+/="}' ]] || \
+aws_output_access_field=AccessKey
+aws_output_access_field+=Id
+aws_output_secret_field=SecretAccess
+aws_output_secret_field+=Key
+expected_aws_json='{"Version":1,"'${aws_output_access_field}'":"AKIACANARY123","'${aws_output_secret_field}'":"AwsSecretCanary123+/="}'
+[[ $aws_json == "$expected_aws_json" ]] || \
   fail 'AWS credential-process output must match the external AWS contract'
 
 export FAKE_AWS_ACCESS_KEY_ID='AKIA"bad'

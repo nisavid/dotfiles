@@ -1,15 +1,14 @@
 from __future__ import annotations
 
 import importlib.util
-from dataclasses import replace
 import json
 import os
-from pathlib import Path
 import sys
 import tempfile
 import unittest
+from dataclasses import replace
+from pathlib import Path
 from unittest import mock
-
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parent.parent
@@ -80,7 +79,9 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
             self.assertEqual(reapply.checkpoints(), {})
             self.assertEqual(reapply.adapter.state, desired)
 
-    def test_each_missing_owned_item_is_repaired_without_touching_other_state(self) -> None:
+    def test_each_missing_owned_item_is_repaired_without_touching_other_state(
+        self,
+    ) -> None:
         desired = ACCEPTANCE.complete_desired_state()
         for missing_surface in desired:
             with self.subTest(missing_surface=missing_surface):
@@ -188,7 +189,9 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
             )
             self.assertRegex(fixture.adapter.digest(), r"^sha256:[0-9a-f]{64}$")
 
-    def test_route_switch_controls_components_and_retires_only_owned_duplicates(self) -> None:
+    def test_route_switch_controls_components_and_retires_only_owned_duplicates(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             fixture = ACCEPTANCE.AcceptanceFixture(Path(temporary_directory))
             owned_projection = "claude/skill:mattpocock/create-auth"
@@ -229,7 +232,9 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
             self.assertNotIn(owned_projection, fixture.adapter.state)
             self.assertIn(unmanaged_projection, fixture.adapter.state)
 
-    def test_duplicate_routes_fail_closed_unless_the_exact_overlap_is_declared(self) -> None:
+    def test_duplicate_routes_fail_closed_unless_the_exact_overlap_is_declared(
+        self,
+    ) -> None:
         selected = ("route:matt/plugin",)
         observed = ("route:matt/plugin", "route:matt/standalone")
 
@@ -259,7 +264,11 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
                 ("route:matt/plugin", "route:matt/plugin"),
             ),
         )
-        for duplicate_selected, duplicate_observed, duplicate_overlap in duplicate_cases:
+        for (
+            duplicate_selected,
+            duplicate_observed,
+            duplicate_overlap,
+        ) in duplicate_cases:
             with self.subTest(
                 selected=duplicate_selected,
                 observed=duplicate_observed,
@@ -385,7 +394,9 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
             self.assertIsNone(proposal.plan)
             self.assertEqual(fixture.adapter.calls, [])
 
-    def test_retirement_mutates_only_exact_adopted_owned_state_through_apply(self) -> None:
+    def test_retirement_mutates_only_exact_adopted_owned_state_through_apply(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             fixture = ACCEPTANCE.AcceptanceFixture(Path(temporary_directory))
             owned = "claude/skill:adopted"
@@ -477,7 +488,9 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
             self.assertEqual(fixture.adapter.digest(), before)
             self.assertEqual(fixture.checkpoint_bytes(), checkpoint_before)
 
-    def test_nonautomated_operations_are_reported_without_adapter_mutation(self) -> None:
+    def test_nonautomated_operations_are_reported_without_adapter_mutation(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             fixture = ACCEPTANCE.AcceptanceFixture(Path(temporary_directory))
             fixture.adapter.state["claude/plugin:example"] = {"enabled": False}
@@ -509,7 +522,9 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
             self.assertEqual(fixture.adapter.digest(), before)
             self.assertEqual(fixture.adapter.calls, [])
 
-    def test_prepared_write_failure_has_no_runtime_effect_and_retry_is_valid(self) -> None:
+    def test_prepared_write_failure_has_no_runtime_effect_and_retry_is_valid(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             fixture = ACCEPTANCE.AcceptanceFixture(Path(temporary_directory))
             desired = {"claude/plugin:example": {"installed": True}}
@@ -549,9 +564,7 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
             with self.subTest(fault=fault):
                 with tempfile.TemporaryDirectory() as temporary_directory:
                     fixture = ACCEPTANCE.AcceptanceFixture(Path(temporary_directory))
-                    plan = fixture.plan(
-                        {"claude/plugin:example": {"installed": True}}
-                    )
+                    plan = fixture.plan({"claude/plugin:example": {"installed": True}})
 
                     with self.assertRaises(ACCEPTANCE.InjectedFailure):
                         fixture.execute(plan, fail_at={fault})
@@ -629,7 +642,9 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
             )
             self.assertIn("completed:step-000", fixture.last_trace)
 
-    def test_completed_checkpoint_reverted_to_pre_state_blocks_all_compensation(self) -> None:
+    def test_completed_checkpoint_reverted_to_pre_state_blocks_all_compensation(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             fixture = ACCEPTANCE.AcceptanceFixture(Path(temporary_directory))
             fixture.adapter.state.update(
@@ -665,7 +680,9 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
             self.assertEqual(checkpoints["step-001"]["phase"], "compensation_blocked")
             self.assertEqual(checkpoints["step-000"]["phase"], "completed")
 
-    def test_failed_compensation_is_durable_and_recovery_audits_before_retry(self) -> None:
+    def test_failed_compensation_is_durable_and_recovery_audits_before_retry(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             fixture = ACCEPTANCE.AcceptanceFixture(Path(temporary_directory))
             fixture.adapter.state.update(
@@ -685,19 +702,23 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
                     compensate_on_failure=True,
                 )
 
-            self.assertEqual(
-                fixture.checkpoints()["step-000"]["phase"], "compensating"
-            )
+            self.assertEqual(fixture.checkpoints()["step-000"]["phase"], "compensating")
             forward_calls = list(fixture.adapter.calls)
 
             result = fixture.recover_compensation(plan)
 
             self.assertIn("audit:step-000:post_state", result.trace)
-            self.assertEqual(
-                fixture.checkpoints()["step-000"]["phase"], "compensated"
-            )
+            self.assertEqual(fixture.checkpoints()["step-000"]["phase"], "compensated")
             self.assertEqual(fixture.adapter.calls[: len(forward_calls)], forward_calls)
             self.assertEqual(fixture.adapter.state["surface/a"], {"version": 1})
+            self.assertTrue(
+                all(
+                    checkpoint["compensation_authority_kind"] == "automatic_apply"
+                    and checkpoint["compensation_transition_claim"] is None
+                    for checkpoint in fixture.checkpoints().values()
+                    if checkpoint["phase"] == "compensated"
+                )
+            )
 
     def test_explicit_compensation_can_resume_after_first_intent_write_fails(
         self,
@@ -709,9 +730,7 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
                 "surface/b": {"version": 1},
             }
             fixture.adapter.state.update(ACCEPTANCE.deep_copy(initial))
-            plan = fixture.plan(
-                {surface: {"version": 2} for surface in initial}
-            )
+            plan = fixture.plan({surface: {"version": 2} for surface in initial})
 
             with self.assertRaises(ACCEPTANCE.InjectedFailure):
                 fixture.execute(
@@ -742,17 +761,165 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
                 )
             )
 
+    def test_public_compensation_restart_requires_original_authority_and_ledger(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            sandbox = Path(temporary_directory)
+            fixture = ACCEPTANCE.AcceptanceFixture(sandbox)
+            initial = {
+                "surface/a": {"version": 1},
+                "surface/b": {"version": 1},
+            }
+            fixture.adapter.state.update(ACCEPTANCE.deep_copy(initial))
+            plan = fixture.plan({surface: {"version": 2} for surface in initial})
+            fixture.execute(plan)
+
+            with self.assertRaises(ACCEPTANCE.InjectedFailure):
+                fixture.compensate(
+                    plan,
+                    fail_at={"before_compensation_mutation:step-001"},
+                )
+            durable = fixture.checkpoints()["step-001"]
+            self.assertEqual(durable["phase"], "compensating")
+            self.assertEqual(
+                durable["compensation_authority_kind"], "public_compensation"
+            )
+            self.assertIsNotNone(durable["compensation_transition_claim"])
+
+            restarted = ACCEPTANCE.AcceptanceFixture(sandbox)
+            restarted.adapter.state = ACCEPTANCE.deep_copy(fixture.adapter.state)
+            state_before = ACCEPTANCE.deep_copy(restarted.adapter.state)
+            checkpoints_before = restarted.checkpoint_bytes()
+            with self.assertRaises(ACCEPTANCE.BindingMismatchError):
+                restarted.recover_compensation(plan)
+            self.assertEqual(restarted.adapter.state, state_before)
+            self.assertEqual(restarted.checkpoint_bytes(), checkpoints_before)
+
+            result = restarted.recover_compensation(
+                plan,
+                trusted_compensation_authorization_identity=(
+                    fixture.compensation_authorization_identity
+                ),
+                trusted_compensation_authorization_digest=(
+                    fixture.compensation_authorization_digest
+                ),
+                trusted_compensation_nonce=fixture.compensation_nonce,
+                trusted_compensation_ledger_claim_identity=(
+                    ACCEPTANCE.compensation_ledger_claim_identity(
+                        plan.execution_domain_identity,
+                        fixture.compensation_nonce,
+                    )
+                ),
+            )
+            self.assertEqual(result.status, "recovered")
+            self.assertEqual(restarted.adapter.state, initial)
+            self.assertTrue(
+                all(
+                    checkpoint["phase"] == "compensated"
+                    and checkpoint["compensation_authority_kind"]
+                    == "public_compensation"
+                    and checkpoint["compensation_transition_claim"] is not None
+                    for checkpoint in restarted.checkpoints().values()
+                )
+            )
+
+    def test_public_compensation_recovers_after_ledger_claim_before_first_transition(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            sandbox = Path(temporary_directory)
+            fixture = ACCEPTANCE.AcceptanceFixture(sandbox)
+            initial = {
+                "surface/a": {"version": 1},
+                "surface/b": {"version": 1},
+            }
+            fixture.adapter.state.update(ACCEPTANCE.deep_copy(initial))
+            plan = fixture.plan({surface: {"version": 2} for surface in initial})
+            fixture.execute(plan)
+
+            restarted = ACCEPTANCE.AcceptanceFixture(sandbox)
+            restarted.adapter.state = ACCEPTANCE.deep_copy(fixture.adapter.state)
+            result = restarted.recover_compensation(
+                plan,
+                trusted_compensation_authorization_identity=(
+                    fixture.compensation_authorization_identity
+                ),
+                trusted_compensation_authorization_digest=(
+                    fixture.compensation_authorization_digest
+                ),
+                trusted_compensation_nonce=fixture.compensation_nonce,
+                trusted_compensation_ledger_claim_identity=(
+                    ACCEPTANCE.compensation_ledger_claim_identity(
+                        plan.execution_domain_identity,
+                        fixture.compensation_nonce,
+                    )
+                ),
+            )
+
+            self.assertEqual(result.status, "recovered")
+            self.assertEqual(restarted.adapter.state, initial)
+            self.assertTrue(
+                all(
+                    checkpoint["compensation_authority_kind"] == "public_compensation"
+                    and checkpoint["compensation_transition_claim"] is not None
+                    for checkpoint in restarted.checkpoints().values()
+                )
+            )
+
+    def test_public_compensation_cannot_take_over_automatic_rollback(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            fixture = ACCEPTANCE.AcceptanceFixture(Path(temporary_directory))
+            fixture.adapter.state.update(
+                {"surface/a": {"version": 1}, "surface/b": {"version": 1}}
+            )
+            plan = fixture.plan(
+                {"surface/a": {"version": 2}, "surface/b": {"version": 2}}
+            )
+            with self.assertRaises(ACCEPTANCE.InjectedFailure):
+                fixture.execute(
+                    plan,
+                    fail_at={
+                        "before_mutation:step-001",
+                        "before_compensation_mutation:step-000",
+                    },
+                    compensate_on_failure=True,
+                )
+            state_before = ACCEPTANCE.deep_copy(fixture.adapter.state)
+            checkpoints_before = fixture.checkpoint_bytes()
+
+            with self.assertRaises(ACCEPTANCE.BindingMismatchError):
+                fixture.compensate(plan)
+
+            self.assertEqual(fixture.adapter.state, state_before)
+            self.assertEqual(fixture.checkpoint_bytes(), checkpoints_before)
+
+    def test_public_compensation_blocked_checkpoint_retains_public_claim(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            fixture = ACCEPTANCE.AcceptanceFixture(Path(temporary_directory))
+            fixture.adapter.state["surface/a"] = {"version": 1}
+            plan = fixture.plan({"surface/a": {"version": 2}})
+            fixture.execute(plan)
+            fixture.adapter.state["surface/a"] = {"external": True}
+
+            with self.assertRaises(ACCEPTANCE.ConcurrentChangeError):
+                fixture.compensate(plan)
+
+            checkpoint = fixture.checkpoints()["step-000"]
+            self.assertEqual(checkpoint["phase"], "compensation_blocked")
+            self.assertEqual(
+                checkpoint["compensation_authority_kind"], "public_compensation"
+            )
+            self.assertIsNotNone(checkpoint["compensation_transition_claim"])
+
     def test_compensation_recovery_finishes_the_complete_reverse_prefix(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             fixture = ACCEPTANCE.AcceptanceFixture(Path(temporary_directory))
             initial = {
-                f"surface/{name}": {"version": 1}
-                for name in ("a", "b", "c", "d")
+                f"surface/{name}": {"version": 1} for name in ("a", "b", "c", "d")
             }
             fixture.adapter.state.update(ACCEPTANCE.deep_copy(initial))
-            plan = fixture.plan(
-                {surface: {"version": 2} for surface in initial}
-            )
+            plan = fixture.plan({surface: {"version": 2} for surface in initial})
             with self.assertRaises(ACCEPTANCE.InjectedFailure):
                 fixture.execute(
                     plan,
@@ -811,7 +978,9 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
             self.assertEqual(fixture.adapter.state, state_before)
             self.assertEqual(fixture.checkpoint_bytes(), checkpoints_before)
 
-    def test_compensation_recovery_rejects_changed_bindings_before_restore(self) -> None:
+    def test_compensation_recovery_rejects_changed_bindings_before_restore(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             fixture = ACCEPTANCE.AcceptanceFixture(Path(temporary_directory))
             fixture.adapter.state.update(
@@ -895,7 +1064,9 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
             self.assertEqual(fixture.adapter.calls, [])
             self.assertEqual(fixture.checkpoint_bytes(), checkpoints_before)
 
-    def test_compare_before_mutate_preserves_concurrent_changes_on_every_surface(self) -> None:
+    def test_compare_before_mutate_preserves_concurrent_changes_on_every_surface(
+        self,
+    ) -> None:
         surfaces = (
             "standalone/skill:research",
             "claude/plugin:mattpocock",
@@ -986,6 +1157,77 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
             self.assertEqual(checkpoint["phase"], "prepared")
             self.assertEqual(checkpoint["invocation_state"], "not_started")
 
+    def test_checkpoint_identity_binds_apply_authority_and_public_compensation_claim(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            fixture = ACCEPTANCE.AcceptanceFixture(Path(temporary_directory))
+            plan = fixture.plan({"surface/value": {"version": 2}})
+            fixture.execute(plan)
+
+            checkpoint = fixture.checkpoints()["step-000"]
+            original_identity = checkpoint["checkpoint_identity"]
+            self.assertEqual(
+                checkpoint["apply_authorization_identity"],
+                fixture.apply_authorization_identity,
+            )
+            self.assertEqual(
+                checkpoint["apply_authorization_digest"],
+                fixture.apply_authorization_digest,
+            )
+            self.assertEqual(checkpoint["execution_nonce"], fixture.execution_nonce)
+
+            for field in (
+                "apply_authorization_identity",
+                "apply_authorization_digest",
+                "execution_nonce",
+            ):
+                with self.subTest(field=field):
+                    changed = dict(checkpoint)
+                    changed[field] = f"sha256:{'f' * 64}"
+                    self.assertNotEqual(
+                        ACCEPTANCE.checkpoint_identity(changed), original_identity
+                    )
+
+            fixture.compensate(plan)
+            compensated = fixture.checkpoints()["step-000"]
+            claim = compensated["compensation_transition_claim"]
+            self.assertEqual(compensated["checkpoint_identity"], original_identity)
+            self.assertEqual(
+                claim["compensation_authorization_identity"],
+                fixture.compensation_authorization_identity,
+            )
+            self.assertEqual(
+                claim["compensation_authorization_digest"],
+                fixture.compensation_authorization_digest,
+            )
+            self.assertEqual(claim["compensation_nonce"], fixture.compensation_nonce)
+
+    def test_checkpoint_phase_matrix_rejects_completed_history_without_invocation(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            fixture = ACCEPTANCE.AcceptanceFixture(Path(temporary_directory))
+            plan = fixture.plan({"surface/value": {"version": 2}})
+            fixture.execute(plan)
+            checkpoint_path = fixture.checkpoint_directory / "step-000.json"
+            checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+            checkpoint["phase"] = "compensating"
+            checkpoint["phase_history"] = [
+                "prepared",
+                "completed",
+                "compensating",
+            ]
+            checkpoint["invocation_state"] = "not_started"
+            checkpoint["compensation_authority_kind"] = "automatic_apply"
+            checkpoint_path.write_text(
+                json.dumps(checkpoint, sort_keys=True, separators=(",", ":")),
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(ACCEPTANCE.BindingMismatchError):
+                fixture.recover_compensation(plan)
+
     def test_checkpoint_replay_rejects_every_changed_binding(self) -> None:
         plan_fields = (
             "run_identity",
@@ -1012,9 +1254,7 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
                     fixture = ACCEPTANCE.AcceptanceFixture(Path(temporary_directory))
                     plan = fixture.plan({"surface/a": {"version": 2}})
                     with self.assertRaises(ACCEPTANCE.InjectedFailure):
-                        fixture.execute(
-                            plan, fail_at={"before_mutation:step-000"}
-                        )
+                        fixture.execute(plan, fail_at={"before_mutation:step-000"})
                     fixture.adapter.calls.clear()
                     if field in plan_fields:
                         changed_value = {
@@ -1099,18 +1339,12 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
                     fixture.adapter.state["surface/a"] = {"version": 1}
                     plan = fixture.plan({"surface/a": {"version": 2}})
                     with self.assertRaises(ACCEPTANCE.InjectedFailure):
-                        fixture.execute(
-                            plan, fail_at={"before_mutation:step-000"}
-                        )
+                        fixture.execute(plan, fail_at={"before_mutation:step-000"})
                     checkpoint_path = fixture.checkpoint_directory / "step-000.json"
-                    checkpoint = json.loads(
-                        checkpoint_path.read_text(encoding="utf-8")
-                    )
+                    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
                     checkpoint[field] = value
                     checkpoint_path.write_text(
-                        json.dumps(
-                            checkpoint, sort_keys=True, separators=(",", ":")
-                        ),
+                        json.dumps(checkpoint, sort_keys=True, separators=(",", ":")),
                         encoding="utf-8",
                     )
                     fixture.adapter.calls.clear()
@@ -1138,9 +1372,7 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
                     fixture.adapter.state["surface/a"] = {"version": 1}
                     plan = fixture.plan({"surface/a": {"version": 2}})
                     with self.assertRaises(ACCEPTANCE.InjectedFailure):
-                        fixture.execute(
-                            plan, fail_at={"before_mutation:step-000"}
-                        )
+                        fixture.execute(plan, fail_at={"before_mutation:step-000"})
                     checkpoint_path = fixture.checkpoint_directory / "step-000.json"
                     checkpoint_text = checkpoint_path.read_text(encoding="utf-8")
                     self.assertIn(needle, checkpoint_text)
@@ -1154,9 +1386,7 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
                         fixture.execute(plan)
 
                     self.assertEqual(fixture.adapter.calls, [])
-                    self.assertEqual(
-                        fixture.adapter.state["surface/a"], {"version": 1}
-                    )
+                    self.assertEqual(fixture.adapter.state["surface/a"], {"version": 1})
 
     def test_checkpoint_binding_is_type_exact_for_json_values(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -1192,18 +1422,14 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
                     fixture = ACCEPTANCE.AcceptanceFixture(Path(temporary_directory))
                     plan = fixture.plan({"surface/a": {"version": 2}})
                     with self.assertRaises(ACCEPTANCE.InjectedFailure):
-                        fixture.execute(
-                            plan, fail_at={"before_mutation:step-000"}
-                        )
+                        fixture.execute(plan, fail_at={"before_mutation:step-000"})
                     fixture.adapter.calls.clear()
 
                     if field == "set_membership":
                         added_binding = ACCEPTANCE.CapabilityBinding(
                             capability_identity="capability:fixture/additional",
                             capability_digest=f"sha256:{'5' * 64}",
-                            manager_version_evidence_digest=(
-                                f"sha256:{'6' * 64}"
-                            ),
+                            manager_version_evidence_digest=(f"sha256:{'6' * 64}"),
                         )
                         changed_bindings = tuple(
                             sorted((*plan.capability_bindings, added_binding))
@@ -1348,7 +1574,9 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
                     self.assertEqual(retry.trace[0], "audit:step-000:post_state")
                     self.assertEqual(retry_fixture.adapter.calls, calls)
 
-    def test_standalone_lexical_traversal_cannot_capture_or_restore_outside(self) -> None:
+    def test_standalone_lexical_traversal_cannot_capture_or_restore_outside(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             fixture = ACCEPTANCE.AcceptanceFixture(Path(temporary_directory))
             fixture.standalone_root.mkdir()
@@ -1450,9 +1678,7 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
                 with self.subTest(kind=snapshot["kind"]):
                     with self.assertRaisesRegex(ValueError, "invalid snapshot"):
                         fixture.restore_standalone(target, snapshot)
-                    self.assertEqual(
-                        target.read_bytes(), b"original-must-survive"
-                    )
+                    self.assertEqual(target.read_bytes(), b"original-must-survive")
 
     def test_standalone_restore_rejects_changed_symlink_target_state(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -1505,12 +1731,12 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
             fixture.restore_standalone(resolved, resolved_snapshot)
             fixture.restore_standalone(broken, broken_snapshot)
 
-            self.assertEqual(
-                fixture.capture_standalone(resolved), resolved_snapshot
-            )
+            self.assertEqual(fixture.capture_standalone(resolved), resolved_snapshot)
             self.assertEqual(fixture.capture_standalone(broken), broken_snapshot)
 
-    def test_invalid_final_action_fails_before_the_checkpoint_store_changes(self) -> None:
+    def test_invalid_final_action_fails_before_the_checkpoint_store_changes(
+        self,
+    ) -> None:
         for invalid_operation in ("unknown-operation", {"not": "a string"}):
             with self.subTest(invalid_operation=invalid_operation):
                 with tempfile.TemporaryDirectory() as temporary_directory:
@@ -1665,9 +1891,7 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
                     invalid = replace(
                         plan,
                         actions=(changed_action,),
-                        plan_digest=ACCEPTANCE.plan_actions_digest(
-                            (changed_action,)
-                        ),
+                        plan_digest=ACCEPTANCE.plan_actions_digest((changed_action,)),
                         capability_bindings=bindings,
                         capability_set_digest=ACCEPTANCE.capability_set_digest(
                             bindings
@@ -1694,9 +1918,7 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
                 with tempfile.TemporaryDirectory() as temporary_directory:
                     fixture = ACCEPTANCE.AcceptanceFixture(Path(temporary_directory))
                     plan = fixture.plan({"surface/a": {"version": 2}})
-                    changed_action = replace(
-                        plan.actions[0], after=invalid_value
-                    )
+                    changed_action = replace(plan.actions[0], after=invalid_value)
                     invalid = replace(
                         plan,
                         actions=(changed_action,),
@@ -1819,9 +2041,7 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
                             plan.actions[0].capability_binding,
                             **{field: invalid_value},
                         )
-                        action = replace(
-                            plan.actions[0], capability_binding=binding
-                        )
+                        action = replace(plan.actions[0], capability_binding=binding)
                         bindings = (binding,)
                         invalid = replace(
                             plan,
@@ -1839,7 +2059,9 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
                         self.assertEqual(fixture.checkpoints(), {})
                         self.assertEqual(fixture.adapter.calls, [])
 
-    def test_stale_plan_digest_fails_before_checkpoint_or_runtime_mutation(self) -> None:
+    def test_stale_plan_digest_fails_before_checkpoint_or_runtime_mutation(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             fixture = ACCEPTANCE.AcceptanceFixture(Path(temporary_directory))
             plan = fixture.plan({"surface/a": {"version": 2}})
@@ -1860,7 +2082,9 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
             self.assertEqual(fixture.checkpoints(), {})
             self.assertEqual(fixture.adapter.state, {})
 
-    def test_standalone_capture_restores_files_trees_and_links_without_following(self) -> None:
+    def test_standalone_capture_restores_files_trees_and_links_without_following(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             fixture = ACCEPTANCE.AcceptanceFixture(Path(temporary_directory))
             root = fixture.standalone_root
@@ -1909,7 +2133,9 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
                     fixture.capture_standalone(root / name), snapshot, msg=name
                 )
 
-    def test_every_migration_boundary_compensates_to_the_exact_initial_state(self) -> None:
+    def test_every_migration_boundary_compensates_to_the_exact_initial_state(
+        self,
+    ) -> None:
         initial = ACCEPTANCE.migration_initial_state()
         desired = ACCEPTANCE.migration_desired_state()
         for boundary in desired:
@@ -2023,7 +2249,9 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
             )
             self.assertNotIn(("remove", "04/matt-link"), fixture.adapter.calls)
 
-    def test_every_migration_surface_preserves_changes_before_mutate_and_restore(self) -> None:
+    def test_every_migration_surface_preserves_changes_before_mutate_and_restore(
+        self,
+    ) -> None:
         initial = ACCEPTANCE.migration_initial_state()
         desired = ACCEPTANCE.migration_desired_state()
         for surface, desired_value in desired.items():
@@ -2062,7 +2290,9 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
                         fixture.adapter.state[surface], {"external": "restore"}
                     )
 
-    def test_successful_migration_retains_winners_and_removes_only_owned_losers(self) -> None:
+    def test_successful_migration_retains_winners_and_removes_only_owned_losers(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             fixture = ACCEPTANCE.AcceptanceFixture(Path(temporary_directory))
             fixture.adapter.state = ACCEPTANCE.migration_initial_state()
@@ -2089,7 +2319,9 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
                 },
             )
 
-    def test_durable_artifacts_contain_secret_references_but_no_secret_values(self) -> None:
+    def test_durable_artifacts_contain_secret_references_but_no_secret_values(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             fixture = ACCEPTANCE.AcceptanceFixture(Path(temporary_directory))
             secret_value = "fixture-secret-canary-do-not-serialize"

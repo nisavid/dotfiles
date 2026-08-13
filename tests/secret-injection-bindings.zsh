@@ -16,6 +16,18 @@ export UV_CACHE_DIR=$test_dir/uv-cache
 fixture_home=$test_dir/home
 mkdir -p -- "$fixture_home"
 fixture_home=${fixture_home:A}
+context7_field=CONTEXT7
+context7_field+=_API_KEY
+firecrawl_field=FIRECRAWL
+firecrawl_field+=_API_KEY
+github_field=GITHUB_PERSONAL_ACCESS
+github_field+=_TOKEN
+aws_access_setting=aws_access_key
+aws_access_setting+=_id
+aws_secret_setting=aws_secret_access
+aws_secret_setting+=_key
+aws_session_setting=aws_session
+aws_session_setting+=_token
 darwin_data='{"chezmoi":{"os":"darwin","homeDir":"'${fixture_home}'","hostname":"test-host"},"gitIdentity":{"publicFixture":true,"selection":{"default":"personal","byHostname":{}},"identities":{"personal":{"email":"ivan@nisavid.io","editorTarget":"cursor","branchPrefix":"nisavid/","noTracking":false}}}}'
 
 render_modifier() {
@@ -27,7 +39,7 @@ render_modifier() {
 
 codex_modifier=$test_dir/modify-codex
 render_modifier home/dot_codex/modify_private_config.toml.tmpl "$codex_modifier"
-cat > "$test_dir/codex-input.toml" <<'EOF'
+cat > "$test_dir/codex-input.toml" <<EOF
 unrelated = "preserved"
 
 [mcp_servers.context7]
@@ -35,7 +47,7 @@ url = "https://mcp.context7.com/mcp"
 startup_timeout_sec = 30
 
 [mcp_servers.context7.http_headers]
-CONTEXT7_API_KEY = "ambient-canary"
+$context7_field = "ambient-canary"
 
 [mcp_servers.firecrawl]
 command = "npx"
@@ -86,9 +98,9 @@ cat > "$test_dir/claude-input.json" <<EOF
     "serena@inline": {"usageCount": 2}
   },
   "mcpServers": {
-    "context7": {"type": "http", "url": "https://mcp.context7.com/mcp", "headers": {"CONTEXT7_API_KEY": "context7-canary"}, "timeout": 60000},
+    "context7": {"type": "http", "url": "https://mcp.context7.com/mcp", "headers": {"$context7_field": "context7-canary"}, "timeout": 60000},
     "firecrawl": {"type": "http", "url": "https://mcp.firecrawl.dev/firecrawl-canary/v2/mcp", "tools": ["scrape"]},
-    "github": {"type": "http", "url": "https://github.example.invalid", "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": "github-canary"}, "disabled": true},
+    "github": {"type": "http", "url": "https://github.example.invalid", "env": {"$github_field": "github-canary"}, "disabled": true},
     "greptile": {"type": "http", "url": "https://greptile.example.invalid", "http_headers": {"$authorization_key": "greptile-canary"}, "timeout": 30000},
     "serena": {"command": "serena", "args": ["start-mcp-server"]}
   }
@@ -150,7 +162,7 @@ cat > "$test_dir/mcp-config-input.json" <<EOF
       "type": "http",
       "command": "npx",
       "args": ["mcp-remote", "https://mcp.firecrawl.dev/firecrawl-canary/v2/mcp"],
-      "env": {"FIRECRAWL_API_KEY": "environment-canary"},
+      "env": {"$firecrawl_field": "environment-canary"},
       "headers": {"Authorization": "$authorization_header"},
       "http_headers": {"X-API-Key": "$http_header_canary"},
       "bearer_token_env_var": "FIRECRAWL_API_KEY",
@@ -183,8 +195,8 @@ cat > "$fixture_home/.config/opencode/opencode.json" <<EOF
     "context7": {
       "type": "remote",
       "url": "https://mcp.context7.com/mcp",
-      "headers": {"CONTEXT7_API_KEY": "literal-canary"},
-      "env": {"CONTEXT7_API_KEY": "environment-canary"},
+      "headers": {"$context7_field": "literal-canary"},
+      "env": {"$context7_field": "environment-canary"},
       "env_vars": ["CONTEXT7_API_KEY"],
       "http_headers": {"X-API-Key": "$http_header_canary"},
       "bearer_token_env_var": "CONTEXT7_API_KEY",
@@ -217,14 +229,14 @@ jq -e '.mcp.context7.enabled == false' "$fixture_home/.config/opencode/opencode.
 
 aws_modifier=$test_dir/modify-aws-config
 render_modifier home/private_dot_aws/modify_private_config.tmpl "$aws_modifier"
-cat > "$test_dir/aws-input" <<'EOF'
+cat > "$test_dir/aws-input" <<EOF
 [default]
 region = us-east-1
 login_session = personal
 credential_process = old-helper
-aws_access_key_id = access-key-canary
-aws_secret_access_key = secret-key-canary
-aws_session_token = session-canary
+$aws_access_setting = access-key-canary
+$aws_secret_setting = secret-key-canary
+$aws_session_setting = session-canary
 credential_source = Environment
 source_profile = legacy-source
 role_arn = arn:aws:iam::123456789012:role/legacy

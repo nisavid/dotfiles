@@ -325,8 +325,10 @@ identity and manifest digest from external trust inputs, strictly parses the
 authorization, manifest, bundle, and attestation, then performs one create-only
 compare-and-swap archive commit using a closed `ReleaseArchiveManifest` over
 the exact input byte digests and execution tuple, including the independently
-trusted execution-domain identity, validated checkpoint-set digest, and
-`run_terminal_state: succeeded`. Only after generation `1` is
+trusted execution-domain identity, complete plan-action-set artifact, validated
+checkpoint-set manifest, and authenticated `RunTerminalRecord` with
+`state: succeeded`. The exact prepared-authority, checkpoint-manifest, and
+terminal-record bytes are also archived and bound by byte digest. Only after generation `1` is
 durable does it emit the closed `ReleaseReceipt`. Candidate output cannot mint,
 overwrite, ignore, or substitute for that receipt. A compensated, blocked, or
 nonterminal run cannot produce a passed receipt. The candidate evidence writer,
@@ -442,11 +444,17 @@ route and surface, validate the capture against the separately supplied action
 set, and resolve again against it. If the capture changes the plan or action
 projection, regenerate and recapture until the plan, action set, and capture
 agree. Atomically seal the plan-action set, captured-state manifest, and private
-recovery blobs. Project and seal the exact acceptance expected-case manifest,
+recovery blobs. Before authorization issuance, derive and independently validate
+the complete `PreparedActionAuthoritySet`: one canonically ordered member per
+plan action and no others, with exact plan/capability/capture bindings, adapter-
+normalized pre/post states, controlled-component identities, desired-state
+fragment, operation, surface, and compensation. Seal its independently trusted
+identity and digest. Project and seal the exact acceptance expected-case manifest,
 including all explicit verification and migration nodes, then obtain
 the exact closed `ApplyAuthorization` naming the complete candidate,
-implementation-manifest, catalog, lock, plan, action-set, capability-set,
-captured-state, and expected-case-manifest tuple plus the command, run, validity
+implementation-manifest, catalog, lock, plan, action-set, prepared-action-
+authority-set, capability-set, captured-state, and expected-case-manifest tuple
+plus the command, run, validity
 window, fresh nonce, independently trusted execution-domain identity, and exact
 operator-review-package digest. Receive
 `trusted_apply_authorization_digest` through
@@ -619,7 +627,8 @@ release authority attests the bundle's canonical semantic digest after every
 result and live sign-off, and the release command validates all three documents
 against the authorized expected-case and attestation manifest digests. The
 external launcher also validates the exact apply authorization and its own trusted launcher
-identity/digest, then commits the authorization, three release documents, and
+identity/digest, then commits the authorization, prepared-action-authority set,
+checkpoint-set manifest, run-terminal record, three release documents, and
 closed archive manifest over their exact serialized byte digests and execution
 tuple, including `execution_domain_identity`, the validated checkpoint-set
 digest, and successful terminal run state, with an `absent` compare token.
@@ -632,6 +641,7 @@ authority.
 
 Completion: the success marker is durable and fsynced, the apply lease is
 released, steady-state audit is a no-op, and the exact apply authorization,
+prepared-action-authority set, checkpoint-set manifest, run-terminal record,
 expected-case manifest, evidence bundle, attestation, archive manifest, and
 closed `ReleaseReceipt` are durably present in the independent authority store.
 Any failed runtime condition enters the recovery procedure.
@@ -646,7 +656,10 @@ and sealed captured-state identity/digest bindings; the route's closed
 capability and manager-evidence binding; action identity and deterministic
 ordinal; route and operation; captured pre-state and expected post-state
 digests; and compensation operation. It additionally records attempt receipts,
-phase, and durable invocation intent (`not_started` or `started`).
+phase, durable invocation intent (`not_started` or `started`), and
+`compensation_authority_kind`. The apply-authorization identity/digest,
+execution nonce, run, and domain participate in the immutable checkpoint
+identity and are validated against independent apply inputs.
 
 The action state machine is:
 
@@ -678,7 +691,30 @@ any concurrent change fails closed. Before the transition, claim
 `compensation_nonce` once by CAS in the same authoritative execution-domain
 ledger namespace. Crash
 recovery cannot infer this public compensation authority merely from a surviving
-`prepared` record or reuse `ApplyAuthorization`.
+`prepared` record or reuse `ApplyAuthorization`. It resumes only from the
+archived original authorization and pretransition manifest plus the independently
+trusted durable compensation-ledger claim. The current store must be a race-
+rechecked monotonic descendant: the same checkpoint identities, unchanged
+forward invocation intent, strictly newer record/store generations for every
+change, and only public claims bound to the original authority. The ledger claim
+also closes the crash window before the first checkpoint transition, so recovery
+does not mint a new nonce or reapply the expired clock window. A blocked
+checkpoint still requires separate operator disposition.
+
+The independently validated plan input is the complete closed
+`agent-equipment-plan-action-set/v1` artifact, not a caller-projected action
+list. Recompute every action identity/digest and the complete set digest, compare
+its candidate, installed implementation, plan, and set bindings with independent
+inputs, and require every stored checkpoint to map uniquely into that complete
+set. The store remains all-and-only the prepared checkpoint subset, so an early
+crash is recoverable without pretending unstarted actions have checkpoints.
+That prefix must also have one reachable cross-record lifecycle. Forward state
+is `completed*` plus at most one final `prepared` action. Reverse state is
+`completed*`, then at most one lowest nonterminal compensation frontier, then
+`compensated*` in ascending ordinal order. A lower action cannot compensate
+while a higher dependent remains forward. Every public claim uses the closed
+non-null identity/digest/nonce formats and is validated against independently
+supplied original compensation authority.
 
 Persist and fsync `prepared` with `invocation_state: not_started`, then compare
 current state with the captured pre-state. Immediately before the adapter call,
@@ -688,6 +724,22 @@ verification. Before rollback, persist and fsync `compensating`; after
 restoration and verification, persist and fsync `compensated`. Records are
 append-only state transitions or compare-and-swap replacements; an older writer
 cannot overwrite a newer phase or invocation intent.
+
+Automatic reverse compensation within the claimed apply invocation records
+`compensation_authority_kind: automatic_apply` and no public claim. A public or
+fresh invocation records `public_compensation` and a separate closed transition
+claim binding the immutable checkpoint identity plus the independently
+validated compensation-authorization identity/digest and nonce. The claim has
+its own canonical identity and digest and never changes the checkpoint identity.
+Recovery rejects an ambiguous kind/claim pair and a canonically resealed foreign
+claim.
+
+Release validates a closed `RunTerminalRecord` against the independently
+validated checkpoint manifest, complete plan-action set, and trusted store
+snapshot/generation. `state: succeeded` requires one unique completed
+checkpoint for every complete plan action. The archive stores the exact
+checkpoint-manifest and terminal-record bytes and binds both byte digests; naked
+checkpoint-digest and terminal-state scalars are never release authority.
 
 `compensation_blocked` is terminal for automatic recovery. It records an exact
 compare-before-restore or ambiguous-effect mismatch, preserves the observed

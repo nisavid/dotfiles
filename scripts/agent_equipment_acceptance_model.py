@@ -7,20 +7,19 @@ does not inspect or mutate a real harness, user home, or native manager.
 
 from __future__ import annotations
 
-from copy import deepcopy
-from dataclasses import dataclass
 import base64
 import binascii
 import hashlib
 import json
 import math
 import os
-from pathlib import Path
 import re
 import shutil
 import stat
+from copy import deepcopy
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Mapping
-
 
 JsonValue = Any
 DesiredState = Mapping[str, JsonValue]
@@ -141,6 +140,9 @@ class Mutation:
 @dataclass(frozen=True)
 class MutationPlan:
     actions: tuple[Mutation, ...]
+    apply_authorization_identity: str
+    apply_authorization_digest: str
+    execution_nonce: str
     run_identity: str
     execution_domain_identity: str
     candidate_digest: str
@@ -175,6 +177,10 @@ class _MissingState:
 
 MISSING = _MissingState()
 BINDING_FIELDS = (
+    "checkpoint_identity",
+    "apply_authorization_identity",
+    "apply_authorization_digest",
+    "execution_nonce",
     "step_id",
     "action_identity",
     "ordinal",
@@ -199,20 +205,77 @@ BINDING_FIELDS = (
     "surface",
 )
 CHECKPOINT_FIELDS = frozenset(
-    (*BINDING_FIELDS, "phase", "phase_history", "invocation_state")
+    (
+        *BINDING_FIELDS,
+        "phase",
+        "phase_history",
+        "invocation_state",
+        "compensation_authority_kind",
+        "compensation_transition_claim",
+    )
 )
-CHECKPOINT_PHASE_HISTORIES = frozenset(
+CHECKPOINT_PHASE_MATRIX = frozenset(
     {
-        ("prepared",),
-        ("prepared", "completed"),
-        ("prepared", "compensating"),
-        ("prepared", "completed", "compensating"),
-        ("prepared", "compensating", "compensated"),
-        ("prepared", "completed", "compensating", "compensated"),
-        ("prepared", "compensation_blocked"),
-        ("prepared", "completed", "compensation_blocked"),
-        ("prepared", "compensating", "compensation_blocked"),
-        ("prepared", "completed", "compensating", "compensation_blocked"),
+        (("prepared",), "prepared", "not_started"),
+        (("prepared",), "prepared", "started"),
+        (("prepared", "completed"), "completed", "started"),
+        (("prepared", "compensating"), "compensating", "not_started"),
+        (("prepared", "compensating"), "compensating", "started"),
+        (
+            ("prepared", "completed", "compensating"),
+            "compensating",
+            "started",
+        ),
+        (
+            ("prepared", "compensating", "compensated"),
+            "compensated",
+            "not_started",
+        ),
+        (
+            ("prepared", "compensating", "compensated"),
+            "compensated",
+            "started",
+        ),
+        (
+            ("prepared", "completed", "compensating", "compensated"),
+            "compensated",
+            "started",
+        ),
+        (
+            ("prepared", "compensation_blocked"),
+            "compensation_blocked",
+            "not_started",
+        ),
+        (
+            ("prepared", "compensation_blocked"),
+            "compensation_blocked",
+            "started",
+        ),
+        (
+            ("prepared", "completed", "compensation_blocked"),
+            "compensation_blocked",
+            "started",
+        ),
+        (
+            ("prepared", "compensating", "compensation_blocked"),
+            "compensation_blocked",
+            "not_started",
+        ),
+        (
+            ("prepared", "compensating", "compensation_blocked"),
+            "compensation_blocked",
+            "started",
+        ),
+        (
+            (
+                "prepared",
+                "completed",
+                "compensating",
+                "compensation_blocked",
+            ),
+            "compensation_blocked",
+            "started",
+        ),
     }
 )
 MUTATING_OPERATIONS = frozenset(
@@ -235,9 +298,7 @@ def _is_digest(value: object) -> bool:
 
 def _is_prefixed_identity(value: object, prefix: str) -> bool:
     return (
-        isinstance(value, str)
-        and value.startswith(prefix)
-        and len(value) > len(prefix)
+        isinstance(value, str) and value.startswith(prefix) and len(value) > len(prefix)
     )
 
 
@@ -277,6 +338,49 @@ def canonical_bytes(value: JsonValue) -> bytes:
     ).encode("utf-8")
 
 
+def checkpoint_identity(checkpoint: Mapping[str, JsonValue]) -> str:
+    """Derive the immutable identity of one durable checkpoint."""
+
+    immutable = {
+        field: checkpoint[field]
+        for field in BINDING_FIELDS
+        if field != "checkpoint_identity"
+    }
+    return f"checkpoint:{canonical_digest({'record_version': 'agent-equipment-checkpoint/v1', 'immutable_record': immutable})}"
+
+
+def compensation_transition_claim_identity(
+    claim: Mapping[str, JsonValue],
+) -> str:
+    payload = {
+        key: value
+        for key, value in claim.items()
+        if key not in {"transition_claim_identity", "transition_claim_digest"}
+    }
+    return f"compensation-transition:{canonical_digest(payload)}"
+
+
+def compensation_transition_claim_digest(
+    claim: Mapping[str, JsonValue],
+) -> str:
+    return canonical_digest(
+        {key: value for key, value in claim.items() if key != "transition_claim_digest"}
+    )
+
+
+def compensation_ledger_claim_identity(
+    execution_domain_identity: str, compensation_nonce: str
+) -> str:
+    """Derive the durable public-compensation ledger claim identity."""
+
+    return "compensation-ledger-claim:" + canonical_digest(
+        {
+            "execution_domain_identity": execution_domain_identity,
+            "compensation_nonce": compensation_nonce,
+        }
+    )
+
+
 def bytes_digest(value: bytes) -> str:
     return f"sha256:{hashlib.sha256(value).hexdigest()}"
 
@@ -296,8 +400,7 @@ def _is_json_value(value: object) -> bool:
         return all(_is_json_value(item) for item in value)
     if isinstance(value, dict):
         return all(
-            isinstance(key, str) and _is_json_value(item)
-            for key, item in value.items()
+            isinstance(key, str) and _is_json_value(item) for key, item in value.items()
         )
     return False
 
@@ -356,9 +459,7 @@ def capability_binding_payload(binding: CapabilityBinding) -> dict[str, str]:
     return {
         "capability_identity": binding.capability_identity,
         "capability_digest": binding.capability_digest,
-        "manager_version_evidence_digest": (
-            binding.manager_version_evidence_digest
-        ),
+        "manager_version_evidence_digest": (binding.manager_version_evidence_digest),
     }
 
 
@@ -379,9 +480,7 @@ def mutation_payload(action: Mutation) -> dict[str, JsonValue]:
         "route": action.route,
         "operation": action.operation,
         "compensation": action.compensation,
-        "capability_binding": capability_binding_payload(
-            action.capability_binding
-        ),
+        "capability_binding": capability_binding_payload(action.capability_binding),
     }
 
 
@@ -392,9 +491,7 @@ def mutation_identity(action: Mutation) -> str:
 def plan_actions_digest(actions: tuple[Mutation, ...]) -> str:
     """Return the canonical digest of a complete ordered fake action plan."""
 
-    return canonical_digest(
-        [mutation_payload(action) for action in actions]
-    )
+    return canonical_digest([mutation_payload(action) for action in actions])
 
 
 def migration_initial_state() -> dict[str, JsonValue]:
@@ -504,6 +601,14 @@ class AcceptanceFixture:
         self._imports: dict[str, ImportedObservation] = {}
         self.candidate_digest = f"sha256:{'0' * 64}"
         self.implementation_manifest_digest = f"sha256:{'9' * 64}"
+        self.apply_authorization_identity = "apply-authorization:sha256:" + "a" * 64
+        self.apply_authorization_digest = f"sha256:{'b' * 64}"
+        self.execution_nonce = "execution-nonce:sha256:" + "c" * 64
+        self.compensation_authorization_identity = (
+            "compensation-authorization:sha256:" + "d" * 64
+        )
+        self.compensation_authorization_digest = f"sha256:{'e' * 64}"
+        self.compensation_nonce = "compensation-nonce:sha256:" + "f" * 64
 
     def checkpoint_bytes(self) -> bytes:
         """Return the durable fixture journal as a comparison-friendly blob."""
@@ -555,6 +660,9 @@ class AcceptanceFixture:
         capability_bindings = (capability_binding,)
         return MutationPlan(
             actions=ordered_actions,
+            apply_authorization_identity=self.apply_authorization_identity,
+            apply_authorization_digest=self.apply_authorization_digest,
+            execution_nonce=self.execution_nonce,
             run_identity="run:fixture/v1",
             execution_domain_identity="execution-domain:fixture/global-ledger-v1",
             candidate_digest=self.candidate_digest,
@@ -595,6 +703,9 @@ class AcceptanceFixture:
         )
         return MutationPlan(
             actions=actions,
+            apply_authorization_identity=plan.apply_authorization_identity,
+            apply_authorization_digest=plan.apply_authorization_digest,
+            execution_nonce=plan.execution_nonce,
             run_identity=plan.run_identity,
             execution_domain_identity=plan.execution_domain_identity,
             candidate_digest=plan.candidate_digest,
@@ -632,6 +743,13 @@ class AcceptanceFixture:
         unknown_step_ids = set(existing_checkpoints) - plan_step_ids
         if unknown_step_ids:
             raise BindingMismatchError(sorted(unknown_step_ids)[0])
+        expected_checkpoint_prefix = [
+            action.step_id for action in plan.actions[: len(existing_checkpoints)]
+        ]
+        if sorted(existing_checkpoints) != expected_checkpoint_prefix or not (
+            self._checkpoint_lifecycle_frontier_valid(existing_checkpoints)
+        ):
+            raise BindingMismatchError("checkpoint lifecycle frontier")
         for action in plan.actions:
             existing = existing_checkpoints.get(action.step_id)
             if existing is None:
@@ -744,7 +862,10 @@ class AcceptanceFixture:
             raise PlanValidationError("complete plan validation failed")
 
         if (
-            plan.candidate_digest != self.candidate_digest
+            plan.apply_authorization_identity != self.apply_authorization_identity
+            or plan.apply_authorization_digest != self.apply_authorization_digest
+            or plan.execution_nonce != self.execution_nonce
+            or plan.candidate_digest != self.candidate_digest
             or plan.implementation_manifest_digest
             != self.implementation_manifest_digest
             or not _is_prefixed_identity(plan.run_identity, "run:")
@@ -767,9 +888,7 @@ class AcceptanceFixture:
                 for action in plan.actions
             )
             or any(
-                not _is_prefixed_identity(
-                    binding.capability_identity, "capability:"
-                )
+                not _is_prefixed_identity(binding.capability_identity, "capability:")
                 or not _is_digest(binding.capability_digest)
                 or not _is_digest(binding.manager_version_evidence_digest)
                 for binding in plan.capability_bindings
@@ -781,6 +900,7 @@ class AcceptanceFixture:
         surfaces = [action.surface for action in plan.actions]
         capability_bindings = plan.capability_bindings
         plan_bindings = (
+            plan.apply_authorization_digest,
             plan.candidate_digest,
             plan.implementation_manifest_digest,
             plan.catalog_digest,
@@ -791,9 +911,7 @@ class AcceptanceFixture:
         )
         try:
             expected_plan_digest = plan_actions_digest(plan.actions)
-            expected_capability_set_digest = capability_set_digest(
-                capability_bindings
-            )
+            expected_capability_set_digest = capability_set_digest(capability_bindings)
         except (TypeError, ValueError):
             raise PlanValidationError("complete plan validation failed") from None
         if (
@@ -807,16 +925,12 @@ class AcceptanceFixture:
             or len(capability_bindings) != len(set(capability_bindings))
             or len({binding.capability_identity for binding in capability_bindings})
             != len(capability_bindings)
-            or plan.capability_set_digest
-            != expected_capability_set_digest
+            or plan.capability_set_digest != expected_capability_set_digest
             or any(
                 action.capability_binding not in capability_bindings
                 for action in plan.actions
             )
-            or any(
-                states_equal(action.before, action.after)
-                for action in plan.actions
-            )
+            or any(states_equal(action.before, action.after) for action in plan.actions)
             or any(
                 not isinstance(action.operation, str)
                 or action.operation not in MUTATING_OPERATIONS
@@ -841,8 +955,11 @@ class AcceptanceFixture:
         action: Mutation,
         phase: str,
     ) -> dict[str, JsonValue]:
-        return {
+        checkpoint: dict[str, JsonValue] = {
             "step_id": action.step_id,
+            "apply_authorization_identity": plan.apply_authorization_identity,
+            "apply_authorization_digest": plan.apply_authorization_digest,
+            "execution_nonce": plan.execution_nonce,
             "action_identity": mutation_identity(action),
             "ordinal": int(action.step_id.removeprefix("step-")),
             "run_identity": plan.run_identity,
@@ -850,6 +967,7 @@ class AcceptanceFixture:
             "phase": phase,
             "phase_history": [phase],
             "invocation_state": "not_started",
+            "compensation_authority_kind": "none",
             "candidate_digest": plan.candidate_digest,
             "implementation_manifest_digest": plan.implementation_manifest_digest,
             "catalog_digest": plan.catalog_digest,
@@ -865,13 +983,14 @@ class AcceptanceFixture:
             "operation_digest": canonical_digest(action.operation),
             "compensation_operation": action.compensation,
             "pre_state_digest": canonical_digest(state_payload(action.before)),
-            "expected_post_state_digest": canonical_digest(
-                state_payload(action.after)
-            ),
+            "expected_post_state_digest": canonical_digest(state_payload(action.after)),
             "pre_state": state_payload(action.before),
             "expected_post_state": state_payload(action.after),
             "surface": action.surface,
+            "compensation_transition_claim": None,
         }
+        checkpoint["checkpoint_identity"] = checkpoint_identity(checkpoint)
+        return checkpoint
 
     @staticmethod
     def _advance_phase(checkpoint: dict[str, JsonValue], phase: str) -> None:
@@ -879,11 +998,70 @@ class AcceptanceFixture:
         checkpoint.setdefault("phase_history", []).append(phase)
 
     @staticmethod
+    def _checkpoint_lifecycle_frontier_valid(
+        checkpoints: Mapping[str, Mapping[str, JsonValue]],
+    ) -> bool:
+        phases = [checkpoints[step_id].get("phase") for step_id in sorted(checkpoints)]
+        compensation_phases = {
+            "compensating",
+            "compensated",
+            "compensation_blocked",
+        }
+        transitioned = [
+            index for index, phase in enumerate(phases) if phase in compensation_phases
+        ]
+        if not transitioned:
+            prepared = [
+                index for index, phase in enumerate(phases) if phase == "prepared"
+            ]
+            return (
+                all(phase in {"prepared", "completed"} for phase in phases)
+                and len(prepared) <= 1
+                and (not prepared or prepared[0] == len(phases) - 1)
+                and all(phase == "completed" for phase in phases[: len(phases) - 1])
+            )
+        frontier = transitioned[0]
+        return (
+            transitioned == list(range(frontier, len(phases)))
+            and all(phase == "completed" for phase in phases[:frontier])
+            and all(phase == "compensated" for phase in phases[frontier + 1 :])
+        )
+
     def _validate_checkpoint_binding(
+        self,
         actual: Mapping[str, JsonValue],
         expected: Mapping[str, JsonValue],
     ) -> None:
         history = actual.get("phase_history")
+        transition_claim = actual.get("compensation_transition_claim")
+        claim_valid = transition_claim is None
+        if isinstance(transition_claim, Mapping):
+            claim_valid = (
+                set(transition_claim)
+                == {
+                    "schema_version",
+                    "checkpoint_identity",
+                    "compensation_authorization_identity",
+                    "compensation_authorization_digest",
+                    "compensation_nonce",
+                    "transition_claim_identity",
+                    "transition_claim_digest",
+                }
+                and transition_claim.get("schema_version")
+                == "agent-equipment-compensation-transition-claim/v1"
+                and transition_claim.get("checkpoint_identity")
+                == actual.get("checkpoint_identity")
+                and transition_claim.get("transition_claim_identity")
+                == compensation_transition_claim_identity(transition_claim)
+                and transition_claim.get("transition_claim_digest")
+                == compensation_transition_claim_digest(transition_claim)
+                and transition_claim.get("compensation_authorization_identity")
+                == self.compensation_authorization_identity
+                and transition_claim.get("compensation_authorization_digest")
+                == self.compensation_authorization_digest
+                and transition_claim.get("compensation_nonce")
+                == self.compensation_nonce
+            )
         if (
             set(actual) != CHECKPOINT_FIELDS
             or any(
@@ -891,15 +1069,85 @@ class AcceptanceFixture:
                 for field in BINDING_FIELDS
             )
             or not isinstance(history, list)
-            or actual.get("invocation_state") not in {"not_started", "started"}
             or (
-                actual.get("phase") == "completed"
-                and actual.get("invocation_state") != "started"
+                tuple(history),
+                actual.get("phase"),
+                actual.get("invocation_state"),
             )
-            or tuple(history) not in CHECKPOINT_PHASE_HISTORIES
-            or history[-1] != actual.get("phase")
+            not in CHECKPOINT_PHASE_MATRIX
+            or not claim_valid
+            or (
+                transition_claim is not None
+                and actual.get("phase") in {"prepared", "completed"}
+            )
+            or (
+                actual.get("phase") in {"prepared", "completed"}
+                and actual.get("compensation_authority_kind") != "none"
+            )
+            or (
+                actual.get("phase")
+                in {"compensating", "compensated", "compensation_blocked"}
+                and (
+                    (transition_claim is None)
+                    != (actual.get("compensation_authority_kind") == "automatic_apply")
+                    or actual.get("compensation_authority_kind")
+                    not in {"automatic_apply", "public_compensation"}
+                )
+            )
         ):
             raise BindingMismatchError(str(expected.get("step_id")))
+
+    def _attach_public_compensation_claim(
+        self,
+        checkpoint: dict[str, JsonValue],
+    ) -> None:
+        existing = checkpoint.get("compensation_transition_claim")
+        if existing is not None:
+            assert isinstance(existing, Mapping)
+            if (
+                existing.get("compensation_authorization_identity")
+                != self.compensation_authorization_identity
+                or existing.get("compensation_authorization_digest")
+                != self.compensation_authorization_digest
+                or existing.get("compensation_nonce") != self.compensation_nonce
+            ):
+                raise BindingMismatchError(str(checkpoint.get("step_id")))
+            return
+        claim: dict[str, JsonValue] = {
+            "schema_version": "agent-equipment-compensation-transition-claim/v1",
+            "checkpoint_identity": checkpoint["checkpoint_identity"],
+            "compensation_authorization_identity": (
+                self.compensation_authorization_identity
+            ),
+            "compensation_authorization_digest": (
+                self.compensation_authorization_digest
+            ),
+            "compensation_nonce": self.compensation_nonce,
+            "transition_claim_identity": "",
+            "transition_claim_digest": "",
+        }
+        claim["transition_claim_identity"] = compensation_transition_claim_identity(
+            claim
+        )
+        claim["transition_claim_digest"] = compensation_transition_claim_digest(claim)
+        checkpoint["compensation_transition_claim"] = claim
+        checkpoint["compensation_authority_kind"] = "public_compensation"
+
+    def _set_compensation_provenance(
+        self,
+        checkpoint: dict[str, JsonValue],
+        authority_kind: str,
+    ) -> None:
+        if authority_kind == "public_compensation":
+            self._attach_public_compensation_claim(checkpoint)
+            return
+        if authority_kind != "automatic_apply":
+            raise BindingMismatchError(str(checkpoint.get("step_id")))
+        existing_kind = checkpoint.get("compensation_authority_kind")
+        if existing_kind not in {"none", "automatic_apply"}:
+            raise BindingMismatchError(str(checkpoint.get("step_id")))
+        checkpoint["compensation_authority_kind"] = "automatic_apply"
+        checkpoint["compensation_transition_claim"] = None
 
     def _apply_value(self, surface: str, value: JsonValue) -> None:
         if value is MISSING:
@@ -926,6 +1174,7 @@ class AcceptanceFixture:
             phase = checkpoint.get("phase")
             invocation_started = checkpoint.get("invocation_state") == "started"
             if phase == "prepared" and states_equal(current, action.before):
+                checkpoint["compensation_authority_kind"] = "automatic_apply"
                 self._advance_phase(checkpoint, "compensating")
                 self._write_checkpoint(
                     checkpoint,
@@ -946,10 +1195,9 @@ class AcceptanceFixture:
             if (
                 phase not in {"prepared", "completed"}
                 or not invocation_started
-                or not states_equal(
-                current, action.after
-                )
+                or not states_equal(current, action.after)
             ):
+                checkpoint["compensation_authority_kind"] = "automatic_apply"
                 self._advance_phase(checkpoint, "compensation_blocked")
                 self._write_checkpoint(
                     checkpoint,
@@ -958,6 +1206,7 @@ class AcceptanceFixture:
                     failures=failures,
                 )
                 raise ConcurrentChangeError(action.surface)
+            checkpoint["compensation_authority_kind"] = "automatic_apply"
             self._advance_phase(checkpoint, "compensating")
             self._write_checkpoint(
                 checkpoint,
@@ -977,21 +1226,54 @@ class AcceptanceFixture:
             )
             trace.append(f"compensated:{action.step_id}")
 
-    def compensate(self, plan: MutationPlan) -> ExecutionResult:
+    def compensate(
+        self,
+        plan: MutationPlan,
+        *,
+        fail_at: set[str] | frozenset[str] = frozenset(),
+    ) -> ExecutionResult:
         """Explicitly authorize rollback when no durable intent was persisted."""
 
-        return self._recover_compensation(plan, allow_initiation=True)
+        return self._recover_compensation(
+            plan,
+            allow_initiation=True,
+            failures=set(fail_at),
+            trusted_public_authority=None,
+        )
 
-    def recover_compensation(self, plan: MutationPlan) -> ExecutionResult:
+    def recover_compensation(
+        self,
+        plan: MutationPlan,
+        *,
+        trusted_compensation_authorization_identity: str | None = None,
+        trusted_compensation_authorization_digest: str | None = None,
+        trusted_compensation_nonce: str | None = None,
+        trusted_compensation_ledger_claim_identity: str | None = None,
+        fail_at: set[str] | frozenset[str] = frozenset(),
+    ) -> ExecutionResult:
         """Infer and finish rollback only from durable compensation intent."""
 
-        return self._recover_compensation(plan, allow_initiation=False)
+        trusted_public_authority = (
+            trusted_compensation_authorization_identity,
+            trusted_compensation_authorization_digest,
+            trusted_compensation_nonce,
+            trusted_compensation_ledger_claim_identity,
+        )
+        return self._recover_compensation(
+            plan,
+            allow_initiation=False,
+            failures=set(fail_at),
+            trusted_public_authority=trusted_public_authority,
+        )
 
     def _recover_compensation(
         self,
         plan: MutationPlan,
         *,
         allow_initiation: bool,
+        failures: set[str],
+        trusted_public_authority: tuple[str | None, str | None, str | None, str | None]
+        | None,
     ) -> ExecutionResult:
         """Audit and finish compensation without replaying forward work."""
 
@@ -1002,6 +1284,13 @@ class AcceptanceFixture:
         unknown_step_ids = set(checkpoints) - set(actions)
         if unknown_step_ids:
             raise BindingMismatchError(sorted(unknown_step_ids)[0])
+        expected_checkpoint_prefix = [
+            action.step_id for action in plan.actions[: len(checkpoints)]
+        ]
+        if sorted(checkpoints) != expected_checkpoint_prefix or not (
+            self._checkpoint_lifecycle_frontier_valid(checkpoints)
+        ):
+            raise BindingMismatchError("checkpoint lifecycle frontier")
         for step_id, checkpoint in sorted(checkpoints.items(), reverse=True):
             action = actions[step_id]
             expected = self._checkpoint(plan, action, "prepared")
@@ -1011,11 +1300,43 @@ class AcceptanceFixture:
             for checkpoint in checkpoints.values()
         ):
             raise CompensationBlockedError("rollback requires operator disposition")
-        if not allow_initiation and not any(
-            checkpoint["phase"] in {"compensating", "compensated"}
+        expected_public_authority = (
+            self.compensation_authorization_identity,
+            self.compensation_authorization_digest,
+            self.compensation_nonce,
+            compensation_ledger_claim_identity(
+                plan.execution_domain_identity, self.compensation_nonce
+            ),
+        )
+        durable_authority_kinds = {
+            str(checkpoint["compensation_authority_kind"])
             for checkpoint in checkpoints.values()
+            if checkpoint["phase"] in {"compensating", "compensated"}
+        }
+        if allow_initiation:
+            if durable_authority_kinds:
+                raise BindingMismatchError(
+                    "public compensation cannot replace durable compensation intent"
+                )
+            compensation_authority_kind = "public_compensation"
+        elif len(durable_authority_kinds) == 1:
+            compensation_authority_kind = durable_authority_kinds.pop()
+        elif not durable_authority_kinds and (
+            trusted_public_authority == expected_public_authority
         ):
-            raise HistoricalCheckpointError("no durable rollback intent")
+            compensation_authority_kind = "public_compensation"
+        else:
+            if not durable_authority_kinds:
+                raise HistoricalCheckpointError("no durable rollback intent")
+            raise BindingMismatchError("ambiguous compensation provenance")
+        if (
+            not allow_initiation
+            and compensation_authority_kind == "public_compensation"
+        ):
+            if trusted_public_authority != expected_public_authority:
+                raise BindingMismatchError(
+                    "public compensation recovery requires original trusted authority and ledger claim"
+                )
 
         for action in reversed(plan.actions):
             step_id = action.step_id
@@ -1035,60 +1356,66 @@ class AcceptanceFixture:
             if phase not in {"prepared", "completed", "compensating"}:
                 raise CompensationBlockedError(step_id)
             if phase == "completed" and (
-                not invocation_started
-                or not states_equal(current, action.after)
+                not invocation_started or not states_equal(current, action.after)
             ):
+                self._set_compensation_provenance(
+                    checkpoint, compensation_authority_kind
+                )
                 self._advance_phase(checkpoint, "compensation_blocked")
                 self._write_checkpoint(
                     checkpoint,
                     fail="compensation_blocked_write",
                     action=action,
-                    failures=set(),
+                    failures=failures,
                 )
                 raise ConcurrentChangeError(action.surface)
 
             if phase == "prepared" and not (
                 states_equal(current, action.before)
-                or (
-                    invocation_started
-                    and states_equal(current, action.after)
-                )
+                or (invocation_started and states_equal(current, action.after))
             ):
+                self._set_compensation_provenance(
+                    checkpoint, compensation_authority_kind
+                )
                 self._advance_phase(checkpoint, "compensation_blocked")
                 self._write_checkpoint(
                     checkpoint,
                     fail="compensation_blocked_write",
                     action=action,
-                    failures=set(),
+                    failures=failures,
                 )
                 raise ConcurrentChangeError(action.surface)
 
             if phase == "compensating" and not (
                 states_equal(current, action.before)
-                or (
-                    invocation_started
-                    and states_equal(current, action.after)
-                )
+                or (invocation_started and states_equal(current, action.after))
             ):
+                self._set_compensation_provenance(
+                    checkpoint, compensation_authority_kind
+                )
                 self._advance_phase(checkpoint, "compensation_blocked")
                 self._write_checkpoint(
                     checkpoint,
                     fail="compensation_blocked_write",
                     action=action,
-                    failures=set(),
+                    failures=failures,
                 )
                 raise ConcurrentChangeError(action.surface)
 
             if phase != "compensating":
+                self._set_compensation_provenance(
+                    checkpoint, compensation_authority_kind
+                )
                 self._advance_phase(checkpoint, "compensating")
                 self._write_checkpoint(
                     checkpoint,
                     fail="compensating_write",
                     action=action,
-                    failures=set(),
+                    failures=failures,
                 )
             if states_equal(current, action.after):
                 trace.append(f"audit:{step_id}:post_state")
+                self._raise_fault("before_compensation_mutation", action, failures)
                 self._apply_value(action.surface, action.before)
             else:
                 trace.append(f"audit:{step_id}:pre_state")
@@ -1097,7 +1424,7 @@ class AcceptanceFixture:
                 checkpoint,
                 fail="compensated_write",
                 action=action,
-                failures=set(),
+                failures=failures,
             )
             trace.append(f"compensated:{step_id}")
         if any(
@@ -1179,9 +1506,7 @@ class AcceptanceFixture:
         trace.append(f"set:{winner_surface}")
         for component, enabled in sorted(component_controls.items()):
             self.adapter.set(f"component-control/{component}", enabled)
-            trace.append(
-                f"control:{component}={'enabled' if enabled else 'disabled'}"
-            )
+            trace.append(f"control:{component}={'enabled' if enabled else 'disabled'}")
         if not states_equal(self.adapter.state[winner_surface], winner_value):
             raise RuntimeError("winner provider did not verify")
         trace.append(f"verify:{winner_surface}")
@@ -1276,7 +1601,9 @@ class AcceptanceFixture:
             or not item.get("verification")
             for item in copied
         ):
-            raise ValueError("nonautomated report entries need disposition and evidence")
+            raise ValueError(
+                "nonautomated report entries need disposition and evidence"
+            )
         return NonautomatedReport(items=copied)
 
     def audit_native_rolling(
@@ -1438,7 +1765,11 @@ class AcceptanceFixture:
             raise ValueError("invalid snapshot structure")
         kind = snapshot.get("kind")
         mode = snapshot.get("mode")
-        if isinstance(mode, bool) or not isinstance(mode, int) or not 0 <= mode <= 0o7777:
+        if (
+            isinstance(mode, bool)
+            or not isinstance(mode, int)
+            or not 0 <= mode <= 0o7777
+        ):
             raise ValueError("invalid snapshot mode")
 
         if kind == "regular_file":
