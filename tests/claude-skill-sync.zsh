@@ -39,6 +39,7 @@ retired_skills=(
   finishing-a-development-branch
   subagent-driven-development
   test-driven-development
+  using-serena-projects
   writing-plans
   yeet
 )
