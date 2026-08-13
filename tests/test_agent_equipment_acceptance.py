@@ -989,6 +989,7 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
     def test_checkpoint_replay_rejects_every_changed_binding(self) -> None:
         plan_fields = (
             "run_identity",
+            "execution_domain_identity",
             "candidate_digest",
             "implementation_manifest_digest",
             "catalog_digest",
@@ -1018,6 +1019,9 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
                     if field in plan_fields:
                         changed_value = {
                             "run_identity": "run:fixture/changed",
+                            "execution_domain_identity": (
+                                "execution-domain:fixture/other-ledger-v1"
+                            ),
                             "captured_state_identity": "captured-state:fixture/changed",
                         }.get(field, f"sha256:{'f' * 64}")
                         changed = replace(plan, **{field: changed_value})
@@ -1592,6 +1596,7 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
     ) -> None:
         plan_cases = {
             "run_identity": (1, ""),
+            "execution_domain_identity": (1, ""),
             "captured_state_identity": (2, ""),
         }
         action_cases = {

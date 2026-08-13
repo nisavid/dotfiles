@@ -14,8 +14,10 @@ semantics.
 | Native manager locks | native manager | Import and provenance evidence only |
 | Harness files and CLIs | harness or native manager | Observable runtime state |
 | Caches, databases, credentials, usage state | harness or native manager | Never catalog state |
-| Apply authorization | external operator authority | One time-bounded, one-run grant for one exact pre-mutation binding tuple |
-| Authorization ledger | reconciler runtime state directory | Durable one-time nonce claim and recovery continuity; never authority issuance |
+| Apply authorization | external operator authority | One time-bounded, one-run grant for one exact pre-mutation binding tuple and execution domain |
+| Execution domain | external operator authority | Independently trusted identity of the one authoritative CAS nonce-ledger namespace and target |
+| Authorization ledger | reconciler runtime state directory | Durable one-time nonce claims inside the exact execution domain; never authority issuance |
+| Compensation authorization | external operator authority | Time-bounded grant for one fresh public compensation invocation against one original run and checkpoint set |
 | Apply checkpoints | reconciler runtime state directory | Recovery evidence for one immutable plan |
 | Expected acceptance cases | production evidence writer | Exact release cases projected from one validated plan and authorized binding tuple |
 | Acceptance evidence bundle | fixture and live runners | Candidate results only; never desired state or mutation authority |
@@ -91,7 +93,8 @@ validated plan, not a replacement for plan validation.
 
 The evidence bundle repeats the exact bindings and route evidence, adds the
 post-authorization execution binding—apply-authorization identity and canonical
-digest, execution nonce, and run identity—and records the
+digest, execution-domain identity, execution nonce, and run identity—and
+records the
 public harness and manager versions, and contains one aggregate plus the exact
 closed child registry. A child's identity is the canonical digest of its
 requirement ID, fixture family, and sealed subject identity. The semantic
@@ -124,10 +127,11 @@ URLs, native output, or secret values. Manager and harness version strings are
 public native-manager observations; diagnostics never echo their supplied
 contents.
 
-`execution-authority-v1.schema.json` owns three closed records with independent
-purposes. `ApplyAuthorization` is the only serialized pre-mutation authority.
-It binds `command: apply`, issuer and validity times, one run identity, one
-issuer-generated execution nonce, and the complete candidate, installed-
+`execution-authority-v1.schema.json` owns four closed records with independent
+purposes. `ApplyAuthorization` is the only serialized authority that may start
+forward mutation. It binds `command: apply`, issuer and validity times, one run
+identity, one issuer-generated execution nonce, the independently trusted
+`execution_domain_identity`, and the complete candidate, installed-
 implementation, catalog, lock, plan, plan-action-set, capability-set, sealed-
 capture, expected-case-manifest, and operator-review-package tuple. The review-
 package digest binds the exact proposed live mutations, rollback material, and
@@ -136,8 +140,23 @@ digest of the record excluding `authorization_identity`; the separately supplied
 `trusted_apply_authorization_digest` is the canonical digest of the complete
 record. Equality with candidate-authored fields is not authorization.
 
+`CompensationAuthorization` is the only serialized authority for a fresh or
+public `compensate` invocation. Its Schema version is
+`agent-equipment-compensation-authorization/v1`; its identity is
+`compensation-authorization:` plus the canonical SHA-256 digest of the record
+excluding `compensation_authorization_identity`. It binds `command: compensate`,
+issuer and validity times, a fresh `compensation_nonce`, and a closed tuple of
+the original apply-authorization identity/digest, execution-domain identity,
+execution nonce, run identity, checkpoint-set digest, and plan-action-set
+digest. Its complete canonical digest is supplied independently as
+`trusted_compensation_authorization_digest`. It cannot start a forward action
+or authorize another run. Immediate reverse compensation after a later failure
+continues inside the already invoked, durably claimed apply run; it does not
+mint or reuse this public authority.
+
 `ReleaseArchiveManifest` is a closed semantic manifest over the candidate and
-installed implementation, exact execution binding, launcher identity/manifest,
+installed implementation, exact execution binding including the execution
+domain, launcher identity/manifest,
 authority-store identity/key, `absent` compare token, generation `1`, and four
 SHA-256 digests of the exact UTF-8 byte streams of the authorization, expected-
 case manifest, evidence bundle, and attestation. Exact-byte digests are distinct
@@ -150,7 +169,8 @@ is the canonical digest of the complete record excluding only
 `ReleaseReceipt` is terminal release evidence, never apply authority. Its
 identity is `release-receipt:` plus the canonical digest of its closed payload.
 That payload binds the independently trusted release-launcher identity and
-manifest digest, exact candidate, installed implementation, execution binding,
+manifest digest, exact candidate, installed implementation, execution binding
+including the execution domain,
 archive identity/digest, store/key, and one create-only generation. A JSON object
 with the same shape is not a receipt unless the independent launcher produced
 it in the external authority's compare-and-swap archive.
@@ -321,6 +341,7 @@ operations rather than additional operation kinds.
 | `update` | Yes | Allowed for source resolution | Proposed atomic catalog and resolved-lock pair | None |
 | `adopt` | Yes | No by default | Proposed catalog ownership transfer | None |
 | `apply` | Yes | Allowed only for locked restore | Checkpoint and authorization ledgers only | Automated operations on reconciler-owned routes, after exact external authorization |
+| `compensate` | Yes | No by default | Checkpoint and authorization ledgers only | Guarded restoration for one original run, after exact compensation authorization |
 
 `import` does not claim ownership. `adopt` requires the exact imported
 observation identity and changes authored ownership only; a later apply performs
@@ -335,7 +356,9 @@ authorization ledger, create an action checkpoint, or invoke `apply`. An
 explicit operator workflow invokes `apply` with exact authorization bytes and a
 separately supplied `trusted_apply_authorization_digest`; neither value is read
 from a template variable, candidate configuration, environment fallback, or
-the authorization record itself.
+the authorization record itself. A later public `compensate` invocation has the
+same closed-input rule for exact `CompensationAuthorization` bytes and
+`trusted_compensation_authorization_digest`. It cannot reuse `ApplyAuthorization`.
 
 An imported observation identity is the canonical digest of its surface,
 observed-state digest, catalog digest, and inventory digest. Adoption accepts
@@ -784,9 +807,22 @@ execute(
   authorization_ledger,
   *,
   trusted_apply_authorization_digest,
+  trusted_execution_domain_identity,
   trusted_operator_review_package_digest,
   trusted_clock,
 ) -> apply_report
+
+compensate(
+  validated_plan,
+  compensation_authorization_bytes,
+  adapters,
+  checkpoint_store,
+  authorization_ledger,
+  *,
+  trusted_compensation_authorization_digest,
+  trusted_execution_domain_identity,
+  trusted_clock,
+) -> compensation_report
 ```
 
 Before the first action checkpoint, the executor strictly parses the closed
@@ -794,15 +830,17 @@ Before the first action checkpoint, the executor strictly parses the closed
 its Schema and semantic digest/identity formulas, and requires its complete
 tuple to equal the independently validated local artifacts and
 `trusted_apply_authorization_digest` plus the trusted operator-review-package
-digest. It requires
+digest. Its top-level `execution_domain_identity` must equal
+`trusted_execution_domain_identity` and identify the same authoritative ledger
+namespace and CAS target used for the nonce claim. It requires
 `issued_at <= not_before <= trusted_clock.now < expires_at`, exact command,
 issuer, and run identity, and the same post-authorization live comparison
 required by the capture contract. It then exclusively creates an
-authorization-ledger record
-for the execution nonce, authorization digest, and run identity, fsyncing file
-and parent directory. A claimed nonce, expired window, missing field, foreign
-tuple, digest mismatch, or ledger persistence failure rejects the run before the
-first action checkpoint and performs zero adapter calls.
+authorization-ledger record in that execution domain for the execution nonce,
+authorization digest, and run identity, fsyncing file and parent directory. A
+claimed nonce, expired window, missing field, foreign tuple or execution domain,
+digest mismatch, or ledger persistence failure rejects the run before the first
+action checkpoint and performs zero adapter calls.
 
 The nonce claim is never deleted or reused. A crash recovery may use an existing
 claim only for the same authorization digest, run, and surviving checkpoints;
@@ -824,6 +862,9 @@ every action it:
 8. Atomically persists and fsyncs `completed`.
 
 On a later failure, completed actions compensate in reverse topological order.
+This automatic reverse walk is recovery continuity for actions already invoked
+inside the claimed apply run; it does not open the public `compensate` seam or
+reuse the apply record as new authority.
 Before each restore, current state must equal the post-state written by that
 action. The executor persists `compensating` before restore and `compensated`
 afterward. A mismatch preserves the external change, durably advances that
@@ -843,13 +884,25 @@ can prove this run's effect only when its durable invocation intent is
 
 A completion-checkpoint write failure therefore cannot cause duplicate replay.
 A compensation failure remains durable and requires the same audit before a
-retry. Checkpoint identities bind the apply-authorization identity and digest,
-execution nonce, canonical catalog digest, lock digest,
+retry. A fresh/public compensation request, including classification of an
+ambiguous `prepared` action before beginning restoration, first validates the
+closed `CompensationAuthorization`, its independently trusted digest and clock,
+the trusted execution domain, original execution tuple, checkpoint-set digest,
+plan-action-set digest, and fresh compensation nonce. It durably claims that
+nonce in the same execution domain before writing `compensating`; an invalid,
+expired, replayed, foreign-domain, or unpersistable record performs no adapter
+call or checkpoint transition.
+
+Checkpoint identities bind the apply-authorization identity and digest,
+execution-domain identity, execution nonce, canonical catalog digest, lock digest,
 plan digest, run and candidate identities, installed-implementation manifest
 digest, sealed captured-state identity and digest, capability-set digest, route
 capability and manager-evidence binding, action identity and ordinal, route,
 operation, pre-state digest, and expected post-state digest. This is the
-complete `CHK-10` binding; no subset authorizes replay.
+complete `CHK-10` binding; no subset or claim in another execution domain
+authorizes replay. A compensation checkpoint additionally records the exact
+compensation-authorization identity/digest and compensation nonce when the
+transition originated through the public seam.
 
 ## Generated outputs
 
@@ -865,11 +918,13 @@ implementation. The sequenced work and exact retained/retired source map are in
 The release evidence writer may write only the expected-case manifest and
 candidate evidence bundle in the operator-selected artifact directory. It does
 not mutate authored state or harness state. After the run, the external release
-authority supplies the trusted digest of a separate attestation over the exact
-bundle. The release validator is pure. The candidate-independent release
+authority supplies the trusted digest of a separate attestation over the
+canonical semantic bundle digest. The release validator is pure. The
+candidate-independent release
 launcher supplies its own externally trusted identity and manifest digest plus
-the trusted execution tuple, apply-authorization, expected-case, and attestation
-digests. It strictly validates the closed records, writes the exact authorization,
+the trusted execution tuple, including the execution domain, apply-authorization,
+expected-case, and attestation digests. It strictly validates the closed records,
+writes the exact authorization,
 expected-case manifest, evidence bundle, attestation, and archive manifest into
 a same-filesystem staging directory, fsyncs them, and performs one create-only
 compare-and-swap rename to the tuple's authority-store identity. `absent` is the

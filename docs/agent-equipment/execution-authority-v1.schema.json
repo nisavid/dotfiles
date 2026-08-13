@@ -4,6 +4,7 @@
   "title": "Agent equipment execution and release authority v1",
   "oneOf": [
     {"$ref": "#/$defs/applyAuthorization"},
+    {"$ref": "#/$defs/compensationAuthorization"},
     {"$ref": "#/$defs/releaseArchiveManifest"},
     {"$ref": "#/$defs/releaseReceipt"}
   ],
@@ -20,6 +21,10 @@
       "type": "string",
       "format": "date-time",
       "pattern": "Z$"
+    },
+    "executionDomainIdentity": {
+      "type": "string",
+      "pattern": "^execution-domain:[A-Za-z0-9][A-Za-z0-9._/-]*$"
     },
     "applyBindings": {
       "type": "object",
@@ -63,6 +68,7 @@
         "expires_at",
         "execution_nonce",
         "run_identity",
+        "execution_domain_identity",
         "command",
         "bindings"
       ],
@@ -86,6 +92,9 @@
           "type": "string",
           "pattern": "^run:sha256:[0-9a-f]{64}$"
         },
+        "execution_domain_identity": {
+          "$ref": "#/$defs/executionDomainIdentity"
+        },
         "command": {"const": "apply"},
         "bindings": {"$ref": "#/$defs/applyBindings"}
       }
@@ -96,6 +105,7 @@
       "required": [
         "apply_authorization_identity",
         "apply_authorization_digest",
+        "execution_domain_identity",
         "execution_nonce",
         "run_identity"
       ],
@@ -105,6 +115,9 @@
           "pattern": "^apply-authorization:sha256:[0-9a-f]{64}$"
         },
         "apply_authorization_digest": {"$ref": "#/$defs/digest"},
+        "execution_domain_identity": {
+          "$ref": "#/$defs/executionDomainIdentity"
+        },
         "execution_nonce": {
           "type": "string",
           "pattern": "^execution-nonce:sha256:[0-9a-f]{64}$"
@@ -113,6 +126,73 @@
           "type": "string",
           "pattern": "^run:sha256:[0-9a-f]{64}$"
         }
+      }
+    },
+    "compensationBindings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apply_authorization_identity",
+        "apply_authorization_digest",
+        "execution_domain_identity",
+        "execution_nonce",
+        "run_identity",
+        "checkpoint_set_digest",
+        "plan_action_set_digest"
+      ],
+      "properties": {
+        "apply_authorization_identity": {
+          "type": "string",
+          "pattern": "^apply-authorization:sha256:[0-9a-f]{64}$"
+        },
+        "apply_authorization_digest": {"$ref": "#/$defs/digest"},
+        "execution_domain_identity": {
+          "$ref": "#/$defs/executionDomainIdentity"
+        },
+        "execution_nonce": {
+          "type": "string",
+          "pattern": "^execution-nonce:sha256:[0-9a-f]{64}$"
+        },
+        "run_identity": {
+          "type": "string",
+          "pattern": "^run:sha256:[0-9a-f]{64}$"
+        },
+        "checkpoint_set_digest": {"$ref": "#/$defs/digest"},
+        "plan_action_set_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "compensationAuthorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "compensation_authorization_identity",
+        "issuer_identity",
+        "issued_at",
+        "not_before",
+        "expires_at",
+        "compensation_nonce",
+        "command",
+        "bindings"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "agent-equipment-compensation-authorization/v1"
+        },
+        "compensation_authorization_identity": {
+          "type": "string",
+          "pattern": "^compensation-authorization:sha256:[0-9a-f]{64}$"
+        },
+        "issuer_identity": {"$ref": "#/$defs/opaqueIdentity"},
+        "issued_at": {"$ref": "#/$defs/utcTimestamp"},
+        "not_before": {"$ref": "#/$defs/utcTimestamp"},
+        "expires_at": {"$ref": "#/$defs/utcTimestamp"},
+        "compensation_nonce": {
+          "type": "string",
+          "pattern": "^compensation-nonce:sha256:[0-9a-f]{64}$"
+        },
+        "command": {"const": "compensate"},
+        "bindings": {"$ref": "#/$defs/compensationBindings"}
       }
     },
     "archiveDestination": {

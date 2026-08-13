@@ -36,6 +36,7 @@ def literal_credential_samples() -> tuple[str, ...]:
     authorization = "Author" + "ization:"
     bearer_value = " Bear" + "er actual-secret-value"
     query_credential = "to" + "ken=actual-secret-value"
+    provider_credential = "gh" + "p_" + "A" * 20
     return (
         *("gh" + prefix + "_" + "A" * 20 for prefix in "pousr"),
         "github" + "_pat_" + "A" * 20,
@@ -43,7 +44,13 @@ def literal_credential_samples() -> tuple[str, ...]:
         "s" + "k-" + "A" * 20,
         "p" + "st_" + "A" * 12 + "::" + "B" * 8,
         authorization + bearer_value,
+        authorization.casefold() + " opaque-secret-value",
         "https://example.invalid/mcp?" + query_credential,
+        "api_" + "key=\"actual-secret-value\"",
+        "${{" + repr(provider_credential) + "}}",
+        "-----BEGIN " + "PRIVATE KEY-----",
+        "-----BEGIN " + "OPENSSH " + "PRIVATE KEY-----",
+        "AGE-" + "SECRET-KEY-" + "A" * 32,
     )
 
 

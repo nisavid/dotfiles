@@ -3,8 +3,8 @@
 This is the release gate defined by Issue #60. It specifies the evidence the
 production reconciler and the separately authorized runtime migration must
 produce. `execution-authority-v1.schema.json` separately defines the closed
-pre-mutation `ApplyAuthorization`, `ReleaseArchiveManifest`, and terminal
-`ReleaseReceipt`; none is
+pre-mutation `ApplyAuthorization`, public `CompensationAuthorization`,
+`ReleaseArchiveManifest`, and terminal `ReleaseReceipt`; none is
 candidate-authored authority. Passing the design-schema tests or the disposable
 prototype alone does not satisfy the production gate.
 
@@ -60,7 +60,8 @@ Each release candidate writes an evidence bundle bound to that exact expected-
 case manifest with:
 
 - the exact post-authorization execution binding: apply-authorization identity
-  and canonical digest, fresh execution nonce, and run identity;
+  and canonical digest, independently trusted execution-domain identity, fresh
+  execution nonce, and run identity;
 - the complete binding tuple, each route's closed capability and manager-
   version evidence binding, and corresponding public harness and manager
   version receipts;
@@ -128,12 +129,13 @@ validate_acceptance_evidence(
   expected_attestation_manifest_digest,
   expected_apply_authorization_identity,
   expected_apply_authorization_digest,
+  expected_execution_domain_identity,
   expected_execution_nonce,
   expected_run_identity,
 ) -> diagnostics
 ```
 
-Its CLI accepts all three files and the same eight independently trusted values.
+Its CLI accepts all three files and the same nine independently trusted values.
 It strictly parses every file, rejects duplicate object members and non-JSON
 numeric constants, and performs no harness discovery, runtime mutation, release
 publication, or plan authentication. The pure validator recomputes and binds
@@ -232,7 +234,7 @@ operation. Run them again for every migration boundary named in `MIGRATION.md`.
 
 | ID | Required fixture and assertion | Evidence |
 | --- | --- | --- |
-| `CHK-01` | Validate the complete authorization and plan, then durably claim the fresh execution nonce before the first action checkpoint; an invalid authorization or final action yields zero runtime and checkpoint mutation. | Authorization and last-action invalid fixtures |
+| `CHK-01` | Validate the complete authorization, trusted execution domain, and plan, then durably claim the fresh execution nonce in that domain before the first action checkpoint; an invalid authorization or final action yields zero runtime and checkpoint mutation. | Authorization and last-action invalid fixtures |
 | `CHK-02` | Fail the atomic prepared-checkpoint write. No runtime mutation occurs and retry creates one valid prepared record. | Write-fault trace |
 | `CHK-03` | Persist `prepared` with invocation intent `not_started`, fail its atomic transition to `started`, prove no adapter call occurred, then audit and retry once without destructive replay. | Recovery classification, intent-write fault, and call counts |
 | `CHK-04` | Persist `prepared` with invocation intent `started`, complete the mutation, and fail before completion persistence. Retry audits the expected post-state and records completion without replay. A `not_started` record at the same target is concurrent drift, never this run's effect. | Mutation receipt, state digest, and call counts |
@@ -241,7 +243,7 @@ operation. Run them again for every migration boundary named in `MIGRATION.md`.
 | `CHK-07` | Change a completed surface externally before compensation. Compare-before-restore preserves the external value and stops. | Drift diagnostic and unchanged external digest |
 | `CHK-08` | Fail compensation and preserve a durable recoverable record. Audit-before-retry classifies state and never issues duplicate or destructive replay. | Fault and retry trace |
 | `CHK-09` | Inject a concurrent change immediately before every adapter mutation. Compare-before-mutate preserves it and stops before the native manager call. | Parameterized adapter call spies |
-| `CHK-10` | Bind each checkpoint to apply-authorization identity and digest, execution nonce, run, candidate identity, installed-implementation manifest digest, catalog, lock, plan, sealed captured-state identity and digest, capability-set, the route's closed capability and manager-evidence binding, action identity and ordinal, route, operation, pre-state, and expected-post-state digests; reject replay under any changed binding. | Authorization, field-mutation, and set-membership negatives |
+| `CHK-10` | Bind each checkpoint to apply-authorization identity and digest, execution-domain identity, execution nonce, run, candidate identity, installed-implementation manifest digest, catalog, lock, plan, sealed captured-state identity and digest, capability-set, the route's closed capability and manager-evidence binding, action identity and ordinal, route, operation, pre-state, and expected-post-state digests; reject replay under any changed binding or execution domain. A public compensation transition additionally binds its compensation-authorization identity/digest and fresh nonce. | Authorization, field-mutation, and set-membership negatives |
 
 ## Migration and rollback fixtures
 
@@ -294,24 +296,26 @@ the 26 methods in `AcceptanceEvidenceContractTests`:
 
 ## Execution-authority design evidence
 
-The apply authorization, release archive manifest, and release receipt are
-external authority records, not children inside the candidate's 74-ID evidence
-bundle. The ten methods in
+The apply authorization, compensation authorization, release archive manifest,
+and release receipt are external authority records, not children inside the
+candidate's 74-ID evidence bundle. The methods in
 `AgentEquipmentDeploymentContractTests` pin their closed source shape and the
 future deployment separation:
 
 | Gate family | Exact test methods |
 | --- | --- |
 | Apply authority | `test_apply_authorization_is_closed_over_the_complete_binding_tuple`; `test_apply_authorization_requires_command_time_run_and_replay_identity`; `test_apply_authorization_identity_and_operator_review_are_semantic_authority`; `test_apply_authorization_validates_the_complete_tuple_and_time_window` |
+| Compensation authority | Closed-schema, canonical-identity, trusted-digest/domain, original-run/checkpoint-set, time-window, and fresh-nonce vectors in `AgentEquipmentDeploymentContractTests` |
 | Release authority | `test_release_archive_manifest_and_receipt_bind_exact_bytes_and_execution`; `test_archive_byte_digest_is_distinct_from_authorization_canonical_digest`; `test_release_authority_uses_shared_public_data_policy`; `test_release_receipt_binds_launcher_authority_and_one_cas_archive`; `test_source_shape_keeps_audit_candidate_and_release_authority_separate` |
 | Runtime boundary | `test_runtime_gate_and_external_authority_precede_every_mutation` |
 
 These are pure design-contract vectors. They prove canonical identities and
 digests, complete trusted binding equality, trusted-clock ordering, exact
 archive-byte digest bindings, and receipt-to-archive equality. Production must
-still prove durable nonce replay rejection, external launcher byte verification,
-create-only archive concurrency/durability, and receipt retrieval from the
-authority store.
+still prove authoritative execution-domain ownership, durable apply and
+compensation nonce replay rejection, production checkpoint-set binding,
+external launcher byte verification, create-only archive concurrency/durability,
+and receipt retrieval from the authority store.
 
 ## Current executable design evidence
 
@@ -350,16 +354,16 @@ contract through its real adapters and evidence writer.
 | `RES-05` | `AgentEquipmentDesignTest.test_provider_configuration_is_typed_and_secret_safe`; `AgentEquipmentAcceptanceTest.test_durable_artifacts_contain_secret_references_but_no_secret_values` |
 | `CMD-01`, `CMD-02`, `CMD-03` | `AgentEquipmentAcceptanceTest.test_audit_import_and_adopt_commands_are_runtime_read_only`; `AgentEquipmentAcceptanceTest.test_adoption_requires_an_exact_import_and_never_mutates_runtime`; `AgentEquipmentAcceptanceTest.test_adoption_rejects_incoherent_imported_value_and_digest`; `AgentEquipmentAcceptanceTest.test_adoption_requires_a_minted_import_identity_and_exact_bindings`; `AgentEquipmentAcceptanceTest.test_adoption_distinguishes_present_null_from_absence` |
 | Partial `CMD-04` | `AgentEquipmentDesignTest.test_digest_bound_catalog_and_lock_pair_accepts_reviewed_advance`; `AgentEquipmentAcceptanceTest.test_update_emits_one_digest_bound_catalog_and_lock_proposal`; `AgentEquipmentAcceptanceTest.test_native_rolling_drift_requires_reviewed_baseline_update` prove one semantically validated paired proposal, stale-pair rejection, runtime immutability, and reviewed rolling-baseline gating. A production source-resolution fixture must still prove source-manifest discovery, source-wide `all` expansion, and verified target derivation. |
-| Partial `CMD-05` | `AgentEquipmentDeploymentContractTests.test_apply_authorization_is_closed_over_the_complete_binding_tuple`; `AgentEquipmentDeploymentContractTests.test_apply_authorization_requires_command_time_run_and_replay_identity`; `AgentEquipmentDeploymentContractTests.test_apply_authorization_identity_and_operator_review_are_semantic_authority`; `AgentEquipmentDeploymentContractTests.test_apply_authorization_validates_the_complete_tuple_and_time_window`; `AgentEquipmentAcceptanceTest.test_invalid_final_action_fails_before_the_checkpoint_store_changes`; `AgentEquipmentAcceptanceTest.test_fresh_home_converges_to_the_complete_desired_state`. The pure validator proves tuple/time authority; a production durable nonce ledger and create-only claim remain unproved. |
+| Partial `CMD-05` | `AgentEquipmentDeploymentContractTests.test_apply_authorization_is_closed_over_the_complete_binding_tuple`; `AgentEquipmentDeploymentContractTests.test_apply_authorization_requires_command_time_run_and_replay_identity`; `AgentEquipmentDeploymentContractTests.test_apply_authorization_identity_and_operator_review_are_semantic_authority`; `AgentEquipmentDeploymentContractTests.test_apply_authorization_validates_the_complete_tuple_and_time_window`; `AgentEquipmentAcceptanceTest.test_invalid_final_action_fails_before_the_checkpoint_store_changes`; `AgentEquipmentAcceptanceTest.test_fresh_home_converges_to_the_complete_desired_state`. The pure validator proves tuple, domain, and time authority; authoritative production ledger ownership plus its durable CAS claim remain unproved. |
 | `CMD-06` | `AgentEquipmentAcceptanceTest.test_nonautomated_operations_are_reported_without_adapter_mutation` |
 | `CON-01`, `CON-02`, `CON-03` | `AgentEquipmentAcceptanceTest.test_fresh_home_converges_to_the_complete_desired_state`; `AgentEquipmentAcceptanceTest.test_reapply_is_a_steady_state_no_op`; `AgentEquipmentAcceptanceTest.test_each_missing_owned_item_is_repaired_without_touching_other_state` |
 | `CON-04` | `AgentEquipmentAcceptanceTest.test_immutable_content_is_verified_before_explicit_update_mutates` |
 | `CON-05`, `CON-06`, `CON-07` | `AgentEquipmentAcceptanceTest.test_route_switch_controls_components_and_retires_only_owned_duplicates`; `AgentEquipmentDesignTest.test_retirement_provider_and_restore_match_selected_distribution`; `AgentEquipmentDesignTest.test_retirement_native_source_matches_selected_executable`; `AgentEquipmentAcceptanceTest.test_duplicate_routes_fail_closed_unless_the_exact_overlap_is_declared`; `AgentEquipmentAcceptanceTest.test_adoption_requires_an_exact_import_and_never_mutates_runtime` |
 | `CON-08`, `CON-09` | `AgentEquipmentAcceptanceTest.test_retirement_mutates_only_exact_adopted_owned_state_through_apply`; `AgentEquipmentAcceptanceTest.test_retirement_reports_drift_when_adopted_state_disappears`; `AgentEquipmentAcceptanceTest.test_native_rolling_drift_requires_reviewed_baseline_update` |
 | Partial `CON-10`; `CON-11` | `AgentEquipmentAcceptanceTest.test_standalone_capture_restores_files_trees_and_links_without_following` and `AgentEquipmentAcceptanceTest.test_standalone_restore_recreates_deleted_and_replaced_symlink_entries` cover type, content, mode, link text, target, broken state, and no-follow restore behavior; `AgentEquipmentAcceptanceTest.test_standalone_lexical_traversal_cannot_capture_or_restore_outside`, `AgentEquipmentAcceptanceTest.test_standalone_restore_rejects_nested_traversal_before_removal`, `AgentEquipmentAcceptanceTest.test_standalone_restore_rejects_tampered_digests_before_removal`, and `AgentEquipmentAcceptanceTest.test_standalone_restore_rejects_changed_symlink_target_state` cover containment and snapshot integrity; `AgentEquipmentAcceptanceTest.test_compare_before_mutate_preserves_concurrent_changes_on_every_surface` covers the `CON-11` state-machine seam. |
-| Partial `CHK-01`; `CHK-02`, `CHK-03` | `AgentEquipmentDeploymentContractTests.test_apply_authorization_is_closed_over_the_complete_binding_tuple`; `AgentEquipmentDeploymentContractTests.test_apply_authorization_validates_the_complete_tuple_and_time_window`; `AgentEquipmentDeploymentContractTests.test_runtime_gate_and_external_authority_precede_every_mutation`; `AgentEquipmentAcceptanceTest.test_invalid_final_action_fails_before_the_checkpoint_store_changes`; `AgentEquipmentAcceptanceTest.test_duplicate_surface_final_action_fails_before_any_effect`; `AgentEquipmentAcceptanceTest.test_invalid_plan_bindings_fail_before_checkpoint_store_changes`; `AgentEquipmentAcceptanceTest.test_plan_rejects_non_string_and_empty_identities_before_any_effect`; `AgentEquipmentAcceptanceTest.test_plan_rejects_non_json_state_before_any_effect`; `AgentEquipmentAcceptanceTest.test_absence_sentinel_cannot_collide_with_valid_json_state`; `AgentEquipmentAcceptanceTest.test_state_equality_distinguishes_booleans_from_numbers`; `AgentEquipmentAcceptanceTest.test_plan_rejects_forged_no_op_action_before_any_effect`; `AgentEquipmentAcceptanceTest.test_stale_plan_digest_fails_before_checkpoint_or_runtime_mutation`; `AgentEquipmentAcceptanceTest.test_prepared_write_failure_has_no_runtime_effect_and_retry_is_valid`; `AgentEquipmentAcceptanceTest.test_prepared_failure_before_mutation_audits_then_retries_once`. The durable authorization-ledger/CAS portion of `CHK-01` remains a production fixture. |
+| Partial `CHK-01`; `CHK-02`, `CHK-03` | `AgentEquipmentDeploymentContractTests.test_apply_authorization_is_closed_over_the_complete_binding_tuple`; `AgentEquipmentDeploymentContractTests.test_apply_authorization_validates_the_complete_tuple_and_time_window`; `AgentEquipmentDeploymentContractTests.test_runtime_gate_and_external_authority_precede_every_mutation`; `AgentEquipmentAcceptanceTest.test_invalid_final_action_fails_before_the_checkpoint_store_changes`; `AgentEquipmentAcceptanceTest.test_duplicate_surface_final_action_fails_before_any_effect`; `AgentEquipmentAcceptanceTest.test_invalid_plan_bindings_fail_before_checkpoint_store_changes`; `AgentEquipmentAcceptanceTest.test_plan_rejects_non_string_and_empty_identities_before_any_effect`; `AgentEquipmentAcceptanceTest.test_plan_rejects_non_json_state_before_any_effect`; `AgentEquipmentAcceptanceTest.test_absence_sentinel_cannot_collide_with_valid_json_state`; `AgentEquipmentAcceptanceTest.test_state_equality_distinguishes_booleans_from_numbers`; `AgentEquipmentAcceptanceTest.test_plan_rejects_forged_no_op_action_before_any_effect`; `AgentEquipmentAcceptanceTest.test_stale_plan_digest_fails_before_checkpoint_or_runtime_mutation`; `AgentEquipmentAcceptanceTest.test_prepared_write_failure_has_no_runtime_effect_and_retry_is_valid`; `AgentEquipmentAcceptanceTest.test_prepared_failure_before_mutation_audits_then_retries_once`. The authoritative execution-domain and durable authorization-ledger/CAS portions of `CHK-01` remain production fixtures. |
 | `CHK-04`, `CHK-05` | `AgentEquipmentAcceptanceTest.test_mutated_but_uncompleted_step_is_audited_without_replay` |
-| `CHK-06`, `CHK-07`, `CHK-08` | `AgentEquipmentAcceptanceTest.test_later_failure_compensates_completed_steps_in_reverse_order`; `AgentEquipmentAcceptanceTest.test_compare_before_restore_preserves_an_external_change`; `AgentEquipmentAcceptanceTest.test_failed_compensation_is_durable_and_recovery_audits_before_retry`; `AgentEquipmentAcceptanceTest.test_explicit_compensation_can_resume_after_first_intent_write_fails`; `AgentEquipmentAcceptanceTest.test_compensation_recovery_finishes_the_complete_reverse_prefix`; `AgentEquipmentAcceptanceTest.test_blocked_compensation_cannot_report_recovered` |
+| Partial `CHK-06`, `CHK-07`, `CHK-08` | `AgentEquipmentAcceptanceTest.test_later_failure_compensates_completed_steps_in_reverse_order`; `AgentEquipmentAcceptanceTest.test_compare_before_restore_preserves_an_external_change`; `AgentEquipmentAcceptanceTest.test_failed_compensation_is_durable_and_recovery_audits_before_retry`; `AgentEquipmentAcceptanceTest.test_explicit_compensation_can_resume_after_first_intent_write_fails`; `AgentEquipmentAcceptanceTest.test_compensation_recovery_finishes_the_complete_reverse_prefix`; `AgentEquipmentAcceptanceTest.test_blocked_compensation_cannot_report_recovered`. The model proves guarded reverse state transitions; it does not prove a production `CompensationAuthorization`, authoritative execution-domain ledger, or one-time CAS claim of `compensation_nonce`. |
 | `CHK-09`; Partial `CHK-10` | `AgentEquipmentDeploymentContractTests.test_apply_authorization_is_closed_over_the_complete_binding_tuple`; `AgentEquipmentDeploymentContractTests.test_apply_authorization_validates_the_complete_tuple_and_time_window`; `AgentEquipmentAcceptanceTest.test_compare_before_mutate_preserves_concurrent_changes_on_every_surface`; `AgentEquipmentAcceptanceTest.test_fresh_action_rejects_target_valued_concurrent_change`; `AgentEquipmentAcceptanceTest.test_auto_compensation_preserves_target_valued_external_change`; `AgentEquipmentAcceptanceTest.test_invocation_intent_write_failure_occurs_before_adapter_call`; `AgentEquipmentAcceptanceTest.test_plan_rejects_foreign_candidate_authority_before_checkpoint`; `AgentEquipmentAcceptanceTest.test_plan_rejects_ambiguous_capability_identity_before_checkpoint`; `AgentEquipmentAcceptanceTest.test_invalid_capability_binding_digests_fail_before_checkpoint`; `AgentEquipmentAcceptanceTest.test_checkpoint_replay_rejects_every_changed_binding`; `AgentEquipmentAcceptanceTest.test_checkpoint_replay_rejects_forged_embedded_step_identity`; `AgentEquipmentAcceptanceTest.test_checkpoint_preflight_rejects_malformed_durable_record`; `AgentEquipmentAcceptanceTest.test_checkpoint_preflight_rejects_duplicate_json_members`; `AgentEquipmentAcceptanceTest.test_checkpoint_binding_is_type_exact_for_json_values`; `AgentEquipmentAcceptanceTest.test_checkpoint_replay_binds_capability_set_and_route_evidence`; `AgentEquipmentAcceptanceTest.test_retry_preflights_every_checkpoint_binding_before_any_write`; `AgentEquipmentAcceptanceTest.test_compensation_recovery_rejects_changed_bindings_before_restore`; `AgentEquipmentAcceptanceTest.test_completed_checkpoint_preserves_reverted_external_state`; `AgentEquipmentAcceptanceTest.test_completed_checkpoint_reverted_to_pre_state_blocks_all_compensation`; `AgentEquipmentAcceptanceTest.test_compensated_checkpoint_cannot_replay_forward_plan`. The model proves record equality and replay rejection, not a production durable ledger/checkpoint CAS implementation. |
 | `CHK-04` through `CHK-06` state-machine examples, all automated mutating operations | `AgentEquipmentAcceptanceTest.test_forward_recovery_and_reverse_compensation_cover_every_mutating_operation` repeats post-mutation audit, completion-persistence recovery, and reverse compensation for every modeled mutating operation, including native-update suppression. It is not the complete `CHK-02` through `CHK-09` production matrix. |
 | Partial migration state-machine seam; no `MIG-*` requirement closes | `AgentEquipmentAcceptanceTest.test_migration_activates_winner_before_retiring_loser`, `AgentEquipmentAcceptanceTest.test_failed_winner_verification_never_retires_loser`, and `AgentEquipmentAcceptanceTest.test_migration_rollback_restores_loser_before_retiring_winner` prove the representative forward and reverse migration order. `AgentEquipmentAcceptanceTest.test_every_migration_boundary_compensates_to_the_exact_initial_state` and `AgentEquipmentAcceptanceTest.test_every_migration_surface_preserves_changes_before_mutate_and_restore` exercise generic ordered checkpoints, reverse compensation, and compare guards. `AgentEquipmentAcceptanceTest.test_successful_migration_retains_winners_and_removes_only_owned_losers` checks the representative state map. These do not prove the production dependency graph, typed projector, per-link `lstat`/unlink, conditional native-plugin, coupled-surface, MCP-overlay, component-control, or coverage-verification behavior required by `MIG-01` through `MIG-07`. |
@@ -379,11 +383,14 @@ and composed `MIG-01` through `MIG-07` fixtures, before the release gate can
 pass.
 
 If the first `compensating` checkpoint write fails, no durable record can imply
-rollback intent after a crash. The fixture's `recover_compensation` seam therefore
-requires a surviving `compensating` or `compensated` phase. Its separate
-`compensate` seam represents a fresh, explicit rollback authorization and may
-initiate the same guarded reverse walk from validated `prepared` and `completed`
-records.
+compensation intent after a crash. The fixture's `recover_compensation` seam
+therefore requires a surviving `compensating` or `compensated` phase. Its
+separate `compensate` seam represents a future public invocation that requires
+an exact, independently trusted `CompensationAuthorization`. Production must
+claim its fresh `compensation_nonce` once by compare-and-swap in the same
+authoritative execution-domain ledger namespace before initiating the guarded
+reverse walk from validated `prepared` or `completed` records. The current model
+does not implement or prove that authority or durable claim.
 
 All `LIVE-*` checks remain live-only. They require the real native managers,
 disposable or operator-approved accounts, current harness versions, secret

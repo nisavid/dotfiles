@@ -142,6 +142,7 @@ class Mutation:
 class MutationPlan:
     actions: tuple[Mutation, ...]
     run_identity: str
+    execution_domain_identity: str
     candidate_digest: str
     implementation_manifest_digest: str
     catalog_digest: str
@@ -178,6 +179,7 @@ BINDING_FIELDS = (
     "action_identity",
     "ordinal",
     "run_identity",
+    "execution_domain_identity",
     "candidate_digest",
     "implementation_manifest_digest",
     "catalog_digest",
@@ -554,6 +556,7 @@ class AcceptanceFixture:
         return MutationPlan(
             actions=ordered_actions,
             run_identity="run:fixture/v1",
+            execution_domain_identity="execution-domain:fixture/global-ledger-v1",
             candidate_digest=self.candidate_digest,
             implementation_manifest_digest=self.implementation_manifest_digest,
             catalog_digest=f"sha256:{'1' * 64}",
@@ -593,6 +596,7 @@ class AcceptanceFixture:
         return MutationPlan(
             actions=actions,
             run_identity=plan.run_identity,
+            execution_domain_identity=plan.execution_domain_identity,
             candidate_digest=plan.candidate_digest,
             implementation_manifest_digest=plan.implementation_manifest_digest,
             catalog_digest=plan.catalog_digest,
@@ -745,6 +749,9 @@ class AcceptanceFixture:
             != self.implementation_manifest_digest
             or not _is_prefixed_identity(plan.run_identity, "run:")
             or not _is_prefixed_identity(
+                plan.execution_domain_identity, "execution-domain:"
+            )
+            or not _is_prefixed_identity(
                 plan.captured_state_identity, "captured-state:"
             )
             or any(
@@ -839,6 +846,7 @@ class AcceptanceFixture:
             "action_identity": mutation_identity(action),
             "ordinal": int(action.step_id.removeprefix("step-")),
             "run_identity": plan.run_identity,
+            "execution_domain_identity": plan.execution_domain_identity,
             "phase": phase,
             "phase_history": [phase],
             "invocation_state": "not_started",

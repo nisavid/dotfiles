@@ -4,29 +4,36 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import hashlib
 import re
 import sys
 from collections.abc import Iterable
 from pathlib import Path
 
-from agent_equipment_public_data import string_looks_like_credential
+from agent_equipment_public_data import (
+    string_looks_like_credential,
+    string_looks_like_private_key,
+)
 
 ALLOWED_EMAILS = {"ivan@nisavid.io"}
 ALLOWED_EMAIL_DOMAINS = {"example.com", "example.invalid"}
 ALLOWED_HOME_USERS = {"fixture", "runner", "test", "test-user"}
 SKIPPED_DIRECTORIES = {".git", ".mypy_cache", ".pytest_cache", "__pycache__"}
+AGE_NATIVE_HEADER = b"age-encryption.org/v1\n"
+AGE_ARMOR_BEGIN = b"-----BEGIN AGE ENCRYPTED FILE-----"
+AGE_ARMOR_END = b"-----END AGE ENCRYPTED FILE-----"
 
 EMAIL = re.compile(r"(?i)\b[A-Z0-9._%+-]+@([A-Z0-9.-]+\.[A-Z]{2,})\b")
 HOME_PATH = re.compile(
     r"(?<![A-Za-z0-9_.$:-])(?:/Users|/home)/"
     r"([A-Za-z0-9._-]+)(?:/[^\s\"'<>]*)?"
 )
-MAC_ADDRESS = re.compile(r"(?i)(?<![0-9a-f])(?:[0-9a-f]{2}:){5}[0-9a-f]{2}(?![0-9a-f])")
-PRIVATE_KEY_MARKERS = (
-    "-----BEGIN " + "PRIVATE KEY-----",
-    "AGE-" + "SECRET-KEY-",
+RELATIVE_HOME_PATH = re.compile(
+    r"(?:^Users|/(?:Users|home))/([A-Za-z0-9._-]+)(?:/[^\s\"'<>]*)?"
 )
+MAC_ADDRESS = re.compile(r"(?i)(?<![0-9a-f])(?:[0-9a-f]{2}:){5}[0-9a-f]{2}(?![0-9a-f])")
 
 
 def files(root: Path) -> Iterable[Path]:
@@ -49,6 +56,27 @@ def read_text(path: Path) -> str | None:
     if b"\0" in data or len(data) > 4 * 1024 * 1024:
         return None
     return data.decode("utf-8", "surrogateescape")
+
+
+def is_age_envelope(data: bytes) -> bool:
+    """Return whether bytes have the closed public shape of an age envelope."""
+
+    payload = data
+    if data.startswith(AGE_ARMOR_BEGIN):
+        lines = data.splitlines()
+        if len(lines) < 3 or lines[0] != AGE_ARMOR_BEGIN or lines[-1] != AGE_ARMOR_END:
+            return False
+        try:
+            payload = base64.b64decode(b"".join(lines[1:-1]), validate=True)
+        except (binascii.Error, ValueError):
+            return False
+    if not payload.startswith(AGE_NATIVE_HEADER):
+        return False
+    separator = payload.find(b"\n--- ", len(AGE_NATIVE_HEADER))
+    if separator < 0 or b"\n-> " not in payload[len(AGE_NATIVE_HEADER) - 1 : separator]:
+        return False
+    payload_start = payload.find(b"\n", separator + 1)
+    return payload_start >= 0 and payload_start + 1 < len(payload)
 
 
 def exact_terms(source: str | None) -> tuple[str, ...]:
@@ -81,7 +109,7 @@ def public_path_label(
     rule = None
     if any(term in folded for term in denylist):
         rule = "exact-denylist-filename"
-    elif any(marker in relative for marker in PRIVATE_KEY_MARKERS):
+    elif string_looks_like_private_key(relative):
         rule = "private-key-filename"
     elif string_looks_like_credential(relative):
         rule = "provider-token-filename"
@@ -93,12 +121,52 @@ def public_path_label(
         for match in EMAIL.finditer(relative)
     ):
         rule = "email-filename"
+    elif any(
+        match.group(1).casefold() not in ALLOWED_HOME_USERS
+        for match in RELATIVE_HOME_PATH.finditer(relative)
+    ):
+        rule = "user-home-filename"
     elif any(0xD800 <= ord(character) <= 0xDFFF for character in relative):
         rule = "non-utf8-filename"
     if rule is None:
         return relative, None
     digest = hashlib.sha256(raw_relative).hexdigest()[:16]
     return f"redacted-path:sha256:{digest}", rule
+
+
+def sensitive_text_rules(
+    value: str,
+    denylist: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Return privacy rules matched by one value without retaining the value."""
+
+    rules: list[str] = []
+    folded = value.casefold()
+    if any(term in folded for term in denylist):
+        rules.append("exact-denylist")
+    if string_looks_like_private_key(value):
+        rules.append("private-key")
+    elif string_looks_like_credential(value):
+        rules.append("provider-token")
+    if MAC_ADDRESS.search(value):
+        rules.append("mac-address")
+    if any(
+        not (match.group(0).casefold().startswith("git@") and "ssh://git@" in folded)
+        and match.group(0).casefold() not in ALLOWED_EMAILS
+        and match.group(1).casefold() not in ALLOWED_EMAIL_DOMAINS
+        for match in EMAIL.finditer(value)
+    ):
+        rules.append("email")
+    if any(
+        not re.search(
+            r"\$[A-Za-z_][A-Za-z0-9_]*\"?$",
+            value[: match.start()],
+        )
+        and match.group(1).casefold() not in ALLOWED_HOME_USERS
+        for match in HOME_PATH.finditer(value)
+    ):
+        rules.append("user-home")
+    return tuple(rules)
 
 
 def main() -> int:
@@ -118,37 +186,40 @@ def main() -> int:
         public_relative, filename_rule = public_path_label(relative, denylist)
         if filename_rule is not None:
             findings.append((public_relative, 0, filename_rule))
-        if path.is_symlink() or path.suffix == ".age":
+        if path.is_symlink():
+            try:
+                target = path.readlink().as_posix()
+            except OSError:
+                findings.append((public_relative, 0, "symlink-target-unreadable"))
+                continue
+            findings.extend(
+                (public_relative, 0, f"{rule}-symlink-target")
+                for rule in sensitive_text_rules(target, denylist)
+            )
             continue
-        text = read_text(path)
+        if path.suffix == ".age":
+            try:
+                age_data = path.read_bytes()
+            except OSError:
+                findings.append((public_relative, 0, "age-envelope-unreadable"))
+                continue
+            if is_age_envelope(age_data):
+                continue
+            findings.append((public_relative, 0, "invalid-age-envelope"))
+            text = (
+                None
+                if b"\0" in age_data or len(age_data) > 4 * 1024 * 1024
+                else age_data.decode("utf-8", "surrogateescape")
+            )
+        else:
+            text = read_text(path)
         if text is None:
             continue
         for line_number, line in enumerate(text.splitlines(), start=1):
-            folded = line.casefold()
-            if any(term in folded for term in denylist):
-                findings.append((public_relative, line_number, "exact-denylist"))
-            if any(marker in line for marker in PRIVATE_KEY_MARKERS):
-                findings.append((public_relative, line_number, "private-key"))
-            if string_looks_like_credential(line):
-                findings.append((public_relative, line_number, "provider-token"))
-            if MAC_ADDRESS.search(line):
-                findings.append((public_relative, line_number, "mac-address"))
-            for match in EMAIL.finditer(line):
-                address = match.group(0).casefold()
-                domain = match.group(1).casefold()
-                if address.startswith("git@") and "ssh://git@" in folded:
-                    continue
-                if (
-                    address not in ALLOWED_EMAILS
-                    and domain not in ALLOWED_EMAIL_DOMAINS
-                ):
-                    findings.append((public_relative, line_number, "email"))
-            for match in HOME_PATH.finditer(line):
-                prefix = line[: match.start()]
-                if re.search(r"\$[A-Za-z_][A-Za-z0-9_]*\"?$", prefix):
-                    continue
-                if match.group(1).casefold() not in ALLOWED_HOME_USERS:
-                    findings.append((public_relative, line_number, "user-home"))
+            findings.extend(
+                (public_relative, line_number, rule)
+                for rule in sensitive_text_rules(line, denylist)
+            )
 
     for relative, line_number, rule in sorted(set(findings)):
         print(f"{relative}:{line_number}: [{rule}] review required")

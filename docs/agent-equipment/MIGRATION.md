@@ -8,6 +8,9 @@ Execution also requires the manifest-bound CPython 3.12 or newer runtime and a
 closed, externally issued `ApplyAuthorization`. The exact authorization bytes
 and independently supplied `trusted_apply_authorization_digest` are distinct
 inputs; neither this runbook nor candidate output can create authority.
+Its top-level `execution_domain_identity` must equal the independently trusted
+identity of the one authoritative compare-and-swap nonce-ledger namespace and
+target used for the run.
 The authorization also binds the exact operator review package digest covering
 the proposed live mutations, rollback material, and review receipts.
 
@@ -77,13 +80,15 @@ Complete all of these before the executor opens an action checkpoint:
    operator review package. Obtain
    separate authority. It emits a Schema-valid `ApplyAuthorization` naming that
    complete exact tuple plus `command: apply`, issuer, UTC issue/not-before/
-   expiry times, one run identity, a fresh execution nonce, and the operator-
-   review-package digest. Obtain its
+   expiry times, one run identity, a fresh execution nonce, the independently
+   selected execution-domain identity, and the operator-review-package digest.
+   Obtain its
    canonical `trusted_apply_authorization_digest` through a separate authenticated
    channel; do not infer it from the record.
 11. After authorization and before any action checkpoint or mutation, strictly
     parse the record and validate its canonical identity and complete digest.
-    Reject a missing, unknown, expired, not-yet-valid, or misbound authorization.
+    Reject a missing, unknown, expired, not-yet-valid, misbound, or foreign-
+    domain authorization.
     Then observe every affected live surface and every bound capability and
     manager-version evidence source, and recompute the installed-implementation
     manifest digest
@@ -91,8 +96,9 @@ Complete all of these before the executor opens an action checkpoint:
     live evidence to equal the sealed capture. Any drift invalidates the
     authorization: mutate nothing, recapture, resolve, reseal, and obtain new
     authorization for the new exact tuple. Only after that comparison succeeds,
-    atomically claim the nonce in the durable authorization ledger. A previously
-    claimed or unpersistable nonce stops before the first action checkpoint.
+    atomically claim the nonce in the durable authorization ledger named by that
+    domain. A previously claimed or unpersistable nonce, or a claim in another
+    ledger domain, stops before the first action checkpoint.
 
 Planning, inventory, import, update, and adopt remain runtime-read-only. Only an
 authorized `apply` may execute this runbook. Authorization for one plan does not
@@ -310,14 +316,16 @@ values.
 
 The candidate-independent release launcher obtains the authorized expected-case
 manifest digest from the exact trusted pre-mutation authorization. After
-execution, a separate release authority attests the exact bundle and supplies
-the trusted attestation digest. The launcher is independently installed at
+execution, a separate release authority attests the bundle's canonical semantic
+digest and supplies the trusted attestation digest. The launcher is independently
+installed at
 `/usr/local/libexec/agent-equipment-release/v1/agent-equipment-release`, outside
 the evaluated candidate and its installed manifest. It verifies its own exact
 identity and manifest digest from external trust inputs, strictly parses the
 authorization, manifest, bundle, and attestation, then performs one create-only
 compare-and-swap archive commit using a closed `ReleaseArchiveManifest` over
-the exact input byte digests and execution tuple. Only after generation `1` is
+the exact input byte digests and execution tuple, including the independently
+trusted execution-domain identity. Only after generation `1` is
 durable does it emit the closed `ReleaseReceipt`. Candidate output cannot mint,
 overwrite,
 ignore, or substitute for that receipt. The candidate evidence writer,
@@ -438,7 +446,8 @@ including all explicit verification and migration nodes, then obtain
 the exact closed `ApplyAuthorization` naming the complete candidate,
 implementation-manifest, catalog, lock, plan, action-set, capability-set,
 captured-state, and expected-case-manifest tuple plus the command, run, validity
-window, fresh nonce, and exact operator-review-package digest. Receive
+window, fresh nonce, independently trusted execution-domain identity, and exact
+operator-review-package digest. Receive
 `trusted_apply_authorization_digest` through
 the external authority channel.
 
@@ -450,11 +459,13 @@ when the candidate identity, implementation digest, and all live evidence equal
 the authorized sealed capture. Otherwise release the proposal without mutation,
 recapture, resolve, reseal, and obtain new authorization. A ledger claim is never
 deleted for reuse. After the exact comparison and immediately before the first
-action checkpoint, durably claim the nonce in the authorization ledger.
+action checkpoint, durably claim the nonce by CAS in the one authoritative
+ledger namespace and target named by `execution_domain_identity`.
 
 Completion: the authorized plan, sealed action set, sealed capture, and expected-
 case manifest have identical bindings; the authorization identity and canonical
-digest are exact; its nonce is claimed once for this run; the post-authorization
+digest are exact; its execution domain is independently trusted; its nonce is
+claimed once for this run in that domain; the post-authorization
 live comparison is exact; all route and surface cross-references validate; no
 harness state has changed; no action checkpoint exists yet.
 
@@ -603,12 +614,13 @@ produce an empty mutation plan.
 
 The evidence writer then seals the exact migration and live child receipts into
 the candidate bundle and derives the aggregates. The candidate-independent
-release authority attests those exact bytes after every result and live sign-
-off, and the release command validates all three documents against the
-authorized expected-case and attestation manifest digests. The external launcher
+release authority attests the bundle's canonical semantic digest after every
+result and live sign-off, and the release command validates all three documents
+against the authorized expected-case and attestation manifest digests. The external launcher
 also validates the exact apply authorization and its own trusted launcher
 identity/digest, then commits the authorization, three release documents, and
-closed archive manifest over their exact byte digests and execution tuple with
+closed archive manifest over their exact serialized byte digests and execution
+tuple, including `execution_domain_identity`, with
 an `absent` compare token. Generation `1` is create-only;
 identical existing bytes are idempotent and different bytes are a conflict.
 Missing, extra, duplicated, nonpassing, stale-attested, or misbound evidence—or
@@ -626,7 +638,7 @@ Any failed runtime condition enters the recovery procedure.
 
 One checkpoint binds a single adapter action and every surface that action can
 change. It records the complete `CHK-10` tuple: apply-authorization identity and
-digest, execution nonce, run and candidate identities;
+digest, execution-domain identity, execution nonce, run and candidate identities;
 installed-implementation manifest digest; catalog, lock, plan, capability-set,
 and sealed captured-state identity/digest bindings; the route's closed
 capability and manager-evidence binding; action identity and deterministic
@@ -644,9 +656,17 @@ compensating --restore verified--> compensated
 prepared | completed | compensating --ambiguity or drift--> compensation_blocked
 ```
 
-The direct `prepared` to `compensating` transition requires a fresh explicit
-rollback authorization and an audit of the prepared action. Crash recovery
-cannot infer rollback authority merely from a surviving `prepared` record.
+The direct `prepared` to `compensating` transition requires an audit of the
+prepared action and a fresh, closed `CompensationAuthorization`. That record
+uses Schema version `agent-equipment-compensation-authorization/v1`, identity
+prefix `compensation-authorization:sha256:`, `command: compensate`, issuer and
+validity window, a fresh `compensation_nonce`, and exact bindings to the original
+apply identity/digest, execution-domain identity, execution nonce, run,
+checkpoint-set digest, and plan-action-set digest. Its canonical complete digest
+is supplied independently. Before the transition, claim `compensation_nonce`
+once by CAS in the same authoritative execution-domain ledger namespace. Crash
+recovery cannot infer this public compensation authority merely from a surviving
+`prepared` record or reuse `ApplyAuthorization`.
 
 Persist and fsync `prepared` with `invocation_state: not_started`, then compare
 current state with the captured pre-state. Immediately before the adapter call,
@@ -686,6 +706,12 @@ candidate implementation identity/manifest digest, catalog, lock, plan,
 plan-action-set, capability-set, captured-state identity/digest, and sealed
 expected-case-manifest digest tuple plus a new run identity, validity window,
 and execution nonce. An already claimed nonce never authorizes the new apply.
+
+Immediate reverse compensation after a later failure remains part of the
+already invoked, claimed apply run and needs no second authority. A fresh or
+public `compensate` invocation, including an ambiguous prepared-action path,
+requires the separate `CompensationAuthorization` and durable compensation-
+nonce claim above. It cannot start a forward action or authorize another run.
 
 ## Step-level compensation
 
@@ -807,9 +833,10 @@ output for seeded secret values.
    capability-set, captured-state identity/digest, and sealed expected-case-
    manifest digest plus every route capability binding against the authorized
    `ApplyAuthorization`. Require its canonical digest to equal the original
-   `trusted_apply_authorization_digest` and its ledger claim to name this exact
-   run and nonce. A mismatch requires a new read-only investigation, not
-   checkpoint editing.
+   `trusted_apply_authorization_digest`, its execution domain to equal
+   `trusted_execution_domain_identity`, and its ledger claim in that domain to
+   name this exact run and nonce. A mismatch requires a new read-only
+   investigation, not checkpoint editing.
 3. Audit every `prepared` and `compensating` checkpoint from supported surfaces.
    Record whether each surface equals captured pre-state, the action's expected
    post-state, or neither.
@@ -819,6 +846,11 @@ output for seeded secret values.
    checkpoint or invocation; compensation and classification of already invoked
    work remain available under the historical ledger claim. Otherwise
    compensate completed actions in reverse topological order.
+   Classification that would begin compensation from an ambiguous `prepared`
+   record, or any separately invoked public `compensate` command, additionally
+   requires a valid `CompensationAuthorization` and a one-time CAS claim of its
+   `compensation_nonce` in that same execution domain before checkpoint change
+   or adapter invocation.
 5. At a compare-before-restore mismatch, preserve the external state and stop.
    Report the exact surface, expected secret-free state, observation source,
    and checkpoint. Obtain an explicit decision to retain the external change
