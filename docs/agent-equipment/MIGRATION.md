@@ -52,13 +52,18 @@ Complete all of these before the executor opens an action checkpoint:
    set, and atomically seal the action set, captured-state manifest, and private
    recovery blobs. Resolve again against that capture; a changed plan or action
    projection must be regenerated, recaptured, and resealed.
-9. Present the secret-free dry-run, exact candidate implementation identity and
+9. Project and seal the closed acceptance expected-case manifest from that
+   validated plan and capture. Include the complete static registry, every
+   automated action, and every explicit read-only verification and mutating
+   migration node. Bind every route's exact capability and manager-version
+   evidence. Do not derive plan nodes from `ACCEPTANCE.md` or this runbook.
+10. Present the secret-free dry-run, exact candidate implementation identity and
    complete installed-implementation manifest digest, catalog digest, lock
    digest, plan digest, plan-action-set digest, capability-set digest, sealed
-   captured-state identity and digest, exact surface set, and native-rolling
-   limitations for operator review. Obtain separate authorization naming that
-   complete exact tuple.
-10. After authorization and before any action checkpoint or mutation, observe
+   captured-state identity and digest, expected-case manifest digest, exact
+   surface set, and native-rolling limitations for operator review. Obtain
+   separate authorization naming that complete exact tuple.
+11. After authorization and before any action checkpoint or mutation, observe
     every affected live surface and every bound capability and manager-version
     evidence source, and recompute the installed-implementation manifest digest
     under the same candidate identity. Require the complete authorized tuple and
@@ -255,6 +260,39 @@ selection requires sealed private recovery material; and a present structured
 surface requires a bound structured or private snapshot. A capture that claims
 present state while retaining absence recovery is invalid.
 
+### Acceptance expected cases and result bundle
+
+`acceptance-evidence-v1.schema.json` closes three release documents. After the
+plan-action set and capture are sealed, the production evidence writer projects
+one expected-case manifest bound to their complete candidate, catalog, lock,
+plan, capability, capture, and route-evidence tuple. Static records cover every
+nonderived requirement, including `ADP-*`, `CAP-*`, and `LIVE-*`. The writer
+adds every automated plan-action identity, every explicit read-only verification
+node, and every explicit mutating migration boundary from the validated graph.
+
+The semantic validator derives one `CHK-02` through `CHK-09` case for every
+automated action and mutating migration boundary. It maps `MIG-*` only from each
+sealed node's explicit requirement list. A plan node absent from the manifest,
+or a manifest node absent from the plan projection, invalidates the release
+projection; this runbook is never parsed to invent a node.
+
+During execution, the evidence writer records one exact child per expected case
+and derives the 74 aggregate results. Mutation cases bind before and after
+observation digests. Checkpoint cases bind the ordered checkpoint and
+compensation trace. Live cases require a live receipt and explicit human
+sign-off; an automated or fake-manager receipt cannot pass them. Opaque artifact
+references and public version strings never contain raw native output or secret
+values.
+
+The candidate-independent release launcher obtains the authorized expected-case
+manifest digest from the pre-mutation authorization. After execution, a
+separate release authority attests the exact bundle and supplies the trusted
+attestation digest. `agent-equipment release` strictly parses and archives the
+exact manifest, bundle, and attestation, then emits a release receipt only when
+every exact child and derived aggregate passes. The candidate evidence writer,
+attestation writer, validator, and release command do not grant apply authority
+or mutate harness state.
+
 ### Filesystem observation
 
 Observe a skill entry with `lstat`; use `readlink` for link text. Resolution of
@@ -364,9 +402,11 @@ route and surface, validate the capture against the separately supplied action
 set, and resolve again against it. If the capture changes the plan or action
 projection, regenerate and recapture until the plan, action set, and capture
 agree. Atomically seal the plan-action set, captured-state manifest, and private
-recovery blobs, then obtain authorization naming the complete candidate,
-implementation-manifest, catalog, lock, plan, action-set, capability-set, and
-captured-state tuple.
+recovery blobs. Project and seal the exact acceptance expected-case manifest,
+including all explicit verification and migration nodes, then obtain
+authorization naming the complete candidate, implementation-manifest, catalog,
+lock, plan, action-set, capability-set, captured-state, and expected-case-
+manifest tuple.
 
 After authorization, recompute the installed implementation manifest and reread
 every affected surface and bound capability and manager-version evidence source.
@@ -374,11 +414,10 @@ Proceed only when the candidate identity, implementation digest, and all live
 evidence equal the authorized sealed capture. Otherwise release the proposal
 without mutation, recapture, resolve, reseal, and obtain new authorization.
 
-Completion: the authorized plan, sealed action set, and sealed capture have
-identical bindings; the post-authorization live comparison is exact; all route
-and surface
-cross-references validate; no harness state has changed; no action checkpoint
-exists yet.
+Completion: the authorized plan, sealed action set, sealed capture, and expected-
+case manifest have identical bindings; the post-authorization live comparison
+is exact; all route and surface cross-references validate; no harness state has
+changed; no action checkpoint exists yet.
 
 ### 2. Replace the blanket Claude projector
 
@@ -523,9 +562,19 @@ Only after the whole verification passes may the executor durably mark the run
 `succeeded`. A second audit of the same catalog, lock, and live state must
 produce an empty mutation plan.
 
+The evidence writer then seals the exact migration and live child receipts into
+the candidate bundle and derives the aggregates. The candidate-independent
+release authority attests those exact bytes after every result and live sign-
+off, and the release command validates all three documents against the
+authorized expected-case and attestation manifest digests. Missing, extra,
+duplicated, nonpassing, stale-attested, or misbound evidence withholds the
+release receipt and preserves the complete run evidence; it never edits a
+checkpoint or fabricates rollback authority.
+
 Completion: the success marker is durable and fsynced, the apply lease is
-released, and steady-state audit is a no-op. Any failed condition enters the
-recovery procedure.
+released, steady-state audit is a no-op, and the exact expected-case manifest,
+evidence bundle, attestation, and release receipt are archived. Any failed
+runtime condition enters the recovery procedure.
 
 ## Checkpoints and idempotence
 
@@ -587,7 +636,8 @@ A completed run whose live state still equals its expected state is a no-op on
 rerun. A compensated run is historical evidence, not a license to replay; a new
 apply requires a fresh sealed capture and authorization naming the complete
 candidate implementation identity/manifest digest, catalog, lock, plan,
-plan-action-set, capability-set, and captured-state identity/digest tuple.
+plan-action-set, capability-set, captured-state identity/digest, and sealed
+expected-case-manifest digest tuple.
 
 ## Step-level compensation
 
@@ -706,9 +756,10 @@ output for seeded secret values.
    commands, chezmoi projection hooks, or ad hoc link repair.
 2. Locate the newest nonterminal run and verify its candidate implementation
    identity/manifest digest, catalog, lock, plan, plan-action-set,
-   capability-set, and captured-state identity/digest plus every route
-   capability binding against the authorized receipt. A mismatch requires a new
-   read-only investigation, not checkpoint editing.
+   capability-set, captured-state identity/digest, and sealed expected-case-
+   manifest digest plus every route capability binding against the authorized
+   receipt. A mismatch requires a new read-only investigation, not checkpoint
+   editing.
 3. Audit every `prepared` and `compensating` checkpoint from supported surfaces.
    Record whether each surface equals captured pre-state, the action's expected
    post-state, or neither.

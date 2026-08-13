@@ -322,6 +322,22 @@ def rebind_capability_digest(sequence: list[dict[str, object]]) -> None:
     ]
 
 
+def rehash_capability_record(capability: dict[str, object]) -> None:
+    capability_without_digest = copy.deepcopy(capability)
+    capability_without_digest.pop("capability_digest")
+    capability["capability_digest"] = canonical_digest(capability_without_digest)
+
+
+def append_unrelated_capability(
+    sequence: list[dict[str, object]],
+) -> dict[str, object]:
+    unrelated = copy.deepcopy(capability_record(sequence[0]))
+    unrelated["capability_identity"] = "capability:unrelated"
+    rehash_capability_record(unrelated)
+    sequence[0]["result"]["records"].append(unrelated)
+    return unrelated
+
+
 def rebind_route_digest(sequence: list[dict[str, object]]) -> None:
     controlled_identities = sorted(
         control["equipment_identity"]
@@ -570,7 +586,9 @@ class AdapterContractSchemaTests(unittest.TestCase):
                     (schema_directory / SCHEMA.name).write_text(
                         json.dumps(invalid_schema), encoding="utf-8"
                     )
-                    catalog_schema = ROOT / "docs/agent-equipment/catalog-v1.schema.json"
+                    catalog_schema = (
+                        ROOT / "docs/agent-equipment/catalog-v1.schema.json"
+                    )
                     (schema_directory / catalog_schema.name).write_text(
                         catalog_schema.read_text(encoding="utf-8"),
                         encoding="utf-8",
@@ -1496,26 +1514,90 @@ class AdapterContractSchemaTests(unittest.TestCase):
         self,
     ) -> None:
         sequence = list(copy.deepcopy(valid_sequence()))
-        unrelated = copy.deepcopy(capability_record(sequence[0]))
-        unrelated["capability_identity"] = "capability:unrelated"
-        unrelated_without_digest = copy.deepcopy(unrelated)
-        unrelated_without_digest.pop("capability_digest")
-        unrelated["capability_digest"] = canonical_digest(unrelated_without_digest)
-        sequence[0]["result"]["records"].append(unrelated)
+        append_unrelated_capability(sequence)
 
         self.assertEqual(
             (),
             validate_adapter_sequence(apply_sequence_document(sequence)),
         )
 
+    def test_plural_discovery_validates_every_manager_evidence_digest(self) -> None:
+        for selected in (True, False):
+            with self.subTest(selected=selected):
+                sequence = list(copy.deepcopy(valid_sequence()))
+                unrelated = append_unrelated_capability(sequence)
+                target = capability_record(sequence[0]) if selected else unrelated
+                evidence = target["manager_version_evidence"]
+                evidence["evidence_digest"] = "sha256:" + "0" * 64
+                rehash_capability_record(target)
+
+                self.assertIn(
+                    "CANONICAL_DIGEST_MISMATCH",
+                    diagnostic_codes(tuple(sequence)),
+                )
+
+    def test_plural_discovery_validates_every_capability_digest(self) -> None:
+        for selected in (True, False):
+            with self.subTest(selected=selected):
+                sequence = list(copy.deepcopy(valid_sequence()))
+                unrelated = append_unrelated_capability(sequence)
+                target = capability_record(sequence[0]) if selected else unrelated
+                target["capability_digest"] = "sha256:" + "0" * 64
+
+                self.assertIn(
+                    "CANONICAL_DIGEST_MISMATCH",
+                    diagnostic_codes(tuple(sequence)),
+                )
+
+    def test_plural_discovery_rejects_surrogates_without_raising(self) -> None:
+        for selected in (True, False):
+            with self.subTest(selected=selected):
+                sequence = list(copy.deepcopy(valid_sequence()))
+                unrelated = append_unrelated_capability(sequence)
+                target = capability_record(sequence[0]) if selected else unrelated
+                target["adapter_version"] = "\ud800"
+
+                self.assertEqual(
+                    {"ADAPTER_SCHEMA_INVALID"},
+                    diagnostic_codes(tuple(sequence)),
+                )
+
+    def test_sequence_rejects_uncanonicalizable_integer_without_raising(self) -> None:
+        for record_type, record_index in (
+            ("PlannedAction", 3),
+            ("MutationReceipt", 4),
+        ):
+            with self.subTest(record_type=record_type):
+                sequence = list(copy.deepcopy(valid_sequence()))
+                sequence[record_index]["record"]["ordinal"] = 10**5000
+
+                self.assertEqual(
+                    {"ADAPTER_SCHEMA_INVALID"},
+                    diagnostic_codes(tuple(sequence)),
+                )
+
+    def test_plural_discovery_requires_every_provider_manager_binding(self) -> None:
+        for selected in (True, False):
+            with self.subTest(selected=selected):
+                sequence = list(copy.deepcopy(valid_sequence()))
+                unrelated = append_unrelated_capability(sequence)
+                target = capability_record(sequence[0]) if selected else unrelated
+                evidence = target["manager_version_evidence"]
+                evidence["manager"] = "direct_mcp"
+                evidence_without_digest = copy.deepcopy(evidence)
+                evidence_without_digest.pop("evidence_digest")
+                evidence["evidence_digest"] = canonical_digest(evidence_without_digest)
+                rehash_capability_record(target)
+
+                self.assertEqual(
+                    {"ADAPTER_SCHEMA_INVALID"},
+                    diagnostic_codes(tuple(sequence)),
+                )
+
     def test_capability_discovery_requires_canonical_record_order(self) -> None:
         sequence = list(copy.deepcopy(valid_sequence()))
-        earlier = copy.deepcopy(capability_record(sequence[0]))
-        earlier["capability_identity"] = "capability:aaa"
-        earlier_without_digest = copy.deepcopy(earlier)
-        earlier_without_digest.pop("capability_digest")
-        earlier["capability_digest"] = canonical_digest(earlier_without_digest)
-        sequence[0]["result"]["records"].append(earlier)
+        append_unrelated_capability(sequence)
+        sequence[0]["result"]["records"].reverse()
 
         self.assertIn(
             "CAPABILITY_ORDER_INVALID",
@@ -1525,15 +1607,19 @@ class AdapterContractSchemaTests(unittest.TestCase):
     def test_capability_component_identity_support_is_canonically_sorted(
         self,
     ) -> None:
-        sequence = list(copy.deepcopy(valid_sequence()))
-        support = capability_record(sequence[0])["component_control_support"]
-        support["supported_equipment_identities"] = ["skill:z", "skill:a"]
-        rebind_capability_digest(sequence)
+        for selected in (True, False):
+            with self.subTest(selected=selected):
+                sequence = list(copy.deepcopy(valid_sequence()))
+                unrelated = append_unrelated_capability(sequence)
+                target = capability_record(sequence[0]) if selected else unrelated
+                support = target["component_control_support"]
+                support["supported_equipment_identities"] = ["skill:z", "skill:a"]
+                rehash_capability_record(target)
 
-        self.assertIn(
-            "CAPABILITY_ORDER_INVALID",
-            diagnostic_codes(tuple(sequence)),
-        )
+                self.assertIn(
+                    "CAPABILITY_ORDER_INVALID",
+                    diagnostic_codes(tuple(sequence)),
+                )
 
     def test_sequence_rejects_missing_or_duplicate_request_bound_capability(
         self,

@@ -122,6 +122,27 @@ A declared route operation that restores the captured pre-state after a later
 failure, subject to compare-before-restore.
 _Avoid_: Best-effort cleanup, rollback claim
 
+**Expected acceptance case manifest**:
+The sealed, pre-execution registry of every release case required for one
+candidate, plan, capture, and route-capability binding tuple.
+_Avoid_: Test output, evidence bundle
+
+**Acceptance evidence bundle**:
+The candidate result set for exactly one expected acceptance case manifest. It
+is evidence to be attested, not authority to authenticate itself or release a
+candidate.
+_Avoid_: Expected cases, release attestation
+
+**Release attestation**:
+A separately authenticated, post-execution statement that binds independent
+runner and operator review to one exact acceptance evidence bundle.
+_Avoid_: Candidate-authored receipt, migration authorization
+
+**Release receipt**:
+The terminal record that one exact candidate, expected-case manifest, evidence
+bundle, and release attestation passed the release gate.
+_Avoid_: Apply checkpoint, migration authorization
+
 **Projection**:
 A harness-visible entry derived from an active provider route.
 _Avoid_: Source of truth, installed source
