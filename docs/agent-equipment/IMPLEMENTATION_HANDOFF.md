@@ -38,7 +38,7 @@ deferred.
 | `docs/agent-equipment/plan-action-set-v1.schema.json` | Closed projection of every independently validated automated plan action supplied to captured-state validation |
 | `docs/agent-equipment/adapter-contract-v1.schema.json` | Closed capability, request, observation, action, and receipt serialization contract |
 | `docs/agent-equipment/acceptance-evidence-v1.schema.json` | Closed expected-case, candidate evidence, and post-run attestation contract |
-| `docs/agent-equipment/execution-authority-v1.schema.json` | Eight closed records: apply authorization, prepared-action-authority set, checkpoint set, compensation authorization and transition claim, run terminal, release archive manifest, and release receipt |
+| `docs/agent-equipment/execution-authority-v1.schema.json` | Nine closed records: apply authorization, capture-observation-authority set, prepared-action-authority set, checkpoint set, compensation authorization and transition claim, run terminal, release archive manifest, and release receipt |
 | `docs/agent-equipment/initial-catalog.proposed.json` | Schema-valid initial desired-state proposal; no live authority |
 | `docs/agent-equipment/initial-lock.proposed.json` | Generated 132-record lock bound to the proposed catalog digest |
 | `docs/agent-equipment/INVENTORY.md` and `initial-inventory.json` | Dated, secret-free read-only observation and initial classification |
@@ -49,7 +49,7 @@ deferred.
 | `scripts/agent_equipment_json_schema.py` and `tests/test_agent_equipment_json_schema.py` | Shared strict local-schema gate used by every public design, adapter, and capture validator |
 | `scripts/agent_equipment_acceptance_model.py` and `tests/test_agent_equipment_acceptance.py` | Disposable fake-manager convergence, checkpoint, compensation, and migration-boundary evidence |
 | `scripts/agent_equipment_acceptance_evidence.py` and `tests/test_agent_equipment_acceptance_evidence.py` | Design-only three-document release gate, adversarial binding checks, and strict CLI fixtures |
-| `tests/test_agent_equipment_deployment_contract.py` | Design-only apply/compensation authorization, release-receipt, deployment-separation, and runtime-gate contract vectors |
+| `tests/test_agent_equipment_deployment_contract.py` | Design-only capture-observation/prepared-state authority, apply/compensation authorization, terminal/archive/receipt, deployment-separation, and runtime-gate contract vectors |
 | `scripts/agent_equipment_captured_state.py` and `tests/test_agent_equipment_captured_state.py` | Captured-state capability/action-set digests and fail-closed cross-record semantic validation against separately supplied plan actions |
 | `scripts/agent_equipment_adapter_contract.py`, `tests/test_agent_equipment_adapter_contract.py`, and `tests/fixtures/agent-equipment/schema/*-adapter-*.json` | Cross-record semantic binding validator plus executable positive and fail-closed adapter-contract examples |
 
@@ -211,6 +211,14 @@ compensate(
 ) -> CompensationReport
 ```
 
+After validating `ApplyAuthorization`, the executor obtains the expected
+capture-observation-authority identity/digest from its closed bindings. Every
+checkpoint, compensation, recovery, terminal, archive, and receipt validator
+takes the exact `CaptureObservationAuthoritySet` plus that expected tuple. The
+public API has no raw observation-list or caller-supplied observation-digest
+form. Public compensation recovery obtains the same tuple from the archived,
+revalidated apply authorization.
+
 The operator invocation supplies the exact authorization file from
 `~/.local/state/agent-equipment/authorization-inbox/<authorization_identity>.json`
 and its separately authenticated `trusted_apply_authorization_digest`. The CLI
@@ -283,8 +291,10 @@ returns no partial capability tuple.
 Adapters receive resolved complete route records. They do not choose providers,
 merge coverage defaults, rewrite outcomes, resolve secret values into returned
 objects, or mutate a surface outside the action. Before apply issuance, validate
-every input shape and seal the complete `PreparedActionAuthoritySet` from the
-trusted plan, capture, and adapter-derived normalized pre/post state. Before
+every input shape and seal the complete `CaptureObservationAuthoritySet` from
+the trusted plan and capture. Validate its independently trusted identity/digest,
+then seal the complete `PreparedActionAuthoritySet` from that artifact and the
+adapter-derived normalized pre/post state. Before
 adapter invocation, construct the `ApplySequence` authority context from that
 validated set and the prepared checkpoint, and enforce its same
 pre-mutation bindings. After receipt and verification, the pure cross-record
@@ -353,6 +363,8 @@ validate_acceptance_evidence(
 
 release_candidate(
     apply_authorization_bytes,
+    capture_observation_authority_set_bytes,
+    prepared_action_authority_set_bytes,
     checkpoint_set_manifest_bytes,
     run_terminal_record_bytes,
     expected_case_manifest_bytes,
@@ -378,16 +390,18 @@ The candidate-independent release launcher obtains the expected-case manifest
 digest from the exact trusted pre-mutation authorization and the attestation
 digest from the separate post-run release authority. It first verifies its own
 installed bytes against the independently supplied launcher identity and
-manifest digest. The release command strictly parses all seven exact byte inputs,
-invokes the validator with the trusted digests, and refuses a release receipt on
-any diagnostic. It hashes each exact input byte stream independently of its
-semantic canonical digest, constructs the closed `ReleaseArchiveManifest`,
-validates the checkpoint manifest against the trusted store snapshot and the
-complete independently bound plan-action set, and validates an authenticated
-`RunTerminalRecord`. Success requires one completed checkpoint for every plan
-action and `state: succeeded`. It stages and fsyncs the authorization, prepared-
-action-authority set, checkpoint manifest, terminal record, three release
-documents, and archive
+manifest digest. The release command strictly parses all eight exact byte
+inputs, invokes the validator with the trusted digests, and refuses a release
+receipt on any diagnostic. It obtains the expected capture-observation-authority
+identity/digest from the validated apply authorization and revalidates the exact
+capture-observation and prepared-action authority sets. It hashes each exact
+input byte stream independently of its semantic canonical digest, constructs the
+closed `ReleaseArchiveManifest`, validates the checkpoint manifest against the
+trusted store snapshot and the complete independently bound plan-action set, and
+validates an authenticated `RunTerminalRecord`. Success requires one completed
+checkpoint for every plan action and `state: succeeded`. It stages and fsyncs
+the authorization, capture-observation-authority set, prepared-action-authority
+set, checkpoint manifest, terminal record, three release documents, and archive
 manifest, then commits generation `1` with a create-only
 compare-and-swap rename. An existing identical generation is an idempotent read;
 different existing bytes are a conflict. It emits a `ReleaseReceipt` only after
@@ -519,20 +533,33 @@ Later steps do not begin until the named evidence passes.
   identities and digests, independent candidate/implementation/plan/set
   bindings, then map the all-and-only checkpoint-store subset uniquely into it.
   Never replace it with a naked caller action list.
-- Before apply issuance, derive and independently validate one complete sealed
-  `PreparedActionAuthoritySet`. Require all-and-only canonical plan membership,
-  exact candidate/implementation/plan/capability/capture bindings, normalized
-  pre/post self-digests and native-update invariants, exact sorted controlled-
-  component identities in both states, and the planned desired-state fragment
-  in expected post-state. Bind the set identity/digest into
-  `ApplyAuthorization`; checkpoints consume its exact state rather than a caller
-  map or raw capture observation.
+- Before apply issuance, derive and seal one complete
+  `CaptureObservationAuthoritySet`. Obtain its expected identity and complete
+  digest through an independent trusted channel; never derive either expected
+  value from the artifact under review. Its closed bindings name the exact
+  candidate, implementation, plan, plan-action set, capability set, and captured
+  state. Each all-and-only ordered observation binds action identity and ordinal,
+  captured-state identity/digest, exact surface scope, controlled-component
+  identities, complete normalized pre-state, and its canonical digest. Bind the
+  validated set identity/digest into `ApplyAuthorization`. The raw observation-
+  list and standalone expected-observation-digest API is removed.
+- Derive and independently validate one complete sealed
+  `PreparedActionAuthoritySet` from that validated capture-observation artifact.
+  Require each prepared pre-state to equal its matching observation exactly, plus
+  all-and-only canonical plan membership, exact candidate, implementation,
+  plan, capability, and capture bindings, normalized pre/post self-digests and
+  native-update invariants, exact sorted controlled-component identities in
+  both states, and the planned desired-state fragment in expected post-state.
+  Bind the prepared set identity/digest into `ApplyAuthorization`; every public
+  validation seam takes both closed artifacts and gets both expected tuples from
+  the validated authorization. Checkpoints consume the prepared set's exact
+  state rather than a caller map or raw capture observation.
 - Add the closed `RunTerminalRecord`, bound to the exact apply tuple, complete
   plan-action-set digest, checkpoint-set identity/digest, trusted store
   generation, and `state: succeeded`. Require full plan coverage by unique
-  completed checkpoints. Release must validate exact prepared-action-authority-
-  set, checkpoint-manifest, and terminal-record bytes and archive their three
-  byte digests; accept no naked
+  completed checkpoints. Release must validate exact capture-observation-
+  authority-set, prepared-action-authority-set, checkpoint-manifest, and
+  terminal-record bytes and archive their four byte digests; accept no naked
   checkpoint-digest or terminal-state scalar.
 - After complete-plan validation, emit its exact closed
   `agent-equipment-plan-action-set/v1` projection. Validate the separately
@@ -706,12 +733,14 @@ Later steps do not begin until the named evidence passes.
 
 - Validate the complete plan and every compensation before opening the first
   checkpoint.
-- Validate the complete captured-state artifact against that plan, derive the
-  adapter-normalized pre/post context for every action, and seal the exact
-  `PreparedActionAuthoritySet` before requesting `ApplyAuthorization`. Reject a
+- Validate the complete captured-state artifact against that plan and seal the
+  exact `CaptureObservationAuthoritySet` over every normalized pre-state. Derive
+  the adapter-normalized post-state context and seal the exact
+  `PreparedActionAuthoritySet` before requesting `ApplyAuthorization`. Bind both
+  independently trusted identity/digest tuples into that authorization. Reject a
   missing/extra action, duplicate ordinal or component identity, capability-set
-  mismatch, desired-post fragment mismatch, or independently trusted set-digest
-  mismatch before issuance.
+  mismatch, capture/prepared-state mismatch, desired-post fragment mismatch, or
+  independently trusted set-identity/digest mismatch before issuance.
 - Require a closed, cycle-free dependency graph and execute only its
   deterministic topological order. Reverse compensation uses the reverse
   topological order.
@@ -743,7 +772,9 @@ Later steps do not begin until the named evidence passes.
   root-owned paths above. Supply its identity and manifest digest from the
   external release authority, never from candidate output.
 - Give only that launcher the release archive capability. Implement strict
-  validation of the authorization plus all three release documents, create-only
+  validation of the authorization, capture-observation-authority set, prepared-
+  action-authority set, checkpoint-set manifest, run-terminal record, and all
+  three release documents; create-only
   compare-and-swap archival, idempotent retrieval of an identical generation,
   conflict rejection, the closed `ReleaseArchiveManifest` identity/digest
   formula over exact byte digests, and the closed `ReleaseReceipt` formula.
@@ -763,12 +794,15 @@ Later steps do not begin until the named evidence passes.
   capture, and resolve again against them. Produce the exact candidate
   implementation identity and installed-manifest digest, catalog digest, lock
   digest, one immutable migration-plan digest, plan-action-set digest,
-  capability-set digest, captured-state identity and digest, expected action
-  list, explicit verification and migration nodes, sealed expected-case manifest
-  and digest, compensation list, and rollback command.
+  capability-set digest, captured-state identity and digest, sealed capture-
+  observation-authority-set identity/digest, sealed prepared-action-authority-set
+  identity/digest, expected action list, explicit verification and migration
+  nodes, sealed expected-case manifest and digest, compensation list, and
+  rollback command.
 - Ask for authorization naming that complete candidate, catalog, lock, plan,
-  plan-action-set, capability-set, captured-state identity/digest, expected-
-  case-manifest digest, operator-review-package digest, and independently
+  plan-action-set, capture-observation-authority-set identity/digest, prepared-
+  action-authority-set identity/digest, capability-set, captured-state identity/
+  digest, expected-case-manifest digest, operator-review-package digest, and independently
   selected execution-domain identity tuple.
   The authority emits the closed `ApplyAuthorization`, including command, issuer,
   time window, execution domain, run, and fresh execution nonce, then supplies
@@ -794,7 +828,11 @@ Later steps do not begin until the named evidence passes.
   trusted digest, and run the release gate against both authorized manifest
   digests. Archive the exact expected-case manifest, bundle, attestation, and
   release receipt from the independently trusted launcher after its create-only
-  archive commit; retain only successfully verified desired state.
+  archive commit. Its archive retains the exact apply authorization, capture-
+  observation-authority set, prepared-action-authority set, checkpoint-set
+  manifest, run-terminal record, expected-case manifest, bundle, and attestation
+  byte streams plus their verified digests. Retain only successfully verified
+  desired state.
 
 ## Retained and retired source map
 
@@ -846,9 +884,10 @@ No retirement rule deletes an unmanaged observation or a canonical
    merely to shorten the stack.
 5. Open a separate closed `ApplyAuthorization` containing the exact candidate
    implementation identity and installed-manifest digest, refreshed inventory,
-   immutable plan, plan-action-set, already validated and sealed prepared-action-
-   authority-set identity/digest, capability-set, and already sealed captured-
-   state identity/digest, sealed expected-case manifest and digest,
+   immutable plan, plan-action-set, already validated and sealed capture-
+   observation-authority-set identity/digest, already validated and sealed
+   prepared-action-authority-set identity/digest, capability-set, and already
+   sealed captured-state identity/digest, sealed expected-case manifest and digest,
    issuer, validity window, independently trusted execution-domain identity,
    run, and fresh execution nonce. Bind the exact live
    mutations, rollback command/actions, and review receipts transitively through
@@ -870,13 +909,16 @@ capability is unknown; an operator-owned route exposes automated mutation; an
 automated mutation lacks pre-state compensation; the catalog-lock binding is
 stale; a secret value enters generated state; current state differs from
 captured or expected state; the capability-set digest or a route binding is
-invalid; the post-authorization comparison differs from the sealed capture; a
+invalid; the capture-observation or prepared-action authority set is missing,
+misbound, incomplete, or differs from its apply-bound identity/digest; the post-
+authorization comparison differs from the sealed capture; a
 checkpoint cannot be made durable; CPython 3.12 or the manifest-bound runtime is
 unavailable; the closed authorization is absent, expired, not yet valid,
 misbound, names a foreign execution domain, is replayed, or cannot be claimed
 durably; its canonical digest differs
 from `trusted_apply_authorization_digest`; or the exact runtime plan, plan-
-action-set, captured-state, and expected-case-manifest digests lack
+action-set, capture-observation-authority-set, prepared-action-authority-set,
+captured-state, and expected-case-manifest digests lack
 authorization.
 
 Stop before a public compensation transition when `CompensationAuthorization`
@@ -887,8 +929,9 @@ by CAS in the same authoritative execution-domain ledger namespace.
 
 Stop before release when the external launcher's identity or installed-manifest
 digest differs from its trusted input; the exact apply authorization or
-attestation digest lacks independent authorization; any release document or
-binding differs; an attestor predates a bound result or live sign-off; the
+attestation digest lacks independent authorization; any of the eight exact
+release inputs fails strict parsing, artifact equality, or archived byte-digest
+verification; any release document or binding differs; an attestor predates a bound result or live sign-off; the
 canonical live operator differs from a passing live signer; any required child
 or aggregate does not pass; or the create-only archive commit is absent or
 conflicts. Candidate output never overrides a stop.

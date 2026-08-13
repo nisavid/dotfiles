@@ -95,6 +95,18 @@ _CHECKPOINT_FIELDS = _CHECKPOINT_BINDING_FIELDS | {
     "compensation_authority_kind",
     "compensation_transition_claim",
 }
+_CAPTURE_OBSERVATION_FIELDS = frozenset(
+    {
+        "action_identity",
+        "ordinal",
+        "captured_state_identity",
+        "captured_state_digest",
+        "surface",
+        "controlled_equipment_identities",
+        "normalized_pre_state",
+        "normalized_pre_state_digest",
+    }
+)
 _CHECKPOINT_PHASE_MATRIX = frozenset(
     {
         (("prepared",), "prepared", "not_started"),
@@ -505,12 +517,222 @@ def validate_plan_action_set(
     return diagnostics
 
 
+def _capture_observation_authority_set_identity(
+    document: Mapping[str, object],
+) -> str:
+    payload = {
+        key: value
+        for key, value in document.items()
+        if key not in {"authority_set_identity", "authority_set_digest"}
+    }
+    return "capture-observation-authority-set:" + canonical_digest(payload)
+
+
+def _capture_observation_authority_set_digest(
+    document: Mapping[str, object],
+) -> str:
+    return _artifact_digest(document, "authority_set_digest")
+
+
+def _validated_capture_observation_authority_index(
+    document: object,
+    *,
+    expected_authority_set_identity: str,
+    expected_authority_set_digest: str,
+    expected_candidate_identity: str,
+    expected_implementation_manifest_digest: str,
+    expected_plan_digest: str,
+    expected_plan_action_set_digest: str,
+    expected_capability_set_digest: str,
+    expected_captured_state_identity: str,
+    expected_captured_state_digest: str,
+    plan_action_index: Mapping[tuple[str, int], Mapping[str, object]],
+) -> tuple[
+    dict[tuple[str, int], Mapping[str, object]],
+    tuple[Diagnostic, ...],
+]:
+    """Validate the closed, apply-bound normalized capture authority set."""
+
+    if (
+        not isinstance(document, Mapping)
+        or document.get("schema_version")
+        != "agent-equipment-capture-observation-authority-set/v1"
+        or not _schema_valid(document)
+    ):
+        return {}, (
+            _diagnostic(
+                "CAPTURE_OBSERVATION_AUTHORITY_SCHEMA_INVALID",
+                "$.capture_observation_authority_set",
+                "The capture-observation authority set does not satisfy the checked-in closed schema.",
+            ),
+        )
+    if contains_literal_credential(document):
+        return {}, (
+            _diagnostic(
+                "CAPTURE_OBSERVATION_AUTHORITY_LITERAL_SECRET",
+                "$.capture_observation_authority_set",
+                "The capture-observation authority set contains credential-shaped literal material.",
+            ),
+        )
+
+    diagnostics: list[Diagnostic] = []
+    bindings = document["bindings"]
+    observations = document["observations"]
+    assert isinstance(bindings, Mapping)
+    assert isinstance(observations, list)
+    if document[
+        "authority_set_identity"
+    ] != _capture_observation_authority_set_identity(document) or document[
+        "authority_set_digest"
+    ] != _capture_observation_authority_set_digest(document):
+        diagnostics.append(
+            _diagnostic(
+                "CAPTURE_OBSERVATION_AUTHORITY_SEAL_INVALID",
+                "$.capture_observation_authority_set",
+                "The capture-observation authority identity or digest does not match its canonical content.",
+            )
+        )
+    if (
+        document["authority_set_identity"] != expected_authority_set_identity
+        or document["authority_set_digest"] != expected_authority_set_digest
+    ):
+        diagnostics.append(
+            _diagnostic(
+                "CAPTURE_OBSERVATION_AUTHORITY_TRUST_MISMATCH",
+                "$.capture_observation_authority_set",
+                "The capture-observation authority set does not match the identity and digest bound by apply authority.",
+            )
+        )
+    expected_bindings = {
+        "candidate_identity": expected_candidate_identity,
+        "implementation_manifest_digest": expected_implementation_manifest_digest,
+        "plan_digest": expected_plan_digest,
+        "plan_action_set_digest": expected_plan_action_set_digest,
+        "capability_set_digest": expected_capability_set_digest,
+        "captured_state_identity": expected_captured_state_identity,
+        "captured_state_digest": expected_captured_state_digest,
+    }
+    if bindings != expected_bindings:
+        diagnostics.append(
+            _diagnostic(
+                "CAPTURE_OBSERVATION_AUTHORITY_BINDING_MISMATCH",
+                "$.capture_observation_authority_set.bindings",
+                "The capture-observation authority set does not match the complete trusted capture and plan tuple.",
+            )
+        )
+
+    result: dict[tuple[str, int], Mapping[str, object]] = {}
+    ordered_keys: list[tuple[int, str]] = []
+    valid = True
+    for observation in observations:
+        if not isinstance(observation, Mapping) or set(observation) != (
+            _CAPTURE_OBSERVATION_FIELDS
+        ):
+            valid = False
+            continue
+        identity = observation.get("action_identity")
+        ordinal = observation.get("ordinal")
+        pre_state = observation.get("normalized_pre_state")
+        if not isinstance(identity, str) or type(ordinal) is not int:
+            valid = False
+            continue
+        key = (identity, ordinal)
+        action = plan_action_index.get(key)
+        controlled_identities = (
+            action.get("controlled_equipment_identities")
+            if isinstance(action, Mapping)
+            else None
+        )
+        if (
+            action is None
+            or key in result
+            or observation.get("captured_state_identity")
+            != expected_captured_state_identity
+            or observation.get("captured_state_digest")
+            != expected_captured_state_digest
+            or observation.get("surface") != action.get("surface_scope")
+            or observation.get("controlled_equipment_identities")
+            != controlled_identities
+            or not isinstance(controlled_identities, list)
+            or _normalized_component_identities(pre_state)
+            != tuple(controlled_identities)
+            or observation.get("normalized_pre_state_digest")
+            != canonical_digest(pre_state)
+        ):
+            valid = False
+            continue
+        result[key] = observation
+        ordered_keys.append((ordinal, identity))
+    if (
+        set(result) != set(plan_action_index)
+        or ordered_keys != sorted(ordered_keys)
+        or [ordinal for ordinal, _ in ordered_keys] != list(range(len(observations)))
+        or len(observations) != len(plan_action_index)
+    ):
+        valid = False
+    if not valid:
+        diagnostics.append(
+            _diagnostic(
+                "CAPTURE_OBSERVATION_AUTHORITY_MEMBERSHIP_INVALID",
+                "$.capture_observation_authority_set.observations",
+                "The capture-observation authority set is not an exact, ordered projection of the authoritative plan and capture.",
+            )
+        )
+    return result, tuple(sorted(set(diagnostics)))
+
+
+def validate_capture_observation_authority_set(
+    document: object,
+    *,
+    authoritative_plan_action_set: object,
+    expected_authority_set_identity: str,
+    expected_authority_set_digest: str,
+    expected_candidate_identity: str,
+    expected_implementation_manifest_digest: str,
+    expected_plan_digest: str,
+    expected_plan_action_set_digest: str,
+    expected_capability_set_digest: str,
+    expected_captured_state_identity: str,
+    expected_captured_state_digest: str,
+) -> tuple[Diagnostic, ...]:
+    """Validate one closed capture-observation authority set."""
+
+    plan_action_index, plan_diagnostics = _validated_plan_action_index(
+        authoritative_plan_action_set,
+        expected_action_set_digest=expected_plan_action_set_digest,
+        expected_candidate_identity=expected_candidate_identity,
+        expected_implementation_manifest_digest=(
+            expected_implementation_manifest_digest
+        ),
+        expected_plan_digest=expected_plan_digest,
+    )
+    _, observation_diagnostics = _validated_capture_observation_authority_index(
+        document,
+        expected_authority_set_identity=expected_authority_set_identity,
+        expected_authority_set_digest=expected_authority_set_digest,
+        expected_candidate_identity=expected_candidate_identity,
+        expected_implementation_manifest_digest=(
+            expected_implementation_manifest_digest
+        ),
+        expected_plan_digest=expected_plan_digest,
+        expected_plan_action_set_digest=expected_plan_action_set_digest,
+        expected_capability_set_digest=expected_capability_set_digest,
+        expected_captured_state_identity=expected_captured_state_identity,
+        expected_captured_state_digest=expected_captured_state_digest,
+        plan_action_index=plan_action_index,
+    )
+    return tuple(sorted(set(plan_diagnostics + observation_diagnostics)))
+
+
 def validate_prepared_action_authority_set(
     document: object,
     *,
     authoritative_captured_state: object,
     expected_captured_state_identity: str,
     expected_captured_state_digest: str,
+    capture_observation_authority_set: object,
+    expected_capture_observation_authority_set_identity: str,
+    expected_capture_observation_authority_set_digest: str,
     authoritative_plan_action_set: object,
     expected_plan_action_set_digest: str,
     expected_candidate_identity: str,
@@ -567,6 +789,31 @@ def validate_prepared_action_authority_set(
         if isinstance(captured_bindings, Mapping)
         else None
     )
+    capture_observation_index, capture_observation_diagnostics = (
+        _validated_capture_observation_authority_index(
+            capture_observation_authority_set,
+            expected_authority_set_identity=(
+                expected_capture_observation_authority_set_identity
+            ),
+            expected_authority_set_digest=(
+                expected_capture_observation_authority_set_digest
+            ),
+            expected_candidate_identity=expected_candidate_identity,
+            expected_implementation_manifest_digest=(
+                expected_implementation_manifest_digest
+            ),
+            expected_plan_digest=expected_plan_digest,
+            expected_plan_action_set_digest=expected_plan_action_set_digest,
+            expected_capability_set_digest=(
+                capability_set_digest if isinstance(capability_set_digest, str) else ""
+            ),
+            expected_captured_state_identity=expected_captured_state_identity,
+            expected_captured_state_digest=expected_captured_state_digest,
+            plan_action_index=plan_action_index,
+        )
+    )
+    diagnostics.extend(capture_observation_diagnostics)
+    capture_observations_valid = not capture_observation_diagnostics
     prepared_index, prepared_valid = _validated_prepared_action_authority_index(
         document,
         expected_authority_set_identity=(
@@ -585,12 +832,18 @@ def validate_prepared_action_authority_set(
     )
     if (
         not prepared_valid
+        or not capture_observations_valid
         or set(prepared_index) != set(plan_action_index)
         or any(
             key not in plan_action_index
+            or key not in capture_observation_index
             or not _prepared_authority_matches_plan_action(
                 authority, plan_action_index[key]
             )
+            or authority.get("captured_pre_state")
+            != capture_observation_index[key].get("normalized_pre_state")
+            or authority.get("captured_pre_state_digest")
+            != capture_observation_index[key].get("normalized_pre_state_digest")
             for key, authority in prepared_index.items()
         )
     ):
@@ -1218,6 +1471,9 @@ def validate_checkpoint_set_manifest(
     authoritative_captured_state: object,
     expected_captured_state_identity: str,
     expected_captured_state_digest: str,
+    capture_observation_authority_set: object,
+    expected_capture_observation_authority_set_identity: str,
+    expected_capture_observation_authority_set_digest: str,
     prepared_action_authority_set: object,
     expected_prepared_action_authority_set_identity: str,
     expected_prepared_action_authority_set_digest: str,
@@ -1379,6 +1635,38 @@ def validate_checkpoint_set_manifest(
                 "The complete captured-state artifact is not valid for the independently trusted plan-action set.",
             )
         )
+    captured_bindings = (
+        authoritative_captured_state.get("bindings")
+        if isinstance(authoritative_captured_state, Mapping)
+        else None
+    )
+    capture_observation_index, capture_observation_diagnostics = (
+        _validated_capture_observation_authority_index(
+            capture_observation_authority_set,
+            expected_authority_set_identity=(
+                expected_capture_observation_authority_set_identity
+            ),
+            expected_authority_set_digest=(
+                expected_capture_observation_authority_set_digest
+            ),
+            expected_candidate_identity=expected_candidate_identity,
+            expected_implementation_manifest_digest=(
+                expected_implementation_manifest_digest
+            ),
+            expected_plan_digest=expected_plan_digest,
+            expected_plan_action_set_digest=expected_plan_action_set_digest,
+            expected_capability_set_digest=(
+                captured_bindings.get("capability_set_digest", "")
+                if isinstance(captured_bindings, Mapping)
+                else ""
+            ),
+            expected_captured_state_identity=expected_captured_state_identity,
+            expected_captured_state_digest=expected_captured_state_digest,
+            plan_action_index=plan_action_index,
+        )
+    )
+    diagnostics.extend(capture_observation_diagnostics)
+    capture_observations_valid = not capture_observation_diagnostics
     prepared_authority_index, prepared_authorities_valid = (
         _validated_prepared_action_authority_index(
             prepared_action_authority_set,
@@ -1393,20 +1681,23 @@ def validate_checkpoint_set_manifest(
                 expected_implementation_manifest_digest
             ),
             expected_capability_set_digest=(
-                authoritative_captured_state.get("bindings", {}).get(
-                    "capability_set_digest", ""
-                )
-                if isinstance(authoritative_captured_state, Mapping)
-                and isinstance(authoritative_captured_state.get("bindings"), Mapping)
+                captured_bindings.get("capability_set_digest", "")
+                if isinstance(captured_bindings, Mapping)
                 else ""
             ),
         )
     )
     if (
         not prepared_authorities_valid
+        or not capture_observations_valid
         or set(prepared_authority_index) != set(plan_action_index)
         or any(
-            not _prepared_authority_matches_plan_action(
+            key not in capture_observation_index
+            or authority.get("captured_pre_state")
+            != capture_observation_index[key].get("normalized_pre_state")
+            or authority.get("captured_pre_state_digest")
+            != capture_observation_index[key].get("normalized_pre_state_digest")
+            or not _prepared_authority_matches_plan_action(
                 authority,
                 plan_action_index[key],
             )
@@ -1609,6 +1900,9 @@ def validate_compensation_authorization(
     authoritative_captured_state: object,
     expected_captured_state_identity: str,
     expected_captured_state_digest: str,
+    capture_observation_authority_set: object,
+    expected_capture_observation_authority_set_identity: str,
+    expected_capture_observation_authority_set_digest: str,
     prepared_action_authority_set: object,
     expected_prepared_action_authority_set_identity: str,
     expected_prepared_action_authority_set_digest: str,
@@ -1657,6 +1951,12 @@ def validate_compensation_authorization(
             ),
         )
 
+    trusted_snapshots: Sequence[Mapping[str, object]] = (
+        trusted_checkpoint_records
+        if isinstance(trusted_checkpoint_records, Sequence)
+        and not isinstance(trusted_checkpoint_records, (str, bytes))
+        else ()
+    )
     checkpoint_diagnostics = validate_checkpoint_set_manifest(
         checkpoint_set_manifest,
         expected_apply_authorization_identity=expected_apply_authorization_identity,
@@ -1666,12 +1966,19 @@ def validate_compensation_authorization(
         expected_run_identity=expected_run_identity,
         expected_plan_action_set_digest=expected_plan_action_set_digest,
         trusted_checkpoint_store_generation=trusted_checkpoint_store_generation,
-        trusted_checkpoint_records=trusted_checkpoint_records,
+        trusted_checkpoint_records=trusted_snapshots,
         pretransition_checkpoint_store_generation=pretransition_checkpoint_store_generation,
         pretransition_checkpoint_records=pretransition_checkpoint_records,
         authoritative_captured_state=authoritative_captured_state,
         expected_captured_state_identity=expected_captured_state_identity,
         expected_captured_state_digest=expected_captured_state_digest,
+        capture_observation_authority_set=capture_observation_authority_set,
+        expected_capture_observation_authority_set_identity=(
+            expected_capture_observation_authority_set_identity
+        ),
+        expected_capture_observation_authority_set_digest=(
+            expected_capture_observation_authority_set_digest
+        ),
         prepared_action_authority_set=prepared_action_authority_set,
         expected_prepared_action_authority_set_identity=(
             expected_prepared_action_authority_set_identity
@@ -1700,7 +2007,7 @@ def validate_compensation_authorization(
         and snapshot["record"].get("compensation_authority_kind") == "automatic_apply"
         and snapshot["record"].get("phase")
         in {"compensating", "compensated", "compensation_blocked"}
-        for snapshot in trusted_checkpoint_records
+        for snapshot in trusted_snapshots
     ):
         diagnostics.append(
             _diagnostic(
@@ -1799,6 +2106,9 @@ def validate_public_compensation_recovery(
     authoritative_captured_state: object,
     expected_captured_state_identity: str,
     expected_captured_state_digest: str,
+    capture_observation_authority_set: object,
+    expected_capture_observation_authority_set_identity: str,
+    expected_capture_observation_authority_set_digest: str,
     prepared_action_authority_set: object,
     expected_prepared_action_authority_set_identity: str,
     expected_prepared_action_authority_set_digest: str,
@@ -1846,6 +2156,13 @@ def validate_public_compensation_recovery(
         "authoritative_captured_state": authoritative_captured_state,
         "expected_captured_state_identity": expected_captured_state_identity,
         "expected_captured_state_digest": expected_captured_state_digest,
+        "capture_observation_authority_set": capture_observation_authority_set,
+        "expected_capture_observation_authority_set_identity": (
+            expected_capture_observation_authority_set_identity
+        ),
+        "expected_capture_observation_authority_set_digest": (
+            expected_capture_observation_authority_set_digest
+        ),
         "prepared_action_authority_set": prepared_action_authority_set,
         "expected_prepared_action_authority_set_identity": (
             expected_prepared_action_authority_set_identity
@@ -2004,8 +2321,8 @@ def validate_public_compensation_recovery(
             current_snapshot, current_record = current_by_identity[identity]
             original_phase = original_record.get("phase")
             current_phase = current_record.get("phase")
-            record_changed = current_record != original_record
-            store_changed = store_changed or record_changed
+            snapshot_changed = current_snapshot != original_snapshot
+            store_changed = store_changed or snapshot_changed
             if (
                 original_phase not in allowed_descendant_phases
                 or original_record.get("compensation_authority_kind") != "none"
@@ -2024,7 +2341,7 @@ def validate_public_compensation_recovery(
                 or current_snapshot["durable_generation"]
                 < original_snapshot["durable_generation"]
                 or (
-                    record_changed
+                    snapshot_changed
                     and current_snapshot["durable_generation"]
                     <= original_snapshot["durable_generation"]
                 )
@@ -2101,6 +2418,9 @@ def validate_run_terminal_record(
     authoritative_captured_state: object,
     expected_captured_state_identity: str,
     expected_captured_state_digest: str,
+    capture_observation_authority_set: object,
+    expected_capture_observation_authority_set_identity: str,
+    expected_capture_observation_authority_set_digest: str,
     prepared_action_authority_set: object,
     expected_prepared_action_authority_set_identity: str,
     expected_prepared_action_authority_set_digest: str,
@@ -2128,6 +2448,12 @@ def validate_run_terminal_record(
             ),
         )
 
+    trusted_snapshots: Sequence[Mapping[str, object]] = (
+        trusted_checkpoint_records
+        if isinstance(trusted_checkpoint_records, Sequence)
+        and not isinstance(trusted_checkpoint_records, (str, bytes))
+        else ()
+    )
     checkpoint_diagnostics = validate_checkpoint_set_manifest(
         checkpoint_set_manifest,
         expected_apply_authorization_identity=expected_apply_authorization_identity,
@@ -2137,12 +2463,19 @@ def validate_run_terminal_record(
         expected_run_identity=expected_run_identity,
         expected_plan_action_set_digest=expected_plan_action_set_digest,
         trusted_checkpoint_store_generation=trusted_checkpoint_store_generation,
-        trusted_checkpoint_records=trusted_checkpoint_records,
+        trusted_checkpoint_records=trusted_snapshots,
         pretransition_checkpoint_store_generation=(trusted_checkpoint_store_generation),
-        pretransition_checkpoint_records=trusted_checkpoint_records,
+        pretransition_checkpoint_records=trusted_snapshots,
         authoritative_captured_state=authoritative_captured_state,
         expected_captured_state_identity=expected_captured_state_identity,
         expected_captured_state_digest=expected_captured_state_digest,
+        capture_observation_authority_set=capture_observation_authority_set,
+        expected_capture_observation_authority_set_identity=(
+            expected_capture_observation_authority_set_identity
+        ),
+        expected_capture_observation_authority_set_digest=(
+            expected_capture_observation_authority_set_digest
+        ),
         prepared_action_authority_set=prepared_action_authority_set,
         expected_prepared_action_authority_set_identity=(
             expected_prepared_action_authority_set_identity
@@ -2208,9 +2541,7 @@ def validate_run_terminal_record(
                 "The terminal record does not bind the exact validated apply, plan, checkpoint set, and store generation.",
             )
         )
-    trusted_records = [
-        _checkpoint_record(snapshot) for snapshot in trusted_checkpoint_records
-    ]
+    trusted_records = [_checkpoint_record(snapshot) for snapshot in trusted_snapshots]
     plan_action_index, plan_diagnostics = _validated_plan_action_index(
         authoritative_plan_action_set,
         expected_action_set_digest=expected_plan_action_set_digest,
@@ -2248,6 +2579,7 @@ def _release_evidence_diagnostics(
     *,
     checkpoint_set_manifest: object,
     checkpoint_set_manifest_bytes: object,
+    capture_observation_authority_set_bytes: object,
     prepared_action_authority_set_bytes: object,
     run_terminal_record: object,
     run_terminal_record_bytes: object,
@@ -2266,6 +2598,9 @@ def _release_evidence_diagnostics(
     authoritative_captured_state: object,
     expected_captured_state_identity: str,
     expected_captured_state_digest: str,
+    capture_observation_authority_set: object,
+    expected_capture_observation_authority_set_identity: str,
+    expected_capture_observation_authority_set_digest: str,
     prepared_action_authority_set: object,
     expected_prepared_action_authority_set_identity: str,
     expected_prepared_action_authority_set_digest: str,
@@ -2293,6 +2628,13 @@ def _release_evidence_diagnostics(
             authoritative_captured_state=authoritative_captured_state,
             expected_captured_state_identity=expected_captured_state_identity,
             expected_captured_state_digest=expected_captured_state_digest,
+            capture_observation_authority_set=capture_observation_authority_set,
+            expected_capture_observation_authority_set_identity=(
+                expected_capture_observation_authority_set_identity
+            ),
+            expected_capture_observation_authority_set_digest=(
+                expected_capture_observation_authority_set_digest
+            ),
             prepared_action_authority_set=prepared_action_authority_set,
             expected_prepared_action_authority_set_identity=(
                 expected_prepared_action_authority_set_identity
@@ -2303,6 +2645,11 @@ def _release_evidence_diagnostics(
         )
     )
     for label, artifact, raw_bytes in (
+        (
+            "capture observation authority set",
+            capture_observation_authority_set,
+            capture_observation_authority_set_bytes,
+        ),
         (
             "prepared action authority set",
             prepared_action_authority_set,
@@ -2331,6 +2678,7 @@ def validate_release_archive_manifest(
     *,
     checkpoint_set_manifest: object,
     checkpoint_set_manifest_bytes: bytes,
+    capture_observation_authority_set_bytes: bytes,
     prepared_action_authority_set_bytes: bytes,
     run_terminal_record: object,
     run_terminal_record_bytes: bytes,
@@ -2349,6 +2697,9 @@ def validate_release_archive_manifest(
     authoritative_captured_state: object,
     expected_captured_state_identity: str,
     expected_captured_state_digest: str,
+    capture_observation_authority_set: object,
+    expected_capture_observation_authority_set_identity: str,
+    expected_capture_observation_authority_set_digest: str,
     prepared_action_authority_set: object,
     expected_prepared_action_authority_set_identity: str,
     expected_prepared_action_authority_set_digest: str,
@@ -2386,6 +2737,9 @@ def validate_release_archive_manifest(
         _release_evidence_diagnostics(
             checkpoint_set_manifest=checkpoint_set_manifest,
             checkpoint_set_manifest_bytes=checkpoint_set_manifest_bytes,
+            capture_observation_authority_set_bytes=(
+                capture_observation_authority_set_bytes
+            ),
             prepared_action_authority_set_bytes=(prepared_action_authority_set_bytes),
             run_terminal_record=run_terminal_record,
             run_terminal_record_bytes=run_terminal_record_bytes,
@@ -2408,6 +2762,13 @@ def validate_release_archive_manifest(
             authoritative_captured_state=authoritative_captured_state,
             expected_captured_state_identity=expected_captured_state_identity,
             expected_captured_state_digest=expected_captured_state_digest,
+            capture_observation_authority_set=capture_observation_authority_set,
+            expected_capture_observation_authority_set_identity=(
+                expected_capture_observation_authority_set_identity
+            ),
+            expected_capture_observation_authority_set_digest=(
+                expected_capture_observation_authority_set_digest
+            ),
             prepared_action_authority_set=prepared_action_authority_set,
             expected_prepared_action_authority_set_identity=(
                 expected_prepared_action_authority_set_identity
@@ -2499,6 +2860,10 @@ def validate_release_archive_manifest(
     computed_byte_digests = dict(expected_archived_document_byte_digests)
     for field, raw_bytes in (
         (
+            "capture_observation_authority_set_bytes_digest",
+            capture_observation_authority_set_bytes,
+        ),
+        (
             "prepared_action_authority_set_bytes_digest",
             prepared_action_authority_set_bytes,
         ),
@@ -2524,6 +2889,7 @@ def validate_release_receipt(
     release_archive_manifest: object,
     checkpoint_set_manifest: object,
     checkpoint_set_manifest_bytes: bytes,
+    capture_observation_authority_set_bytes: bytes,
     prepared_action_authority_set_bytes: bytes,
     run_terminal_record: object,
     run_terminal_record_bytes: bytes,
@@ -2542,6 +2908,9 @@ def validate_release_receipt(
     authoritative_captured_state: object,
     expected_captured_state_identity: str,
     expected_captured_state_digest: str,
+    capture_observation_authority_set: object,
+    expected_capture_observation_authority_set_identity: str,
+    expected_capture_observation_authority_set_digest: str,
     prepared_action_authority_set: object,
     expected_prepared_action_authority_set_identity: str,
     expected_prepared_action_authority_set_digest: str,
@@ -2578,6 +2947,9 @@ def validate_release_receipt(
         release_archive_manifest,
         checkpoint_set_manifest=checkpoint_set_manifest,
         checkpoint_set_manifest_bytes=checkpoint_set_manifest_bytes,
+        capture_observation_authority_set_bytes=(
+            capture_observation_authority_set_bytes
+        ),
         prepared_action_authority_set_bytes=prepared_action_authority_set_bytes,
         run_terminal_record=run_terminal_record,
         run_terminal_record_bytes=run_terminal_record_bytes,
@@ -2598,6 +2970,13 @@ def validate_release_receipt(
         authoritative_captured_state=authoritative_captured_state,
         expected_captured_state_identity=expected_captured_state_identity,
         expected_captured_state_digest=expected_captured_state_digest,
+        capture_observation_authority_set=capture_observation_authority_set,
+        expected_capture_observation_authority_set_identity=(
+            expected_capture_observation_authority_set_identity
+        ),
+        expected_capture_observation_authority_set_digest=(
+            expected_capture_observation_authority_set_digest
+        ),
         prepared_action_authority_set=prepared_action_authority_set,
         expected_prepared_action_authority_set_identity=(
             expected_prepared_action_authority_set_identity
@@ -2704,6 +3083,7 @@ __all__ = (
     "compensation_ledger_claim_identity",
     "parse_execution_authority_bytes",
     "validate_apply_authorization",
+    "validate_capture_observation_authority_set",
     "validate_checkpoint_set_manifest",
     "validate_compensation_authorization",
     "validate_plan_action_set",

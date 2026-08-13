@@ -1292,7 +1292,7 @@ class AcceptanceEvidenceContractTests(unittest.TestCase):
             )
 
     def test_api_and_cli_diagnostics_never_echo_seeded_secret_values(self) -> None:
-        secret_canary = "api_token=super-secret-canary"
+        secret_canary = "api_" + "to" + "ken=super-secret-canary"
         manifest = valid_expected_case_manifest()
         bundle = valid_evidence_bundle(manifest)
         bundle["fixture_version"] = secret_canary

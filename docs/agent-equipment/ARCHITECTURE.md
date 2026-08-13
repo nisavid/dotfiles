@@ -17,6 +17,7 @@ semantics.
 | Apply authorization | external operator authority | One time-bounded, one-run grant for one exact pre-mutation binding tuple and execution domain |
 | Execution domain | external operator authority | Independently trusted identity of the one authoritative CAS nonce-ledger namespace and target |
 | Authorization ledger | reconciler runtime state directory | Durable one-time nonce claims inside the exact execution domain; never authority issuance |
+| Capture observation authority set | trusted pre-invocation validator | Sealed all-and-only plan-action projection of normalized capture observations, with identity/digest later bound by apply authority |
 | Prepared action authority set | trusted pre-invocation validator | Sealed all-and-only plan-action projection of adapter-derived normalized pre-state and expected post-state |
 | Compensation authorization | external operator authority | Time-bounded grant for one fresh public compensation invocation against one original run and checkpoint set |
 | Apply checkpoints | reconciler runtime state directory | Recovery evidence for one immutable plan |
@@ -128,9 +129,20 @@ URLs, native output, or secret values. Manager and harness version strings are
 public native-manager observations; diagnostics never echo their supplied
 contents.
 
-`execution-authority-v1.schema.json` owns eight closed records with independent
-purposes. `PreparedActionAuthoritySet` is sealed after complete plan, capture,
-and adapter-context validation and before apply issuance. It contains one
+`execution-authority-v1.schema.json` owns nine closed records with independent
+purposes. `CaptureObservationAuthoritySet` replaces the former raw observation-
+list input with one closed, canonically sealed artifact. Its bindings name the
+exact candidate, installed implementation, plan, plan-action set, capability
+set, and captured-state identity/digest. It contains one canonically ordered
+observation for every plan action and no others. Each observation binds the
+action identity and ordinal, exact surface and controlled-component identities,
+and complete normalized captured pre-state plus its canonical digest. Before
+apply issuance, an independent trust channel supplies and validates the set's
+exact identity and complete digest. `ApplyAuthorization` then binds that tuple;
+a coordinated projection reseal requires a new authorization.
+
+`PreparedActionAuthoritySet` is sealed after complete plan, capture-observation-
+authority, and adapter-context validation and before apply issuance. It contains one
 canonically ordered authority for every plan action and no others. Each member
 binds the exact candidate and implementation, catalog, lock, plan, capability
 set and route capability, operation and compensation, surface set, sealed
@@ -139,14 +151,16 @@ post-state with self-digests. Both normalized states contain a sorted, unique
 component identity set equal to the action's exact controlled-equipment set, and
 the expected post-state must include the action's desired-state fragment. The
 set has an independently trusted canonical identity and digest; a caller map or
-a coordinated reseal does not replace that trust.
+a coordinated reseal does not replace that trust. Every prepared pre-state must
+equal its matching member of the validated `CaptureObservationAuthoritySet`.
 
 `ApplyAuthorization` is the only serialized authority that may start
 forward mutation. It binds `command: apply`, issuer and validity times, one run
 identity, one issuer-generated execution nonce, the independently trusted
 `execution_domain_identity`, and the complete candidate, installed-
-implementation, catalog, lock, plan, plan-action-set, prepared-action-authority-
-set identity/digest, capability-set, sealed-capture, expected-case-manifest, and
+implementation, catalog, lock, plan, plan-action-set, capture-observation-
+authority-set identity/digest, prepared-action-authority-set identity/digest,
+capability-set, sealed-capture, expected-case-manifest, and
 operator-review-package tuple. The review-
 package digest binds the exact proposed live mutations, rollback material, and
 operator review content presented to the issuer. Its identity is the canonical
@@ -179,11 +193,16 @@ concurrently changed record fails closed. Every durable record itself includes
 the apply-authorization identity/digest, execution nonce, run, domain, and the
 full `CHK-10` tuple; those fields participate in its immutable checkpoint
 identity and are checked against independent apply inputs. Before accepting any
-checkpoint, validation revalidates the complete captured-state artifact and
-`PreparedActionAuthoritySet`, requires the checkpoint sequence to be the exact
-canonical plan prefix, and matches its step ID, normalized pre/post state,
+checkpoint, validation revalidates the complete captured-state artifact,
+`CaptureObservationAuthoritySet`, and `PreparedActionAuthoritySet`, requires the
+checkpoint sequence to be the exact canonical plan prefix, and matches its step
+ID, normalized pre/post state,
 capability-set digest, and all other immutable fields to the corresponding
-prepared authority. Raw captured observations never directly authorize restore.
+prepared authority. Each public checkpoint, compensation, recovery, terminal,
+archive, and receipt validation seam receives the closed capture-observation
+artifact plus the expected identity/digest tuple obtained from the validated
+`ApplyAuthorization`; no seam accepts a raw observation list or derives trust
+from the artifact under review.
 The cross-record lifecycle must also be reachable: before compensation it is
 zero or more `completed` records followed by at most one final `prepared`
 record; during compensation it is zero or more `completed` records, at most one
@@ -230,7 +249,9 @@ the complete plan-action-set digest, validated checkpoint-set identity/digest
 and store generation, and `state: succeeded`. Terminal validation requires one
 unique completed checkpoint for every action in the complete plan-action set.
 An early-crash checkpoint prefix may authorize compensation but cannot
-authorize release. The `run-terminal:` identity excludes identity and digest;
+authorize release. Terminal validation revalidates the exact capture-observation-
+authority and prepared-action-authority sets against the tuple bound by the
+validated apply authorization. The `run-terminal:` identity excludes identity and digest;
 the complete digest excludes only the digest.
 
 `ReleaseArchiveManifest` is a closed semantic manifest over the candidate and
@@ -238,8 +259,9 @@ installed implementation, exact execution binding including the execution
 domain, complete plan-action-set digest, checkpoint-set identity/digest,
 authenticated run-terminal identity/digest, launcher
 identity/manifest, authority-store identity/key, `absent` compare token,
-generation `1`, and seven SHA-256 digests of the exact UTF-8 byte streams of the
-authorization, prepared-action-authority set, checkpoint-set manifest,
+generation `1`, and eight SHA-256 digests of the exact UTF-8 byte streams of the
+authorization, capture-observation-authority set, prepared-action-authority set,
+checkpoint-set manifest,
 run-terminal record, expected-case manifest, evidence bundle, and attestation.
 Exact-byte digests are distinct
 from semantic canonical digests: differently formatted JSON may have the same
@@ -910,6 +932,13 @@ compensate(
 ) -> compensation_report
 ```
 
+The executor first validates `ApplyAuthorization`, then takes the expected
+capture-observation-authority identity/digest from its closed bindings. Every
+public validation path receives that expected tuple together with the exact
+`CaptureObservationAuthoritySet` artifact. The former raw observation-list and
+caller-supplied observation-digest API does not exist. Compensation recovery
+uses the same tuple from the archived, revalidated apply authorization.
+
 Before the first action checkpoint, the executor rejects a raw authority input
 larger than 256 KiB before UTF-8 decoding, JSON parsing, regex evaluation,
 credential scanning, or hashing. It strictly parses UTF-8 JSON, rejects
@@ -1026,10 +1055,11 @@ canonical semantic bundle digest. The release validator is pure. The
 candidate-independent release
 launcher supplies its own externally trusted identity and manifest digest plus
 the trusted execution tuple, including the execution domain, apply-authorization,
-expected-case, and attestation digests. It strictly validates the closed records,
-writes the exact authorization, prepared-action-authority set, checkpoint-set
-manifest, run-terminal record, expected-case manifest, evidence bundle,
-attestation, and archive manifest into
+expected-case, and attestation digests. It strictly parses the eight exact
+release inputs and validates the closed records. It writes the exact
+authorization, capture-observation-authority set, prepared-action-authority set,
+checkpoint-set manifest, run-terminal record, expected-case manifest, evidence
+bundle, attestation, and archive manifest into
 a same-filesystem staging directory, fsyncs them, and performs one create-only
 compare-and-swap rename to the tuple's authority-store identity. `absent` is the
 only first-write compare token and generation `1` is the only first committed
@@ -1048,10 +1078,11 @@ apply.
 
 ## Schema evolution
 
-Catalog, lock, captured-state, plan-action-set, prepared-action-authority-set,
-apply-authorization, compensation-authorization, compensation-transition-claim,
-checkpoint-set, run-terminal, evidence, attestation, release-archive-manifest,
-and release-receipt formats use independent explicit major versions. Adding an
+Catalog, lock, captured-state, plan-action-set, capture-observation-authority-set,
+prepared-action-authority-set, apply-authorization, compensation-authorization,
+compensation-transition-claim, checkpoint-set, run-terminal, evidence,
+attestation, release-archive-manifest, and release-receipt formats use
+independent explicit major versions. Adding an
 optional field with unchanged meaning may remain in
 the current major version only when old readers reject or safely ignore it by
 contract; these v1 schemas use exact shapes, so additions normally require a

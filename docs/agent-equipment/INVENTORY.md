@@ -44,7 +44,7 @@ evidence, entry kind, Claude visibility, and overlap evidence.
 Provenance is observable for 87 skills through the global `skills` lock. The
 repository also names 32 canonical skills, with `graphite` appearing in both
 sets. Four live skills have neither source: `applying-diataxis`, `impeccable`,
-`publishing-systalyze-sites`, and `working-in-systalyze-worktrees`; they remain
+`publishing-private-sites`, and `working-in-private-worktrees`; they remain
 retained observations rather than inferred adoptions. The three canonical
 Hindsight symlinks additionally identify the Hindsight control plane as their
 active-release source.

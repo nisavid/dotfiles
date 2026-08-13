@@ -71,16 +71,18 @@ python3 scripts/admit-age-envelopes \
 python3 scripts/privacy-scan --root . --require-age-manifest
 ```
 
-The admission command requires age v1.3.1, mode-`0600` post-quantum identities
-outside the repository, and only ML-KEM-768+X25519 recipient stanzas. The
-number of stanzas must equal the supplied identity set, and each supplied
-identity must independently decrypt every exact candidate to EOF. It reads
-each candidate once with a 4 MiB limit before atomically replacing the
-manifest. It discards plaintext and age diagnostics. The command leaves the
+The admission command requires age v1.3.1, exactly one mode-`0600` post-quantum
+identity outside the repository, and exactly one ML-KEM-768+X25519 recipient
+stanza. That identity must independently decrypt every exact candidate to EOF. It reads
+each candidate once with a 4 MiB limit before atomically and durably replacing
+the manifest. It discards plaintext and age diagnostics. The command leaves the
 existing manifest unchanged if any path is unsafe, any envelope fails
 decryption, or any other validation fails. Review the ciphertext and manifest
 together; do not hand-edit a digest to admit bytes that were not validated by
-this command.
+this command. Exit status `2` with `age-envelope manifest durability uncertain`
+means the exact new manifest bytes are installed but the directory durability
+commit could not be confirmed; inspect the installed manifest and rerun
+admission before treating it as durable.
 
 ## Source-Only Catalog Editing
 
@@ -119,4 +121,14 @@ Initialization writes chezmoi's age configuration before apply. With the correct
 
 ## Rotation And Additional Machines
 
-Generate a new post-quantum identity, add its public recipient to the age configuration, and re-encrypt every ciphertext to all active recipients. Verify decryption with each retained identity before removing an old recipient. Do not mix post-quantum and classical recipients on one file because the classical recipient determines the weaker confidentiality boundary.
+The v1 single-stanza policy supports a reviewed cutover, not a multi-recipient
+overlap. Generate a new post-quantum identity, re-encrypt every ciphertext only
+to the new recipient, admit the complete repository with that identity, and
+verify the new machine before retiring the old identity. Machines retaining
+only the old identity cannot decrypt the rotated repository.
+
+An overlap window requires a separately reviewed policy change that raises the
+authorized stanza count and updates admission and hosted scanning together.
+Never add an extra recipient under the v1 policy, and do not mix post-quantum
+and classical recipients because the classical recipient determines the weaker
+confidentiality boundary.

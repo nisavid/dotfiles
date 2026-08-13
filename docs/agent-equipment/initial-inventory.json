@@ -6558,7 +6558,7 @@
           "onboarding-forks-for-agent-maintenance",
           "pr-review-orchestration",
           "publishing-reviewable-prs",
-          "publishing-systalyze-sites",
+          "publishing-private-sites",
           "ralph-review-until-clean",
           "resolving-workflow-ownership",
           "resuming-reviewed-prs",
@@ -6570,7 +6570,7 @@
           "triaging-agent-armory-issues",
           "triaging-sandboxed-cli-failures",
           "using-persistent-git-worktrees",
-          "working-in-systalyze-worktrees",
+          "working-in-private-worktrees",
           "writing-clearly-and-concisely",
           "writing-reviewable-pr-descriptions"
         ],
@@ -6654,7 +6654,7 @@
           "improve-codebase-architecture",
           "media-use",
           "prototype",
-          "publishing-systalyze-sites",
+          "publishing-private-sites",
           "receiving-code-review",
           "requesting-code-review",
           "research",
@@ -6673,7 +6673,7 @@
           "using-superpowers",
           "verification-before-completion",
           "wayfinder",
-          "working-in-systalyze-worktrees",
+          "working-in-private-worktrees",
           "writing-clearly-and-concisely",
           "writing-plans",
           "writing-skills"
@@ -6806,7 +6806,7 @@
         "pr-review-orchestration",
         "prototype",
         "publishing-reviewable-prs",
-        "publishing-systalyze-sites",
+        "publishing-private-sites",
         "ralph-review-until-clean",
         "receiving-code-review",
         "requesting-code-review",
@@ -6838,7 +6838,7 @@
         "wait-what",
         "wayfinder",
         "wizard",
-        "working-in-systalyze-worktrees",
+        "working-in-private-worktrees",
         "writing-clearly-and-concisely",
         "writing-for-agents",
         "writing-plans",
@@ -7139,8 +7139,8 @@
         "names": [
           "applying-diataxis",
           "impeccable",
-          "publishing-systalyze-sites",
-          "working-in-systalyze-worktrees"
+          "publishing-private-sites",
+          "working-in-private-worktrees"
         ]
       }
     ]

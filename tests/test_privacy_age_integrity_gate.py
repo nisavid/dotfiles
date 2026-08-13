@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -31,12 +32,22 @@ PROTECTED_FILES = {
 
 
 def run(*command: str, cwd: Path) -> str:
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_TERMINAL_PROMPT": "0",
+        }
+    )
     result = subprocess.run(
         command,
         cwd=cwd,
         check=True,
         capture_output=True,
         text=True,
+        env=environment,
+        timeout=10,
     )
     return result.stdout.strip()
 
@@ -52,6 +63,10 @@ def commit_all(root: Path, message: str) -> str:
     run("git", "add", "--all", cwd=root)
     run(
         "git",
+        "-c",
+        "commit.gpgsign=false",
+        "-c",
+        f"core.hooksPath={os.devnull}",
         "-c",
         "user.name=Fixture",
         "-c",
@@ -112,6 +127,29 @@ class PrivacyAgeIntegrityGateTests(TestCase):
         )
         self.assertIn("python3 trusted-base/scripts/privacy-scan", source)
         self.assertNotIn("python3 untrusted-head/", source)
+        self.assertEqual(
+            tuple(
+                line.strip() for line in source.splitlines() if "untrusted-head" in line
+            ),
+            (
+                "path: untrusted-head",
+                'test "$(git -C untrusted-head rev-parse HEAD)" = "$PRIVACY_HEAD_SHA"',
+                "--head-repository untrusted-head \\",
+                '--root "$GITHUB_WORKSPACE/untrusted-head" \\',
+            ),
+        )
+        self.assertIsNone(
+            re.search(
+                r"(?m)^\s*(?:uses|working-directory):\s*(?:\./)?untrusted-head(?:/|$)",
+                source,
+            )
+        )
+        self.assertIsNone(
+            re.search(
+                r"(?m)^\s*(?:bash|sh|zsh|make|npm|npx)\b[^\n]*\buntrusted-head/",
+                source,
+            )
+        )
 
     def test_every_protected_surface_is_frozen(self) -> None:
         mutations = {
@@ -156,6 +194,17 @@ class PrivacyAgeIntegrityGateTests(TestCase):
                 _, base, head, base_commit = self.make_checkouts()
                 mutate(head)
                 head_commit = commit_all(head, label)
+                with self.assertRaisesRegex(RuntimeError, "protected path"):
+                    self.verify(base, head, base_commit, head_commit)
+
+        for relative in PROTECTED_FILES:
+            with self.subTest(protected=relative):
+                _, base, head, base_commit = self.make_checkouts()
+                (head / relative).write_text(
+                    "candidate mutation\n",
+                    encoding="utf-8",
+                )
+                head_commit = commit_all(head, f"changed {relative}")
                 with self.assertRaisesRegex(RuntimeError, "protected path"):
                     self.verify(base, head, base_commit, head_commit)
 
