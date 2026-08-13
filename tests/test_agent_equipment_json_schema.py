@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+import time
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -115,6 +116,33 @@ class AgentEquipmentJsonSchemaTests(unittest.TestCase):
             with self.subTest(document=type(document).__name__):
                 self.assertFalse(self.validate(document, {"root.json": schema}))
 
+    def test_rejects_non_unicode_scalar_strings_and_object_keys(self) -> None:
+        invalid_documents = (
+            "\ud800",
+            "\udfff",
+            "prefix\ud800suffix",
+            {"\ud800": "value"},
+            {"nested": ["\udc00"]},
+        )
+        for document in invalid_documents:
+            with self.subTest(document=repr(document)):
+                self.assertFalse(self.validate(document, {"root.json": {}}))
+
+        self.assertTrue(
+            self.validate(
+                {"\U0010ffff": "\U0001f642"},
+                {"root.json": {"type": "object"}},
+            )
+        )
+
+        strict_loaded_surrogate_schemas = (
+            b'{"$defs":{"bad":{"const":"\\ud800"}},"type":"string"}',
+            b'{"$defs":{"\\ud800":{}},"type":"string"}',
+        )
+        for schema in strict_loaded_surrogate_schemas:
+            with self.subTest(schema=schema):
+                self.assertFalse(self.validate_raw("value", {"root.json": schema}))
+
     def test_preflights_the_value_shape_of_every_supported_keyword(self) -> None:
         malformed_schemas = {
             "schema dialect type": {"$schema": 1},
@@ -155,6 +183,57 @@ class AgentEquipmentJsonSchemaTests(unittest.TestCase):
                 self.assertFalse(self.validate("value", {"root.json": schema}))
 
         self.assertFalse(self.validate_raw("value", {"root.json": b'{"const":NaN}'}))
+
+    def test_validates_schema_ids_with_only_optional_empty_fragments(self) -> None:
+        checked_in_schemas = (
+            json.loads(path.read_text(encoding="utf-8"))
+            for path in sorted((ROOT / "docs/agent-equipment").glob("*.schema.json"))
+        )
+        checked_in_ids = tuple(
+            schema["$id"] for schema in checked_in_schemas if "$id" in schema
+        )
+        valid_ids = checked_in_ids + (
+            "root.json",
+            "root.json#",
+            "root.json#\n",
+            "../schemas/root.json",
+            "#",
+            "",
+            "https://exa mple.invalid/root.json",
+            "https://[broken/root.json",
+            "https://example.invalid/%zz",
+            "root[1].json",
+            "root.json?[query]",
+            "https://first@second@example.invalid/root.json",
+            "https://example.invalid:port/root.json",
+            ":relative",
+            "1scheme:relative",
+            "\\server\\schema.json",
+        )
+        for schema_id in valid_ids:
+            with self.subTest(schema_id=schema_id):
+                self.assertTrue(
+                    self.validate(
+                        "value",
+                        {"root.json": {"$id": schema_id, "type": "string"}},
+                    )
+                )
+
+        invalid_ids = (
+            "#fragment",
+            "root.json#fragment",
+            "root.json##",
+            "##",
+            "root.json#fragment#",
+        )
+        for schema_id in invalid_ids:
+            with self.subTest(schema_id=schema_id):
+                self.assertFalse(
+                    self.validate(
+                        "value",
+                        {"root.json": {"$id": schema_id, "type": "string"}},
+                    )
+                )
 
     def test_preflight_visits_unselected_definitions_and_branches(self) -> None:
         malformed_locations = (
@@ -240,14 +319,32 @@ class AgentEquipmentJsonSchemaTests(unittest.TestCase):
             with self.subTest(label=label):
                 self.assertTrue(self.validate(document, {"root.json": schema}))
 
+    def test_accepts_nonnegative_integer_valued_float_schema_limits(self) -> None:
+        instances = {
+            "minLength": "x",
+            "minItems": ["x"],
+            "maxItems": [],
+            "minProperties": {"name": "x"},
+        }
+        for keyword, instance in instances.items():
+            for limit in (1.0, -0.0):
+                with self.subTest(keyword=keyword, limit=limit):
+                    self.assertTrue(
+                        self.validate(instance, {"root.json": {keyword: limit}})
+                    )
+
+            for limit in (1.5, -1.0, float("inf")):
+                with self.subTest(keyword=keyword, limit=limit):
+                    self.assertFalse(
+                        self.validate(instance, {"root.json": {keyword: limit}})
+                    )
+
     def test_evaluates_types_values_and_scalar_constraints_exactly(self) -> None:
         rejected_cases = (
             (True, {"type": "integer"}),
             (True, {"type": "number"}),
             (1, {"type": "boolean"}),
             (None, {"type": "string"}),
-            (1.0, {"const": 1}),
-            (1.0, {"enum": [1]}),
             ("short", {"minLength": 6}),
             ("abc", {"pattern": "^[0-9]+$"}),
             (0, {"minimum": 1}),
@@ -264,6 +361,110 @@ class AgentEquipmentJsonSchemaTests(unittest.TestCase):
                 huge_integer,
                 {"root.json": {"type": "integer", "minimum": huge_integer}},
             )
+        )
+
+    def test_validates_and_evaluates_finite_maximum(self) -> None:
+        accepted_cases = (
+            (2, {"maximum": 2}),
+            (2.0, {"maximum": 2}),
+            (1, {"maximum": 1.0}),
+            (True, {"maximum": 0}),
+        )
+        for document, schema in accepted_cases:
+            with self.subTest(document=document, schema=schema):
+                self.assertTrue(self.validate(document, {"root.json": schema}))
+
+        self.assertFalse(self.validate(2, {"root.json": {"maximum": 1}}))
+        for maximum in (True, "1", float("inf"), float("nan")):
+            with self.subTest(maximum=maximum):
+                self.assertFalse(
+                    self.validate("value", {"root.json": {"maximum": maximum}})
+                )
+
+    def test_validates_rfc3339_date_times_with_year_zero_and_offsets(self) -> None:
+        schema = {"type": "string", "format": "date-time"}
+        accepted = (
+            "0000-01-01T00:00:00Z",
+            "0000-02-29t23:59:59z",
+            "2000-02-29T12:34:56.123+23:59",
+            "2026-08-13T04:00:00-00:00",
+            "2026-08-13T04:00:00,123Z",
+            "2026-08-13t04:00:00,123z",
+            "2026-08-13T04:00:00Z\n",
+            "2026-08-13T04:00:00,123Z\n",
+        )
+        for value in accepted:
+            with self.subTest(value=value):
+                self.assertTrue(self.validate(value, {"root.json": schema}))
+
+        rejected = (
+            "1900-02-29T00:00:00Z",
+            "2026-02-30T00:00:00Z",
+            "2026-01-01T24:00:00Z",
+            "2026-01-01T00:00:60Z",
+            "2026-01-01T00:00:00+24:00",
+            "2026-01-01T00:00:00+00:60",
+            "2026-01-01T00:00:00",
+            "2026-01-01T00:00:00Z\n\n",
+            "2026-01-01T00:00:00Z\r",
+        )
+        for value in rejected:
+            with self.subTest(value=value):
+                self.assertFalse(self.validate(value, {"root.json": schema}))
+
+    def test_uses_json_schema_numeric_equality_and_integer_semantics(self) -> None:
+        accepted_cases = (
+            (1.0, {"type": "integer"}),
+            (1.0, {"const": 1}),
+            (1.0, {"enum": [1]}),
+            ([True, 1], {"type": "array", "uniqueItems": True}),
+        )
+        for document, schema in accepted_cases:
+            with self.subTest(document=document, schema=schema):
+                self.assertTrue(self.validate(document, {"root.json": schema}))
+
+        rejected_cases = (
+            (1.5, {"type": "integer"}),
+            ([1, 1.0], {"type": "array", "uniqueItems": True}),
+            (1, {"oneOf": [{"const": 1}, {"const": 1.0}]}),
+            (True, {"const": 1}),
+            (1, {"const": True}),
+        )
+        for document, schema in rejected_cases:
+            with self.subTest(document=document, schema=schema):
+                self.assertFalse(self.validate(document, {"root.json": schema}))
+
+        self.assertFalse(self.validate("value", {"root.json": {"enum": [1, 1.0]}}))
+
+    def test_unique_items_handles_wide_structured_arrays(self) -> None:
+        values = [
+            {"identity": f"item:{index}", "coordinates": [index, index + 1]}
+            for index in range(4_000)
+        ]
+        schema = {"type": "array", "uniqueItems": True}
+
+        self.assertTrue(self.validate(values, {"root.json": schema}))
+        self.assertFalse(
+            self.validate(
+                [*values, {"coordinates": [3999.0, 4000.0], "identity": "item:3999"}],
+                {"root.json": schema},
+            )
+        )
+
+    def test_unique_items_resists_python_integer_hash_collisions(self) -> None:
+        values = [index * sys.hash_info.modulus for index in range(10_000)]
+        schema = {"type": "array", "uniqueItems": True}
+
+        started = time.perf_counter()
+        self.assertTrue(self.validate(values, {"root.json": schema}))
+        self.assertFalse(self.validate([*values, values[-1]], {"root.json": schema}))
+        elapsed = time.perf_counter() - started
+
+        self.assertLess(elapsed, 1.0)
+
+        huge_integer = 10**10_000
+        self.assertTrue(
+            self.validate([huge_integer, -huge_integer], {"root.json": schema})
         )
 
     def test_evaluates_array_and_object_constraints(self) -> None:

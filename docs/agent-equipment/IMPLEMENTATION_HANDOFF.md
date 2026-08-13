@@ -36,6 +36,7 @@ deferred.
 | `docs/agent-equipment/captured-state-v1.schema.json` | Pre-mutation runtime capture and recovery-evidence contract |
 | `docs/agent-equipment/plan-action-set-v1.schema.json` | Closed projection of every independently validated automated plan action supplied to captured-state validation |
 | `docs/agent-equipment/adapter-contract-v1.schema.json` | Closed capability, request, observation, action, and receipt serialization contract |
+| `docs/agent-equipment/acceptance-evidence-v1.schema.json` | Closed expected-case, candidate evidence, and post-run attestation contract |
 | `docs/agent-equipment/initial-catalog.proposed.json` | Schema-valid initial desired-state proposal; no live authority |
 | `docs/agent-equipment/initial-lock.proposed.json` | Generated 132-record lock bound to the proposed catalog digest |
 | `docs/agent-equipment/INVENTORY.md` and `initial-inventory.json` | Dated, secret-free read-only observation and initial classification |
@@ -45,8 +46,15 @@ deferred.
 | `scripts/agent_equipment_design.py` and `tests/test_agent_equipment_design.py` | Executable schema, expansion, and fail-closed design model |
 | `scripts/agent_equipment_json_schema.py` and `tests/test_agent_equipment_json_schema.py` | Shared strict local-schema gate used by every public design, adapter, and capture validator |
 | `scripts/agent_equipment_acceptance_model.py` and `tests/test_agent_equipment_acceptance.py` | Disposable fake-manager convergence, checkpoint, compensation, and migration-boundary evidence |
+| `scripts/agent_equipment_acceptance_evidence.py` and `tests/test_agent_equipment_acceptance_evidence.py` | Design-only three-document release gate, adversarial binding checks, and strict CLI fixtures |
 | `scripts/agent_equipment_captured_state.py` and `tests/test_agent_equipment_captured_state.py` | Captured-state capability/action-set digests and fail-closed cross-record semantic validation against separately supplied plan actions |
 | `scripts/agent_equipment_adapter_contract.py`, `tests/test_agent_equipment_adapter_contract.py`, and `tests/fixtures/agent-equipment/schema/*-adapter-*.json` | Cross-record semantic binding validator plus executable positive and fail-closed adapter-contract examples |
+
+Acceptance-evidence tests synthesize the compact expected-case manifest and its
+full child projection in temporary directories. This avoids checking in one
+dated 74-aggregate, plan-sized generated bundle as if it were release evidence.
+CI independently checks the Schema metaschema, while the public API and CLI
+tests pass all three synthesized documents through the checked-in Schema gate.
 
 Research notes are dated evidence, not desired state. Native locks, runtime
 files, caches, credentials, application databases, and manager timestamps are
@@ -67,6 +75,11 @@ mutating a real harness, user home, native manager, or credential store. It is
 evidence for the handoff, not the production controller or runtime-migration
 authority.
 
+The executable acceptance-evidence validator is also design-only. It validates
+closed files against independently supplied trust inputs, but it neither emits
+the production expected-case projection nor authenticates a plan. It never
+publishes a release or grants runtime-migration authority.
+
 ## Production source shape
 
 Add these exact source paths in dependency order:
@@ -80,6 +93,7 @@ home/dot_local/lib/agent-equipment/schemas/lock-v1.schema.json
 home/dot_local/lib/agent-equipment/schemas/captured-state-v1.schema.json
 home/dot_local/lib/agent-equipment/schemas/plan-action-set-v1.schema.json
 home/dot_local/lib/agent-equipment/schemas/adapter-contract-v1.schema.json
+home/dot_local/lib/agent-equipment/schemas/acceptance-evidence-v1.schema.json
 home/dot_local/lib/agent-equipment/agent_equipment/__init__.py
 home/dot_local/lib/agent-equipment/agent_equipment/model.py
 home/dot_local/lib/agent-equipment/agent_equipment/canonical.py
@@ -89,6 +103,8 @@ home/dot_local/lib/agent-equipment/agent_equipment/inventory.py
 home/dot_local/lib/agent-equipment/agent_equipment/checkpoint.py
 home/dot_local/lib/agent-equipment/agent_equipment/executor.py
 home/dot_local/lib/agent-equipment/agent_equipment/secrets.py
+home/dot_local/lib/agent-equipment/agent_equipment/evidence.py
+home/dot_local/lib/agent-equipment/agent_equipment/release.py
 home/dot_local/lib/agent-equipment/agent_equipment/adapters/base.py
 home/dot_local/lib/agent-equipment/agent_equipment/adapters/standalone_skills.py
 home/dot_local/lib/agent-equipment/agent_equipment/adapters/claude_projection.py
@@ -107,7 +123,7 @@ Chezmoi installs the package verbatim below
 `~/.local/lib/agent-equipment/agent_equipment/`; the launcher resolves that
 directory relative to its own installed `~/.local/bin` path and prepends only
 that exact directory to its private Python import path. It never imports from a
-source checkout or the process working directory. The five authoritative
+source checkout or the process working directory. The six authoritative
 Schemas install beside the package under `~/.local/lib/agent-equipment/schemas/`;
 the validator reads those exact bytes before semantic validation, verifies
 their compiled-in version and digest manifest, and fails closed on a missing or
@@ -171,6 +187,80 @@ pre-mutation bindings. After receipt and verification, the pure cross-record
 validator accepts only the complete success proof; it re-derives exact surfaces,
 proves complete desired component state against the route and capability, and
 binds the receipt and verification back to the capture and authority context.
+
+The production candidate evidence writer has two nonmutating seams:
+
+```python
+project_expected_acceptance_cases(
+    validated_plan,
+    sealed_capture,
+    static_requirement_registry,
+    route_capability_bindings,
+) -> ExpectedCaseManifest
+
+write_acceptance_evidence(
+    expected_cases,
+    child_results,
+    harness_versions,
+    manager_versions,
+) -> AcceptanceEvidenceBundle
+```
+
+The first projection includes every sealed automated action and every explicit
+verification or mutating migration node. It never infers nodes from prose. The
+second derives every aggregate from the complete child set and writes only to
+an operator-selected artifact directory. It cannot write release attestations.
+
+A separately authorized release-attestation writer owns the post-run authority
+record:
+
+```python
+write_release_attestation(
+    evidence_bundle_bytes,
+    authorized_expected_case_manifest_digest,
+    authenticated_attestors,
+) -> AcceptanceAttestation
+```
+
+It binds the exact bundle bytes, candidate/artifact tuple, and the canonical
+automated-runner, live-operator, and release-reviewer records. Each attestor
+time follows every bound result and live sign-off; the live-operator identity
+equals every passing live signer's identity. Attestor versions identify the
+runner or signing-policy implementation used for that role.
+
+The pure release validator and nonmutating release command are separate:
+
+```python
+validate_acceptance_evidence(
+    bundle,
+    expected_case_manifest,
+    attestation_manifest,
+    *,
+    expected_candidate_identity,
+    expected_implementation_manifest_digest,
+    expected_case_manifest_digest,
+    expected_attestation_manifest_digest,
+) -> tuple[Diagnostic, ...]
+
+release_candidate(
+    expected_case_manifest_bytes,
+    evidence_bundle_bytes,
+    attestation_manifest_bytes,
+    *,
+    trusted_candidate_identity,
+    trusted_implementation_manifest_digest,
+    authorized_expected_case_manifest_digest,
+    authorized_attestation_manifest_digest,
+    artifact_store,
+) -> ReleaseReceipt
+```
+
+The candidate-independent launcher obtains the expected-case manifest digest
+from the sealed pre-mutation authorization and the attestation digest from the
+separate post-run release authority. The release command strictly parses all
+three exact byte inputs, invokes the validator with both trusted digests,
+archives those bytes, and refuses a release receipt on any diagnostic. It does
+not call apply, adapters, native managers, or migration recovery.
 
 ## Dependency-ordered implementation backlog
 
@@ -403,9 +493,23 @@ Later steps do not begin until the named evidence passes.
 - Implement all accepted entries, non-automated reporting, idempotent repair,
   provider switching, manager-driven drift, and owned retirement in disposable
   homes.
+- Implement the production candidate evidence writer, separately authorized
+  attestation writer, pure acceptance-evidence validator, and nonmutating
+  `agent-equipment release` command. Project the complete static
+  requirement registry, sealed plan-action identities, and explicit
+  verification and mutating migration nodes into one digest-bound expected-case
+  manifest. Emit exact child receipts, derive aggregates, and reject missing,
+  extra, duplicate, foreign-bound, or incomplete evidence.
+- Require every passing `LIVE-*` child to carry a live receipt and human
+  sign-off. Require every route capability and manager-evidence binding to have
+  a matching public manager-version receipt. Bind all three exact documents,
+  require the canonical attestor set after the latest evidence time, and bind
+  the live signer to the live-operator attestor. Keep opaque references,
+  diagnostics, and archives secret-free.
 - Run the complete automated acceptance matrix on macOS and Linux where the
   adapter exists. Record unsupported harness behavior explicitly.
-- Evidence: all `CMD-*`, `CON-*`, and `CHK-*` requirements.
+- Evidence: all `CMD-*`, `CON-*`, and `CHK-*` requirements plus adversarial
+  acceptance-evidence writer, validator, and release-command fixtures.
 
 ### 9. Request exact runtime-migration authorization
 
@@ -418,9 +522,11 @@ Later steps do not begin until the named evidence passes.
   implementation identity and installed-manifest digest, catalog digest, lock
   digest, one immutable migration-plan digest, plan-action-set digest,
   capability-set digest, captured-state identity and digest, expected action
-  list, compensation list, and rollback command.
+  list, explicit verification and migration nodes, sealed expected-case manifest
+  and digest, compensation list, and rollback command.
 - Ask for authorization naming that complete candidate, catalog, lock, plan,
-  plan-action-set, capability-set, and captured-state identity/digest tuple.
+  plan-action-set, capability-set, captured-state identity/digest, and expected-
+  case-manifest digest tuple.
   General approval of this architecture is not authorization to execute it.
   After authorization and before any action checkpoint, recompute the installed
   manifest and compare it plus all affected live state and bound
@@ -435,8 +541,11 @@ Later steps do not begin until the named evidence passes.
   verify its complete active Matt activation group; only then remove positively
   identified, catalog-owned Matt Claude links while keeping every standalone
   target untouched; then reconcile MCP and plugin selections.
-- Run all `MIG-*` and applicable `LIVE-*` checks, archive the evidence bundle,
-  and retain only successfully verified desired state.
+- Run all exact expected `MIG-*` and applicable `LIVE-*` child cases, write the
+  evidence bundle, obtain a separate post-run attestation and its externally
+  trusted digest, and run the release gate against both authorized manifest
+  digests. Archive the exact expected-case manifest, bundle, attestation, and
+  release receipt; retain only successfully verified desired state.
 
 ## Retained and retired source map
 
@@ -487,10 +596,10 @@ No retirement rule deletes an unmanaged observation or a canonical
 5. Open a separate migration authorization containing the exact candidate
    implementation identity and installed-manifest digest, refreshed inventory,
    immutable plan, plan-action-set, capability-set, and already sealed
-   captured-state identity/digest, exact live mutations, rollback command, and
-   review receipts. Require an exact post-authorization implementation and live
-   comparison before the first checkpoint; drift requires a new capture and
-   authorization.
+   captured-state identity/digest, sealed expected-case manifest and digest,
+   exact live mutations, rollback command, and review receipts. Require an exact
+   post-authorization implementation and live comparison before the first
+   checkpoint; drift requires a new capture and authorization.
 
 ## Stop conditions
 
@@ -502,4 +611,10 @@ stale; a secret value enters generated state; current state differs from
 captured or expected state; the capability-set digest or a route binding is
 invalid; the post-authorization comparison differs from the sealed capture; a
 checkpoint cannot be made durable; or the exact runtime plan, plan-action-set,
-and captured-state digests lack authorization.
+captured-state, and expected-case-manifest digests lack authorization.
+
+Stop before release when the exact attestation digest lacks independent
+post-run authorization; any of the three documents or their bindings differ;
+an attestor predates a bound result or live sign-off; the canonical live
+operator differs from a passing live signer; or any required child or aggregate
+does not pass.

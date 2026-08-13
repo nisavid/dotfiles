@@ -7,31 +7,116 @@ not satisfy the production gate.
 
 ## Evidence record
 
-Each release candidate writes a secret-free evidence bundle with:
+`acceptance-evidence-v1.schema.json` defines three closed documents: the pre-
+mutation expected-case manifest emitted from the independently validated plan,
+the candidate's secret-free evidence bundle, and a separate post-run release
+attestation. The launcher supplies the trusted candidate identity, installed-
+implementation manifest digest, authorized expected-case manifest digest, and
+independently trusted attestation digest; none is learned from the files under
+validation.
 
-- the exact candidate implementation identity and complete installed-
-  implementation manifest digest, catalog digest, lock digest, plan digest,
-  plan-action-set digest, capability-set digest, sealed captured-state identity
-  and digest, each route's closed capability and manager-version evidence
-  binding, harness and manager versions, and fixture version;
-- one result for every requirement ID below: `pass`, `fail`, `blocked`, or
-  `not_run`, plus an artifact reference and execution timestamp;
-- before and after runtime observation digests for mutating fixtures;
-- the ordered checkpoint and compensation trace for failure fixtures; and
-- an explicit human sign-off for each live-only check.
+The expected-case manifest binds the candidate implementation identity and
+complete installed-implementation manifest digest, catalog digest, lock digest,
+plan digest, plan-action-set digest, capability-set digest, sealed captured-
+state identity and digest, fixture version, and the sorted closed capability and
+manager-version evidence binding for every route. It contains:
+
+- the complete canonical 74-ID v1 requirement registry;
+- one or more static cases for every requirement except the derived `CHK-02`
+  through `CHK-09` and `MIG-01` through `MIG-07` matrices;
+- every sealed automated plan-action identity;
+- every explicit read-only verification-node identity and its `MIG-*`
+  requirements; and
+- every explicit mutating migration-boundary identity and its `MIG-*`
+  requirements.
+
+The validator deterministically adds one `CHK-02` through `CHK-09` child for
+every plan action and every mutating migration boundary. It never derives
+production plan or migration nodes from this prose. A complete production
+release manifest therefore requires non-empty action, verification-node, and
+migration-boundary sets; an empty or static-only design fixture cannot pass the
+release gate.
+
+Each case has a stable identity derived from exactly its requirement ID, fixture
+family, and sealed subject identity. `ADP-*`, `CAP-*`, and `LIVE-*` use explicit
+static cases. `CHK-*` uses the sealed plan-action and migration-boundary
+identities. `MIG-*` uses only the explicit verification and migration nodes that
+claim the applicable requirement. Missing, extra, duplicate, noncanonical, or
+foreign-bound cases fail the gate.
+
+`MIG-01`, `MIG-02`, and `MIG-05` each require at least one read-only
+verification-node case. `MIG-01` through `MIG-04`, `MIG-06`, and `MIG-07` each
+require at least one mutating migration-boundary case. One requirement may have
+both case kinds when the sealed graph contains both nodes.
+
+Each release candidate writes an evidence bundle bound to that exact expected-
+case manifest with:
+
+- the complete binding tuple, each route's closed capability and manager-
+  version evidence binding, and corresponding public harness and manager
+  version receipts;
+- one aggregate result for every requirement ID: `pass`, `fail`, `blocked`, or
+  `not_run`, plus an opaque artifact reference, digest, and timestamp;
+- one exact child result for every expected case, using an automated receipt,
+  before/after mutation receipt, checkpoint-and-compensation trace, or live
+  receipt as sealed by that case; and
+- an explicit live receipt and human sign-off for every passing live-only case.
 
 Only `pass` closes a requirement. `blocked` and `not_run` are visible release
 failures, not waivers. Artifacts contain secret-reference names but never
-resolved values. The gate fails if a requirement is absent, duplicated, or
-recorded against a different candidate, action set, captured state, or
-catalog-lock binding.
+resolved values. The gate fails if a requirement is absent, extra, duplicated,
+or recorded against a different candidate, action set, captured state,
+catalog-lock binding, route capability, manager-version evidence, or expected-
+case manifest.
 
-Requirements exercised as a repeated operation or migration-boundary matrix
-still produce exactly one aggregate result for the requirement ID. They also
-produce one child result for every expected case, keyed by the stable composite
-identity of requirement ID, fixture family, and operation or boundary identity.
-Missing, duplicate, or extra child cases fail the gate, and the aggregate may
-pass only when every expected child case passes.
+Every requirement has at least one child. The aggregate is derived: it passes
+if and only if every expected child passes. A `blocked` or `not_run` child
+carries a closed unavailable-reason record, not fabricated execution evidence.
+Live cases never silently pass from schema, prototype, fake-manager, or
+automated-receipt evidence.
+
+The evidence bundle is never its own trust root. After the run, the separate
+attestation binds the recomputed complete bundle digest, expected-case manifest
+digest, and exact candidate/artifact binding tuple. Its canonical attestor set
+contains exactly `automated_runner`, `live_operator`, and `release_reviewer`,
+with one distinct opaque identity, runner or signing-policy implementation
+version, and UTC attestation time for each role. Every attestor time is at or
+after the latest result and live sign-off, and every passing live signer is the
+canonical live-operator attestor. The attestation's own digest excludes only
+its digest field.
+Changing a manager or harness version, live sign-off, receipt, aggregate, child,
+binding, or attestor therefore requires a new attestation and a new externally
+trusted attestation digest.
+
+Expected-case authorization is a pre-mutation authority boundary. Release
+attestation is a distinct post-run authority boundary. Neither substitutes for
+the other, and the candidate cannot authorize a rewritten bundle by resealing
+both files itself.
+
+The design-only semantic seam is:
+
+```text
+validate_acceptance_evidence(
+  bundle,
+  expected_case_manifest,
+  attestation_manifest,
+  *,
+  expected_candidate_identity,
+  expected_implementation_manifest_digest,
+  expected_case_manifest_digest,
+  expected_attestation_manifest_digest,
+) -> diagnostics
+```
+
+Its CLI accepts all three files and the same four independently trusted values.
+It strictly parses every file, rejects duplicate object members and non-JSON
+numeric constants, and performs no harness discovery, runtime mutation, release
+publication, or plan authentication. The pure validator recomputes and binds
+the documents; it does not authenticate receipts, human identities, or
+signatures. The external release authority authenticates the attestation digest.
+The production evidence writer owns projection from the validated plan and
+receipts; the release command owns supplying both trusted manifest digests,
+invoking this validator, and failing unless diagnostics are empty.
 
 The fixture runner creates a disposable home and isolated XDG directories for
 every automated scenario. It replaces native CLIs with stateful fakes unless a
@@ -145,10 +230,12 @@ operation. Run them again for every migration boundary named in `MIGRATION.md`.
 | `MIG-07` | Prove a successful migration retains desired provider selections and removes only owned losing projections; prove rollback restores every captured link before winner disablement or uninstall, restores every other captured plugin, enablement, MCP, and selection field, and restores the projector last. | Complete before/after/rollback snapshots |
 
 `MIG-01`, `MIG-02`, and `MIG-05` use plan-bound read-only verification nodes,
-not `PlannedAction` records. Their canonical node definitions and dependency
-edges contribute to `plan_digest`; successful predicate evidence is journaled
-without an action checkpoint. A converged winner still requires a fresh bound
-observation, and reverse compensation skips verification nodes.
+not `PlannedAction` records. `MIG-01` and `MIG-02` also require separate
+mutating migration-boundary cases for their state changes. Canonical node
+definitions and dependency edges contribute to `plan_digest`; successful
+predicate evidence is journaled without an action checkpoint. A converged
+winner still requires a fresh bound observation, and reverse compensation
+skips verification nodes.
 
 ## Live checks
 
@@ -164,6 +251,20 @@ authorizing runtime migration.
 | `LIVE-04` | Cursor user plugin and skill discovery behavior. | Record the supported user installation surface, whether realpath-identical Claude and Agent Skills entries deduplicate, and whether any stable per-path exclusion exists. Opaque database editing is forbidden. |
 | `LIVE-05` | Direct MCP startup for every selected harness route using secret references. | Server starts and authenticates while logs, diagnostics, diffs, and evidence contain no resolved secret values. |
 | `LIVE-06` | Native manager drift. | Change or observe a rolling provider version and prove audit reports drift while update alone proposes the reviewed baseline advancement. |
+
+## Outer release-gate implementation evidence
+
+The acceptance-evidence validator and attestation are the non-circular outer
+release gate. They are not a child requirement inside the 74-ID bundle and do
+not create a self-referential evidence result. CI and review trace that gate to
+the 20 methods in `AcceptanceEvidenceContractTests`:
+
+| Gate family | Exact test methods |
+| --- | --- |
+| Valid projection and result closure | `test_release_accepts_only_an_independently_trusted_attestation`; `test_public_validator_accepts_the_complete_closed_evidence_projection`; `test_child_registry_rejects_missing_extra_and_duplicate_cases`; `test_aggregate_pass_is_derived_from_complete_passing_children`; `test_aggregate_registry_rejects_missing_extra_and_duplicate_ids` |
+| Independent authority and complete binding | `test_trusted_attestation_freezes_every_candidate_bundle_value`; `test_candidate_cannot_reseal_bundle_and_attestation_under_old_trust`; `test_fully_resealed_artifact_tuple_requires_a_new_attestation_trust_root`; `test_forged_attestor_fails_under_the_original_trusted_digest`; `test_attestation_must_follow_results_and_bind_the_live_signer`; `test_bindings_reject_foreign_artifacts_and_route_capability_substitution`; `test_trusted_manifest_digest_rejects_a_coordinated_foreign_tuple` |
+| Strict input, role, privacy, and live evidence | `test_live_cases_require_live_receipts_and_human_signoff`; `test_cli_accepts_valid_inputs_and_rejects_noncanonical_json`; `test_api_and_cli_diagnostics_never_echo_seeded_secret_values`; `test_public_validator_rejects_documents_supplied_in_the_wrong_roles`; `test_cli_rejects_documents_supplied_in_the_wrong_roles`; `test_evidence_references_reject_urls_and_filesystem_paths` |
+| Migration-node semantics | `test_node_evidence_kinds_distinguish_read_only_and_mutating_boundaries`; `test_migration_requirements_cannot_move_between_node_classes` |
 
 ## Current executable design evidence
 
@@ -242,5 +343,8 @@ disposable or operator-approved accounts, current harness versions, secret
 resolution at process boundaries, and explicit human sign-off. No schema,
 prototype, or fake-manager result substitutes for those observations.
 
-The future production release command must fail unless the evidence bundle has
-one passing result for every ID in this document and no extra unknown result.
+The future production release command must fail unless the evidence bundle
+matches the independently trusted expected-case manifest, has one passing
+aggregate for every ID in this document, has every exact passing child case,
+contains no extra result, and is exactly bound by the independently trusted
+post-run attestation.

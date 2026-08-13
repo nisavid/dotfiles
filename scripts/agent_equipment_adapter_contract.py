@@ -157,7 +157,6 @@ def validate_sequence(
         trusted_implementation_manifest_digest,
     )
 
-    _validate_canonical_capability(diagnostics, capability)
     for label, record in (
         ("PreStateRequest", pre_request),
         ("PlannedAction", action),
@@ -1192,6 +1191,10 @@ def _capability_record(
         )
         return None
     records = result.get("records")
+    if isinstance(records, list):
+        for record in records:
+            if isinstance(record, dict):
+                _validate_canonical_capability(diagnostics, record)
     if isinstance(records, list) and records != sorted(
         records,
         key=_capability_sort_key,

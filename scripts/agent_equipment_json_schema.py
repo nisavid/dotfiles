@@ -12,7 +12,7 @@ import math
 import re
 from collections.abc import Collection
 from dataclasses import dataclass
-from datetime import datetime
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +42,7 @@ _SUPPORTED_KEYWORDS = frozenset(
         "format",
         "minLength",
         "minimum",
+        "maximum",
         "minItems",
         "maxItems",
         "minProperties",
@@ -70,10 +71,14 @@ _NONNEGATIVE_INTEGER_KEYWORDS = (
     "minProperties",
 )
 _DATE_TIME_PATTERN = re.compile(
-    r"^[0-9]{4}-[0-9]{2}-[0-9]{2}[Tt]"
-    r"[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]+)?"
-    r"(?:[Zz]|[+-][0-9]{2}:[0-9]{2})$"
+    r"^(?P<year>[0-9]{4})-"
+    r"(?P<month>0[1-9]|1[0-2])-"
+    r"(?P<day>0[1-9]|[12][0-9]|3[01])[Tt]"
+    r"(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]"
+    r"(?:[.,][0-9]+)?"
+    r"(?:[Zz]|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])$"
 )
+_SCHEMA_ID_PATTERN = re.compile(r"^[^#]*#?$")
 
 _SchemaLocation = tuple[str, tuple[str, ...]]
 
@@ -157,7 +162,7 @@ class _SchemaSet:
             return False
         if "$schema" in schema and schema["$schema"] != _DRAFT_2020_12:
             return False
-        if "$id" in schema and type(schema["$id"]) is not str:
+        if "$id" in schema and not _valid_schema_id(schema["$id"]):
             return False
         if "title" in schema and type(schema["title"]) is not str:
             return False
@@ -225,15 +230,10 @@ class _SchemaSet:
         if "format" in schema and schema["format"] != "date-time":
             return False
         for keyword in _NONNEGATIVE_INTEGER_KEYWORDS:
-            if keyword in schema and (
-                type(schema[keyword]) is not int or schema[keyword] < 0
-            ):
+            if keyword in schema and not _is_nonnegative_integer(schema[keyword]):
                 return False
-        if "minimum" in schema:
-            minimum = schema["minimum"]
-            if type(minimum) not in {int, float} or (
-                type(minimum) is float and not math.isfinite(minimum)
-            ):
+        for keyword in ("minimum", "maximum"):
+            if keyword in schema and not _is_finite_number(schema[keyword]):
                 return False
         return not ("uniqueItems" in schema and type(schema["uniqueItems"]) is not bool)
 
@@ -330,6 +330,12 @@ class _SchemaSet:
             type(instance) in {int, float}
             and "minimum" in schema
             and instance < schema["minimum"]
+        ):
+            return _Evaluation(False)
+        if (
+            type(instance) in {int, float}
+            and "maximum" in schema
+            and instance > schema["maximum"]
         ):
             return _Evaluation(False)
 
@@ -507,7 +513,7 @@ def _load_schemas(
             )
         except (OSError, UnicodeError, ValueError):
             return None
-        if type(parsed) is not dict:
+        if type(parsed) is not dict or not _is_json_value(parsed):
             return None
         schemas[name] = parsed
     return schemas
@@ -520,6 +526,12 @@ def _safe_filename(value: object) -> bool:
         and value not in {".", ".."}
         and Path(value).name == value
     )
+
+
+def _valid_schema_id(value: Any) -> bool:
+    # JSON Schema ``pattern`` uses search semantics, including ``$`` matching
+    # immediately before one final newline.
+    return type(value) is str and _SCHEMA_ID_PATTERN.search(value) is not None
 
 
 def _object_without_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -543,8 +555,10 @@ def _finite_float(value: str) -> float:
 
 
 def _is_json_value(value: Any, active: frozenset[int] = frozenset()) -> bool:
-    if value is None or type(value) in {str, bool, int}:
+    if value is None or type(value) in {bool, int}:
         return True
+    if type(value) is str:
+        return _is_unicode_scalar_string(value)
     if type(value) is float:
         return math.isfinite(value)
     if type(value) is list:
@@ -557,10 +571,16 @@ def _is_json_value(value: Any, active: frozenset[int] = frozenset()) -> bool:
             return False
         nested = active | {id(value)}
         return all(
-            type(key) is str and _is_json_value(item, nested)
+            type(key) is str
+            and _is_unicode_scalar_string(key)
+            and _is_json_value(item, nested)
             for key, item in value.items()
         )
     return False
+
+
+def _is_unicode_scalar_string(value: str) -> bool:
+    return all(not 0xD800 <= ord(character) <= 0xDFFF for character in value)
 
 
 def _valid_unique_string_array(value: Any, *, allow_empty: bool) -> bool:
@@ -572,34 +592,81 @@ def _valid_unique_string_array(value: Any, *, allow_empty: bool) -> bool:
     )
 
 
+def _is_nonnegative_integer(value: Any) -> bool:
+    return (
+        type(value) is int
+        or (type(value) is float and math.isfinite(value) and value.is_integer())
+    ) and value >= 0
+
+
+def _is_finite_number(value: Any) -> bool:
+    return type(value) is int or (type(value) is float and math.isfinite(value))
+
+
 def _all_json_unique(values: list[Any]) -> bool:
-    return all(
-        not _json_equal(value, earlier)
-        for index, value in enumerate(values)
-        for earlier in values[:index]
-    )
+    seen: set[bytes] = set()
+    for value in values:
+        digest = _json_digest(value)
+        if digest in seen:
+            return False
+        seen.add(digest)
+    return True
 
 
 def _json_equal(left: Any, right: Any) -> bool:
-    if type(left) is not type(right):
-        return False
-    if type(left) is list:
-        return len(left) == len(right) and all(
-            _json_equal(left_item, right_item)
-            for left_item, right_item in zip(left, right, strict=True)
-        )
-    if type(left) is dict:
-        return left.keys() == right.keys() and all(
-            _json_equal(left[key], right[key]) for key in left
-        )
-    return bool(left == right)
+    return _json_digest(left) == _json_digest(right)
+
+
+def _json_digest(value: Any) -> bytes:
+    """Return a collision-resistant digest under JSON Schema equality."""
+
+    digest = sha256()
+    if value is None:
+        digest.update(b"null")
+    elif type(value) is bool:
+        digest.update(b"boolean:true" if value else b"boolean:false")
+    elif type(value) is int or (type(value) is float and value.is_integer()):
+        digest.update(b"integer:")
+        integer = int(value)
+        magnitude = abs(integer)
+        encoded = magnitude.to_bytes(max(1, (magnitude.bit_length() + 7) // 8), "big")
+        digest.update(b"-" if integer < 0 else b"+")
+        _update_framed(digest, encoded)
+    elif type(value) is float:
+        digest.update(b"float:")
+        digest.update(value.hex().encode("ascii"))
+    elif type(value) is str:
+        digest.update(b"string:")
+        _update_framed(digest, value.encode("utf-8"))
+    elif type(value) is list:
+        digest.update(b"array:")
+        digest.update(str(len(value)).encode("ascii"))
+        digest.update(b":")
+        for item in value:
+            digest.update(_json_digest(item))
+    elif type(value) is dict:
+        digest.update(b"object:")
+        digest.update(str(len(value)).encode("ascii"))
+        digest.update(b":")
+        for key in sorted(value):
+            _update_framed(digest, key.encode("utf-8"))
+            digest.update(_json_digest(value[key]))
+    else:
+        raise TypeError("value is outside the closed JSON domain")
+    return digest.digest()
+
+
+def _update_framed(digest: Any, value: bytes) -> None:
+    digest.update(str(len(value)).encode("ascii"))
+    digest.update(b":")
+    digest.update(value)
 
 
 def _matches_type(value: Any, expected: str) -> bool:
     return {
         "null": value is None,
         "boolean": type(value) is bool,
-        "integer": type(value) is int,
+        "integer": type(value) is int or (type(value) is float and value.is_integer()),
         "number": type(value) in {int, float},
         "string": type(value) is str,
         "array": type(value) is list,
@@ -608,13 +675,25 @@ def _matches_type(value: Any, expected: str) -> bool:
 
 
 def _valid_date_time(value: str) -> bool:
-    if _DATE_TIME_PATTERN.fullmatch(value) is None:
+    match = _DATE_TIME_PATTERN.search(value)
+    if match is None:
         return False
-    normalized = value.replace("t", "T").replace("z", "Z")
-    if normalized.endswith("Z"):
-        normalized = f"{normalized[:-1]}+00:00"
-    try:
-        datetime.fromisoformat(normalized)
-    except ValueError:
-        return False
-    return True
+    year = int(match.group("year"))
+    month = int(match.group("month"))
+    day = int(match.group("day"))
+    leap_year = year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+    month_lengths = (
+        31,
+        29 if leap_year else 28,
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    )
+    return day <= month_lengths[month - 1]

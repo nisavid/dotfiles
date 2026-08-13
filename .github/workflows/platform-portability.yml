@@ -28,6 +28,7 @@ on:
       - "scripts/private-skill-transaction.d/**"
       - "scripts/privacy-scan"
       - "scripts/agent_equipment_acceptance_model.py"
+      - "scripts/agent_equipment_acceptance_evidence.py"
       - "scripts/agent_equipment_adapter_contract.py"
       - "scripts/agent_equipment_captured_state.py"
       - "scripts/agent_equipment_design.py"
@@ -50,6 +51,7 @@ on:
       - "tests/private-skill-transaction.d/**"
       - "tests/test_chezmoi_source_ownership.py"
       - "tests/test_agent_equipment_acceptance.py"
+      - "tests/test_agent_equipment_acceptance_evidence.py"
       - "tests/test_agent_equipment_adapter_contract.py"
       - "tests/test_agent_equipment_captured_state.py"
       - "tests/test_agent_equipment_design.py"
@@ -199,6 +201,7 @@ jobs:
           fi
           python3 -m unittest tests/test_chezmoi_source_ownership.py
           python3 -m unittest tests/test_agent_equipment_acceptance.py
+          python3 -m unittest tests/test_agent_equipment_acceptance_evidence.py
           python3 -m unittest tests/test_agent_equipment_adapter_contract.py
           python3 -m unittest tests/test_agent_equipment_captured_state.py
           python3 -m unittest tests/test_agent_equipment_design.py
@@ -206,6 +209,7 @@ jobs:
           uvx --from check-jsonschema==0.35.0 \
             check-jsonschema --check-metaschema \
             docs/agent-equipment/adapter-contract-v1.schema.json \
+            docs/agent-equipment/acceptance-evidence-v1.schema.json \
             docs/agent-equipment/catalog-v1.schema.json \
             docs/agent-equipment/lock-v1.schema.json \
             docs/agent-equipment/captured-state-v1.schema.json \

@@ -15,6 +15,9 @@ semantics.
 | Harness files and CLIs | harness or native manager | Observable runtime state |
 | Caches, databases, credentials, usage state | harness or native manager | Never catalog state |
 | Apply checkpoints | reconciler runtime state directory | Recovery evidence for one immutable plan |
+| Expected acceptance cases | production evidence writer | Exact release cases projected from one validated plan and authorized binding tuple |
+| Acceptance evidence bundle | fixture and live runners | Candidate results only; never desired state or mutation authority |
+| Release attestation | external release authority | Post-run authorization of one exact evidence-bundle digest and attestor set |
 
 The catalog and lock are public, secret-free data. They contain environment
 variable names or opaque `secret-exec` profile names, never resolved values.
@@ -71,6 +74,47 @@ is the SHA-256 digest of the catalog's canonical serialization. The lock:
 Formatting-only catalog edits therefore do not stale the lock. Any semantic
 catalog change does. Apply rejects an absent, malformed, or stale lock before
 opening its checkpoint store.
+
+`acceptance-evidence-v1.schema.json` owns three closed release documents. The
+pre-mutation expected-case manifest binds the candidate, installed manifest,
+catalog, lock, plan, plan-action set, capability set, sealed capture, fixture
+version, and every route's exact provider selector, route digest, capability,
+and manager-version evidence. It carries the complete v1 requirement registry,
+static cases, sealed automated action identities, explicit verification nodes,
+and explicit mutating migration boundaries. It is a projection of an already
+validated plan, not a replacement for plan validation.
+
+The evidence bundle repeats the exact bindings and route evidence, records the
+public harness and manager versions, and contains one aggregate plus the exact
+closed child registry. A child's identity is the canonical digest of its
+requirement ID, fixture family, and sealed subject identity. The semantic
+validator expands the repeated checkpoint matrix only over the manifest's
+sealed actions and mutating migration boundaries. It maps migration cases only
+through explicit node-to-requirement records; it never invents plan nodes from
+prose.
+
+The post-run attestation binds the recomputed complete evidence-bundle digest,
+the expected-case manifest digest, and the exact candidate/artifact bindings.
+Its canonically ordered attestors are the automated runner, live operator, and
+release reviewer, each with a distinct identity, runner or signing-policy
+implementation version, and UTC attestation time after all bound evidence. The
+live operator is the signer of every passing live child. Its own canonical
+digest is independently authenticated by an external release authority. The
+candidate bundle cannot authenticate its own manager versions, harness
+versions, live sign-offs, receipts, or results.
+
+The candidate-independent release launcher supplies the trusted candidate,
+installed-manifest digest, pre-mutation expected-case manifest digest, and post-
+run attestation digest. The validator recomputes all three document digests,
+requires exact cross-document bindings and route capability membership,
+requires every route's manager-evidence digest to have a manager-version
+receipt, and derives aggregate pass from complete passing child results. It
+does not authenticate attestor identities, signatures, or receipt truth; the
+external authority authenticates the attestation digest. Opaque artifact
+references plus digests identify evidence without embedding filesystem paths,
+URLs, native output, or secret values. Manager and harness version strings are
+public native-manager observations; diagnostics never echo their supplied
+contents.
 
 ## Resolver interface
 
@@ -715,6 +759,15 @@ The acceptance matrix in `ACCEPTANCE.md` is the release gate for production
 implementation. The sequenced work and exact retained/retired source map are in
 `IMPLEMENTATION_HANDOFF.md`.
 
+The release evidence writer may write only the expected-case manifest and
+candidate evidence bundle in the operator-selected artifact directory. It does
+not mutate authored state or harness state. After the run, the external release
+authority supplies the trusted digest of a separate attestation over the exact
+bundle. The release validator is pure. The release command supplies the trusted
+expected-case and attestation digests, invokes the validator, archives all three
+exact documents, and refuses release on any diagnostic. No release document
+grants apply or migration authority.
+
 The checked-in `initial-catalog.proposed.json` and
 `initial-lock.proposed.json` exercise this serialized contract with 44 accepted
 identities, 132 complete coverage records, nine resolved distributions, and 23
@@ -724,8 +777,8 @@ apply.
 
 ## Schema evolution
 
-Catalog, lock, captured-state, and evidence formats use independent explicit
-major versions. Adding an optional field with unchanged meaning may remain in
+Catalog, lock, captured-state, evidence, and attestation formats use independent
+explicit major versions. Adding an optional field with unchanged meaning may remain in
 the current major version only when old readers reject or safely ignore it by
 contract; these v1 schemas use exact shapes, so additions normally require a
 new major version. Renaming a field, changing an enum or default, weakening an
