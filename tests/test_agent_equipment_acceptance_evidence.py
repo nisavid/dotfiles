@@ -39,6 +39,7 @@ CANDIDATE_IDENTITY = "candidate:fixture/controller-v1"
 EXECUTION_BINDING = {
     "apply_authorization_identity": "apply-authorization:sha256:" + "4" * 64,
     "apply_authorization_digest": "sha256:" + "5" * 64,
+    "execution_domain_identity": "execution-domain:fixture/global-ledger-v1",
     "execution_nonce": "execution-nonce:sha256:" + "6" * 64,
     "run_identity": "run:sha256:" + "7" * 64,
 }
@@ -51,6 +52,9 @@ def trusted_execution_inputs() -> dict[str, str]:
         ],
         "expected_apply_authorization_digest": EXECUTION_BINDING[
             "apply_authorization_digest"
+        ],
+        "expected_execution_domain_identity": EXECUTION_BINDING[
+            "execution_domain_identity"
         ],
         "expected_execution_nonce": EXECUTION_BINDING["execution_nonce"],
         "expected_run_identity": EXECUTION_BINDING["run_identity"],
@@ -488,6 +492,8 @@ def cli_args(
         EXECUTION_BINDING["apply_authorization_identity"],
         "--expected-apply-authorization-digest",
         EXECUTION_BINDING["apply_authorization_digest"],
+        "--expected-execution-domain-identity",
+        EXECUTION_BINDING["execution_domain_identity"],
         "--expected-execution-nonce",
         EXECUTION_BINDING["execution_nonce"],
         "--expected-run-identity",
@@ -530,6 +536,9 @@ def validation_diagnostics(
         expected_apply_authorization_digest=EXECUTION_BINDING[
             "apply_authorization_digest"
         ],
+        expected_execution_domain_identity=EXECUTION_BINDING[
+            "execution_domain_identity"
+        ],
         expected_execution_nonce=EXECUTION_BINDING["execution_nonce"],
         expected_run_identity=EXECUTION_BINDING["run_identity"],
     )
@@ -559,6 +568,9 @@ class AcceptanceEvidenceContractTests(unittest.TestCase):
             expected_apply_authorization_digest=EXECUTION_BINDING[
                 "apply_authorization_digest"
             ],
+            expected_execution_domain_identity=EXECUTION_BINDING[
+                "execution_domain_identity"
+            ],
             expected_execution_nonce=EXECUTION_BINDING["execution_nonce"],
             expected_run_identity=EXECUTION_BINDING["run_identity"],
         )
@@ -573,23 +585,33 @@ class AcceptanceEvidenceContractTests(unittest.TestCase):
         bundle = valid_evidence_bundle(manifest)
         attestation = valid_attestation_manifest(bundle, manifest)
 
-        forged_binding = copy.deepcopy(EXECUTION_BINDING)
-        forged_binding["execution_nonce"] = "execution-nonce:sha256:" + "8" * 64
-        bundle["execution_binding"] = copy.deepcopy(forged_binding)
-        reseal_bundle(bundle)
-        attestation["execution_binding"] = copy.deepcopy(forged_binding)
-        attestation["bundle_digest"] = bundle["bundle_digest"]
-        reseal_attestation(attestation)
+        for field, value in (
+            (
+                "execution_domain_identity",
+                "execution-domain:fixture/other-ledger-v1",
+            ),
+            ("execution_nonce", "execution-nonce:sha256:" + "8" * 64),
+        ):
+            with self.subTest(field=field):
+                forged_binding = copy.deepcopy(EXECUTION_BINDING)
+                forged_binding[field] = value
+                forged_bundle = copy.deepcopy(bundle)
+                forged_bundle["execution_binding"] = copy.deepcopy(forged_binding)
+                reseal_bundle(forged_bundle)
+                forged_attestation = copy.deepcopy(attestation)
+                forged_attestation["execution_binding"] = copy.deepcopy(forged_binding)
+                forged_attestation["bundle_digest"] = forged_bundle["bundle_digest"]
+                reseal_attestation(forged_attestation)
 
-        codes = diagnostic_codes(
-            bundle,
-            manifest,
-            attestation,
-            expected_attestation_manifest_digest=attestation[
-                "attestation_manifest_digest"
-            ],
-        )
-        self.assertIn("EXECUTION_BINDING_MISMATCH", codes)
+                codes = diagnostic_codes(
+                    forged_bundle,
+                    manifest,
+                    forged_attestation,
+                    expected_attestation_manifest_digest=forged_attestation[
+                        "attestation_manifest_digest"
+                    ],
+                )
+                self.assertIn("EXECUTION_BINDING_MISMATCH", codes)
 
     def test_trusted_attestation_freezes_every_candidate_bundle_value(self) -> None:
         manifest = valid_expected_case_manifest()

@@ -445,7 +445,9 @@ set -e
 rm -- "$fixture_home/.config/environment.d/70-keys.conf"
 
 mkdir -p -- "$fixture_home/.config/firecrawl-cli"
-print -r -- '{"apiKey":"stale-firecrawl-canary"}' > \
+stale_firecrawl_value='stale-firecrawl-'
+stale_firecrawl_value+='canary'
+print -r -- "{\"apiKey\":\"$stale_firecrawl_value\"}" > \
   "$fixture_home/.config/firecrawl-cli/credentials.json"
 set +e
 zsh "$migrator" --retire-plaintext > "$test_dir/stale-firecrawl.out" 2>&1

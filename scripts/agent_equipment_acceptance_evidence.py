@@ -671,6 +671,7 @@ def validate_acceptance_evidence(
     expected_attestation_manifest_digest: str,
     expected_apply_authorization_identity: str,
     expected_apply_authorization_digest: str,
+    expected_execution_domain_identity: str,
     expected_execution_nonce: str,
     expected_run_identity: str,
 ) -> tuple[Diagnostic, ...]:
@@ -753,6 +754,7 @@ def validate_acceptance_evidence(
     expected_execution_binding = {
         "apply_authorization_identity": expected_apply_authorization_identity,
         "apply_authorization_digest": expected_apply_authorization_digest,
+        "execution_domain_identity": expected_execution_domain_identity,
         "execution_nonce": expected_execution_nonce,
         "run_identity": expected_run_identity,
     }
@@ -1098,6 +1100,11 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
         help="executor-trusted canonical digest of the complete apply authorization record",
     )
     parser.add_argument(
+        "--expected-execution-domain-identity",
+        required=True,
+        help="executor-trusted authoritative nonce-ledger domain identity",
+    )
+    parser.add_argument(
         "--expected-execution-nonce",
         required=True,
         help="executor-trusted fresh nonce claimed for this apply run",
@@ -1157,6 +1164,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.expected_apply_authorization_identity
         ),
         expected_apply_authorization_digest=args.expected_apply_authorization_digest,
+        expected_execution_domain_identity=args.expected_execution_domain_identity,
         expected_execution_nonce=args.expected_execution_nonce,
         expected_run_identity=args.expected_run_identity,
     )

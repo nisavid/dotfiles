@@ -105,6 +105,7 @@
       "required": [
         "apply_authorization_identity",
         "apply_authorization_digest",
+        "execution_domain_identity",
         "execution_nonce",
         "run_identity"
       ],
@@ -114,6 +115,10 @@
           "pattern": "^apply-authorization:sha256:[0-9a-f]{64}$"
         },
         "apply_authorization_digest": {"$ref": "#/$defs/digest"},
+        "execution_domain_identity": {
+          "type": "string",
+          "pattern": "^execution-domain:[A-Za-z0-9][A-Za-z0-9._/-]*$"
+        },
         "execution_nonce": {
           "type": "string",
           "pattern": "^execution-nonce:sha256:[0-9a-f]{64}$"

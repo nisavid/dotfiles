@@ -133,10 +133,25 @@ The issuer-generated one-time identity that prevents one apply authorization
 from starting another run.
 _Avoid_: Run identity, checkpoint ordinal
 
+**Execution domain identity**:
+The independently trusted identity of the one authoritative compare-and-swap
+nonce-ledger namespace and target in which an execution nonce may be claimed.
+It follows the authorized run through evidence, checkpoints, archives, and
+receipts so a claim in another ledger cannot satisfy the run.
+_Avoid_: Filesystem path, caller-selected ledger, execution nonce
+
 **Authorization ledger**:
 The durable history of execution-nonce claims and their exact authorization and
-run bindings. It records consumption; it does not issue authority.
+run bindings inside one execution domain. It records consumption; it does not
+issue authority.
 _Avoid_: Apply authorization, checkpoint store
+
+**Compensation authorization**:
+An externally issued, time-bounded grant to invoke the public `compensate` seam
+for one original authorized run and execution domain, one exact checkpoint and
+plan-action set, and one fresh compensation nonce. It never authorizes a new
+forward action and never reuses apply authority.
+_Avoid_: Apply authorization, automatic in-run compensation, generic rollback
 
 **Expected acceptance case manifest**:
 The sealed, pre-execution registry of every release case required for one

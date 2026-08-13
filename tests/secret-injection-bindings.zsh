@@ -138,6 +138,8 @@ mcp_config_modifier=$test_dir/modify-mcp-config
 render_modifier home/dot_config/modify_private_mcp-config.json.tmpl "$mcp_config_modifier"
 authorization_header='Bearer '
 authorization_header+='header-canary'
+http_header_canary='http-header-'
+http_header_canary+='canary'
 cat > "$test_dir/mcp-config-input.json" <<EOF
 {
   "unrelated": "preserved",
@@ -148,7 +150,7 @@ cat > "$test_dir/mcp-config-input.json" <<EOF
       "args": ["mcp-remote", "https://mcp.firecrawl.dev/firecrawl-canary/v2/mcp"],
       "env": {"FIRECRAWL_API_KEY": "environment-canary"},
       "headers": {"Authorization": "$authorization_header"},
-      "http_headers": {"X-API-Key": "http-header-canary"},
+      "http_headers": {"X-API-Key": "$http_header_canary"},
       "bearer_token_env_var": "FIRECRAWL_API_KEY",
       "tools": ["scrape"],
       "url": "https://mcp.firecrawl.dev/firecrawl-canary/v2/mcp"
@@ -172,7 +174,7 @@ jq -e --arg command "$fixture_home/.local/bin/secret-exec" '
 opencode_hook=$test_dir/update-opencode-context7
 render_modifier home/run_after_update-opencode-context7.sh.tmpl "$opencode_hook"
 mkdir -p -- "$fixture_home/.config/opencode"
-cat > "$fixture_home/.config/opencode/opencode.json" <<'EOF'
+cat > "$fixture_home/.config/opencode/opencode.json" <<EOF
 {
   "unrelated": "preserved",
   "mcp": {
@@ -182,7 +184,7 @@ cat > "$fixture_home/.config/opencode/opencode.json" <<'EOF'
       "headers": {"CONTEXT7_API_KEY": "literal-canary"},
       "env": {"CONTEXT7_API_KEY": "environment-canary"},
       "env_vars": ["CONTEXT7_API_KEY"],
-      "http_headers": {"X-API-Key": "http-header-canary"},
+      "http_headers": {"X-API-Key": "$http_header_canary"},
       "bearer_token_env_var": "CONTEXT7_API_KEY",
       "timeout": 60000
     }

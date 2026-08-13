@@ -38,7 +38,7 @@ deferred.
 | `docs/agent-equipment/plan-action-set-v1.schema.json` | Closed projection of every independently validated automated plan action supplied to captured-state validation |
 | `docs/agent-equipment/adapter-contract-v1.schema.json` | Closed capability, request, observation, action, and receipt serialization contract |
 | `docs/agent-equipment/acceptance-evidence-v1.schema.json` | Closed expected-case, candidate evidence, and post-run attestation contract |
-| `docs/agent-equipment/execution-authority-v1.schema.json` | Closed apply authorization, release archive manifest, and terminal receipt contract |
+| `docs/agent-equipment/execution-authority-v1.schema.json` | Closed apply, compensation, release archive manifest, and terminal receipt authority contract |
 | `docs/agent-equipment/initial-catalog.proposed.json` | Schema-valid initial desired-state proposal; no live authority |
 | `docs/agent-equipment/initial-lock.proposed.json` | Generated 132-record lock bound to the proposed catalog digest |
 | `docs/agent-equipment/INVENTORY.md` and `initial-inventory.json` | Dated, secret-free read-only observation and initial classification |
@@ -49,7 +49,7 @@ deferred.
 | `scripts/agent_equipment_json_schema.py` and `tests/test_agent_equipment_json_schema.py` | Shared strict local-schema gate used by every public design, adapter, and capture validator |
 | `scripts/agent_equipment_acceptance_model.py` and `tests/test_agent_equipment_acceptance.py` | Disposable fake-manager convergence, checkpoint, compensation, and migration-boundary evidence |
 | `scripts/agent_equipment_acceptance_evidence.py` and `tests/test_agent_equipment_acceptance_evidence.py` | Design-only three-document release gate, adversarial binding checks, and strict CLI fixtures |
-| `tests/test_agent_equipment_deployment_contract.py` | Design-only apply-authorization, release-receipt, deployment-separation, and runtime-gate contract vectors |
+| `tests/test_agent_equipment_deployment_contract.py` | Design-only apply/compensation authorization, release-receipt, deployment-separation, and runtime-gate contract vectors |
 | `scripts/agent_equipment_captured_state.py` and `tests/test_agent_equipment_captured_state.py` | Captured-state capability/action-set digests and fail-closed cross-record semantic validation against separately supplied plan actions |
 | `scripts/agent_equipment_adapter_contract.py`, `tests/test_agent_equipment_adapter_contract.py`, and `tests/fixtures/agent-equipment/schema/*-adapter-*.json` | Cross-record semantic binding validator plus executable positive and fail-closed adapter-contract examples |
 
@@ -181,7 +181,8 @@ The resolver has one side-effect-free entry point:
 resolve(command, catalog, lock, inventory, capabilities) -> Resolution
 ```
 
-The executor has one mutating entry point:
+The executor has one forward-mutation seam and one separately authorized public
+compensation seam:
 
 ```python
 execute(
@@ -192,9 +193,22 @@ execute(
     authorization_ledger,
     *,
     trusted_apply_authorization_digest,
+    trusted_execution_domain_identity,
     trusted_operator_review_package_digest,
     trusted_clock,
 ) -> ApplyReport
+
+compensate(
+    validated_plan,
+    compensation_authorization_bytes,
+    adapters,
+    checkpoint_store,
+    authorization_ledger,
+    *,
+    trusted_compensation_authorization_digest,
+    trusted_execution_domain_identity,
+    trusted_clock,
+) -> CompensationReport
 ```
 
 The operator invocation supplies the exact authorization file from
@@ -202,14 +216,32 @@ The operator invocation supplies the exact authorization file from
 and its separately authenticated `trusted_apply_authorization_digest`. The CLI
 does not discover a newest authorization, infer its digest, or fall back to an
 environment/config value. Before the first action checkpoint it strictly parses
-and validates the record, checks the complete binding tuple and UTC window,
+and validates the record, checks the complete binding tuple, exact top-level
+`execution_domain_identity` against `trusted_execution_domain_identity`, and
+UTC window,
 performs the final authorized live comparison, and only then durably claims its
 execution nonce under
-`~/.local/state/agent-equipment/authorization-ledger/`. Exclusive creation plus
-file and parent-directory fsync make the claim one-time. A claimed, expired,
-misbound, or unpersistable authorization performs zero adapter calls. Recovery
-may reopen only the same claimed run and surviving checkpoints; a new action or
-run requires a fresh authorization and nonce.
+`~/.local/state/agent-equipment/authorization-ledger/`, whose independently
+trusted execution-domain identity names that one authoritative CAS namespace
+and target. Exclusive creation plus file and parent-directory fsync make the
+claim one-time. A claimed, expired, misbound, foreign-domain, or unpersistable
+authorization performs zero adapter calls. Recovery
+may reopen only the same claimed run, execution domain, and surviving
+checkpoints; a new action or run requires a fresh authorization and nonce.
+
+The public `compensate` seam accepts only the closed
+`CompensationAuthorization` (`agent-equipment-compensation-authorization/v1`)
+and its independently authenticated digest. The record uses
+`compensation_authorization_identity`, `command: compensate`, issuer and UTC
+window, a fresh `compensation_nonce`, and exact bindings to the original apply
+identity/digest, execution-domain identity, execution nonce, run identity,
+checkpoint-set digest, and plan-action-set digest. The executor claims the
+compensation nonce once by compare-and-swap in the same authoritative
+execution-domain ledger namespace before any `compensating` transition. A
+missing, expired, replayed, foreign-domain, or unpersistable authorization
+performs no adapter call or checkpoint transition. Immediate reverse
+compensation after a later failure stays inside the already invoked claimed
+apply run; it does not reuse apply authority as a public compensation grant.
 
 Every adapter implements:
 
@@ -273,8 +305,8 @@ write_release_attestation(
 ) -> AcceptanceAttestation
 ```
 
-It binds the exact bundle bytes, candidate/artifact tuple, and the canonical
-automated-runner, live-operator, and release-reviewer records. Each attestor
+It binds the canonical semantic bundle digest, candidate/artifact tuple, and the
+canonical automated-runner, live-operator, and release-reviewer records. Each attestor
 time follows every bound result and live sign-off; the live-operator identity
 equals every passing live signer's identity. Attestor versions identify the
 runner or signing-policy implementation used for that role.
@@ -293,6 +325,7 @@ validate_acceptance_evidence(
     expected_attestation_manifest_digest,
     expected_apply_authorization_identity,
     expected_apply_authorization_digest,
+    expected_execution_domain_identity,
     expected_execution_nonce,
     expected_run_identity,
 ) -> tuple[Diagnostic, ...]
@@ -393,12 +426,26 @@ Later steps do not begin until the named evidence passes.
 - Implement the closed `ApplyAuthorization` parser and semantic validator plus
   the durable authorization ledger. The public executor requires exact
   authorization bytes and the separately supplied
-  `trusted_apply_authorization_digest` and trusted operator-review-package
-  digest; validate the canonical identity, full
+  `trusted_apply_authorization_digest`, `trusted_execution_domain_identity`, and
+  trusted operator-review-package digest; validate the canonical identity, full
   tuple, command, UTC window, run, and nonce before the first action checkpoint.
-  Claim the nonce with an exclusive, fsynced create. Test missing, extra,
-  expired, not-yet-valid, replayed, cross-run, cross-plan, and persistence-fault
-  cases for zero adapter calls and zero action checkpoints.
+  Require the authorization's top-level execution domain to equal that trusted
+  identity and the one authoritative ledger namespace and CAS target. Claim the
+  nonce with an exclusive, fsynced create in that domain. Test missing, extra,
+  expired, not-yet-valid, replayed, cross-run, cross-plan, cross-domain, and
+  persistence-fault cases for zero adapter calls and zero action checkpoints.
+- Implement the separate closed `CompensationAuthorization` parser and public
+  `compensate` boundary. Require `command: compensate`, canonical
+  `compensation_authorization_identity`, independently trusted complete digest,
+  issuer and UTC window, a fresh `compensation_nonce`, and exact original apply,
+  execution-domain, execution-nonce, run, checkpoint-set, and plan-action-set
+  bindings. Claim the compensation nonce once by CAS in the same authoritative
+  execution-domain ledger before writing `compensating`. Never reuse
+  `ApplyAuthorization` for this seam. Test missing, expired, replayed,
+  cross-domain, cross-run, cross-checkpoint, cross-action-set, and persistence-
+  fault cases for zero adapter calls and checkpoint transitions. Keep automatic
+  compensation after a later apply failure inside that already invoked claimed
+  run.
 - After complete-plan validation, emit its exact closed
   `agent-equipment-plan-action-set/v1` projection. Validate the separately
   produced action set and capture with their checked-in JSON Schemas, then run
@@ -627,9 +674,11 @@ Later steps do not begin until the named evidence passes.
   and digest, compensation list, and rollback command.
 - Ask for authorization naming that complete candidate, catalog, lock, plan,
   plan-action-set, capability-set, captured-state identity/digest, expected-
-  case-manifest digest, and operator-review-package digest tuple.
+  case-manifest digest, operator-review-package digest, and independently
+  selected execution-domain identity tuple.
   The authority emits the closed `ApplyAuthorization`, including command, issuer,
-  time window, run, and fresh execution nonce, then supplies its canonical
+  time window, execution domain, run, and fresh execution nonce, then supplies
+  its canonical
   `trusted_apply_authorization_digest` independently of the file. General
   approval of this architecture is not authorization to execute it. After
   authorization and before any action checkpoint, recompute the installed
@@ -705,13 +754,18 @@ No retirement rule deletes an unmanaged observation or a canonical
    implementation identity and installed-manifest digest, refreshed inventory,
    immutable plan, plan-action-set, capability-set, and already sealed
    captured-state identity/digest, sealed expected-case manifest and digest,
-   issuer, validity window, run, and fresh execution nonce. Bind the exact live
+   issuer, validity window, independently trusted execution-domain identity,
+   run, and fresh execution nonce. Bind the exact live
    mutations, rollback command/actions, and review receipts transitively through
    the closed `operator_review_package_digest`; do not embed those documents as
    open authorization fields. Supply its
    `trusted_apply_authorization_digest` outside the record. Require an exact post-
    authorization implementation and live comparison before the first action
-   checkpoint; drift or nonce reuse requires a new capture and authorization.
+   checkpoint; drift, a different ledger domain, or nonce reuse requires a new
+   capture and authorization. A later fresh/public compensation invocation
+   requires its own closed `CompensationAuthorization`, independently trusted
+   digest, and one-time CAS claim of `compensation_nonce` in that same execution
+   domain; it never reuses the apply record.
 
 ## Stop conditions
 
@@ -724,10 +778,17 @@ captured or expected state; the capability-set digest or a route binding is
 invalid; the post-authorization comparison differs from the sealed capture; a
 checkpoint cannot be made durable; CPython 3.12 or the manifest-bound runtime is
 unavailable; the closed authorization is absent, expired, not yet valid,
-misbound, replayed, or cannot be claimed durably; its canonical digest differs
+misbound, names a foreign execution domain, is replayed, or cannot be claimed
+durably; its canonical digest differs
 from `trusted_apply_authorization_digest`; or the exact runtime plan, plan-
 action-set, captured-state, and expected-case-manifest digests lack
 authorization.
+
+Stop before a public compensation transition when `CompensationAuthorization`
+is absent, expired, not yet valid, misbound to the original run, execution
+domain, checkpoint set, or plan-action set, has a replayed `compensation_nonce`,
+differs from `trusted_compensation_authorization_digest`, or cannot be claimed
+by CAS in the same authoritative execution-domain ledger namespace.
 
 Stop before release when the external launcher's identity or installed-manifest
 digest differs from its trusted input; the exact apply authorization or
