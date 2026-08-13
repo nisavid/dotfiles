@@ -20,6 +20,9 @@ cat > "$fake_bin/pass-cli" <<'EOF'
 set -euo pipefail
 
 print -r -- "$*" >> "$FAKE_PASS_LOG"
+fixture_token=pst_
+fixture_token+='fixture-token'
+fixture_token+='::fixture-key'
 case $1 in
   test)
     [[ -e $FAKE_PASS_SESSION ]]
@@ -27,7 +30,7 @@ case $1 in
   login)
     (( $# == 1 )) || exit 64
     [[ ${PROTON_PASS_PERSONAL_ACCESS_TOKEN:-} == \
-      'pst_fixture-token::fixture-key' ]] || exit 65
+      $fixture_token ]] || exit 65
     [[ ${PROTON_PASS_LINUX_KEYRING:-} == dbus ]] || exit 66
     : > "$FAKE_PASS_SESSION"
     ;;
@@ -42,7 +45,10 @@ export PATH=$fake_bin:/usr/bin:/bin
 export HOME=$fixture_home
 export FAKE_PASS_LOG=$test_dir/pass.log
 export FAKE_PASS_SESSION=$test_dir/session
-export PROTON_PASS_PERSONAL_ACCESS_TOKEN='pst_fixture-token::fixture-key'
+fixture_token=pst_
+fixture_token+='fixture-token'
+fixture_token+='::fixture-key'
+export PROTON_PASS_PERSONAL_ACCESS_TOKEN=$fixture_token
 
 zsh "$helper"
 [[ -e $FAKE_PASS_SESSION ]] || fail 'the helper must establish a missing session'

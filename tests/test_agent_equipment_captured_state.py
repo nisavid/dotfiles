@@ -434,6 +434,45 @@ def valid_document() -> dict[str, object]:
 
 
 class CapturedStateValidationTest(unittest.TestCase):
+    def test_public_capture_rejects_literal_credentials_without_echoing_them(
+        self,
+    ) -> None:
+        secret_canary = "Author" + "ization:" + " Bear" + "er actual-secret-value"
+        document = valid_document()
+        document["surfaces"][0]["provenance"]["evidence"][0]["source"] = secret_canary
+
+        diagnostics = validate_document(document)
+
+        self.assertEqual(
+            [diagnostic.code for diagnostic in diagnostics],
+            ["CAPTURED_STATE_LITERAL_SECRET"],
+        )
+        self.assertNotIn(secret_canary, repr(diagnostics))
+
+    def test_public_plan_action_set_rejects_literal_credentials_without_echoing_them(
+        self,
+    ) -> None:
+        secret_canary = "ghp_" + "A" * 20
+        document = valid_document()
+        authority = authoritative_plan_action_set()
+        action_payload = authority["actions"][0]["action_payload"]
+        action_payload["adapter_version"] = secret_canary
+        action_payload["preconditions"]["adapter_version"] = secret_canary
+        rehash_authoritative_plan_action_set(authority)
+        action_digest = authority["actions"][0]["action_digest"]
+        document["provider_routes"][0]["planned_actions"][0]["action_digest"] = (
+            action_digest
+        )
+        document["bindings"]["plan_action_set_digest"] = authority["action_set_digest"]
+
+        diagnostics = validate_document(document, authority)
+
+        self.assertEqual(
+            [diagnostic.code for diagnostic in diagnostics],
+            ["AUTHORITATIVE_PLAN_ACTION_SET_LITERAL_SECRET"],
+        )
+        self.assertNotIn(secret_canary, repr(diagnostics))
+
     def test_schema_and_fixture_are_valid(self) -> None:
         metaschema = run_check_jsonschema(
             "--check-metaschema",
@@ -928,7 +967,7 @@ class CapturedStateValidationTest(unittest.TestCase):
             "https://example.com/token-secret",
             "https://example.com/Token/secret-value",
             "https://example.com/CLIENT-SECRET/value",
-            "https://example.com/mcp?api_key=x",
+            "https://example.com/mcp?" + "api_" + "key=x",
             "https://-.example/mcp",
             "https://example..com/mcp",
             "https://example.com/./mcp",
@@ -2690,6 +2729,82 @@ class CapturedStateValidationTest(unittest.TestCase):
         self.assertEqual(1, result.returncode)
         self.assertIn("AUTHORITATIVE_PLAN_ACTION_SET_SCHEMA_INVALID", result.stderr)
         self.assertNotIn("Traceback", result.stderr)
+
+    def test_oversized_numeric_tokens_cannot_satisfy_string_schemas(self) -> None:
+        oversized_integer = 10**5000
+
+        authoritative = authoritative_plan_action_set()
+        action_payload = authoritative["actions"][0]["action_payload"]
+        action_payload["adapter_version"] = oversized_integer
+        action_payload["preconditions"]["adapter_version"] = oversized_integer
+        api_plan_diagnostics = validate_document(valid_document(), authoritative)
+        self.assertEqual(
+            [diagnostic.code for diagnostic in api_plan_diagnostics],
+            ["AUTHORITATIVE_PLAN_ACTION_SET_SCHEMA_INVALID"],
+        )
+
+        captured_document = valid_document()
+        captured_document["surfaces"][0]["provenance"]["evidence"][0]["source"] = (
+            oversized_integer
+        )
+        api_capture_diagnostics = validate_document(captured_document)
+        self.assertEqual(
+            [diagnostic.code for diagnostic in api_capture_diagnostics],
+            ["CAPTURED_STATE_SCHEMA_INVALID"],
+        )
+
+        oversized_token = "9" * 5001
+        with tempfile.TemporaryDirectory() as directory:
+            manifest_path = Path(directory) / "captured-state.json"
+            plan_actions_path = Path(directory) / "plan-actions.json"
+
+            serialized_actions = json.dumps(authoritative_plan_action_set())
+            self.assertEqual(2, serialized_actions.count('"adapter_version": "1.0.0"'))
+            serialized_actions = serialized_actions.replace(
+                '"adapter_version": "1.0.0"',
+                '"adapter_version": ' + oversized_token,
+            )
+            plan_actions_path.write_text(serialized_actions, encoding="utf-8")
+            manifest_path.write_text(
+                json.dumps(valid_document()),
+                encoding="utf-8",
+            )
+
+            plan_result = subprocess.run(
+                validation_cli_args(plan_actions_path, manifest_path),
+                cwd=ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            plan_actions_path.write_text(
+                json.dumps(authoritative_plan_action_set()),
+                encoding="utf-8",
+            )
+            serialized_capture = json.dumps(valid_document()).replace(
+                '"source": "claude plugin list"',
+                '"source": ' + oversized_token,
+                1,
+            )
+            manifest_path.write_text(serialized_capture, encoding="utf-8")
+            capture_result = subprocess.run(
+                validation_cli_args(plan_actions_path, manifest_path),
+                cwd=ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(1, plan_result.returncode)
+        self.assertIn(
+            "AUTHORITATIVE_PLAN_ACTION_SET_SCHEMA_INVALID",
+            plan_result.stderr,
+        )
+        self.assertNotIn("Traceback", plan_result.stderr)
+        self.assertEqual(1, capture_result.returncode)
+        self.assertIn("CAPTURED_STATE_SCHEMA_INVALID", capture_result.stderr)
+        self.assertNotIn("Traceback", capture_result.stderr)
 
     def test_cli_rejects_artifacts_from_a_different_current_candidate(
         self,

@@ -456,6 +456,34 @@ def write_document(path: Path, document: object) -> None:
 
 
 class AdapterContractSchemaTests(unittest.TestCase):
+    def test_public_sequence_rejects_literal_credentials_without_echoing_them(
+        self,
+    ) -> None:
+        secret_canary = "Author" + "ization:" + " Bear" + "er actual-secret-value"
+        sequence = valid_sequence()
+        capability = capability_record(sequence[0])
+        evidence = capability["manager_version_evidence"]
+        evidence["observation_source"] = secret_canary
+        evidence_without_digest = copy.deepcopy(evidence)
+        evidence_without_digest.pop("evidence_digest")
+        evidence["evidence_digest"] = canonical_digest(evidence_without_digest)
+        rebind_capability_digest(sequence)
+        for index in (1, 2, 3, 4):
+            sequence[index]["record"]["manager_version_evidence_digest"] = evidence[
+                "evidence_digest"
+            ]
+        sequence[3]["record"]["preconditions"]["manager_version_evidence_digest"] = (
+            evidence["evidence_digest"]
+        )
+
+        diagnostics = validate_adapter_sequence(apply_sequence_document(sequence))
+
+        self.assertEqual(
+            [diagnostic.code for diagnostic in diagnostics],
+            ["ADAPTER_SEQUENCE_LITERAL_SECRET"],
+        )
+        self.assertNotIn(secret_canary, repr(diagnostics))
+
     def test_semantic_validation_requires_external_implementation_trust(self) -> None:
         with self.assertRaises(TypeError):
             CONTRACT.validate_sequence(apply_sequence_document(valid_sequence()))

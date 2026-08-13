@@ -22,6 +22,10 @@ except ModuleNotFoundError:  # Loaded as a repo module rather than an executable
     from scripts.agent_equipment_json_schema import (
         validate_document as _validate_schema,
     )
+try:
+    from agent_equipment_public_data import contains_literal_credential
+except ModuleNotFoundError:  # Loaded as a repo module rather than an executable.
+    from scripts.agent_equipment_public_data import contains_literal_credential
 
 JsonObject = Mapping[str, Any]
 MUTATING_OPERATIONS = frozenset(
@@ -93,6 +97,14 @@ def validate_sequence(
                 "ADAPTER_SCHEMA_INVALID",
                 "ApplySequence",
                 "The adapter sequence must satisfy the checked-in closed contract.",
+            ),
+        )
+    if contains_literal_credential(document):
+        return (
+            Diagnostic(
+                "ADAPTER_SEQUENCE_LITERAL_SECRET",
+                "ApplySequence",
+                "The adapter sequence contains credential-shaped literal material.",
             ),
         )
 

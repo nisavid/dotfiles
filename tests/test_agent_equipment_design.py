@@ -32,6 +32,21 @@ def valid_pair() -> tuple[dict[str, object], dict[str, object]]:
     return catalog, lock
 
 
+def literal_credential_samples() -> tuple[str, ...]:
+    authorization = "Author" + "ization:"
+    bearer_value = " Bear" + "er actual-secret-value"
+    query_credential = "to" + "ken=actual-secret-value"
+    return (
+        *("gh" + prefix + "_" + "A" * 20 for prefix in "pousr"),
+        "github" + "_pat_" + "A" * 20,
+        "AK" + "IA" + "A" * 16,
+        "s" + "k-" + "A" * 20,
+        "p" + "st_" + "A" * 12 + "::" + "B" * 8,
+        authorization + bearer_value,
+        "https://example.invalid/mcp?" + query_credential,
+    )
+
+
 def managed_selection(catalog: dict[str, object]) -> dict[str, object]:
     return catalog["coverage_templates"][0]["record"]["provider_selection"]
 
@@ -1396,7 +1411,9 @@ class AgentEquipmentDesignTest(unittest.TestCase):
 
     def test_literal_secret_material_fails_closed_without_echoing_it(self) -> None:
         catalog, lock = valid_pair()
-        secret_canary = "Authorization: Bearer secret-canary-value"  # noqa: S105
+        secret_canary = (
+            "Author" + "ization:" + " Bear" + "er secret-canary-value"
+        )  # noqa: S105
         provider = {
             "kind": "direct_mcp",
             "server_name": "context7",
@@ -1422,6 +1439,65 @@ class AgentEquipmentDesignTest(unittest.TestCase):
             all(secret_canary not in diagnostic.message for diagnostic in result.diagnostics)
         )
         self.assertIsNone(result.mutation_plan)
+
+    def test_literal_credential_stops_before_identifier_diagnostics_can_echo_it(
+        self,
+    ) -> None:
+        catalog, lock = valid_pair()
+        literal_credential = "gh" + "p_" + "a" * 20
+        catalog["equipment"][0]["identity"] = f"skill:{literal_credential}"
+
+        result = DESIGN.validate_design(catalog, lock)
+
+        self.assertEqual(
+            result.diagnostics,
+            (
+                DESIGN.Diagnostic(
+                    "LITERAL_SECRET_MATERIAL",
+                    "The catalog contains literal secret material; use a structured secret reference.",
+                ),
+            ),
+        )
+        self.assertNotIn(literal_credential, repr(result.diagnostics))
+        self.assertEqual(result.coverage, ())
+        self.assertIsNone(result.mutation_plan)
+
+    def test_every_literal_credential_family_fails_closed_without_echoing_it(
+        self,
+    ) -> None:
+        for literal_credential in literal_credential_samples():
+            with self.subTest(family=literal_credential[:4]):
+                catalog, lock = valid_pair()
+                provider = {
+                    "kind": "direct_mcp",
+                    "server_name": "context7",
+                    "transport": "stdio",
+                    "command": "npx",
+                    "arguments": [{"literal": literal_credential}],
+                }
+                managed_route(catalog)["provider"] = deepcopy(provider)
+                managed_route(catalog)["provenance"] = {
+                    "owner": "overlay:claude/mcp"
+                }
+                locked_managed_route(lock)["provider"] = deepcopy(provider)
+                locked_managed_route(lock)["provenance"] = deepcopy(
+                    managed_route(catalog)["provenance"]
+                )
+                lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
+
+                result = DESIGN.validate_design(catalog, lock)
+
+                self.assertIn(
+                    "LITERAL_SECRET_MATERIAL",
+                    {diagnostic.code for diagnostic in result.diagnostics},
+                )
+                self.assertTrue(
+                    all(
+                        literal_credential not in diagnostic.message
+                        for diagnostic in result.diagnostics
+                    )
+                )
+                self.assertIsNone(result.mutation_plan)
 
     def test_split_secret_flag_requires_structured_reference_argument(self) -> None:
         for flag in ("--api-key", "--token", "Authorization", "X-Api-Key"):

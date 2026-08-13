@@ -20,6 +20,14 @@ except ModuleNotFoundError:  # Loaded as a repo module rather than an executable
     from scripts.agent_equipment_json_schema import (
         validate_document as _validate_schema,
     )
+try:
+    from agent_equipment_public_data import (
+        contains_literal_credential as _contains_literal_credential,
+    )
+except ModuleNotFoundError:  # Loaded as a repo module rather than an executable.
+    from scripts.agent_equipment_public_data import (
+        contains_literal_credential as _contains_literal_credential,
+    )
 
 
 JsonObject = Mapping[str, object]
@@ -64,16 +72,6 @@ _UTC_TIMESTAMP_PATTERN = re.compile(
     r"^(?P<year>[0-9]{4})-(?P<month>[0-9]{2})-(?P<day>[0-9]{2})"
     r"[Tt](?P<hour>[0-9]{2}):(?P<minute>[0-9]{2}):(?P<second>[0-9]{2})"
     r"(?P<fraction>[.,][0-9]+)?Z(?:\n)?\Z"
-)
-_LITERAL_CREDENTIAL_PATTERNS = tuple(
-    re.compile(pattern)
-    for pattern in (
-        r"(?i)\b(?:authorization|proxy-authorization|x-api-key|api[_-]?key|access[_-]?token|password|client[_-]?secret)\s*[:=]\s*(?:bearer\s+\S+|(?!bearer(?:\s|$))\S+)",
-        r"(?i)\bbearer\s+[A-Za-z0-9._~+/-]+",
-        r"\bgh[pousr]_[A-Za-z0-9]{20,}\b",
-        r"\bAKIA[A-Z0-9]{16}\b",
-        r"[?&](?:api[_-]?key|access[_-]?token|token|secret)=[^&#\s]+",
-    )
 )
 _DERIVED_REQUIREMENTS = frozenset(
     CHECKPOINT_MATRIX_REQUIREMENTS + MIGRATION_REQUIREMENTS
@@ -159,25 +157,6 @@ def _utc_timestamp_key(value: object) -> tuple[int | str, ...] | None:
 
 def _diagnostic(code: str, path: str, message: str) -> Diagnostic:
     return Diagnostic(path=path, code=code, message=message)
-
-
-def _iter_public_strings(value: object):
-    if isinstance(value, str):
-        yield value
-    elif isinstance(value, Mapping):
-        for item in value.values():
-            yield from _iter_public_strings(item)
-    elif isinstance(value, list):
-        for item in value:
-            yield from _iter_public_strings(item)
-
-
-def _contains_literal_credential(document: object) -> bool:
-    return any(
-        pattern.search(value) is not None
-        for value in _iter_public_strings(document)
-        for pattern in _LITERAL_CREDENTIAL_PATTERNS
-    )
 
 
 def _literal_credential_diagnostic(code: str, label: str) -> Diagnostic:
@@ -690,6 +669,10 @@ def validate_acceptance_evidence(
     expected_implementation_manifest_digest: str,
     expected_case_manifest_digest: str,
     expected_attestation_manifest_digest: str,
+    expected_apply_authorization_identity: str,
+    expected_apply_authorization_digest: str,
+    expected_execution_nonce: str,
+    expected_run_identity: str,
 ) -> tuple[Diagnostic, ...]:
     """Validate one bundle against independently supplied release expectations.
 
@@ -766,6 +749,24 @@ def validate_acceptance_evidence(
         )
     assert isinstance(attestation_manifest, Mapping)
     diagnostics: list[Diagnostic] = []
+
+    expected_execution_binding = {
+        "apply_authorization_identity": expected_apply_authorization_identity,
+        "apply_authorization_digest": expected_apply_authorization_digest,
+        "execution_nonce": expected_execution_nonce,
+        "run_identity": expected_run_identity,
+    }
+    if (
+        bundle["execution_binding"] != expected_execution_binding
+        or attestation_manifest["execution_binding"] != expected_execution_binding
+    ):
+        diagnostics.append(
+            _diagnostic(
+                "EXECUTION_BINDING_MISMATCH",
+                "$.execution_binding",
+                "Evidence and attestation must bind the exact externally trusted apply authorization, nonce, and run.",
+            )
+        )
 
     diagnostics.extend(
         _validate_attestation_manifest(
@@ -1086,6 +1087,26 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
         required=True,
         help="release-launcher-trusted digest of the authorized post-run attestation",
     )
+    parser.add_argument(
+        "--expected-apply-authorization-identity",
+        required=True,
+        help="executor-trusted identity of the exact apply authorization",
+    )
+    parser.add_argument(
+        "--expected-apply-authorization-digest",
+        required=True,
+        help="executor-trusted canonical digest of the complete apply authorization record",
+    )
+    parser.add_argument(
+        "--expected-execution-nonce",
+        required=True,
+        help="executor-trusted fresh nonce claimed for this apply run",
+    )
+    parser.add_argument(
+        "--expected-run-identity",
+        required=True,
+        help="executor-trusted identity of this apply run",
+    )
     parser.add_argument("bundle", type=Path)
     return parser.parse_args(argv)
 
@@ -1132,6 +1153,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         expected_attestation_manifest_digest=(
             args.expected_attestation_manifest_digest
         ),
+        expected_apply_authorization_identity=(
+            args.expected_apply_authorization_identity
+        ),
+        expected_apply_authorization_digest=args.expected_apply_authorization_digest,
+        expected_execution_nonce=args.expected_execution_nonce,
+        expected_run_identity=args.expected_run_identity,
     )
     for diagnostic in diagnostics:
         print(

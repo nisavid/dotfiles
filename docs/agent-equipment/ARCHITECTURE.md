@@ -21,6 +21,7 @@ semantics.
 | Acceptance evidence bundle | fixture and live runners | Candidate results only; never desired state or mutation authority |
 | Release attestation | external release authority | Post-run authorization of one exact evidence-bundle digest and attestor set |
 | Release launcher | external release authority | Candidate-independent validation, create-only archival, and receipt issuance |
+| Release archive manifest | external release authority | Closed identity/digest contract over exact archived bytes, execution tuple, launcher, and destination |
 | Release receipt | external release authority | Terminal proof of one launcher-authenticated, atomically archived release tuple |
 
 The catalog and lock are public, secret-free data. They contain environment
@@ -88,7 +89,9 @@ static cases, sealed automated action identities, explicit verification nodes,
 and explicit mutating migration boundaries. It is a projection of an already
 validated plan, not a replacement for plan validation.
 
-The evidence bundle repeats the exact bindings and route evidence, records the
+The evidence bundle repeats the exact bindings and route evidence, adds the
+post-authorization execution binding—apply-authorization identity and canonical
+digest, execution nonce, and run identity—and records the
 public harness and manager versions, and contains one aggregate plus the exact
 closed child registry. A child's identity is the canonical digest of its
 requirement ID, fixture family, and sealed subject identity. The semantic
@@ -97,8 +100,9 @@ sealed actions and mutating migration boundaries. It maps migration cases only
 through explicit node-to-requirement records; it never invents plan nodes from
 prose.
 
-The post-run attestation binds the recomputed complete evidence-bundle digest,
-the expected-case manifest digest, and the exact candidate/artifact bindings.
+The post-run attestation binds the same execution binding, the recomputed
+complete evidence-bundle digest, the expected-case manifest digest, and the
+exact candidate/artifact bindings.
 Its canonically ordered attestors are the automated runner, live operator, and
 release reviewer, each with a distinct identity, runner or signing-policy
 implementation version, and UTC attestation time after all bound evidence. The
@@ -120,21 +124,34 @@ URLs, native output, or secret values. Manager and harness version strings are
 public native-manager observations; diagnostics never echo their supplied
 contents.
 
-`execution-authority-v1.schema.json` owns two closed records with independent
+`execution-authority-v1.schema.json` owns three closed records with independent
 purposes. `ApplyAuthorization` is the only serialized pre-mutation authority.
 It binds `command: apply`, issuer and validity times, one run identity, one
 issuer-generated execution nonce, and the complete candidate, installed-
 implementation, catalog, lock, plan, plan-action-set, capability-set, sealed-
-capture, and expected-case-manifest tuple. Its identity is the canonical digest
-of the record excluding `authorization_identity`; the separately supplied
+capture, expected-case-manifest, and operator-review-package tuple. The review-
+package digest binds the exact proposed live mutations, rollback material, and
+operator review content presented to the issuer. Its identity is the canonical
+digest of the record excluding `authorization_identity`; the separately supplied
 `trusted_apply_authorization_digest` is the canonical digest of the complete
 record. Equality with candidate-authored fields is not authorization.
 
+`ReleaseArchiveManifest` is a closed semantic manifest over the candidate and
+installed implementation, exact execution binding, launcher identity/manifest,
+authority-store identity/key, `absent` compare token, generation `1`, and four
+SHA-256 digests of the exact UTF-8 byte streams of the authorization, expected-
+case manifest, evidence bundle, and attestation. Exact-byte digests are distinct
+from semantic canonical digests: differently formatted JSON may have the same
+semantic digest but different archive byte digests. The archive identity is
+`release-archive:` plus the canonical digest of its payload; its manifest digest
+is the canonical digest of the complete record excluding only
+`archive_manifest_digest`.
+
 `ReleaseReceipt` is terminal release evidence, never apply authority. Its
-identity is the canonical digest of its closed payload. That payload binds the
-independently trusted release-launcher identity and manifest digest, the exact
-apply authorization, candidate, installed implementation, expected cases,
-evidence bundle, attestation, and one create-only archive commit. A JSON object
+identity is `release-receipt:` plus the canonical digest of its closed payload.
+That payload binds the independently trusted release-launcher identity and
+manifest digest, exact candidate, installed implementation, execution binding,
+archive identity/digest, store/key, and one create-only generation. A JSON object
 with the same shape is not a receipt unless the independent launcher produced
 it in the external authority's compare-and-swap archive.
 
@@ -767,6 +784,7 @@ execute(
   authorization_ledger,
   *,
   trusted_apply_authorization_digest,
+  trusted_operator_review_package_digest,
   trusted_clock,
 ) -> apply_report
 ```
@@ -775,10 +793,12 @@ Before the first action checkpoint, the executor strictly parses the closed
 `ApplyAuthorization`, rejects duplicate members and non-JSON values, validates
 its Schema and semantic digest/identity formulas, and requires its complete
 tuple to equal the independently validated local artifacts and
-`trusted_apply_authorization_digest`. It requires
-`issued_at <= not_before <= trusted_clock.now < expires_at`, exact command and
-run identity, and the same post-authorization live comparison required by the
-capture contract. It then exclusively creates an authorization-ledger record
+`trusted_apply_authorization_digest` plus the trusted operator-review-package
+digest. It requires
+`issued_at <= not_before <= trusted_clock.now < expires_at`, exact command,
+issuer, and run identity, and the same post-authorization live comparison
+required by the capture contract. It then exclusively creates an
+authorization-ledger record
 for the execution nonce, authorization digest, and run identity, fsyncing file
 and parent directory. A claimed nonce, expired window, missing field, foreign
 tuple, digest mismatch, or ledger persistence failure rejects the run before the
@@ -848,8 +868,8 @@ not mutate authored state or harness state. After the run, the external release
 authority supplies the trusted digest of a separate attestation over the exact
 bundle. The release validator is pure. The candidate-independent release
 launcher supplies its own externally trusted identity and manifest digest plus
-the trusted apply-authorization, expected-case, and attestation digests. It
-strictly validates the closed records, writes the exact authorization,
+the trusted execution tuple, apply-authorization, expected-case, and attestation
+digests. It strictly validates the closed records, writes the exact authorization,
 expected-case manifest, evidence bundle, attestation, and archive manifest into
 a same-filesystem staging directory, fsyncs them, and performs one create-only
 compare-and-swap rename to the tuple's authority-store identity. `absent` is the
@@ -869,8 +889,9 @@ apply.
 
 ## Schema evolution
 
-Catalog, lock, captured-state, evidence, attestation, apply-authorization, and
-release-receipt formats use independent explicit major versions. Adding an
+Catalog, lock, captured-state, evidence, attestation, apply-authorization,
+release-archive-manifest, and release-receipt formats use independent explicit
+major versions. Adding an
 optional field with unchanged meaning may remain in
 the current major version only when old readers reject or safely ignore it by
 contract; these v1 schemas use exact shapes, so additions normally require a

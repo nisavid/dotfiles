@@ -136,7 +136,9 @@ jq -e '
 
 mcp_config_modifier=$test_dir/modify-mcp-config
 render_modifier home/dot_config/modify_private_mcp-config.json.tmpl "$mcp_config_modifier"
-cat > "$test_dir/mcp-config-input.json" <<'EOF'
+authorization_header='Bearer '
+authorization_header+='header-canary'
+cat > "$test_dir/mcp-config-input.json" <<EOF
 {
   "unrelated": "preserved",
   "mcpServers": {
@@ -145,7 +147,7 @@ cat > "$test_dir/mcp-config-input.json" <<'EOF'
       "command": "npx",
       "args": ["mcp-remote", "https://mcp.firecrawl.dev/firecrawl-canary/v2/mcp"],
       "env": {"FIRECRAWL_API_KEY": "environment-canary"},
-      "headers": {"Authorization": "Bearer header-canary"},
+      "headers": {"Authorization": "$authorization_header"},
       "http_headers": {"X-API-Key": "http-header-canary"},
       "bearer_token_env_var": "FIRECRAWL_API_KEY",
       "tools": ["scrape"],

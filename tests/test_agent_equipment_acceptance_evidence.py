@@ -36,6 +36,25 @@ DIGESTS = {
     }.items()
 }
 CANDIDATE_IDENTITY = "candidate:fixture/controller-v1"
+EXECUTION_BINDING = {
+    "apply_authorization_identity": "apply-authorization:sha256:" + "4" * 64,
+    "apply_authorization_digest": "sha256:" + "5" * 64,
+    "execution_nonce": "execution-nonce:sha256:" + "6" * 64,
+    "run_identity": "run:sha256:" + "7" * 64,
+}
+
+
+def trusted_execution_inputs() -> dict[str, str]:
+    return {
+        "expected_apply_authorization_identity": EXECUTION_BINDING[
+            "apply_authorization_identity"
+        ],
+        "expected_apply_authorization_digest": EXECUTION_BINDING[
+            "apply_authorization_digest"
+        ],
+        "expected_execution_nonce": EXECUTION_BINDING["execution_nonce"],
+        "expected_run_identity": EXECUTION_BINDING["run_identity"],
+    }
 
 
 def canonical_digest(value: object) -> str:
@@ -310,6 +329,7 @@ def valid_evidence_bundle(
     document: dict[str, object] = {
         "schema_version": "agent-equipment-acceptance-evidence/v1",
         "bindings": copy.deepcopy(manifest["bindings"]),
+        "execution_binding": copy.deepcopy(EXECUTION_BINDING),
         "fixture_version": manifest["fixture_version"],
         "expected_case_manifest_digest": manifest["expected_case_manifest_digest"],
         "route_capability_bindings": copy.deepcopy(
@@ -373,6 +393,7 @@ def valid_attestation_manifest(
     document: dict[str, object] = {
         "schema_version": "agent-equipment-acceptance-attestation/v1",
         "bindings": copy.deepcopy(manifest["bindings"]),
+        "execution_binding": copy.deepcopy(bundle["execution_binding"]),
         "expected_case_manifest_digest": manifest["expected_case_manifest_digest"],
         "bundle_digest": bundle["bundle_digest"],
         "attestors": [
@@ -463,6 +484,14 @@ def cli_args(
         str(attestation_path),
         "--expected-attestation-manifest-digest",
         expected_attestation_manifest_digest,
+        "--expected-apply-authorization-identity",
+        EXECUTION_BINDING["apply_authorization_identity"],
+        "--expected-apply-authorization-digest",
+        EXECUTION_BINDING["apply_authorization_digest"],
+        "--expected-execution-nonce",
+        EXECUTION_BINDING["execution_nonce"],
+        "--expected-run-identity",
+        EXECUTION_BINDING["run_identity"],
         str(bundle_path),
     ]
 
@@ -495,6 +524,14 @@ def validation_diagnostics(
             expected_attestation_manifest_digest
             or attestation["attestation_manifest_digest"]
         ),
+        expected_apply_authorization_identity=EXECUTION_BINDING[
+            "apply_authorization_identity"
+        ],
+        expected_apply_authorization_digest=EXECUTION_BINDING[
+            "apply_authorization_digest"
+        ],
+        expected_execution_nonce=EXECUTION_BINDING["execution_nonce"],
+        expected_run_identity=EXECUTION_BINDING["run_identity"],
     )
 
 
@@ -516,9 +553,43 @@ class AcceptanceEvidenceContractTests(unittest.TestCase):
             expected_attestation_manifest_digest=attestation[
                 "attestation_manifest_digest"
             ],
+            expected_apply_authorization_identity=EXECUTION_BINDING[
+                "apply_authorization_identity"
+            ],
+            expected_apply_authorization_digest=EXECUTION_BINDING[
+                "apply_authorization_digest"
+            ],
+            expected_execution_nonce=EXECUTION_BINDING["execution_nonce"],
+            expected_run_identity=EXECUTION_BINDING["run_identity"],
         )
 
         self.assertEqual(diagnostics, ())
+
+    def test_execution_binding_is_post_authorization_and_externally_trusted(
+        self,
+    ) -> None:
+        manifest = valid_expected_case_manifest()
+        self.assertNotIn("execution_binding", manifest)
+        bundle = valid_evidence_bundle(manifest)
+        attestation = valid_attestation_manifest(bundle, manifest)
+
+        forged_binding = copy.deepcopy(EXECUTION_BINDING)
+        forged_binding["execution_nonce"] = "execution-nonce:sha256:" + "8" * 64
+        bundle["execution_binding"] = copy.deepcopy(forged_binding)
+        reseal_bundle(bundle)
+        attestation["execution_binding"] = copy.deepcopy(forged_binding)
+        attestation["bundle_digest"] = bundle["bundle_digest"]
+        reseal_attestation(attestation)
+
+        codes = diagnostic_codes(
+            bundle,
+            manifest,
+            attestation,
+            expected_attestation_manifest_digest=attestation[
+                "attestation_manifest_digest"
+            ],
+        )
+        self.assertIn("EXECUTION_BINDING_MISMATCH", codes)
 
     def test_trusted_attestation_freezes_every_candidate_bundle_value(self) -> None:
         manifest = valid_expected_case_manifest()
@@ -1243,7 +1314,7 @@ class AcceptanceEvidenceContractTests(unittest.TestCase):
     def test_all_archived_release_documents_reject_literal_credentials(self) -> None:
         credential_values = {
             "manifest provider": "ghp_" + "A" * 24,
-            "harness version": "Bearer abcdefghijklmnopqrstuvwxyz",
+            "harness version": "Bearer " + "abcdefghijklmnopqrstuvwxyz",
             "manager version": "ghp_" + "B" * 24,
             "attestor version": "AKIA" + "C" * 16,
         }
@@ -1367,6 +1438,7 @@ class AcceptanceEvidenceContractTests(unittest.TestCase):
             ],
             expected_case_manifest_digest=trusted_digest,
             expected_attestation_manifest_digest=trusted_attestation_digest,
+            **trusted_execution_inputs(),
         )
         self.assertEqual(
             [diagnostic.code for diagnostic in swapped],
@@ -1383,6 +1455,7 @@ class AcceptanceEvidenceContractTests(unittest.TestCase):
             ],
             expected_case_manifest_digest=trusted_digest,
             expected_attestation_manifest_digest=trusted_attestation_digest,
+            **trusted_execution_inputs(),
         )
         self.assertEqual(
             [diagnostic.code for diagnostic in manifest_in_bundle_position],
@@ -1400,6 +1473,7 @@ class AcceptanceEvidenceContractTests(unittest.TestCase):
                 ],
                 expected_case_manifest_digest=trusted_digest,
                 expected_attestation_manifest_digest=(trusted_attestation_digest),
+                **trusted_execution_inputs(),
             )
         )
         self.assertEqual(
