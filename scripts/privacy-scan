@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import Iterable
-from pathlib import Path
+import hashlib
 import re
 import sys
+from collections.abc import Iterable
+from pathlib import Path
 
+from agent_equipment_public_data import string_looks_like_credential
 
 ALLOWED_EMAILS = {"ivan@nisavid.io"}
 ALLOWED_EMAIL_DOMAINS = {"example.com", "example.invalid"}
@@ -20,16 +22,7 @@ HOME_PATH = re.compile(
     r"(?<![A-Za-z0-9_.$:-])(?:/Users|/home)/"
     r"([A-Za-z0-9._-]+)(?:/[^\s\"'<>]*)?"
 )
-MAC_ADDRESS = re.compile(
-    r"(?i)(?<![0-9a-f])(?:[0-9a-f]{2}:){5}[0-9a-f]{2}(?![0-9a-f])"
-)
-PROVIDER_TOKEN = re.compile(
-    r"\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|"
-    r"github_pat_[A-Za-z0-9_]{20,}|"
-    r"AKIA[0-9A-Z]{16}|"
-    r"sk-[A-Za-z0-9_-]{20,}|"
-    r"pst_[A-Za-z0-9_-]{12,}::[A-Za-z0-9_-]{8,})\b"
-)
+MAC_ADDRESS = re.compile(r"(?i)(?<![0-9a-f])(?:[0-9a-f]{2}:){5}[0-9a-f]{2}(?![0-9a-f])")
 PRIVATE_KEY_MARKERS = (
     "-----BEGIN " + "PRIVATE KEY-----",
     "AGE-" + "SECRET-KEY-",
@@ -40,7 +33,10 @@ def files(root: Path) -> Iterable[Path]:
     for path in root.rglob("*"):
         if any(part in SKIPPED_DIRECTORIES for part in path.parts):
             continue
-        if not path.is_file() or path.suffix == ".age":
+        if path.is_symlink():
+            yield path
+            continue
+        if not path.is_file():
             continue
         yield path
 
@@ -58,17 +54,51 @@ def read_text(path: Path) -> str | None:
 def exact_terms(source: str | None) -> tuple[str, ...]:
     if source is None:
         return ()
-    stream = sys.stdin if source == "-" else Path(source).open(encoding="utf-8")
-    try:
-        terms = {
+
+    def read_terms(stream: Iterable[str]) -> set[str]:
+        return {
             line.strip().casefold()
             for line in stream
             if line.strip() and not line.lstrip().startswith("#")
         }
-    finally:
-        if stream is not sys.stdin:
-            stream.close()
+
+    if source == "-":
+        terms = read_terms(sys.stdin)
+    else:
+        with Path(source).open(encoding="utf-8") as stream:
+            terms = read_terms(stream)
     return tuple(sorted(terms, key=len, reverse=True))
+
+
+def public_path_label(
+    relative: str,
+    denylist: tuple[str, ...],
+) -> tuple[str, str | None]:
+    """Return a non-sensitive finding label and any filename finding rule."""
+
+    raw_relative = relative.encode("utf-8", errors="surrogateescape")
+    folded = relative.casefold()
+    rule = None
+    if any(term in folded for term in denylist):
+        rule = "exact-denylist-filename"
+    elif any(marker in relative for marker in PRIVATE_KEY_MARKERS):
+        rule = "private-key-filename"
+    elif string_looks_like_credential(relative):
+        rule = "provider-token-filename"
+    elif MAC_ADDRESS.search(relative):
+        rule = "mac-address-filename"
+    elif any(
+        match.group(0).casefold() not in ALLOWED_EMAILS
+        and match.group(1).casefold() not in ALLOWED_EMAIL_DOMAINS
+        for match in EMAIL.finditer(relative)
+    ):
+        rule = "email-filename"
+    elif any(0xD800 <= ord(character) <= 0xDFFF for character in relative):
+        rule = "non-utf8-filename"
+    if rule is None:
+        return relative, None
+    digest = hashlib.sha256(raw_relative).hexdigest()[:16]
+    return f"redacted-path:sha256:{digest}", rule
 
 
 def main() -> int:
@@ -84,33 +114,41 @@ def main() -> int:
     findings: list[tuple[str, int, str]] = []
 
     for path in files(root):
+        relative = path.relative_to(root).as_posix()
+        public_relative, filename_rule = public_path_label(relative, denylist)
+        if filename_rule is not None:
+            findings.append((public_relative, 0, filename_rule))
+        if path.is_symlink() or path.suffix == ".age":
+            continue
         text = read_text(path)
         if text is None:
             continue
-        relative = path.relative_to(root).as_posix()
         for line_number, line in enumerate(text.splitlines(), start=1):
             folded = line.casefold()
             if any(term in folded for term in denylist):
-                findings.append((relative, line_number, "exact-denylist"))
+                findings.append((public_relative, line_number, "exact-denylist"))
             if any(marker in line for marker in PRIVATE_KEY_MARKERS):
-                findings.append((relative, line_number, "private-key"))
-            if PROVIDER_TOKEN.search(line) and "fixture" not in folded:
-                findings.append((relative, line_number, "provider-token"))
+                findings.append((public_relative, line_number, "private-key"))
+            if string_looks_like_credential(line):
+                findings.append((public_relative, line_number, "provider-token"))
             if MAC_ADDRESS.search(line):
-                findings.append((relative, line_number, "mac-address"))
+                findings.append((public_relative, line_number, "mac-address"))
             for match in EMAIL.finditer(line):
                 address = match.group(0).casefold()
                 domain = match.group(1).casefold()
                 if address.startswith("git@") and "ssh://git@" in folded:
                     continue
-                if address not in ALLOWED_EMAILS and domain not in ALLOWED_EMAIL_DOMAINS:
-                    findings.append((relative, line_number, "email"))
+                if (
+                    address not in ALLOWED_EMAILS
+                    and domain not in ALLOWED_EMAIL_DOMAINS
+                ):
+                    findings.append((public_relative, line_number, "email"))
             for match in HOME_PATH.finditer(line):
                 prefix = line[: match.start()]
                 if re.search(r"\$[A-Za-z_][A-Za-z0-9_]*\"?$", prefix):
                     continue
                 if match.group(1).casefold() not in ALLOWED_HOME_USERS:
-                    findings.append((relative, line_number, "user-home"))
+                    findings.append((public_relative, line_number, "user-home"))
 
     for relative, line_number, rule in sorted(set(findings)):
         print(f"{relative}:{line_number}: [{rule}] review required")

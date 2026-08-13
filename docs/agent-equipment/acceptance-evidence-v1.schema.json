@@ -99,6 +99,31 @@
         "captured_state_digest": {"$ref": "#/$defs/digest"}
       }
     },
+    "executionBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apply_authorization_identity",
+        "apply_authorization_digest",
+        "execution_nonce",
+        "run_identity"
+      ],
+      "properties": {
+        "apply_authorization_identity": {
+          "type": "string",
+          "pattern": "^apply-authorization:sha256:[0-9a-f]{64}$"
+        },
+        "apply_authorization_digest": {"$ref": "#/$defs/digest"},
+        "execution_nonce": {
+          "type": "string",
+          "pattern": "^execution-nonce:sha256:[0-9a-f]{64}$"
+        },
+        "run_identity": {
+          "type": "string",
+          "pattern": "^run:sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
     "requirement": {
       "type": "object",
       "additionalProperties": false,
@@ -512,6 +537,7 @@
       "required": [
         "schema_version",
         "bindings",
+        "execution_binding",
         "expected_case_manifest_digest",
         "bundle_digest",
         "attestors",
@@ -522,6 +548,7 @@
           "const": "agent-equipment-acceptance-attestation/v1"
         },
         "bindings": {"$ref": "#/$defs/bindings"},
+        "execution_binding": {"$ref": "#/$defs/executionBinding"},
         "expected_case_manifest_digest": {"$ref": "#/$defs/digest"},
         "bundle_digest": {"$ref": "#/$defs/digest"},
         "attestors": {
@@ -540,6 +567,7 @@
       "required": [
         "schema_version",
         "bindings",
+        "execution_binding",
         "fixture_version",
         "expected_case_manifest_digest",
         "route_capability_bindings",
@@ -552,6 +580,7 @@
       "properties": {
         "schema_version": {"const": "agent-equipment-acceptance-evidence/v1"},
         "bindings": {"$ref": "#/$defs/bindings"},
+        "execution_binding": {"$ref": "#/$defs/executionBinding"},
         "fixture_version": {"$ref": "#/$defs/opaqueIdentity"},
         "expected_case_manifest_digest": {"$ref": "#/$defs/digest"},
         "route_capability_bindings": {

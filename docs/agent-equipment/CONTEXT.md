@@ -159,6 +159,12 @@ The independently trusted release-authority component that validates and
 archives one exact release tuple and alone may issue its release receipt.
 _Avoid_: Candidate CLI, evidence writer, acceptance validator
 
+**Release archive manifest**:
+The closed record binding exact release-document byte digests, candidate and
+execution identity, trusted launcher, authority-store destination, and the
+create-only generation contract.
+_Avoid_: Release receipt, candidate artifact index
+
 **Release receipt**:
 The terminal record that an independently trusted release launcher validated
 and atomically archived one exact authorization, candidate, expected-case

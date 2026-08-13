@@ -8,6 +8,8 @@ Execution also requires the manifest-bound CPython 3.12 or newer runtime and a
 closed, externally issued `ApplyAuthorization`. The exact authorization bytes
 and independently supplied `trusted_apply_authorization_digest` are distinct
 inputs; neither this runbook nor candidate output can create authority.
+The authorization also binds the exact operator review package digest covering
+the proposed live mutations, rollback material, and review receipts.
 
 The migration changes provider routes without treating a distribution as an
 atomic capability. Every plugin skill, MCP, hook, and other component is
@@ -71,10 +73,12 @@ Complete all of these before the executor opens an action checkpoint:
    complete installed-implementation manifest digest, catalog digest, lock
    digest, plan digest, plan-action-set digest, capability-set digest, sealed
    captured-state identity and digest, expected-case manifest digest, exact
-   surface set, and native-rolling limitations for operator review. Obtain
+   surface set, native-rolling limitations, and the closed digest of that exact
+   operator review package. Obtain
    separate authority. It emits a Schema-valid `ApplyAuthorization` naming that
    complete exact tuple plus `command: apply`, issuer, UTC issue/not-before/
-   expiry times, one run identity, and a fresh execution nonce. Obtain its
+   expiry times, one run identity, a fresh execution nonce, and the operator-
+   review-package digest. Obtain its
    canonical `trusted_apply_authorization_digest` through a separate authenticated
    channel; do not infer it from the record.
 11. After authorization and before any action checkpoint or mutation, strictly
@@ -312,8 +316,10 @@ the trusted attestation digest. The launcher is independently installed at
 the evaluated candidate and its installed manifest. It verifies its own exact
 identity and manifest digest from external trust inputs, strictly parses the
 authorization, manifest, bundle, and attestation, then performs one create-only
-compare-and-swap archive commit. Only after generation `1` is durable does it
-emit the closed `ReleaseReceipt`. Candidate output cannot mint, overwrite,
+compare-and-swap archive commit using a closed `ReleaseArchiveManifest` over
+the exact input byte digests and execution tuple. Only after generation `1` is
+durable does it emit the closed `ReleaseReceipt`. Candidate output cannot mint,
+overwrite,
 ignore, or substitute for that receipt. The candidate evidence writer,
 attestation writer, and validator do not grant apply authority or mutate harness
 state.
@@ -432,7 +438,8 @@ including all explicit verification and migration nodes, then obtain
 the exact closed `ApplyAuthorization` naming the complete candidate,
 implementation-manifest, catalog, lock, plan, action-set, capability-set,
 captured-state, and expected-case-manifest tuple plus the command, run, validity
-window, and fresh nonce. Receive `trusted_apply_authorization_digest` through
+window, fresh nonce, and exact operator-review-package digest. Receive
+`trusted_apply_authorization_digest` through
 the external authority channel.
 
 After authorization, strictly validate the exact bytes and digest and verify the
@@ -601,7 +608,8 @@ off, and the release command validates all three documents against the
 authorized expected-case and attestation manifest digests. The external launcher
 also validates the exact apply authorization and its own trusted launcher
 identity/digest, then commits the authorization, three release documents, and
-archive manifest with an `absent` compare token. Generation `1` is create-only;
+closed archive manifest over their exact byte digests and execution tuple with
+an `absent` compare token. Generation `1` is create-only;
 identical existing bytes are idempotent and different bytes are a conflict.
 Missing, extra, duplicated, nonpassing, stale-attested, or misbound evidence—or
 a failed/conflicting archive commit—withholds the release receipt and preserves

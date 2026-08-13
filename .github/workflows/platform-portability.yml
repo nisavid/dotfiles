@@ -32,7 +32,9 @@ on:
       - "scripts/agent_equipment_adapter_contract.py"
       - "scripts/agent_equipment_captured_state.py"
       - "scripts/agent_equipment_design.py"
+      - "scripts/agent_equipment_execution_authority.py"
       - "scripts/agent_equipment_json_schema.py"
+      - "scripts/agent_equipment_public_data.py"
       - "tests/claude-skill-sync.zsh"
       - "tests/container-runtime-bindings.zsh"
       - "tests/global-agents-policy.zsh"
@@ -57,6 +59,7 @@ on:
       - "tests/test_agent_equipment_design.py"
       - "tests/test_agent_equipment_deployment_contract.py"
       - "tests/test_agent_equipment_json_schema.py"
+      - "tests/test_agent_equipment_public_data.py"
       - "tests/fixtures/agent-equipment/**"
   push:
     branches:
@@ -208,6 +211,7 @@ jobs:
           python3 -m unittest tests/test_agent_equipment_deployment_contract.py
           python3 -m unittest tests/test_agent_equipment_design.py
           python3 -m unittest tests/test_agent_equipment_json_schema.py
+          python3 -m unittest tests/test_agent_equipment_public_data.py
           uvx --from check-jsonschema==0.35.0 \
             check-jsonschema --check-metaschema \
             docs/agent-equipment/adapter-contract-v1.schema.json \

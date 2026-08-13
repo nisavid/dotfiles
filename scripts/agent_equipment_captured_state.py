@@ -20,6 +20,10 @@ except ModuleNotFoundError:  # Loaded as a repo module rather than an executable
     from scripts.agent_equipment_json_schema import (
         validate_document as _validate_schema,
     )
+try:
+    from agent_equipment_public_data import contains_literal_credential
+except ModuleNotFoundError:  # Loaded as a repo module rather than an executable.
+    from scripts.agent_equipment_public_data import contains_literal_credential
 
 
 JsonObject = Mapping[str, object]
@@ -278,10 +282,13 @@ def _reject_non_json_constant(_: str) -> object:
     raise ValueError("non-JSON numeric constant")
 
 
+_OVERSIZED_JSON_INTEGER = object()
+
+
 def _strict_json_integer(value: str) -> object:
     digit_limit = sys.get_int_max_str_digits()
     if digit_limit and len(value.removeprefix("-")) > digit_limit:
-        return value
+        return _OVERSIZED_JSON_INTEGER
     return int(value)
 
 
@@ -1984,6 +1991,23 @@ def validate_captured_state(
     )
     if plan_action_schema_diagnostic is not None:
         return (plan_action_schema_diagnostic,)
+
+    if contains_literal_credential(document):
+        return (
+            _diagnostic(
+                "CAPTURED_STATE_LITERAL_SECRET",
+                "$",
+                "The captured-state manifest contains credential-shaped literal material.",
+            ),
+        )
+    if contains_literal_credential(authoritative_plan_action_set):
+        return (
+            _diagnostic(
+                "AUTHORITATIVE_PLAN_ACTION_SET_LITERAL_SECRET",
+                "$.authoritative_plan_action_set",
+                "The authoritative plan-action set contains credential-shaped literal material.",
+            ),
+        )
 
     if not _has_semantic_structure(document):
         return (

@@ -1,9 +1,10 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://nisavid.github.io/dotfiles/agent-equipment/execution-authority-v1.schema.json",
-  "title": "Agent equipment apply authorization and release receipt v1",
+  "title": "Agent equipment execution and release authority v1",
   "oneOf": [
     {"$ref": "#/$defs/applyAuthorization"},
+    {"$ref": "#/$defs/releaseArchiveManifest"},
     {"$ref": "#/$defs/releaseReceipt"}
   ],
   "$defs": {
@@ -33,7 +34,8 @@
         "capability_set_digest",
         "captured_state_identity",
         "captured_state_digest",
-        "expected_case_manifest_digest"
+        "expected_case_manifest_digest",
+        "operator_review_package_digest"
       ],
       "properties": {
         "candidate_identity": {"$ref": "#/$defs/opaqueIdentity"},
@@ -45,7 +47,8 @@
         "capability_set_digest": {"$ref": "#/$defs/digest"},
         "captured_state_identity": {"$ref": "#/$defs/opaqueIdentity"},
         "captured_state_digest": {"$ref": "#/$defs/digest"},
-        "expected_case_manifest_digest": {"$ref": "#/$defs/digest"}
+        "expected_case_manifest_digest": {"$ref": "#/$defs/digest"},
+        "operator_review_package_digest": {"$ref": "#/$defs/digest"}
       }
     },
     "applyAuthorization": {
@@ -87,20 +90,109 @@
         "bindings": {"$ref": "#/$defs/applyBindings"}
       }
     },
-    "archiveCommit": {
+    "executionBinding": {
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "archive_identity",
-        "archive_manifest_digest",
+        "apply_authorization_identity",
+        "apply_authorization_digest",
+        "execution_nonce",
+        "run_identity"
+      ],
+      "properties": {
+        "apply_authorization_identity": {
+          "type": "string",
+          "pattern": "^apply-authorization:sha256:[0-9a-f]{64}$"
+        },
+        "apply_authorization_digest": {"$ref": "#/$defs/digest"},
+        "execution_nonce": {
+          "type": "string",
+          "pattern": "^execution-nonce:sha256:[0-9a-f]{64}$"
+        },
+        "run_identity": {
+          "type": "string",
+          "pattern": "^run:sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "archiveDestination": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "store_identity",
+        "store_key",
         "compare_token",
         "committed_generation"
       ],
       "properties": {
-        "archive_identity": {"$ref": "#/$defs/opaqueIdentity"},
-        "archive_manifest_digest": {"$ref": "#/$defs/digest"},
+        "store_identity": {"$ref": "#/$defs/opaqueIdentity"},
+        "store_key": {"$ref": "#/$defs/opaqueIdentity"},
         "compare_token": {"const": "absent"},
         "committed_generation": {"const": 1}
+      }
+    },
+    "archivedDocumentByteDigests": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apply_authorization_bytes_digest",
+        "expected_case_manifest_bytes_digest",
+        "evidence_bundle_bytes_digest",
+        "attestation_manifest_bytes_digest"
+      ],
+      "properties": {
+        "apply_authorization_bytes_digest": {"$ref": "#/$defs/digest"},
+        "expected_case_manifest_bytes_digest": {"$ref": "#/$defs/digest"},
+        "evidence_bundle_bytes_digest": {"$ref": "#/$defs/digest"},
+        "attestation_manifest_bytes_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "releaseArchivePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidate_identity",
+        "implementation_manifest_digest",
+        "execution_binding",
+        "launcher_identity",
+        "launcher_manifest_digest",
+        "archive_destination",
+        "archived_document_byte_digests"
+      ],
+      "properties": {
+        "candidate_identity": {"$ref": "#/$defs/opaqueIdentity"},
+        "implementation_manifest_digest": {"$ref": "#/$defs/digest"},
+        "execution_binding": {"$ref": "#/$defs/executionBinding"},
+        "launcher_identity": {
+          "type": "string",
+          "pattern": "^release-launcher:[A-Za-z0-9][A-Za-z0-9._/-]*$"
+        },
+        "launcher_manifest_digest": {"$ref": "#/$defs/digest"},
+        "archive_destination": {"$ref": "#/$defs/archiveDestination"},
+        "archived_document_byte_digests": {
+          "$ref": "#/$defs/archivedDocumentByteDigests"
+        }
+      }
+    },
+    "releaseArchiveManifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "archive_identity",
+        "payload",
+        "archive_manifest_digest"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "agent-equipment-release-archive-manifest/v1"
+        },
+        "archive_identity": {
+          "type": "string",
+          "pattern": "^release-archive:sha256:[0-9a-f]{64}$"
+        },
+        "payload": {"$ref": "#/$defs/releaseArchivePayload"},
+        "archive_manifest_digest": {"$ref": "#/$defs/digest"}
       }
     },
     "releaseReceiptPayload": {
@@ -109,31 +201,32 @@
       "required": [
         "issued_at",
         "outcome",
-        "launcher_identity",
-        "launcher_manifest_digest",
-        "apply_authorization_digest",
         "candidate_identity",
         "implementation_manifest_digest",
-        "expected_case_manifest_digest",
-        "evidence_bundle_digest",
-        "attestation_manifest_digest",
-        "archive_commit"
+        "execution_binding",
+        "launcher_identity",
+        "launcher_manifest_digest",
+        "archive_identity",
+        "archive_manifest_digest",
+        "archive_destination"
       ],
       "properties": {
         "issued_at": {"$ref": "#/$defs/utcTimestamp"},
         "outcome": {"const": "passed"},
+        "candidate_identity": {"$ref": "#/$defs/opaqueIdentity"},
+        "implementation_manifest_digest": {"$ref": "#/$defs/digest"},
+        "execution_binding": {"$ref": "#/$defs/executionBinding"},
         "launcher_identity": {
           "type": "string",
           "pattern": "^release-launcher:[A-Za-z0-9][A-Za-z0-9._/-]*$"
         },
         "launcher_manifest_digest": {"$ref": "#/$defs/digest"},
-        "apply_authorization_digest": {"$ref": "#/$defs/digest"},
-        "candidate_identity": {"$ref": "#/$defs/opaqueIdentity"},
-        "implementation_manifest_digest": {"$ref": "#/$defs/digest"},
-        "expected_case_manifest_digest": {"$ref": "#/$defs/digest"},
-        "evidence_bundle_digest": {"$ref": "#/$defs/digest"},
-        "attestation_manifest_digest": {"$ref": "#/$defs/digest"},
-        "archive_commit": {"$ref": "#/$defs/archiveCommit"}
+        "archive_identity": {
+          "type": "string",
+          "pattern": "^release-archive:sha256:[0-9a-f]{64}$"
+        },
+        "archive_manifest_digest": {"$ref": "#/$defs/digest"},
+        "archive_destination": {"$ref": "#/$defs/archiveDestination"}
       }
     },
     "releaseReceipt": {

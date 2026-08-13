@@ -19,6 +19,11 @@ except ModuleNotFoundError:  # Loaded as a repo module rather than an executable
         validate_document as _validate_schema,
     )
 
+try:
+    from agent_equipment_public_data import contains_literal_credential
+except ModuleNotFoundError:  # Loaded as a repo module rather than an executable.
+    from scripts.agent_equipment_public_data import contains_literal_credential
+
 
 JsonObject = Mapping[str, Any]
 OPERATIONS = (
@@ -125,6 +130,12 @@ def validate_design(catalog: JsonObject, lock: JsonObject) -> DesignValidationRe
             mutation_plan=None,
         )
     diagnostics.extend(_literal_secret_diagnostics(catalog, lock))
+    if diagnostics:
+        return DesignValidationResult(
+            diagnostics=tuple(diagnostics),
+            coverage=(),
+            mutation_plan=None,
+        )
     if (
         set(catalog)
         != {
@@ -751,10 +762,7 @@ def _literal_secret_diagnostics(
 
     diagnostics: list[Diagnostic] = []
     for label, document in (("catalog", catalog), ("lock", lock)):
-        if any(
-            _string_looks_like_secret_material(value)
-            for value in _iter_string_leaves(document)
-        ):
+        if contains_literal_credential(document):
             diagnostics.append(
                 Diagnostic(
                     "LITERAL_SECRET_MATERIAL",
@@ -762,29 +770,6 @@ def _literal_secret_diagnostics(
                 )
             )
     return tuple(diagnostics)
-
-
-def _iter_string_leaves(value: Any):
-    if isinstance(value, str):
-        yield value
-    elif isinstance(value, list):
-        for item in value:
-            yield from _iter_string_leaves(item)
-    elif isinstance(value, dict):
-        for item in value.values():
-            yield from _iter_string_leaves(item)
-
-
-def _string_looks_like_secret_material(value: str) -> bool:
-    candidate = value.replace("${{reference}}", "").replace("{reference}", "")
-    patterns = (
-        r"(?i)\b(?:authorization|proxy-authorization|x-api-key|api[_-]?key|access[_-]?token|password|client[_-]?secret)\s*[:=]\s*(?:bearer\s+\S+|(?!bearer(?:\s|$))\S+)",
-        r"(?i)\bbearer\s+[A-Za-z0-9._~+/-]+",
-        r"\bgh[pousr]_[A-Za-z0-9]{20,}\b",
-        r"\bAKIA[A-Z0-9]{16}\b",
-        r"[?&](?:api[_-]?key|access[_-]?token|token|secret)=[^&#\s]+",
-    )
-    return any(re.search(pattern, candidate) is not None for pattern in patterns)
 
 
 def _route_is_valid(

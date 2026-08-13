@@ -38,7 +38,7 @@ deferred.
 | `docs/agent-equipment/plan-action-set-v1.schema.json` | Closed projection of every independently validated automated plan action supplied to captured-state validation |
 | `docs/agent-equipment/adapter-contract-v1.schema.json` | Closed capability, request, observation, action, and receipt serialization contract |
 | `docs/agent-equipment/acceptance-evidence-v1.schema.json` | Closed expected-case, candidate evidence, and post-run attestation contract |
-| `docs/agent-equipment/execution-authority-v1.schema.json` | Closed pre-mutation apply authorization and terminal release-receipt contract |
+| `docs/agent-equipment/execution-authority-v1.schema.json` | Closed apply authorization, release archive manifest, and terminal receipt contract |
 | `docs/agent-equipment/initial-catalog.proposed.json` | Schema-valid initial desired-state proposal; no live authority |
 | `docs/agent-equipment/initial-lock.proposed.json` | Generated 132-record lock bound to the proposed catalog digest |
 | `docs/agent-equipment/INVENTORY.md` and `initial-inventory.json` | Dated, secret-free read-only observation and initial classification |
@@ -192,6 +192,7 @@ execute(
     authorization_ledger,
     *,
     trusted_apply_authorization_digest,
+    trusted_operator_review_package_digest,
     trusted_clock,
 ) -> ApplyReport
 ```
@@ -290,6 +291,10 @@ validate_acceptance_evidence(
     expected_implementation_manifest_digest,
     expected_case_manifest_digest,
     expected_attestation_manifest_digest,
+    expected_apply_authorization_identity,
+    expected_apply_authorization_digest,
+    expected_execution_nonce,
+    expected_run_identity,
 ) -> tuple[Diagnostic, ...]
 
 release_candidate(
@@ -305,6 +310,7 @@ release_candidate(
     trusted_implementation_manifest_digest,
     authorized_expected_case_manifest_digest,
     authorized_attestation_manifest_digest,
+    trusted_execution_binding,
     artifact_store,
 ) -> ReleaseReceipt
 ```
@@ -315,8 +321,10 @@ digest from the separate post-run release authority. It first verifies its own
 installed bytes against the independently supplied launcher identity and
 manifest digest. The release command strictly parses all four exact byte inputs,
 invokes the validator with the trusted digests, and refuses a release receipt on
-any diagnostic. It stages and fsyncs the authorization, three release documents,
-and closed archive manifest, then commits generation `1` with a create-only
+any diagnostic. It hashes each exact input byte stream independently of its
+semantic canonical digest, constructs the closed `ReleaseArchiveManifest`,
+stages and fsyncs the authorization, three release documents, and archive
+manifest, then commits generation `1` with a create-only
 compare-and-swap rename. An existing identical generation is an idempotent read;
 different existing bytes are a conflict. It emits a `ReleaseReceipt` only after
 that archive commit is durable. Candidate code cannot call the authority's
@@ -385,7 +393,8 @@ Later steps do not begin until the named evidence passes.
 - Implement the closed `ApplyAuthorization` parser and semantic validator plus
   the durable authorization ledger. The public executor requires exact
   authorization bytes and the separately supplied
-  `trusted_apply_authorization_digest`; validate the canonical identity, full
+  `trusted_apply_authorization_digest` and trusted operator-review-package
+  digest; validate the canonical identity, full
   tuple, command, UTC window, run, and nonce before the first action checkpoint.
   Claim the nonce with an exclusive, fsynced create. Test missing, extra,
   expired, not-yet-valid, replayed, cross-run, cross-plan, and persistence-fault
@@ -595,7 +604,8 @@ Later steps do not begin until the named evidence passes.
 - Give only that launcher the release archive capability. Implement strict
   validation of the authorization plus all three release documents, create-only
   compare-and-swap archival, idempotent retrieval of an identical generation,
-  conflict rejection, and the closed `ReleaseReceipt` identity/digest formula.
+  conflict rejection, the closed `ReleaseArchiveManifest` identity/digest
+  formula over exact byte digests, and the closed `ReleaseReceipt` formula.
   Test that candidate-owned paths, candidate-minted receipts, skipped archive
   commits, and altered launcher bytes never satisfy release.
 - Evidence: deployment ownership inspection, launcher-manifest verification,
@@ -616,8 +626,8 @@ Later steps do not begin until the named evidence passes.
   list, explicit verification and migration nodes, sealed expected-case manifest
   and digest, compensation list, and rollback command.
 - Ask for authorization naming that complete candidate, catalog, lock, plan,
-  plan-action-set, capability-set, captured-state identity/digest, and expected-
-  case-manifest digest tuple.
+  plan-action-set, capability-set, captured-state identity/digest, expected-
+  case-manifest digest, and operator-review-package digest tuple.
   The authority emits the closed `ApplyAuthorization`, including command, issuer,
   time window, run, and fresh execution nonce, then supplies its canonical
   `trusted_apply_authorization_digest` independently of the file. General
@@ -695,8 +705,10 @@ No retirement rule deletes an unmanaged observation or a canonical
    implementation identity and installed-manifest digest, refreshed inventory,
    immutable plan, plan-action-set, capability-set, and already sealed
    captured-state identity/digest, sealed expected-case manifest and digest,
-   exact live mutations, rollback command, review receipts, issuer, validity
-   window, run, and fresh execution nonce. Supply its
+   issuer, validity window, run, and fresh execution nonce. Bind the exact live
+   mutations, rollback command/actions, and review receipts transitively through
+   the closed `operator_review_package_digest`; do not embed those documents as
+   open authorization fields. Supply its
    `trusted_apply_authorization_digest` outside the record. Require an exact post-
    authorization implementation and live comparison before the first action
    checkpoint; drift or nonce reuse requires a new capture and authorization.
