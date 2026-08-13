@@ -13,7 +13,8 @@ main() {
   is_retired_skill() {
     case $1 in
     dispatching-parallel-agents | executing-plans | finishing-a-development-branch | \
-      subagent-driven-development | test-driven-development | writing-plans | yeet)
+      subagent-driven-development | test-driven-development | using-serena-projects | \
+      writing-plans | yeet)
       return 0
       ;;
     esac
