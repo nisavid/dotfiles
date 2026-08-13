@@ -98,6 +98,167 @@ def execution_binding(
     }
 
 
+def valid_checkpoint_record(ordinal: int = 0) -> dict[str, object]:
+    authorization = valid_apply_authorization()
+    seal_apply_authorization(authorization)
+    return {
+        "step_id": f"step-{ordinal}",
+        "action_identity": "action:sha256:" + f"{ordinal + 1:064x}",
+        "ordinal": ordinal,
+        "run_identity": authorization["run_identity"],
+        "execution_domain_identity": authorization["execution_domain_identity"],
+        "phase": "completed",
+        "phase_history": ["prepared", "completed"],
+        "invocation_state": "started",
+        "candidate_digest": authorization["bindings"]["candidate_identity"],
+        "implementation_manifest_digest": authorization["bindings"][
+            "implementation_manifest_digest"
+        ],
+        "catalog_digest": authorization["bindings"]["catalog_digest"],
+        "lock_digest": authorization["bindings"]["lock_digest"],
+        "plan_digest": authorization["bindings"]["plan_digest"],
+        "capability_set_digest": authorization["bindings"]["capability_set_digest"],
+        "captured_state_identity": authorization["bindings"]["captured_state_identity"],
+        "captured_state_digest": authorization["bindings"]["captured_state_digest"],
+        "route_capability_binding": {
+            "capability_identity": f"capability:fixture/{ordinal}",
+            "capability_digest": DIGEST_B,
+            "manager_version_evidence_digest": DIGEST_C,
+        },
+        "route_digest": DIGEST_A,
+        "operation_digest": DIGEST_B,
+        "compensation_operation": "restore_captured_pre_state",
+        "pre_state_digest": DIGEST_A,
+        "expected_post_state_digest": DIGEST_B,
+        "pre_state": {"present": False},
+        "expected_post_state": {"present": True, "ordinal": ordinal},
+        "surface": f"surface-{ordinal}",
+    }
+
+
+def checkpoint_snapshot(
+    record: dict[str, object], durable_generation: int
+) -> dict[str, object]:
+    return {
+        "durable_generation": durable_generation,
+        "record_version": "agent-equipment-checkpoint/v1",
+        "record": copy.deepcopy(record),
+    }
+
+
+def checkpoint_manifest_entry(snapshot: dict[str, object]) -> dict[str, object]:
+    record = snapshot["record"]
+    assert isinstance(record, dict)
+    identity_record = copy.deepcopy(record)
+    for field in ("phase", "phase_history", "invocation_state"):
+        identity_record.pop(field)
+    return {
+        "checkpoint_identity": "checkpoint:"
+        + canonical_digest(
+            {
+                "record_version": snapshot["record_version"],
+                "immutable_record": identity_record,
+            }
+        ),
+        "durable_generation": snapshot["durable_generation"],
+        "record_version": snapshot["record_version"],
+        "phase": record["phase"],
+        "invocation_state": record["invocation_state"],
+        "action_identity": record["action_identity"],
+        "ordinal": record["ordinal"],
+        "checkpoint_record_digest": canonical_digest(record),
+    }
+
+
+def trusted_checkpoint_bindings(record: dict[str, object]) -> dict[str, object]:
+    return {
+        field: record[field]
+        for field in (
+            "candidate_digest",
+            "implementation_manifest_digest",
+            "catalog_digest",
+            "lock_digest",
+            "plan_digest",
+            "captured_state_identity",
+            "captured_state_digest",
+            "capability_set_digest",
+        )
+    }
+
+
+def trusted_plan_action(record: dict[str, object]) -> dict[str, object]:
+    return {
+        field: record[field]
+        for field in (
+            "action_identity",
+            "ordinal",
+            "step_id",
+            "surface",
+            "route_capability_binding",
+            "route_digest",
+            "operation_digest",
+            "compensation_operation",
+            "pre_state_digest",
+            "expected_post_state_digest",
+            "pre_state",
+            "expected_post_state",
+        )
+    }
+
+
+def seal_checkpoint_set_manifest(document: dict[str, object]) -> str:
+    identity_payload = copy.deepcopy(document)
+    identity_payload.pop("checkpoint_set_identity", None)
+    identity_payload.pop("checkpoint_set_digest", None)
+    document["checkpoint_set_identity"] = "checkpoint-set:" + canonical_digest(
+        identity_payload
+    )
+    digest_payload = copy.deepcopy(document)
+    digest_payload.pop("checkpoint_set_digest", None)
+    document["checkpoint_set_digest"] = canonical_digest(digest_payload)
+    return document["checkpoint_set_digest"]
+
+
+def valid_checkpoint_snapshots() -> list[dict[str, object]]:
+    return [
+        checkpoint_snapshot(valid_checkpoint_record(0), 1),
+        checkpoint_snapshot(valid_checkpoint_record(1), 2),
+    ]
+
+
+def valid_checkpoint_set_manifest(
+    snapshots: list[dict[str, object]] | None = None,
+    *,
+    store_generation: int = 7,
+) -> dict[str, object]:
+    authorization = valid_apply_authorization()
+    authorization_digest = seal_apply_authorization(authorization)
+    document: dict[str, object] = {
+        "schema_version": "agent-equipment-checkpoint-set/v1",
+        "checkpoint_set_identity": "checkpoint-set:sha256:" + "4" * 64,
+        "checkpoint_store_generation": store_generation,
+        "bindings": {
+            "apply_authorization_identity": authorization["authorization_identity"],
+            "apply_authorization_digest": authorization_digest,
+            "execution_domain_identity": authorization["execution_domain_identity"],
+            "execution_nonce": authorization["execution_nonce"],
+            "run_identity": authorization["run_identity"],
+            "plan_action_set_digest": authorization["bindings"][
+                "plan_action_set_digest"
+            ],
+        },
+        "checkpoints": [
+            checkpoint_manifest_entry(snapshot)
+            for snapshot in (
+                snapshots if snapshots is not None else valid_checkpoint_snapshots()
+            )
+        ],
+        "checkpoint_set_digest": DIGEST_D,
+    }
+    seal_checkpoint_set_manifest(document)
+    return document
+
+
 def apply_validation_inputs(
     authorization: dict[str, object],
     *,
@@ -128,9 +289,12 @@ def apply_validation_inputs(
     }
 
 
-def valid_compensation_authorization() -> dict[str, object]:
+def valid_compensation_authorization(
+    checkpoint_set: dict[str, object] | None = None,
+) -> dict[str, object]:
     apply_authorization = valid_apply_authorization()
     apply_authorization_digest = seal_apply_authorization(apply_authorization)
+    checkpoint_set = checkpoint_set or valid_checkpoint_set_manifest()
     document: dict[str, object] = {
         "schema_version": "agent-equipment-compensation-authorization/v1",
         "compensation_authorization_identity": (
@@ -152,7 +316,7 @@ def valid_compensation_authorization() -> dict[str, object]:
             ],
             "execution_nonce": apply_authorization["execution_nonce"],
             "run_identity": apply_authorization["run_identity"],
-            "checkpoint_set_digest": DIGEST_D,
+            "checkpoint_set_digest": checkpoint_set["checkpoint_set_digest"],
             "plan_action_set_digest": apply_authorization["bindings"][
                 "plan_action_set_digest"
             ],
@@ -173,9 +337,18 @@ def seal_compensation_authorization(document: dict[str, object]) -> str:
 
 def compensation_validation_inputs(
     authorization: dict[str, object],
+    checkpoint_set: dict[str, object] | None = None,
+    checkpoint_snapshots: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     bindings = authorization["bindings"]
     assert isinstance(bindings, dict)
+    checkpoint_set = checkpoint_set or valid_checkpoint_set_manifest()
+    checkpoint_snapshots = copy.deepcopy(
+        checkpoint_snapshots or valid_checkpoint_snapshots()
+    )
+    first_snapshot = checkpoint_snapshots[0]
+    first_checkpoint = first_snapshot["record"]
+    assert isinstance(first_checkpoint, dict)
     return {
         "expected_compensation_authorization_identity": authorization[
             "compensation_authorization_identity"
@@ -188,7 +361,19 @@ def compensation_validation_inputs(
         "expected_execution_domain_identity": bindings["execution_domain_identity"],
         "expected_execution_nonce": bindings["execution_nonce"],
         "expected_run_identity": bindings["run_identity"],
-        "expected_checkpoint_set_digest": bindings["checkpoint_set_digest"],
+        "checkpoint_set_manifest": checkpoint_set,
+        "trusted_checkpoint_store_generation": checkpoint_set[
+            "checkpoint_store_generation"
+        ],
+        "trusted_checkpoint_records": checkpoint_snapshots,
+        "pretransition_checkpoint_store_generation": checkpoint_set[
+            "checkpoint_store_generation"
+        ],
+        "pretransition_checkpoint_records": copy.deepcopy(checkpoint_snapshots),
+        "expected_checkpoint_bindings": trusted_checkpoint_bindings(first_checkpoint),
+        "trusted_plan_actions": [
+            trusted_plan_action(snapshot["record"]) for snapshot in checkpoint_snapshots
+        ],
         "expected_plan_action_set_digest": bindings["plan_action_set_digest"],
         "expected_compensation_nonce": authorization["compensation_nonce"],
         "expected_issuer_identity": authorization["issuer_identity"],
@@ -199,12 +384,15 @@ def compensation_validation_inputs(
 def valid_release_archive_manifest() -> dict[str, object]:
     authorization = valid_apply_authorization()
     authorization_digest = seal_apply_authorization(authorization)
+    checkpoint_set = valid_checkpoint_set_manifest()
     payload = {
         "candidate_identity": authorization["bindings"]["candidate_identity"],
         "implementation_manifest_digest": authorization["bindings"][
             "implementation_manifest_digest"
         ],
         "execution_binding": execution_binding(authorization, authorization_digest),
+        "checkpoint_set_digest": checkpoint_set["checkpoint_set_digest"],
+        "run_terminal_state": "succeeded",
         "launcher_identity": "release-launcher:fixture/v1",
         "launcher_manifest_digest": DIGEST_A,
         "archive_destination": {
@@ -246,6 +434,8 @@ def valid_release_receipt(
             "implementation_manifest_digest"
         ],
         "execution_binding": copy.deepcopy(archive_payload["execution_binding"]),
+        "checkpoint_set_digest": archive_payload["checkpoint_set_digest"],
+        "run_terminal_state": archive_payload["run_terminal_state"],
         "launcher_identity": archive_payload["launcher_identity"],
         "launcher_manifest_digest": archive_payload["launcher_manifest_digest"],
         "archive_identity": archive["archive_identity"],
@@ -488,7 +678,7 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
             "9e9791ab1c9634b4c9740924bf7370ce1418ab20e1a9666656e8c43ad2c36ebd",
         )
 
-    def test_apply_authorization_compares_arbitrary_fractional_seconds_exactly(
+    def test_apply_authorization_compares_bounded_fractional_seconds_exactly(
         self,
     ) -> None:
         authorization = valid_apply_authorization()
@@ -519,7 +709,7 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
         )
         self.assertEqual(diagnostics, ())
 
-        authorization["not_before"] = "2026-08-13T07:00:00." + "0" * 5000 + "1Z"
+        authorization["not_before"] = "2026-08-13T07:00:00.000000001Z"
         authorization["expires_at"] = "2026-08-13T08:00:00Z"
         seal_apply_authorization(authorization)
         diagnostics = EXECUTION_AUTHORITY.validate_apply_authorization(
@@ -534,19 +724,407 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
             {diagnostic.code for diagnostic in diagnostics},
         )
 
+        authorization["not_before"] = "2026-08-13T07:00:00.0000000001Z"
+        seal_apply_authorization(authorization)
+        self.assertFalse(self.validate(authorization))
+
+    def test_checkpoint_set_manifest_is_closed_and_matches_the_trusted_store(
+        self,
+    ) -> None:
+        snapshots = valid_checkpoint_snapshots()
+        manifest = valid_checkpoint_set_manifest(snapshots)
+        self.assertTrue(self.validate(manifest))
+        bindings = manifest["bindings"]
+        assert isinstance(bindings, dict)
+        first_record = snapshots[0]["record"]
+        assert isinstance(first_record, dict)
+        diagnostics = EXECUTION_AUTHORITY.validate_checkpoint_set_manifest(
+            manifest,
+            expected_apply_authorization_identity=bindings[
+                "apply_authorization_identity"
+            ],
+            expected_apply_authorization_digest=bindings["apply_authorization_digest"],
+            expected_execution_domain_identity=bindings["execution_domain_identity"],
+            expected_execution_nonce=bindings["execution_nonce"],
+            expected_run_identity=bindings["run_identity"],
+            expected_plan_action_set_digest=bindings["plan_action_set_digest"],
+            trusted_checkpoint_store_generation=manifest["checkpoint_store_generation"],
+            trusted_checkpoint_records=copy.deepcopy(snapshots),
+            pretransition_checkpoint_store_generation=manifest[
+                "checkpoint_store_generation"
+            ],
+            pretransition_checkpoint_records=copy.deepcopy(snapshots),
+            expected_checkpoint_bindings=trusted_checkpoint_bindings(first_record),
+            trusted_plan_actions=[
+                trusted_plan_action(snapshot["record"]) for snapshot in snapshots
+            ],
+        )
+        self.assertEqual(diagnostics, ())
+
+        identity_payload = copy.deepcopy(manifest)
+        identity_payload.pop("checkpoint_set_identity")
+        identity_payload.pop("checkpoint_set_digest")
+        self.assertEqual(
+            manifest["checkpoint_set_identity"],
+            "checkpoint-set:" + canonical_digest(identity_payload),
+        )
+        digest_payload = copy.deepcopy(manifest)
+        digest_payload.pop("checkpoint_set_digest")
+        self.assertEqual(
+            manifest["checkpoint_set_digest"],
+            canonical_digest(digest_payload),
+        )
+
+    def test_checkpoint_set_rejects_incomplete_foreign_or_stale_store_views(
+        self,
+    ) -> None:
+        snapshots = valid_checkpoint_snapshots()
+        manifest = valid_checkpoint_set_manifest(snapshots)
+        bindings = manifest["bindings"]
+        assert isinstance(bindings, dict)
+        first_record = snapshots[0]["record"]
+        assert isinstance(first_record, dict)
+        plan_actions = [
+            trusted_plan_action(snapshot["record"]) for snapshot in snapshots
+        ]
+
+        def diagnostics_for(
+            candidate: dict[str, object],
+            *,
+            trusted_records: list[dict[str, object]] | None = None,
+            trusted_generation: int | None = None,
+            pretransition_records: list[dict[str, object]] | None = None,
+            pretransition_generation: int | None = None,
+            expected_bindings: dict[str, object] | None = None,
+            expected_actions: list[dict[str, object]] | None = None,
+        ) -> set[str]:
+            return {
+                diagnostic.code
+                for diagnostic in EXECUTION_AUTHORITY.validate_checkpoint_set_manifest(
+                    candidate,
+                    expected_apply_authorization_identity=bindings[
+                        "apply_authorization_identity"
+                    ],
+                    expected_apply_authorization_digest=bindings[
+                        "apply_authorization_digest"
+                    ],
+                    expected_execution_domain_identity=bindings[
+                        "execution_domain_identity"
+                    ],
+                    expected_execution_nonce=bindings["execution_nonce"],
+                    expected_run_identity=bindings["run_identity"],
+                    expected_plan_action_set_digest=bindings["plan_action_set_digest"],
+                    trusted_checkpoint_store_generation=(
+                        manifest["checkpoint_store_generation"]
+                        if trusted_generation is None
+                        else trusted_generation
+                    ),
+                    trusted_checkpoint_records=(
+                        copy.deepcopy(snapshots)
+                        if trusted_records is None
+                        else trusted_records
+                    ),
+                    pretransition_checkpoint_store_generation=(
+                        manifest["checkpoint_store_generation"]
+                        if pretransition_generation is None
+                        else pretransition_generation
+                    ),
+                    pretransition_checkpoint_records=(
+                        copy.deepcopy(snapshots)
+                        if pretransition_records is None
+                        else pretransition_records
+                    ),
+                    expected_checkpoint_bindings=(
+                        trusted_checkpoint_bindings(first_record)
+                        if expected_bindings is None
+                        else expected_bindings
+                    ),
+                    trusted_plan_actions=(
+                        copy.deepcopy(plan_actions)
+                        if expected_actions is None
+                        else expected_actions
+                    ),
+                )
+            }
+
+        extra_snapshot = checkpoint_snapshot(valid_checkpoint_record(2), 3)
+        mutations = {
+            "missing": lambda candidate: candidate["checkpoints"].pop(),
+            "extra": lambda candidate: candidate["checkpoints"].append(
+                checkpoint_manifest_entry(extra_snapshot)
+            ),
+            "duplicate identity": lambda candidate: candidate["checkpoints"][1].update(
+                {
+                    "checkpoint_identity": candidate["checkpoints"][0][
+                        "checkpoint_identity"
+                    ]
+                }
+            ),
+            "duplicate ordinal": lambda candidate: candidate["checkpoints"][1].update(
+                {"ordinal": candidate["checkpoints"][0]["ordinal"]}
+            ),
+            "foreign action": lambda candidate: candidate["checkpoints"][0].update(
+                {"action_identity": "action:sha256:" + "f" * 64}
+            ),
+            "reordered": lambda candidate: candidate["checkpoints"].reverse(),
+            "phase": lambda candidate: candidate["checkpoints"][0].update(
+                {"phase": "prepared"}
+            ),
+            "intent": lambda candidate: candidate["checkpoints"][0].update(
+                {"invocation_state": "not_started"}
+            ),
+            "record digest": lambda candidate: candidate["checkpoints"][0].update(
+                {"checkpoint_record_digest": DIGEST_D}
+            ),
+        }
+        for label, mutate in mutations.items():
+            with self.subTest(label=label):
+                candidate = copy.deepcopy(manifest)
+                mutate(candidate)
+                seal_checkpoint_set_manifest(candidate)
+                self.assertIn(
+                    "CHECKPOINT_SET_MEMBERSHIP_MISMATCH", diagnostics_for(candidate)
+                )
+
+        empty = valid_checkpoint_set_manifest([])
+        self.assertIn("CHECKPOINT_SET_SCHEMA_INVALID", diagnostics_for(empty))
+
+        self.assertIn(
+            "CHECKPOINT_STORE_GENERATION_MISMATCH",
+            diagnostics_for(manifest, trusted_generation=8),
+        )
+        self.assertIn(
+            "CHECKPOINT_STORE_GENERATION_MISMATCH",
+            diagnostics_for(manifest, trusted_generation=True),
+        )
+        self.assertIn(
+            "CHECKPOINT_STORE_CONCURRENT_CHANGE",
+            diagnostics_for(manifest, pretransition_generation=True),
+        )
+
+        changed_store = copy.deepcopy(snapshots)
+        changed_store[0]["durable_generation"] += 1
+        self.assertIn(
+            "CHECKPOINT_SET_MEMBERSHIP_MISMATCH",
+            diagnostics_for(manifest, trusted_records=changed_store),
+        )
+
+        for label, mutate in {
+            "unknown field": lambda record: record.update({"foreign": True}),
+            "invalid history": lambda record: record.update(
+                {"phase_history": ["completed"]}
+            ),
+            "non-string history": lambda record: record.update({"phase_history": [{}]}),
+        }.items():
+            with self.subTest(malformed_store=label):
+                malformed_store = copy.deepcopy(snapshots)
+                malformed_record = malformed_store[0]["record"]
+                assert isinstance(malformed_record, dict)
+                mutate(malformed_record)
+                self.assertIn(
+                    "CHECKPOINT_SET_MEMBERSHIP_MISMATCH",
+                    diagnostics_for(manifest, trusted_records=malformed_store),
+                )
+
+        changed_before_transition = copy.deepcopy(snapshots)
+        changed_record = changed_before_transition[0]["record"]
+        assert isinstance(changed_record, dict)
+        changed_record["phase"] = "compensating"
+        changed_record["phase_history"].append("compensating")
+        self.assertIn(
+            "CHECKPOINT_STORE_CONCURRENT_CHANGE",
+            diagnostics_for(
+                manifest,
+                pretransition_records=changed_before_transition,
+                pretransition_generation=8,
+            ),
+        )
+
+        foreign_action_store = copy.deepcopy(snapshots)
+        foreign_action_record = foreign_action_store[0]["record"]
+        assert isinstance(foreign_action_record, dict)
+        foreign_action_record["action_identity"] = "action:sha256:" + "f" * 64
+        foreign_action_manifest = valid_checkpoint_set_manifest(foreign_action_store)
+        self.assertIn(
+            "CHECKPOINT_PLAN_ACTION_MISMATCH",
+            diagnostics_for(
+                foreign_action_manifest,
+                trusted_records=foreign_action_store,
+                pretransition_records=foreign_action_store,
+            ),
+        )
+
+        coordinated_store = copy.deepcopy(snapshots)
+        coordinated_record = coordinated_store[0]["record"]
+        assert isinstance(coordinated_record, dict)
+        coordinated_record["catalog_digest"] = DIGEST_D
+        coordinated_manifest = valid_checkpoint_set_manifest(coordinated_store)
+        self.assertIn(
+            "CHECKPOINT_BINDING_MISMATCH",
+            diagnostics_for(
+                coordinated_manifest,
+                trusted_records=coordinated_store,
+                pretransition_records=coordinated_store,
+            ),
+        )
+
+        for field, value in (
+            ("run_identity", "run:sha256:" + "f" * 64),
+            ("execution_domain_identity", "execution-domain:fixture/foreign"),
+        ):
+            with self.subTest(foreign_checkpoint_binding=field):
+                foreign_store = copy.deepcopy(snapshots)
+                foreign_record = foreign_store[0]["record"]
+                assert isinstance(foreign_record, dict)
+                foreign_record[field] = value
+                foreign_manifest = valid_checkpoint_set_manifest(foreign_store)
+                self.assertIn(
+                    "CHECKPOINT_BINDING_MISMATCH",
+                    diagnostics_for(
+                        foreign_manifest,
+                        trusted_records=foreign_store,
+                        pretransition_records=foreign_store,
+                    ),
+                )
+
+        self.assertIn(
+            "CHECKPOINT_PLAN_ACTION_MISMATCH",
+            diagnostics_for(manifest, expected_actions=plan_actions[:-1]),
+        )
+
+        incomplete_bindings = trusted_checkpoint_bindings(first_record)
+        incomplete_bindings.pop("catalog_digest")
+        self.assertIn(
+            "CHECKPOINT_BINDING_MISMATCH",
+            diagnostics_for(manifest, expected_bindings=incomplete_bindings),
+        )
+
+    def test_compensation_derives_checkpoint_digest_from_the_trusted_store(
+        self,
+    ) -> None:
+        snapshots = valid_checkpoint_snapshots()
+        checkpoint_set = valid_checkpoint_set_manifest(snapshots)
+        authorization = valid_compensation_authorization(checkpoint_set)
+        self.assertEqual(
+            EXECUTION_AUTHORITY.validate_compensation_authorization(
+                authorization,
+                **compensation_validation_inputs(
+                    authorization, checkpoint_set, snapshots
+                ),
+            ),
+            (),
+        )
+
+        incomplete = copy.deepcopy(checkpoint_set)
+        incomplete["checkpoints"].pop()
+        seal_checkpoint_set_manifest(incomplete)
+        inputs = compensation_validation_inputs(authorization, incomplete, snapshots)
+        codes = {
+            diagnostic.code
+            for diagnostic in EXECUTION_AUTHORITY.validate_compensation_authorization(
+                authorization, **inputs
+            )
+        }
+        self.assertIn("CHECKPOINT_SET_MEMBERSHIP_MISMATCH", codes)
+        self.assertIn("COMPENSATION_AUTHORIZATION_BINDING_MISMATCH", codes)
+
+    def test_raw_authority_boundary_rejects_ambiguous_or_unbounded_input(self) -> None:
+        authorization = valid_apply_authorization()
+        seal_apply_authorization(authorization)
+        valid_bytes = json.dumps(authorization).encode("utf-8")
+        parsed, diagnostics = EXECUTION_AUTHORITY.parse_execution_authority_bytes(
+            valid_bytes
+        )
+        self.assertEqual(diagnostics, ())
+        self.assertEqual(parsed, authorization)
+
+        exact_limit_bytes = valid_bytes + b" " * (
+            EXECUTION_AUTHORITY.MAX_EXECUTION_AUTHORITY_BYTES - len(valid_bytes)
+        )
+        parsed, diagnostics = EXECUTION_AUTHORITY.parse_execution_authority_bytes(
+            exact_limit_bytes
+        )
+        self.assertEqual(diagnostics, ())
+        self.assertEqual(parsed, authorization)
+
+        cases = {
+            "oversized bytes": b" "
+            * (EXECUTION_AUTHORITY.MAX_EXECUTION_AUTHORITY_BYTES + 1),
+            "non utf8": b"\xff",
+            "duplicate key": valid_bytes.replace(
+                b'"schema_version":',
+                b'"schema_version":"foreign","schema_version":',
+                1,
+            ),
+            "NaN": valid_bytes.replace(b'"command": "apply"', b'"command": NaN'),
+            "Infinity": valid_bytes.replace(
+                b'"command": "apply"', b'"command": Infinity'
+            ),
+        }
+        for label, raw in cases.items():
+            with self.subTest(label=label):
+                parsed, diagnostics = (
+                    EXECUTION_AUTHORITY.parse_execution_authority_bytes(raw)
+                )
+                self.assertIsNone(parsed)
+                self.assertTrue(diagnostics)
+
+        original_schema_valid = EXECUTION_AUTHORITY._schema_valid
+        original_credential_scan = EXECUTION_AUTHORITY.contains_literal_credential
+        original_canonical_digest = EXECUTION_AUTHORITY.canonical_digest
+
+        def forbidden_after_oversize(*_args: object, **_kwargs: object) -> object:
+            raise AssertionError("oversized bytes reached parsed-object processing")
+
+        try:
+            EXECUTION_AUTHORITY._schema_valid = forbidden_after_oversize
+            EXECUTION_AUTHORITY.contains_literal_credential = forbidden_after_oversize
+            EXECUTION_AUTHORITY.canonical_digest = forbidden_after_oversize
+            parsed, diagnostics = EXECUTION_AUTHORITY.parse_execution_authority_bytes(
+                b" " * (EXECUTION_AUTHORITY.MAX_EXECUTION_AUTHORITY_BYTES + 1)
+            )
+            self.assertIsNone(parsed)
+            self.assertEqual(
+                {diagnostic.code for diagnostic in diagnostics},
+                {"EXECUTION_AUTHORITY_BYTES_INVALID"},
+            )
+        finally:
+            EXECUTION_AUTHORITY._schema_valid = original_schema_valid
+            EXECUTION_AUTHORITY.contains_literal_credential = original_credential_scan
+            EXECUTION_AUTHORITY.canonical_digest = original_canonical_digest
+
+        oversized_string = copy.deepcopy(authorization)
+        oversized_string["issuer_identity"] = "authority:" + "a" * 256
+        parsed, diagnostics = EXECUTION_AUTHORITY.parse_execution_authority_bytes(
+            json.dumps(oversized_string).encode("utf-8")
+        )
+        self.assertIsNone(parsed)
+        self.assertEqual(
+            {diagnostic.code for diagnostic in diagnostics},
+            {"EXECUTION_AUTHORITY_SCHEMA_INVALID"},
+        )
+
+        excessive_fraction = copy.deepcopy(authorization)
+        excessive_fraction["issued_at"] = "2026-08-13T07:00:00." + "1" * 5000 + "Z"
+        parsed, diagnostics = EXECUTION_AUTHORITY.parse_execution_authority_bytes(
+            json.dumps(excessive_fraction).encode("utf-8")
+        )
+        self.assertIsNone(parsed)
+        self.assertEqual(
+            {diagnostic.code for diagnostic in diagnostics},
+            {"EXECUTION_AUTHORITY_SCHEMA_INVALID"},
+        )
+
     def test_compensation_authorization_is_closed_and_independently_trusted(
         self,
     ) -> None:
         authorization = valid_compensation_authorization()
         self.assertTrue(self.validate(authorization))
+        identity_payload = copy.deepcopy(authorization)
+        identity_payload.pop("compensation_authorization_identity")
         self.assertEqual(
             authorization["compensation_authorization_identity"],
-            "compensation-authorization:sha256:"
-            "8bec97e8dfc9e687c27d7131d9f1fa8a5bbf31eaf3949387182241a8f876020c",
-        )
-        self.assertEqual(
-            canonical_digest(authorization),
-            "sha256:40f167515f61373b46b1a16301199f1254020b29611b4e5035bf09de2765628d",
+            "compensation-authorization:" + canonical_digest(identity_payload),
         )
         self.assertEqual(
             EXECUTION_AUTHORITY.validate_compensation_authorization(
@@ -681,6 +1259,15 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
         receipt = valid_release_receipt()
         self.assertTrue(self.validate(receipt))
 
+        for terminal_state in ("running", "compensated", "needs_operator"):
+            with self.subTest(terminal_state=terminal_state):
+                candidate = copy.deepcopy(receipt)
+                candidate["payload"]["run_terminal_state"] = terminal_state
+                candidate["receipt_identity"] = "release-receipt:" + canonical_digest(
+                    candidate["payload"]
+                )
+                self.assertFalse(self.validate(candidate))
+
         payload_fields = tuple(receipt["payload"])
         for field in payload_fields:
             with self.subTest(field=field):
@@ -706,15 +1293,16 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
         receipt = valid_release_receipt(archive)
         self.assertEqual(
             archive["archive_identity"],
-            "release-archive:sha256:ffcd88a835be1bf7f1c9159da4af94540030f415180ce5decb1beaeb467c9f72",
+            "release-archive:" + canonical_digest(archive["payload"]),
         )
+        unsigned_archive = copy.deepcopy(archive)
+        unsigned_archive.pop("archive_manifest_digest")
         self.assertEqual(
-            archive["archive_manifest_digest"],
-            "sha256:effb2db5b024aba3a5ff6b4160ddb002250388094a6a11d44d0ff85bd703c003",
+            archive["archive_manifest_digest"], canonical_digest(unsigned_archive)
         )
         self.assertEqual(
             receipt["receipt_identity"],
-            "release-receipt:sha256:021c6c45f71149ba32d05cd73ef554c45a2013e71e06b25ee9021b7410936d9c",
+            "release-receipt:" + canonical_digest(receipt["payload"]),
         )
         payload = archive["payload"]
         assert isinstance(payload, dict)
@@ -734,6 +1322,8 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
                 "implementation_manifest_digest"
             ],
             expected_execution_binding=trusted_execution,
+            expected_checkpoint_set_digest=payload["checkpoint_set_digest"],
+            expected_run_terminal_state="succeeded",
             expected_launcher_identity=payload["launcher_identity"],
             expected_launcher_manifest_digest=payload["launcher_manifest_digest"],
             expected_store_identity=destination["store_identity"],
@@ -749,6 +1339,8 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
                 "implementation_manifest_digest"
             ],
             expected_execution_binding=trusted_execution,
+            expected_checkpoint_set_digest=payload["checkpoint_set_digest"],
+            expected_run_terminal_state="succeeded",
             expected_launcher_identity=payload["launcher_identity"],
             expected_launcher_manifest_digest=payload["launcher_manifest_digest"],
             expected_archive_identity=archive["archive_identity"],
@@ -757,6 +1349,55 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
             expected_store_key=destination["store_key"],
         )
         self.assertEqual(receipt_diagnostics, ())
+
+        for trusted_terminal_state in ("running", "compensated", "needs_operator"):
+            with self.subTest(trusted_terminal_state=trusted_terminal_state):
+                archive_codes = {
+                    diagnostic.code
+                    for diagnostic in EXECUTION_AUTHORITY.validate_release_archive_manifest(
+                        archive,
+                        expected_candidate_identity=payload["candidate_identity"],
+                        expected_implementation_manifest_digest=payload[
+                            "implementation_manifest_digest"
+                        ],
+                        expected_execution_binding=trusted_execution,
+                        expected_checkpoint_set_digest=payload["checkpoint_set_digest"],
+                        expected_run_terminal_state=trusted_terminal_state,
+                        expected_launcher_identity=payload["launcher_identity"],
+                        expected_launcher_manifest_digest=payload[
+                            "launcher_manifest_digest"
+                        ],
+                        expected_store_identity=destination["store_identity"],
+                        expected_store_key=destination["store_key"],
+                        expected_archived_document_byte_digests=trusted_byte_digests,
+                    )
+                }
+                self.assertIn("RELEASE_ARCHIVE_AUTHORITY_MISMATCH", archive_codes)
+
+                receipt_codes = {
+                    diagnostic.code
+                    for diagnostic in EXECUTION_AUTHORITY.validate_release_receipt(
+                        receipt,
+                        expected_candidate_identity=payload["candidate_identity"],
+                        expected_implementation_manifest_digest=payload[
+                            "implementation_manifest_digest"
+                        ],
+                        expected_execution_binding=trusted_execution,
+                        expected_checkpoint_set_digest=payload["checkpoint_set_digest"],
+                        expected_run_terminal_state=trusted_terminal_state,
+                        expected_launcher_identity=payload["launcher_identity"],
+                        expected_launcher_manifest_digest=payload[
+                            "launcher_manifest_digest"
+                        ],
+                        expected_archive_identity=archive["archive_identity"],
+                        expected_archive_manifest_digest=archive[
+                            "archive_manifest_digest"
+                        ],
+                        expected_store_identity=destination["store_identity"],
+                        expected_store_key=destination["store_key"],
+                    )
+                }
+                self.assertIn("RELEASE_RECEIPT_AUTHORITY_MISMATCH", receipt_codes)
 
         forged_archive = copy.deepcopy(archive)
         forged_archive["payload"]["execution_binding"]["run_identity"] = (
@@ -777,6 +1418,8 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
                     "implementation_manifest_digest"
                 ],
                 expected_execution_binding=trusted_execution,
+                expected_checkpoint_set_digest=payload["checkpoint_set_digest"],
+                expected_run_terminal_state="succeeded",
                 expected_launcher_identity=payload["launcher_identity"],
                 expected_launcher_manifest_digest=payload["launcher_manifest_digest"],
                 expected_store_identity=destination["store_identity"],
@@ -805,6 +1448,8 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
                     "implementation_manifest_digest"
                 ],
                 expected_execution_binding=trusted_execution,
+                expected_checkpoint_set_digest=payload["checkpoint_set_digest"],
+                expected_run_terminal_state="succeeded",
                 expected_launcher_identity=payload["launcher_identity"],
                 expected_launcher_manifest_digest=payload["launcher_manifest_digest"],
                 expected_store_identity=destination["store_identity"],
@@ -833,6 +1478,8 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
                     "implementation_manifest_digest"
                 ],
                 expected_execution_binding=trusted_execution,
+                expected_checkpoint_set_digest=payload["checkpoint_set_digest"],
+                expected_run_terminal_state="succeeded",
                 expected_launcher_identity=payload["launcher_identity"],
                 expected_launcher_manifest_digest=payload["launcher_manifest_digest"],
                 expected_store_identity=destination["store_identity"],
@@ -858,6 +1505,8 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
                     "implementation_manifest_digest"
                 ],
                 expected_execution_binding=trusted_execution,
+                expected_checkpoint_set_digest=payload["checkpoint_set_digest"],
+                expected_run_terminal_state="succeeded",
                 expected_launcher_identity=payload["launcher_identity"],
                 expected_launcher_manifest_digest=payload["launcher_manifest_digest"],
                 expected_archive_identity=archive["archive_identity"],
@@ -884,6 +1533,8 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
                     "implementation_manifest_digest"
                 ],
                 expected_execution_binding=trusted_execution,
+                expected_checkpoint_set_digest=payload["checkpoint_set_digest"],
+                expected_run_terminal_state="succeeded",
                 expected_launcher_identity=payload["launcher_identity"],
                 expected_launcher_manifest_digest=payload["launcher_manifest_digest"],
                 expected_archive_identity=archive["archive_identity"],
@@ -918,6 +1569,8 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
                 "implementation_manifest_digest"
             ],
             expected_execution_binding=payload["execution_binding"],
+            expected_checkpoint_set_digest=payload["checkpoint_set_digest"],
+            expected_run_terminal_state="succeeded",
             expected_launcher_identity=payload["launcher_identity"],
             expected_launcher_manifest_digest=payload["launcher_manifest_digest"],
             expected_store_identity=destination["store_identity"],
@@ -977,6 +1630,8 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
                     "implementation_manifest_digest"
                 ],
                 expected_execution_binding=payload["execution_binding"],
+                expected_checkpoint_set_digest=payload["checkpoint_set_digest"],
+                expected_run_terminal_state="succeeded",
                 expected_launcher_identity=payload["launcher_identity"],
                 expected_launcher_manifest_digest=payload["launcher_manifest_digest"],
                 expected_store_identity=destination["store_identity"],

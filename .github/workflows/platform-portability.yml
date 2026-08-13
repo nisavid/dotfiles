@@ -75,6 +75,7 @@ permissions:
   contents: read
 
 env:
+  AGE_VERSION: "1.3.1"
   CHEZMOI_VERSION: "2.71.0"
 
 jobs:
@@ -109,15 +110,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          brew install age bat flock jq ripgrep
+          brew install bat flock jq ripgrep
           case "$(uname -m)" in
             arm64)
               archive=chezmoi_${CHEZMOI_VERSION}_darwin_arm64.tar.gz
               digest=8b03d7be6b5d500a503c712ae6da7dd6817b6c3328223b4ae8be7a8be5a2fa3a
+              age_archive=age-v${AGE_VERSION}-darwin-arm64.tar.gz
+              age_digest=01120ea2cbf0463d4c6bd767f99f3271bbed1cdc8a9aa718a76ba1fe4f01998b
               ;;
             x86_64)
               archive=chezmoi_${CHEZMOI_VERSION}_darwin_amd64.tar.gz
               digest=12b78b365528597ad701f5117fa71f6c42b5b1e65d8075e19c48472ad81faf30
+              age_archive=age-v${AGE_VERSION}-darwin-amd64.tar.gz
+              age_digest=2b233301ad21ab7b1eabd9ae1198a164005fa4928fcdd745d47c39f8593209d7
               ;;
             *)
               printf 'unsupported macOS architecture: %s\n' "$(uname -m)" >&2
@@ -131,6 +136,17 @@ jobs:
           printf '%s  %s\n' "$digest" "$package" | shasum -a 256 --check
           mkdir -p "$RUNNER_TEMP/chezmoi-bin"
           tar -xzf "$package" -C "$RUNNER_TEMP/chezmoi-bin" chezmoi
+          age_package="$RUNNER_TEMP/$age_archive"
+          curl --fail --location --silent --show-error \
+            --output "$age_package" \
+            "https://github.com/FiloSottile/age/releases/download/v${AGE_VERSION}/$age_archive"
+          printf '%s  %s\n' "$age_digest" "$age_package" | shasum -a 256 --check
+          tar -xzf "$age_package" -C "$RUNNER_TEMP"
+          install -m 0755 \
+            "$RUNNER_TEMP/age/age" \
+            "$RUNNER_TEMP/age/age-keygen" \
+            "$RUNNER_TEMP/age/age-inspect" \
+            "$RUNNER_TEMP/chezmoi-bin"
           printf '%s\n' "$RUNNER_TEMP/chezmoi-bin" >>"$GITHUB_PATH"
 
       - name: Install Linux dependencies
@@ -139,7 +155,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get -qq update
-          sudo apt-get -qq install -y acl age bat curl jq ripgrep zsh
+          sudo apt-get -qq install -y acl bat curl jq ripgrep zsh
           sudo ln -s /usr/bin/batcat /usr/local/bin/bat
           archive=chezmoi_${CHEZMOI_VERSION}_linux_amd64.tar.gz
           package="$RUNNER_TEMP/$archive"
@@ -151,11 +167,32 @@ jobs:
             "$package" | sha256sum --check
           mkdir -p "$RUNNER_TEMP/chezmoi-bin"
           tar -xzf "$package" -C "$RUNNER_TEMP/chezmoi-bin" chezmoi
+          age_archive=age-v${AGE_VERSION}-linux-amd64.tar.gz
+          age_package="$RUNNER_TEMP/$age_archive"
+          curl --fail --location --silent --show-error \
+            --output "$age_package" \
+            "https://github.com/FiloSottile/age/releases/download/v${AGE_VERSION}/$age_archive"
+          printf '%s  %s\n' \
+            bdc69c09cbdd6cf8b1f333d372a1f58247b3a33146406333e30c0f26e8f51377 \
+            "$age_package" | sha256sum --check
+          tar -xzf "$age_package" -C "$RUNNER_TEMP"
+          install -m 0755 \
+            "$RUNNER_TEMP/age/age" \
+            "$RUNNER_TEMP/age/age-keygen" \
+            "$RUNNER_TEMP/age/age-inspect" \
+            "$RUNNER_TEMP/chezmoi-bin"
           printf '%s\n' "$RUNNER_TEMP/chezmoi-bin" >>"$GITHUB_PATH"
 
       - name: Verify chezmoi version
         shell: bash
         run: chezmoi --version | grep -Fq "chezmoi version v${CHEZMOI_VERSION},"
+
+      - name: Verify age parser version
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(age --version)" = "v${AGE_VERSION}"
+          test "$(age-inspect --version)" = "v${AGE_VERSION}"
 
       - name: Verify shell syntax
         shell: bash

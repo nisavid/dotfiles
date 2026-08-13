@@ -153,6 +153,16 @@ plan-action set, and one fresh compensation nonce. It never authorizes a new
 forward action and never reuses apply authority.
 _Avoid_: Apply authorization, automatic in-run compensation, generic rollback
 
+**Checkpoint-set manifest**:
+The canonical nonempty ordered projection of all and only durable checkpoints
+for one exact original apply/run/domain and validated plan action set at one
+store generation. Its entries bind generation/version, phase, invocation
+state, immutable identity, action/ordinal, and the digest of each complete
+durable record; its digest is derived by trusted enumeration under the
+exclusive lease and rechecked immediately before a public compensation claim
+or transition.
+_Avoid_: Caller-supplied digest, partial checkpoint list, mutable store view
+
 **Expected acceptance case manifest**:
 The sealed, pre-execution registry of every release case required for one
 candidate, plan, capture, and route-capability binding tuple.

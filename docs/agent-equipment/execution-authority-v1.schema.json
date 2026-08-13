@@ -5,6 +5,7 @@
   "oneOf": [
     {"$ref": "#/$defs/applyAuthorization"},
     {"$ref": "#/$defs/compensationAuthorization"},
+    {"$ref": "#/$defs/checkpointSetManifest"},
     {"$ref": "#/$defs/releaseArchiveManifest"},
     {"$ref": "#/$defs/releaseReceipt"}
   ],
@@ -15,16 +16,16 @@
     },
     "opaqueIdentity": {
       "type": "string",
-      "pattern": "^[a-z][a-z0-9_-]*:[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+      "pattern": "^[a-z][a-z0-9_-]{0,31}:[A-Za-z0-9][A-Za-z0-9._:/-]{0,254}$"
     },
     "utcTimestamp": {
       "type": "string",
       "format": "date-time",
-      "pattern": "Z$"
+      "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])[Tt]([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]([.,][0-9]{1,9})?Z$"
     },
     "executionDomainIdentity": {
       "type": "string",
-      "pattern": "^execution-domain:[A-Za-z0-9][A-Za-z0-9._/-]*$"
+      "pattern": "^execution-domain:[A-Za-z0-9][A-Za-z0-9._/-]{0,254}$"
     },
     "applyBindings": {
       "type": "object",
@@ -195,6 +196,114 @@
         "bindings": {"$ref": "#/$defs/compensationBindings"}
       }
     },
+    "checkpointSetBindings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apply_authorization_identity",
+        "apply_authorization_digest",
+        "execution_domain_identity",
+        "execution_nonce",
+        "run_identity",
+        "plan_action_set_digest"
+      ],
+      "properties": {
+        "apply_authorization_identity": {
+          "type": "string",
+          "pattern": "^apply-authorization:sha256:[0-9a-f]{64}$"
+        },
+        "apply_authorization_digest": {"$ref": "#/$defs/digest"},
+        "execution_domain_identity": {"$ref": "#/$defs/executionDomainIdentity"},
+        "execution_nonce": {
+          "type": "string",
+          "pattern": "^execution-nonce:sha256:[0-9a-f]{64}$"
+        },
+        "run_identity": {
+          "type": "string",
+          "pattern": "^run:sha256:[0-9a-f]{64}$"
+        },
+        "plan_action_set_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "checkpointManifestEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "checkpoint_identity",
+        "durable_generation",
+        "record_version",
+        "phase",
+        "invocation_state",
+        "action_identity",
+        "ordinal",
+        "checkpoint_record_digest"
+      ],
+      "properties": {
+        "checkpoint_identity": {
+          "type": "string",
+          "pattern": "^checkpoint:sha256:[0-9a-f]{64}$"
+        },
+        "durable_generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        },
+        "record_version": {"const": "agent-equipment-checkpoint/v1"},
+        "phase": {
+          "enum": [
+            "prepared",
+            "completed",
+            "compensating",
+            "compensated",
+            "compensation_blocked"
+          ]
+        },
+        "invocation_state": {"enum": ["not_started", "started"]},
+        "action_identity": {
+          "type": "string",
+          "pattern": "^action:sha256:[0-9a-f]{64}$"
+        },
+        "ordinal": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9223372036854775807
+        },
+        "checkpoint_record_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "checkpointSetManifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "checkpoint_set_identity",
+        "checkpoint_store_generation",
+        "bindings",
+        "checkpoints",
+        "checkpoint_set_digest"
+      ],
+      "properties": {
+        "schema_version": {"const": "agent-equipment-checkpoint-set/v1"},
+        "checkpoint_set_identity": {
+          "type": "string",
+          "pattern": "^checkpoint-set:sha256:[0-9a-f]{64}$"
+        },
+        "checkpoint_store_generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        },
+        "bindings": {"$ref": "#/$defs/checkpointSetBindings"},
+        "checkpoints": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4096,
+          "items": {"$ref": "#/$defs/checkpointManifestEntry"},
+          "uniqueItems": true
+        },
+        "checkpoint_set_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
     "archiveDestination": {
       "type": "object",
       "additionalProperties": false,
@@ -234,6 +343,8 @@
         "candidate_identity",
         "implementation_manifest_digest",
         "execution_binding",
+        "checkpoint_set_digest",
+        "run_terminal_state",
         "launcher_identity",
         "launcher_manifest_digest",
         "archive_destination",
@@ -243,9 +354,11 @@
         "candidate_identity": {"$ref": "#/$defs/opaqueIdentity"},
         "implementation_manifest_digest": {"$ref": "#/$defs/digest"},
         "execution_binding": {"$ref": "#/$defs/executionBinding"},
+        "checkpoint_set_digest": {"$ref": "#/$defs/digest"},
+        "run_terminal_state": {"const": "succeeded"},
         "launcher_identity": {
           "type": "string",
-          "pattern": "^release-launcher:[A-Za-z0-9][A-Za-z0-9._/-]*$"
+          "pattern": "^release-launcher:[A-Za-z0-9][A-Za-z0-9._/-]{0,254}$"
         },
         "launcher_manifest_digest": {"$ref": "#/$defs/digest"},
         "archive_destination": {"$ref": "#/$defs/archiveDestination"},
@@ -284,6 +397,8 @@
         "candidate_identity",
         "implementation_manifest_digest",
         "execution_binding",
+        "checkpoint_set_digest",
+        "run_terminal_state",
         "launcher_identity",
         "launcher_manifest_digest",
         "archive_identity",
@@ -296,9 +411,11 @@
         "candidate_identity": {"$ref": "#/$defs/opaqueIdentity"},
         "implementation_manifest_digest": {"$ref": "#/$defs/digest"},
         "execution_binding": {"$ref": "#/$defs/executionBinding"},
+        "checkpoint_set_digest": {"$ref": "#/$defs/digest"},
+        "run_terminal_state": {"const": "succeeded"},
         "launcher_identity": {
           "type": "string",
-          "pattern": "^release-launcher:[A-Za-z0-9][A-Za-z0-9._/-]*$"
+          "pattern": "^release-launcher:[A-Za-z0-9][A-Za-z0-9._/-]{0,254}$"
         },
         "launcher_manifest_digest": {"$ref": "#/$defs/digest"},
         "archive_identity": {

@@ -29,10 +29,22 @@ workflow_concurrency=$(
   fail 'platform workflow does not group superseded runs by workflow and ref'
 [[ $workflow_concurrency == *'cancel-in-progress: true'* ]] ||
   fail 'platform workflow does not cancel superseded runs'
-grep -Fq 'brew install age bat flock jq ripgrep' "$workflow" ||
-  fail 'platform workflow does not install ripgrep on macOS'
-grep -Fq 'sudo apt-get -qq install -y acl age bat curl jq ripgrep zsh' "$workflow" ||
-  fail 'platform workflow does not install ripgrep on Linux'
+grep -Fq 'AGE_VERSION: "1.3.1"' "$workflow" ||
+  fail 'platform workflow does not pin the age parser version'
+grep -Fq 'brew install bat flock jq ripgrep' "$workflow" ||
+  fail 'platform workflow does not install macOS runtime dependencies'
+grep -Fq 'age-v${AGE_VERSION}-darwin-arm64.tar.gz' "$workflow" ||
+  fail 'platform workflow does not install the pinned arm64 macOS age parser'
+grep -Fq 'age-v${AGE_VERSION}-darwin-amd64.tar.gz' "$workflow" ||
+  fail 'platform workflow does not install the pinned amd64 macOS age parser'
+grep -Fq 'sudo apt-get -qq install -y acl bat curl jq ripgrep zsh' "$workflow" ||
+  fail 'platform workflow does not install Linux runtime dependencies'
+grep -Fq 'age-v${AGE_VERSION}-linux-amd64.tar.gz' "$workflow" ||
+  fail 'platform workflow does not install the pinned Linux age parser'
+grep -Fq '"$RUNNER_TEMP/age/age-inspect"' "$workflow" ||
+  fail 'platform workflow does not install age-inspect'
+grep -Fq 'test "$(age-inspect --version)" = "v${AGE_VERSION}"' "$workflow" ||
+  fail 'platform workflow does not verify the age parser version'
 grep -Fq 'python3 -m pip install uv==0.11.32' "$workflow" ||
   fail 'platform workflow does not install the pinned uv runtime'
 

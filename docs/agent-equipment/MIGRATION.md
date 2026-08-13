@@ -325,10 +325,11 @@ identity and manifest digest from external trust inputs, strictly parses the
 authorization, manifest, bundle, and attestation, then performs one create-only
 compare-and-swap archive commit using a closed `ReleaseArchiveManifest` over
 the exact input byte digests and execution tuple, including the independently
-trusted execution-domain identity. Only after generation `1` is
+trusted execution-domain identity, validated checkpoint-set digest, and
+`run_terminal_state: succeeded`. Only after generation `1` is
 durable does it emit the closed `ReleaseReceipt`. Candidate output cannot mint,
-overwrite,
-ignore, or substitute for that receipt. The candidate evidence writer,
+overwrite, ignore, or substitute for that receipt. A compensated, blocked, or
+nonterminal run cannot produce a passed receipt. The candidate evidence writer,
 attestation writer, and validator do not grant apply authority or mutate harness
 state.
 
@@ -616,12 +617,13 @@ The evidence writer then seals the exact migration and live child receipts into
 the candidate bundle and derives the aggregates. The candidate-independent
 release authority attests the bundle's canonical semantic digest after every
 result and live sign-off, and the release command validates all three documents
-against the authorized expected-case and attestation manifest digests. The external launcher
-also validates the exact apply authorization and its own trusted launcher
+against the authorized expected-case and attestation manifest digests. The
+external launcher also validates the exact apply authorization and its own trusted launcher
 identity/digest, then commits the authorization, three release documents, and
 closed archive manifest over their exact serialized byte digests and execution
-tuple, including `execution_domain_identity`, with
-an `absent` compare token. Generation `1` is create-only;
+tuple, including `execution_domain_identity`, the validated checkpoint-set
+digest, and successful terminal run state, with an `absent` compare token.
+Generation `1` is create-only;
 identical existing bytes are idempotent and different bytes are a conflict.
 Missing, extra, duplicated, nonpassing, stale-attested, or misbound evidence—or
 a failed/conflicting archive commit—withholds the release receipt and preserves
@@ -663,8 +665,18 @@ prefix `compensation-authorization:sha256:`, `command: compensate`, issuer and
 validity window, a fresh `compensation_nonce`, and exact bindings to the original
 apply identity/digest, execution-domain identity, execution nonce, run,
 checkpoint-set digest, and plan-action-set digest. Its canonical complete digest
-is supplied independently. Before the transition, claim `compensation_nonce`
-once by CAS in the same authoritative execution-domain ledger namespace. Crash
+is supplied independently. Under the exclusive lease, enumerate all and only
+the authoritative durable checkpoints for that exact original apply/run/domain
+and validated plan action set into a closed `CheckpointSetManifest`. Each
+ordered entry projects the durable generation/version, phase, invocation state,
+immutable checkpoint identity, action/ordinal, and canonical digest of the
+complete checkpoint record. Reject empty, missing, extra, duplicate, reordered,
+foreign, stale, malformed, or resealed records. Derive the authorization's
+checkpoint-set digest from that manifest, then re-enumerate the store and check
+the same generation immediately before the nonce claim and first transition;
+any concurrent change fails closed. Before the transition, claim
+`compensation_nonce` once by CAS in the same authoritative execution-domain
+ledger namespace. Crash
 recovery cannot infer this public compensation authority merely from a surviving
 `prepared` record or reuse `ApplyAuthorization`.
 

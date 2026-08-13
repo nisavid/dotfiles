@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
+import os
 import subprocess
 import sys
 import unittest
@@ -164,6 +166,64 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
             with self.subTest(public_reference=next(iter(document))):
                 self.assertFalse(contains_literal_credential(document))
 
+    def test_serialized_credential_assignments_match_mapping_policy(self) -> None:
+        literal = "actual-" + "secret value"
+        credential_fields = (
+            "api_" + "key",
+            "access_" + "token",
+            "pass" + "word",
+            "client_" + "secret",
+            "to" + "ken",
+            "sec" + "ret",
+            "author" + "ization",
+            "proxy-author" + "ization",
+            "x-api-" + "key",
+        )
+
+        for field in credential_fields:
+            document = {field: literal}
+            serialized_documents = (
+                json.dumps(document, separators=(",", ":")),
+                f"{field}: '{literal}'",
+                f'{field} = "{literal}"',
+            )
+            with self.subTest(field=field):
+                self.assertTrue(contains_literal_credential(document))
+                for serialized in serialized_documents:
+                    self.assertTrue(string_looks_like_credential(serialized))
+
+    def test_serialized_credential_assignments_preserve_reference_exceptions(
+        self,
+    ) -> None:
+        credential_fields = (
+            "to" + "ken",
+            "sec" + "ret",
+            "author" + "ization",
+            "proxy-author" + "ization",
+        )
+        references = (
+            "$TOKEN",
+            "${TOKEN}",
+            "${{ secrets.TOKEN }}",
+            "secret_profile:context7",
+            "secret_reference:API_KEY",
+            "reference:context7",
+        )
+
+        for field in credential_fields:
+            for reference in references:
+                document = {field: reference}
+                serialized = json.dumps(document, separators=(",", ":"))
+                with self.subTest(field=field, reference=reference):
+                    self.assertFalse(contains_literal_credential(document))
+                    self.assertFalse(string_looks_like_credential(serialized))
+
+    def test_json_unicode_escaped_credential_keys_do_not_evade_policy(self) -> None:
+        escaped_key = "Authoriz" + "\\u0061" + "tion"
+        serialized = '{"' + escaped_key + '":"actual-secret-value"}'
+
+        self.assertTrue(string_looks_like_credential(serialized))
+
     def test_privacy_scan_uses_the_shared_policy_without_echoing_values(self) -> None:
         credentials = (
             provider_credentials()
@@ -269,21 +329,17 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
         self,
     ) -> None:
         credential = provider_credentials()[0]
-        native_age = (
-            b"age-encryption.org/v1\n"
-            b"-> fixture recipient\n"
-            b"--- fixture-tag\n"
-            b"\0ciphertext"
-        )
-        armored_age = (
-            b"-----BEGIN AGE ENCRYPTED FILE-----\n"
-            + base64.b64encode(native_age)
-            + b"\n-----END AGE ENCRYPTED FILE-----\n"
-        )
+        native_age = (ROOT / "home/.private-prd-01.toml.age").read_bytes()
+        armored_age = (ROOT / "home/.private-agents.md.age").read_bytes()
         header_only_spoof = (
             b"-----BEGIN AGE ENCRYPTED FILE-----\n"
             + base64.b64encode(b"age-encryption.org/v1\n")
             + b"\n-----END AGE ENCRYPTED FILE-----\n"
+        )
+        plausible_spoof = (
+            b"age-encryption.org/v1\n"
+            b"-> fixture recipient\n"
+            b"--- fixture-tag\n" + credential.encode("utf-8") + b"\n"
         )
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -291,6 +347,7 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
             (root / "native.age").write_bytes(native_age)
             (root / "armored.age").write_bytes(armored_age)
             (root / "spoof.age").write_bytes(header_only_spoof)
+            (root / "plausible-spoof.age").write_bytes(plausible_spoof)
 
             result = subprocess.run(
                 [
@@ -310,10 +367,62 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
             [
                 "mislabeled.age:0: [invalid-age-envelope] review required",
                 "mislabeled.age:1: [provider-token] review required",
+                "plausible-spoof.age:0: [invalid-age-envelope] review required",
+                "plausible-spoof.age:4: [provider-token] review required",
                 "spoof.age:0: [invalid-age-envelope] review required",
             ],
         )
         self.assertNotIn(credential, result.stdout)
+
+    def test_privacy_scan_fails_closed_when_age_parser_is_unavailable(self) -> None:
+        native_age = (ROOT / "home/.private-prd-01.toml.age").read_bytes()
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "ciphertext.age").write_bytes(native_age)
+            environment = os.environ.copy()
+            environment["PATH"] = ""
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts/privacy-scan"),
+                    "--root",
+                    str(root),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(
+            result.stdout,
+            "ciphertext.age:0: [invalid-age-envelope] review required\n",
+        )
+
+    def test_privacy_scan_rejects_oversized_age_input_before_parsing(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "oversized.age").write_bytes(b"x" * (4 * 1024 * 1024 + 1))
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts/privacy-scan"),
+                    "--root",
+                    str(root),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(
+            result.stdout,
+            "oversized.age:0: [invalid-age-envelope] review required\n",
+        )
 
     def test_privacy_scan_redacts_other_sensitive_filename_families(self) -> None:
         private_email = "operator@" + "private.invalid.txt"
