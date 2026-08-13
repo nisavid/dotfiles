@@ -66,7 +66,9 @@ grep -Fq 'python3 trusted-base/scripts/privacy_age_integrity_gate.py' \
   fail 'age boundary does not execute the trusted transition verifier'
 grep -Fq 'python3 trusted-base/scripts/privacy-scan' "$age_boundary_workflow" ||
   fail 'age boundary does not execute the trusted privacy scanner'
-! grep -Eq 'python3 untrusted-head|untrusted-head/scripts/' "$age_boundary_workflow" ||
+! grep -Eq \
+  '^[[:space:]]*(python[0-9.]*|bash|sh|zsh|ruby|perl|node|npm|npx|make)([[:space:]]|$).*untrusted-head/|^[[:space:]]*(\./)?untrusted-head/|^[[:space:]]*(uses|working-directory):[[:space:]]*(\./)?untrusted-head(/|$)' \
+  "$age_boundary_workflow" ||
   fail 'age boundary executes candidate code'
 
 chezmoi -S "$repo_root/home" execute-template \

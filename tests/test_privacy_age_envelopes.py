@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import textwrap
+import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase, mock
@@ -25,6 +26,7 @@ ADMITTER = ROOT / "scripts/admit-age-envelopes"
 AGE_VERSION = "v1.3.1"
 MANIFEST = ".privacy-age-envelopes.json"
 MANIFEST_VERSION = "privacy-age-envelopes/v1"
+TOOL_TIMEOUT_SECONDS = 10
 
 
 def sha256(data: bytes) -> str:
@@ -42,6 +44,16 @@ def manifest_bytes(entries: list[tuple[str, bytes]]) -> bytes:
 
 
 class PrivacyAgeEnvelopeTests(TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        missing = [
+            name
+            for name in ("age", "age-keygen", "age-inspect")
+            if not shutil.which(name)
+        ]
+        if missing:
+            raise unittest.SkipTest("age v1.3.1 tooling is unavailable")
+
     def setUp(self) -> None:
         self.temporary_directory = TemporaryDirectory()
         self.addCleanup(self.temporary_directory.cleanup)
@@ -54,12 +66,14 @@ class PrivacyAgeEnvelopeTests(TestCase):
             check=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            timeout=TOOL_TIMEOUT_SECONDS,
         )
         self.recipient = subprocess.run(
             ["age-keygen", "-y", str(self.identity)],
             check=True,
             capture_output=True,
             text=True,
+            timeout=TOOL_TIMEOUT_SECONDS,
         ).stdout.strip()
 
     def run_scanner(self) -> subprocess.CompletedProcess[str]:
@@ -68,7 +82,7 @@ class PrivacyAgeEnvelopeTests(TestCase):
             check=False,
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=TOOL_TIMEOUT_SECONDS,
         )
 
     def run_admitter(self) -> subprocess.CompletedProcess[str]:
@@ -97,7 +111,7 @@ class PrivacyAgeEnvelopeTests(TestCase):
             capture_output=True,
             text=True,
             env=environment,
-            timeout=10,
+            timeout=TOOL_TIMEOUT_SECONDS,
         )
 
     def encrypt(
@@ -117,6 +131,7 @@ class PrivacyAgeEnvelopeTests(TestCase):
             input=plaintext,
             check=True,
             capture_output=True,
+            timeout=TOOL_TIMEOUT_SECONDS,
         ).stdout
 
     def armor(self, native: bytes) -> bytes:
@@ -137,6 +152,7 @@ class PrivacyAgeEnvelopeTests(TestCase):
             input=data,
             check=True,
             capture_output=True,
+            timeout=TOOL_TIMEOUT_SECONDS,
         )
         document = json.loads(result.stdout)
         self.assertIsInstance(document, dict)
@@ -153,12 +169,14 @@ class PrivacyAgeEnvelopeTests(TestCase):
             check=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            timeout=TOOL_TIMEOUT_SECONDS,
         )
         recipient = subprocess.run(
             ["age-keygen", "-y", str(identity)],
             check=True,
             capture_output=True,
             text=True,
+            timeout=TOOL_TIMEOUT_SECONDS,
         ).stdout.strip()
         return identity, recipient
 
@@ -314,7 +332,7 @@ class PrivacyAgeEnvelopeTests(TestCase):
         self.assertEqual(result.stderr, "age-envelope admission failed\n")
         self.assertEqual((self.root / MANIFEST).read_bytes(), sentinel)
 
-    def test_admission_accepts_when_each_supplied_identity_decrypts(self) -> None:
+    def test_v1_admission_rejects_multiple_identities_and_recipients(self) -> None:
         additional_identity, additional_recipient = self.make_identity(
             "additional-identity.txt"
         )
@@ -329,11 +347,10 @@ class PrivacyAgeEnvelopeTests(TestCase):
             additional_identities=[additional_identity],
         )
 
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(
-            (self.root / MANIFEST).read_bytes(),
-            manifest_bytes([("candidate.age", candidate)]),
-        )
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, "age-envelope admission failed\n")
+        self.assertFalse((self.root / MANIFEST).exists())
 
     def test_admission_rejects_duplicate_identity_material(self) -> None:
         duplicate_identity = self.base / "duplicate-identity.txt"
@@ -396,6 +413,7 @@ class PrivacyAgeEnvelopeTests(TestCase):
             input=native,
             check=True,
             capture_output=True,
+            timeout=TOOL_TIMEOUT_SECONDS,
         )
         header_size = json.loads(inspected.stdout)["sizes"]["header"]
         accepted_truncation = native[: header_size + 32]
@@ -406,6 +424,7 @@ class PrivacyAgeEnvelopeTests(TestCase):
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 check=False,
+                timeout=TOOL_TIMEOUT_SECONDS,
             ).returncode,
             0,
         )
@@ -475,6 +494,7 @@ class PrivacyAgeEnvelopeTests(TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn(f"{MANIFEST}:0: [invalid-age-envelope-manifest]", result.stdout)
 
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "FIFOs require POSIX")
     def test_scanner_rejects_a_fifo_manifest_without_blocking(self) -> None:
         os.mkfifo(self.root / MANIFEST)
 
@@ -486,6 +506,7 @@ class PrivacyAgeEnvelopeTests(TestCase):
             result.stdout,
         )
 
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "FIFOs require POSIX")
     def test_admission_rejects_a_fifo_candidate_without_manifest_mutation(
         self,
     ) -> None:
@@ -551,6 +572,146 @@ class PrivacyAgeEnvelopeTests(TestCase):
             [],
         )
 
+    def test_admission_hides_an_identity_stat_race_and_preserves_manifest(self) -> None:
+        candidate = self.encrypt(b"identity stat race fixture")
+        (self.root / "candidate.age").write_bytes(candidate)
+        sentinel = manifest_bytes([])
+        (self.root / MANIFEST).write_bytes(sentinel)
+        hook_directory = self.base / "identity-stat-hook"
+        hook_directory.mkdir()
+        sensitive_error = os.fspath(self.base / "private-identity-stat-detail")
+        (hook_directory / "sitecustomize.py").write_text(
+            textwrap.dedent(
+                f"""
+                import os
+                from pathlib import Path
+
+                _original_stat = Path.stat
+
+                def _stat(path, *args, **kwargs):
+                    if os.fspath(path) == {os.fspath(self.identity.resolve())!r}:
+                        raise OSError({sensitive_error!r})
+                    return _original_stat(path, *args, **kwargs)
+
+                Path.stat = _stat
+                """
+            ),
+            encoding="utf-8",
+        )
+        environment = os.environ.copy()
+        environment["PYTHONPATH"] = os.pathsep.join(
+            filter(
+                None,
+                [os.fspath(hook_directory), environment.get("PYTHONPATH", "")],
+            )
+        )
+
+        result = self.run_admitter_with(
+            identity=self.identity,
+            environment=environment,
+        )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, "age-envelope admission failed\n")
+        self.assertNotIn(sensitive_error, result.stderr)
+        self.assertEqual((self.root / MANIFEST).read_bytes(), sentinel)
+
+    def test_admission_fsyncs_the_manifest_directory_after_replacement(self) -> None:
+        candidate = self.encrypt(b"directory durability fixture")
+        (self.root / "candidate.age").write_bytes(candidate)
+        hook_directory = self.base / "directory-fsync-hook"
+        hook_directory.mkdir()
+        marker = self.base / "directory-fsynced"
+        (hook_directory / "sitecustomize.py").write_text(
+            textwrap.dedent(
+                f"""
+                import os
+                import stat
+
+                _original_fsync = os.fsync
+
+                def _fsync(descriptor):
+                    if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+                        with open({os.fspath(marker)!r}, "w", encoding="utf-8") as stream:
+                            stream.write("directory fsynced\\n")
+                    return _original_fsync(descriptor)
+
+                os.fsync = _fsync
+                """
+            ),
+            encoding="utf-8",
+        )
+        environment = os.environ.copy()
+        environment["PYTHONPATH"] = os.pathsep.join(
+            filter(
+                None,
+                [os.fspath(hook_directory), environment.get("PYTHONPATH", "")],
+            )
+        )
+
+        result = self.run_admitter_with(
+            identity=self.identity,
+            environment=environment,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(marker.read_text(encoding="utf-8"), "directory fsynced\n")
+
+    def test_admission_reports_durability_uncertain_after_directory_fsync_failure(
+        self,
+    ) -> None:
+        candidate = self.encrypt(b"directory fsync failure fixture")
+        (self.root / "candidate.age").write_bytes(candidate)
+        sentinel = manifest_bytes([])
+        (self.root / MANIFEST).write_bytes(sentinel)
+        hook_directory = self.base / "directory-fsync-failure-hook"
+        hook_directory.mkdir()
+        sensitive_error = os.fspath(self.base / "private-directory-fsync-detail")
+        (hook_directory / "sitecustomize.py").write_text(
+            textwrap.dedent(
+                f"""
+                import os
+                import stat
+
+                _original_fsync = os.fsync
+
+                def _fsync(descriptor):
+                    if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+                        raise OSError({sensitive_error!r})
+                    return _original_fsync(descriptor)
+
+                os.fsync = _fsync
+                """
+            ),
+            encoding="utf-8",
+        )
+        environment = os.environ.copy()
+        environment["PYTHONPATH"] = os.pathsep.join(
+            filter(
+                None,
+                [os.fspath(hook_directory), environment.get("PYTHONPATH", "")],
+            )
+        )
+
+        result = self.run_admitter_with(
+            identity=self.identity,
+            environment=environment,
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(
+            result.stderr,
+            "age-envelope manifest durability uncertain\n",
+        )
+        self.assertNotIn(sensitive_error, result.stderr)
+        self.assertEqual(
+            (self.root / MANIFEST).read_bytes(),
+            manifest_bytes([("candidate.age", candidate)]),
+        )
+        self.assertEqual(list(self.root.glob(f"{MANIFEST}.*")), [])
+
     def test_scanner_rejects_a_case_confusable_age_suffix(self) -> None:
         data = self.encrypt(b"renamed ciphertext")
         (self.root / "candidate.AgE").write_bytes(data)
@@ -606,7 +767,11 @@ class PrivacyAgeEnvelopeTests(TestCase):
         error = PermissionError("private path")
 
         def failed_walk(*args: object, **kwargs: object) -> object:
-            callback = kwargs["onerror"]
+            callback = kwargs.get("onerror")
+            if callback is None and len(args) > 2:
+                callback = args[2]
+            self.assertIsNotNone(callback)
+            assert callable(callback)
             callback(error)
             return ()
 

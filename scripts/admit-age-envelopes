@@ -34,6 +34,10 @@ SKIPPED_DIRECTORIES = {".git"}
 _POSTQUANTUM_RECIPIENT = re.compile(rb"age1pq1[a-z0-9]+\n\Z", re.ASCII)
 
 
+class ManifestDurabilityUncertainError(AgeEnvelopeError):
+    """The new manifest is installed but its directory commit is unconfirmed."""
+
+
 def _is_within(path: Path, root: Path) -> bool:
     try:
         path.relative_to(root)
@@ -43,8 +47,8 @@ def _is_within(path: Path, root: Path) -> bool:
 
 
 def _validated_identities(raw_identities: list[Path], root: Path) -> list[int]:
-    if not raw_identities:
-        raise AgeEnvelopeError("at least one identity is required")
+    if len(raw_identities) != 1:
+        raise AgeEnvelopeError("v1 requires exactly one identity")
     identities: list[int] = []
     identity_objects: set[tuple[int, int]] = set()
     try:
@@ -59,7 +63,10 @@ def _validated_identities(raw_identities: list[Path], root: Path) -> list[int]:
 
             descriptor, info = open_regular_file_descriptor(lexical)
             try:
-                canonical_info = canonical.stat(follow_symlinks=False)
+                try:
+                    canonical_info = canonical.stat(follow_symlinks=False)
+                except OSError as error:
+                    raise AgeEnvelopeError("identity is unavailable") from error
                 identity_object = (info.st_dev, info.st_ino)
                 if not stat.S_ISREG(canonical_info.st_mode) or identity_object != (
                     canonical_info.st_dev,
@@ -185,6 +192,7 @@ def _decrypts_to_eof(age: str, identities: list[int], data: bytes) -> bool:
 def _replace_manifest(root: Path, data: bytes) -> None:
     descriptor: int | None = None
     temporary: Path | None = None
+    replaced = False
     try:
         descriptor, temporary_name = tempfile.mkstemp(
             dir=root,
@@ -196,10 +204,32 @@ def _replace_manifest(root: Path, data: bytes) -> None:
         with stream:
             stream.write(data)
             stream.flush()
+            temporary.chmod(0o644)
             os.fsync(stream.fileno())
-        temporary.chmod(0o644)
         os.replace(temporary, root / AGE_MANIFEST_NAME)
+        temporary = None
+        replaced = True
+        directory = os.open(
+            root,
+            os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+        )
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
     except OSError as error:
+        if replaced:
+            try:
+                installed = read_regular_file(
+                    root / AGE_MANIFEST_NAME,
+                    maximum=len(data),
+                )
+            except (AgeEnvelopeError, OSError):
+                installed = None
+            if installed == data:
+                raise ManifestDurabilityUncertainError(
+                    "manifest installed but directory durability is uncertain"
+                ) from error
         raise AgeEnvelopeError("manifest replacement failed") from error
     finally:
         if descriptor is not None:
@@ -226,7 +256,7 @@ def admit(root: Path, raw_identities: list[Path]) -> None:
         age = _validated_binary("age")
         age_keygen = _validated_binary("age-keygen")
         age_inspect = _validated_binary("age-inspect")
-        identity_recipients = _validated_identity_recipients(age_keygen, identities)
+        _validated_identity_recipients(age_keygen, identities)
         discovered = discover_age_files(root, skipped_directories=SKIPPED_DIRECTORIES)
 
         admitted: dict[str, str] = {}
@@ -238,7 +268,7 @@ def admit(root: Path, raw_identities: list[Path]) -> None:
             if not _has_authorized_postquantum_structure(
                 age_inspect,
                 data,
-                identity_count=len(identity_recipients),
+                identity_count=1,
             ):
                 raise AgeEnvelopeError("an envelope has an unauthorized recipient set")
             if not _decrypts_to_eof(age, identities, data):
@@ -258,6 +288,9 @@ def main() -> int:
     arguments = parser.parse_args()
     try:
         admit(arguments.root, arguments.identity)
+    except ManifestDurabilityUncertainError:
+        print("age-envelope manifest durability uncertain", file=sys.stderr)
+        return 2
     except AgeEnvelopeError:
         print("age-envelope admission failed", file=sys.stderr)
         return 1

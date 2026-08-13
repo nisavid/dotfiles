@@ -15,18 +15,24 @@ from scripts.agent_equipment_public_data import (
     string_looks_like_credential,
     string_looks_like_private_key,
 )
-from scripts.privacy_age_envelopes import canonical_manifest_bytes
 
 ROOT = Path(__file__).resolve().parent.parent
 
 
 def write_age_manifest(root: Path, paths: list[str]) -> None:
-    entries = {
-        relative: "sha256:" + hashlib.sha256((root / relative).read_bytes()).hexdigest()
-        for relative in paths
+    document = {
+        "version": "privacy-age-envelopes/v1",
+        "envelopes": [
+            {
+                "path": relative,
+                "sha256": "sha256:"
+                + hashlib.sha256((root / relative).read_bytes()).hexdigest(),
+            }
+            for relative in sorted(paths)
+        ],
     }
     (root / ".privacy-age-envelopes.json").write_bytes(
-        canonical_manifest_bytes(entries)
+        (json.dumps(document, ensure_ascii=True, indent=2) + "\n").encode("ascii")
     )
 
 
@@ -565,9 +571,10 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
             with self.subTest(document=document):
                 self.assertTrue(string_looks_like_credential(document))
 
+        authorization = "Author" + "ization"
         authorization_values = (
-            "Authorization: Bearer ${TOKEN}-actual-secret",
-            "Authorization: Basic ${TOKEN}-actual-secret",
+            authorization + ": Bear" + "er ${TOKEN}-actual-secret",
+            authorization + ": Bas" + "ic ${TOKEN}-actual-secret",
         )
         for value in authorization_values:
             with self.subTest(authorization=value.split(":", 1)[1]):
@@ -643,6 +650,104 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
             ],
         )
         self.assertTrue(all(value not in result.stdout for value in credentials))
+
+    def test_privacy_scan_rejects_credentials_in_python_comments_and_docstrings(
+        self,
+    ) -> None:
+        credential = "Bear" + "er " + "A" * 32
+        sources = {
+            "comment.py": "# Author" + "ization: " + credential + "\n",
+            "docstring.py": '"""Author' + "ization: " + credential + '"""\n',
+        }
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            for relative, source in sources.items():
+                (root / relative).write_text(source, encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts/privacy-scan"),
+                    "--root",
+                    str(root),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(
+            set(result.stdout.splitlines()),
+            {
+                "comment.py:1: [provider-token] review required",
+                "docstring.py:1: [provider-token] review required",
+            },
+        )
+        self.assertNotIn(credential, result.stdout + result.stderr)
+
+    def test_privacy_scan_rejects_a_credential_hidden_by_a_duplicate_json_member(
+        self,
+    ) -> None:
+        field = "to" + "ken"
+        credential = "actual-" + "secret-value"
+        document = '{"' + field + '":"' + credential + '","' + field + '":"${TOKEN}"}\n'
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "duplicate.json").write_text(document, encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts/privacy-scan"),
+                    "--root",
+                    str(root),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(
+            result.stdout,
+            "duplicate.json:1: [provider-token] review required\n",
+        )
+        self.assertNotIn(credential, result.stdout + result.stderr)
+
+    def test_privacy_scan_rejects_a_numeric_credential_field(self) -> None:
+        field = "pass" + "word"
+        token_field = "to" + "ken"
+        credential = "123456"
+        document = '{"' + field + '":' + credential + "}\n"
+        absent_document = '{"' + field + '":null,"' + token_field + '":false}\n'
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "numeric.json").write_text(document, encoding="utf-8")
+            (root / "absent.json").write_text(
+                absent_document,
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts/privacy-scan"),
+                    "--root",
+                    str(root),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(
+            "numeric.json:0: [provider-token] review required",
+            result.stdout,
+        )
+        self.assertNotIn("absent.json", result.stdout)
+        self.assertNotIn(credential, result.stdout + result.stderr)
 
     def test_privacy_scan_rejects_each_provider_credential_field_without_echoing_values(
         self,
@@ -942,6 +1047,92 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
         self.assertIn("nul.txt:1: [provider-token] review required", result.stdout)
         self.assertNotIn(credential, result.stdout + result.stderr)
 
+    def test_privacy_scan_scans_a_dot_git_file_but_prunes_dot_git_directories(
+        self,
+    ) -> None:
+        credential = "gh" + "p_" + "A" * 36
+        hidden_credential = "s" + "k-" + "B" * 24
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / ".git").write_text(credential + "\n", encoding="utf-8")
+            metadata = root / "nested/.git"
+            metadata.mkdir(parents=True)
+            (metadata / "hidden.txt").write_text(
+                hidden_credential + "\n",
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts/privacy-scan"),
+                    "--root",
+                    str(root),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(
+            result.stdout,
+            ".git:1: [provider-token] review required\n",
+        )
+        self.assertNotIn(credential, result.stdout + result.stderr)
+        self.assertNotIn(hidden_credential, result.stdout + result.stderr)
+
+    def test_privacy_scan_treats_an_exact_gitdir_pointer_as_git_metadata(self) -> None:
+        gitdir_pointer = (
+            "gitdir: /Users/" + "private-user/repository/.git/worktrees/fixture\n"
+        )
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / ".git").write_text(
+                gitdir_pointer,
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts/privacy-scan"),
+                    "--root",
+                    str(root),
+                    "--denylist",
+                    "-",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                input="private-user\n",
+            )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, "")
+
+        invalid_pointer = "gitdir: /Users/" + "private-user/not-a-worktree\n"
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / ".git").write_text(invalid_pointer, encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts/privacy-scan"),
+                    "--root",
+                    str(root),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, ".git:1: [user-home] review required\n")
+        self.assertNotIn("private-user", result.stdout + result.stderr)
+
     def test_privacy_scan_rejects_a_missing_or_non_directory_root(self) -> None:
         with TemporaryDirectory() as directory:
             base = Path(directory)
@@ -965,6 +1156,10 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
                     self.assertEqual(result.stdout, "")
                     self.assertEqual(result.stderr, "privacy scan failed\n")
 
+    @unittest.skipIf(
+        getattr(os, "geteuid", lambda: -1)() == 0,
+        "root can read mode-zero paths",
+    )
     def test_privacy_scan_fails_closed_for_unreadable_paths(self) -> None:
         with TemporaryDirectory() as directory:
             base = Path(directory)
@@ -1200,7 +1395,91 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertEqual(
             result.stdout,
-            "ciphertext.age:0: [invalid-age-envelope] review required\n",
+            "ciphertext.age:0: [age-parser-unavailable] review required\n",
+        )
+
+    def test_privacy_scan_fails_closed_when_age_parser_version_is_untrusted(
+        self,
+    ) -> None:
+        native_age = (ROOT / "home/.private-prd-01.toml.age").read_bytes()
+        with TemporaryDirectory() as directory:
+            base = Path(directory)
+            root = base / "repository"
+            root.mkdir()
+            (root / "ciphertext.age").write_bytes(native_age)
+            write_age_manifest(root, ["ciphertext.age"])
+            fake_bin = base / "bin"
+            fake_bin.mkdir()
+            parser = fake_bin / "age-inspect"
+            parser.write_text(
+                "#!/bin/sh\nprintf '%s\\n' v9.9.9\n",
+                encoding="utf-8",
+            )
+            parser.chmod(0o755)
+            environment = os.environ.copy()
+            environment["PATH"] = os.fspath(fake_bin)
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts/privacy-scan"),
+                    "--root",
+                    str(root),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(
+            result.stdout,
+            "ciphertext.age:0: [age-parser-unavailable] review required\n",
+        )
+
+    def test_privacy_scan_fails_closed_when_age_parser_times_out(self) -> None:
+        native_age = (ROOT / "home/.private-prd-01.toml.age").read_bytes()
+        with TemporaryDirectory() as directory:
+            base = Path(directory)
+            root = base / "repository"
+            root.mkdir()
+            (root / "ciphertext.age").write_bytes(native_age)
+            write_age_manifest(root, ["ciphertext.age"])
+            fake_bin = base / "bin"
+            fake_bin.mkdir()
+            parser = fake_bin / "age-inspect"
+            parser.write_text(
+                "#!/bin/sh\n"
+                'if [ "$1" = --version ]; then\n'
+                "  printf '%s\\n' v1.3.1\n"
+                "  exit 0\n"
+                "fi\n"
+                "exec /bin/sleep 30\n",
+                encoding="utf-8",
+            )
+            parser.chmod(0o755)
+            environment = os.environ.copy()
+            environment["PATH"] = os.fspath(fake_bin)
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts/privacy-scan"),
+                    "--root",
+                    str(root),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+                timeout=10,
+            )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(
+            result.stdout,
+            "ciphertext.age:0: [age-parser-unavailable] review required\n",
         )
 
     def test_privacy_scan_rejects_oversized_age_input_before_parsing(self) -> None:

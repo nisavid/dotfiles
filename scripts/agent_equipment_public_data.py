@@ -446,8 +446,19 @@ def _parsed_json_contains_literal_credential(value: str) -> bool:
     stripped = value.lstrip()
     if not stripped.startswith(("{", "[")):
         return False
+    credential_occurrence = False
+
+    def object_from_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        nonlocal credential_occurrence
+        credential_occurrence = credential_occurrence or any(
+            contains_literal_credential({key: member}) for key, member in pairs
+        )
+        return dict(pairs)
+
     try:
-        document, end = json.JSONDecoder().raw_decode(stripped)
+        document, end = json.JSONDecoder(
+            object_pairs_hook=object_from_pairs,
+        ).raw_decode(stripped)
     except (TypeError, ValueError):
         return False
     if (
@@ -455,7 +466,7 @@ def _parsed_json_contains_literal_credential(value: str) -> bool:
         or re.fullmatch(r"[\s,;)}\]]*", stripped[end:]) is None
     ):
         return False
-    return contains_literal_credential(document)
+    return credential_occurrence or contains_literal_credential(document)
 
 
 def _parsed_toml_contains_literal_credential(value: str) -> bool:
@@ -925,8 +936,8 @@ def string_looks_like_credential(value: str) -> bool:
     if _parsed_json_contains_literal_credential(candidate):
         return True
     python_result = _parsed_python_credential_result(candidate)
-    if python_result is not None:
-        return python_result
+    if python_result:
+        return True
     return (
         _parsed_toml_contains_literal_credential(candidate)
         or _direct_context_contains_literal_credential(candidate)
@@ -973,4 +984,6 @@ def contains_literal_credential(document: object) -> bool:
                 continue
             seen.add(identity)
             pending.extend((member, credential_context) for member in value)
+        elif credential_context and value is not None and type(value) is not bool:
+            return True
     return False

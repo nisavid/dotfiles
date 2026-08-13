@@ -59,6 +59,10 @@ def valid_apply_authorization() -> dict[str, object]:
     plan_action_set = valid_plan_action_set()
     prepared_authorities = valid_prepared_action_authority_set(plan_action_set)
     captured_state = valid_captured_state(plan_action_set)
+    capture_observation_authorities = valid_capture_observation_authority_set(
+        plan_action_set,
+        captured_state,
+    )
     first_action = plan_action_set["actions"][0]["action_payload"]
     return {
         "schema_version": "agent-equipment-apply-authorization/v1",
@@ -89,6 +93,12 @@ def valid_apply_authorization() -> dict[str, object]:
             ],
             "captured_state_identity": "capture:fixture/run-v1",
             "captured_state_digest": canonical_digest(captured_state),
+            "capture_observation_authority_set_identity": (
+                capture_observation_authorities["authority_set_identity"]
+            ),
+            "capture_observation_authority_set_digest": (
+                capture_observation_authorities["authority_set_digest"]
+            ),
             "expected_case_manifest_digest": DIGEST_B,
             "operator_review_package_digest": DIGEST_C,
         },
@@ -350,6 +360,80 @@ def valid_prepared_action_authority_set(
     return document
 
 
+def valid_capture_observations(
+    plan_action_set: dict[str, object] | None = None,
+    captured_state: dict[str, object] | None = None,
+) -> list[dict[str, object]]:
+    plan_action_set = plan_action_set or valid_plan_action_set()
+    captured_state = captured_state or valid_captured_state(plan_action_set)
+    captured_state_digest = canonical_digest(captured_state)
+    observations = []
+    for evidence in plan_action_set["actions"]:
+        action = evidence["action_payload"]
+        pre_state = normalized_state(present=False)
+        observations.append(
+            {
+                "action_identity": action["action_identity"],
+                "ordinal": action["ordinal"],
+                "captured_state_identity": "capture:fixture/run-v1",
+                "captured_state_digest": captured_state_digest,
+                "surface": copy.deepcopy(action["surface_scope"]),
+                "controlled_equipment_identities": copy.deepcopy(
+                    action["controlled_equipment_identities"]
+                ),
+                "normalized_pre_state": pre_state,
+                "normalized_pre_state_digest": canonical_digest(pre_state),
+            }
+        )
+    return observations
+
+
+def valid_capture_observation_authority_set(
+    plan_action_set: dict[str, object] | None = None,
+    captured_state: dict[str, object] | None = None,
+) -> dict[str, object]:
+    plan_action_set = plan_action_set or valid_plan_action_set()
+    captured_state = captured_state or valid_captured_state(plan_action_set)
+    document: dict[str, object] = {
+        "schema_version": "agent-equipment-capture-observation-authority-set/v1",
+        "authority_set_identity": (
+            "capture-observation-authority-set:sha256:" + "0" * 64
+        ),
+        "bindings": {
+            "candidate_identity": plan_action_set["candidate_identity"],
+            "implementation_manifest_digest": plan_action_set[
+                "implementation_manifest_digest"
+            ],
+            "plan_digest": plan_action_set["plan_digest"],
+            "plan_action_set_digest": plan_action_set["action_set_digest"],
+            "capability_set_digest": captured_state["bindings"][
+                "capability_set_digest"
+            ],
+            "captured_state_identity": "capture:fixture/run-v1",
+            "captured_state_digest": canonical_digest(captured_state),
+        },
+        "observations": valid_capture_observations(
+            plan_action_set,
+            captured_state,
+        ),
+        "authority_set_digest": DIGEST_A,
+    }
+    seal_capture_observation_authority_set(document)
+    return document
+
+
+def seal_capture_observation_authority_set(document: dict[str, object]) -> None:
+    identity_payload = copy.deepcopy(document)
+    identity_payload.pop("authority_set_identity", None)
+    identity_payload.pop("authority_set_digest", None)
+    document["authority_set_identity"] = (
+        "capture-observation-authority-set:" + canonical_digest(identity_payload)
+    )
+    digest_payload = copy.deepcopy(document)
+    digest_payload.pop("authority_set_digest", None)
+    document["authority_set_digest"] = canonical_digest(digest_payload)
+
+
 def valid_checkpoint_record(
     ordinal: int = 0,
     plan_action_set: dict[str, object] | None = None,
@@ -445,12 +529,26 @@ def checkpoint_authority_inputs(
     plan_action_set: dict[str, object] | None = None,
 ) -> dict[str, object]:
     plan_action_set = plan_action_set or valid_plan_action_set()
+    apply_authorization = valid_apply_authorization()
+    apply_bindings = apply_authorization["bindings"]
+    assert isinstance(apply_bindings, dict)
     capture = valid_captured_state(plan_action_set)
+    capture_observation_authorities = valid_capture_observation_authority_set(
+        plan_action_set,
+        capture,
+    )
     prepared = valid_prepared_action_authority_set(plan_action_set)
     return {
         "authoritative_captured_state": capture,
         "expected_captured_state_identity": "capture:fixture/run-v1",
         "expected_captured_state_digest": canonical_digest(capture),
+        "capture_observation_authority_set": capture_observation_authorities,
+        "expected_capture_observation_authority_set_identity": (
+            apply_bindings["capture_observation_authority_set_identity"]
+        ),
+        "expected_capture_observation_authority_set_digest": (
+            apply_bindings["capture_observation_authority_set_digest"]
+        ),
         "prepared_action_authority_set": prepared,
         "expected_prepared_action_authority_set_identity": prepared[
             "authority_set_identity"
@@ -472,10 +570,21 @@ def prepared_validation_inputs(
         prepared_action_authority_set
         or valid_prepared_action_authority_set(plan_action_set)
     )
+    capture_observation_authorities = valid_capture_observation_authority_set(
+        plan_action_set,
+        captured_state,
+    )
     return {
         "authoritative_captured_state": captured_state,
         "expected_captured_state_identity": "capture:fixture/run-v1",
         "expected_captured_state_digest": canonical_digest(captured_state),
+        "capture_observation_authority_set": capture_observation_authorities,
+        "expected_capture_observation_authority_set_identity": (
+            capture_observation_authorities["authority_set_identity"]
+        ),
+        "expected_capture_observation_authority_set_digest": (
+            capture_observation_authorities["authority_set_digest"]
+        ),
         "authoritative_plan_action_set": plan_action_set,
         "expected_plan_action_set_digest": plan_action_set["action_set_digest"],
         "expected_candidate_identity": plan_action_set["candidate_identity"],
@@ -793,6 +902,7 @@ def valid_release_archive_manifest() -> dict[str, object]:
     checkpoint_set = valid_checkpoint_set_manifest()
     run_terminal = valid_run_terminal_record(checkpoint_set)
     prepared = valid_prepared_action_authority_set()
+    capture_observation_authorities = valid_capture_observation_authority_set()
     payload = {
         "candidate_identity": authorization["bindings"]["candidate_identity"],
         "implementation_manifest_digest": authorization["bindings"][
@@ -814,6 +924,9 @@ def valid_release_archive_manifest() -> dict[str, object]:
         },
         "archived_document_byte_digests": {
             "apply_authorization_bytes_digest": DIGEST_D,
+            "capture_observation_authority_set_bytes_digest": byte_digest(
+                canonical_bytes(capture_observation_authorities)
+            ),
             "prepared_action_authority_set_bytes_digest": byte_digest(
                 canonical_bytes(prepared)
             ),
@@ -927,11 +1040,15 @@ def release_validation_inputs(
     assert isinstance(destination, dict)
     byte_digests = copy.deepcopy(payload["archived_document_byte_digests"])
     byte_digests.pop("checkpoint_set_manifest_bytes_digest")
+    byte_digests.pop("capture_observation_authority_set_bytes_digest")
     byte_digests.pop("prepared_action_authority_set_bytes_digest")
     byte_digests.pop("run_terminal_record_bytes_digest")
     return {
         "checkpoint_set_manifest": checkpoint_set,
         "checkpoint_set_manifest_bytes": canonical_bytes(checkpoint_set),
+        "capture_observation_authority_set_bytes": canonical_bytes(
+            valid_capture_observation_authority_set()
+        ),
         "prepared_action_authority_set_bytes": canonical_bytes(
             valid_prepared_action_authority_set()
         ),
@@ -990,6 +1107,182 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
         candidate["bindings"]["unreviewed_digest"] = DIGEST_C
         self.assertFalse(self.validate(candidate))
 
+    def test_capture_observation_authority_is_closed_and_apply_bound(self) -> None:
+        authority_set = valid_capture_observation_authority_set()
+        authorization = valid_apply_authorization()
+
+        self.assertTrue(self.validate(authority_set))
+        self.assertEqual(
+            authorization["bindings"]["capture_observation_authority_set_identity"],
+            authority_set["authority_set_identity"],
+        )
+        self.assertEqual(
+            authorization["bindings"]["capture_observation_authority_set_digest"],
+            authority_set["authority_set_digest"],
+        )
+        self.assertTrue(self.validate(authorization))
+
+        for field in tuple(authority_set):
+            with self.subTest(field=field):
+                candidate = copy.deepcopy(authority_set)
+                del candidate[field]
+                self.assertFalse(self.validate(candidate))
+
+        candidate = copy.deepcopy(authority_set)
+        candidate["bindings"]["unreviewed_digest"] = DIGEST_C
+        self.assertFalse(self.validate(candidate))
+
+    def test_capture_observation_reseal_cannot_escape_apply_authority(self) -> None:
+        plan_action_set = valid_plan_action_set()
+        captured_state = valid_captured_state(plan_action_set)
+        authority_set = valid_capture_observation_authority_set(
+            plan_action_set,
+            captured_state,
+        )
+        authorization = valid_apply_authorization()
+        inputs = {
+            "authoritative_plan_action_set": plan_action_set,
+            "expected_authority_set_identity": authorization["bindings"][
+                "capture_observation_authority_set_identity"
+            ],
+            "expected_authority_set_digest": authorization["bindings"][
+                "capture_observation_authority_set_digest"
+            ],
+            "expected_candidate_identity": plan_action_set["candidate_identity"],
+            "expected_implementation_manifest_digest": plan_action_set[
+                "implementation_manifest_digest"
+            ],
+            "expected_plan_digest": plan_action_set["plan_digest"],
+            "expected_plan_action_set_digest": plan_action_set["action_set_digest"],
+            "expected_capability_set_digest": captured_state["bindings"][
+                "capability_set_digest"
+            ],
+            "expected_captured_state_identity": "capture:fixture/run-v1",
+            "expected_captured_state_digest": canonical_digest(captured_state),
+        }
+        self.assertEqual(
+            EXECUTION_AUTHORITY.validate_capture_observation_authority_set(
+                authority_set,
+                **inputs,
+            ),
+            (),
+        )
+
+        forged = copy.deepcopy(authority_set)
+        forged_pre_state = forged["observations"][0]["normalized_pre_state"]
+        forged_pre_state["route_presence"] = "unknown"
+        forged["observations"][0]["normalized_pre_state_digest"] = canonical_digest(
+            forged_pre_state
+        )
+        seal_capture_observation_authority_set(forged)
+        diagnostics = EXECUTION_AUTHORITY.validate_capture_observation_authority_set(
+            forged,
+            **inputs,
+        )
+        self.assertIn(
+            "CAPTURE_OBSERVATION_AUTHORITY_TRUST_MISMATCH",
+            {diagnostic.code for diagnostic in diagnostics},
+        )
+
+        trusted_apply = valid_apply_authorization()
+        seal_apply_authorization(trusted_apply)
+        trusted_apply_inputs = apply_validation_inputs(trusted_apply)
+        forged_apply = copy.deepcopy(trusted_apply)
+        forged_apply["bindings"]["capture_observation_authority_set_digest"] = forged[
+            "authority_set_digest"
+        ]
+        seal_apply_authorization(forged_apply)
+        forged_apply_codes = {
+            diagnostic.code
+            for diagnostic in EXECUTION_AUTHORITY.validate_apply_authorization(
+                forged_apply,
+                **trusted_apply_inputs,
+            )
+        }
+        self.assertIn("APPLY_AUTHORIZATION_TRUST_MISMATCH", forged_apply_codes)
+        self.assertIn("APPLY_AUTHORIZATION_DIGEST_MISMATCH", forged_apply_codes)
+        self.assertIn("APPLY_AUTHORIZATION_BINDING_MISMATCH", forged_apply_codes)
+
+    def test_capture_observation_authority_rejects_partial_raw_and_secret_inputs(
+        self,
+    ) -> None:
+        plan_action_set = valid_plan_action_set()
+        captured_state = valid_captured_state(plan_action_set)
+        authority_set = valid_capture_observation_authority_set(
+            plan_action_set,
+            captured_state,
+        )
+        inputs = {
+            "authoritative_plan_action_set": plan_action_set,
+            "expected_authority_set_identity": authority_set["authority_set_identity"],
+            "expected_authority_set_digest": authority_set["authority_set_digest"],
+            "expected_candidate_identity": plan_action_set["candidate_identity"],
+            "expected_implementation_manifest_digest": plan_action_set[
+                "implementation_manifest_digest"
+            ],
+            "expected_plan_digest": plan_action_set["plan_digest"],
+            "expected_plan_action_set_digest": plan_action_set["action_set_digest"],
+            "expected_capability_set_digest": captured_state["bindings"][
+                "capability_set_digest"
+            ],
+            "expected_captured_state_identity": "capture:fixture/run-v1",
+            "expected_captured_state_digest": canonical_digest(captured_state),
+        }
+
+        raw_diagnostics = (
+            EXECUTION_AUTHORITY.validate_capture_observation_authority_set(
+                authority_set["observations"],
+                **inputs,
+            )
+        )
+        self.assertEqual(
+            [diagnostic.code for diagnostic in raw_diagnostics],
+            ["CAPTURE_OBSERVATION_AUTHORITY_SCHEMA_INVALID"],
+        )
+
+        missing = copy.deepcopy(authority_set)
+        missing["observations"].pop()
+        seal_capture_observation_authority_set(missing)
+        missing_codes = {
+            diagnostic.code
+            for diagnostic in EXECUTION_AUTHORITY.validate_capture_observation_authority_set(
+                missing,
+                **inputs,
+            )
+        }
+        self.assertIn("CAPTURE_OBSERVATION_AUTHORITY_MEMBERSHIP_INVALID", missing_codes)
+
+        reordered = copy.deepcopy(authority_set)
+        reordered["observations"].reverse()
+        seal_capture_observation_authority_set(reordered)
+        reordered_codes = {
+            diagnostic.code
+            for diagnostic in EXECUTION_AUTHORITY.validate_capture_observation_authority_set(
+                reordered,
+                **inputs,
+            )
+        }
+        self.assertIn(
+            "CAPTURE_OBSERVATION_AUTHORITY_MEMBERSHIP_INVALID",
+            reordered_codes,
+        )
+
+        secret = copy.deepcopy(authority_set)
+        secret["observations"][0]["normalized_pre_state"]["manager_drift"][
+            "reviewed_baseline"
+        ] = "ghp_" + "A" * 36
+        seal_capture_observation_authority_set(secret)
+        secret_diagnostics = (
+            EXECUTION_AUTHORITY.validate_capture_observation_authority_set(
+                secret,
+                **inputs,
+            )
+        )
+        self.assertEqual(
+            [diagnostic.code for diagnostic in secret_diagnostics],
+            ["CAPTURE_OBSERVATION_AUTHORITY_LITERAL_SECRET"],
+        )
+
     def test_apply_authorization_identity_and_operator_review_are_semantic_authority(
         self,
     ) -> None:
@@ -997,11 +1290,11 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
         trusted_digest = seal_apply_authorization(authorization)
         self.assertEqual(
             authorization["authorization_identity"],
-            "apply-authorization:sha256:374b8ce1e40136e8cadf00edbd707c7da87db5d80e5542d2a46c019722e04ee6",
+            "apply-authorization:sha256:7efe1cc1915c066a43e085365de9bfa972f12268a776af121eaadbd2fdb80b9e",
         )
         self.assertEqual(
             trusted_digest,
-            "sha256:68ec96a355b8bad78b142aa9df28bbdeeb6879a6b7069df2b29dfe785d10fad0",
+            "sha256:8a32cd6b574c1b43deeb7e995cffb6f1ff084e5e489a401e8438826683a9e871",
         )
 
         diagnostics = EXECUTION_AUTHORITY.validate_apply_authorization(
@@ -1108,6 +1401,18 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
             "capture": lambda candidate: candidate["bindings"].update(
                 {"captured_state_digest": DIGEST_B}
             ),
+            "capture observation authority identity": lambda candidate: candidate[
+                "bindings"
+            ].update(
+                {
+                    "capture_observation_authority_set_identity": (
+                        "capture-observation-authority-set:sha256:" + "9" * 64
+                    )
+                }
+            ),
+            "capture observation authority digest": lambda candidate: candidate[
+                "bindings"
+            ].update({"capture_observation_authority_set_digest": DIGEST_D}),
             "expected cases": lambda candidate: candidate["bindings"].update(
                 {"expected_case_manifest_digest": DIGEST_A}
             ),
@@ -1255,6 +1560,32 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
             (),
         )
 
+        resealed_observations = copy.deepcopy(
+            trusted_inputs["capture_observation_authority_set"]
+        )
+        resealed_observations["observations"][0]["normalized_pre_state"][
+            "route_presence"
+        ] = "unknown"
+        resealed_observations["observations"][0]["normalized_pre_state_digest"] = (
+            canonical_digest(
+                resealed_observations["observations"][0]["normalized_pre_state"]
+            )
+        )
+        seal_capture_observation_authority_set(resealed_observations)
+        stale_observation_digest_inputs = dict(trusted_inputs)
+        stale_observation_digest_inputs["capture_observation_authority_set"] = (
+            resealed_observations
+        )
+        self.assertIn(
+            "CAPTURE_OBSERVATION_AUTHORITY_TRUST_MISMATCH",
+            {
+                diagnostic.code
+                for diagnostic in EXECUTION_AUTHORITY.validate_prepared_action_authority_set(
+                    prepared, **stale_observation_digest_inputs
+                )
+            },
+        )
+
         missing = copy.deepcopy(prepared)
         missing["authorities"].pop()
         seal_prepared_action_authority_set(missing)
@@ -1311,12 +1642,33 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
         )
         seal_prepared_action_authority(coordinated_authority)
         seal_prepared_action_authority_set(coordinated_reseal)
+        coordinated_capture_authorities = copy.deepcopy(
+            trusted_inputs["capture_observation_authority_set"]
+        )
+        coordinated_observation = coordinated_capture_authorities["observations"][0]
+        coordinated_observation["normalized_pre_state"] = copy.deepcopy(
+            coordinated_authority["captured_pre_state"]
+        )
+        coordinated_observation["normalized_pre_state_digest"] = canonical_digest(
+            coordinated_observation["normalized_pre_state"]
+        )
+        seal_capture_observation_authority_set(coordinated_capture_authorities)
+        coordinated_inputs = dict(trusted_inputs)
+        coordinated_inputs["capture_observation_authority_set"] = (
+            coordinated_capture_authorities
+        )
+        coordinated_inputs["expected_prepared_action_authority_set_identity"] = (
+            coordinated_reseal["authority_set_identity"]
+        )
+        coordinated_inputs["expected_prepared_action_authority_set_digest"] = (
+            coordinated_reseal["authority_set_digest"]
+        )
         self.assertIn(
-            "PREPARED_ACTION_AUTHORITY_INVALID",
+            "CAPTURE_OBSERVATION_AUTHORITY_TRUST_MISMATCH",
             {
                 diagnostic.code
                 for diagnostic in EXECUTION_AUTHORITY.validate_prepared_action_authority_set(
-                    coordinated_reseal, **trusted_inputs
+                    coordinated_reseal, **coordinated_inputs
                 )
             },
         )
@@ -2126,6 +2478,47 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
             (),
         )
 
+        generation_only_snapshots = copy.deepcopy(original_snapshots)
+        generation_only_snapshots[1]["durable_generation"] += 1
+        same_store_generation_manifest = valid_checkpoint_set_manifest(
+            generation_only_snapshots,
+            store_generation=original_manifest["checkpoint_store_generation"],
+        )
+        same_store_generation_inputs = public_recovery_validation_inputs(
+            authorization,
+            original_manifest,
+            original_snapshots,
+            same_store_generation_manifest,
+            generation_only_snapshots,
+        )
+        self.assertIn(
+            "COMPENSATION_RECOVERY_DESCENDANT_MISMATCH",
+            {
+                diagnostic.code
+                for diagnostic in EXECUTION_AUTHORITY.validate_public_compensation_recovery(
+                    authorization, **same_store_generation_inputs
+                )
+            },
+        )
+
+        advanced_store_generation_manifest = valid_checkpoint_set_manifest(
+            generation_only_snapshots,
+            store_generation=original_manifest["checkpoint_store_generation"] + 1,
+        )
+        advanced_store_generation_inputs = public_recovery_validation_inputs(
+            authorization,
+            original_manifest,
+            original_snapshots,
+            advanced_store_generation_manifest,
+            generation_only_snapshots,
+        )
+        self.assertEqual(
+            EXECUTION_AUTHORITY.validate_public_compensation_recovery(
+                authorization, **advanced_store_generation_inputs
+            ),
+            (),
+        )
+
         prepared_started_snapshots = copy.deepcopy(original_snapshots)
         prepared_started_record = prepared_started_snapshots[1]["record"]
         assert isinstance(prepared_started_record, dict)
@@ -2308,6 +2701,7 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
         record["phase_history"] = ["prepared", "completed", "compensating"]
         record["compensation_authority_kind"] = "none"
         manifest = valid_checkpoint_set_manifest(snapshots)
+        self.assertFalse(self.validate(manifest))
         authorization = valid_compensation_authorization(manifest)
         inputs = compensation_validation_inputs(authorization, manifest, snapshots)
         codes = {
@@ -2316,7 +2710,73 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
                 authorization, **inputs
             )
         }
-        self.assertIn("CHECKPOINT_SET_MEMBERSHIP_MISMATCH", codes)
+        self.assertIn("CHECKPOINT_SET_SCHEMA_INVALID", codes)
+
+    def test_authority_validators_reject_malformed_trusted_checkpoint_collections(
+        self,
+    ) -> None:
+        authorization = valid_compensation_authorization()
+        compensation_inputs = compensation_validation_inputs(authorization)
+        release_inputs = release_validation_inputs()
+        terminal = release_inputs["run_terminal_record"]
+        terminal_input_fields = {
+            "checkpoint_set_manifest",
+            "expected_apply_authorization_identity",
+            "expected_apply_authorization_digest",
+            "expected_execution_domain_identity",
+            "expected_execution_nonce",
+            "expected_run_identity",
+            "authoritative_plan_action_set",
+            "expected_plan_action_set_digest",
+            "expected_candidate_identity",
+            "expected_implementation_manifest_digest",
+            "expected_plan_digest",
+            "trusted_checkpoint_store_generation",
+            "trusted_checkpoint_records",
+            "authoritative_captured_state",
+            "expected_captured_state_identity",
+            "expected_captured_state_digest",
+            "capture_observation_authority_set",
+            "expected_capture_observation_authority_set_identity",
+            "expected_capture_observation_authority_set_digest",
+            "prepared_action_authority_set",
+            "expected_prepared_action_authority_set_identity",
+            "expected_prepared_action_authority_set_digest",
+        }
+        terminal_inputs = {
+            key: value
+            for key, value in release_inputs.items()
+            if key in terminal_input_fields
+        }
+
+        for malformed_records in (object(), "not-a-checkpoint-sequence"):
+            with self.subTest(
+                validator="compensation",
+                records_type=type(malformed_records).__name__,
+            ):
+                malformed_inputs = dict(compensation_inputs)
+                malformed_inputs["trusted_checkpoint_records"] = malformed_records
+                diagnostics = EXECUTION_AUTHORITY.validate_compensation_authorization(
+                    authorization, **malformed_inputs
+                )
+                self.assertIn(
+                    "CHECKPOINT_SET_MEMBERSHIP_MISMATCH",
+                    {diagnostic.code for diagnostic in diagnostics},
+                )
+
+            with self.subTest(
+                validator="terminal",
+                records_type=type(malformed_records).__name__,
+            ):
+                malformed_inputs = dict(terminal_inputs)
+                malformed_inputs["trusted_checkpoint_records"] = malformed_records
+                diagnostics = EXECUTION_AUTHORITY.validate_run_terminal_record(
+                    terminal, **malformed_inputs
+                )
+                self.assertIn(
+                    "CHECKPOINT_SET_MEMBERSHIP_MISMATCH",
+                    {diagnostic.code for diagnostic in diagnostics},
+                )
 
     def test_raw_authority_boundary_rejects_ambiguous_or_unbounded_input(self) -> None:
         authorization = valid_apply_authorization()
@@ -2602,7 +3062,14 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
         )
         self.assertEqual(archive_diagnostics, ())
 
+        missing_capture_bytes_digest = copy.deepcopy(archive)
+        del missing_capture_bytes_digest["payload"]["archived_document_byte_digests"][
+            "capture_observation_authority_set_bytes_digest"
+        ]
+        self.assertFalse(self.validate(missing_capture_bytes_digest))
+
         for field, malformed_bytes in (
+            ("capture_observation_authority_set_bytes", b"{}"),
             ("prepared_action_authority_set_bytes", "not-bytes"),
             ("checkpoint_set_manifest_bytes", bytearray(b"{}")),
             ("run_terminal_record_bytes", memoryview(b"{}")),
@@ -2625,6 +3092,17 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
             receipt, **receipt_inputs
         )
         self.assertEqual(receipt_diagnostics, ())
+        malformed_receipt_inputs = dict(receipt_inputs)
+        malformed_receipt_inputs["capture_observation_authority_set_bytes"] = b"{}"
+        receipt_codes = {
+            diagnostic.code
+            for diagnostic in EXECUTION_AUTHORITY.validate_release_receipt(
+                receipt,
+                **malformed_receipt_inputs,
+            )
+        }
+        self.assertIn("RELEASE_EVIDENCE_BYTES_MISMATCH", receipt_codes)
+        self.assertIn("ARCHIVED_DOCUMENT_BYTES_MISMATCH", receipt_codes)
 
         incomplete_inputs = dict(release_inputs)
         incomplete_inputs["trusted_checkpoint_records"] = release_inputs[

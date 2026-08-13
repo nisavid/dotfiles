@@ -136,6 +136,11 @@ and per-action operation and compensation context before apply authority is
 issued.
 _Avoid_: Caller state map, partial checkpoint prefix, post-mutation observation
 
+**Capture observation authority set**:
+The sealed, complete normalized pre-state projection for every action in one
+captured plan. Its exact identity and digest are granted by apply authority.
+_Avoid_: Raw observation list, caller state map, self-authenticating capture
+
 **Execution nonce**:
 The issuer-generated one-time identity that prevents one apply authorization
 from starting another run.

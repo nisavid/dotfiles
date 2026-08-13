@@ -52,6 +52,9 @@ RELATIVE_HOME_PATH = re.compile(
     r"(?:^Users|/(?:Users|home))/([A-Za-z0-9._-]+)(?:/[^\s\"'<>]*)?"
 )
 MAC_ADDRESS = re.compile(r"(?i)(?<![0-9a-f])(?:[0-9a-f]{2}:){5}[0-9a-f]{2}(?![0-9a-f])")
+GITDIR_POINTER = re.compile(
+    r"gitdir: (?:[^\r\n]*/)?\.git/worktrees/[^/\r\n]+(?:\r?\n)?\Z"
+)
 
 
 class PublicScanError(RuntimeError):
@@ -88,8 +91,6 @@ def files(root: Path) -> Iterable[Path]:
                 retained_directories.append(name)
             directory_names[:] = retained_directories
             for name in file_names:
-                if name == ".git":
-                    continue
                 path = current_path / name
                 yield path
     except OSError as error:
@@ -138,7 +139,14 @@ def public_text_views(data: bytes) -> tuple[str, ...]:
     views = [data.decode("utf-8", "surrogateescape")]
     if b"\0" in data:
         views.append(data.replace(b"\0", b"").decode("utf-8", "surrogateescape"))
-        for encoding in ("utf-16", "utf-16-le", "utf-16-be", "utf-32", "utf-32-le", "utf-32-be"):
+        for encoding in (
+            "utf-16",
+            "utf-16-le",
+            "utf-16-be",
+            "utf-32",
+            "utf-32-le",
+            "utf-32-be",
+        ):
             try:
                 views.append(data.decode(encoding))
             except (UnicodeError, ValueError):
@@ -175,12 +183,14 @@ def structured_document_contains_credential(path: Path, text: str) -> bool:
     return contains_literal_credential(document)
 
 
-def is_age_envelope(data: bytes) -> bool:
-    """Return whether exact ciphertext satisfies the hosted recipient policy."""
+def age_envelope_finding(data: bytes) -> str | None:
+    """Return any exact-ciphertext or parser finding for the hosted policy."""
 
     parser = shutil.which("age-inspect")
-    if parser is None or len(data) > MAX_PUBLIC_FILE_BYTES:
-        return False
+    if parser is None:
+        return "age-parser-unavailable"
+    if len(data) > MAX_PUBLIC_FILE_BYTES:
+        return "invalid-age-envelope"
     try:
         version = subprocess.run(
             [parser, "--version"],
@@ -188,10 +198,11 @@ def is_age_envelope(data: bytes) -> bool:
             capture_output=True,
             timeout=AGE_INSPECT_TIMEOUT_SECONDS,
         )
-        if version.returncode != 0 or version.stdout.strip() != AGE_VERSION.encode(
-            "ascii"
-        ):
-            return False
+    except (OSError, subprocess.TimeoutExpired):
+        return "age-parser-unavailable"
+    if version.returncode != 0 or version.stdout.strip() != AGE_VERSION.encode("ascii"):
+        return "age-parser-unavailable"
+    try:
         result = subprocess.run(
             [parser, "--json", "-"],
             check=False,
@@ -201,17 +212,19 @@ def is_age_envelope(data: bytes) -> bool:
             timeout=AGE_INSPECT_TIMEOUT_SECONDS,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return False
+        return "age-parser-unavailable"
     if result.returncode != 0 or len(result.stdout) > MAX_AGE_INSPECTION_BYTES:
-        return False
+        return "invalid-age-envelope"
     try:
         document = json.loads(result.stdout)
     except (UnicodeError, json.JSONDecodeError):
-        return False
-    return age_inspection_has_exact_postquantum_stanzas(
+        return "invalid-age-envelope"
+    if not age_inspection_has_exact_postquantum_stanzas(
         document,
         stanza_count=EXPECTED_AGE_RECIPIENT_STANZAS,
-    )
+    ):
+        return "invalid-age-envelope"
+    return None
 
 
 def exact_terms(source: str | None) -> tuple[str, ...]:
@@ -332,6 +345,25 @@ def sensitive_age_text_rules(
     return tuple(rules)
 
 
+def sensitive_file_text_rules(
+    relative: str,
+    value: str,
+    denylist: tuple[str, ...],
+    *,
+    age_shaped: bool,
+) -> tuple[str, ...]:
+    """Return rules while treating an exact root gitfile pointer as metadata."""
+
+    if age_shaped:
+        return sensitive_age_text_rules(value, denylist)
+    rules = sensitive_text_rules(value, denylist)
+    if relative == ".git" and GITDIR_POINTER.fullmatch(value):
+        return tuple(
+            rule for rule in rules if rule not in {"exact-denylist", "user-home"}
+        )
+    return rules
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, default=Path.cwd())
@@ -381,7 +413,12 @@ def main() -> int:
         discovered = {}
         inventory_is_valid = False
     manifest_exists = os.path.lexists(root / AGE_MANIFEST_NAME)
-    if discovered or age_candidates or manifest_exists or arguments.require_age_manifest:
+    if (
+        discovered
+        or age_candidates
+        or manifest_exists
+        or arguments.require_age_manifest
+    ):
         try:
             admitted = load_manifest(root)
         except AgeEnvelopeError:
@@ -435,12 +472,11 @@ def main() -> int:
                 findings.append((public_relative, 0, "invalid-age-envelope"))
                 continue
             digest = "sha256:" + hashlib.sha256(age_data).hexdigest()
-            if (
-                admitted is None
-                or admitted.get(relative) != digest
-                or not is_age_envelope(age_data)
-            ):
+            if admitted is None or admitted.get(relative) != digest:
                 findings.append((public_relative, 0, "invalid-age-envelope"))
+            envelope_finding = age_envelope_finding(age_data)
+            if envelope_finding is not None:
+                findings.append((public_relative, 0, envelope_finding))
             text_views = (age_data.decode("utf-8", "surrogateescape"),)
             age_shaped = True
         else:
@@ -457,24 +493,30 @@ def main() -> int:
                 text_views = public_text_views(public_data)
         if not text_views:
             continue
-        rules_for = sensitive_age_text_rules if age_shaped else sensitive_text_rules
         for text in text_views:
             line_rules: set[str] = set()
             for line_number, line in enumerate(text.splitlines(), start=1):
-                matched_rules = rules_for(line, denylist)
+                matched_rules = sensitive_file_text_rules(
+                    relative,
+                    line,
+                    denylist,
+                    age_shaped=age_shaped,
+                )
                 line_rules.update(matched_rules)
                 findings.extend(
                     (public_relative, line_number, rule) for rule in matched_rules
                 )
             findings.extend(
                 (public_relative, 0, rule)
-                for rule in rules_for(text, denylist)
+                for rule in sensitive_file_text_rules(
+                    relative,
+                    text,
+                    denylist,
+                    age_shaped=age_shaped,
+                )
                 if rule not in line_rules
             )
-            if (
-                not age_shaped
-                and structured_document_contains_credential(path, text)
-            ):
+            if not age_shaped and structured_document_contains_credential(path, text):
                 findings.append((public_relative, 0, "provider-token"))
 
     for relative, line_number, rule in sorted(set(findings)):
