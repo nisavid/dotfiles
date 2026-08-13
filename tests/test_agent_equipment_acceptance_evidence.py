@@ -187,7 +187,7 @@ def valid_expected_case_manifest() -> dict[str, object]:
                     "plugin_id": "example@fixture",
                     "scope": "user",
                 },
-                "manager_identity": "manager:fixture/claude",
+                "manager_identity": "manager:claude",
                 "capability_identity": "capability:fixture/claude-plugin",
                 "capability_digest": "sha256:" + "b" * 64,
                 "manager_version_evidence_digest": "sha256:" + "c" * 64,
@@ -322,10 +322,19 @@ def valid_evidence_bundle(
         ],
         "manager_versions": [
             {
-                "manager_identity": "manager:fixture/claude",
+                "manager_identity": manager_identity,
                 "version": "fixture-1",
-                "evidence_digest": "sha256:" + "c" * 64,
+                "evidence_digest": evidence_digest,
             }
+            for manager_identity, evidence_digest in sorted(
+                {
+                    (
+                        binding["manager_identity"],
+                        binding["manager_version_evidence_digest"],
+                    )
+                    for binding in manifest["route_capability_bindings"]
+                }
+            )
         ],
         "aggregate_results": [
             {
@@ -697,6 +706,86 @@ class AcceptanceEvidenceContractTests(unittest.TestCase):
                 diagnostics = validation_diagnostics(bundle, manifest, variant)
                 self.assertIsInstance(diagnostics, tuple)
 
+    def test_attestor_and_signoff_identities_follow_their_human_roles(self) -> None:
+        manifest = valid_expected_case_manifest()
+        bundle = valid_evidence_bundle(manifest)
+        attestation = valid_attestation_manifest(bundle, manifest)
+        self.assertEqual(validation_diagnostics(bundle, manifest, attestation), ())
+
+        service_live_bundle = valid_evidence_bundle(manifest)
+        service_live_attestation = valid_attestation_manifest(
+            service_live_bundle,
+            manifest,
+        )
+        service_live_attestation["attestors"][1]["identity"] = (
+            "service:fixture/live-observer"
+        )
+        reseal_attestation(service_live_attestation)
+        self.assertEqual(
+            diagnostic_codes(
+                service_live_bundle,
+                manifest,
+                service_live_attestation,
+            ),
+            {"ACCEPTANCE_ATTESTATION_SCHEMA_INVALID"},
+        )
+
+        service_signoff = valid_evidence_bundle(manifest)
+        live_result = next(
+            result
+            for result in service_signoff["child_results"]
+            if result["requirement_id"] == "LIVE-01"
+        )
+        live_result["evidence"]["human_signoff"]["signer_identity"] = (
+            "service:fixture/live-observer"
+        )
+        reseal_bundle(service_signoff)
+        self.assertEqual(
+            diagnostic_codes(service_signoff, manifest),
+            {"ACCEPTANCE_EVIDENCE_SCHEMA_INVALID"},
+        )
+
+        service_reviewer = valid_attestation_manifest(bundle, manifest)
+        service_reviewer["attestors"][2]["identity"] = (
+            "service:fixture/release-reviewer"
+        )
+        reseal_attestation(service_reviewer)
+        self.assertEqual(
+            diagnostic_codes(bundle, manifest, service_reviewer),
+            {"ACCEPTANCE_ATTESTATION_SCHEMA_INVALID"},
+        )
+
+    def test_timestamp_ordering_handles_arbitrary_fractional_precision(self) -> None:
+        manifest = valid_expected_case_manifest()
+        bundle = valid_evidence_bundle(manifest)
+        prefix = "2026-08-13T05:00:00." + "0" * 5_000
+        evidence_time = prefix + "2Z"
+        earlier_attestation_time = prefix + "1Z"
+        later_attestation_time = prefix + "3Z"
+        for aggregate in bundle["aggregate_results"]:
+            aggregate["recorded_at"] = evidence_time
+        for result in bundle["child_results"]:
+            result["recorded_at"] = evidence_time
+            evidence = result["evidence"]
+            if evidence["kind"] == "live_receipt":
+                evidence["human_signoff"]["signed_at"] = evidence_time
+        reseal_bundle(bundle)
+
+        early = valid_attestation_manifest(bundle, manifest)
+        for attestor in early["attestors"]:
+            attestor["attested_at"] = earlier_attestation_time
+        reseal_attestation(early)
+        self.assertIn(
+            "ATTESTATION_PRECEDES_EVIDENCE",
+            diagnostic_codes(bundle, manifest, early),
+        )
+
+        late = valid_attestation_manifest(bundle, manifest)
+        for attestor in late["attestors"]:
+            attestor["attested_at"] = later_attestation_time
+        reseal_attestation(late)
+        self.assertEqual(validation_diagnostics(bundle, manifest, late), ())
+
     def test_public_validator_accepts_the_complete_closed_evidence_projection(
         self,
     ) -> None:
@@ -776,6 +865,27 @@ class AcceptanceEvidenceContractTests(unittest.TestCase):
         self.assertIn("AGGREGATE_STATUS_INVALID", codes)
         self.assertIn("REQUIREMENT_NOT_PASSING", codes)
 
+    def test_aggregate_timestamp_follows_every_child_for_the_requirement(self) -> None:
+        manifest = valid_expected_case_manifest()
+        bundle = valid_evidence_bundle(manifest)
+        requirement_id = bundle["aggregate_results"][0]["requirement_id"]
+        child = next(
+            result
+            for result in bundle["child_results"]
+            if result["requirement_id"] == requirement_id
+        )
+        child["recorded_at"] = "2026-08-13T05:00:01Z"
+        reseal_bundle(bundle)
+
+        self.assertIn(
+            "AGGREGATE_PRECEDES_CHILD_RESULT",
+            diagnostic_codes(bundle, manifest),
+        )
+
+        bundle["aggregate_results"][0]["recorded_at"] = child["recorded_at"]
+        reseal_bundle(bundle)
+        self.assertEqual(validation_diagnostics(bundle, manifest), ())
+
     def test_aggregate_registry_rejects_missing_extra_and_duplicate_ids(self) -> None:
         manifest = valid_expected_case_manifest()
 
@@ -835,6 +945,116 @@ class AcceptanceEvidenceContractTests(unittest.TestCase):
         self.assertIn(
             "MANAGER_EVIDENCE_COVERAGE_INCOMPLETE",
             diagnostic_codes(missing_manager_receipt, manifest),
+        )
+
+    def test_route_capability_bindings_close_each_provider_family_tuple(self) -> None:
+        provider_families = {
+            "standalone": {
+                "harness": "cursor",
+                "provider_selector": {
+                    "kind": "standalone_skill",
+                    "canonical_root": "agents_skills",
+                },
+                "manager_identity": "manager:standalone_skills",
+            },
+            "native": {
+                "harness": "claude",
+                "provider_selector": {
+                    "kind": "native_plugin",
+                    "manager": "claude",
+                    "plugin_id": "example@fixture",
+                    "scope": "user",
+                },
+                "manager_identity": "manager:claude",
+            },
+            "direct": {
+                "harness": "codex",
+                "provider_selector": {
+                    "kind": "direct_mcp",
+                    "transport": "stdio",
+                    "overlay_family": "codex_toml",
+                },
+                "manager_identity": "manager:direct_mcp",
+            },
+        }
+        for label, coordinates in provider_families.items():
+            with self.subTest(provider_family=label):
+                manifest = valid_expected_case_manifest()
+                binding = manifest["route_capability_bindings"][0]
+                binding.update(copy.deepcopy(coordinates))
+                reseal_manifest(manifest)
+                bundle = valid_evidence_bundle(manifest)
+                self.assertEqual(validation_diagnostics(bundle, manifest), ())
+
+        mismatches = {
+            "native harness and manager": {
+                "harness": "claude",
+                "provider_selector": {
+                    "kind": "native_plugin",
+                    "manager": "codex",
+                    "plugin_id": "example@fixture",
+                    "scope": "user",
+                },
+                "manager_identity": "manager:codex",
+            },
+            "native manager identity": {
+                "harness": "claude",
+                "provider_selector": {
+                    "kind": "native_plugin",
+                    "manager": "claude",
+                    "plugin_id": "example@fixture",
+                    "scope": "user",
+                },
+                "manager_identity": "manager:cursor",
+            },
+            "direct overlay and harness": {
+                "harness": "codex",
+                "provider_selector": {
+                    "kind": "direct_mcp",
+                    "transport": "stdio",
+                    "overlay_family": "cursor_json",
+                },
+                "manager_identity": "manager:direct_mcp",
+            },
+            "direct manager identity": {
+                "harness": "codex",
+                "provider_selector": {
+                    "kind": "direct_mcp",
+                    "transport": "stdio",
+                    "overlay_family": "codex_toml",
+                },
+                "manager_identity": "manager:codex",
+            },
+            "standalone manager identity": {
+                "harness": "cursor",
+                "provider_selector": {
+                    "kind": "standalone_skill",
+                    "canonical_root": "agents_skills",
+                },
+                "manager_identity": "manager:claude",
+            },
+        }
+        for label, coordinates in mismatches.items():
+            with self.subTest(mismatch=label):
+                manifest = valid_expected_case_manifest()
+                binding = manifest["route_capability_bindings"][0]
+                binding.update(copy.deepcopy(coordinates))
+                reseal_manifest(manifest)
+                bundle = valid_evidence_bundle(manifest)
+                self.assertIn(
+                    "ROUTE_CAPABILITY_BINDING_COHERENCE_INVALID",
+                    diagnostic_codes(bundle, manifest),
+                )
+
+        unknown_manager = valid_expected_case_manifest()
+        unknown_manager["route_capability_bindings"][0]["manager_identity"] = (
+            "manager:fixture/claude"
+        )
+        reseal_manifest(unknown_manager)
+        unknown_manager_bundle = valid_evidence_bundle(unknown_manager)
+        self.assertEqual(
+            diagnostic_codes(unknown_manager_bundle, unknown_manager),
+            {"EXPECTED_CASE_MANIFEST_SCHEMA_INVALID"},
         )
 
     def test_trusted_manifest_digest_rejects_a_coordinated_foreign_tuple(self) -> None:
@@ -1019,6 +1239,114 @@ class AcceptanceEvidenceContractTests(unittest.TestCase):
             )
             self.assertNotEqual(result.returncode, 0)
             self.assertNotIn(secret_canary, result.stderr)
+
+    def test_all_archived_release_documents_reject_literal_credentials(self) -> None:
+        credential_values = {
+            "manifest provider": "ghp_" + "A" * 24,
+            "harness version": "Bearer abcdefghijklmnopqrstuvwxyz",
+            "manager version": "ghp_" + "B" * 24,
+            "attestor version": "AKIA" + "C" * 16,
+        }
+        cases: list[
+            tuple[
+                str,
+                str,
+                dict[str, object],
+                dict[str, object],
+                dict[str, object],
+            ]
+        ] = []
+
+        manifest = valid_expected_case_manifest()
+        manifest["route_capability_bindings"][0]["provider_selector"]["plugin_id"] = (
+            credential_values["manifest provider"]
+        )
+        reseal_manifest(manifest)
+        bundle = valid_evidence_bundle(manifest)
+        cases.append(
+            (
+                "manifest provider",
+                "EXPECTED_CASE_MANIFEST_LITERAL_SECRET",
+                manifest,
+                bundle,
+                valid_attestation_manifest(bundle, manifest),
+            )
+        )
+
+        for label, version_collection in (
+            ("harness version", "harness_versions"),
+            ("manager version", "manager_versions"),
+        ):
+            manifest = valid_expected_case_manifest()
+            bundle = valid_evidence_bundle(manifest)
+            bundle[version_collection][0]["version"] = credential_values[label]
+            reseal_bundle(bundle)
+            cases.append(
+                (
+                    label,
+                    "ACCEPTANCE_EVIDENCE_LITERAL_SECRET",
+                    manifest,
+                    bundle,
+                    valid_attestation_manifest(bundle, manifest),
+                )
+            )
+
+        manifest = valid_expected_case_manifest()
+        bundle = valid_evidence_bundle(manifest)
+        attestation = valid_attestation_manifest(bundle, manifest)
+        attestation["attestors"][0]["version"] = credential_values["attestor version"]
+        reseal_attestation(attestation)
+        cases.append(
+            (
+                "attestor version",
+                "ACCEPTANCE_ATTESTATION_LITERAL_SECRET",
+                manifest,
+                bundle,
+                attestation,
+            )
+        )
+
+        for label, expected_code, manifest, bundle, attestation in cases:
+            with self.subTest(api=label):
+                diagnostics = validation_diagnostics(bundle, manifest, attestation)
+                self.assertEqual(
+                    {diagnostic.code for diagnostic in diagnostics},
+                    {expected_code},
+                )
+                rendered = "\n".join(
+                    f"{diagnostic.path}: {diagnostic.code}: {diagnostic.message}"
+                    for diagnostic in diagnostics
+                )
+                self.assertNotIn(credential_values[label], rendered)
+
+            with self.subTest(cli=label), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                manifest_path = root / "expected.json"
+                bundle_path = root / "bundle.json"
+                attestation_path = root / "attestation.json"
+                manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+                bundle_path.write_text(json.dumps(bundle), encoding="utf-8")
+                attestation_path.write_text(json.dumps(attestation), encoding="utf-8")
+                result = subprocess.run(
+                    cli_args(
+                        manifest_path,
+                        bundle_path,
+                        attestation_path,
+                        expected_case_manifest_digest=manifest[
+                            "expected_case_manifest_digest"
+                        ],
+                        expected_attestation_manifest_digest=attestation[
+                            "attestation_manifest_digest"
+                        ],
+                    ),
+                    cwd=ROOT,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(expected_code, result.stderr)
+                self.assertNotIn(credential_values[label], result.stderr)
 
     def test_public_validator_rejects_documents_supplied_in_the_wrong_roles(
         self,

@@ -278,11 +278,19 @@ def _reject_non_json_constant(_: str) -> object:
     raise ValueError("non-JSON numeric constant")
 
 
+def _strict_json_integer(value: str) -> object:
+    digit_limit = sys.get_int_max_str_digits()
+    if digit_limit and len(value.removeprefix("-")) > digit_limit:
+        return value
+    return int(value)
+
+
 def _strict_json_load(stream: object) -> object:
     return json.load(
         stream,
         object_pairs_hook=_strict_json_object,
         parse_constant=_reject_non_json_constant,
+        parse_int=_strict_json_integer,
     )
 
 
@@ -409,6 +417,7 @@ def _has_plan_action_payload_shape(value: object) -> bool:
         isinstance(value.get("action_identity"), str)
         and isinstance(value.get("ordinal"), int)
         and not isinstance(value.get("ordinal"), bool)
+        and 0 <= value["ordinal"] <= 2_147_483_647
         and all(
             isinstance(value.get(field), str)
             for field in (

@@ -503,6 +503,22 @@ class CapturedStateValidationTest(unittest.TestCase):
             ["AUTHORITATIVE_PLAN_ACTION_SET_SCHEMA_INVALID"],
         )
 
+    def test_plan_action_ordinal_is_bounded_before_canonicalization(self) -> None:
+        for label, ordinal in (
+            ("over maximum", 2_147_483_648),
+            ("oversized decimal", 10**5000),
+        ):
+            with self.subTest(label=label):
+                authoritative = authoritative_plan_action_set()
+                authoritative["actions"][0]["action_payload"]["ordinal"] = ordinal
+
+                diagnostics = validate_document(valid_document(), authoritative)
+
+                self.assertEqual(
+                    [diagnostic.code for diagnostic in diagnostics],
+                    ["AUTHORITATIVE_PLAN_ACTION_SET_SCHEMA_INVALID"],
+                )
+
     def test_public_schema_gate_rejects_unsupported_array_valued_types(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             schema_directory = Path(temporary_directory)
@@ -594,6 +610,45 @@ class CapturedStateValidationTest(unittest.TestCase):
         self.assertEqual(
             [diagnostic.code for diagnostic in diagnostics],
             ["CAPTURED_STATE_SCHEMA_INVALID"],
+        )
+
+    def test_public_gate_rejects_draft_valid_nested_schema_ids(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            schema_directory = Path(temporary_directory)
+            captured_schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
+            plan_schema = json.loads(
+                PLAN_ACTION_SET_SCHEMA.read_text(encoding="utf-8")
+            )
+            plan_schema["$defs"]["digest"]["$id"] = "nested-digest.json"
+            captured_path = schema_directory / SCHEMA.name
+            plan_path = schema_directory / PLAN_ACTION_SET_SCHEMA.name
+            captured_path.write_text(json.dumps(captured_schema), encoding="utf-8")
+            plan_path.write_text(json.dumps(plan_schema), encoding="utf-8")
+
+            metaschema = run_check_jsonschema("--check-metaschema", str(plan_path))
+            self.assertEqual(
+                0,
+                metaschema.returncode,
+                metaschema.stdout + metaschema.stderr,
+            )
+
+            original_directory = CAPTURED_STATE.SCHEMA_DIRECTORY
+            CAPTURED_STATE.SCHEMA_DIRECTORY = schema_directory
+            try:
+                diagnostics = CAPTURED_STATE.validate_captured_state(
+                    valid_document(),
+                    authoritative_plan_action_set(),
+                    expected_candidate_identity=CANDIDATE_IDENTITY,
+                    expected_implementation_manifest_digest=(
+                        IMPLEMENTATION_MANIFEST_DIGEST
+                    ),
+                )
+            finally:
+                CAPTURED_STATE.SCHEMA_DIRECTORY = original_directory
+
+        self.assertEqual(
+            [diagnostic.code for diagnostic in diagnostics],
+            ["AUTHORITATIVE_PLAN_ACTION_SET_SCHEMA_INVALID"],
         )
 
     def test_public_schema_gate_rejects_malformed_supported_keyword_values(
@@ -955,6 +1010,15 @@ class CapturedStateValidationTest(unittest.TestCase):
         payload["unexpected"] = "not part of the closed action evidence"
         with self.assertRaises(ValueError):
             CAPTURED_STATE.plan_action_digest(payload)
+
+        over_maximum_ordinal = copy.deepcopy(PLAN_ACTION_PAYLOAD)
+        over_maximum_ordinal["ordinal"] = 2_147_483_648
+        with self.assertRaises(ValueError):
+            CAPTURED_STATE.plan_action_digest(over_maximum_ordinal)
+
+        maximum_ordinal = copy.deepcopy(PLAN_ACTION_PAYLOAD)
+        maximum_ordinal["ordinal"] = 2_147_483_647
+        self.assertTrue(CAPTURED_STATE.plan_action_digest(maximum_ordinal))
 
         combined_payload = copy.deepcopy(PLAN_ACTION_PAYLOAD)
         combined_payload["desired_state"] = {
@@ -2599,6 +2663,33 @@ class CapturedStateValidationTest(unittest.TestCase):
 
         self.assertEqual(1, result.returncode)
         self.assertIn("CAPABILITY_SET_DIGEST_MISMATCH", result.stderr)
+
+    def test_cli_reports_a_schema_diagnostic_for_an_oversized_ordinal(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            manifest_path = Path(directory) / "captured-state.json"
+            plan_actions_path = Path(directory) / "plan-actions.json"
+            manifest_path.write_text(
+                json.dumps(valid_document()),
+                encoding="utf-8",
+            )
+            serialized_actions = json.dumps(authoritative_plan_action_set()).replace(
+                '"ordinal": 0',
+                '"ordinal": ' + "9" * 5001,
+                1,
+            )
+            plan_actions_path.write_text(serialized_actions, encoding="utf-8")
+
+            result = subprocess.run(
+                validation_cli_args(plan_actions_path, manifest_path),
+                cwd=ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(1, result.returncode)
+        self.assertIn("AUTHORITATIVE_PLAN_ACTION_SET_SCHEMA_INVALID", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
 
     def test_cli_rejects_artifacts_from_a_different_current_candidate(
         self,

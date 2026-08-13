@@ -313,7 +313,7 @@
       ],
       "properties": {
         "action_identity": {"type": "string", "pattern": "^action:sha256:[0-9a-f]{64}$"},
-        "ordinal": {"type": "integer", "minimum": 0},
+        "ordinal": {"type": "integer", "minimum": 0, "maximum": 2147483647},
         "candidate_identity": {"$ref": "#/$defs/nonEmptyString"},
         "implementation_manifest_digest": {"$ref": "#/$defs/digest"},
         "catalog_digest": {"$ref": "#/$defs/digest"},

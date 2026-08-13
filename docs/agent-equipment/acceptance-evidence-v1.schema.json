@@ -36,9 +36,22 @@
       "type": "string",
       "pattern": "^(operator|person|service):[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*$"
     },
+    "humanIdentity": {
+      "type": "string",
+      "pattern": "^(operator|person):[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*$"
+    },
     "publicVersion": {
       "type": "string",
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._+:/() -]{0,255}$"
+    },
+    "managerIdentity": {
+      "enum": [
+        "manager:claude",
+        "manager:codex",
+        "manager:cursor",
+        "manager:direct_mcp",
+        "manager:standalone_skills"
+      ]
     },
     "utcTimestamp": {
       "type": "string",
@@ -153,7 +166,7 @@
         "route_digest": {"$ref": "#/$defs/digest"},
         "harness": {"enum": ["claude", "codex", "cursor"]},
         "provider_selector": {"$ref": "#/$defs/providerSelector"},
-        "manager_identity": {"$ref": "#/$defs/opaqueIdentity"},
+        "manager_identity": {"$ref": "#/$defs/managerIdentity"},
         "capability_identity": {"$ref": "#/$defs/opaqueIdentity"},
         "capability_digest": {"$ref": "#/$defs/digest"},
         "manager_version_evidence_digest": {"$ref": "#/$defs/digest"}
@@ -362,7 +375,7 @@
       "additionalProperties": false,
       "required": ["signer_identity", "signed_at", "signoff_digest"],
       "properties": {
-        "signer_identity": {"$ref": "#/$defs/signerIdentity"},
+        "signer_identity": {"$ref": "#/$defs/humanIdentity"},
         "signed_at": {"$ref": "#/$defs/utcTimestamp"},
         "signoff_digest": {"$ref": "#/$defs/digest"}
       }
@@ -451,27 +464,47 @@
       "additionalProperties": false,
       "required": ["manager_identity", "version", "evidence_digest"],
       "properties": {
-        "manager_identity": {"$ref": "#/$defs/opaqueIdentity"},
+        "manager_identity": {"$ref": "#/$defs/managerIdentity"},
         "version": {"$ref": "#/$defs/publicVersion"},
         "evidence_digest": {"$ref": "#/$defs/digest"}
       }
     },
     "attestor": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["role", "identity", "version", "attested_at"],
-      "properties": {
-        "role": {
-          "enum": [
-            "automated_runner",
-            "live_operator",
-            "release_reviewer"
-          ]
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["role", "identity", "version", "attested_at"],
+          "properties": {
+            "role": {"const": "automated_runner"},
+            "identity": {"$ref": "#/$defs/signerIdentity"},
+            "version": {"$ref": "#/$defs/publicVersion"},
+            "attested_at": {"$ref": "#/$defs/utcTimestamp"}
+          }
         },
-        "identity": {"$ref": "#/$defs/signerIdentity"},
-        "version": {"$ref": "#/$defs/publicVersion"},
-        "attested_at": {"$ref": "#/$defs/utcTimestamp"}
-      }
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["role", "identity", "version", "attested_at"],
+          "properties": {
+            "role": {"const": "live_operator"},
+            "identity": {"$ref": "#/$defs/humanIdentity"},
+            "version": {"$ref": "#/$defs/publicVersion"},
+            "attested_at": {"$ref": "#/$defs/utcTimestamp"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["role", "identity", "version", "attested_at"],
+          "properties": {
+            "role": {"const": "release_reviewer"},
+            "identity": {"$ref": "#/$defs/humanIdentity"},
+            "version": {"$ref": "#/$defs/publicVersion"},
+            "attested_at": {"$ref": "#/$defs/utcTimestamp"}
+          }
+        }
+      ]
     },
     "attestationManifest": {
       "type": "object",

@@ -2,24 +2,30 @@
 
 This is the release gate defined by Issue #60. It specifies the evidence the
 production reconciler and the separately authorized runtime migration must
-produce. Passing the design-schema tests or the disposable prototype alone does
-not satisfy the production gate.
+produce. `execution-authority-v1.schema.json` separately defines the closed
+pre-mutation `ApplyAuthorization` and terminal `ReleaseReceipt`; neither is
+candidate-authored authority. Passing the design-schema tests or the disposable
+prototype alone does not satisfy the production gate.
 
 ## Evidence record
 
 `acceptance-evidence-v1.schema.json` defines three closed documents: the pre-
 mutation expected-case manifest emitted from the independently validated plan,
 the candidate's secret-free evidence bundle, and a separate post-run release
-attestation. The launcher supplies the trusted candidate identity, installed-
-implementation manifest digest, authorized expected-case manifest digest, and
-independently trusted attestation digest; none is learned from the files under
-validation.
+attestation. The candidate-independent launcher supplies its own externally
+trusted identity and manifest digest, the trusted apply-authorization digest,
+the trusted candidate identity and installed-implementation manifest digest,
+the authorized expected-case manifest digest, and the independently trusted
+attestation digest; none is learned from the files under validation.
 
 The expected-case manifest binds the candidate implementation identity and
 complete installed-implementation manifest digest, catalog digest, lock digest,
 plan digest, plan-action-set digest, capability-set digest, sealed captured-
 state identity and digest, fixture version, and the sorted closed capability and
-manager-version evidence binding for every route. It contains:
+manager-version evidence binding for every route. Each route binding uses the
+adapter contract's closed manager vocabulary: native-plugin manager and harness
+match, direct-MCP overlay family matches its harness and `direct_mcp` manager,
+and standalone skills use the `standalone_skills` manager. It contains:
 
 - the complete canonical 74-ID v1 requirement registry;
 - one or more static cases for every requirement except the derived `CHK-02`
@@ -70,7 +76,8 @@ catalog-lock binding, route capability, manager-version evidence, or expected-
 case manifest.
 
 Every requirement has at least one child. The aggregate is derived: it passes
-if and only if every expected child passes. A `blocked` or `not_run` child
+if and only if every expected child passes, and its timestamp is at or after
+every child timestamp for that requirement. A `blocked` or `not_run` child
 carries a closed unavailable-reason record, not fabricated execution evidence.
 Live cases never silently pass from schema, prototype, fake-manager, or
 automated-receipt evidence.
@@ -79,14 +86,23 @@ The evidence bundle is never its own trust root. After the run, the separate
 attestation binds the recomputed complete bundle digest, expected-case manifest
 digest, and exact candidate/artifact binding tuple. Its canonical attestor set
 contains exactly `automated_runner`, `live_operator`, and `release_reviewer`,
-with one distinct opaque identity, runner or signing-policy implementation
-version, and UTC attestation time for each role. Every attestor time is at or
-after the latest result and live sign-off, and every passing live signer is the
-canonical live-operator attestor. The attestation's own digest excludes only
-its digest field.
+with one distinct identity, implementation version, and UTC attestation time
+for each role. The automated runner may use a `service:`, `operator:`, or
+`person:` identity. The live operator, every human sign-off, and the release
+reviewer use only `operator:` or `person:` identities; a service cannot claim a
+human role. Every attestor time is at or after the latest result and live
+sign-off, and every passing live signer is the canonical live-operator
+attestor. Fractional-second ordering is exact at arbitrary schema-valid
+precision. The attestation's own digest excludes only its digest field.
 Changing a manager or harness version, live sign-off, receipt, aggregate, child,
 binding, or attestor therefore requires a new attestation and a new externally
 trusted attestation digest.
+
+All three archived documents reject the same narrow credential-shaped literal
+grammar used by the design boundary, including authorization values, bearer
+tokens, common GitHub and AWS credential shapes, and credential-bearing query
+parameters. Diagnostics name only the document and rule; they never echo the
+rejected value.
 
 Expected-case authorization is a pre-mutation authority boundary. Release
 attestation is a distinct post-run authority boundary. Neither substitutes for
@@ -115,8 +131,9 @@ publication, or plan authentication. The pure validator recomputes and binds
 the documents; it does not authenticate receipts, human identities, or
 signatures. The external release authority authenticates the attestation digest.
 The production evidence writer owns projection from the validated plan and
-receipts; the release command owns supplying both trusted manifest digests,
-invoking this validator, and failing unless diagnostics are empty.
+receipts. The separately deployed release launcher owns supplying both trusted
+manifest digests, invoking this validator, performing the create-only archive
+commit, and issuing a closed release receipt only when diagnostics are empty.
 
 The fixture runner creates a disposable home and isolated XDG directories for
 every automated scenario. It replaces native CLIs with stateful fakes unless a
@@ -155,7 +172,7 @@ it must prove no path outside that sandbox changed.
 | `CMD-02` | `import` discovers unmanaged state and emits a proposal without claiming ownership or changing runtime state. | Proposal golden plus runtime digest equality |
 | `CMD-03` | `adopt` requires an exact imported observation and changes only a reviewable authored proposal. Runtime state remains byte-identical until later apply. | Catalog diff plus runtime digest equality |
 | `CMD-04` | `update` expands source-wide selection, advances immutable targets or reviewed rolling baselines, and emits one reviewable catalog-and-lock proposal without changing runtime state. | Catalog-and-lock diff plus runtime digest equality |
-| `CMD-05` | `apply` rejects a stale or incomplete plan, then reconciles every accepted catalog entry in deterministic order when the complete plan is valid. | Rejection trace and complete ordered plan trace |
+| `CMD-05` | `apply` rejects a missing, stale, replayed, expired, or incomplete authorization or plan before its first checkpoint, then reconciles every accepted catalog entry in deterministic order when both exact records are valid. | Authorization/schema/replay rejection plus complete ordered plan trace |
 | `CMD-06` | Apply reports `operator_action` and `unavailable` operations with supported verification evidence but never automates them. | Adapter call spy and operator report |
 
 ## Convergence, drift, and retirement fixtures
@@ -206,7 +223,7 @@ operation. Run them again for every migration boundary named in `MIGRATION.md`.
 
 | ID | Required fixture and assertion | Evidence |
 | --- | --- | --- |
-| `CHK-01` | Validate the complete plan before the first checkpoint; an invalid final action yields zero runtime and checkpoint mutation. | Last-action invalid fixture |
+| `CHK-01` | Validate the complete authorization and plan, then durably claim the fresh execution nonce before the first action checkpoint; an invalid authorization or final action yields zero runtime and checkpoint mutation. | Authorization and last-action invalid fixtures |
 | `CHK-02` | Fail the atomic prepared-checkpoint write. No runtime mutation occurs and retry creates one valid prepared record. | Write-fault trace |
 | `CHK-03` | Persist `prepared` with invocation intent `not_started`, fail its atomic transition to `started`, prove no adapter call occurred, then audit and retry once without destructive replay. | Recovery classification, intent-write fault, and call counts |
 | `CHK-04` | Persist `prepared` with invocation intent `started`, complete the mutation, and fail before completion persistence. Retry audits the expected post-state and records completion without replay. A `not_started` record at the same target is concurrent drift, never this run's effect. | Mutation receipt, state digest, and call counts |
@@ -215,7 +232,7 @@ operation. Run them again for every migration boundary named in `MIGRATION.md`.
 | `CHK-07` | Change a completed surface externally before compensation. Compare-before-restore preserves the external value and stops. | Drift diagnostic and unchanged external digest |
 | `CHK-08` | Fail compensation and preserve a durable recoverable record. Audit-before-retry classifies state and never issues duplicate or destructive replay. | Fault and retry trace |
 | `CHK-09` | Inject a concurrent change immediately before every adapter mutation. Compare-before-mutate preserves it and stops before the native manager call. | Parameterized adapter call spies |
-| `CHK-10` | Bind each checkpoint to run, candidate identity, installed-implementation manifest digest, catalog, lock, plan, sealed captured-state identity and digest, capability-set, the route's closed capability and manager-evidence binding, action identity and ordinal, route, operation, pre-state, and expected-post-state digests; reject replay under any changed binding. | Field-mutation and set-membership negatives |
+| `CHK-10` | Bind each checkpoint to apply-authorization identity and digest, execution nonce, run, candidate identity, installed-implementation manifest digest, catalog, lock, plan, sealed captured-state identity and digest, capability-set, the route's closed capability and manager-evidence binding, action identity and ordinal, route, operation, pre-state, and expected-post-state digests; reject replay under any changed binding. | Authorization, field-mutation, and set-membership negatives |
 
 ## Migration and rollback fixtures
 
@@ -257,14 +274,32 @@ authorizing runtime migration.
 The acceptance-evidence validator and attestation are the non-circular outer
 release gate. They are not a child requirement inside the 74-ID bundle and do
 not create a self-referential evidence result. CI and review trace that gate to
-the 20 methods in `AcceptanceEvidenceContractTests`:
+the 25 methods in `AcceptanceEvidenceContractTests`:
 
 | Gate family | Exact test methods |
 | --- | --- |
-| Valid projection and result closure | `test_release_accepts_only_an_independently_trusted_attestation`; `test_public_validator_accepts_the_complete_closed_evidence_projection`; `test_child_registry_rejects_missing_extra_and_duplicate_cases`; `test_aggregate_pass_is_derived_from_complete_passing_children`; `test_aggregate_registry_rejects_missing_extra_and_duplicate_ids` |
-| Independent authority and complete binding | `test_trusted_attestation_freezes_every_candidate_bundle_value`; `test_candidate_cannot_reseal_bundle_and_attestation_under_old_trust`; `test_fully_resealed_artifact_tuple_requires_a_new_attestation_trust_root`; `test_forged_attestor_fails_under_the_original_trusted_digest`; `test_attestation_must_follow_results_and_bind_the_live_signer`; `test_bindings_reject_foreign_artifacts_and_route_capability_substitution`; `test_trusted_manifest_digest_rejects_a_coordinated_foreign_tuple` |
-| Strict input, role, privacy, and live evidence | `test_live_cases_require_live_receipts_and_human_signoff`; `test_cli_accepts_valid_inputs_and_rejects_noncanonical_json`; `test_api_and_cli_diagnostics_never_echo_seeded_secret_values`; `test_public_validator_rejects_documents_supplied_in_the_wrong_roles`; `test_cli_rejects_documents_supplied_in_the_wrong_roles`; `test_evidence_references_reject_urls_and_filesystem_paths` |
+| Valid projection and result closure | `test_release_accepts_only_an_independently_trusted_attestation`; `test_public_validator_accepts_the_complete_closed_evidence_projection`; `test_child_registry_rejects_missing_extra_and_duplicate_cases`; `test_aggregate_pass_is_derived_from_complete_passing_children`; `test_aggregate_registry_rejects_missing_extra_and_duplicate_ids`; `test_aggregate_timestamp_follows_every_child_for_the_requirement` |
+| Independent authority and complete binding | `test_trusted_attestation_freezes_every_candidate_bundle_value`; `test_candidate_cannot_reseal_bundle_and_attestation_under_old_trust`; `test_fully_resealed_artifact_tuple_requires_a_new_attestation_trust_root`; `test_forged_attestor_fails_under_the_original_trusted_digest`; `test_attestation_must_follow_results_and_bind_the_live_signer`; `test_timestamp_ordering_handles_arbitrary_fractional_precision`; `test_bindings_reject_foreign_artifacts_and_route_capability_substitution`; `test_route_capability_bindings_close_each_provider_family_tuple`; `test_trusted_manifest_digest_rejects_a_coordinated_foreign_tuple` |
+| Strict input, role, privacy, and live evidence | `test_live_cases_require_live_receipts_and_human_signoff`; `test_attestor_and_signoff_identities_follow_their_human_roles`; `test_cli_accepts_valid_inputs_and_rejects_noncanonical_json`; `test_api_and_cli_diagnostics_never_echo_seeded_secret_values`; `test_all_archived_release_documents_reject_literal_credentials`; `test_public_validator_rejects_documents_supplied_in_the_wrong_roles`; `test_cli_rejects_documents_supplied_in_the_wrong_roles`; `test_evidence_references_reject_urls_and_filesystem_paths` |
 | Migration-node semantics | `test_node_evidence_kinds_distinguish_read_only_and_mutating_boundaries`; `test_migration_requirements_cannot_move_between_node_classes` |
+
+## Execution-authority design evidence
+
+The apply authorization and release receipt are external authority records, not
+children inside the candidate's 74-ID evidence bundle. The five methods in
+`AgentEquipmentDeploymentContractTests` pin their closed source shape and the
+future deployment separation:
+
+| Gate family | Exact test methods |
+| --- | --- |
+| Apply authority | `test_apply_authorization_is_closed_over_the_complete_binding_tuple`; `test_apply_authorization_requires_command_time_run_and_replay_identity` |
+| Release authority | `test_release_receipt_binds_launcher_authority_and_one_cas_archive`; `test_source_shape_keeps_audit_candidate_and_release_authority_separate` |
+| Runtime boundary | `test_runtime_gate_and_external_authority_precede_every_mutation` |
+
+These are design-contract vectors. Production must additionally prove canonical
+record identities and digests, trusted-clock ordering, durable nonce replay
+rejection, external launcher byte verification, create-only archive behavior,
+and receipt retrieval from the authority store.
 
 ## Current executable design evidence
 
@@ -303,17 +338,17 @@ contract through its real adapters and evidence writer.
 | `RES-05` | `AgentEquipmentDesignTest.test_provider_configuration_is_typed_and_secret_safe`; `AgentEquipmentAcceptanceTest.test_durable_artifacts_contain_secret_references_but_no_secret_values` |
 | `CMD-01`, `CMD-02`, `CMD-03` | `AgentEquipmentAcceptanceTest.test_audit_import_and_adopt_commands_are_runtime_read_only`; `AgentEquipmentAcceptanceTest.test_adoption_requires_an_exact_import_and_never_mutates_runtime`; `AgentEquipmentAcceptanceTest.test_adoption_rejects_incoherent_imported_value_and_digest`; `AgentEquipmentAcceptanceTest.test_adoption_requires_a_minted_import_identity_and_exact_bindings`; `AgentEquipmentAcceptanceTest.test_adoption_distinguishes_present_null_from_absence` |
 | Partial `CMD-04` | `AgentEquipmentDesignTest.test_digest_bound_catalog_and_lock_pair_accepts_reviewed_advance`; `AgentEquipmentAcceptanceTest.test_update_emits_one_digest_bound_catalog_and_lock_proposal`; `AgentEquipmentAcceptanceTest.test_native_rolling_drift_requires_reviewed_baseline_update` prove one semantically validated paired proposal, stale-pair rejection, runtime immutability, and reviewed rolling-baseline gating. A production source-resolution fixture must still prove source-manifest discovery, source-wide `all` expansion, and verified target derivation. |
-| `CMD-05` | `AgentEquipmentAcceptanceTest.test_invalid_final_action_fails_before_the_checkpoint_store_changes`; `AgentEquipmentAcceptanceTest.test_fresh_home_converges_to_the_complete_desired_state` |
+| `CMD-05` | `AgentEquipmentDeploymentContractTests.test_apply_authorization_is_closed_over_the_complete_binding_tuple`; `AgentEquipmentDeploymentContractTests.test_apply_authorization_requires_command_time_run_and_replay_identity`; `AgentEquipmentAcceptanceTest.test_invalid_final_action_fails_before_the_checkpoint_store_changes`; `AgentEquipmentAcceptanceTest.test_fresh_home_converges_to_the_complete_desired_state` |
 | `CMD-06` | `AgentEquipmentAcceptanceTest.test_nonautomated_operations_are_reported_without_adapter_mutation` |
 | `CON-01`, `CON-02`, `CON-03` | `AgentEquipmentAcceptanceTest.test_fresh_home_converges_to_the_complete_desired_state`; `AgentEquipmentAcceptanceTest.test_reapply_is_a_steady_state_no_op`; `AgentEquipmentAcceptanceTest.test_each_missing_owned_item_is_repaired_without_touching_other_state` |
 | `CON-04` | `AgentEquipmentAcceptanceTest.test_immutable_content_is_verified_before_explicit_update_mutates` |
 | `CON-05`, `CON-06`, `CON-07` | `AgentEquipmentAcceptanceTest.test_route_switch_controls_components_and_retires_only_owned_duplicates`; `AgentEquipmentDesignTest.test_retirement_provider_and_restore_match_selected_distribution`; `AgentEquipmentDesignTest.test_retirement_native_source_matches_selected_executable`; `AgentEquipmentAcceptanceTest.test_duplicate_routes_fail_closed_unless_the_exact_overlap_is_declared`; `AgentEquipmentAcceptanceTest.test_adoption_requires_an_exact_import_and_never_mutates_runtime` |
 | `CON-08`, `CON-09` | `AgentEquipmentAcceptanceTest.test_retirement_mutates_only_exact_adopted_owned_state_through_apply`; `AgentEquipmentAcceptanceTest.test_retirement_reports_drift_when_adopted_state_disappears`; `AgentEquipmentAcceptanceTest.test_native_rolling_drift_requires_reviewed_baseline_update` |
 | Partial `CON-10`; `CON-11` | `AgentEquipmentAcceptanceTest.test_standalone_capture_restores_files_trees_and_links_without_following` and `AgentEquipmentAcceptanceTest.test_standalone_restore_recreates_deleted_and_replaced_symlink_entries` cover type, content, mode, link text, target, broken state, and no-follow restore behavior; `AgentEquipmentAcceptanceTest.test_standalone_lexical_traversal_cannot_capture_or_restore_outside`, `AgentEquipmentAcceptanceTest.test_standalone_restore_rejects_nested_traversal_before_removal`, `AgentEquipmentAcceptanceTest.test_standalone_restore_rejects_tampered_digests_before_removal`, and `AgentEquipmentAcceptanceTest.test_standalone_restore_rejects_changed_symlink_target_state` cover containment and snapshot integrity; `AgentEquipmentAcceptanceTest.test_compare_before_mutate_preserves_concurrent_changes_on_every_surface` covers the `CON-11` state-machine seam. |
-| `CHK-01`, `CHK-02`, `CHK-03` | `AgentEquipmentAcceptanceTest.test_invalid_final_action_fails_before_the_checkpoint_store_changes`; `AgentEquipmentAcceptanceTest.test_duplicate_surface_final_action_fails_before_any_effect`; `AgentEquipmentAcceptanceTest.test_invalid_plan_bindings_fail_before_checkpoint_store_changes`; `AgentEquipmentAcceptanceTest.test_plan_rejects_non_string_and_empty_identities_before_any_effect`; `AgentEquipmentAcceptanceTest.test_plan_rejects_non_json_state_before_any_effect`; `AgentEquipmentAcceptanceTest.test_absence_sentinel_cannot_collide_with_valid_json_state`; `AgentEquipmentAcceptanceTest.test_state_equality_distinguishes_booleans_from_numbers`; `AgentEquipmentAcceptanceTest.test_plan_rejects_forged_no_op_action_before_any_effect`; `AgentEquipmentAcceptanceTest.test_stale_plan_digest_fails_before_checkpoint_or_runtime_mutation`; `AgentEquipmentAcceptanceTest.test_prepared_write_failure_has_no_runtime_effect_and_retry_is_valid`; `AgentEquipmentAcceptanceTest.test_prepared_failure_before_mutation_audits_then_retries_once` |
+| `CHK-01`, `CHK-02`, `CHK-03` | `AgentEquipmentDeploymentContractTests.test_apply_authorization_is_closed_over_the_complete_binding_tuple`; `AgentEquipmentDeploymentContractTests.test_apply_authorization_requires_command_time_run_and_replay_identity`; `AgentEquipmentDeploymentContractTests.test_runtime_gate_and_external_authority_precede_every_mutation`; `AgentEquipmentAcceptanceTest.test_invalid_final_action_fails_before_the_checkpoint_store_changes`; `AgentEquipmentAcceptanceTest.test_duplicate_surface_final_action_fails_before_any_effect`; `AgentEquipmentAcceptanceTest.test_invalid_plan_bindings_fail_before_checkpoint_store_changes`; `AgentEquipmentAcceptanceTest.test_plan_rejects_non_string_and_empty_identities_before_any_effect`; `AgentEquipmentAcceptanceTest.test_plan_rejects_non_json_state_before_any_effect`; `AgentEquipmentAcceptanceTest.test_absence_sentinel_cannot_collide_with_valid_json_state`; `AgentEquipmentAcceptanceTest.test_state_equality_distinguishes_booleans_from_numbers`; `AgentEquipmentAcceptanceTest.test_plan_rejects_forged_no_op_action_before_any_effect`; `AgentEquipmentAcceptanceTest.test_stale_plan_digest_fails_before_checkpoint_or_runtime_mutation`; `AgentEquipmentAcceptanceTest.test_prepared_write_failure_has_no_runtime_effect_and_retry_is_valid`; `AgentEquipmentAcceptanceTest.test_prepared_failure_before_mutation_audits_then_retries_once` |
 | `CHK-04`, `CHK-05` | `AgentEquipmentAcceptanceTest.test_mutated_but_uncompleted_step_is_audited_without_replay` |
 | `CHK-06`, `CHK-07`, `CHK-08` | `AgentEquipmentAcceptanceTest.test_later_failure_compensates_completed_steps_in_reverse_order`; `AgentEquipmentAcceptanceTest.test_compare_before_restore_preserves_an_external_change`; `AgentEquipmentAcceptanceTest.test_failed_compensation_is_durable_and_recovery_audits_before_retry`; `AgentEquipmentAcceptanceTest.test_explicit_compensation_can_resume_after_first_intent_write_fails`; `AgentEquipmentAcceptanceTest.test_compensation_recovery_finishes_the_complete_reverse_prefix`; `AgentEquipmentAcceptanceTest.test_blocked_compensation_cannot_report_recovered` |
-| `CHK-09`, `CHK-10` | `AgentEquipmentAcceptanceTest.test_compare_before_mutate_preserves_concurrent_changes_on_every_surface`; `AgentEquipmentAcceptanceTest.test_fresh_action_rejects_target_valued_concurrent_change`; `AgentEquipmentAcceptanceTest.test_auto_compensation_preserves_target_valued_external_change`; `AgentEquipmentAcceptanceTest.test_invocation_intent_write_failure_occurs_before_adapter_call`; `AgentEquipmentAcceptanceTest.test_plan_rejects_foreign_candidate_authority_before_checkpoint`; `AgentEquipmentAcceptanceTest.test_plan_rejects_ambiguous_capability_identity_before_checkpoint`; `AgentEquipmentAcceptanceTest.test_invalid_capability_binding_digests_fail_before_checkpoint`; `AgentEquipmentAcceptanceTest.test_checkpoint_replay_rejects_every_changed_binding`; `AgentEquipmentAcceptanceTest.test_checkpoint_replay_rejects_forged_embedded_step_identity`; `AgentEquipmentAcceptanceTest.test_checkpoint_preflight_rejects_malformed_durable_record`; `AgentEquipmentAcceptanceTest.test_checkpoint_preflight_rejects_duplicate_json_members`; `AgentEquipmentAcceptanceTest.test_checkpoint_binding_is_type_exact_for_json_values`; `AgentEquipmentAcceptanceTest.test_checkpoint_replay_binds_capability_set_and_route_evidence`; `AgentEquipmentAcceptanceTest.test_retry_preflights_every_checkpoint_binding_before_any_write`; `AgentEquipmentAcceptanceTest.test_compensation_recovery_rejects_changed_bindings_before_restore`; `AgentEquipmentAcceptanceTest.test_completed_checkpoint_preserves_reverted_external_state`; `AgentEquipmentAcceptanceTest.test_completed_checkpoint_reverted_to_pre_state_blocks_all_compensation`; `AgentEquipmentAcceptanceTest.test_compensated_checkpoint_cannot_replay_forward_plan` |
+| `CHK-09`, `CHK-10` | `AgentEquipmentDeploymentContractTests.test_apply_authorization_is_closed_over_the_complete_binding_tuple`; `AgentEquipmentAcceptanceTest.test_compare_before_mutate_preserves_concurrent_changes_on_every_surface`; `AgentEquipmentAcceptanceTest.test_fresh_action_rejects_target_valued_concurrent_change`; `AgentEquipmentAcceptanceTest.test_auto_compensation_preserves_target_valued_external_change`; `AgentEquipmentAcceptanceTest.test_invocation_intent_write_failure_occurs_before_adapter_call`; `AgentEquipmentAcceptanceTest.test_plan_rejects_foreign_candidate_authority_before_checkpoint`; `AgentEquipmentAcceptanceTest.test_plan_rejects_ambiguous_capability_identity_before_checkpoint`; `AgentEquipmentAcceptanceTest.test_invalid_capability_binding_digests_fail_before_checkpoint`; `AgentEquipmentAcceptanceTest.test_checkpoint_replay_rejects_every_changed_binding`; `AgentEquipmentAcceptanceTest.test_checkpoint_replay_rejects_forged_embedded_step_identity`; `AgentEquipmentAcceptanceTest.test_checkpoint_preflight_rejects_malformed_durable_record`; `AgentEquipmentAcceptanceTest.test_checkpoint_preflight_rejects_duplicate_json_members`; `AgentEquipmentAcceptanceTest.test_checkpoint_binding_is_type_exact_for_json_values`; `AgentEquipmentAcceptanceTest.test_checkpoint_replay_binds_capability_set_and_route_evidence`; `AgentEquipmentAcceptanceTest.test_retry_preflights_every_checkpoint_binding_before_any_write`; `AgentEquipmentAcceptanceTest.test_compensation_recovery_rejects_changed_bindings_before_restore`; `AgentEquipmentAcceptanceTest.test_completed_checkpoint_preserves_reverted_external_state`; `AgentEquipmentAcceptanceTest.test_completed_checkpoint_reverted_to_pre_state_blocks_all_compensation`; `AgentEquipmentAcceptanceTest.test_compensated_checkpoint_cannot_replay_forward_plan` |
 | `CHK-04` through `CHK-06` state-machine examples, all automated mutating operations | `AgentEquipmentAcceptanceTest.test_forward_recovery_and_reverse_compensation_cover_every_mutating_operation` repeats post-mutation audit, completion-persistence recovery, and reverse compensation for every modeled mutating operation, including native-update suppression. It is not the complete `CHK-02` through `CHK-09` production matrix. |
 | Partial migration state-machine seam; no `MIG-*` requirement closes | `AgentEquipmentAcceptanceTest.test_migration_activates_winner_before_retiring_loser`, `AgentEquipmentAcceptanceTest.test_failed_winner_verification_never_retires_loser`, and `AgentEquipmentAcceptanceTest.test_migration_rollback_restores_loser_before_retiring_winner` prove the representative forward and reverse migration order. `AgentEquipmentAcceptanceTest.test_every_migration_boundary_compensates_to_the_exact_initial_state` and `AgentEquipmentAcceptanceTest.test_every_migration_surface_preserves_changes_before_mutate_and_restore` exercise generic ordered checkpoints, reverse compensation, and compare guards. `AgentEquipmentAcceptanceTest.test_successful_migration_retains_winners_and_removes_only_owned_losers` checks the representative state map. These do not prove the production dependency graph, typed projector, per-link `lstat`/unlink, conditional native-plugin, coupled-surface, MCP-overlay, component-control, or coverage-verification behavior required by `MIG-01` through `MIG-07`. |
 

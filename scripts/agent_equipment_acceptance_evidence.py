@@ -12,7 +12,6 @@ import sys
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from fractions import Fraction
 from pathlib import Path
 
 try:
@@ -49,10 +48,32 @@ MUTATING_MIGRATION_REQUIREMENTS = frozenset(
     {"MIG-01", "MIG-02", "MIG-03", "MIG-04", "MIG-06", "MIG-07"}
 )
 ATTESTOR_ROLES = ("automated_runner", "live_operator", "release_reviewer")
+_DIRECT_MCP_OVERLAY_BY_HARNESS = {
+    "claude": "claude_json",
+    "codex": "codex_toml",
+    "cursor": "cursor_json",
+}
+_MANAGER_IDENTITY_BY_MANAGER = {
+    "claude": "manager:claude",
+    "codex": "manager:codex",
+    "cursor": "manager:cursor",
+    "direct_mcp": "manager:direct_mcp",
+    "standalone_skills": "manager:standalone_skills",
+}
 _UTC_TIMESTAMP_PATTERN = re.compile(
     r"^(?P<year>[0-9]{4})-(?P<month>[0-9]{2})-(?P<day>[0-9]{2})"
     r"[Tt](?P<hour>[0-9]{2}):(?P<minute>[0-9]{2}):(?P<second>[0-9]{2})"
     r"(?P<fraction>[.,][0-9]+)?Z(?:\n)?\Z"
+)
+_LITERAL_CREDENTIAL_PATTERNS = tuple(
+    re.compile(pattern)
+    for pattern in (
+        r"(?i)\b(?:authorization|proxy-authorization|x-api-key|api[_-]?key|access[_-]?token|password|client[_-]?secret)\s*[:=]\s*(?:bearer\s+\S+|(?!bearer(?:\s|$))\S+)",
+        r"(?i)\bbearer\s+[A-Za-z0-9._~+/-]+",
+        r"\bgh[pousr]_[A-Za-z0-9]{20,}\b",
+        r"\bAKIA[A-Z0-9]{16}\b",
+        r"[?&](?:api[_-]?key|access[_-]?token|token|secret)=[^&#\s]+",
+    )
 )
 _DERIVED_REQUIREMENTS = frozenset(
     CHECKPOINT_MATRIX_REQUIREMENTS + MIGRATION_REQUIREMENTS
@@ -112,7 +133,7 @@ def _artifact_digest(document: JsonObject, digest_member: str) -> str:
     )
 
 
-def _utc_timestamp_key(value: object) -> tuple[int | Fraction, ...] | None:
+def _utc_timestamp_key(value: object) -> tuple[int | str, ...] | None:
     """Return a total ordering key for the local schema's UTC timestamps."""
 
     if not isinstance(value, str):
@@ -122,10 +143,9 @@ def _utc_timestamp_key(value: object) -> tuple[int | Fraction, ...] | None:
         return None
     fraction = match.group("fraction")
     if fraction is None:
-        fractional_second = Fraction(0)
+        fractional_second = ""
     else:
-        digits = fraction[1:]
-        fractional_second = Fraction(int(digits), 10 ** len(digits))
+        fractional_second = fraction[1:].rstrip("0")
     return (
         int(match.group("year")),
         int(match.group("month")),
@@ -139,6 +159,33 @@ def _utc_timestamp_key(value: object) -> tuple[int | Fraction, ...] | None:
 
 def _diagnostic(code: str, path: str, message: str) -> Diagnostic:
     return Diagnostic(path=path, code=code, message=message)
+
+
+def _iter_public_strings(value: object):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, Mapping):
+        for item in value.values():
+            yield from _iter_public_strings(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _iter_public_strings(item)
+
+
+def _contains_literal_credential(document: object) -> bool:
+    return any(
+        pattern.search(value) is not None
+        for value in _iter_public_strings(document)
+        for pattern in _LITERAL_CREDENTIAL_PATTERNS
+    )
+
+
+def _literal_credential_diagnostic(code: str, label: str) -> Diagnostic:
+    return _diagnostic(
+        code,
+        "$",
+        f"The {label} contains credential-shaped literal material; archive only public values and opaque secret references.",
+    )
 
 
 def _schema_valid(document: object) -> bool:
@@ -162,6 +209,28 @@ def _case_from_record(record: JsonObject) -> _ExpectedCase:
         case_identity=str(record["case_identity"]),
         evidence_kind=str(record["evidence_kind"]),
     )
+
+
+def _route_capability_binding_is_coherent(binding: JsonObject) -> bool:
+    provider = binding["provider_selector"]
+    assert isinstance(provider, Mapping)
+    harness = binding["harness"]
+    manager_identity = binding["manager_identity"]
+    kind = provider["kind"]
+    if kind == "standalone_skill":
+        return manager_identity == _MANAGER_IDENTITY_BY_MANAGER["standalone_skills"]
+    if kind == "native_plugin":
+        manager = provider["manager"]
+        return (
+            manager == harness
+            and manager_identity == _MANAGER_IDENTITY_BY_MANAGER[manager]
+        )
+    if kind == "direct_mcp":
+        return (
+            provider["overlay_family"] == _DIRECT_MCP_OVERLAY_BY_HARNESS[harness]
+            and manager_identity == _MANAGER_IDENTITY_BY_MANAGER["direct_mcp"]
+        )
+    return False
 
 
 def _derived_case(
@@ -463,6 +532,16 @@ def _validate_expected_manifest(
                 "Route capability bindings must be complete, unique, and sorted by route identity.",
             )
         )
+    for index, binding in enumerate(route_bindings):
+        assert isinstance(binding, Mapping)
+        if not _route_capability_binding_is_coherent(binding):
+            diagnostics.append(
+                _diagnostic(
+                    "ROUTE_CAPABILITY_BINDING_COHERENCE_INVALID",
+                    f"$.route_capability_bindings[{index}]",
+                    "The route capability binding does not match its closed provider-family manager coordinates.",
+                )
+            )
 
     registry, registry_diagnostics = _expected_registry(manifest)
     diagnostics.extend(registry_diagnostics)
@@ -631,6 +710,13 @@ def validate_acceptance_evidence(
                 "The expected-case manifest does not satisfy the checked-in closed schema.",
             ),
         )
+    if _contains_literal_credential(expected_case_manifest):
+        return (
+            _literal_credential_diagnostic(
+                "EXPECTED_CASE_MANIFEST_LITERAL_SECRET",
+                "expected-case manifest",
+            ),
+        )
     assert isinstance(expected_case_manifest, Mapping)
     registry, manifest_diagnostics = _validate_expected_manifest(
         expected_case_manifest,
@@ -652,6 +738,13 @@ def validate_acceptance_evidence(
                 "The acceptance evidence bundle does not satisfy the checked-in closed schema.",
             ),
         )
+    if _contains_literal_credential(bundle):
+        return (
+            _literal_credential_diagnostic(
+                "ACCEPTANCE_EVIDENCE_LITERAL_SECRET",
+                "acceptance evidence bundle",
+            ),
+        )
     assert isinstance(bundle, Mapping)
     if not _has_schema_version(
         attestation_manifest,
@@ -662,6 +755,13 @@ def validate_acceptance_evidence(
                 "ACCEPTANCE_ATTESTATION_SCHEMA_INVALID",
                 "$",
                 "The post-run attestation does not satisfy the checked-in closed schema.",
+            ),
+        )
+    if _contains_literal_credential(attestation_manifest):
+        return (
+            _literal_credential_diagnostic(
+                "ACCEPTANCE_ATTESTATION_LITERAL_SECRET",
+                "release attestation",
             ),
         )
     assert isinstance(attestation_manifest, Mapping)
@@ -782,6 +882,30 @@ def validate_acceptance_evidence(
 
     child_results = bundle["child_results"]
     assert isinstance(child_results, list)
+    latest_child_timestamps: dict[str, tuple[int | str, ...]] = {}
+    for result in child_results:
+        timestamp = _utc_timestamp_key(result["recorded_at"])
+        assert timestamp is not None
+        requirement_id = str(result["requirement_id"])
+        prior = latest_child_timestamps.get(requirement_id)
+        if prior is None or prior < timestamp:
+            latest_child_timestamps[requirement_id] = timestamp
+    for index, aggregate in enumerate(aggregate_results):
+        requirement_id = str(aggregate["requirement_id"])
+        aggregate_timestamp = _utc_timestamp_key(aggregate["recorded_at"])
+        assert aggregate_timestamp is not None
+        latest_child_timestamp = latest_child_timestamps.get(requirement_id)
+        if (
+            latest_child_timestamp is not None
+            and aggregate_timestamp < latest_child_timestamp
+        ):
+            diagnostics.append(
+                _diagnostic(
+                    "AGGREGATE_PRECEDES_CHILD_RESULT",
+                    f"$.aggregate_results[{index}].recorded_at",
+                    "An aggregate result must be recorded at or after every child result for the same requirement.",
+                )
+            )
     actual_coordinates = [
         (
             str(result["requirement_id"]),
