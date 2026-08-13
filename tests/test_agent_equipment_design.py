@@ -668,7 +668,7 @@ class AgentEquipmentDesignTest(unittest.TestCase):
             "CATALOG_SCHEMA_INVALID",
             {diagnostic.code for diagnostic in result.diagnostics},
         )
-        self.assertIn("unsupported schema keyword", result.diagnostics[0].message)
+        self.assertIn("closed local schema set is invalid", result.diagnostics[0].message)
         self.assertIsNone(result.mutation_plan)
 
     def test_public_validator_fails_closed_when_checked_in_schemas_are_unavailable(
@@ -747,9 +747,9 @@ class AgentEquipmentDesignTest(unittest.TestCase):
             finally:
                 DESIGN.SCHEMA_DIRECTORY = original_directory
 
-        self.assertEqual(
+        self.assertIn(
+            "CATALOG_SCHEMA_INVALID",
             {diagnostic.code for diagnostic in result.diagnostics},
-            {"CATALOG_SCHEMA_INVALID"},
         )
         self.assertEqual(result.coverage, ())
         self.assertIsNone(result.mutation_plan)
@@ -780,9 +780,76 @@ class AgentEquipmentDesignTest(unittest.TestCase):
             finally:
                 DESIGN.SCHEMA_DIRECTORY = original_directory
 
-        self.assertEqual(
+        self.assertIn(
+            "CATALOG_SCHEMA_INVALID",
             {diagnostic.code for diagnostic in result.diagnostics},
-            {"CATALOG_SCHEMA_INVALID"},
+        )
+        self.assertEqual(result.coverage, ())
+        self.assertIsNone(result.mutation_plan)
+
+    def test_public_validator_rejects_malformed_supported_schema_keywords(
+        self,
+    ) -> None:
+        catalog, lock = valid_pair()
+        for schema_name, expected_code in (
+            ("catalog-v1.schema.json", "CATALOG_SCHEMA_INVALID"),
+            ("lock-v1.schema.json", "LOCK_SCHEMA_INVALID"),
+        ):
+            with self.subTest(schema_name=schema_name):
+                with TemporaryDirectory() as temporary_directory:
+                    schema_directory = Path(temporary_directory)
+                    for name in ("catalog-v1.schema.json", "lock-v1.schema.json"):
+                        schema = json.loads(
+                            (ROOT / "docs/agent-equipment" / name).read_text(
+                                encoding="utf-8"
+                            )
+                        )
+                        if name == schema_name:
+                            schema["required"] = {}
+                        (schema_directory / name).write_text(
+                            json.dumps(schema), encoding="utf-8"
+                        )
+                    original_directory = DESIGN.SCHEMA_DIRECTORY
+                    DESIGN.SCHEMA_DIRECTORY = schema_directory
+                    try:
+                        result = DESIGN.validate_design(catalog, lock)
+                    finally:
+                        DESIGN.SCHEMA_DIRECTORY = original_directory
+
+                self.assertIn(
+                    expected_code,
+                    {diagnostic.code for diagnostic in result.diagnostics},
+                )
+                self.assertEqual(result.coverage, ())
+                self.assertIsNone(result.mutation_plan)
+
+    def test_public_validator_rejects_cyclic_schema_references_without_crashing(
+        self,
+    ) -> None:
+        catalog, lock = valid_pair()
+        with TemporaryDirectory() as temporary_directory:
+            schema_directory = Path(temporary_directory)
+            for name in ("catalog-v1.schema.json", "lock-v1.schema.json"):
+                schema = json.loads(
+                    (ROOT / "docs/agent-equipment" / name).read_text(
+                        encoding="utf-8"
+                    )
+                )
+                if name == "catalog-v1.schema.json":
+                    schema["$ref"] = "#"
+                (schema_directory / name).write_text(
+                    json.dumps(schema), encoding="utf-8"
+                )
+            original_directory = DESIGN.SCHEMA_DIRECTORY
+            DESIGN.SCHEMA_DIRECTORY = schema_directory
+            try:
+                result = DESIGN.validate_design(catalog, lock)
+            finally:
+                DESIGN.SCHEMA_DIRECTORY = original_directory
+
+        self.assertIn(
+            "CATALOG_SCHEMA_INVALID",
+            {diagnostic.code for diagnostic in result.diagnostics},
         )
         self.assertEqual(result.coverage, ())
         self.assertIsNone(result.mutation_plan)
@@ -1153,6 +1220,21 @@ class AgentEquipmentDesignTest(unittest.TestCase):
         result = DESIGN.validate_design(catalog, lock)
 
         self.assertIn("COMPONENT_CONTROL_INVALID", {item.code for item in result.diagnostics})
+        self.assertIsNone(result.mutation_plan)
+
+        catalog, lock = valid_pair()
+        managed_route(catalog)["component_controls"] = [control, deepcopy(control)]
+        locked_managed_route(lock)["component_controls"] = deepcopy(
+            managed_route(catalog)["component_controls"]
+        )
+        lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
+
+        result = DESIGN.validate_design(catalog, lock)
+
+        self.assertIn(
+            "CATALOG_SCHEMA_INVALID",
+            {item.code for item in result.diagnostics},
+        )
         self.assertIsNone(result.mutation_plan)
 
     def test_active_route_cannot_disable_current_equipment_identity(self) -> None:
@@ -1825,7 +1907,7 @@ class AgentEquipmentDesignTest(unittest.TestCase):
             ("unknown_distribution", "RETIREMENT_REFERENCE_INVALID"),
             ("invalid_state", "RETIREMENT_SURFACE_INVALID"),
             ("operator_owned", "RETIREMENT_OWNER_INVALID"),
-            ("missing_compensation", "AUTOMATED_COMPENSATION_MISSING"),
+            ("missing_compensation", "CATALOG_SCHEMA_INVALID"),
         )
         for mutation, expected in mutations:
             with self.subTest(mutation=mutation):
@@ -2048,11 +2130,11 @@ class AgentEquipmentDesignTest(unittest.TestCase):
 
         result = DESIGN.validate_design(catalog, lock)
 
-        self.assertEqual(result.coverage[-1].equipment_identity, "skill:zzz/final-invalid")
         self.assertIn(
-            "AUTOMATED_COMPENSATION_MISSING",
+            "CATALOG_SCHEMA_INVALID",
             {item.code for item in result.diagnostics},
         )
+        self.assertEqual(result.coverage, ())
         self.assertIsNone(result.mutation_plan)
 
     def test_resolution_is_deterministic_under_input_ordering(self) -> None:
@@ -2173,7 +2255,7 @@ class AgentEquipmentDesignTest(unittest.TestCase):
         result = DESIGN.validate_design(catalog, lock)
 
         self.assertIn(
-            "AUTOMATED_COMPENSATION_MISSING",
+            "CATALOG_SCHEMA_INVALID",
             {item.code for item in result.diagnostics},
         )
         self.assertIsNone(result.mutation_plan)

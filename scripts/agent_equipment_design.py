@@ -12,6 +12,13 @@ import re
 from typing import Any
 from urllib.parse import urlsplit
 
+try:
+    from agent_equipment_json_schema import validate_document as _validate_schema
+except ModuleNotFoundError:  # Loaded as a repo module rather than an executable.
+    from scripts.agent_equipment_json_schema import (
+        validate_document as _validate_schema,
+    )
+
 
 JsonObject = Mapping[str, Any]
 OPERATIONS = (
@@ -26,27 +33,6 @@ OPERATIONS = (
 )
 MUTATING_OPERATIONS = frozenset(OPERATIONS) - {"inspect"}
 SCHEMA_DIRECTORY = Path(__file__).resolve().parent.parent / "docs/agent-equipment"
-SUPPORTED_SCHEMA_KEYWORDS = frozenset(
-    {
-        "$defs",
-        "$id",
-        "$ref",
-        "$schema",
-        "additionalProperties",
-        "const",
-        "enum",
-        "items",
-        "minItems",
-        "minLength",
-        "oneOf",
-        "pattern",
-        "properties",
-        "required",
-        "title",
-        "type",
-        "uniqueItems",
-    }
-)
 
 
 @dataclass(frozen=True, order=True)
@@ -92,25 +78,6 @@ def canonical_json_sha256(document: JsonObject) -> str:
         sort_keys=True,
     ).encode("utf-8")
     return f"sha256:{hashlib.sha256(payload).hexdigest()}"
-
-
-def _json_values_equal(left: Any, right: Any) -> bool:
-    try:
-        return json.dumps(
-            left,
-            allow_nan=False,
-            ensure_ascii=False,
-            separators=(",", ":"),
-            sort_keys=True,
-        ) == json.dumps(
-            right,
-            allow_nan=False,
-            ensure_ascii=False,
-            separators=(",", ":"),
-            sort_keys=True,
-        )
-    except (TypeError, ValueError):
-        return False
 
 
 def load_and_validate(catalog_path: Path, lock_path: Path) -> DesignValidationResult:
@@ -742,24 +709,6 @@ def _document_schema_diagnostics(
 ) -> tuple[Diagnostic, ...]:
     """Validate both public documents against their checked-in JSON Schemas."""
 
-    try:
-        catalog_schema = json.loads(
-            (SCHEMA_DIRECTORY / "catalog-v1.schema.json").read_text(encoding="utf-8")
-        )
-        lock_schema = json.loads(
-            (SCHEMA_DIRECTORY / "lock-v1.schema.json").read_text(encoding="utf-8")
-        )
-    except (OSError, UnicodeError, json.JSONDecodeError):
-        return (
-            Diagnostic(
-                "CATALOG_SCHEMA_INVALID",
-                "The checked-in catalog and lock schemas could not be loaded.",
-            ),
-        )
-    schemas = {
-        "catalog-v1.schema.json": catalog_schema,
-        "lock-v1.schema.json": lock_schema,
-    }
     diagnostics: list[Diagnostic] = []
     for code, label, document, schema_name in (
         (
@@ -775,70 +724,23 @@ def _document_schema_diagnostics(
             "lock-v1.schema.json",
         ),
     ):
-        schema = schemas[schema_name]
-        schema_failure = _schema_shape_failure(schema, "$")
-        if schema_failure is not None:
-            diagnostics.append(
-                Diagnostic(
-                    code,
-                    f"The checked-in {schema_name} is unsupported: {schema_failure}",
-                )
-            )
-            continue
-        failures = _json_schema_failures(
+        if not _validate_schema(
             document,
-            schema,
-            schemas,
-            schema_name,
-            "$",
-        )
-        if failures:
+            schema_directory=SCHEMA_DIRECTORY,
+            root_schema_name=schema_name,
+            allowed_schema_names=(
+                {"catalog-v1.schema.json"}
+                if schema_name == "catalog-v1.schema.json"
+                else {"catalog-v1.schema.json", "lock-v1.schema.json"}
+            ),
+        ):
             diagnostics.append(
                 Diagnostic(
                     code,
-                    f"The {label} violates {schema_name}: {failures[0]}",
+                    f"The {label} or its closed local schema set is invalid.",
                 )
             )
     return tuple(diagnostics)
-
-
-def _schema_shape_failure(schema: Any, path: str) -> str | None:
-    if not isinstance(schema, Mapping):
-        return f"{path} must be a schema object"
-    unsupported_keywords = sorted(set(schema) - SUPPORTED_SCHEMA_KEYWORDS)
-    if unsupported_keywords:
-        return (
-            f"{path} uses unsupported schema keyword(s): "
-            + ", ".join(unsupported_keywords)
-        )
-    if "type" in schema and not isinstance(schema["type"], str):
-        return f"{path}.type must be one supported type name"
-    for collection_name in ("$defs", "properties"):
-        if collection_name not in schema:
-            continue
-        collection = schema[collection_name]
-        if not isinstance(collection, Mapping):
-            return f"{path}.{collection_name} must be an object of schemas"
-        for name, child in collection.items():
-            failure = _schema_shape_failure(
-                child,
-                f"{path}.{collection_name}.{name}",
-            )
-            if failure is not None:
-                return failure
-    if "oneOf" in schema:
-        branches = schema["oneOf"]
-        if not isinstance(branches, list) or not branches:
-            return f"{path}.oneOf must be a nonempty array of schema objects"
-        for index, child in enumerate(branches):
-            failure = _schema_shape_failure(child, f"{path}.oneOf[{index}]")
-            if failure is not None:
-                return failure
-    if "items" in schema:
-        failure = _schema_shape_failure(schema["items"], f"{path}.items")
-        if failure is not None:
-            return failure
-    return None
 
 
 def _literal_secret_diagnostics(
@@ -883,146 +785,6 @@ def _string_looks_like_secret_material(value: str) -> bool:
         r"[?&](?:api[_-]?key|access[_-]?token|token|secret)=[^&#\s]+",
     )
     return any(re.search(pattern, candidate) is not None for pattern in patterns)
-
-
-def _json_schema_failures(
-    instance: Any,
-    schema: JsonObject,
-    schemas: Mapping[str, JsonObject],
-    schema_name: str,
-    path: str,
-) -> list[str]:
-    """Evaluate the JSON Schema keywords used by the v1 catalog and lock."""
-
-    failures: list[str] = []
-    unsupported_keywords = sorted(set(schema) - SUPPORTED_SCHEMA_KEYWORDS)
-    if unsupported_keywords:
-        return [
-            f"{path} uses unsupported schema keyword(s): "
-            + ", ".join(unsupported_keywords)
-        ]
-    if "type" in schema and not isinstance(schema["type"], str):
-        return [f"{path} uses an unsupported schema type declaration"]
-    reference = schema.get("$ref")
-    if isinstance(reference, str):
-        reference_file, separator, fragment = reference.partition("#")
-        target_name = reference_file or schema_name
-        target: Any = schemas.get(target_name)
-        if target is None:
-            return [f"{path} references unknown schema {target_name!r}"]
-        if separator and fragment:
-            for encoded_part in fragment.removeprefix("/").split("/"):
-                part = encoded_part.replace("~1", "/").replace("~0", "~")
-                if not isinstance(target, dict) or part not in target:
-                    return [f"{path} references unknown fragment {reference!r}"]
-                target = target[part]
-        if not isinstance(target, dict):
-            return [f"{path} references a non-schema value {reference!r}"]
-        failures.extend(
-            _json_schema_failures(
-                instance,
-                target,
-                schemas,
-                target_name,
-                path,
-            )
-        )
-
-    branches = schema.get("oneOf")
-    if isinstance(branches, list):
-        matches = sum(
-            not _json_schema_failures(
-                instance,
-                branch,
-                schemas,
-                schema_name,
-                path,
-            )
-            for branch in branches
-            if isinstance(branch, dict)
-        )
-        if matches != 1:
-            failures.append(f"{path} must match exactly one allowed shape")
-
-    expected_type = schema.get("type")
-    type_matches = {
-        "object": isinstance(instance, dict),
-        "array": isinstance(instance, list),
-        "string": isinstance(instance, str),
-        "boolean": isinstance(instance, bool),
-        "integer": isinstance(instance, int) and not isinstance(instance, bool),
-        "number": isinstance(instance, (int, float)) and not isinstance(instance, bool),
-        "null": instance is None,
-    }
-    if isinstance(expected_type, str) and not type_matches.get(expected_type, False):
-        failures.append(f"{path} must be of type {expected_type}")
-        return failures
-
-    if "const" in schema and not _json_values_equal(instance, schema["const"]):
-        failures.append(f"{path} must equal the required constant")
-    if isinstance(schema.get("enum"), list) and not any(
-        _json_values_equal(instance, allowed) for allowed in schema["enum"]
-    ):
-        failures.append(f"{path} must be one of the allowed values")
-
-    if isinstance(instance, str):
-        minimum_length = schema.get("minLength")
-        if isinstance(minimum_length, int) and len(instance) < minimum_length:
-            failures.append(f"{path} is shorter than {minimum_length} characters")
-        pattern = schema.get("pattern")
-        if isinstance(pattern, str) and re.search(pattern, instance) is None:
-            failures.append(f"{path} does not match the required pattern")
-
-    if isinstance(instance, list):
-        minimum_items = schema.get("minItems")
-        if isinstance(minimum_items, int) and len(instance) < minimum_items:
-            failures.append(f"{path} has fewer than {minimum_items} items")
-        if schema.get("uniqueItems") is True:
-            serialized = [
-                json.dumps(item, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
-                for item in instance
-            ]
-            if len(serialized) != len(set(serialized)):
-                failures.append(f"{path} items must be unique")
-        item_schema = schema.get("items")
-        if isinstance(item_schema, dict):
-            for index, item in enumerate(instance):
-                failures.extend(
-                    _json_schema_failures(
-                        item,
-                        item_schema,
-                        schemas,
-                        schema_name,
-                        f"{path}[{index}]",
-                    )
-                )
-
-    if isinstance(instance, dict):
-        required = schema.get("required")
-        if isinstance(required, list):
-            for property_name in required:
-                if property_name not in instance:
-                    failures.append(f"{path}.{property_name} is required")
-        properties = schema.get("properties")
-        if isinstance(properties, dict):
-            for property_name, property_schema in properties.items():
-                if property_name in instance and isinstance(property_schema, dict):
-                    failures.extend(
-                        _json_schema_failures(
-                            instance[property_name],
-                            property_schema,
-                            schemas,
-                            schema_name,
-                            f"{path}.{property_name}",
-                        )
-                    )
-        if schema.get("additionalProperties") is False:
-            allowed_properties = properties.keys() if isinstance(properties, dict) else ()
-            for property_name in instance.keys() - allowed_properties:
-                failures.append(
-                    f"{path}.{property_name} is not an allowed property"
-                )
-    return failures
 
 
 def _route_is_valid(

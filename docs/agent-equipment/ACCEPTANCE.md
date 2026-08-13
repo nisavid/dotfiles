@@ -26,6 +26,13 @@ resolved values. The gate fails if a requirement is absent, duplicated, or
 recorded against a different candidate, action set, captured state, or
 catalog-lock binding.
 
+Requirements exercised as a repeated operation or migration-boundary matrix
+still produce exactly one aggregate result for the requirement ID. They also
+produce one child result for every expected case, keyed by the stable composite
+identity of requirement ID, fixture family, and operation or boundary identity.
+Missing, duplicate, or extra child cases fail the gate, and the aggregate may
+pass only when every expected child case passes.
+
 The fixture runner creates a disposable home and isolated XDG directories for
 every automated scenario. It replaces native CLIs with stateful fakes unless a
 scenario is explicitly marked live. A fixture may read only its own sandbox;

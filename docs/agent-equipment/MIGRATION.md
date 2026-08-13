@@ -541,10 +541,16 @@ phase, and durable invocation intent (`not_started` or `started`).
 The action state machine is:
 
 ```text
-prepared -> completed -> compensating -> compensated
-    |          |              |
-    +----------+--------------+-> compensation_blocked
+prepared --forward verified--> completed
+prepared --explicit rollback after audit--> compensating
+completed --rollback--> compensating
+compensating --restore verified--> compensated
+prepared | completed | compensating --ambiguity or drift--> compensation_blocked
 ```
+
+The direct `prepared` to `compensating` transition requires a fresh explicit
+rollback authorization and an audit of the prepared action. Crash recovery
+cannot infer rollback authority merely from a surviving `prepared` record.
 
 Persist and fsync `prepared` with `invocation_state: not_started`, then compare
 current state with the captured pre-state. Immediately before the adapter call,

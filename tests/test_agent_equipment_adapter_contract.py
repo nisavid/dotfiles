@@ -545,17 +545,47 @@ class AdapterContractSchemaTests(unittest.TestCase):
             document_diagnostic_codes(document),
         )
 
-    def test_schema_keyword_allowlist_checks_additional_properties(self) -> None:
-        self.assertFalse(
-            CONTRACT._schema_uses_only_supported_keywords(
-                {"additionalProperties": {"unsupportedKeyword": True}}
-            )
-        )
-        self.assertFalse(
-            CONTRACT._schema_uses_only_supported_keywords(
-                {"type": ["string", "null"]}
-            )
-        )
+    def test_public_schema_gate_rejects_malformed_supported_keyword_values(
+        self,
+    ) -> None:
+        invalid_values = {
+            "type": None,
+            "required": {},
+            "properties": [],
+            "oneOf": {},
+            "items": [],
+            "additionalProperties": "false",
+            "minItems": -1,
+            "uniqueItems": "true",
+            "minimum": True,
+            "pattern": 1,
+            "if": [],
+        }
+        for keyword, invalid_value in invalid_values.items():
+            with self.subTest(keyword=keyword):
+                with tempfile.TemporaryDirectory() as directory:
+                    schema_directory = Path(directory)
+                    invalid_schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
+                    invalid_schema[keyword] = invalid_value
+                    (schema_directory / SCHEMA.name).write_text(
+                        json.dumps(invalid_schema), encoding="utf-8"
+                    )
+                    catalog_schema = ROOT / "docs/agent-equipment/catalog-v1.schema.json"
+                    (schema_directory / catalog_schema.name).write_text(
+                        catalog_schema.read_text(encoding="utf-8"),
+                        encoding="utf-8",
+                    )
+                    original_directory = CONTRACT.SCHEMA_DIRECTORY
+                    CONTRACT.SCHEMA_DIRECTORY = schema_directory
+                    try:
+                        self.assertIn(
+                            "ADAPTER_SCHEMA_INVALID",
+                            document_diagnostic_codes(
+                                apply_sequence_document(valid_sequence())
+                            ),
+                        )
+                    finally:
+                        CONTRACT.SCHEMA_DIRECTORY = original_directory
 
     def test_public_sequence_validation_requires_exact_contract_versions(self) -> None:
         locations = (
@@ -832,9 +862,7 @@ class AdapterContractSchemaTests(unittest.TestCase):
     def test_named_invalid_runtime_observations_have_only_the_named_defect(
         self,
     ) -> None:
-        misnamed = load_document(
-            "invalid-adapter-misnamed-native-update-state.json"
-        )
+        misnamed = load_document("invalid-adapter-misnamed-native-update-state.json")
         normalized_state = misnamed["record"]["result"]["normalized_state"]
         normalized_state["native_update_suppression_state"] = normalized_state.pop(
             "native_update_state"
@@ -943,9 +971,9 @@ class AdapterContractSchemaTests(unittest.TestCase):
 
         update_mismatch = apply_sequence_document(valid_sequence())
         for observation_name in ("pre_state_observation", "post_state_observation"):
-            normalized_state = update_mismatch["sequence"][observation_name][
-                "record"
-            ]["result"]["normalized_state"]
+            normalized_state = update_mismatch["sequence"][observation_name]["record"][
+                "result"
+            ]["normalized_state"]
             normalized_state["native_update_control"] = "not_applicable"
             normalized_state["native_update_suppression_state"] = "not_applicable"
         cases.append(
@@ -1480,6 +1508,33 @@ class AdapterContractSchemaTests(unittest.TestCase):
             validate_adapter_sequence(apply_sequence_document(sequence)),
         )
 
+    def test_capability_discovery_requires_canonical_record_order(self) -> None:
+        sequence = list(copy.deepcopy(valid_sequence()))
+        earlier = copy.deepcopy(capability_record(sequence[0]))
+        earlier["capability_identity"] = "capability:aaa"
+        earlier_without_digest = copy.deepcopy(earlier)
+        earlier_without_digest.pop("capability_digest")
+        earlier["capability_digest"] = canonical_digest(earlier_without_digest)
+        sequence[0]["result"]["records"].append(earlier)
+
+        self.assertIn(
+            "CAPABILITY_ORDER_INVALID",
+            diagnostic_codes(tuple(sequence)),
+        )
+
+    def test_capability_component_identity_support_is_canonically_sorted(
+        self,
+    ) -> None:
+        sequence = list(copy.deepcopy(valid_sequence()))
+        support = capability_record(sequence[0])["component_control_support"]
+        support["supported_equipment_identities"] = ["skill:z", "skill:a"]
+        rebind_capability_digest(sequence)
+
+        self.assertIn(
+            "CAPABILITY_ORDER_INVALID",
+            diagnostic_codes(tuple(sequence)),
+        )
+
     def test_sequence_rejects_missing_or_duplicate_request_bound_capability(
         self,
     ) -> None:
@@ -1655,9 +1710,7 @@ class AdapterContractSchemaTests(unittest.TestCase):
                         schema_valid_mismatch(field, current)
                     )
                     expected_code = "ECHO_BINDING_MISMATCH"
-                self.assertIn(
-                    expected_code, diagnostic_codes(tuple(sequence))
-                )
+                self.assertIn(expected_code, diagnostic_codes(tuple(sequence)))
 
     def test_sequence_rejects_ok_state_and_compensation_restore_mismatches(
         self,
