@@ -127,7 +127,7 @@ URLs, native output, or secret values. Manager and harness version strings are
 public native-manager observations; diagnostics never echo their supplied
 contents.
 
-`execution-authority-v1.schema.json` owns four closed records with independent
+`execution-authority-v1.schema.json` owns five closed records with independent
 purposes. `ApplyAuthorization` is the only serialized authority that may start
 forward mutation. It binds `command: apply`, issuer and validity times, one run
 identity, one issuer-generated execution nonce, the independently trusted
@@ -140,6 +140,24 @@ digest of the record excluding `authorization_identity`; the separately supplied
 `trusted_apply_authorization_digest` is the canonical digest of the complete
 record. Equality with candidate-authored fields is not authorization.
 
+`CheckpointSetManifest` is the canonical, nonempty, ordered projection of all
+durable checkpoints eligible for one exact apply authorization, execution
+domain, run, and plan-action set at one checkpoint-store generation. Each entry
+binds durable generation and record version, phase, invocation state, action
+identity and ordinal, an immutable checkpoint identity, and the canonical
+digest of the complete closed durable checkpoint record, including phase
+history, capability binding, compensation operation, and pre/post state. The
+manifest identity is the canonical digest of the record excluding both identity
+and digest; its complete digest excludes only the digest. The executor derives
+this manifest while holding the exclusive lease by independently enumerating
+the authoritative checkpoint store and matching every action/ordinal against
+the validated plan action set. It re-enumerates the store and checks the same
+generation immediately before claiming the compensation nonce or writing the
+first transition; any missing, extra, duplicate, reordered, foreign, stale, or
+concurrently changed record fails closed. The original trusted
+`ApplyAuthorization` supplies the execution nonce because the v1 durable
+checkpoint record does not duplicate that field.
+
 `CompensationAuthorization` is the only serialized authority for a fresh or
 public `compensate` invocation. Its Schema version is
 `agent-equipment-compensation-authorization/v1`; its identity is
@@ -148,7 +166,9 @@ excluding `compensation_authorization_identity`. It binds `command: compensate`,
 issuer and validity times, a fresh `compensation_nonce`, and a closed tuple of
 the original apply-authorization identity/digest, execution-domain identity,
 execution nonce, run identity, checkpoint-set digest, and plan-action-set
-digest. Its complete canonical digest is supplied independently as
+digest. The checkpoint-set digest is derived from the validated complete
+manifest, never accepted as a caller echo. Its complete canonical digest is
+supplied independently as
 `trusted_compensation_authorization_digest`. It cannot start a forward action
 or authorize another run. Immediate reverse compensation after a later failure
 continues inside the already invoked, durably claimed apply run; it does not
@@ -156,8 +176,9 @@ mint or reuse this public authority.
 
 `ReleaseArchiveManifest` is a closed semantic manifest over the candidate and
 installed implementation, exact execution binding including the execution
-domain, launcher identity/manifest,
-authority-store identity/key, `absent` compare token, generation `1`, and four
+domain, checkpoint-set digest, `run_terminal_state: succeeded`, launcher
+identity/manifest, authority-store identity/key, `absent` compare token,
+generation `1`, and four
 SHA-256 digests of the exact UTF-8 byte streams of the authorization, expected-
 case manifest, evidence bundle, and attestation. Exact-byte digests are distinct
 from semantic canonical digests: differently formatted JSON may have the same
@@ -170,8 +191,10 @@ is the canonical digest of the complete record excluding only
 identity is `release-receipt:` plus the canonical digest of its closed payload.
 That payload binds the independently trusted release-launcher identity and
 manifest digest, exact candidate, installed implementation, execution binding
-including the execution domain,
-archive identity/digest, store/key, and one create-only generation. A JSON object
+including the execution domain, checkpoint-set digest, successful terminal run
+state, archive identity/digest,
+store/key, and one create-only generation. A passed receipt cannot exist for a
+compensated, blocked, or nonterminal run. A JSON object
 with the same shape is not a receipt unless the independent launcher produced
 it in the external authority's compare-and-swap archive.
 
@@ -825,9 +848,14 @@ compensate(
 ) -> compensation_report
 ```
 
-Before the first action checkpoint, the executor strictly parses the closed
-`ApplyAuthorization`, rejects duplicate members and non-JSON values, validates
-its Schema and semantic digest/identity formulas, and requires its complete
+Before the first action checkpoint, the executor rejects a raw authority input
+larger than 256 KiB before UTF-8 decoding, JSON parsing, regex evaluation,
+credential scanning, or hashing. It strictly parses UTF-8 JSON, rejects
+duplicate members, non-finite numbers, and non-JSON values, then validates the
+closed `ApplyAuthorization`. Every variable string is bounded by Schema and UTC
+fractional seconds are limited to nine digits, so parsed-object callers cannot
+bypass the raw-byte boundary with unbounded regex or hash work. The executor
+validates its Schema and semantic digest/identity formulas, and requires its complete
 tuple to equal the independently validated local artifacts and
 `trusted_apply_authorization_digest` plus the trusted operator-review-package
 digest. Its top-level `execution_domain_identity` must equal

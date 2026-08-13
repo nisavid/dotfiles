@@ -3,9 +3,10 @@
 This is the release gate defined by Issue #60. It specifies the evidence the
 production reconciler and the separately authorized runtime migration must
 produce. `execution-authority-v1.schema.json` separately defines the closed
-pre-mutation `ApplyAuthorization`, public `CompensationAuthorization`,
-`ReleaseArchiveManifest`, and terminal `ReleaseReceipt`; none is
-candidate-authored authority. Passing the design-schema tests or the disposable
+pre-mutation `ApplyAuthorization`, closed `CheckpointSetManifest`, public
+`CompensationAuthorization`, `ReleaseArchiveManifest`, and terminal
+`ReleaseReceipt`; none is candidate-authored authority. Passing the
+design-schema tests or the disposable
 prototype alone does not satisfy the production gate.
 
 ## Evidence record
@@ -296,9 +297,9 @@ the 26 methods in `AcceptanceEvidenceContractTests`:
 
 ## Execution-authority design evidence
 
-The apply authorization, compensation authorization, release archive manifest,
-and release receipt are external authority records, not children inside the
-candidate's 74-ID evidence bundle. The methods in
+The apply authorization, checkpoint-set manifest, compensation authorization,
+release archive manifest, and release receipt are external authority records,
+not children inside the candidate's 74-ID evidence bundle. The methods in
 `AgentEquipmentDeploymentContractTests` pin their closed source shape and the
 future deployment separation:
 
@@ -306,14 +307,17 @@ future deployment separation:
 | --- | --- |
 | Apply authority | `test_apply_authorization_is_closed_over_the_complete_binding_tuple`; `test_apply_authorization_requires_command_time_run_and_replay_identity`; `test_apply_authorization_identity_and_operator_review_are_semantic_authority`; `test_apply_authorization_validates_the_complete_tuple_and_time_window` |
 | Compensation authority | Closed-schema, canonical-identity, trusted-digest/domain, original-run/checkpoint-set, time-window, and fresh-nonce vectors in `AgentEquipmentDeploymentContractTests` |
+| Checkpoint-set authority | `test_checkpoint_set_manifest_is_closed_and_matches_the_trusted_store`; `test_checkpoint_set_rejects_incomplete_foreign_or_stale_store_views`; `test_compensation_derives_checkpoint_digest_from_the_trusted_store` |
 | Release authority | `test_release_archive_manifest_and_receipt_bind_exact_bytes_and_execution`; `test_archive_byte_digest_is_distinct_from_authorization_canonical_digest`; `test_release_authority_uses_shared_public_data_policy`; `test_release_receipt_binds_launcher_authority_and_one_cas_archive`; `test_source_shape_keeps_audit_candidate_and_release_authority_separate` |
-| Runtime boundary | `test_runtime_gate_and_external_authority_precede_every_mutation` |
+| Runtime boundary | `test_runtime_gate_and_external_authority_precede_every_mutation`; `test_raw_authority_boundary_rejects_ambiguous_or_unbounded_input` |
 
 These are pure design-contract vectors. They prove canonical identities and
-digests, complete trusted binding equality, trusted-clock ordering, exact
-archive-byte digest bindings, and receipt-to-archive equality. Production must
+digests, complete trusted binding equality, bounded strict raw parsing,
+trusted-clock ordering, exact archive-byte digest bindings, and receipt-to-
+archive equality. Production must
 still prove authoritative execution-domain ownership, durable apply and
-compensation nonce replay rejection, production checkpoint-set binding,
+compensation nonce replay rejection, the exclusive-lease store enumeration and
+generation/CAS recheck represented by the pure checkpoint-set validator,
 external launcher byte verification, create-only archive concurrency/durability,
 and receipt retrieval from the authority store.
 

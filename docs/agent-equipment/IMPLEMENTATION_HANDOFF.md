@@ -38,7 +38,7 @@ deferred.
 | `docs/agent-equipment/plan-action-set-v1.schema.json` | Closed projection of every independently validated automated plan action supplied to captured-state validation |
 | `docs/agent-equipment/adapter-contract-v1.schema.json` | Closed capability, request, observation, action, and receipt serialization contract |
 | `docs/agent-equipment/acceptance-evidence-v1.schema.json` | Closed expected-case, candidate evidence, and post-run attestation contract |
-| `docs/agent-equipment/execution-authority-v1.schema.json` | Closed apply, compensation, release archive manifest, and terminal receipt authority contract |
+| `docs/agent-equipment/execution-authority-v1.schema.json` | Closed apply, checkpoint-set, compensation, release archive manifest, and terminal receipt authority contract |
 | `docs/agent-equipment/initial-catalog.proposed.json` | Schema-valid initial desired-state proposal; no live authority |
 | `docs/agent-equipment/initial-lock.proposed.json` | Generated 132-record lock bound to the proposed catalog digest |
 | `docs/agent-equipment/INVENTORY.md` and `initial-inventory.json` | Dated, secret-free read-only observation and initial classification |
@@ -236,6 +236,14 @@ and its independently authenticated digest. The record uses
 window, a fresh `compensation_nonce`, and exact bindings to the original apply
 identity/digest, execution-domain identity, execution nonce, run identity,
 checkpoint-set digest, and plan-action-set digest. The executor claims the
+checkpoint-set digest only from a validated `CheckpointSetManifest`: while
+holding the exclusive lease it enumerates the authoritative store at one
+generation, recomputes each complete durable record digest, requires all-and-
+only deterministic membership against the validated plan actions, and rejects
+empty, missing, extra, duplicate, foreign, stale, reordered, malformed, or
+resealed entries. It repeats that enumeration and generation check immediately
+before claiming the nonce or writing a transition; concurrent change fails.
+The executor claims the
 compensation nonce once by compare-and-swap in the same authoritative
 execution-domain ledger namespace before any `compensating` transition. A
 missing, expired, replayed, foreign-domain, or unpersistable authorization
@@ -344,6 +352,8 @@ release_candidate(
     authorized_expected_case_manifest_digest,
     authorized_attestation_manifest_digest,
     trusted_execution_binding,
+    trusted_checkpoint_set_digest,
+    trusted_run_terminal_state,
     artifact_store,
 ) -> ReleaseReceipt
 ```
@@ -356,11 +366,14 @@ manifest digest. The release command strictly parses all four exact byte inputs,
 invokes the validator with the trusted digests, and refuses a release receipt on
 any diagnostic. It hashes each exact input byte stream independently of its
 semantic canonical digest, constructs the closed `ReleaseArchiveManifest`,
-stages and fsyncs the authorization, three release documents, and archive
+binds the independently validated checkpoint-set digest, requires terminal
+state `succeeded`, and stages and fsyncs the authorization, three release
+documents, and archive
 manifest, then commits generation `1` with a create-only
 compare-and-swap rename. An existing identical generation is an idempotent read;
 different existing bytes are a conflict. It emits a `ReleaseReceipt` only after
-that archive commit is durable. Candidate code cannot call the authority's
+that archive commit is durable; compensated, blocked, and nonterminal runs
+cannot yield a passed receipt. Candidate code cannot call the authority's
 receipt/archive capability, and a candidate-authored lookalike record is not a
 receipt. The launcher does not call apply, adapters, native managers, or
 migration recovery.
@@ -434,13 +447,22 @@ Later steps do not begin until the named evidence passes.
   nonce with an exclusive, fsynced create in that domain. Test missing, extra,
   expired, not-yet-valid, replayed, cross-run, cross-plan, cross-domain, and
   persistence-fault cases for zero adapter calls and zero action checkpoints.
+- Put a 256 KiB raw-byte limit ahead of UTF-8 decoding, JSON parsing, regular
+  expressions, credential scanning, and hashing for every public authority
+  record. Reject duplicate members, non-UTF-8, `NaN`/infinity, oversized
+  strings, and timestamps with more than nine fractional digits; keep every
+  variable string bounded in Schema so parsed-object validation also fails
+  closed.
 - Implement the separate closed `CompensationAuthorization` parser and public
   `compensate` boundary. Require `command: compensate`, canonical
   `compensation_authorization_identity`, independently trusted complete digest,
   issuer and UTC window, a fresh `compensation_nonce`, and exact original apply,
   execution-domain, execution-nonce, run, checkpoint-set, and plan-action-set
-  bindings. Claim the compensation nonce once by CAS in the same authoritative
-  execution-domain ledger before writing `compensating`. Never reuse
+  bindings. Derive the checkpoint-set binding from the complete independently
+  enumerated manifest under the exclusive lease, then repeat the exact
+  generation/content check immediately before mutation. Claim the compensation
+  nonce once by CAS in the same authoritative execution-domain ledger before
+  writing `compensating`. Never reuse
   `ApplyAuthorization` for this seam. Test missing, expired, replayed,
   cross-domain, cross-run, cross-checkpoint, cross-action-set, and persistence-
   fault cases for zero adapter calls and checkpoint transitions. Keep automatic

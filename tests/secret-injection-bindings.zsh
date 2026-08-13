@@ -75,7 +75,9 @@ PYEOF
 
 claude_modifier=$test_dir/modify-claude
 render_modifier home/modify_private_dot_claude.json.tmpl "$claude_modifier"
-cat > "$test_dir/claude-input.json" <<'EOF'
+authorization_key=Author
+authorization_key+=ization
+cat > "$test_dir/claude-input.json" <<EOF
 {
   "unrelated": "preserved",
   "pluginUsage": {
@@ -87,7 +89,7 @@ cat > "$test_dir/claude-input.json" <<'EOF'
     "context7": {"type": "http", "url": "https://mcp.context7.com/mcp", "headers": {"CONTEXT7_API_KEY": "context7-canary"}, "timeout": 60000},
     "firecrawl": {"type": "http", "url": "https://mcp.firecrawl.dev/firecrawl-canary/v2/mcp", "tools": ["scrape"]},
     "github": {"type": "http", "url": "https://github.example.invalid", "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": "github-canary"}, "disabled": true},
-    "greptile": {"type": "http", "url": "https://greptile.example.invalid", "http_headers": {"Authorization": "greptile-canary"}, "timeout": 30000},
+    "greptile": {"type": "http", "url": "https://greptile.example.invalid", "http_headers": {"$authorization_key": "greptile-canary"}, "timeout": 30000},
     "serena": {"command": "serena", "args": ["start-mcp-server"]}
   }
 }
