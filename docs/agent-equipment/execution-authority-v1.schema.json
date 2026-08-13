@@ -4,8 +4,11 @@
   "title": "Agent equipment execution and release authority v1",
   "oneOf": [
     {"$ref": "#/$defs/applyAuthorization"},
+    {"$ref": "#/$defs/preparedActionAuthoritySet"},
     {"$ref": "#/$defs/compensationAuthorization"},
+    {"$ref": "#/$defs/compensationTransitionClaim"},
     {"$ref": "#/$defs/checkpointSetManifest"},
+    {"$ref": "#/$defs/runTerminalRecord"},
     {"$ref": "#/$defs/releaseArchiveManifest"},
     {"$ref": "#/$defs/releaseReceipt"}
   ],
@@ -37,6 +40,8 @@
         "lock_digest",
         "plan_digest",
         "plan_action_set_digest",
+        "prepared_action_authority_set_identity",
+        "prepared_action_authority_set_digest",
         "capability_set_digest",
         "captured_state_identity",
         "captured_state_digest",
@@ -50,6 +55,11 @@
         "lock_digest": {"$ref": "#/$defs/digest"},
         "plan_digest": {"$ref": "#/$defs/digest"},
         "plan_action_set_digest": {"$ref": "#/$defs/digest"},
+        "prepared_action_authority_set_identity": {
+          "type": "string",
+          "pattern": "^prepared-action-authority-set:sha256:[0-9a-f]{64}$"
+        },
+        "prepared_action_authority_set_digest": {"$ref": "#/$defs/digest"},
         "capability_set_digest": {"$ref": "#/$defs/digest"},
         "captured_state_identity": {"$ref": "#/$defs/opaqueIdentity"},
         "captured_state_digest": {"$ref": "#/$defs/digest"},
@@ -98,6 +108,220 @@
         },
         "command": {"const": "apply"},
         "bindings": {"$ref": "#/$defs/applyBindings"}
+      }
+    },
+    "configurationObservation": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["status", "digest"],
+          "additionalProperties": false,
+          "properties": {
+            "status": {"const": "observed"},
+            "digest": {"$ref": "#/$defs/digest"}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["status"],
+          "additionalProperties": false,
+          "properties": {"status": {"enum": ["not_applicable", "unknown"]}}
+        }
+      ]
+    },
+    "observedVersion": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["status", "value"],
+          "additionalProperties": false,
+          "properties": {
+            "status": {"const": "observed"},
+            "value": {"type": "string", "minLength": 1}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["status"],
+          "additionalProperties": false,
+          "properties": {"status": {"enum": ["route_absent", "unknown"]}}
+        }
+      ]
+    },
+    "managerDrift": {
+      "type": "object",
+      "required": ["status", "reviewed_baseline", "observation_source"],
+      "additionalProperties": false,
+      "properties": {
+        "status": {"enum": ["none", "changed_from_reviewed_baseline", "unobservable", "not_applicable"]},
+        "reviewed_baseline": {"oneOf": [{"type": "string", "minLength": 1}, {"type": "null"}]},
+        "observation_source": {"oneOf": [{"type": "string", "minLength": 1}, {"type": "null"}]}
+      }
+    },
+    "normalizedState": {
+      "type": "object",
+      "required": ["route_presence", "enablement", "configuration", "component_states", "observed_version", "native_update_control", "native_update_suppression_state", "manager_drift"],
+      "additionalProperties": false,
+      "properties": {
+        "route_presence": {"enum": ["present", "absent", "partial", "unknown"]},
+        "enablement": {"enum": ["enabled", "disabled", "mixed", "not_applicable", "unknown"]},
+        "configuration": {"$ref": "#/$defs/configurationObservation"},
+        "component_states": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "required": ["equipment_identity", "state"],
+            "additionalProperties": false,
+            "properties": {
+              "equipment_identity": {"type": "string", "pattern": "^(skill|plugin|mcp|hook|other):"},
+              "state": {"enum": ["enabled", "disabled", "absent", "unknown"]}
+            }
+          }
+        },
+        "observed_version": {"$ref": "#/$defs/observedVersion"},
+        "native_update_control": {"enum": ["unknown", "suppressible", "unsuppressible", "not_applicable"]},
+        "native_update_suppression_state": {"enum": ["enabled", "disabled", "unavailable", "unknown", "not_applicable"]},
+        "manager_drift": {"$ref": "#/$defs/managerDrift"}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"native_update_control": {"const": "not_applicable"}}
+          },
+          "then": {
+            "properties": {"native_update_suppression_state": {"const": "not_applicable"}}
+          }
+        },
+        {
+          "if": {
+            "properties": {"native_update_control": {"const": "unsuppressible"}}
+          },
+          "then": {
+            "properties": {"native_update_suppression_state": {"const": "unavailable"}}
+          }
+        },
+        {
+          "if": {
+            "properties": {"native_update_control": {"const": "suppressible"}}
+          },
+          "then": {
+            "properties": {
+              "native_update_suppression_state": {
+                "enum": ["enabled", "disabled", "unknown", "unavailable"]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"native_update_control": {"const": "unknown"}}
+          },
+          "then": {
+            "properties": {
+              "native_update_suppression_state": {"enum": ["unknown", "unavailable"]}
+            }
+          }
+        }
+      ]
+    },
+    "preparedActionAuthority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action_identity",
+        "ordinal",
+        "candidate_identity",
+        "implementation_manifest_digest",
+        "catalog_digest",
+        "lock_digest",
+        "plan_digest",
+        "capability_set_digest",
+        "route_capability_binding",
+        "route_digest",
+        "operation_digest",
+        "compensation_operation",
+        "surface",
+        "captured_state_identity",
+        "captured_state_digest",
+        "captured_pre_state",
+        "captured_pre_state_digest",
+        "expected_post_state",
+        "expected_post_state_digest",
+        "authority_digest"
+      ],
+      "properties": {
+        "action_identity": {
+          "type": "string",
+          "pattern": "^action:sha256:[0-9a-f]{64}$"
+        },
+        "ordinal": {"type": "integer", "minimum": 0, "maximum": 2147483647},
+        "candidate_identity": {"$ref": "#/$defs/opaqueIdentity"},
+        "implementation_manifest_digest": {"$ref": "#/$defs/digest"},
+        "catalog_digest": {"$ref": "#/$defs/digest"},
+        "lock_digest": {"$ref": "#/$defs/digest"},
+        "plan_digest": {"$ref": "#/$defs/digest"},
+        "capability_set_digest": {"$ref": "#/$defs/digest"},
+        "route_capability_binding": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "capability_identity",
+            "capability_digest",
+            "manager_version_evidence_digest"
+          ],
+          "properties": {
+            "capability_identity": {
+              "type": "string",
+              "pattern": "^capability:[a-z0-9][a-z0-9._:/+-]*$"
+            },
+            "capability_digest": {"$ref": "#/$defs/digest"},
+            "manager_version_evidence_digest": {"$ref": "#/$defs/digest"}
+          }
+        },
+        "route_digest": {"$ref": "#/$defs/digest"},
+        "operation_digest": {"$ref": "#/$defs/digest"},
+        "compensation_operation": {"const": "restore_captured_pre_state"},
+        "surface": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "captured_state_identity": {"$ref": "#/$defs/opaqueIdentity"},
+        "captured_state_digest": {"$ref": "#/$defs/digest"},
+        "captured_pre_state": {"$ref": "#/$defs/normalizedState"},
+        "captured_pre_state_digest": {"$ref": "#/$defs/digest"},
+        "expected_post_state": {"$ref": "#/$defs/normalizedState"},
+        "expected_post_state_digest": {"$ref": "#/$defs/digest"},
+        "authority_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "preparedActionAuthoritySet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "authority_set_identity",
+        "authorities",
+        "authority_set_digest"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "agent-equipment-prepared-action-authority-set/v1"
+        },
+        "authority_set_identity": {
+          "type": "string",
+          "pattern": "^prepared-action-authority-set:sha256:[0-9a-f]{64}$"
+        },
+        "authorities": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4096,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/preparedActionAuthority"}
+        },
+        "authority_set_digest": {"$ref": "#/$defs/digest"}
       }
     },
     "executionBinding": {
@@ -196,6 +420,42 @@
         "bindings": {"$ref": "#/$defs/compensationBindings"}
       }
     },
+    "compensationTransitionClaim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "checkpoint_identity",
+        "compensation_authorization_identity",
+        "compensation_authorization_digest",
+        "compensation_nonce",
+        "transition_claim_identity",
+        "transition_claim_digest"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "agent-equipment-compensation-transition-claim/v1"
+        },
+        "checkpoint_identity": {
+          "type": "string",
+          "pattern": "^checkpoint:sha256:[0-9a-f]{64}$"
+        },
+        "compensation_authorization_identity": {
+          "type": "string",
+          "pattern": "^compensation-authorization:sha256:[0-9a-f]{64}$"
+        },
+        "compensation_authorization_digest": {"$ref": "#/$defs/digest"},
+        "compensation_nonce": {
+          "type": "string",
+          "pattern": "^compensation-nonce:sha256:[0-9a-f]{64}$"
+        },
+        "transition_claim_identity": {
+          "type": "string",
+          "pattern": "^compensation-transition:sha256:[0-9a-f]{64}$"
+        },
+        "transition_claim_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
     "checkpointSetBindings": {
       "type": "object",
       "additionalProperties": false,
@@ -234,8 +494,10 @@
         "record_version",
         "phase",
         "invocation_state",
+        "compensation_authority_kind",
         "action_identity",
         "ordinal",
+        "compensation_transition_claim_identity",
         "checkpoint_record_digest"
       ],
       "properties": {
@@ -259,6 +521,9 @@
           ]
         },
         "invocation_state": {"enum": ["not_started", "started"]},
+        "compensation_authority_kind": {
+          "enum": ["none", "automatic_apply", "public_compensation"]
+        },
         "action_identity": {
           "type": "string",
           "pattern": "^action:sha256:[0-9a-f]{64}$"
@@ -268,8 +533,54 @@
           "minimum": 0,
           "maximum": 9223372036854775807
         },
+        "compensation_transition_claim_identity": {
+          "oneOf": [
+            {"type": "null"},
+            {
+              "type": "string",
+              "pattern": "^compensation-transition:sha256:[0-9a-f]{64}$"
+            }
+          ]
+        },
         "checkpoint_record_digest": {"$ref": "#/$defs/digest"}
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"phase": {"enum": ["prepared", "completed"]}}
+          },
+          "then": {
+            "properties": {
+              "compensation_authority_kind": {"const": "none"},
+              "compensation_transition_claim_identity": {"type": "null"}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "compensation_authority_kind": {"const": "automatic_apply"}
+            }
+          },
+          "then": {
+            "properties": {
+              "compensation_transition_claim_identity": {"type": "null"}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "compensation_authority_kind": {"const": "public_compensation"}
+            }
+          },
+          "then": {
+            "properties": {
+              "compensation_transition_claim_identity": {"type": "string"}
+            }
+          }
+        }
+      ]
     },
     "checkpointSetManifest": {
       "type": "object",
@@ -325,15 +636,57 @@
       "additionalProperties": false,
       "required": [
         "apply_authorization_bytes_digest",
+        "prepared_action_authority_set_bytes_digest",
+        "checkpoint_set_manifest_bytes_digest",
+        "run_terminal_record_bytes_digest",
         "expected_case_manifest_bytes_digest",
         "evidence_bundle_bytes_digest",
         "attestation_manifest_bytes_digest"
       ],
       "properties": {
         "apply_authorization_bytes_digest": {"$ref": "#/$defs/digest"},
+        "prepared_action_authority_set_bytes_digest": {"$ref": "#/$defs/digest"},
+        "checkpoint_set_manifest_bytes_digest": {"$ref": "#/$defs/digest"},
+        "run_terminal_record_bytes_digest": {"$ref": "#/$defs/digest"},
         "expected_case_manifest_bytes_digest": {"$ref": "#/$defs/digest"},
         "evidence_bundle_bytes_digest": {"$ref": "#/$defs/digest"},
         "attestation_manifest_bytes_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "runTerminalRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "run_terminal_identity",
+        "execution_binding",
+        "plan_action_set_digest",
+        "checkpoint_set_identity",
+        "checkpoint_set_digest",
+        "checkpoint_store_generation",
+        "state",
+        "run_terminal_digest"
+      ],
+      "properties": {
+        "schema_version": {"const": "agent-equipment-run-terminal-record/v1"},
+        "run_terminal_identity": {
+          "type": "string",
+          "pattern": "^run-terminal:sha256:[0-9a-f]{64}$"
+        },
+        "execution_binding": {"$ref": "#/$defs/executionBinding"},
+        "plan_action_set_digest": {"$ref": "#/$defs/digest"},
+        "checkpoint_set_identity": {
+          "type": "string",
+          "pattern": "^checkpoint-set:sha256:[0-9a-f]{64}$"
+        },
+        "checkpoint_set_digest": {"$ref": "#/$defs/digest"},
+        "checkpoint_store_generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        },
+        "state": {"const": "succeeded"},
+        "run_terminal_digest": {"$ref": "#/$defs/digest"}
       }
     },
     "releaseArchivePayload": {
@@ -343,8 +696,11 @@
         "candidate_identity",
         "implementation_manifest_digest",
         "execution_binding",
+        "plan_action_set_digest",
+        "checkpoint_set_identity",
         "checkpoint_set_digest",
-        "run_terminal_state",
+        "run_terminal_identity",
+        "run_terminal_digest",
         "launcher_identity",
         "launcher_manifest_digest",
         "archive_destination",
@@ -354,8 +710,17 @@
         "candidate_identity": {"$ref": "#/$defs/opaqueIdentity"},
         "implementation_manifest_digest": {"$ref": "#/$defs/digest"},
         "execution_binding": {"$ref": "#/$defs/executionBinding"},
+        "plan_action_set_digest": {"$ref": "#/$defs/digest"},
+        "checkpoint_set_identity": {
+          "type": "string",
+          "pattern": "^checkpoint-set:sha256:[0-9a-f]{64}$"
+        },
         "checkpoint_set_digest": {"$ref": "#/$defs/digest"},
-        "run_terminal_state": {"const": "succeeded"},
+        "run_terminal_identity": {
+          "type": "string",
+          "pattern": "^run-terminal:sha256:[0-9a-f]{64}$"
+        },
+        "run_terminal_digest": {"$ref": "#/$defs/digest"},
         "launcher_identity": {
           "type": "string",
           "pattern": "^release-launcher:[A-Za-z0-9][A-Za-z0-9._/-]{0,254}$"
@@ -397,8 +762,11 @@
         "candidate_identity",
         "implementation_manifest_digest",
         "execution_binding",
+        "plan_action_set_digest",
+        "checkpoint_set_identity",
         "checkpoint_set_digest",
-        "run_terminal_state",
+        "run_terminal_identity",
+        "run_terminal_digest",
         "launcher_identity",
         "launcher_manifest_digest",
         "archive_identity",
@@ -411,8 +779,17 @@
         "candidate_identity": {"$ref": "#/$defs/opaqueIdentity"},
         "implementation_manifest_digest": {"$ref": "#/$defs/digest"},
         "execution_binding": {"$ref": "#/$defs/executionBinding"},
+        "plan_action_set_digest": {"$ref": "#/$defs/digest"},
+        "checkpoint_set_identity": {
+          "type": "string",
+          "pattern": "^checkpoint-set:sha256:[0-9a-f]{64}$"
+        },
         "checkpoint_set_digest": {"$ref": "#/$defs/digest"},
-        "run_terminal_state": {"const": "succeeded"},
+        "run_terminal_identity": {
+          "type": "string",
+          "pattern": "^run-terminal:sha256:[0-9a-f]{64}$"
+        },
+        "run_terminal_digest": {"$ref": "#/$defs/digest"},
         "launcher_identity": {
           "type": "string",
           "pattern": "^release-launcher:[A-Za-z0-9][A-Za-z0-9._/-]{0,254}$"

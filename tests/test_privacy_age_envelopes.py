@@ -1,0 +1,693 @@
+from __future__ import annotations
+
+import base64
+import hashlib
+import json
+import os
+import shutil
+import subprocess
+import sys
+import textwrap
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest import TestCase, mock
+
+from scripts.privacy_age_envelopes import (
+    AgeEnvelopeError,
+    age_inspection_has_exact_postquantum_stanzas,
+    canonical_manifest_bytes,
+    discover_age_files,
+)
+
+ROOT = Path(__file__).resolve().parents[1]
+SCANNER = ROOT / "scripts/privacy-scan"
+ADMITTER = ROOT / "scripts/admit-age-envelopes"
+AGE_VERSION = "v1.3.1"
+MANIFEST = ".privacy-age-envelopes.json"
+MANIFEST_VERSION = "privacy-age-envelopes/v1"
+
+
+def sha256(data: bytes) -> str:
+    return "sha256:" + hashlib.sha256(data).hexdigest()
+
+
+def manifest_bytes(entries: list[tuple[str, bytes]]) -> bytes:
+    document = {
+        "version": MANIFEST_VERSION,
+        "envelopes": [
+            {"path": path, "sha256": sha256(data)} for path, data in sorted(entries)
+        ],
+    }
+    return (json.dumps(document, indent=2) + "\n").encode("utf-8")
+
+
+class PrivacyAgeEnvelopeTests(TestCase):
+    def setUp(self) -> None:
+        self.temporary_directory = TemporaryDirectory()
+        self.addCleanup(self.temporary_directory.cleanup)
+        self.base = Path(self.temporary_directory.name)
+        self.root = self.base / "repository"
+        self.root.mkdir()
+        self.identity = self.base / "identity.txt"
+        subprocess.run(
+            ["age-keygen", "-pq", "-o", str(self.identity)],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        self.recipient = subprocess.run(
+            ["age-keygen", "-y", str(self.identity)],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+
+    def run_scanner(self) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, str(SCANNER), "--root", str(self.root)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+    def run_admitter(self) -> subprocess.CompletedProcess[str]:
+        return self.run_admitter_with(identity=self.identity)
+
+    def run_admitter_with(
+        self,
+        *,
+        identity: Path,
+        additional_identities: list[Path] | None = None,
+        environment: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        command = [
+            sys.executable,
+            str(ADMITTER),
+            "--root",
+            str(self.root),
+            "--identity",
+            str(identity),
+        ]
+        for additional_identity in additional_identities or []:
+            command.extend(("--identity", str(additional_identity)))
+        return subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            env=environment,
+            timeout=10,
+        )
+
+    def encrypt(
+        self,
+        plaintext: bytes,
+        *,
+        armor: bool = False,
+        recipients: list[str] | None = None,
+    ) -> bytes:
+        command = ["age", "--encrypt"]
+        for recipient in recipients or [self.recipient]:
+            command.extend(("--recipient", recipient))
+        if armor:
+            command.append("--armor")
+        return subprocess.run(
+            command,
+            input=plaintext,
+            check=True,
+            capture_output=True,
+        ).stdout
+
+    def armor(self, native: bytes) -> bytes:
+        encoded = base64.b64encode(native).decode("ascii")
+        body = "\n".join(textwrap.wrap(encoded, width=64))
+        return (
+            "-----BEGIN AGE ENCRYPTED FILE-----\n"
+            + body
+            + "\n-----END AGE ENCRYPTED FILE-----\n"
+        ).encode("ascii")
+
+    def write_manifest(self, entries: list[tuple[str, bytes]]) -> None:
+        (self.root / MANIFEST).write_bytes(manifest_bytes(entries))
+
+    def inspect(self, data: bytes) -> dict[str, object]:
+        result = subprocess.run(
+            ["age-inspect", "--json", "-"],
+            input=data,
+            check=True,
+            capture_output=True,
+        )
+        document = json.loads(result.stdout)
+        self.assertIsInstance(document, dict)
+        return document
+
+    def make_identity(self, name: str, *, postquantum: bool = True) -> tuple[Path, str]:
+        identity = self.base / name
+        command = ["age-keygen"]
+        if postquantum:
+            command.append("-pq")
+        command.extend(("-o", str(identity)))
+        subprocess.run(
+            command,
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        recipient = subprocess.run(
+            ["age-keygen", "-y", str(identity)],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        return identity, recipient
+
+    def test_scanner_rejects_plaintext_appended_to_a_manifested_native_envelope(
+        self,
+    ) -> None:
+        relative = "ciphertext.age"
+        valid = (ROOT / "home/.private-prd-01.toml.age").read_bytes()
+        path = self.root / relative
+        path.write_bytes(valid)
+        self.write_manifest([(relative, valid)])
+
+        clean = self.run_scanner()
+        self.assertEqual(clean.returncode, 0, clean.stdout + clean.stderr)
+
+        credential = "ghp_" + "A" * 36
+        path.write_bytes(valid + b"\n" + credential.encode("ascii") + b"\n")
+        result = self.run_scanner()
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("ciphertext.age:0: [invalid-age-envelope]", result.stdout)
+        self.assertIn("ciphertext.age:", result.stdout)
+        self.assertIn("[provider-token]", result.stdout)
+        self.assertNotIn(credential, result.stdout + result.stderr)
+
+    def test_admission_decrypts_native_and_armored_binary_envelopes_to_eof(
+        self,
+    ) -> None:
+        native = self.encrypt(b"\x00binary\xffpayload")
+        armored = self.encrypt(b"armored payload", armor=True)
+        (self.root / "native.age").write_bytes(native)
+        nested = self.root / "nested"
+        nested.mkdir()
+        (nested / "armored.age").write_bytes(armored)
+
+        result = self.run_admitter()
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, "")
+        self.assertEqual(
+            (self.root / MANIFEST).read_bytes(),
+            manifest_bytes([("native.age", native), ("nested/armored.age", armored)]),
+        )
+        scan = self.run_scanner()
+        self.assertEqual(scan.returncode, 0, scan.stdout + scan.stderr)
+
+    def test_admission_rejects_an_additional_postquantum_recipient(self) -> None:
+        _, additional_recipient = self.make_identity("additional-identity.txt")
+        candidate = self.encrypt(
+            b"unauthorized recipient fixture",
+            recipients=[self.recipient, additional_recipient],
+        )
+        (self.root / "candidate.age").write_bytes(candidate)
+        sentinel = manifest_bytes([])
+        (self.root / MANIFEST).write_bytes(sentinel)
+
+        result = self.run_admitter()
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, "age-envelope admission failed\n")
+        self.assertEqual((self.root / MANIFEST).read_bytes(), sentinel)
+
+    def test_hosted_policy_accepts_exactly_one_postquantum_stanza(self) -> None:
+        _, additional_recipient = self.make_identity("additional-identity.txt")
+        one_recipient = self.encrypt(b"one recipient")
+        two_recipients = self.encrypt(
+            b"two recipients",
+            recipients=[self.recipient, additional_recipient],
+        )
+
+        self.assertTrue(
+            age_inspection_has_exact_postquantum_stanzas(
+                self.inspect(one_recipient),
+                stanza_count=1,
+            )
+        )
+        self.assertFalse(
+            age_inspection_has_exact_postquantum_stanzas(
+                self.inspect(two_recipients),
+                stanza_count=1,
+            )
+        )
+
+    def test_hosted_policy_rejects_malformed_age_inspection_metadata(self) -> None:
+        valid = self.inspect(self.encrypt(b"inspection metadata fixture"))
+        valid_sizes = valid["sizes"]
+        self.assertIsInstance(valid_sizes, dict)
+        cases = {
+            "non-PQ marker": {**valid, "postquantum": "no"},
+            "non-string stanza": {**valid, "stanza_types": [None]},
+            "wrong stanza type": {**valid, "stanza_types": ["X25519"]},
+            "missing stanza": {**valid, "stanza_types": []},
+            "extra stanza": {
+                **valid,
+                "stanza_types": ["mlkem768x25519", "mlkem768x25519"],
+            },
+            "boolean size": {
+                **valid,
+                "sizes": {**valid_sizes, "header": True},
+            },
+            "unknown member": {**valid, "unknown": True},
+        }
+
+        for label, metadata in cases.items():
+            with self.subTest(label):
+                self.assertFalse(
+                    age_inspection_has_exact_postquantum_stanzas(
+                        metadata,
+                        stanza_count=1,
+                    )
+                )
+
+    def test_admission_rejects_a_classical_only_ciphertext(self) -> None:
+        classical_identity, classical_recipient = self.make_identity(
+            "classical-identity.txt",
+            postquantum=False,
+        )
+        candidate = self.encrypt(
+            b"classical recipient fixture",
+            recipients=[classical_recipient],
+        )
+        (self.root / "candidate.age").write_bytes(candidate)
+        sentinel = manifest_bytes([])
+        (self.root / MANIFEST).write_bytes(sentinel)
+
+        result = self.run_admitter_with(identity=classical_identity)
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, "age-envelope admission failed\n")
+        self.assertEqual((self.root / MANIFEST).read_bytes(), sentinel)
+
+    def test_admission_requires_each_supplied_identity_to_decrypt(self) -> None:
+        missing_identity, _ = self.make_identity("missing-identity.txt")
+        _, unauthorized_recipient = self.make_identity("unauthorized-identity.txt")
+        candidate = self.encrypt(
+            b"recipient substitution fixture",
+            recipients=[self.recipient, unauthorized_recipient],
+        )
+        (self.root / "candidate.age").write_bytes(candidate)
+        sentinel = manifest_bytes([])
+        (self.root / MANIFEST).write_bytes(sentinel)
+
+        result = self.run_admitter_with(
+            identity=self.identity,
+            additional_identities=[missing_identity],
+        )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, "age-envelope admission failed\n")
+        self.assertEqual((self.root / MANIFEST).read_bytes(), sentinel)
+
+    def test_admission_accepts_when_each_supplied_identity_decrypts(self) -> None:
+        additional_identity, additional_recipient = self.make_identity(
+            "additional-identity.txt"
+        )
+        candidate = self.encrypt(
+            b"complete recipient set fixture",
+            recipients=[self.recipient, additional_recipient],
+        )
+        (self.root / "candidate.age").write_bytes(candidate)
+
+        result = self.run_admitter_with(
+            identity=self.identity,
+            additional_identities=[additional_identity],
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(
+            (self.root / MANIFEST).read_bytes(),
+            manifest_bytes([("candidate.age", candidate)]),
+        )
+
+    def test_admission_rejects_duplicate_identity_material(self) -> None:
+        duplicate_identity = self.base / "duplicate-identity.txt"
+        shutil.copyfile(self.identity, duplicate_identity)
+        duplicate_identity.chmod(0o600)
+        _, unauthorized_recipient = self.make_identity("unauthorized-identity.txt")
+        candidate = self.encrypt(
+            b"duplicate identity substitution fixture",
+            recipients=[self.recipient, unauthorized_recipient],
+        )
+        (self.root / "candidate.age").write_bytes(candidate)
+        sentinel = manifest_bytes([])
+        (self.root / MANIFEST).write_bytes(sentinel)
+
+        result = self.run_admitter_with(
+            identity=self.identity,
+            additional_identities=[duplicate_identity],
+        )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, "age-envelope admission failed\n")
+        self.assertEqual((self.root / MANIFEST).read_bytes(), sentinel)
+
+    def test_admission_rejects_a_group_or_world_readable_identity(self) -> None:
+        candidate = self.encrypt(b"identity mode fixture")
+        (self.root / "candidate.age").write_bytes(candidate)
+        sentinel = manifest_bytes([])
+        (self.root / MANIFEST).write_bytes(sentinel)
+        self.identity.chmod(0o644)
+
+        result = self.run_admitter()
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, "age-envelope admission failed\n")
+        self.assertEqual((self.root / MANIFEST).read_bytes(), sentinel)
+
+    def test_admission_rejects_a_symlinked_identity(self) -> None:
+        candidate = self.encrypt(b"identity symlink fixture")
+        (self.root / "candidate.age").write_bytes(candidate)
+        sentinel = manifest_bytes([])
+        (self.root / MANIFEST).write_bytes(sentinel)
+        symlink = self.base / "identity-link.txt"
+        symlink.symlink_to(self.identity)
+
+        result = self.run_admitter_with(identity=symlink)
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, "age-envelope admission failed\n")
+        self.assertEqual((self.root / MANIFEST).read_bytes(), sentinel)
+
+    def test_admission_rejects_incomplete_or_trailing_envelopes_without_mutation(
+        self,
+    ) -> None:
+        native = self.encrypt(b"x" * 2048)
+        inspected = subprocess.run(
+            ["age-inspect", "--json", "-"],
+            input=native,
+            check=True,
+            capture_output=True,
+        )
+        header_size = json.loads(inspected.stdout)["sizes"]["header"]
+        accepted_truncation = native[: header_size + 32]
+        self.assertEqual(
+            subprocess.run(
+                ["age-inspect", "--json", "-"],
+                input=accepted_truncation,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            ).returncode,
+            0,
+        )
+        credential = b"ghp_" + b"A" * 36
+        cases = {
+            "appended plaintext": native + b"\n" + credential + b"\n",
+            "accepted truncation": accepted_truncation,
+            "concatenated streams": native + native,
+            "re-armored truncation": self.armor(accepted_truncation),
+        }
+        sentinel = manifest_bytes([])
+
+        for label, candidate in cases.items():
+            with self.subTest(label):
+                (self.root / "candidate.age").write_bytes(candidate)
+                (self.root / MANIFEST).write_bytes(sentinel)
+
+                result = self.run_admitter()
+
+                self.assertEqual(result.returncode, 1)
+                self.assertEqual(result.stdout, "")
+                self.assertEqual(result.stderr, "age-envelope admission failed\n")
+                self.assertNotIn(credential.decode("ascii"), result.stderr)
+                self.assertEqual((self.root / MANIFEST).read_bytes(), sentinel)
+
+    def test_scanner_rejects_a_noncanonical_or_symlinked_manifest(self) -> None:
+        native = self.encrypt(b"manifest fixture")
+        (self.root / "candidate.age").write_bytes(native)
+        canonical = manifest_bytes([("candidate.age", native)])
+        outside = self.base / "outside-manifest.json"
+        outside.write_bytes(canonical)
+        manifest = self.root / MANIFEST
+        cases: dict[str, bytes | None] = {
+            "missing": None,
+            "duplicate member": canonical.replace(
+                b'{\n  "version":',
+                b'{\n  "version": "privacy-age-envelopes/v1",\n  "version":',
+                1,
+            ),
+            "noncanonical encoding": json.dumps(
+                json.loads(canonical), separators=(",", ":")
+            ).encode("ascii"),
+            "unknown member": canonical.replace(
+                b'{\n  "version":', b'{\n  "unknown": true,\n  "version":', 1
+            ),
+            "traversal path": canonical.replace(
+                b'"candidate.age"', b'"../candidate.age"'
+            ),
+            "uppercase digest": canonical.replace(b"sha256:", b"SHA256:", 1),
+        }
+
+        for label, data in cases.items():
+            with self.subTest(label):
+                manifest.unlink(missing_ok=True)
+                if data is not None:
+                    manifest.write_bytes(data)
+                result = self.run_scanner()
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(
+                    f"{MANIFEST}:0: [invalid-age-envelope-manifest]",
+                    result.stdout,
+                )
+
+        manifest.unlink(missing_ok=True)
+        manifest.symlink_to(outside)
+        result = self.run_scanner()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(f"{MANIFEST}:0: [invalid-age-envelope-manifest]", result.stdout)
+
+    def test_scanner_rejects_a_fifo_manifest_without_blocking(self) -> None:
+        os.mkfifo(self.root / MANIFEST)
+
+        result = self.run_scanner()
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(
+            f"{MANIFEST}:0: [invalid-age-envelope-manifest]",
+            result.stdout,
+        )
+
+    def test_admission_rejects_a_fifo_candidate_without_manifest_mutation(
+        self,
+    ) -> None:
+        os.mkfifo(self.root / "candidate.age")
+        sentinel = manifest_bytes([])
+        (self.root / MANIFEST).write_bytes(sentinel)
+
+        result = self.run_admitter()
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, "age-envelope admission failed\n")
+        self.assertEqual((self.root / MANIFEST).read_bytes(), sentinel)
+
+    def test_admission_preserves_the_manifest_and_hides_replace_errors(self) -> None:
+        candidate = self.encrypt(b"manifest replacement fixture")
+        (self.root / "candidate.age").write_bytes(candidate)
+        sentinel = manifest_bytes([])
+        (self.root / MANIFEST).write_bytes(sentinel)
+        hook_directory = self.base / "python-hook"
+        hook_directory.mkdir()
+        sensitive_error = os.fspath(self.base / "private-replace-detail")
+        (hook_directory / "sitecustomize.py").write_text(
+            textwrap.dedent(
+                f"""
+                import os
+
+                _original_replace = os.replace
+
+                def _replace(source, destination):
+                    if os.path.basename(os.fspath(destination)) == {MANIFEST!r}:
+                        raise OSError({sensitive_error!r})
+                    return _original_replace(source, destination)
+
+                os.replace = _replace
+                """
+            ),
+            encoding="utf-8",
+        )
+        environment = os.environ.copy()
+        environment["PYTHONPATH"] = os.pathsep.join(
+            filter(
+                None,
+                [
+                    os.fspath(hook_directory),
+                    environment.get("PYTHONPATH", ""),
+                ],
+            )
+        )
+
+        result = self.run_admitter_with(
+            identity=self.identity,
+            environment=environment,
+        )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, "age-envelope admission failed\n")
+        self.assertNotIn(sensitive_error, result.stderr)
+        self.assertEqual((self.root / MANIFEST).read_bytes(), sentinel)
+        self.assertEqual(
+            list(self.root.glob(f"{MANIFEST}.*")),
+            [],
+        )
+
+    def test_scanner_rejects_a_case_confusable_age_suffix(self) -> None:
+        data = self.encrypt(b"renamed ciphertext")
+        (self.root / "candidate.AgE").write_bytes(data)
+
+        result = self.run_scanner()
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(
+            "candidate.AgE:0: [invalid-age-envelope-suffix] review required",
+            result.stdout,
+        )
+        self.assertIn("[invalid-age-envelope-manifest]", result.stdout)
+
+    def test_scanner_inventory_does_not_hide_age_files_in_cache_named_directories(
+        self,
+    ) -> None:
+        credential = "gh" + "p_" + "A" * 36
+        private_key = "-----BEGIN " + "PRIVATE KEY-----"
+        hidden = {
+            ".pytest_cache/credential.age": credential,
+            "__pycache__/private-key.age": private_key,
+        }
+        for relative, contents in hidden.items():
+            path = self.root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(contents + "\n", encoding="utf-8")
+
+        result = self.run_scanner()
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(f"{MANIFEST}:0: [invalid-age-envelope-manifest]", result.stdout)
+        self.assertIn(".pytest_cache/credential.age:1: [provider-token]", result.stdout)
+        self.assertIn("__pycache__/private-key.age:1: [private-key]", result.stdout)
+        self.assertNotIn(credential, result.stdout + result.stderr)
+        self.assertNotIn(private_key, result.stdout + result.stderr)
+
+    def test_admission_includes_age_files_in_cache_named_directories(self) -> None:
+        relative = ".pytest_cache/candidate.age"
+        ciphertext = self.encrypt(b"cache inventory fixture")
+        candidate = self.root / relative
+        candidate.parent.mkdir()
+        candidate.write_bytes(ciphertext)
+
+        result = self.run_admitter()
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(
+            (self.root / MANIFEST).read_bytes(),
+            manifest_bytes([(relative, ciphertext)]),
+        )
+
+    def test_age_discovery_fails_closed_on_a_walk_error(self) -> None:
+        error = PermissionError("private path")
+
+        def failed_walk(*args: object, **kwargs: object) -> object:
+            callback = kwargs["onerror"]
+            callback(error)
+            return ()
+
+        with (
+            mock.patch("scripts.privacy_age_envelopes.os.walk", failed_walk),
+            self.assertRaises(AgeEnvelopeError),
+        ):
+            discover_age_files(self.root)
+
+    def test_canonical_manifest_rejects_a_serialization_above_its_bound(
+        self,
+    ) -> None:
+        digest = "sha256:" + "a" * 64
+        entries = {f"{'a' * 480}{index:04d}.age": digest for index in range(4096)}
+
+        with self.assertRaises(AgeEnvelopeError):
+            canonical_manifest_bytes(entries)
+
+    def test_scanner_rejects_an_age_symlink_without_following_it(self) -> None:
+        outside = self.base / "outside.age"
+        outside.write_bytes(self.encrypt(b"outside ciphertext"))
+        (self.root / "candidate.age").symlink_to(outside)
+
+        result = self.run_scanner()
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(
+            "candidate.age:0: [age-envelope-not-regular] review required",
+            result.stdout,
+        )
+
+    def test_admission_rejects_unsafe_boundaries_without_manifest_mutation(
+        self,
+    ) -> None:
+        native = self.encrypt(b"boundary fixture")
+        candidate = self.root / "candidate.age"
+        candidate.write_bytes(native)
+        manifest = self.root / MANIFEST
+        sentinel = manifest_bytes([])
+
+        inside_identity = self.root / "identity.txt"
+        inside_identity.write_bytes(self.identity.read_bytes())
+        manifest.write_bytes(sentinel)
+        result = self.run_admitter_with(identity=inside_identity)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(manifest.read_bytes(), sentinel)
+
+        outside = self.base / "outside.age"
+        outside.write_bytes(native)
+        candidate.unlink()
+        candidate.symlink_to(outside)
+        result = self.run_admitter()
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(manifest.read_bytes(), sentinel)
+
+        candidate.unlink()
+        (self.root / "candidate.AGE").write_bytes(native)
+        result = self.run_admitter()
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(manifest.read_bytes(), sentinel)
+
+        (self.root / "candidate.AGE").unlink()
+        candidate.write_bytes(b"x" * (4 * 1024 * 1024 + 1))
+        result = self.run_admitter()
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(manifest.read_bytes(), sentinel)
+
+        fake_bin = self.base / "fake-bin"
+        fake_bin.mkdir()
+        fake_age = fake_bin / "age"
+        fake_age.write_text(
+            "#!/bin/sh\nprintf '%s\\n' v9.9.9\n",
+            encoding="utf-8",
+        )
+        fake_age.chmod(0o755)
+        environment = os.environ.copy()
+        environment["PATH"] = os.fspath(fake_bin)
+        candidate.write_bytes(native)
+        result = self.run_admitter_with(
+            identity=self.identity,
+            environment=environment,
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(manifest.read_bytes(), sentinel)

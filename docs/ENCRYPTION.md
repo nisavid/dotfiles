@@ -11,6 +11,7 @@ Dot-prefixed ciphertext files are source-only data. Chezmoi ignores them as targ
 ## Encrypted Sources And Plaintext Targets
 
 - `home/.private-agents.md.age` supplies the private section of `home/dot_codex/private_AGENTS.md.tmpl`. Chezmoi renders the combined policy only to `~/.codex/AGENTS.md`; the `private_` source attribute gives that target mode `0600`.
+- `home/.private-codex-work.toml.age` supplies private Codex writable roots and trusted project paths to the mode-`0600` `~/.codex/config.toml` overlay.
 - `home/.private-git-identities.toml.age` supplies hostname selection, identity records, editor preference, branch prefix, and tracking policy to generated configuration targets. Public data contains only a synthetic fixture and the allowed personal fallback.
 - `home/.private-machine.toml.age` supplies machine-local checkout paths and identity-bearing GnuPG configuration.
 - `home/.private-hindsight.toml.age` supplies the complete Darwin-only Hindsight consumer binding. Public Hindsight data contains only the reusable release pin.
@@ -25,13 +26,61 @@ skill path, or skill body to the source tree.
 Before publication, run both scan layers:
 
 ```zsh
-python3 scripts/privacy-scan --root .
+python3 scripts/privacy-scan --root . --require-age-manifest
 chezmoi decrypt home/.private-privacy-denylist.txt.age |
-  python3 scripts/privacy-scan --root . --denylist -
+  python3 scripts/privacy-scan --root . --require-age-manifest --denylist -
 ```
 
 The scanner reports only a path, line, and rule. It never echoes the matched
 value.
+
+### Ciphertext admission
+
+The root `.privacy-age-envelopes.json` is the closed, canonical inventory of
+every regular `*.age` source path and its exact SHA-256 digest. Hosted scans
+require the inventory and age v1.3.1's structural parser, reject an unlisted,
+missing, renamed, malformed, oversized, or byte-changed ciphertext, and still
+scan the exact ciphertext bytes for plaintext credential and private-key
+canaries. `age-inspect` does not authenticate a payload and cannot by itself
+distinguish a complete native envelope from a truncated or extended byte
+stream.
+
+The manifest is an integrity inventory, not an authenticated admission
+receipt. The `pull_request_target` boundary executes only verifier and scanner
+code from the exact trusted base commit and treats the pull-request checkout as
+data. It rejects any candidate change to ciphertexts, this inventory, the
+recipient configuration, admission or scanning code, encryption policy, or any
+workflow. A legitimate rotation therefore requires local identity-backed
+admission plus an explicit owner-controlled ruleset disposition; ordinary pull
+requests cannot mint admission authority by editing the candidate manifest.
+
+The v1 repository policy authorizes exactly one post-quantum recipient stanza
+per ciphertext. Hosted scanning enforces that public structural invariant;
+admission binds the single stanza to the supplied identity by independently
+decrypting the exact bytes. To rotate or add a machine, re-encrypt and admit the
+repository as a separately reviewed policy change rather than adding an
+unaccounted recipient.
+
+After adding, replacing, removing, or re-encrypting any age source, regenerate
+the inventory with the machine-local identity outside the repository:
+
+```zsh
+python3 scripts/admit-age-envelopes \
+  --root . \
+  --identity ~/.config/age/key.txt
+python3 scripts/privacy-scan --root . --require-age-manifest
+```
+
+The admission command requires age v1.3.1, mode-`0600` post-quantum identities
+outside the repository, and only ML-KEM-768+X25519 recipient stanzas. The
+number of stanzas must equal the supplied identity set, and each supplied
+identity must independently decrypt every exact candidate to EOF. It reads
+each candidate once with a 4 MiB limit before atomically replacing the
+manifest. It discards plaintext and age diagnostics. The command leaves the
+existing manifest unchanged if any path is unsafe, any envelope fails
+decryption, or any other validation fails. Review the ciphertext and manifest
+together; do not hand-edit a digest to admit bytes that were not validated by
+this command.
 
 ## Source-Only Catalog Editing
 

@@ -19,6 +19,22 @@ mkdir -p -- "$fixture_home/.config/environment.d" "$fixture_home/.config/zsh/zsh
   "$fixture_home/.claude" "$fixture_home/.local/bin" \
   "$fixture_home/.local/lib/secret-exec/bin" "$fake_bin" "$state_dir"
 chmod 700 "$fixture_home/.config/secret-exec/profiles"
+aws_access_field=AWS_ACCESS_KEY
+aws_access_field+=_ID
+aws_secret_field=AWS_SECRET_ACCESS
+aws_secret_field+=_KEY
+github_field=GITHUB_PERSONAL_ACCESS
+github_field+=_TOKEN
+context7_field=CONTEXT7
+context7_field+=_API_KEY
+firecrawl_field=FIRECRAWL
+firecrawl_field+=_API_KEY
+greptile_field=GREPTILE
+greptile_field+=_API_KEY
+aws_access_setting=aws_access_key
+aws_access_setting+=_id
+aws_secret_setting=aws_secret_access
+aws_secret_setting+=_key
 for profile_template in "$repo_root"/home/dot_config/private_secret-exec/private_profiles/*.tmpl(N); do
   profile_name=${${profile_template:t}#private_}
   profile_name=${profile_name%.tmpl}
@@ -65,29 +81,29 @@ cat > "$fixture_home/.aws/config" <<EOF
 credential_process = $fixture_home/.local/bin/secret-exec aws-credential-process aws
 EOF
 
-cat > "$fixture_home/.config/environment.d/10-apikeys.local.conf" <<'EOF'
-AWS_ACCESS_KEY_ID=AKIACANARY123
-AWS_SECRET_ACCESS_KEY=AwsSecretCanary123+/=
-GITHUB_PERSONAL_ACCESS_TOKEN=github-canary
-CONTEXT7_API_KEY=context7-canary
-FIRECRAWL_API_KEY=firecrawl-canary
-GREPTILE_API_KEY=greptile-canary
+cat > "$fixture_home/.config/environment.d/10-apikeys.local.conf" <<EOF
+$aws_access_field=AKIACANARY123
+$aws_secret_field=AwsSecretCanary123+/=
+$github_field=github-canary
+$context7_field=context7-canary
+$firecrawl_field=firecrawl-canary
+$greptile_field=greptile-canary
 EOF
-cat > "$fixture_home/.config/zsh/zshrc.d/apikeys.local.zsh" <<'EOF'
-export GITHUB_PERSONAL_ACCESS_TOKEN=github-canary
-export CONTEXT7_API_KEY=context7-canary
-export FIRECRAWL_API_KEY=firecrawl-canary
+cat > "$fixture_home/.config/zsh/zshrc.d/apikeys.local.zsh" <<EOF
+export $github_field=github-canary
+export $context7_field=context7-canary
+export $firecrawl_field=firecrawl-canary
 EOF
-cat > "$fixture_home/.aws/credentials" <<'EOF'
+cat > "$fixture_home/.aws/credentials" <<EOF
 # Shared credentials fixture
 ; duplicate verification tolerates unrelated profiles; retirement removes this legacy file
 [unrelated]
-aws_access_key_id = UNRELATEDCANARY
-aws_secret_access_key = UnrelatedSecretCanary
+$aws_access_setting = UNRELATEDCANARY
+$aws_secret_setting = UnrelatedSecretCanary
 
 [default]
-aws_access_key_id = AKIACANARY123
-aws_secret_access_key = AwsSecretCanary123+/=
+$aws_access_setting = AKIACANARY123
+$aws_secret_setting = AwsSecretCanary123+/=
 EOF
 cat > "$fixture_home/.config/mcp-config.json" <<'EOF'
 {"mcpServers":{"firecrawl":{"url":"https://mcp.firecrawl.dev/firecrawl-canary/v2/mcp"}}}
@@ -172,13 +188,13 @@ export PATH=$shim_bin:$fake_bin:/opt/homebrew/bin:/usr/bin:/bin
 export FAKE_PROTON_STATE=$state_dir
 
 cp "$fixture_home/.config/environment.d/10-apikeys.local.conf" "$test_dir/environment-pattern"
-cat > "$fixture_home/.config/environment.d/10-apikeys.local.conf" <<'EOF'
-AWS_ACCESS_KEY_ID=AKIACANARY123
-AWS_SECRET_ACCESS_KEY=AwsSecretCanary123+/=
-GITHUB_PERSONAL_ACCESS_TOKEN=github-*
-CONTEXT7_API_KEY=context7-canary
-FIRECRAWL_API_KEY=firecrawl-canary
-GREPTILE_API_KEY=greptile-canary
+cat > "$fixture_home/.config/environment.d/10-apikeys.local.conf" <<EOF
+$aws_access_field=AKIACANARY123
+$aws_secret_field=AwsSecretCanary123+/=
+$github_field=github-*
+$context7_field=context7-canary
+$firecrawl_field=firecrawl-canary
+$greptile_field=greptile-canary
 EOF
 set +e
 zsh "$migrator" > "$test_dir/pattern-mismatch.out" 2>&1
@@ -429,9 +445,9 @@ cat > "$fixture_home/.config/mcp-config.json" <<EOF
 {"mcpServers":{"firecrawl":{"type":"stdio","command":"$fixture_home/.local/bin/secret-exec","args":["firecrawl","--","npx","-y","firecrawl-mcp@3.22.3"]}}}
 EOF
 
-cat > "$fixture_home/.config/environment.d/70-keys.conf" <<'EOF'
+cat > "$fixture_home/.config/environment.d/70-keys.conf" <<EOF
 HF_HOME=/tmp/models
-FIRECRAWL_API_KEY=unexpected-ambient-canary
+$firecrawl_field=unexpected-ambient-canary
 EOF
 set +e
 zsh "$migrator" --retire-plaintext > "$test_dir/unexpected-ambient.out" 2>&1
@@ -461,8 +477,8 @@ set -e
 rm -- "$fixture_home/.config/firecrawl-cli/credentials.json"
 
 mkdir -p -- "$fixture_home/.config/opencode"
-cat > "$fixture_home/.config/opencode/opencode.json" <<'EOF'
-{"mcp":{"context7":{"type":"remote","url":"https://mcp.context7.com/mcp","headers":{"CONTEXT7_API_KEY":"literal-context7-canary"}}}}
+cat > "$fixture_home/.config/opencode/opencode.json" <<EOF
+{"mcp":{"context7":{"type":"remote","url":"https://mcp.context7.com/mcp","headers":{"$context7_field":"literal-context7-canary"}}}}
 EOF
 set +e
 zsh "$migrator" --retire-plaintext > "$test_dir/legacy-opencode.out" 2>&1

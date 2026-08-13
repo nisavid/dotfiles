@@ -17,6 +17,7 @@ semantics.
 | Apply authorization | external operator authority | One time-bounded, one-run grant for one exact pre-mutation binding tuple and execution domain |
 | Execution domain | external operator authority | Independently trusted identity of the one authoritative CAS nonce-ledger namespace and target |
 | Authorization ledger | reconciler runtime state directory | Durable one-time nonce claims inside the exact execution domain; never authority issuance |
+| Prepared action authority set | trusted pre-invocation validator | Sealed all-and-only plan-action projection of adapter-derived normalized pre-state and expected post-state |
 | Compensation authorization | external operator authority | Time-bounded grant for one fresh public compensation invocation against one original run and checkpoint set |
 | Apply checkpoints | reconciler runtime state directory | Recovery evidence for one immutable plan |
 | Expected acceptance cases | production evidence writer | Exact release cases projected from one validated plan and authorized binding tuple |
@@ -127,13 +128,26 @@ URLs, native output, or secret values. Manager and harness version strings are
 public native-manager observations; diagnostics never echo their supplied
 contents.
 
-`execution-authority-v1.schema.json` owns five closed records with independent
-purposes. `ApplyAuthorization` is the only serialized authority that may start
+`execution-authority-v1.schema.json` owns eight closed records with independent
+purposes. `PreparedActionAuthoritySet` is sealed after complete plan, capture,
+and adapter-context validation and before apply issuance. It contains one
+canonically ordered authority for every plan action and no others. Each member
+binds the exact candidate and implementation, catalog, lock, plan, capability
+set and route capability, operation and compensation, surface set, sealed
+capture identity/digest, and complete normalized captured pre-state and expected
+post-state with self-digests. Both normalized states contain a sorted, unique
+component identity set equal to the action's exact controlled-equipment set, and
+the expected post-state must include the action's desired-state fragment. The
+set has an independently trusted canonical identity and digest; a caller map or
+a coordinated reseal does not replace that trust.
+
+`ApplyAuthorization` is the only serialized authority that may start
 forward mutation. It binds `command: apply`, issuer and validity times, one run
 identity, one issuer-generated execution nonce, the independently trusted
 `execution_domain_identity`, and the complete candidate, installed-
-implementation, catalog, lock, plan, plan-action-set, capability-set, sealed-
-capture, expected-case-manifest, and operator-review-package tuple. The review-
+implementation, catalog, lock, plan, plan-action-set, prepared-action-authority-
+set identity/digest, capability-set, sealed-capture, expected-case-manifest, and
+operator-review-package tuple. The review-
 package digest binds the exact proposed live mutations, rollback material, and
 operator review content presented to the issuer. Its identity is the canonical
 digest of the record excluding `authorization_identity`; the separately supplied
@@ -142,7 +156,9 @@ record. Equality with candidate-authored fields is not authorization.
 
 `CheckpointSetManifest` is the canonical, nonempty, ordered projection of all
 durable checkpoints eligible for one exact apply authorization, execution
-domain, run, and plan-action set at one checkpoint-store generation. Each entry
+domain, run, and complete validated plan-action set at one checkpoint-store
+generation. The store may contain a strict prepared prefix after an early
+crash; it is not required to echo every plan action. Each entry
 binds durable generation and record version, phase, invocation state, action
 identity and ordinal, an immutable checkpoint identity, and the canonical
 digest of the complete closed durable checkpoint record, including phase
@@ -151,12 +167,29 @@ manifest identity is the canonical digest of the record excluding both identity
 and digest; its complete digest excludes only the digest. The executor derives
 this manifest while holding the exclusive lease by independently enumerating
 the authoritative checkpoint store and matching every action/ordinal against
-the validated plan action set. It re-enumerates the store and checks the same
+the complete closed `agent-equipment-plan-action-set/v1` artifact. That artifact
+is schema-checked, its action and set identities/digests are recomputed, and its
+candidate, implementation, plan, and set digest are compared with independent
+trusted inputs. Each checkpoint maps uniquely to one artifact action, while the
+manifest remains all-and-only the authoritative store. It re-enumerates the
+store and checks the same
 generation immediately before claiming the compensation nonce or writing the
 first transition; any missing, extra, duplicate, reordered, foreign, stale, or
-concurrently changed record fails closed. The original trusted
-`ApplyAuthorization` supplies the execution nonce because the v1 durable
-checkpoint record does not duplicate that field.
+concurrently changed record fails closed. Every durable record itself includes
+the apply-authorization identity/digest, execution nonce, run, domain, and the
+full `CHK-10` tuple; those fields participate in its immutable checkpoint
+identity and are checked against independent apply inputs. Before accepting any
+checkpoint, validation revalidates the complete captured-state artifact and
+`PreparedActionAuthoritySet`, requires the checkpoint sequence to be the exact
+canonical plan prefix, and matches its step ID, normalized pre/post state,
+capability-set digest, and all other immutable fields to the corresponding
+prepared authority. Raw captured observations never directly authorize restore.
+The cross-record lifecycle must also be reachable: before compensation it is
+zero or more `completed` records followed by at most one final `prepared`
+record; during compensation it is zero or more `completed` records, at most one
+lowest `compensating` or `compensation_blocked` frontier, then only
+`compensated` records in ascending ordinal order. This enforces the reverse-
+topological walk across records, not merely each record's local phase matrix.
 
 `CompensationAuthorization` is the only serialized authority for a fresh or
 public `compensate` invocation. Its Schema version is
@@ -172,15 +205,43 @@ supplied independently as
 `trusted_compensation_authorization_digest`. It cannot start a forward action
 or authorize another run. Immediate reverse compensation after a later failure
 continues inside the already invoked, durably claimed apply run; it does not
-mint or reuse this public authority.
+mint or reuse this public authority. Each compensation-state checkpoint carries
+`compensation_authority_kind`: `automatic_apply` preserves original-run
+provenance, while `public_compensation` requires a separate closed transition
+claim. That claim binds the immutable checkpoint identity and independently
+validated compensation-authorization identity/digest and nonce; its canonical
+identity and complete digest do not alter the immutable checkpoint identity.
+All claim members must satisfy their closed string and digest formats, and a
+checkpoint manifest containing any public claim is invalid unless the validator
+received the independently validated non-null compensation-authority tuple.
+After the compensation nonce is durably claimed, restart uses the archived
+original authorization and pretransition checkpoint manifest plus the exact
+durable ledger claim. It race-checks the current store and accepts only a
+monotonic descendant with the same checkpoint identities, unchanged forward
+invocation intent, strictly advanced record/store generations for changes, and
+surviving claims bound to that original authority. This recovery mode has no new
+clock or nonce check: the durable ledger claim is the continuation authority,
+including the crash window before the first checkpoint transition. A
+`compensation_blocked` descendant still requires separate operator disposition,
+and public recovery cannot replace durable `automatic_apply` provenance.
+
+`RunTerminalRecord` authenticates success for one exact apply tuple. It binds
+the complete plan-action-set digest, validated checkpoint-set identity/digest
+and store generation, and `state: succeeded`. Terminal validation requires one
+unique completed checkpoint for every action in the complete plan-action set.
+An early-crash checkpoint prefix may authorize compensation but cannot
+authorize release. The `run-terminal:` identity excludes identity and digest;
+the complete digest excludes only the digest.
 
 `ReleaseArchiveManifest` is a closed semantic manifest over the candidate and
 installed implementation, exact execution binding including the execution
-domain, checkpoint-set digest, `run_terminal_state: succeeded`, launcher
+domain, complete plan-action-set digest, checkpoint-set identity/digest,
+authenticated run-terminal identity/digest, launcher
 identity/manifest, authority-store identity/key, `absent` compare token,
-generation `1`, and four
-SHA-256 digests of the exact UTF-8 byte streams of the authorization, expected-
-case manifest, evidence bundle, and attestation. Exact-byte digests are distinct
+generation `1`, and seven SHA-256 digests of the exact UTF-8 byte streams of the
+authorization, prepared-action-authority set, checkpoint-set manifest,
+run-terminal record, expected-case manifest, evidence bundle, and attestation.
+Exact-byte digests are distinct
 from semantic canonical digests: differently formatted JSON may have the same
 semantic digest but different archive byte digests. The archive identity is
 `release-archive:` plus the canonical digest of its payload; its manifest digest
@@ -191,8 +252,9 @@ is the canonical digest of the complete record excluding only
 identity is `release-receipt:` plus the canonical digest of its closed payload.
 That payload binds the independently trusted release-launcher identity and
 manifest digest, exact candidate, installed implementation, execution binding
-including the execution domain, checkpoint-set digest, successful terminal run
-state, archive identity/digest,
+including the execution domain, plan-action-set digest, checkpoint-set
+identity/digest, authenticated successful run-terminal identity/digest, archive
+identity/digest,
 store/key, and one create-only generation. A passed receipt cannot exist for a
 compensated, blocked, or nonterminal run. A JSON object
 with the same shape is not a receipt unless the independent launcher produced
@@ -852,9 +914,10 @@ Before the first action checkpoint, the executor rejects a raw authority input
 larger than 256 KiB before UTF-8 decoding, JSON parsing, regex evaluation,
 credential scanning, or hashing. It strictly parses UTF-8 JSON, rejects
 duplicate members, non-finite numbers, and non-JSON values, then validates the
-closed `ApplyAuthorization`. Every variable string is bounded by Schema and UTC
-fractional seconds are limited to nine digits, so parsed-object callers cannot
-bypass the raw-byte boundary with unbounded regex or hash work. The executor
+closed `ApplyAuthorization`. Each parsed-object authority validator first
+canonicalizes only to enforce the same 256 KiB ceiling before Schema, regex,
+credential, or digest work; UTC fractional seconds are limited to nine digits.
+The executor
 validates its Schema and semantic digest/identity formulas, and requires its complete
 tuple to equal the independently validated local artifacts and
 `trusted_apply_authorization_digest` plus the trusted operator-review-package
@@ -920,6 +983,14 @@ plan-action-set digest, and fresh compensation nonce. It durably claims that
 nonce in the same execution domain before writing `compensating`; an invalid,
 expired, replayed, foreign-domain, or unpersistable record performs no adapter
 call or checkpoint transition.
+Once that nonce claim is durable, recovery validates the archived original
+authorization and checkpoint manifest, its independently trusted ledger claim,
+and the current race-rechecked descendant store. It resumes under the surviving
+original claims without a fresh clock check, including a crash before the first
+checkpoint transition or after a direct `prepared` to `compensating` write.
+Forward invocation intent cannot change during this walk, every changed record
+and store uses a strictly newer generation, and `compensation_blocked` stops for
+operator disposition.
 
 Checkpoint identities bind the apply-authorization identity and digest,
 execution-domain identity, execution nonce, canonical catalog digest, lock digest,
@@ -929,8 +1000,12 @@ capability and manager-evidence binding, action identity and ordinal, route,
 operation, pre-state digest, and expected post-state digest. This is the
 complete `CHK-10` binding; no subset or claim in another execution domain
 authorizes replay. A compensation checkpoint additionally records the exact
-compensation-authorization identity/digest and compensation nonce when the
-transition originated through the public seam.
+authority kind. Automatic rollback records `automatic_apply` and preserves the
+original apply provenance. A transition through the public seam records
+`public_compensation` plus a separate immutable transition claim whose identity
+and digest bind the checkpoint identity and independently validated
+compensation-authorization identity/digest and nonce. A missing, foreign, or
+self-consistently resealed claim fails before transition.
 
 ## Generated outputs
 
@@ -952,8 +1027,9 @@ candidate-independent release
 launcher supplies its own externally trusted identity and manifest digest plus
 the trusted execution tuple, including the execution domain, apply-authorization,
 expected-case, and attestation digests. It strictly validates the closed records,
-writes the exact authorization,
-expected-case manifest, evidence bundle, attestation, and archive manifest into
+writes the exact authorization, prepared-action-authority set, checkpoint-set
+manifest, run-terminal record, expected-case manifest, evidence bundle,
+attestation, and archive manifest into
 a same-filesystem staging directory, fsyncs them, and performs one create-only
 compare-and-swap rename to the tuple's authority-store identity. `absent` is the
 only first-write compare token and generation `1` is the only first committed
@@ -972,9 +1048,10 @@ apply.
 
 ## Schema evolution
 
-Catalog, lock, captured-state, evidence, attestation, apply-authorization,
-release-archive-manifest, and release-receipt formats use independent explicit
-major versions. Adding an
+Catalog, lock, captured-state, plan-action-set, prepared-action-authority-set,
+apply-authorization, compensation-authorization, compensation-transition-claim,
+checkpoint-set, run-terminal, evidence, attestation, release-archive-manifest,
+and release-receipt formats use independent explicit major versions. Adding an
 optional field with unchanged meaning may remain in
 the current major version only when old readers reject or safely ignore it by
 contract; these v1 schemas use exact shapes, so additions normally require a

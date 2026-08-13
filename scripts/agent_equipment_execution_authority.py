@@ -21,10 +21,37 @@ try:
     from agent_equipment_public_data import contains_literal_credential
 except ModuleNotFoundError:  # Loaded as a repo module rather than an executable.
     from scripts.agent_equipment_public_data import contains_literal_credential
+try:
+    from agent_equipment_captured_state import (
+        plan_action_digest as _plan_action_digest,
+    )
+    from agent_equipment_captured_state import (
+        plan_action_identity as _plan_action_identity,
+    )
+    from agent_equipment_captured_state import (
+        plan_action_set_digest as _plan_action_set_digest,
+    )
+    from agent_equipment_captured_state import (
+        validate_captured_state as _validate_captured_state,
+    )
+except ModuleNotFoundError:  # Loaded as a repo module rather than an executable.
+    from scripts.agent_equipment_captured_state import (
+        plan_action_digest as _plan_action_digest,
+    )
+    from scripts.agent_equipment_captured_state import (
+        plan_action_identity as _plan_action_identity,
+    )
+    from scripts.agent_equipment_captured_state import (
+        plan_action_set_digest as _plan_action_set_digest,
+    )
+    from scripts.agent_equipment_captured_state import (
+        validate_captured_state as _validate_captured_state,
+    )
 
 
 SCHEMA_DIRECTORY = Path(__file__).resolve().parent.parent / "docs/agent-equipment"
 SCHEMA_NAME = "execution-authority-v1.schema.json"
+PLAN_ACTION_SET_SCHEMA_NAME = "plan-action-set-v1.schema.json"
 MAX_EXECUTION_AUTHORITY_BYTES = 262_144
 _UTC_TIMESTAMP_PATTERN = re.compile(
     r"^(?P<year>[0-9]{4})-(?P<month>[0-9]{2})-(?P<day>[0-9]{2})"
@@ -33,6 +60,10 @@ _UTC_TIMESTAMP_PATTERN = re.compile(
 )
 _CHECKPOINT_BINDING_FIELDS = frozenset(
     {
+        "checkpoint_identity",
+        "apply_authorization_identity",
+        "apply_authorization_digest",
+        "execution_nonce",
         "step_id",
         "action_identity",
         "ordinal",
@@ -61,31 +92,46 @@ _CHECKPOINT_FIELDS = _CHECKPOINT_BINDING_FIELDS | {
     "phase",
     "phase_history",
     "invocation_state",
+    "compensation_authority_kind",
+    "compensation_transition_claim",
 }
-_CHECKPOINT_TRUSTED_BINDING_FIELDS = frozenset(
+_CHECKPOINT_PHASE_MATRIX = frozenset(
     {
-        "candidate_digest",
-        "implementation_manifest_digest",
-        "catalog_digest",
-        "lock_digest",
-        "plan_digest",
-        "capability_set_digest",
-        "captured_state_identity",
-        "captured_state_digest",
-    }
-)
-_CHECKPOINT_PHASE_HISTORIES = frozenset(
-    {
-        ("prepared",),
-        ("prepared", "completed"),
-        ("prepared", "compensating"),
-        ("prepared", "completed", "compensating"),
-        ("prepared", "compensating", "compensated"),
-        ("prepared", "completed", "compensating", "compensated"),
-        ("prepared", "compensation_blocked"),
-        ("prepared", "completed", "compensation_blocked"),
-        ("prepared", "compensating", "compensation_blocked"),
-        ("prepared", "completed", "compensating", "compensation_blocked"),
+        (("prepared",), "prepared", "not_started"),
+        (("prepared",), "prepared", "started"),
+        (("prepared", "completed"), "completed", "started"),
+        (("prepared", "compensating"), "compensating", "not_started"),
+        (("prepared", "compensating"), "compensating", "started"),
+        (("prepared", "completed", "compensating"), "compensating", "started"),
+        (("prepared", "compensating", "compensated"), "compensated", "not_started"),
+        (("prepared", "compensating", "compensated"), "compensated", "started"),
+        (
+            ("prepared", "completed", "compensating", "compensated"),
+            "compensated",
+            "started",
+        ),
+        (("prepared", "compensation_blocked"), "compensation_blocked", "not_started"),
+        (("prepared", "compensation_blocked"), "compensation_blocked", "started"),
+        (
+            ("prepared", "completed", "compensation_blocked"),
+            "compensation_blocked",
+            "started",
+        ),
+        (
+            ("prepared", "compensating", "compensation_blocked"),
+            "compensation_blocked",
+            "not_started",
+        ),
+        (
+            ("prepared", "compensating", "compensation_blocked"),
+            "compensation_blocked",
+            "started",
+        ),
+        (
+            ("prepared", "completed", "compensating", "compensation_blocked"),
+            "compensation_blocked",
+            "started",
+        ),
     }
 )
 
@@ -119,12 +165,18 @@ def _diagnostic(code: str, path: str, message: str) -> Diagnostic:
     return Diagnostic(path=path, code=code, message=message)
 
 
-def _schema_valid(document: object) -> bool:
+def _schema_valid(document: object, schema_name: str = SCHEMA_NAME) -> bool:
+    if schema_name == SCHEMA_NAME:
+        try:
+            if len(_canonical_bytes(document)) > MAX_EXECUTION_AUTHORITY_BYTES:
+                return False
+        except (RecursionError, TypeError, UnicodeEncodeError, ValueError):
+            return False
     return _validate_schema(
         document,
         schema_directory=SCHEMA_DIRECTORY,
-        root_schema_name=SCHEMA_NAME,
-        allowed_schema_names=frozenset({SCHEMA_NAME}),
+        root_schema_name=schema_name,
+        allowed_schema_names=frozenset({schema_name}),
     )
 
 
@@ -230,6 +282,328 @@ def _checkpoint_set_digest(document: Mapping[str, object]) -> str:
     return _artifact_digest(document, "checkpoint_set_digest")
 
 
+def checkpoint_identity(
+    record_version: str,
+    record: Mapping[str, object],
+) -> str:
+    immutable_record = {
+        key: value
+        for key, value in record.items()
+        if key
+        not in {
+            "checkpoint_identity",
+            "phase",
+            "phase_history",
+            "invocation_state",
+            "compensation_authority_kind",
+            "compensation_transition_claim",
+        }
+    }
+    return "checkpoint:" + canonical_digest(
+        {
+            "record_version": record_version,
+            "immutable_record": immutable_record,
+        }
+    )
+
+
+def _compensation_transition_claim_identity(
+    claim: Mapping[str, object],
+) -> str:
+    payload = {
+        key: value
+        for key, value in claim.items()
+        if key not in {"transition_claim_identity", "transition_claim_digest"}
+    }
+    return "compensation-transition:" + canonical_digest(payload)
+
+
+def _compensation_transition_claim_digest(
+    claim: Mapping[str, object],
+) -> str:
+    return _artifact_digest(claim, "transition_claim_digest")
+
+
+def _compensation_transition_claim_valid(
+    claim: object,
+    checkpoint_identity: object,
+) -> bool:
+    if claim is None:
+        return True
+    if not isinstance(claim, Mapping) or set(claim) != {
+        "schema_version",
+        "checkpoint_identity",
+        "compensation_authorization_identity",
+        "compensation_authorization_digest",
+        "compensation_nonce",
+        "transition_claim_identity",
+        "transition_claim_digest",
+    }:
+        return False
+    patterns = {
+        "checkpoint_identity": r"^checkpoint:sha256:[0-9a-f]{64}$",
+        "compensation_authorization_identity": (
+            r"^compensation-authorization:sha256:[0-9a-f]{64}$"
+        ),
+        "compensation_authorization_digest": r"^sha256:[0-9a-f]{64}$",
+        "compensation_nonce": r"^compensation-nonce:sha256:[0-9a-f]{64}$",
+        "transition_claim_identity": (r"^compensation-transition:sha256:[0-9a-f]{64}$"),
+        "transition_claim_digest": r"^sha256:[0-9a-f]{64}$",
+    }
+    return (
+        claim.get("schema_version")
+        == "agent-equipment-compensation-transition-claim/v1"
+        and all(
+            isinstance(claim.get(field), str)
+            and re.fullmatch(pattern, claim[field]) is not None
+            for field, pattern in patterns.items()
+        )
+        and claim.get("checkpoint_identity") == checkpoint_identity
+        and claim.get("transition_claim_identity")
+        == _compensation_transition_claim_identity(claim)
+        and claim.get("transition_claim_digest")
+        == _compensation_transition_claim_digest(claim)
+    )
+
+
+def _validated_plan_action_index(
+    document: object,
+    *,
+    expected_action_set_digest: str,
+    expected_candidate_identity: str,
+    expected_implementation_manifest_digest: str,
+    expected_plan_digest: str,
+) -> tuple[dict[tuple[str, int], Mapping[str, object]], tuple[Diagnostic, ...]]:
+    if (
+        not isinstance(document, Mapping)
+        or document.get("schema_version") != "agent-equipment-plan-action-set/v1"
+        or not _schema_valid(document, PLAN_ACTION_SET_SCHEMA_NAME)
+    ):
+        return {}, (
+            _diagnostic(
+                "PLAN_ACTION_SET_SCHEMA_INVALID",
+                "$.authoritative_plan_action_set",
+                "The authoritative plan-action set does not satisfy the checked-in closed schema.",
+            ),
+        )
+    if contains_literal_credential(document):
+        return {}, (
+            _diagnostic(
+                "PLAN_ACTION_SET_LITERAL_SECRET",
+                "$.authoritative_plan_action_set",
+                "The authoritative plan-action set contains credential-shaped literal material.",
+            ),
+        )
+
+    diagnostics: list[Diagnostic] = []
+    actions = document["actions"]
+    assert isinstance(actions, list)
+    try:
+        computed_set_digest = _plan_action_set_digest(
+            str(document["candidate_identity"]),
+            str(document["implementation_manifest_digest"]),
+            str(document["plan_digest"]),
+            actions,
+        )
+    except (TypeError, ValueError):
+        computed_set_digest = None
+    if (
+        computed_set_digest is None
+        or document["action_set_digest"] != computed_set_digest
+        or computed_set_digest != expected_action_set_digest
+    ):
+        diagnostics.append(
+            _diagnostic(
+                "PLAN_ACTION_SET_DIGEST_MISMATCH",
+                "$.authoritative_plan_action_set.action_set_digest",
+                "The complete plan-action-set artifact does not match the independently trusted digest.",
+            )
+        )
+    if (
+        document["candidate_identity"] != expected_candidate_identity
+        or document["implementation_manifest_digest"]
+        != expected_implementation_manifest_digest
+        or document["plan_digest"] != expected_plan_digest
+    ):
+        diagnostics.append(
+            _diagnostic(
+                "PLAN_ACTION_SET_BINDING_MISMATCH",
+                "$.authoritative_plan_action_set",
+                "The plan-action set does not match the independently trusted candidate and plan bindings.",
+            )
+        )
+
+    index: dict[tuple[str, int], Mapping[str, object]] = {}
+    ordered_keys: list[tuple[int, str]] = []
+    for action_index, evidence in enumerate(actions):
+        assert isinstance(evidence, Mapping)
+        payload = evidence["action_payload"]
+        assert isinstance(payload, Mapping)
+        try:
+            valid = evidence["action_digest"] == _plan_action_digest(
+                payload
+            ) and payload["action_identity"] == _plan_action_identity(payload)
+        except (TypeError, ValueError):
+            valid = False
+        identity = payload.get("action_identity")
+        ordinal = payload.get("ordinal")
+        if not valid or not isinstance(identity, str) or type(ordinal) is not int:
+            diagnostics.append(
+                _diagnostic(
+                    "PLAN_ACTION_INVALID",
+                    f"$.authoritative_plan_action_set.actions[{action_index}]",
+                    "A plan action does not match its canonical identity and digest.",
+                )
+            )
+            continue
+        key = (identity, ordinal)
+        if key in index:
+            diagnostics.append(
+                _diagnostic(
+                    "PLAN_ACTION_SET_MEMBERSHIP_INVALID",
+                    "$.authoritative_plan_action_set.actions",
+                    "The complete plan-action set contains duplicate action coordinates.",
+                )
+            )
+        index[key] = payload
+        ordered_keys.append((ordinal, identity))
+    ordinals = [ordinal for ordinal, _ in ordered_keys]
+    if (
+        ordered_keys != sorted(ordered_keys)
+        or ordinals != list(range(len(actions)))
+        or len(index) != len(actions)
+    ):
+        diagnostics.append(
+            _diagnostic(
+                "PLAN_ACTION_SET_MEMBERSHIP_INVALID",
+                "$.authoritative_plan_action_set.actions",
+                "The complete plan-action set is not uniquely and contiguously ordered from ordinal zero.",
+            )
+        )
+    return index, tuple(sorted(set(diagnostics)))
+
+
+def validate_plan_action_set(
+    document: object,
+    *,
+    expected_action_set_digest: str,
+    expected_candidate_identity: str,
+    expected_implementation_manifest_digest: str,
+    expected_plan_digest: str,
+) -> tuple[Diagnostic, ...]:
+    """Validate one complete authoritative plan-action-set artifact."""
+
+    _, diagnostics = _validated_plan_action_index(
+        document,
+        expected_action_set_digest=expected_action_set_digest,
+        expected_candidate_identity=expected_candidate_identity,
+        expected_implementation_manifest_digest=(
+            expected_implementation_manifest_digest
+        ),
+        expected_plan_digest=expected_plan_digest,
+    )
+    return diagnostics
+
+
+def validate_prepared_action_authority_set(
+    document: object,
+    *,
+    authoritative_captured_state: object,
+    expected_captured_state_identity: str,
+    expected_captured_state_digest: str,
+    authoritative_plan_action_set: object,
+    expected_plan_action_set_digest: str,
+    expected_candidate_identity: str,
+    expected_implementation_manifest_digest: str,
+    expected_plan_digest: str,
+    expected_prepared_action_authority_set_identity: str,
+    expected_prepared_action_authority_set_digest: str,
+) -> tuple[Diagnostic, ...]:
+    """Validate the complete sealed action authority before apply issuance."""
+
+    diagnostics: list[Diagnostic] = []
+    plan_action_index, plan_diagnostics = _validated_plan_action_index(
+        authoritative_plan_action_set,
+        expected_action_set_digest=expected_plan_action_set_digest,
+        expected_candidate_identity=expected_candidate_identity,
+        expected_implementation_manifest_digest=(
+            expected_implementation_manifest_digest
+        ),
+        expected_plan_digest=expected_plan_digest,
+    )
+    diagnostics.extend(plan_diagnostics)
+    try:
+        captured_state_diagnostics = _validate_captured_state(
+            authoritative_captured_state,
+            authoritative_plan_action_set,
+            expected_candidate_identity=expected_candidate_identity,
+            expected_implementation_manifest_digest=(
+                expected_implementation_manifest_digest
+            ),
+        )
+        captured_state_digest = canonical_digest(authoritative_captured_state)
+    except (TypeError, ValueError):
+        captured_state_diagnostics = (object(),)
+        captured_state_digest = None
+    captured_bindings = (
+        authoritative_captured_state.get("bindings")
+        if isinstance(authoritative_captured_state, Mapping)
+        else None
+    )
+    if (
+        captured_state_diagnostics
+        or captured_state_digest != expected_captured_state_digest
+        or not isinstance(captured_bindings, Mapping)
+    ):
+        diagnostics.append(
+            _diagnostic(
+                "CAPTURED_STATE_AUTHORITY_INVALID",
+                "$.authoritative_captured_state",
+                "The complete captured-state artifact is not valid for the independently trusted plan and digest.",
+            )
+        )
+    capability_set_digest = (
+        captured_bindings.get("capability_set_digest")
+        if isinstance(captured_bindings, Mapping)
+        else None
+    )
+    prepared_index, prepared_valid = _validated_prepared_action_authority_index(
+        document,
+        expected_authority_set_identity=(
+            expected_prepared_action_authority_set_identity
+        ),
+        expected_authority_set_digest=expected_prepared_action_authority_set_digest,
+        expected_captured_state_identity=expected_captured_state_identity,
+        expected_captured_state_digest=expected_captured_state_digest,
+        expected_candidate_identity=expected_candidate_identity,
+        expected_implementation_manifest_digest=(
+            expected_implementation_manifest_digest
+        ),
+        expected_capability_set_digest=(
+            capability_set_digest if isinstance(capability_set_digest, str) else ""
+        ),
+    )
+    if (
+        not prepared_valid
+        or set(prepared_index) != set(plan_action_index)
+        or any(
+            key not in plan_action_index
+            or not _prepared_authority_matches_plan_action(
+                authority, plan_action_index[key]
+            )
+            for key, authority in prepared_index.items()
+        )
+    ):
+        diagnostics.append(
+            _diagnostic(
+                "PREPARED_ACTION_AUTHORITY_INVALID",
+                "$.prepared_action_authority_set",
+                "The sealed pre-invocation authority set is not complete and valid for the captured plan.",
+            )
+        )
+    return tuple(sorted(set(diagnostics)))
+
+
 def _checkpoint_entry(snapshot: object) -> dict[str, object] | None:
     if not isinstance(snapshot, Mapping) or set(snapshot) != {
         "durable_generation",
@@ -250,6 +624,9 @@ def _checkpoint_entry(snapshot: object) -> dict[str, object] | None:
     history = record.get("phase_history")
     phase = record.get("phase")
     intent = record.get("invocation_state")
+    record_checkpoint_identity = record.get("checkpoint_identity")
+    transition_claim = record.get("compensation_transition_claim")
+    compensation_authority_kind = record.get("compensation_authority_kind")
     try:
         canonical_digest(record)
     except (TypeError, ValueError):
@@ -258,32 +635,42 @@ def _checkpoint_entry(snapshot: object) -> dict[str, object] | None:
         set(record) != _CHECKPOINT_FIELDS
         or not isinstance(history, list)
         or any(type(item) is not str for item in history)
-        or tuple(history) not in _CHECKPOINT_PHASE_HISTORIES
-        or history[-1] != phase
-        or type(intent) is not str
-        or intent not in {"not_started", "started"}
-        or (phase == "completed" and intent != "started")
+        or (tuple(history), phase, intent) not in _CHECKPOINT_PHASE_MATRIX
         or type(record.get("ordinal")) is not int
         or record["ordinal"] < 0
+        or record_checkpoint_identity != checkpoint_identity(record_version, record)
+        or not _compensation_transition_claim_valid(
+            transition_claim, record_checkpoint_identity
+        )
+        or (transition_claim is not None and phase in {"prepared", "completed"})
+        or (
+            phase in {"prepared", "completed"} and compensation_authority_kind != "none"
+        )
+        or (
+            phase in {"compensating", "compensated", "compensation_blocked"}
+            and (
+                compensation_authority_kind
+                not in {"automatic_apply", "public_compensation"}
+                or (transition_claim is None)
+                != (compensation_authority_kind == "automatic_apply")
+            )
+        )
     ):
         return None
-    immutable_record = dict(record)
-    for field in ("phase", "phase_history", "invocation_state"):
-        immutable_record.pop(field)
     return {
-        "checkpoint_identity": "checkpoint:"
-        + canonical_digest(
-            {
-                "record_version": record_version,
-                "immutable_record": immutable_record,
-            }
-        ),
+        "checkpoint_identity": record_checkpoint_identity,
         "durable_generation": generation,
         "record_version": record_version,
         "phase": record["phase"],
         "invocation_state": record["invocation_state"],
+        "compensation_authority_kind": record["compensation_authority_kind"],
         "action_identity": record["action_identity"],
         "ordinal": record["ordinal"],
+        "compensation_transition_claim_identity": (
+            transition_claim["transition_claim_identity"]
+            if isinstance(transition_claim, Mapping)
+            else None
+        ),
         "checkpoint_record_digest": canonical_digest(record),
     }
 
@@ -307,22 +694,268 @@ def _checkpoint_record(snapshot: object) -> Mapping[str, object] | None:
     return record if isinstance(record, Mapping) else None
 
 
-def _checkpoint_action(record: Mapping[str, object]) -> dict[str, object]:
-    fields = (
-        "action_identity",
-        "ordinal",
-        "step_id",
-        "surface",
-        "route_capability_binding",
-        "route_digest",
-        "operation_digest",
-        "compensation_operation",
-        "pre_state_digest",
-        "expected_post_state_digest",
-        "pre_state",
-        "expected_post_state",
+def _checkpoint_lifecycle_frontier_valid(
+    records: Sequence[Mapping[str, object] | None],
+) -> bool:
+    compensation_phases = {
+        "compensating",
+        "compensated",
+        "compensation_blocked",
+    }
+    phases = [record.get("phase") if record is not None else None for record in records]
+    transitioned_indices = [
+        index for index, phase in enumerate(phases) if phase in compensation_phases
+    ]
+    if not transitioned_indices:
+        prepared_indices = [
+            index for index, phase in enumerate(phases) if phase == "prepared"
+        ]
+        return (
+            all(phase in {"prepared", "completed"} for phase in phases)
+            and len(prepared_indices) <= 1
+            and (not prepared_indices or prepared_indices[0] == len(phases) - 1)
+            and all(phase == "completed" for phase in phases[: len(phases) - 1])
+        )
+    frontier = transitioned_indices[0]
+    if transitioned_indices != list(range(frontier, len(records))) or any(
+        phase != "completed" for phase in phases[:frontier]
+    ):
+        return False
+    frontier_phase = phases[frontier]
+    suffix_after_frontier = phases[frontier + 1 :]
+    return frontier_phase in compensation_phases and all(
+        phase == "compensated" for phase in suffix_after_frontier
     )
-    return {field: record.get(field) for field in fields}
+
+
+def _prepared_action_authority_set_identity(document: Mapping[str, object]) -> str:
+    payload = {
+        key: value
+        for key, value in document.items()
+        if key not in {"authority_set_identity", "authority_set_digest"}
+    }
+    return "prepared-action-authority-set:" + canonical_digest(payload)
+
+
+def _prepared_action_authority_set_digest(document: Mapping[str, object]) -> str:
+    return _artifact_digest(document, "authority_set_digest")
+
+
+def _validated_prepared_action_authority_index(
+    document: object,
+    *,
+    expected_authority_set_identity: str,
+    expected_authority_set_digest: str,
+    expected_captured_state_identity: str,
+    expected_captured_state_digest: str,
+    expected_candidate_identity: str,
+    expected_implementation_manifest_digest: str,
+    expected_capability_set_digest: str,
+) -> tuple[dict[tuple[str, int], Mapping[str, object]], bool]:
+    """Validate and index one sealed complete pre-invocation authority set."""
+
+    if (
+        not isinstance(document, Mapping)
+        or document.get("schema_version")
+        != "agent-equipment-prepared-action-authority-set/v1"
+        or not _schema_valid(document)
+        or document.get("authority_set_identity")
+        != _prepared_action_authority_set_identity(document)
+        or document.get("authority_set_digest")
+        != _prepared_action_authority_set_digest(document)
+        or document.get("authority_set_identity") != expected_authority_set_identity
+        or document.get("authority_set_digest") != expected_authority_set_digest
+        or contains_literal_credential(document)
+    ):
+        return {}, False
+    authorities = document.get("authorities")
+    if not isinstance(authorities, list):
+        return {}, False
+    result: dict[tuple[str, int], Mapping[str, object]] = {}
+    valid = True
+    ordered_keys: list[tuple[int, str]] = []
+    for authority in authorities:
+        if not isinstance(authority, Mapping):
+            valid = False
+            continue
+        identity = authority.get("action_identity")
+        ordinal = authority.get("ordinal")
+        pre_state = authority.get("captured_pre_state")
+        post_state = authority.get("expected_post_state")
+        if (
+            not isinstance(identity, str)
+            or type(ordinal) is not int
+            or (identity, ordinal) in result
+            or authority.get("candidate_identity") != expected_candidate_identity
+            or authority.get("implementation_manifest_digest")
+            != expected_implementation_manifest_digest
+            or authority.get("captured_state_identity")
+            != expected_captured_state_identity
+            or authority.get("captured_state_digest") != expected_captured_state_digest
+            or authority.get("capability_set_digest") != expected_capability_set_digest
+            or authority.get("captured_pre_state_digest") != canonical_digest(pre_state)
+            or authority.get("expected_post_state_digest")
+            != canonical_digest(post_state)
+            or authority.get("authority_digest")
+            != canonical_digest(
+                {
+                    key: value
+                    for key, value in authority.items()
+                    if key != "authority_digest"
+                }
+            )
+        ):
+            valid = False
+            continue
+        result[(identity, ordinal)] = authority
+        ordered_keys.append((ordinal, identity))
+    if ordered_keys != sorted(ordered_keys) or [key[0] for key in ordered_keys] != list(
+        range(len(authorities))
+    ):
+        valid = False
+    return result, valid
+
+
+def _prepared_authority_matches_plan_action(
+    authority: Mapping[str, object],
+    action: Mapping[str, object],
+) -> bool:
+    compensation = action.get("compensation")
+    if not isinstance(compensation, Mapping):
+        return False
+    expected = {
+        "action_identity": action.get("action_identity"),
+        "ordinal": action.get("ordinal"),
+        "candidate_identity": action.get("candidate_identity"),
+        "implementation_manifest_digest": action.get("implementation_manifest_digest"),
+        "catalog_digest": action.get("catalog_digest"),
+        "lock_digest": action.get("lock_digest"),
+        "plan_digest": action.get("plan_digest"),
+        "route_capability_binding": {
+            "capability_identity": action.get("capability_identity"),
+            "capability_digest": action.get("capability_digest"),
+            "manager_version_evidence_digest": action.get(
+                "manager_version_evidence_digest"
+            ),
+        },
+        "route_digest": action.get("route_digest"),
+        "operation_digest": canonical_digest(action.get("operation")),
+        "compensation_operation": compensation.get("kind"),
+        "surface": action.get("surface_scope"),
+        "expected_post_state_digest": action.get("expected_post_state_digest"),
+    }
+    controlled_identities = action.get("controlled_equipment_identities")
+    return (
+        isinstance(controlled_identities, list)
+        and _normalized_component_identities(authority.get("captured_pre_state"))
+        == tuple(controlled_identities)
+        and _normalized_component_identities(authority.get("expected_post_state"))
+        == tuple(controlled_identities)
+        and all(authority.get(field) == value for field, value in expected.items())
+        and _normalized_state_includes_desired_fragment(
+            authority.get("expected_post_state"),
+            action.get("desired_state"),
+        )
+    )
+
+
+def _normalized_component_identities(
+    normalized_state: object,
+) -> tuple[str, ...] | None:
+    if not isinstance(normalized_state, Mapping):
+        return None
+    components = normalized_state.get("component_states")
+    if not isinstance(components, list):
+        return None
+    identities = [
+        component.get("equipment_identity")
+        for component in components
+        if isinstance(component, Mapping)
+    ]
+    if (
+        len(identities) != len(components)
+        or any(not isinstance(identity, str) for identity in identities)
+        or identities != sorted(set(identities))
+    ):
+        return None
+    return tuple(identities)
+
+
+def _normalized_state_includes_desired_fragment(
+    normalized_state: object,
+    desired_state: object,
+) -> bool:
+    if not isinstance(normalized_state, Mapping) or not isinstance(
+        desired_state, Mapping
+    ):
+        return False
+    for field in (
+        "route_presence",
+        "enablement",
+        "native_update_suppression_state",
+    ):
+        if (
+            field in desired_state
+            and normalized_state.get(field) != desired_state[field]
+        ):
+            return False
+    desired_configuration = desired_state.get("configuration")
+    if isinstance(desired_configuration, Mapping):
+        expected_configuration = dict(desired_configuration)
+        if expected_configuration.get("status") == "desired":
+            expected_configuration["status"] = "observed"
+        if normalized_state.get("configuration") != expected_configuration:
+            return False
+    desired_components = desired_state.get("component_states")
+    normalized_components = normalized_state.get("component_states")
+    if isinstance(desired_components, list):
+        if not isinstance(normalized_components, list):
+            return False
+        normalized_index = {
+            item.get("equipment_identity"): item.get("state")
+            for item in normalized_components
+            if isinstance(item, Mapping)
+        }
+        if any(
+            not isinstance(item, Mapping)
+            or normalized_index.get(item.get("equipment_identity")) != item.get("state")
+            for item in desired_components
+        ):
+            return False
+    return True
+
+
+def _checkpoint_matches_plan_action(
+    record: Mapping[str, object],
+    action: Mapping[str, object],
+) -> bool:
+    capability_binding = {
+        "capability_identity": action.get("capability_identity"),
+        "capability_digest": action.get("capability_digest"),
+        "manager_version_evidence_digest": action.get(
+            "manager_version_evidence_digest"
+        ),
+    }
+    compensation = action.get("compensation")
+    if not isinstance(compensation, Mapping):
+        return False
+    expected = {
+        "step_id": f"step-{action.get('ordinal'):03d}",
+        "action_identity": action.get("action_identity"),
+        "ordinal": action.get("ordinal"),
+        "candidate_digest": action.get("candidate_identity"),
+        "implementation_manifest_digest": action.get("implementation_manifest_digest"),
+        "catalog_digest": action.get("catalog_digest"),
+        "lock_digest": action.get("lock_digest"),
+        "plan_digest": action.get("plan_digest"),
+        "route_capability_binding": capability_binding,
+        "route_digest": action.get("route_digest"),
+        "operation_digest": canonical_digest(action.get("operation")),
+        "compensation_operation": compensation.get("kind"),
+        "expected_post_state_digest": action.get("expected_post_state_digest"),
+        "surface": action.get("surface_scope"),
+    }
+    return all(record.get(field) == value for field, value in expected.items())
 
 
 def authorization_ledger_claim_identity(
@@ -582,8 +1215,19 @@ def validate_checkpoint_set_manifest(
     trusted_checkpoint_records: Sequence[Mapping[str, object]],
     pretransition_checkpoint_store_generation: int,
     pretransition_checkpoint_records: Sequence[Mapping[str, object]],
-    expected_checkpoint_bindings: Mapping[str, object],
-    trusted_plan_actions: Sequence[Mapping[str, object]],
+    authoritative_captured_state: object,
+    expected_captured_state_identity: str,
+    expected_captured_state_digest: str,
+    prepared_action_authority_set: object,
+    expected_prepared_action_authority_set_identity: str,
+    expected_prepared_action_authority_set_digest: str,
+    authoritative_plan_action_set: object,
+    expected_candidate_identity: str,
+    expected_implementation_manifest_digest: str,
+    expected_plan_digest: str,
+    expected_compensation_authorization_identity: str | None = None,
+    expected_compensation_authorization_digest: str | None = None,
+    expected_compensation_nonce: str | None = None,
 ) -> tuple[Diagnostic, ...]:
     """Validate a closed checkpoint snapshot and its race-free store recheck."""
 
@@ -609,6 +1253,16 @@ def validate_checkpoint_set_manifest(
         )
 
     diagnostics: list[Diagnostic] = []
+    if not isinstance(
+        expected_prepared_action_authority_set_identity, str
+    ) or not isinstance(expected_prepared_action_authority_set_digest, str):
+        diagnostics.append(
+            _diagnostic(
+                "PREPARED_ACTION_AUTHORITY_TRUST_MISMATCH",
+                "$.prepared_action_authority_set",
+                "The executor must obtain the prepared-action authority identity and digest from validated apply bindings.",
+            )
+        )
     if document["checkpoint_set_identity"] != _checkpoint_set_identity(document):
         diagnostics.append(
             _diagnostic(
@@ -699,36 +1353,164 @@ def validate_checkpoint_set_manifest(
             )
         )
 
-    trusted_actions = (
-        list(trusted_plan_actions)
-        if isinstance(trusted_plan_actions, Sequence)
-        and not isinstance(trusted_plan_actions, (str, bytes))
-        else []
+    plan_action_index, plan_diagnostics = _validated_plan_action_index(
+        authoritative_plan_action_set,
+        expected_action_set_digest=expected_plan_action_set_digest,
+        expected_candidate_identity=expected_candidate_identity,
+        expected_implementation_manifest_digest=(
+            expected_implementation_manifest_digest
+        ),
+        expected_plan_digest=expected_plan_digest,
     )
-    records = [_checkpoint_record(snapshot) for snapshot in trusted_snapshots]
+    diagnostics.extend(plan_diagnostics)
+    captured_state_diagnostics = _validate_captured_state(
+        authoritative_captured_state,
+        authoritative_plan_action_set,
+        expected_candidate_identity=expected_candidate_identity,
+        expected_implementation_manifest_digest=(
+            expected_implementation_manifest_digest
+        ),
+    )
+    if captured_state_diagnostics:
+        diagnostics.append(
+            _diagnostic(
+                "CAPTURED_STATE_AUTHORITY_INVALID",
+                "$.authoritative_captured_state",
+                "The complete captured-state artifact is not valid for the independently trusted plan-action set.",
+            )
+        )
+    prepared_authority_index, prepared_authorities_valid = (
+        _validated_prepared_action_authority_index(
+            prepared_action_authority_set,
+            expected_authority_set_identity=(
+                expected_prepared_action_authority_set_identity
+            ),
+            expected_authority_set_digest=expected_prepared_action_authority_set_digest,
+            expected_captured_state_identity=expected_captured_state_identity,
+            expected_captured_state_digest=expected_captured_state_digest,
+            expected_candidate_identity=expected_candidate_identity,
+            expected_implementation_manifest_digest=(
+                expected_implementation_manifest_digest
+            ),
+            expected_capability_set_digest=(
+                authoritative_captured_state.get("bindings", {}).get(
+                    "capability_set_digest", ""
+                )
+                if isinstance(authoritative_captured_state, Mapping)
+                and isinstance(authoritative_captured_state.get("bindings"), Mapping)
+                else ""
+            ),
+        )
+    )
     if (
-        any(record is None for record in records)
-        or [_checkpoint_action(record) for record in records if record is not None]
-        != trusted_actions
+        not prepared_authorities_valid
+        or set(prepared_authority_index) != set(plan_action_index)
+        or any(
+            not _prepared_authority_matches_plan_action(
+                authority,
+                plan_action_index[key],
+            )
+            for key, authority in prepared_authority_index.items()
+            if key in plan_action_index
+        )
+    ):
+        diagnostics.append(
+            _diagnostic(
+                "PREPARED_ACTION_AUTHORITY_INVALID",
+                "$.prepared_action_authority_set",
+                "The sealed pre-invocation authority set is not complete and valid for the plan.",
+            )
+        )
+    records = [_checkpoint_record(snapshot) for snapshot in trusted_snapshots]
+    checkpoint_action_keys = [
+        (record.get("action_identity"), record.get("ordinal"))
+        for record in records
+        if record is not None
+    ]
+    canonical_plan_keys = list(plan_action_index)
+    if (
+        checkpoint_action_keys != canonical_plan_keys[: len(checkpoint_action_keys)]
+        or any(record is None for record in records)
+        or any(
+            not isinstance(identity, str)
+            or type(ordinal) is not int
+            or (identity, ordinal) not in plan_action_index
+            or not _checkpoint_matches_plan_action(
+                record,
+                plan_action_index[(identity, ordinal)],
+            )
+            for record, (identity, ordinal) in zip(
+                (record for record in records if record is not None),
+                checkpoint_action_keys,
+                strict=True,
+            )
+        )
     ):
         diagnostics.append(
             _diagnostic(
                 "CHECKPOINT_PLAN_ACTION_MISMATCH",
                 "$.checkpoints",
-                "A checkpoint does not match one independently validated plan action and ordinal.",
+                "A checkpoint does not map uniquely into the independently validated complete plan-action set.",
             )
         )
 
+    captured_bindings = (
+        authoritative_captured_state.get("bindings")
+        if isinstance(authoritative_captured_state, Mapping)
+        else None
+    )
+    try:
+        actual_captured_state_digest = canonical_digest(authoritative_captured_state)
+    except (TypeError, ValueError):
+        actual_captured_state_digest = None
     if (
-        not isinstance(expected_checkpoint_bindings, Mapping)
-        or set(expected_checkpoint_bindings) != _CHECKPOINT_TRUSTED_BINDING_FIELDS
+        not isinstance(captured_bindings, Mapping)
+        or actual_captured_state_digest != expected_captured_state_digest
     ) or any(
         record.get("run_identity") != expected_run_identity
         or record.get("execution_domain_identity") != expected_execution_domain_identity
-        or any(
-            record.get(field) != expected_checkpoint_bindings[field]
-            for field in _CHECKPOINT_TRUSTED_BINDING_FIELDS
-        )
+        or record.get("apply_authorization_identity")
+        != expected_apply_authorization_identity
+        or record.get("apply_authorization_digest")
+        != expected_apply_authorization_digest
+        or record.get("execution_nonce") != expected_execution_nonce
+        or record.get("candidate_digest") != captured_bindings.get("candidate_identity")
+        or record.get("implementation_manifest_digest")
+        != captured_bindings.get("implementation_manifest_digest")
+        or record.get("catalog_digest") != captured_bindings.get("catalog_digest")
+        or record.get("lock_digest") != captured_bindings.get("lock_digest")
+        or record.get("plan_digest") != captured_bindings.get("plan_digest")
+        or record.get("capability_set_digest")
+        != captured_bindings.get("capability_set_digest")
+        or record.get("captured_state_identity") != expected_captured_state_identity
+        or record.get("captured_state_digest") != expected_captured_state_digest
+        or not isinstance(record.get("action_identity"), str)
+        or (record["action_identity"], record.get("ordinal"))
+        not in prepared_authority_index
+        or record.get("captured_state_identity")
+        != prepared_authority_index[
+            (record["action_identity"], record.get("ordinal"))
+        ].get("captured_state_identity")
+        or record.get("captured_state_digest")
+        != prepared_authority_index[
+            (record["action_identity"], record.get("ordinal"))
+        ].get("captured_state_digest")
+        or record.get("pre_state")
+        != prepared_authority_index[
+            (record["action_identity"], record.get("ordinal"))
+        ].get("captured_pre_state")
+        or record.get("pre_state_digest")
+        != prepared_authority_index[
+            (record["action_identity"], record.get("ordinal"))
+        ].get("captured_pre_state_digest")
+        or record.get("expected_post_state")
+        != prepared_authority_index[
+            (record["action_identity"], record.get("ordinal"))
+        ].get("expected_post_state")
+        or record.get("expected_post_state_digest")
+        != prepared_authority_index[
+            (record["action_identity"], record.get("ordinal"))
+        ].get("expected_post_state_digest")
         for record in records
         if record is not None
     ):
@@ -737,6 +1519,73 @@ def validate_checkpoint_set_manifest(
                 "CHECKPOINT_BINDING_MISMATCH",
                 "$.checkpoints",
                 "A checkpoint does not bind the complete independently trusted run material.",
+            )
+        )
+    compensation_kinds = {
+        record.get("compensation_authority_kind")
+        for record in records
+        if record is not None
+        and record.get("phase")
+        in {"compensating", "compensated", "compensation_blocked"}
+    }
+    if len(compensation_kinds) > 1:
+        diagnostics.append(
+            _diagnostic(
+                "CHECKPOINT_COMPENSATION_PROVENANCE_MISMATCH",
+                "$.checkpoints",
+                "One checkpoint set cannot mix automatic and public compensation provenance.",
+            )
+        )
+    if not _checkpoint_lifecycle_frontier_valid(records):
+        diagnostics.append(
+            _diagnostic(
+                "CHECKPOINT_LIFECYCLE_FRONTIER_MISMATCH",
+                "$.checkpoints",
+                "Checkpoint phases do not form one reachable forward prefix or reverse-topological compensation frontier.",
+            )
+        )
+    if any(
+        isinstance(record.get("compensation_transition_claim"), Mapping)
+        and (
+            record["compensation_transition_claim"].get(
+                "compensation_authorization_identity"
+            )
+            != expected_compensation_authorization_identity
+            or record["compensation_transition_claim"].get(
+                "compensation_authorization_digest"
+            )
+            != expected_compensation_authorization_digest
+            or record["compensation_transition_claim"].get("compensation_nonce")
+            != expected_compensation_nonce
+        )
+        for record in records
+        if record is not None
+    ):
+        diagnostics.append(
+            _diagnostic(
+                "CHECKPOINT_COMPENSATION_CLAIM_MISMATCH",
+                "$.checkpoints",
+                "A public compensation transition claim does not match the independently validated compensation authority.",
+            )
+        )
+    has_public_claim = any(
+        isinstance(record.get("compensation_transition_claim"), Mapping)
+        for record in records
+        if record is not None
+    )
+    if has_public_claim and not all(
+        isinstance(value, str)
+        for value in (
+            expected_compensation_authorization_identity,
+            expected_compensation_authorization_digest,
+            expected_compensation_nonce,
+        )
+    ):
+        diagnostics.append(
+            _diagnostic(
+                "CHECKPOINT_COMPENSATION_AUTHORITY_REQUIRED",
+                "$.checkpoints",
+                "Public compensation claims require an independently validated non-null compensation-authority tuple.",
             )
         )
     return tuple(sorted(diagnostics))
@@ -757,8 +1606,16 @@ def validate_compensation_authorization(
     trusted_checkpoint_records: Sequence[Mapping[str, object]],
     pretransition_checkpoint_store_generation: int,
     pretransition_checkpoint_records: Sequence[Mapping[str, object]],
-    expected_checkpoint_bindings: Mapping[str, object],
-    trusted_plan_actions: Sequence[Mapping[str, object]],
+    authoritative_captured_state: object,
+    expected_captured_state_identity: str,
+    expected_captured_state_digest: str,
+    prepared_action_authority_set: object,
+    expected_prepared_action_authority_set_identity: str,
+    expected_prepared_action_authority_set_digest: str,
+    authoritative_plan_action_set: object,
+    expected_candidate_identity: str,
+    expected_implementation_manifest_digest: str,
+    expected_plan_digest: str,
     expected_plan_action_set_digest: str,
     expected_compensation_nonce: str,
     expected_issuer_identity: str,
@@ -812,10 +1669,46 @@ def validate_compensation_authorization(
         trusted_checkpoint_records=trusted_checkpoint_records,
         pretransition_checkpoint_store_generation=pretransition_checkpoint_store_generation,
         pretransition_checkpoint_records=pretransition_checkpoint_records,
-        expected_checkpoint_bindings=expected_checkpoint_bindings,
-        trusted_plan_actions=trusted_plan_actions,
+        authoritative_captured_state=authoritative_captured_state,
+        expected_captured_state_identity=expected_captured_state_identity,
+        expected_captured_state_digest=expected_captured_state_digest,
+        prepared_action_authority_set=prepared_action_authority_set,
+        expected_prepared_action_authority_set_identity=(
+            expected_prepared_action_authority_set_identity
+        ),
+        expected_prepared_action_authority_set_digest=(
+            expected_prepared_action_authority_set_digest
+        ),
+        authoritative_plan_action_set=authoritative_plan_action_set,
+        expected_candidate_identity=expected_candidate_identity,
+        expected_implementation_manifest_digest=(
+            expected_implementation_manifest_digest
+        ),
+        expected_plan_digest=expected_plan_digest,
+        expected_compensation_authorization_identity=(
+            expected_compensation_authorization_identity
+        ),
+        expected_compensation_authorization_digest=(
+            expected_compensation_authorization_digest
+        ),
+        expected_compensation_nonce=expected_compensation_nonce,
     )
     diagnostics: list[Diagnostic] = list(checkpoint_diagnostics)
+    if any(
+        isinstance(snapshot, Mapping)
+        and isinstance(snapshot.get("record"), Mapping)
+        and snapshot["record"].get("compensation_authority_kind") == "automatic_apply"
+        and snapshot["record"].get("phase")
+        in {"compensating", "compensated", "compensation_blocked"}
+        for snapshot in trusted_checkpoint_records
+    ):
+        diagnostics.append(
+            _diagnostic(
+                "COMPENSATION_AUTHORITY_TAKEOVER_FORBIDDEN",
+                "$.trusted_checkpoint_store",
+                "A public compensation invocation cannot replace durable automatic rollback intent.",
+            )
+        )
     if document["compensation_authorization_identity"] != (
         _compensation_authorization_identity(document)
     ):
@@ -882,21 +1775,590 @@ def validate_compensation_authorization(
     return tuple(sorted(diagnostics))
 
 
+def validate_public_compensation_recovery(
+    document: object,
+    *,
+    expected_compensation_authorization_identity: str,
+    expected_compensation_authorization_digest: str,
+    expected_apply_authorization_identity: str,
+    expected_apply_authorization_digest: str,
+    expected_execution_domain_identity: str,
+    expected_execution_nonce: str,
+    expected_run_identity: str,
+    expected_plan_action_set_digest: str,
+    expected_compensation_nonce: str,
+    expected_issuer_identity: str,
+    original_checkpoint_set_manifest: object,
+    original_checkpoint_store_generation: int,
+    original_checkpoint_records: Sequence[Mapping[str, object]],
+    current_checkpoint_set_manifest: object,
+    current_checkpoint_store_generation: int,
+    current_checkpoint_records: Sequence[Mapping[str, object]],
+    pretransition_checkpoint_store_generation: int,
+    pretransition_checkpoint_records: Sequence[Mapping[str, object]],
+    authoritative_captured_state: object,
+    expected_captured_state_identity: str,
+    expected_captured_state_digest: str,
+    prepared_action_authority_set: object,
+    expected_prepared_action_authority_set_identity: str,
+    expected_prepared_action_authority_set_digest: str,
+    authoritative_plan_action_set: object,
+    expected_candidate_identity: str,
+    expected_implementation_manifest_digest: str,
+    expected_plan_digest: str,
+    expected_compensation_ledger_claim_identity: str,
+    trusted_compensation_ledger_claim_identity: str,
+    trusted_compensation_ledger_authorization_identity: str,
+    trusted_compensation_ledger_authorization_digest: str,
+    trusted_compensation_ledger_generation: int,
+) -> tuple[Diagnostic, ...]:
+    """Validate restart under one previously claimed public compensation intent."""
+
+    if (
+        not isinstance(document, Mapping)
+        or document.get("schema_version")
+        != "agent-equipment-compensation-authorization/v1"
+        or not _schema_valid(document)
+    ):
+        return (
+            _diagnostic(
+                "COMPENSATION_RECOVERY_AUTHORITY_INVALID",
+                "$.compensation_authorization",
+                "The archived compensation authorization does not satisfy the checked-in closed schema.",
+            ),
+        )
+    if contains_literal_credential(document):
+        return (
+            _diagnostic(
+                "COMPENSATION_RECOVERY_AUTHORITY_INVALID",
+                "$.compensation_authorization",
+                "The archived compensation authorization contains credential-shaped literal material.",
+            ),
+        )
+
+    shared_checkpoint_inputs = {
+        "expected_apply_authorization_identity": expected_apply_authorization_identity,
+        "expected_apply_authorization_digest": expected_apply_authorization_digest,
+        "expected_execution_domain_identity": expected_execution_domain_identity,
+        "expected_execution_nonce": expected_execution_nonce,
+        "expected_run_identity": expected_run_identity,
+        "expected_plan_action_set_digest": expected_plan_action_set_digest,
+        "authoritative_captured_state": authoritative_captured_state,
+        "expected_captured_state_identity": expected_captured_state_identity,
+        "expected_captured_state_digest": expected_captured_state_digest,
+        "prepared_action_authority_set": prepared_action_authority_set,
+        "expected_prepared_action_authority_set_identity": (
+            expected_prepared_action_authority_set_identity
+        ),
+        "expected_prepared_action_authority_set_digest": (
+            expected_prepared_action_authority_set_digest
+        ),
+        "authoritative_plan_action_set": authoritative_plan_action_set,
+        "expected_candidate_identity": expected_candidate_identity,
+        "expected_implementation_manifest_digest": (
+            expected_implementation_manifest_digest
+        ),
+        "expected_plan_digest": expected_plan_digest,
+    }
+    original_diagnostics = validate_checkpoint_set_manifest(
+        original_checkpoint_set_manifest,
+        trusted_checkpoint_store_generation=original_checkpoint_store_generation,
+        trusted_checkpoint_records=original_checkpoint_records,
+        pretransition_checkpoint_store_generation=(
+            original_checkpoint_store_generation
+        ),
+        pretransition_checkpoint_records=original_checkpoint_records,
+        **shared_checkpoint_inputs,
+    )
+    current_diagnostics = validate_checkpoint_set_manifest(
+        current_checkpoint_set_manifest,
+        trusted_checkpoint_store_generation=current_checkpoint_store_generation,
+        trusted_checkpoint_records=current_checkpoint_records,
+        pretransition_checkpoint_store_generation=(
+            pretransition_checkpoint_store_generation
+        ),
+        pretransition_checkpoint_records=pretransition_checkpoint_records,
+        expected_compensation_authorization_identity=(
+            expected_compensation_authorization_identity
+        ),
+        expected_compensation_authorization_digest=(
+            expected_compensation_authorization_digest
+        ),
+        expected_compensation_nonce=expected_compensation_nonce,
+        **shared_checkpoint_inputs,
+    )
+    diagnostics: list[Diagnostic] = [*original_diagnostics, *current_diagnostics]
+
+    original_checkpoint_set_digest = (
+        original_checkpoint_set_manifest.get("checkpoint_set_digest")
+        if isinstance(original_checkpoint_set_manifest, Mapping)
+        else None
+    )
+    expected_bindings = {
+        "apply_authorization_identity": expected_apply_authorization_identity,
+        "apply_authorization_digest": expected_apply_authorization_digest,
+        "execution_domain_identity": expected_execution_domain_identity,
+        "execution_nonce": expected_execution_nonce,
+        "run_identity": expected_run_identity,
+        "checkpoint_set_digest": original_checkpoint_set_digest,
+        "plan_action_set_digest": expected_plan_action_set_digest,
+    }
+    try:
+        document_digest = canonical_digest(document)
+        document_identity = _compensation_authorization_identity(document)
+    except (TypeError, ValueError):
+        document_digest = None
+        document_identity = None
+    if (
+        document.get("compensation_authorization_identity") != document_identity
+        or document.get("compensation_authorization_identity")
+        != expected_compensation_authorization_identity
+        or document_digest != expected_compensation_authorization_digest
+        or document.get("bindings") != expected_bindings
+        or document.get("compensation_nonce") != expected_compensation_nonce
+        or document.get("issuer_identity") != expected_issuer_identity
+    ):
+        diagnostics.append(
+            _diagnostic(
+                "COMPENSATION_RECOVERY_AUTHORITY_INVALID",
+                "$.compensation_authorization",
+                "The archived compensation authorization does not match the independently trusted original invocation and checkpoint set.",
+            )
+        )
+
+    derived_ledger_claim_identity = compensation_ledger_claim_identity(
+        expected_execution_domain_identity, expected_compensation_nonce
+    )
+    if (
+        expected_compensation_ledger_claim_identity != derived_ledger_claim_identity
+        or trusted_compensation_ledger_claim_identity
+        != expected_compensation_ledger_claim_identity
+        or trusted_compensation_ledger_authorization_identity
+        != expected_compensation_authorization_identity
+        or trusted_compensation_ledger_authorization_digest
+        != expected_compensation_authorization_digest
+        or type(trusted_compensation_ledger_generation) is not int
+        or trusted_compensation_ledger_generation < 1
+    ):
+        diagnostics.append(
+            _diagnostic(
+                "COMPENSATION_RECOVERY_LEDGER_MISMATCH",
+                "$.trusted_compensation_ledger",
+                "Recovery requires the original durable ledger claim for the exact compensation authorization and nonce.",
+            )
+        )
+
+    original_snapshots = (
+        original_checkpoint_records
+        if isinstance(original_checkpoint_records, Sequence)
+        and not isinstance(original_checkpoint_records, (str, bytes))
+        else ()
+    )
+    current_snapshots = (
+        current_checkpoint_records
+        if isinstance(current_checkpoint_records, Sequence)
+        and not isinstance(current_checkpoint_records, (str, bytes))
+        else ()
+    )
+    original_by_identity = {
+        record.get("checkpoint_identity"): (snapshot, record)
+        for snapshot in original_snapshots
+        if (record := _checkpoint_record(snapshot)) is not None
+    }
+    current_by_identity = {
+        record.get("checkpoint_identity"): (snapshot, record)
+        for snapshot in current_snapshots
+        if (record := _checkpoint_record(snapshot)) is not None
+    }
+    allowed_descendant_phases = {
+        "prepared": {
+            "prepared",
+            "compensating",
+            "compensated",
+            "compensation_blocked",
+        },
+        "completed": {
+            "completed",
+            "compensating",
+            "compensated",
+            "compensation_blocked",
+        },
+    }
+    descendant_valid = (
+        not original_diagnostics
+        and not current_diagnostics
+        and type(original_checkpoint_store_generation) is int
+        and type(current_checkpoint_store_generation) is int
+        and current_checkpoint_store_generation >= original_checkpoint_store_generation
+        and len(original_by_identity) == len(original_snapshots)
+        and len(current_by_identity) == len(current_snapshots)
+        and set(original_by_identity) == set(current_by_identity)
+    )
+    store_changed = False
+    blocked = False
+    if descendant_valid:
+        for identity, (
+            original_snapshot,
+            original_record,
+        ) in original_by_identity.items():
+            current_snapshot, current_record = current_by_identity[identity]
+            original_phase = original_record.get("phase")
+            current_phase = current_record.get("phase")
+            record_changed = current_record != original_record
+            store_changed = store_changed or record_changed
+            if (
+                original_phase not in allowed_descendant_phases
+                or original_record.get("compensation_authority_kind") != "none"
+                or original_record.get("compensation_transition_claim") is not None
+                or current_phase not in allowed_descendant_phases[original_phase]
+                or current_record.get("invocation_state")
+                != original_record.get("invocation_state")
+                or not isinstance(original_record.get("phase_history"), list)
+                or not isinstance(current_record.get("phase_history"), list)
+                or current_record["phase_history"][
+                    : len(original_record["phase_history"])
+                ]
+                != original_record["phase_history"]
+                or type(original_snapshot.get("durable_generation")) is not int
+                or type(current_snapshot.get("durable_generation")) is not int
+                or current_snapshot["durable_generation"]
+                < original_snapshot["durable_generation"]
+                or (
+                    record_changed
+                    and current_snapshot["durable_generation"]
+                    <= original_snapshot["durable_generation"]
+                )
+            ):
+                descendant_valid = False
+                break
+            if current_phase in {
+                "compensating",
+                "compensated",
+                "compensation_blocked",
+            }:
+                blocked = blocked or current_phase == "compensation_blocked"
+                if current_record.get("compensation_authority_kind") != (
+                    "public_compensation"
+                ):
+                    descendant_valid = False
+                    break
+        if store_changed and (
+            current_checkpoint_store_generation <= original_checkpoint_store_generation
+        ):
+            descendant_valid = False
+    if not descendant_valid:
+        diagnostics.append(
+            _diagnostic(
+                "COMPENSATION_RECOVERY_DESCENDANT_MISMATCH",
+                "$.current_checkpoint_store",
+                "The current store is not an authorized monotonic descendant of the archived pretransition checkpoint set.",
+            )
+        )
+    if blocked:
+        diagnostics.append(
+            _diagnostic(
+                "COMPENSATION_RECOVERY_BLOCKED",
+                "$.current_checkpoint_store",
+                "A compensation-blocked checkpoint requires separate operator disposition and cannot be resumed.",
+            )
+        )
+    return tuple(sorted(set(diagnostics)))
+
+
+def _run_terminal_identity(document: Mapping[str, object]) -> str:
+    payload = {
+        key: value
+        for key, value in document.items()
+        if key not in {"run_terminal_identity", "run_terminal_digest"}
+    }
+    return "run-terminal:" + canonical_digest(payload)
+
+
+def _run_terminal_digest(document: Mapping[str, object]) -> str:
+    return _artifact_digest(document, "run_terminal_digest")
+
+
+def _bytes_digest(payload: bytes) -> str:
+    return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+def validate_run_terminal_record(
+    document: object,
+    *,
+    checkpoint_set_manifest: object,
+    expected_apply_authorization_identity: str,
+    expected_apply_authorization_digest: str,
+    expected_execution_domain_identity: str,
+    expected_execution_nonce: str,
+    expected_run_identity: str,
+    authoritative_plan_action_set: object,
+    expected_plan_action_set_digest: str,
+    expected_candidate_identity: str,
+    expected_implementation_manifest_digest: str,
+    expected_plan_digest: str,
+    trusted_checkpoint_store_generation: int,
+    trusted_checkpoint_records: Sequence[Mapping[str, object]],
+    authoritative_captured_state: object,
+    expected_captured_state_identity: str,
+    expected_captured_state_digest: str,
+    prepared_action_authority_set: object,
+    expected_prepared_action_authority_set_identity: str,
+    expected_prepared_action_authority_set_digest: str,
+) -> tuple[Diagnostic, ...]:
+    """Validate terminal success from complete plan and checkpoint artifacts."""
+
+    if (
+        not isinstance(document, Mapping)
+        or document.get("schema_version") != "agent-equipment-run-terminal-record/v1"
+        or not _schema_valid(document)
+    ):
+        return (
+            _diagnostic(
+                "RUN_TERMINAL_SCHEMA_INVALID",
+                "$.run_terminal_record",
+                "The run-terminal record does not satisfy the checked-in closed schema.",
+            ),
+        )
+    if contains_literal_credential(document):
+        return (
+            _diagnostic(
+                "RUN_TERMINAL_LITERAL_SECRET",
+                "$.run_terminal_record",
+                "The run-terminal record contains credential-shaped literal material.",
+            ),
+        )
+
+    checkpoint_diagnostics = validate_checkpoint_set_manifest(
+        checkpoint_set_manifest,
+        expected_apply_authorization_identity=expected_apply_authorization_identity,
+        expected_apply_authorization_digest=expected_apply_authorization_digest,
+        expected_execution_domain_identity=expected_execution_domain_identity,
+        expected_execution_nonce=expected_execution_nonce,
+        expected_run_identity=expected_run_identity,
+        expected_plan_action_set_digest=expected_plan_action_set_digest,
+        trusted_checkpoint_store_generation=trusted_checkpoint_store_generation,
+        trusted_checkpoint_records=trusted_checkpoint_records,
+        pretransition_checkpoint_store_generation=(trusted_checkpoint_store_generation),
+        pretransition_checkpoint_records=trusted_checkpoint_records,
+        authoritative_captured_state=authoritative_captured_state,
+        expected_captured_state_identity=expected_captured_state_identity,
+        expected_captured_state_digest=expected_captured_state_digest,
+        prepared_action_authority_set=prepared_action_authority_set,
+        expected_prepared_action_authority_set_identity=(
+            expected_prepared_action_authority_set_identity
+        ),
+        expected_prepared_action_authority_set_digest=(
+            expected_prepared_action_authority_set_digest
+        ),
+        authoritative_plan_action_set=authoritative_plan_action_set,
+        expected_candidate_identity=expected_candidate_identity,
+        expected_implementation_manifest_digest=(
+            expected_implementation_manifest_digest
+        ),
+        expected_plan_digest=expected_plan_digest,
+    )
+    diagnostics: list[Diagnostic] = list(checkpoint_diagnostics)
+    if document["run_terminal_identity"] != _run_terminal_identity(document):
+        diagnostics.append(
+            _diagnostic(
+                "RUN_TERMINAL_IDENTITY_INVALID",
+                "$.run_terminal_record.run_terminal_identity",
+                "The run-terminal identity does not match its canonical payload.",
+            )
+        )
+    if document["run_terminal_digest"] != _run_terminal_digest(document):
+        diagnostics.append(
+            _diagnostic(
+                "RUN_TERMINAL_DIGEST_INVALID",
+                "$.run_terminal_record.run_terminal_digest",
+                "The run-terminal digest does not match the complete record.",
+            )
+        )
+
+    execution_binding = {
+        "apply_authorization_identity": expected_apply_authorization_identity,
+        "apply_authorization_digest": expected_apply_authorization_digest,
+        "execution_domain_identity": expected_execution_domain_identity,
+        "execution_nonce": expected_execution_nonce,
+        "run_identity": expected_run_identity,
+    }
+    checkpoint_identity = (
+        checkpoint_set_manifest.get("checkpoint_set_identity")
+        if isinstance(checkpoint_set_manifest, Mapping)
+        else None
+    )
+    checkpoint_digest = (
+        checkpoint_set_manifest.get("checkpoint_set_digest")
+        if isinstance(checkpoint_set_manifest, Mapping)
+        else None
+    )
+    expected_fields = {
+        "execution_binding": execution_binding,
+        "plan_action_set_digest": expected_plan_action_set_digest,
+        "checkpoint_set_identity": checkpoint_identity,
+        "checkpoint_set_digest": checkpoint_digest,
+        "checkpoint_store_generation": trusted_checkpoint_store_generation,
+        "state": "succeeded",
+    }
+    if any(document[field] != value for field, value in expected_fields.items()):
+        diagnostics.append(
+            _diagnostic(
+                "RUN_TERMINAL_BINDING_MISMATCH",
+                "$.run_terminal_record",
+                "The terminal record does not bind the exact validated apply, plan, checkpoint set, and store generation.",
+            )
+        )
+    trusted_records = [
+        _checkpoint_record(snapshot) for snapshot in trusted_checkpoint_records
+    ]
+    plan_action_index, plan_diagnostics = _validated_plan_action_index(
+        authoritative_plan_action_set,
+        expected_action_set_digest=expected_plan_action_set_digest,
+        expected_candidate_identity=expected_candidate_identity,
+        expected_implementation_manifest_digest=(
+            expected_implementation_manifest_digest
+        ),
+        expected_plan_digest=expected_plan_digest,
+    )
+    diagnostics.extend(plan_diagnostics)
+    terminal_checkpoint_keys = {
+        (record.get("action_identity"), record.get("ordinal"))
+        for record in trusted_records
+        if record is not None
+    }
+    if (
+        any(
+            record is None or record.get("phase") != "completed"
+            for record in trusted_records
+        )
+        or terminal_checkpoint_keys != set(plan_action_index)
+        or len(terminal_checkpoint_keys) != len(trusted_records)
+    ):
+        diagnostics.append(
+            _diagnostic(
+                "RUN_TERMINAL_CHECKPOINT_STATE_MISMATCH",
+                "$.trusted_checkpoint_store",
+                "A successful run requires one completed trusted checkpoint for every action in the complete plan-action set.",
+            )
+        )
+    return tuple(sorted(set(diagnostics)))
+
+
+def _release_evidence_diagnostics(
+    *,
+    checkpoint_set_manifest: object,
+    checkpoint_set_manifest_bytes: object,
+    prepared_action_authority_set_bytes: object,
+    run_terminal_record: object,
+    run_terminal_record_bytes: object,
+    expected_apply_authorization_identity: str,
+    expected_apply_authorization_digest: str,
+    expected_execution_domain_identity: str,
+    expected_execution_nonce: str,
+    expected_run_identity: str,
+    authoritative_plan_action_set: object,
+    expected_plan_action_set_digest: str,
+    expected_candidate_identity: str,
+    expected_implementation_manifest_digest: str,
+    expected_plan_digest: str,
+    trusted_checkpoint_store_generation: int,
+    trusted_checkpoint_records: Sequence[Mapping[str, object]],
+    authoritative_captured_state: object,
+    expected_captured_state_identity: str,
+    expected_captured_state_digest: str,
+    prepared_action_authority_set: object,
+    expected_prepared_action_authority_set_identity: str,
+    expected_prepared_action_authority_set_digest: str,
+) -> tuple[Diagnostic, ...]:
+    diagnostics = list(
+        validate_run_terminal_record(
+            run_terminal_record,
+            checkpoint_set_manifest=checkpoint_set_manifest,
+            expected_apply_authorization_identity=(
+                expected_apply_authorization_identity
+            ),
+            expected_apply_authorization_digest=expected_apply_authorization_digest,
+            expected_execution_domain_identity=expected_execution_domain_identity,
+            expected_execution_nonce=expected_execution_nonce,
+            expected_run_identity=expected_run_identity,
+            authoritative_plan_action_set=authoritative_plan_action_set,
+            expected_plan_action_set_digest=expected_plan_action_set_digest,
+            expected_candidate_identity=expected_candidate_identity,
+            expected_implementation_manifest_digest=(
+                expected_implementation_manifest_digest
+            ),
+            expected_plan_digest=expected_plan_digest,
+            trusted_checkpoint_store_generation=(trusted_checkpoint_store_generation),
+            trusted_checkpoint_records=trusted_checkpoint_records,
+            authoritative_captured_state=authoritative_captured_state,
+            expected_captured_state_identity=expected_captured_state_identity,
+            expected_captured_state_digest=expected_captured_state_digest,
+            prepared_action_authority_set=prepared_action_authority_set,
+            expected_prepared_action_authority_set_identity=(
+                expected_prepared_action_authority_set_identity
+            ),
+            expected_prepared_action_authority_set_digest=(
+                expected_prepared_action_authority_set_digest
+            ),
+        )
+    )
+    for label, artifact, raw_bytes in (
+        (
+            "prepared action authority set",
+            prepared_action_authority_set,
+            prepared_action_authority_set_bytes,
+        ),
+        ("checkpoint set", checkpoint_set_manifest, checkpoint_set_manifest_bytes),
+        ("run terminal", run_terminal_record, run_terminal_record_bytes),
+    ):
+        parsed: object | None = None
+        parse_diagnostics: tuple[Diagnostic, ...] = ()
+        if type(raw_bytes) is bytes:
+            parsed, parse_diagnostics = parse_execution_authority_bytes(raw_bytes)
+        if type(raw_bytes) is not bytes or parse_diagnostics or parsed != artifact:
+            diagnostics.append(
+                _diagnostic(
+                    "RELEASE_EVIDENCE_BYTES_MISMATCH",
+                    "$.release_evidence_bytes",
+                    f"The exact {label} bytes do not decode to the validated artifact.",
+                )
+            )
+    return tuple(sorted(set(diagnostics)))
+
+
 def validate_release_archive_manifest(
     document: object,
     *,
+    checkpoint_set_manifest: object,
+    checkpoint_set_manifest_bytes: bytes,
+    prepared_action_authority_set_bytes: bytes,
+    run_terminal_record: object,
+    run_terminal_record_bytes: bytes,
+    expected_apply_authorization_identity: str,
+    expected_apply_authorization_digest: str,
+    expected_execution_domain_identity: str,
+    expected_execution_nonce: str,
+    expected_run_identity: str,
+    authoritative_plan_action_set: object,
+    expected_plan_action_set_digest: str,
     expected_candidate_identity: str,
     expected_implementation_manifest_digest: str,
-    expected_execution_binding: Mapping[str, object],
-    expected_checkpoint_set_digest: str,
-    expected_run_terminal_state: str,
+    expected_plan_digest: str,
+    trusted_checkpoint_store_generation: int,
+    trusted_checkpoint_records: Sequence[Mapping[str, object]],
+    authoritative_captured_state: object,
+    expected_captured_state_identity: str,
+    expected_captured_state_digest: str,
+    prepared_action_authority_set: object,
+    expected_prepared_action_authority_set_identity: str,
+    expected_prepared_action_authority_set_digest: str,
     expected_launcher_identity: str,
     expected_launcher_manifest_digest: str,
     expected_store_identity: str,
     expected_store_key: str,
     expected_archived_document_byte_digests: Mapping[str, object],
 ) -> tuple[Diagnostic, ...]:
-    """Validate one closed archive manifest without touching the archive store."""
+    """Validate one archive from independently trusted execution artifacts."""
 
     if (
         not isinstance(document, Mapping)
@@ -920,7 +2382,41 @@ def validate_release_archive_manifest(
             ),
         )
 
-    diagnostics: list[Diagnostic] = []
+    diagnostics = list(
+        _release_evidence_diagnostics(
+            checkpoint_set_manifest=checkpoint_set_manifest,
+            checkpoint_set_manifest_bytes=checkpoint_set_manifest_bytes,
+            prepared_action_authority_set_bytes=(prepared_action_authority_set_bytes),
+            run_terminal_record=run_terminal_record,
+            run_terminal_record_bytes=run_terminal_record_bytes,
+            expected_apply_authorization_identity=(
+                expected_apply_authorization_identity
+            ),
+            expected_apply_authorization_digest=expected_apply_authorization_digest,
+            expected_execution_domain_identity=expected_execution_domain_identity,
+            expected_execution_nonce=expected_execution_nonce,
+            expected_run_identity=expected_run_identity,
+            authoritative_plan_action_set=authoritative_plan_action_set,
+            expected_plan_action_set_digest=expected_plan_action_set_digest,
+            expected_candidate_identity=expected_candidate_identity,
+            expected_implementation_manifest_digest=(
+                expected_implementation_manifest_digest
+            ),
+            expected_plan_digest=expected_plan_digest,
+            trusted_checkpoint_store_generation=(trusted_checkpoint_store_generation),
+            trusted_checkpoint_records=trusted_checkpoint_records,
+            authoritative_captured_state=authoritative_captured_state,
+            expected_captured_state_identity=expected_captured_state_identity,
+            expected_captured_state_digest=expected_captured_state_digest,
+            prepared_action_authority_set=prepared_action_authority_set,
+            expected_prepared_action_authority_set_identity=(
+                expected_prepared_action_authority_set_identity
+            ),
+            expected_prepared_action_authority_set_digest=(
+                expected_prepared_action_authority_set_digest
+            ),
+        )
+    )
     payload = document["payload"]
     assert isinstance(payload, Mapping)
     destination = payload["archive_destination"]
@@ -943,28 +2439,48 @@ def validate_release_archive_manifest(
                 "The archive manifest digest does not match the complete manifest.",
             )
         )
-    expected_fields = {
+
+    execution_binding = {
+        "apply_authorization_identity": expected_apply_authorization_identity,
+        "apply_authorization_digest": expected_apply_authorization_digest,
+        "execution_domain_identity": expected_execution_domain_identity,
+        "execution_nonce": expected_execution_nonce,
+        "run_identity": expected_run_identity,
+    }
+    evidence_fields = {
         "candidate_identity": expected_candidate_identity,
         "implementation_manifest_digest": expected_implementation_manifest_digest,
-        "checkpoint_set_digest": expected_checkpoint_set_digest,
-        "run_terminal_state": expected_run_terminal_state,
+        "execution_binding": execution_binding,
+        "plan_action_set_digest": expected_plan_action_set_digest,
+        "checkpoint_set_identity": (
+            checkpoint_set_manifest.get("checkpoint_set_identity")
+            if isinstance(checkpoint_set_manifest, Mapping)
+            else None
+        ),
+        "checkpoint_set_digest": (
+            checkpoint_set_manifest.get("checkpoint_set_digest")
+            if isinstance(checkpoint_set_manifest, Mapping)
+            else None
+        ),
+        "run_terminal_identity": (
+            run_terminal_record.get("run_terminal_identity")
+            if isinstance(run_terminal_record, Mapping)
+            else None
+        ),
+        "run_terminal_digest": (
+            run_terminal_record.get("run_terminal_digest")
+            if isinstance(run_terminal_record, Mapping)
+            else None
+        ),
         "launcher_identity": expected_launcher_identity,
         "launcher_manifest_digest": expected_launcher_manifest_digest,
     }
-    if any(payload[field] != expected for field, expected in expected_fields.items()):
+    if any(payload[field] != expected for field, expected in evidence_fields.items()):
         diagnostics.append(
             _diagnostic(
                 "RELEASE_ARCHIVE_AUTHORITY_MISMATCH",
                 "$.payload",
-                "The archive manifest does not match the trusted candidate and launcher authority.",
-            )
-        )
-    if payload["execution_binding"] != expected_execution_binding:
-        diagnostics.append(
-            _diagnostic(
-                "EXECUTION_BINDING_MISMATCH",
-                "$.payload.execution_binding",
-                "The archive manifest does not bind the exact trusted execution tuple.",
+                "The archive manifest does not match the trusted candidate, execution evidence, and launcher authority.",
             )
         )
     if (
@@ -980,7 +2496,18 @@ def validate_release_archive_manifest(
         )
     archived_digests = payload["archived_document_byte_digests"]
     assert isinstance(archived_digests, Mapping)
-    if archived_digests != expected_archived_document_byte_digests:
+    computed_byte_digests = dict(expected_archived_document_byte_digests)
+    for field, raw_bytes in (
+        (
+            "prepared_action_authority_set_bytes_digest",
+            prepared_action_authority_set_bytes,
+        ),
+        ("checkpoint_set_manifest_bytes_digest", checkpoint_set_manifest_bytes),
+        ("run_terminal_record_bytes_digest", run_terminal_record_bytes),
+    ):
+        if type(raw_bytes) is bytes:
+            computed_byte_digests[field] = _bytes_digest(raw_bytes)
+    if archived_digests != computed_byte_digests:
         diagnostics.append(
             _diagnostic(
                 "ARCHIVED_DOCUMENT_BYTES_MISMATCH",
@@ -988,25 +2515,43 @@ def validate_release_archive_manifest(
                 "The archive manifest does not bind the exact independently supplied document bytes.",
             )
         )
-    return tuple(sorted(diagnostics))
+    return tuple(sorted(set(diagnostics)))
 
 
 def validate_release_receipt(
     document: object,
     *,
+    release_archive_manifest: object,
+    checkpoint_set_manifest: object,
+    checkpoint_set_manifest_bytes: bytes,
+    prepared_action_authority_set_bytes: bytes,
+    run_terminal_record: object,
+    run_terminal_record_bytes: bytes,
+    expected_apply_authorization_identity: str,
+    expected_apply_authorization_digest: str,
+    expected_execution_domain_identity: str,
+    expected_execution_nonce: str,
+    expected_run_identity: str,
+    authoritative_plan_action_set: object,
+    expected_plan_action_set_digest: str,
     expected_candidate_identity: str,
     expected_implementation_manifest_digest: str,
-    expected_execution_binding: Mapping[str, object],
-    expected_checkpoint_set_digest: str,
-    expected_run_terminal_state: str,
+    expected_plan_digest: str,
+    trusted_checkpoint_store_generation: int,
+    trusted_checkpoint_records: Sequence[Mapping[str, object]],
+    authoritative_captured_state: object,
+    expected_captured_state_identity: str,
+    expected_captured_state_digest: str,
+    prepared_action_authority_set: object,
+    expected_prepared_action_authority_set_identity: str,
+    expected_prepared_action_authority_set_digest: str,
     expected_launcher_identity: str,
     expected_launcher_manifest_digest: str,
-    expected_archive_identity: str,
-    expected_archive_manifest_digest: str,
     expected_store_identity: str,
     expected_store_key: str,
+    expected_archived_document_byte_digests: Mapping[str, object],
 ) -> tuple[Diagnostic, ...]:
-    """Validate a terminal receipt against one already committed archive manifest."""
+    """Validate a receipt by revalidating its exact archived execution evidence."""
 
     if (
         not isinstance(document, Mapping)
@@ -1029,11 +2574,53 @@ def validate_release_receipt(
             ),
         )
 
-    diagnostics: list[Diagnostic] = []
+    archive_diagnostics = validate_release_archive_manifest(
+        release_archive_manifest,
+        checkpoint_set_manifest=checkpoint_set_manifest,
+        checkpoint_set_manifest_bytes=checkpoint_set_manifest_bytes,
+        prepared_action_authority_set_bytes=prepared_action_authority_set_bytes,
+        run_terminal_record=run_terminal_record,
+        run_terminal_record_bytes=run_terminal_record_bytes,
+        expected_apply_authorization_identity=expected_apply_authorization_identity,
+        expected_apply_authorization_digest=expected_apply_authorization_digest,
+        expected_execution_domain_identity=expected_execution_domain_identity,
+        expected_execution_nonce=expected_execution_nonce,
+        expected_run_identity=expected_run_identity,
+        authoritative_plan_action_set=authoritative_plan_action_set,
+        expected_plan_action_set_digest=expected_plan_action_set_digest,
+        expected_candidate_identity=expected_candidate_identity,
+        expected_implementation_manifest_digest=(
+            expected_implementation_manifest_digest
+        ),
+        expected_plan_digest=expected_plan_digest,
+        trusted_checkpoint_store_generation=trusted_checkpoint_store_generation,
+        trusted_checkpoint_records=trusted_checkpoint_records,
+        authoritative_captured_state=authoritative_captured_state,
+        expected_captured_state_identity=expected_captured_state_identity,
+        expected_captured_state_digest=expected_captured_state_digest,
+        prepared_action_authority_set=prepared_action_authority_set,
+        expected_prepared_action_authority_set_identity=(
+            expected_prepared_action_authority_set_identity
+        ),
+        expected_prepared_action_authority_set_digest=(
+            expected_prepared_action_authority_set_digest
+        ),
+        expected_launcher_identity=expected_launcher_identity,
+        expected_launcher_manifest_digest=expected_launcher_manifest_digest,
+        expected_store_identity=expected_store_identity,
+        expected_store_key=expected_store_key,
+        expected_archived_document_byte_digests=(
+            expected_archived_document_byte_digests
+        ),
+    )
+    diagnostics: list[Diagnostic] = list(archive_diagnostics)
     payload = document["payload"]
     assert isinstance(payload, Mapping)
-    destination = payload["archive_destination"]
-    assert isinstance(destination, Mapping)
+    archive_payload = (
+        release_archive_manifest.get("payload")
+        if isinstance(release_archive_manifest, Mapping)
+        else None
+    )
     if document["receipt_identity"] != "release-receipt:" + canonical_digest(payload):
         diagnostics.append(
             _diagnostic(
@@ -1045,29 +2632,55 @@ def validate_release_receipt(
     expected_fields = {
         "candidate_identity": expected_candidate_identity,
         "implementation_manifest_digest": expected_implementation_manifest_digest,
-        "checkpoint_set_digest": expected_checkpoint_set_digest,
-        "run_terminal_state": expected_run_terminal_state,
+        "execution_binding": (
+            archive_payload.get("execution_binding")
+            if isinstance(archive_payload, Mapping)
+            else None
+        ),
+        "plan_action_set_digest": expected_plan_action_set_digest,
+        "checkpoint_set_identity": (
+            checkpoint_set_manifest.get("checkpoint_set_identity")
+            if isinstance(checkpoint_set_manifest, Mapping)
+            else None
+        ),
+        "checkpoint_set_digest": (
+            checkpoint_set_manifest.get("checkpoint_set_digest")
+            if isinstance(checkpoint_set_manifest, Mapping)
+            else None
+        ),
+        "run_terminal_identity": (
+            run_terminal_record.get("run_terminal_identity")
+            if isinstance(run_terminal_record, Mapping)
+            else None
+        ),
+        "run_terminal_digest": (
+            run_terminal_record.get("run_terminal_digest")
+            if isinstance(run_terminal_record, Mapping)
+            else None
+        ),
         "launcher_identity": expected_launcher_identity,
         "launcher_manifest_digest": expected_launcher_manifest_digest,
-        "archive_identity": expected_archive_identity,
-        "archive_manifest_digest": expected_archive_manifest_digest,
+        "archive_identity": (
+            release_archive_manifest.get("archive_identity")
+            if isinstance(release_archive_manifest, Mapping)
+            else None
+        ),
+        "archive_manifest_digest": (
+            release_archive_manifest.get("archive_manifest_digest")
+            if isinstance(release_archive_manifest, Mapping)
+            else None
+        ),
     }
     if any(payload[field] != expected for field, expected in expected_fields.items()):
         diagnostics.append(
             _diagnostic(
                 "RELEASE_RECEIPT_AUTHORITY_MISMATCH",
                 "$.payload",
-                "The release receipt does not match the trusted candidate, launcher, and archive.",
+                "The release receipt does not match the revalidated archive and execution evidence.",
             )
         )
-    if payload["execution_binding"] != expected_execution_binding:
-        diagnostics.append(
-            _diagnostic(
-                "EXECUTION_BINDING_MISMATCH",
-                "$.payload.execution_binding",
-                "The release receipt does not bind the exact trusted execution tuple.",
-            )
-        )
+    destination = payload["archive_destination"]
+    assert isinstance(destination, Mapping)
     if (
         destination["store_identity"] != expected_store_identity
         or destination["store_key"] != expected_store_key
@@ -1079,7 +2692,7 @@ def validate_release_receipt(
                 "The release receipt does not name the trusted archive store and key.",
             )
         )
-    return tuple(sorted(diagnostics))
+    return tuple(sorted(set(diagnostics)))
 
 
 __all__ = (
@@ -1087,11 +2700,16 @@ __all__ = (
     "Diagnostic",
     "authorization_ledger_claim_identity",
     "canonical_digest",
+    "checkpoint_identity",
     "compensation_ledger_claim_identity",
     "parse_execution_authority_bytes",
     "validate_apply_authorization",
     "validate_checkpoint_set_manifest",
     "validate_compensation_authorization",
+    "validate_plan_action_set",
+    "validate_prepared_action_authority_set",
+    "validate_public_compensation_recovery",
     "validate_release_archive_manifest",
     "validate_release_receipt",
+    "validate_run_terminal_record",
 )

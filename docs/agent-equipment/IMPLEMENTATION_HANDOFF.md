@@ -38,7 +38,7 @@ deferred.
 | `docs/agent-equipment/plan-action-set-v1.schema.json` | Closed projection of every independently validated automated plan action supplied to captured-state validation |
 | `docs/agent-equipment/adapter-contract-v1.schema.json` | Closed capability, request, observation, action, and receipt serialization contract |
 | `docs/agent-equipment/acceptance-evidence-v1.schema.json` | Closed expected-case, candidate evidence, and post-run attestation contract |
-| `docs/agent-equipment/execution-authority-v1.schema.json` | Closed apply, checkpoint-set, compensation, release archive manifest, and terminal receipt authority contract |
+| `docs/agent-equipment/execution-authority-v1.schema.json` | Eight closed records: apply authorization, prepared-action-authority set, checkpoint set, compensation authorization and transition claim, run terminal, release archive manifest, and release receipt |
 | `docs/agent-equipment/initial-catalog.proposed.json` | Schema-valid initial desired-state proposal; no live authority |
 | `docs/agent-equipment/initial-lock.proposed.json` | Generated 132-record lock bound to the proposed catalog digest |
 | `docs/agent-equipment/INVENTORY.md` and `initial-inventory.json` | Dated, secret-free read-only observation and initial classification |
@@ -250,6 +250,17 @@ missing, expired, replayed, foreign-domain, or unpersistable authorization
 performs no adapter call or checkpoint transition. Immediate reverse
 compensation after a later failure stays inside the already invoked claimed
 apply run; it does not reuse apply authority as a public compensation grant.
+Recovery after the public nonce claim is a separate continuation path. It
+requires the archived original compensation authorization and pretransition
+checkpoint manifest, the independently trusted durable ledger claim for their
+exact identity/digest/nonce, and a race-rechecked current checkpoint store. The
+current store must preserve checkpoint membership and forward invocation intent,
+carry only claims for that original authority, and strictly advance each changed
+record and the store generation. It may equal the original store when the crash
+occurred after the ledger CAS but before the first checkpoint transition. It
+does not mint a fresh nonce or reapply the expired clock window.
+`compensation_blocked` requires separate operator disposition, and public
+recovery never replaces `automatic_apply` provenance.
 
 Every adapter implements:
 
@@ -271,9 +282,11 @@ returns no partial capability tuple.
 
 Adapters receive resolved complete route records. They do not choose providers,
 merge coverage defaults, rewrite outcomes, resolve secret values into returned
-objects, or mutate a surface outside the action. Before adapter invocation,
-validate every input shape, construct the `ApplySequence` authority context from
-the trusted plan, capture, and prepared checkpoint, and enforce its same
+objects, or mutate a surface outside the action. Before apply issuance, validate
+every input shape and seal the complete `PreparedActionAuthoritySet` from the
+trusted plan, capture, and adapter-derived normalized pre/post state. Before
+adapter invocation, construct the `ApplySequence` authority context from that
+validated set and the prepared checkpoint, and enforce its same
 pre-mutation bindings. After receipt and verification, the pure cross-record
 validator accepts only the complete success proof; it re-derives exact surfaces,
 proves complete desired component state against the route and capability, and
@@ -340,6 +353,8 @@ validate_acceptance_evidence(
 
 release_candidate(
     apply_authorization_bytes,
+    checkpoint_set_manifest_bytes,
+    run_terminal_record_bytes,
     expected_case_manifest_bytes,
     evidence_bundle_bytes,
     attestation_manifest_bytes,
@@ -351,9 +366,10 @@ release_candidate(
     trusted_implementation_manifest_digest,
     authorized_expected_case_manifest_digest,
     authorized_attestation_manifest_digest,
-    trusted_execution_binding,
-    trusted_checkpoint_set_digest,
-    trusted_run_terminal_state,
+    trusted_apply_execution_tuple,
+    authoritative_plan_action_set,
+    trusted_checkpoint_store_generation,
+    trusted_checkpoint_store_snapshot,
     artifact_store,
 ) -> ReleaseReceipt
 ```
@@ -362,12 +378,15 @@ The candidate-independent release launcher obtains the expected-case manifest
 digest from the exact trusted pre-mutation authorization and the attestation
 digest from the separate post-run release authority. It first verifies its own
 installed bytes against the independently supplied launcher identity and
-manifest digest. The release command strictly parses all four exact byte inputs,
+manifest digest. The release command strictly parses all seven exact byte inputs,
 invokes the validator with the trusted digests, and refuses a release receipt on
 any diagnostic. It hashes each exact input byte stream independently of its
 semantic canonical digest, constructs the closed `ReleaseArchiveManifest`,
-binds the independently validated checkpoint-set digest, requires terminal
-state `succeeded`, and stages and fsyncs the authorization, three release
+validates the checkpoint manifest against the trusted store snapshot and the
+complete independently bound plan-action set, and validates an authenticated
+`RunTerminalRecord`. Success requires one completed checkpoint for every plan
+action and `state: succeeded`. It stages and fsyncs the authorization, prepared-
+action-authority set, checkpoint manifest, terminal record, three release
 documents, and archive
 manifest, then commits generation `1` with a create-only
 compare-and-swap rename. An existing identical generation is an idempotent read;
@@ -450,9 +469,9 @@ Later steps do not begin until the named evidence passes.
 - Put a 256 KiB raw-byte limit ahead of UTF-8 decoding, JSON parsing, regular
   expressions, credential scanning, and hashing for every public authority
   record. Reject duplicate members, non-UTF-8, `NaN`/infinity, oversized
-  strings, and timestamps with more than nine fractional digits; keep every
-  variable string bounded in Schema so parsed-object validation also fails
-  closed.
+  records, and timestamps with more than nine fractional digits. At every
+  parsed-object authority boundary, canonicalize only to enforce the same 256
+  KiB ceiling before Schema, regular-expression, credential, or digest work.
 - Implement the separate closed `CompensationAuthorization` parser and public
   `compensate` boundary. Require `command: compensate`, canonical
   `compensation_authorization_identity`, independently trusted complete digest,
@@ -468,6 +487,53 @@ Later steps do not begin until the named evidence passes.
   fault cases for zero adapter calls and checkpoint transitions. Keep automatic
   compensation after a later apply failure inside that already invoked claimed
   run.
+- Add a distinct public-compensation recovery validator. Revalidate the archived
+  original authorization and pretransition checkpoint manifest, require the
+  independently trusted durable compensation-ledger claim, and race-check that
+  the current store is a monotonic descendant with unchanged forward invocation
+  intent and surviving claims bound only to the original authority. Cover the
+  crash after ledger CAS but before any checkpoint change, direct `prepared` to
+  `compensating`, strict record/store generation advancement, automatic-
+  provenance takeover rejection, and blocked-state refusal. Recovery does not
+  mint a new nonce or reapply the original clock window.
+- Persist apply-authorization identity/digest and execution nonce in every
+  durable checkpoint, include them with the full `CHK-10` tuple in its immutable
+  identity, and validate them against independent apply inputs. Enforce the
+  complete phase-history, current-phase, invocation-state matrix.
+- Enforce one reachable lifecycle across the canonical checkpoint prefix:
+  `completed*` plus at most one final `prepared` record before compensation, or
+  `completed*`, at most one lowest nonterminal compensation frontier, then
+  `compensated*` during reverse execution. Reject a later completed action after
+  an earlier prepared one and reject a lower compensated action while a higher
+  dependent remains forward.
+- Distinguish compensation provenance with `compensation_authority_kind`.
+  Automatic rollback uses `automatic_apply` without a public claim. The public
+  seam uses `public_compensation` and a separate closed transition claim binding
+  checkpoint identity plus the independently validated compensation authority
+  identity/digest and nonce. Reject missing, ambiguous, and canonically resealed
+  foreign claims before transition. Enforce every closed claim member's string
+  and digest format and require the independently validated non-null public
+  compensation tuple whenever any claim is present.
+- Accept the complete closed `agent-equipment-plan-action-set/v1` artifact at
+  checkpoint and terminal seams. Validate its Schema, canonical action/set
+  identities and digests, independent candidate/implementation/plan/set
+  bindings, then map the all-and-only checkpoint-store subset uniquely into it.
+  Never replace it with a naked caller action list.
+- Before apply issuance, derive and independently validate one complete sealed
+  `PreparedActionAuthoritySet`. Require all-and-only canonical plan membership,
+  exact candidate/implementation/plan/capability/capture bindings, normalized
+  pre/post self-digests and native-update invariants, exact sorted controlled-
+  component identities in both states, and the planned desired-state fragment
+  in expected post-state. Bind the set identity/digest into
+  `ApplyAuthorization`; checkpoints consume its exact state rather than a caller
+  map or raw capture observation.
+- Add the closed `RunTerminalRecord`, bound to the exact apply tuple, complete
+  plan-action-set digest, checkpoint-set identity/digest, trusted store
+  generation, and `state: succeeded`. Require full plan coverage by unique
+  completed checkpoints. Release must validate exact prepared-action-authority-
+  set, checkpoint-manifest, and terminal-record bytes and archive their three
+  byte digests; accept no naked
+  checkpoint-digest or terminal-state scalar.
 - After complete-plan validation, emit its exact closed
   `agent-equipment-plan-action-set/v1` projection. Validate the separately
   produced action set and capture with their checked-in JSON Schemas, then run
@@ -640,6 +706,12 @@ Later steps do not begin until the named evidence passes.
 
 - Validate the complete plan and every compensation before opening the first
   checkpoint.
+- Validate the complete captured-state artifact against that plan, derive the
+  adapter-normalized pre/post context for every action, and seal the exact
+  `PreparedActionAuthoritySet` before requesting `ApplyAuthorization`. Reject a
+  missing/extra action, duplicate ordinal or component identity, capability-set
+  mismatch, desired-post fragment mismatch, or independently trusted set-digest
+  mismatch before issuance.
 - Require a closed, cycle-free dependency graph and execute only its
   deterministic topological order. Reverse compensation uses the reverse
   topological order.
@@ -774,8 +846,9 @@ No retirement rule deletes an unmanaged observation or a canonical
    merely to shorten the stack.
 5. Open a separate closed `ApplyAuthorization` containing the exact candidate
    implementation identity and installed-manifest digest, refreshed inventory,
-   immutable plan, plan-action-set, capability-set, and already sealed
-   captured-state identity/digest, sealed expected-case manifest and digest,
+   immutable plan, plan-action-set, already validated and sealed prepared-action-
+   authority-set identity/digest, capability-set, and already sealed captured-
+   state identity/digest, sealed expected-case manifest and digest,
    issuer, validity window, independently trusted execution-domain identity,
    run, and fresh execution nonce. Bind the exact live
    mutations, rollback command/actions, and review receipts transitively through

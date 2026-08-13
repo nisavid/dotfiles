@@ -3,68 +3,9 @@ name: Platform portability
 # Zsh GUI path deployment is verified by zsh-deployment-portability.yml.
 on:
   pull_request:
-    paths: &platform_paths
-      - ".github/workflows/platform-portability.yml"
-      - "docs/HINDSIGHT.md"
-      - "docs/ENCRYPTION.md"
-      - "docs/SECRET_INJECTION.md"
-      - "docs/agent-equipment/**"
-      - "docs/research/GLOBAL_AGENT_EQUIPMENT_PRIMARY_SOURCES.md"
-      - "docs/research/MATTPOCOCK_SKILLS_CURRENT_DISTRIBUTION.md"
-      - "home/.chezmoiignore"
-      - "home/.chezmoidata/git-identity.toml"
-      - "home/.chezmoidata/editor-target.toml"
-      - "home/**/*hindsight*"
-      - "home/**/*hindsight*/**"
-      - "home/**/*secret-exec*"
-      - "home/**/*secret-exec*/**"
-      - "home/dot_codex/private_AGENTS.md.tmpl"
-      - "home/dot_codex/modify_private_config.toml.tmpl"
-      - "home/dot_config/git/config.tmpl"
-      - "home/dot_config/environment.d/**"
-      - "home/run_*acl.sh"
-      - "home/run_after_sync-global-agent-skills-to-claude.zsh"
-      - "scripts/private-skill-transaction"
-      - "scripts/private-skill-transaction.d/**"
-      - "scripts/privacy-scan"
-      - "scripts/agent_equipment_acceptance_model.py"
-      - "scripts/agent_equipment_acceptance_evidence.py"
-      - "scripts/agent_equipment_adapter_contract.py"
-      - "scripts/agent_equipment_captured_state.py"
-      - "scripts/agent_equipment_design.py"
-      - "scripts/agent_equipment_execution_authority.py"
-      - "scripts/agent_equipment_json_schema.py"
-      - "scripts/agent_equipment_public_data.py"
-      - "tests/claude-skill-sync.zsh"
-      - "tests/container-runtime-bindings.zsh"
-      - "tests/global-agents-policy.zsh"
-      - "tests/hindsight-agents-bindings.zsh"
-      - "tests/identity-bindings.zsh"
-      - "tests/platform-portability.zsh"
-      - "tests/private-skills.zsh"
-      - "tests/privacy-scan.zsh"
-      - "tests/proton-pass-session.zsh"
-      - "tests/secret-command-shims.zsh"
-      - "tests/secret-exec-migrate.zsh"
-      - "tests/secret-exec.zsh"
-      - "tests/secret-injection-bindings.zsh"
-      - "tests/fixtures/secret-exec-public.toml"
-      - "tests/private-skill-transaction.zsh"
-      - "tests/private-skill-transaction.d/**"
-      - "tests/test_chezmoi_source_ownership.py"
-      - "tests/test_agent_equipment_acceptance.py"
-      - "tests/test_agent_equipment_acceptance_evidence.py"
-      - "tests/test_agent_equipment_adapter_contract.py"
-      - "tests/test_agent_equipment_captured_state.py"
-      - "tests/test_agent_equipment_design.py"
-      - "tests/test_agent_equipment_deployment_contract.py"
-      - "tests/test_agent_equipment_json_schema.py"
-      - "tests/test_agent_equipment_public_data.py"
-      - "tests/fixtures/agent-equipment/**"
   push:
     branches:
       - main
-    paths: *platform_paths
   workflow_dispatch:
 
 concurrency:
@@ -228,7 +169,7 @@ jobs:
           zsh -f tests/platform-portability.zsh
           zsh -f tests/container-runtime-bindings.zsh
           zsh -f tests/privacy-scan.zsh
-          python3 scripts/privacy-scan --root .
+          python3 scripts/privacy-scan --root . --require-age-manifest
           zsh -f tests/identity-bindings.zsh
           zsh -f tests/secret-exec.zsh
           zsh -f tests/secret-command-shims.zsh
@@ -249,6 +190,8 @@ jobs:
           python3 -m unittest tests/test_agent_equipment_design.py
           python3 -m unittest tests/test_agent_equipment_json_schema.py
           python3 -m unittest tests/test_agent_equipment_public_data.py
+          python3 -m unittest tests/test_privacy_age_integrity_gate.py
+          python3 -m unittest tests/test_privacy_age_envelopes.py
           uvx --from check-jsonschema==0.35.0 \
             check-jsonschema --check-metaschema \
             docs/agent-equipment/adapter-contract-v1.schema.json \

@@ -128,6 +128,14 @@ exact candidate, desired-state, plan, capability, capture, and expected-case
 binding tuple.
 _Avoid_: Plan approval, release attestation, candidate-authored permission
 
+**Prepared action authority set**:
+The sealed, complete pre-invocation projection of every validated plan action's
+adapter-derived normalized pre-state and expected post-state. It binds the
+complete plan, capability set, sealed capture, exact controlled-component set,
+and per-action operation and compensation context before apply authority is
+issued.
+_Avoid_: Caller state map, partial checkpoint prefix, post-mutation observation
+
 **Execution nonce**:
 The issuer-generated one-time identity that prevents one apply authorization
 from starting another run.
@@ -162,6 +170,29 @@ durable record; its digest is derived by trusted enumeration under the
 exclusive lease and rechecked immediately before a public compensation claim
 or transition.
 _Avoid_: Caller-supplied digest, partial checkpoint list, mutable store view
+
+**Compensation transition claim**:
+The separate immutable provenance record for a public compensation transition.
+It binds one immutable checkpoint identity to the independently validated
+compensation-authorization identity, complete digest, and fresh nonce. Automatic
+in-run rollback has an explicit `automatic_apply` authority kind and no public
+claim.
+_Avoid_: Checkpoint identity rewrite, self-authenticating claim, ambiguous null
+
+**Public compensation recovery**:
+Continuation of one already claimed public compensation invocation. It requires
+the independently trusted original authorization and pretransition checkpoint
+manifest, the durable compensation-ledger claim, and a race-rechecked current
+checkpoint store that is a monotonic descendant carrying only the original
+public claims. It does not mint a new nonce or reapply the original time window.
+_Avoid_: Fresh compensation authorization, inferred authority, automatic rollback takeover
+
+**Run terminal record**:
+The closed authenticated success record for one exact apply execution tuple,
+complete plan-action set, validated checkpoint-set manifest, and trusted store
+generation. Success requires unique completed checkpoint coverage of every plan
+action.
+_Avoid_: Caller-supplied state string, partial checkpoint prefix, release receipt
 
 **Expected acceptance case manifest**:
 The sealed, pre-execution registry of every release case required for one

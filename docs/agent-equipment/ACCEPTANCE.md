@@ -244,7 +244,8 @@ operation. Run them again for every migration boundary named in `MIGRATION.md`.
 | `CHK-07` | Change a completed surface externally before compensation. Compare-before-restore preserves the external value and stops. | Drift diagnostic and unchanged external digest |
 | `CHK-08` | Fail compensation and preserve a durable recoverable record. Audit-before-retry classifies state and never issues duplicate or destructive replay. | Fault and retry trace |
 | `CHK-09` | Inject a concurrent change immediately before every adapter mutation. Compare-before-mutate preserves it and stops before the native manager call. | Parameterized adapter call spies |
-| `CHK-10` | Bind each checkpoint to apply-authorization identity and digest, execution-domain identity, execution nonce, run, candidate identity, installed-implementation manifest digest, catalog, lock, plan, sealed captured-state identity and digest, capability-set, the route's closed capability and manager-evidence binding, action identity and ordinal, route, operation, pre-state, and expected-post-state digests; reject replay under any changed binding or execution domain. A public compensation transition additionally binds its compensation-authorization identity/digest and fresh nonce. | Authorization, field-mutation, and set-membership negatives |
+| `CHK-10` | Before apply issuance, validate and seal one complete `PreparedActionAuthoritySet` over all-and-only the plan actions, exact capability/capture bindings, adapter-derived normalized pre/post state, desired-state semantics, and exact controlled-component identities. Bind its independently trusted identity/digest into `ApplyAuthorization`. Bind each checkpoint identity to that prepared authority plus apply identity/digest, execution domain/nonce/run, candidate and implementation, catalog/lock/plan/capability/capture, route capability/manager evidence, action/ordinal/step, operation, surface, compensation, and exact normalized pre/post state. Require checkpoints to form the canonical prepared plan prefix and one reachable cross-record forward or reverse-topological lifecycle frontier in addition to the local phase-history x phase x invocation-state matrix. Distinguish automatic apply compensation from public compensation; the latter requires a closed non-null original-authority transition claim and durable ledger evidence for restart. | Cross-module identity, coordinated authority-reseal, malformed normalized-state, component-set, phase-matrix, complete-plan, prefix/frontier, claim-type, and compensation-restart negatives |
+| `CHK-11` | Authenticate a closed `RunTerminalRecord` over the exact apply tuple, complete plan-action-set, validated prepared-action-authority set, checkpoint-set manifest, and trusted store generation. `succeeded` requires one unique completed checkpoint for every plan action. Release revalidates all exact artifacts and archives their exact byte digests; naked checkpoint/state scalars and a partial completed prefix fail. | Terminal coordinated-reseal, partial-store, exact-byte, and receipt negatives |
 
 ## Migration and rollback fixtures
 
@@ -297,8 +298,9 @@ the 26 methods in `AcceptanceEvidenceContractTests`:
 
 ## Execution-authority design evidence
 
-The apply authorization, checkpoint-set manifest, compensation authorization,
-release archive manifest, and release receipt are external authority records,
+The prepared-action-authority set, apply authorization, checkpoint-set manifest,
+compensation authorization and transition claim, run-terminal record, release
+archive manifest, and release receipt are execution-authority records,
 not children inside the candidate's 74-ID evidence bundle. The methods in
 `AgentEquipmentDeploymentContractTests` pin their closed source shape and the
 future deployment separation:
@@ -306,7 +308,8 @@ future deployment separation:
 | Gate family | Exact test methods |
 | --- | --- |
 | Apply authority | `test_apply_authorization_is_closed_over_the_complete_binding_tuple`; `test_apply_authorization_requires_command_time_run_and_replay_identity`; `test_apply_authorization_identity_and_operator_review_are_semantic_authority`; `test_apply_authorization_validates_the_complete_tuple_and_time_window` |
-| Compensation authority | Closed-schema, canonical-identity, trusted-digest/domain, original-run/checkpoint-set, time-window, and fresh-nonce vectors in `AgentEquipmentDeploymentContractTests` |
+| Prepared-state authority | `test_prepared_action_authority_is_complete_and_semantically_bound`; `test_prepared_action_authority_rejects_component_and_data_ambiguity`; `test_prepared_action_authority_requires_exact_controlled_components` |
+| Compensation authority | Closed-schema, canonical-identity, trusted-digest/domain, original-run/checkpoint-set, time-window, fresh-nonce, original-ledger-claim restart, monotonic descendant, and provenance-takeover vectors in `AgentEquipmentDeploymentContractTests` |
 | Checkpoint-set authority | `test_checkpoint_set_manifest_is_closed_and_matches_the_trusted_store`; `test_checkpoint_set_rejects_incomplete_foreign_or_stale_store_views`; `test_compensation_derives_checkpoint_digest_from_the_trusted_store` |
 | Release authority | `test_release_archive_manifest_and_receipt_bind_exact_bytes_and_execution`; `test_archive_byte_digest_is_distinct_from_authorization_canonical_digest`; `test_release_authority_uses_shared_public_data_policy`; `test_release_receipt_binds_launcher_authority_and_one_cas_archive`; `test_source_shape_keeps_audit_candidate_and_release_authority_separate` |
 | Runtime boundary | `test_runtime_gate_and_external_authority_precede_every_mutation`; `test_raw_authority_boundary_rejects_ambiguous_or_unbounded_input` |

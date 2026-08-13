@@ -47,6 +47,27 @@ grep -Fq 'test "$(age-inspect --version)" = "v${AGE_VERSION}"' "$workflow" ||
   fail 'platform workflow does not verify the age parser version'
 grep -Fq 'python3 -m pip install uv==0.11.32' "$workflow" ||
   fail 'platform workflow does not install the pinned uv runtime'
+! grep -Fq '    paths:' "$workflow" ||
+  fail 'platform workflow does not run the privacy gate for every change'
+grep -Fq \
+  'python3 scripts/privacy-scan --root . --require-age-manifest' \
+  "$workflow" ||
+  fail 'platform workflow does not enforce the age-envelope manifest'
+
+age_boundary_workflow=$repo_root/.github/workflows/privacy-age-integrity.yml
+grep -Fq '  pull_request_target:' "$age_boundary_workflow" ||
+  fail 'age boundary does not execute from the trusted base event'
+grep -Fq '          path: trusted-base' "$age_boundary_workflow" ||
+  fail 'age boundary does not isolate the trusted base checkout'
+grep -Fq '          path: untrusted-head' "$age_boundary_workflow" ||
+  fail 'age boundary does not isolate the candidate data checkout'
+grep -Fq 'python3 trusted-base/scripts/privacy_age_integrity_gate.py' \
+  "$age_boundary_workflow" ||
+  fail 'age boundary does not execute the trusted transition verifier'
+grep -Fq 'python3 trusted-base/scripts/privacy-scan' "$age_boundary_workflow" ||
+  fail 'age boundary does not execute the trusted privacy scanner'
+! grep -Eq 'python3 untrusted-head|untrusted-head/scripts/' "$age_boundary_workflow" ||
+  fail 'age boundary executes candidate code'
 
 chezmoi -S "$repo_root/home" execute-template \
   --override-data '{"chezmoi":{"os":"linux"}}' \

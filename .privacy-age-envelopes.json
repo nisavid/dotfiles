@@ -1,0 +1,53 @@
+{
+  "version": "privacy-age-envelopes/v1",
+  "envelopes": [
+    {
+      "path": "home/.private-agents.md.age",
+      "sha256": "sha256:a879f9d9d19c34f40e43d4c3b7c8137db9d4789c56b1868bb03a3df5d1273f66"
+    },
+    {
+      "path": "home/.private-codex-work.toml.age",
+      "sha256": "sha256:ffe3297e65694a413a25d3fe08264a1f9f262dafdcbc2704f4b42d34a8d3c4d6"
+    },
+    {
+      "path": "home/.private-git-identities.toml.age",
+      "sha256": "sha256:384bfe56039d4f6c1ff916960fb328c994d5c240d8309d7febe3cc7ba1d1d896"
+    },
+    {
+      "path": "home/.private-hindsight.toml.age",
+      "sha256": "sha256:b9b468d356dea4ea11f58193366b1d08ff0a3b6926e915713c0aaa48a8e53715"
+    },
+    {
+      "path": "home/.private-machine.toml.age",
+      "sha256": "sha256:9c3e3cec54d89095bce7b18342c0aacb29d40d44d0ea2e0fab1473c3e73bb35d"
+    },
+    {
+      "path": "home/.private-prd-01.toml.age",
+      "sha256": "sha256:c18a2ba660403058d86a052b315544b30776d6e28243374890d870d5e5748b05"
+    },
+    {
+      "path": "home/.private-privacy-denylist.txt.age",
+      "sha256": "sha256:223696a820e1a4c44b311a64c303f2bf7a91c6156b9664779898a9645cbf86a2"
+    },
+    {
+      "path": "home/.private-secret-exec.toml.age",
+      "sha256": "sha256:fb76ba664119deadb0d4efd151fd51b8400d1fe08b064500ef34add4b9d576b4"
+    },
+    {
+      "path": "home/.private-skill-01-body.age",
+      "sha256": "sha256:19f221d4a4ec3a5df6ed088ee356716847797b540b6f00e05913f24198e20813"
+    },
+    {
+      "path": "home/.private-skill-01-path.age",
+      "sha256": "sha256:c24451c5894a81b3860c387bbcedfacecfb4531f86ce353d47ed24103e283150"
+    },
+    {
+      "path": "home/.private-skill-02-body.age",
+      "sha256": "sha256:2aca6f08d1d819e7e6e08b9be4077aca1b2de9ee6761940cf7617a4e43d1e26a"
+    },
+    {
+      "path": "home/.private-skill-02-path.age",
+      "sha256": "sha256:332f2f4279e95fed7f6a98a0ea11434a75127105d27896fa142bc8c9be844ff2"
+    }
+  ]
+}
