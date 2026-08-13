@@ -4,6 +4,11 @@ This is the design deliverable for Issue #59. It specifies a future migration;
 it does not authorize, start, or perform one. Running it requires separate
 authorization for one fully resolved plan and its exact digests.
 
+Execution also requires the manifest-bound CPython 3.12 or newer runtime and a
+closed, externally issued `ApplyAuthorization`. The exact authorization bytes
+and independently supplied `trusted_apply_authorization_digest` are distinct
+inputs; neither this runbook nor candidate output can create authority.
+
 The migration changes provider routes without treating a distribution as an
 atomic capability. Every plugin skill, MCP, hook, and other component is
 classified before the plan chooses a preferred route, a supplementary route,
@@ -15,6 +20,11 @@ fact again before migration.
 ## Preconditions and authority gate
 
 Complete all of these before the executor opens an action checkpoint:
+
+0. Run the installed wrapper's CPython 3.12+ gate before importing candidate
+   code or reading native state. Recompute the runtime identity and executable
+   digest in the installed-implementation manifest. Any mismatch stops before
+   the first action checkpoint with zero adapter calls.
 
 1. Refresh the live inventory and every selected native manager channel. For
    Matt, refresh the official marketplace entry, upstream plugin manifest,
@@ -62,18 +72,28 @@ Complete all of these before the executor opens an action checkpoint:
    digest, plan digest, plan-action-set digest, capability-set digest, sealed
    captured-state identity and digest, expected-case manifest digest, exact
    surface set, and native-rolling limitations for operator review. Obtain
-   separate authorization naming that complete exact tuple.
-11. After authorization and before any action checkpoint or mutation, observe
-    every affected live surface and every bound capability and manager-version
-    evidence source, and recompute the installed-implementation manifest digest
+   separate authority. It emits a Schema-valid `ApplyAuthorization` naming that
+   complete exact tuple plus `command: apply`, issuer, UTC issue/not-before/
+   expiry times, one run identity, and a fresh execution nonce. Obtain its
+   canonical `trusted_apply_authorization_digest` through a separate authenticated
+   channel; do not infer it from the record.
+11. After authorization and before any action checkpoint or mutation, strictly
+    parse the record and validate its canonical identity and complete digest.
+    Reject a missing, unknown, expired, not-yet-valid, or misbound authorization.
+    Then observe every affected live surface and every bound capability and
+    manager-version evidence source, and recompute the installed-implementation
+    manifest digest
     under the same candidate identity. Require the complete authorized tuple and
     live evidence to equal the sealed capture. Any drift invalidates the
     authorization: mutate nothing, recapture, resolve, reseal, and obtain new
-    authorization for the new exact tuple.
+    authorization for the new exact tuple. Only after that comparison succeeds,
+    atomically claim the nonce in the durable authorization ledger. A previously
+    claimed or unpersistable nonce stops before the first action checkpoint.
 
 Planning, inventory, import, update, and adopt remain runtime-read-only. Only an
 authorized `apply` may execute this runbook. Authorization for one plan does not
-carry to a recomputed plan.
+carry to a recomputed plan. Chezmoi's `run_onchange` integration invokes audit
+only and has no authorization or mutation input.
 
 ## Captured state
 
@@ -285,13 +305,18 @@ references and public version strings never contain raw native output or secret
 values.
 
 The candidate-independent release launcher obtains the authorized expected-case
-manifest digest from the pre-mutation authorization. After execution, a
-separate release authority attests the exact bundle and supplies the trusted
-attestation digest. `agent-equipment release` strictly parses and archives the
-exact manifest, bundle, and attestation, then emits a release receipt only when
-every exact child and derived aggregate passes. The candidate evidence writer,
-attestation writer, validator, and release command do not grant apply authority
-or mutate harness state.
+manifest digest from the exact trusted pre-mutation authorization. After
+execution, a separate release authority attests the exact bundle and supplies
+the trusted attestation digest. The launcher is independently installed at
+`/usr/local/libexec/agent-equipment-release/v1/agent-equipment-release`, outside
+the evaluated candidate and its installed manifest. It verifies its own exact
+identity and manifest digest from external trust inputs, strictly parses the
+authorization, manifest, bundle, and attestation, then performs one create-only
+compare-and-swap archive commit. Only after generation `1` is durable does it
+emit the closed `ReleaseReceipt`. Candidate output cannot mint, overwrite,
+ignore, or substitute for that receipt. The candidate evidence writer,
+attestation writer, and validator do not grant apply authority or mutate harness
+state.
 
 ### Filesystem observation
 
@@ -404,20 +429,27 @@ projection, regenerate and recapture until the plan, action set, and capture
 agree. Atomically seal the plan-action set, captured-state manifest, and private
 recovery blobs. Project and seal the exact acceptance expected-case manifest,
 including all explicit verification and migration nodes, then obtain
-authorization naming the complete candidate, implementation-manifest, catalog,
-lock, plan, action-set, capability-set, captured-state, and expected-case-
-manifest tuple.
+the exact closed `ApplyAuthorization` naming the complete candidate,
+implementation-manifest, catalog, lock, plan, action-set, capability-set,
+captured-state, and expected-case-manifest tuple plus the command, run, validity
+window, and fresh nonce. Receive `trusted_apply_authorization_digest` through
+the external authority channel.
 
-After authorization, recompute the installed implementation manifest and reread
-every affected surface and bound capability and manager-version evidence source.
-Proceed only when the candidate identity, implementation digest, and all live
-evidence equal the authorized sealed capture. Otherwise release the proposal
-without mutation, recapture, resolve, reseal, and obtain new authorization.
+After authorization, strictly validate the exact bytes and digest and verify the
+trusted time window. Then recompute the installed implementation manifest and
+reread every affected surface and bound capability and manager-version evidence
+source. Proceed only
+when the candidate identity, implementation digest, and all live evidence equal
+the authorized sealed capture. Otherwise release the proposal without mutation,
+recapture, resolve, reseal, and obtain new authorization. A ledger claim is never
+deleted for reuse. After the exact comparison and immediately before the first
+action checkpoint, durably claim the nonce in the authorization ledger.
 
 Completion: the authorized plan, sealed action set, sealed capture, and expected-
-case manifest have identical bindings; the post-authorization live comparison
-is exact; all route and surface cross-references validate; no harness state has
-changed; no action checkpoint exists yet.
+case manifest have identical bindings; the authorization identity and canonical
+digest are exact; its nonce is claimed once for this run; the post-authorization
+live comparison is exact; all route and surface cross-references validate; no
+harness state has changed; no action checkpoint exists yet.
 
 ### 2. Replace the blanket Claude projector
 
@@ -566,20 +598,27 @@ The evidence writer then seals the exact migration and live child receipts into
 the candidate bundle and derives the aggregates. The candidate-independent
 release authority attests those exact bytes after every result and live sign-
 off, and the release command validates all three documents against the
-authorized expected-case and attestation manifest digests. Missing, extra,
-duplicated, nonpassing, stale-attested, or misbound evidence withholds the
-release receipt and preserves the complete run evidence; it never edits a
-checkpoint or fabricates rollback authority.
+authorized expected-case and attestation manifest digests. The external launcher
+also validates the exact apply authorization and its own trusted launcher
+identity/digest, then commits the authorization, three release documents, and
+archive manifest with an `absent` compare token. Generation `1` is create-only;
+identical existing bytes are idempotent and different bytes are a conflict.
+Missing, extra, duplicated, nonpassing, stale-attested, or misbound evidence—or
+a failed/conflicting archive commit—withholds the release receipt and preserves
+the complete run evidence; it never edits a checkpoint or fabricates rollback
+authority.
 
 Completion: the success marker is durable and fsynced, the apply lease is
-released, steady-state audit is a no-op, and the exact expected-case manifest,
-evidence bundle, attestation, and release receipt are archived. Any failed
-runtime condition enters the recovery procedure.
+released, steady-state audit is a no-op, and the exact apply authorization,
+expected-case manifest, evidence bundle, attestation, archive manifest, and
+closed `ReleaseReceipt` are durably present in the independent authority store.
+Any failed runtime condition enters the recovery procedure.
 
 ## Checkpoints and idempotence
 
 One checkpoint binds a single adapter action and every surface that action can
-change. It records the complete `CHK-10` tuple: run and candidate identities;
+change. It records the complete `CHK-10` tuple: apply-authorization identity and
+digest, execution nonce, run and candidate identities;
 installed-implementation manifest digest; catalog, lock, plan, capability-set,
 and sealed captured-state identity/digest bindings; the route's closed
 capability and manager-evidence binding; action identity and deterministic
@@ -637,7 +676,8 @@ rerun. A compensated run is historical evidence, not a license to replay; a new
 apply requires a fresh sealed capture and authorization naming the complete
 candidate implementation identity/manifest digest, catalog, lock, plan,
 plan-action-set, capability-set, captured-state identity/digest, and sealed
-expected-case-manifest digest tuple.
+expected-case-manifest digest tuple plus a new run identity, validity window,
+and execution nonce. An already claimed nonce never authorizes the new apply.
 
 ## Step-level compensation
 
@@ -758,14 +798,19 @@ output for seeded secret values.
    identity/manifest digest, catalog, lock, plan, plan-action-set,
    capability-set, captured-state identity/digest, and sealed expected-case-
    manifest digest plus every route capability binding against the authorized
-   receipt. A mismatch requires a new read-only investigation, not checkpoint
-   editing.
+   `ApplyAuthorization`. Require its canonical digest to equal the original
+   `trusted_apply_authorization_digest` and its ledger claim to name this exact
+   run and nonce. A mismatch requires a new read-only investigation, not
+   checkpoint editing.
 3. Audit every `prepared` and `compensating` checkpoint from supported surfaces.
    Record whether each surface equals captured pre-state, the action's expected
    post-state, or neither.
 4. Resume forward only when the exact authorized plan remains valid, every
-   ambiguous action is classified, and all next-action compare guards pass.
-   Otherwise compensate completed actions in reverse topological order.
+   ambiguous action is classified, all next-action compare guards pass, and the
+   authorization remains within its expiry. After expiry, create no new action
+   checkpoint or invocation; compensation and classification of already invoked
+   work remain available under the historical ledger claim. Otherwise
+   compensate completed actions in reverse topological order.
 5. At a compare-before-restore mismatch, preserve the external state and stop.
    Report the exact surface, expected secret-free state, observation source,
    and checkpoint. Obtain an explicit decision to retain the external change

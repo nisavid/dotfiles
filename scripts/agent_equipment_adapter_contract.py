@@ -8,12 +8,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-from pathlib import Path
 import re
 from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass
-from datetime import datetime
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -38,6 +37,15 @@ MUTATING_OPERATIONS = frozenset(
 )
 SCHEMA_DIRECTORY = Path(__file__).resolve().parent.parent / "docs/agent-equipment"
 ADAPTER_SCHEMA_NAME = "adapter-contract-v1.schema.json"
+_UTC_TIMESTAMP_PATTERN = re.compile(
+    r"\A(?P<year>[0-9]{4})-"
+    r"(?P<month>0[1-9]|1[0-2])-"
+    r"(?P<day>0[1-9]|[12][0-9]|3[01])[Tt]"
+    r"(?P<hour>[01][0-9]|2[0-3]):"
+    r"(?P<minute>[0-5][0-9]):"
+    r"(?P<second>[0-5][0-9])"
+    r"(?:[.,](?P<fraction>[0-9]+))?Z\n?\Z"
+)
 
 
 @dataclass(frozen=True, order=True)
@@ -1195,6 +1203,19 @@ def _capability_record(
         for record in records:
             if isinstance(record, dict):
                 _validate_canonical_capability(diagnostics, record)
+        capability_identities = [
+            record.get("capability_identity")
+            for record in records
+            if isinstance(record, dict)
+        ]
+        if len(capability_identities) != len(set(capability_identities)):
+            diagnostics.append(
+                Diagnostic(
+                    "DUPLICATE_CAPABILITY_IDENTITY",
+                    "CapabilityDiscovery.result.records",
+                    "Every discovered capability identity must be globally unique.",
+                )
+            )
     if isinstance(records, list) and records != sorted(
         records,
         key=_capability_sort_key,
@@ -1362,15 +1383,37 @@ def _validate_sequence_timestamps(
         )
 
 
-def _parse_utc_timestamp(value: Any) -> datetime | None:
-    if not isinstance(value, str) or not value.endswith("Z"):
+def _parse_utc_timestamp(
+    value: Any,
+) -> tuple[int, int, int, int, int, int, str] | None:
+    if not isinstance(value, str):
         return None
-    try:
-        parsed = datetime.fromisoformat(f"{value[:-1]}+00:00")
-    except ValueError:
+    match = _UTC_TIMESTAMP_PATTERN.search(value)
+    if match is None:
         return None
-    offset = parsed.utcoffset()
-    return parsed if offset is not None and offset.total_seconds() == 0 else None
+    year, month, day, hour, minute, second = (
+        int(match.group(field))
+        for field in ("year", "month", "day", "hour", "minute", "second")
+    )
+    leap_year = year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+    month_lengths = (
+        31,
+        29 if leap_year else 28,
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    )
+    if day > month_lengths[month - 1]:
+        return None
+    fraction = (match.group("fraction") or "").rstrip("0")
+    return year, month, day, hour, minute, second, fraction
 
 
 def _manager_for_provider(provider_match: Any) -> Any:

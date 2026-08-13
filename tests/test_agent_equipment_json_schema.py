@@ -235,6 +235,31 @@ class AgentEquipmentJsonSchemaTests(unittest.TestCase):
                     )
                 )
 
+    def test_rejects_nested_schema_ids_in_the_closed_local_subset(self) -> None:
+        nested_cases = (
+            (
+                {"name": "value"},
+                {
+                    "type": "object",
+                    "properties": {"name": {"$id": "nested.json", "type": "string"}},
+                },
+            ),
+            (
+                "value",
+                {
+                    "$defs": {"name": {"$id": "nested.json#", "type": "string"}},
+                    "$ref": "#/$defs/name",
+                },
+            ),
+            (
+                "value",
+                {"allOf": [{"$id": "nested.json", "type": "string"}]},
+            ),
+        )
+        for document, schema in nested_cases:
+            with self.subTest(schema=schema):
+                self.assertFalse(self.validate(document, {"root.json": schema}))
+
     def test_preflight_visits_unselected_definitions_and_branches(self) -> None:
         malformed_locations = (
             {"$defs": {"unused": {"unknown": True}}},

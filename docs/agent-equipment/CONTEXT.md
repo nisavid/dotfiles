@@ -122,6 +122,22 @@ A declared route operation that restores the captured pre-state after a later
 failure, subject to compare-before-restore.
 _Avoid_: Best-effort cleanup, rollback claim
 
+**Apply authorization**:
+An externally issued, time-bounded, one-run grant to execute `apply` for one
+exact candidate, desired-state, plan, capability, capture, and expected-case
+binding tuple.
+_Avoid_: Plan approval, release attestation, candidate-authored permission
+
+**Execution nonce**:
+The issuer-generated one-time identity that prevents one apply authorization
+from starting another run.
+_Avoid_: Run identity, checkpoint ordinal
+
+**Authorization ledger**:
+The durable history of execution-nonce claims and their exact authorization and
+run bindings. It records consumption; it does not issue authority.
+_Avoid_: Apply authorization, checkpoint store
+
 **Expected acceptance case manifest**:
 The sealed, pre-execution registry of every release case required for one
 candidate, plan, capture, and route-capability binding tuple.
@@ -138,9 +154,15 @@ A separately authenticated, post-execution statement that binds independent
 runner and operator review to one exact acceptance evidence bundle.
 _Avoid_: Candidate-authored receipt, migration authorization
 
+**Release launcher**:
+The independently trusted release-authority component that validates and
+archives one exact release tuple and alone may issue its release receipt.
+_Avoid_: Candidate CLI, evidence writer, acceptance validator
+
 **Release receipt**:
-The terminal record that one exact candidate, expected-case manifest, evidence
-bundle, and release attestation passed the release gate.
+The terminal record that an independently trusted release launcher validated
+and atomically archived one exact authorization, candidate, expected-case
+manifest, evidence bundle, and release attestation tuple.
 _Avoid_: Apply checkpoint, migration authorization
 
 **Projection**:

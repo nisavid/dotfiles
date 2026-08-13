@@ -605,6 +605,31 @@ class AdapterContractSchemaTests(unittest.TestCase):
                     finally:
                         CONTRACT.SCHEMA_DIRECTORY = original_directory
 
+    def test_public_schema_gate_rejects_nested_schema_ids(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            schema_directory = Path(directory)
+            invalid_schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
+            invalid_schema["$defs"]["digest"]["$id"] = "nested-digest.json"
+            (schema_directory / SCHEMA.name).write_text(
+                json.dumps(invalid_schema),
+                encoding="utf-8",
+            )
+            catalog_schema = ROOT / "docs/agent-equipment/catalog-v1.schema.json"
+            (schema_directory / catalog_schema.name).write_text(
+                catalog_schema.read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            original_directory = CONTRACT.SCHEMA_DIRECTORY
+            CONTRACT.SCHEMA_DIRECTORY = schema_directory
+            try:
+                diagnostics = document_diagnostic_codes(
+                    apply_sequence_document(valid_sequence())
+                )
+            finally:
+                CONTRACT.SCHEMA_DIRECTORY = original_directory
+
+        self.assertEqual({"ADAPTER_SCHEMA_INVALID"}, diagnostics)
+
     def test_public_sequence_validation_requires_exact_contract_versions(self) -> None:
         locations = (
             ("authority",),
@@ -1413,6 +1438,67 @@ class AdapterContractSchemaTests(unittest.TestCase):
                         document_diagnostic_codes(document),
                     )
 
+    def test_sequence_chronology_accepts_the_schema_utc_domain(self) -> None:
+        accepted_timelines = (
+            (
+                "0000-01-01T00:00:00Z",
+                "0000-01-01T00:00:00.1Z",
+                "0000-01-01T00:00:00.10Z",
+                "0000-01-01T00:00:00.1001Z",
+            ),
+            (
+                "2026-08-12T15:00:00Z\n",
+                "2026-08-12T15:00:01Z\n",
+                "2026-08-12T15:00:01Z\n",
+                "2026-08-12T15:00:02Z\n",
+            ),
+        )
+        for build in (
+            lambda: apply_sequence_document(valid_sequence()),
+            valid_compensation_sequence_document,
+        ):
+            for timeline in accepted_timelines:
+                with self.subTest(build=build, timeline=timeline):
+                    document = build()
+                    sequence = document["sequence"]
+                    sequence["pre_state_observation"]["record"]["observed_at"] = (
+                        timeline[0]
+                    )
+                    sequence["mutation_receipt"]["record"]["started_at"] = timeline[1]
+                    sequence["mutation_receipt"]["record"]["finished_at"] = timeline[2]
+                    sequence["post_state_observation"]["record"]["observed_at"] = (
+                        timeline[3]
+                    )
+
+                    self.assertNotIn(
+                        "TIMESTAMP_ORDER_INVALID",
+                        document_diagnostic_codes(document),
+                    )
+
+    def test_sequence_chronology_preserves_arbitrary_fraction_precision(self) -> None:
+        fraction_prefixes = ("000000", "0" * 5000)
+        for fraction_prefix in fraction_prefixes:
+            with self.subTest(fraction_digits=len(fraction_prefix) + 1):
+                document = apply_sequence_document(valid_sequence())
+                sequence = document["sequence"]
+                sequence["pre_state_observation"]["record"]["observed_at"] = (
+                    f"2026-08-12T15:00:01.{fraction_prefix}1Z"
+                )
+                sequence["mutation_receipt"]["record"]["started_at"] = (
+                    f"2026-08-12T15:00:01.{fraction_prefix}3Z"
+                )
+                sequence["mutation_receipt"]["record"]["finished_at"] = (
+                    f"2026-08-12T15:00:01.{fraction_prefix}2Z"
+                )
+                sequence["post_state_observation"]["record"]["observed_at"] = (
+                    f"2026-08-12T15:00:01.{fraction_prefix}4Z"
+                )
+
+                self.assertIn(
+                    "TIMESTAMP_ORDER_INVALID",
+                    document_diagnostic_codes(document),
+                )
+
     def test_apply_sequence_rejects_verification_of_a_different_route(self) -> None:
         document = apply_sequence_document(valid_sequence())
         post_request = document["sequence"]["post_state_request"]["record"]
@@ -1603,6 +1689,25 @@ class AdapterContractSchemaTests(unittest.TestCase):
             "CAPABILITY_ORDER_INVALID",
             diagnostic_codes(tuple(sequence)),
         )
+
+    def test_capability_discovery_requires_globally_unique_identities(self) -> None:
+        for selected in (True, False):
+            with self.subTest(selected=selected):
+                sequence = list(copy.deepcopy(valid_sequence()))
+                original = (
+                    capability_record(sequence[0])
+                    if selected
+                    else append_unrelated_capability(sequence)
+                )
+                duplicate = copy.deepcopy(original)
+                duplicate["adapter_version"] = "duplicate-fixture-version"
+                rehash_capability_record(duplicate)
+                sequence[0]["result"]["records"].append(duplicate)
+
+                self.assertIn(
+                    "DUPLICATE_CAPABILITY_IDENTITY",
+                    diagnostic_codes(tuple(sequence)),
+                )
 
     def test_capability_component_identity_support_is_canonically_sorted(
         self,

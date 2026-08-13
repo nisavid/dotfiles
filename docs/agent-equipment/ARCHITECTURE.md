@@ -14,10 +14,14 @@ semantics.
 | Native manager locks | native manager | Import and provenance evidence only |
 | Harness files and CLIs | harness or native manager | Observable runtime state |
 | Caches, databases, credentials, usage state | harness or native manager | Never catalog state |
+| Apply authorization | external operator authority | One time-bounded, one-run grant for one exact pre-mutation binding tuple |
+| Authorization ledger | reconciler runtime state directory | Durable one-time nonce claim and recovery continuity; never authority issuance |
 | Apply checkpoints | reconciler runtime state directory | Recovery evidence for one immutable plan |
 | Expected acceptance cases | production evidence writer | Exact release cases projected from one validated plan and authorized binding tuple |
 | Acceptance evidence bundle | fixture and live runners | Candidate results only; never desired state or mutation authority |
 | Release attestation | external release authority | Post-run authorization of one exact evidence-bundle digest and attestor set |
+| Release launcher | external release authority | Candidate-independent validation, create-only archival, and receipt issuance |
+| Release receipt | external release authority | Terminal proof of one launcher-authenticated, atomically archived release tuple |
 
 The catalog and lock are public, secret-free data. They contain environment
 variable names or opaque `secret-exec` profile names, never resolved values.
@@ -115,6 +119,48 @@ references plus digests identify evidence without embedding filesystem paths,
 URLs, native output, or secret values. Manager and harness version strings are
 public native-manager observations; diagnostics never echo their supplied
 contents.
+
+`execution-authority-v1.schema.json` owns two closed records with independent
+purposes. `ApplyAuthorization` is the only serialized pre-mutation authority.
+It binds `command: apply`, issuer and validity times, one run identity, one
+issuer-generated execution nonce, and the complete candidate, installed-
+implementation, catalog, lock, plan, plan-action-set, capability-set, sealed-
+capture, and expected-case-manifest tuple. Its identity is the canonical digest
+of the record excluding `authorization_identity`; the separately supplied
+`trusted_apply_authorization_digest` is the canonical digest of the complete
+record. Equality with candidate-authored fields is not authorization.
+
+`ReleaseReceipt` is terminal release evidence, never apply authority. Its
+identity is the canonical digest of its closed payload. That payload binds the
+independently trusted release-launcher identity and manifest digest, the exact
+apply authorization, candidate, installed implementation, expected cases,
+evidence bundle, attestation, and one create-only archive commit. A JSON object
+with the same shape is not a receipt unless the independent launcher produced
+it in the external authority's compare-and-swap archive.
+
+## Runtime and launcher trust boundary
+
+The production candidate requires CPython 3.12 or newer. Before importing the
+candidate package, reading a native manager, acquiring the apply lease, or
+opening the checkpoint store, the installed wrapper requires
+`sys.implementation.name == "cpython"` and `sys.version_info >= (3, 12)`.
+It computes the selected interpreter's implementation/version identity and
+executable digest and requires both in the complete installed-implementation
+manifest. A missing, older, changed, or non-CPython runtime fails before the
+first action checkpoint and performs no harness mutation. The future
+implementation may instead ship a pinned interpreter, but that interpreter's
+complete installed bytes remain part of the same manifest binding.
+
+The candidate-independent release launcher is a separately deployed,
+root-owned executable outside the candidate package, candidate installed-
+implementation manifest, and chezmoi `run_onchange` evaluation. It neither
+imports candidate modules nor uses the candidate-selected interpreter. Its
+caller supplies `trusted_release_launcher_identity` and
+`trusted_release_launcher_manifest_digest` from the external release authority;
+the launcher verifies its installed bytes before parsing candidate evidence.
+Candidate code has no receipt-issuing or archive-commit capability. Release
+consumers accept only a receipt retrieved with the matching generation from the
+external authority store, never candidate output or a caller-selected path.
 
 ## Resolver interface
 
@@ -257,7 +303,7 @@ operations rather than additional operation kinds.
 | `import` | Yes | No by default | Emits a proposal only | None |
 | `update` | Yes | Allowed for source resolution | Proposed atomic catalog and resolved-lock pair | None |
 | `adopt` | Yes | No by default | Proposed catalog ownership transfer | None |
-| `apply` | Yes | Allowed only for locked restore | Checkpoint ledger only | Automated operations on reconciler-owned routes |
+| `apply` | Yes | Allowed only for locked restore | Checkpoint and authorization ledgers only | Automated operations on reconciler-owned routes, after exact external authorization |
 
 `import` does not claim ownership. `adopt` requires the exact imported
 observation identity and changes authored ownership only; a later apply performs
@@ -265,6 +311,14 @@ any runtime reconciliation. `update` advances the catalog's resolved route
 evidence and the digest-bound lock together for immutable revisions or reviewed
 native-rolling baselines, without installing them. Apply never advances either
 artifact.
+
+Chezmoi's `run_onchange` integration invokes `audit` only. It can report a
+candidate plan but cannot accept an authorization path or digest, open the
+authorization ledger, create an action checkpoint, or invoke `apply`. An
+explicit operator workflow invokes `apply` with exact authorization bytes and a
+separately supplied `trusted_apply_authorization_digest`; neither value is read
+from a template variable, candidate configuration, environment fallback, or
+the authorization record itself.
 
 An imported observation identity is the canonical digest of its surface,
 observed-state digest, catalog digest, and inventory digest. Adoption accepts
@@ -497,8 +551,8 @@ captured-state object, and a durably prepared checkpoint before it invokes the
 adapter. It appends the receipt and verification records, then validates the
 complete success proof before marking the checkpoint completed or compensated.
 The validator requires the candidate identity and installed implementation-
-manifest digest as separate, candidate-independent launcher trust inputs; it
-never derives them from the sequence it is validating. Omitting either input,
+manifest digest as separate operator-invocation trust inputs; it never derives
+them from the sequence it is validating. Omitting either input,
 or presenting an internally consistent sequence for a different candidate,
 fails before the proof can authorize a checkpoint transition.
 
@@ -705,11 +759,39 @@ and produce reviewable before-and-after records; apply never converts records.
 The executor should expose one deep interface:
 
 ```text
-execute(validated_plan, adapters, checkpoint_store) -> apply_report
+execute(
+  validated_plan,
+  apply_authorization_bytes,
+  adapters,
+  checkpoint_store,
+  authorization_ledger,
+  *,
+  trusted_apply_authorization_digest,
+  trusted_clock,
+) -> apply_report
 ```
 
-The executor refuses an unvalidated or digest-mismatched plan. It does not
-promise global atomicity. For every action it:
+Before the first action checkpoint, the executor strictly parses the closed
+`ApplyAuthorization`, rejects duplicate members and non-JSON values, validates
+its Schema and semantic digest/identity formulas, and requires its complete
+tuple to equal the independently validated local artifacts and
+`trusted_apply_authorization_digest`. It requires
+`issued_at <= not_before <= trusted_clock.now < expires_at`, exact command and
+run identity, and the same post-authorization live comparison required by the
+capture contract. It then exclusively creates an authorization-ledger record
+for the execution nonce, authorization digest, and run identity, fsyncing file
+and parent directory. A claimed nonce, expired window, missing field, foreign
+tuple, digest mismatch, or ledger persistence failure rejects the run before the
+first action checkpoint and performs zero adapter calls.
+
+The nonce claim is never deleted or reused. A crash recovery may use an existing
+claim only for the same authorization digest, run, and surviving checkpoints;
+it may compensate or finish an already invoked action. It cannot create the
+first checkpoint, start a new planned action after authorization expiry, or
+turn the claimed nonce into authority for a new run. A fresh apply requires a
+new external authorization and nonce. The executor otherwise refuses an
+unvalidated or digest-mismatched plan. It does not promise global atomicity. For
+every action it:
 
 1. Audits and captures the exact pre-state.
 2. Derives the expected post-state and compensation from adapter capabilities.
@@ -741,7 +823,8 @@ can prove this run's effect only when its durable invocation intent is
 
 A completion-checkpoint write failure therefore cannot cause duplicate replay.
 A compensation failure remains durable and requires the same audit before a
-retry. Checkpoint identities bind the canonical catalog digest, lock digest,
+retry. Checkpoint identities bind the apply-authorization identity and digest,
+execution nonce, canonical catalog digest, lock digest,
 plan digest, run and candidate identities, installed-implementation manifest
 digest, sealed captured-state identity and digest, capability-set digest, route
 capability and manager-evidence binding, action identity and ordinal, route,
@@ -763,10 +846,19 @@ The release evidence writer may write only the expected-case manifest and
 candidate evidence bundle in the operator-selected artifact directory. It does
 not mutate authored state or harness state. After the run, the external release
 authority supplies the trusted digest of a separate attestation over the exact
-bundle. The release validator is pure. The release command supplies the trusted
-expected-case and attestation digests, invokes the validator, archives all three
-exact documents, and refuses release on any diagnostic. No release document
-grants apply or migration authority.
+bundle. The release validator is pure. The candidate-independent release
+launcher supplies its own externally trusted identity and manifest digest plus
+the trusted apply-authorization, expected-case, and attestation digests. It
+strictly validates the closed records, writes the exact authorization,
+expected-case manifest, evidence bundle, attestation, and archive manifest into
+a same-filesystem staging directory, fsyncs them, and performs one create-only
+compare-and-swap rename to the tuple's authority-store identity. `absent` is the
+only first-write compare token and generation `1` is the only first committed
+generation. An existing byte-identical generation is an idempotent read; an
+existing different generation is a conflict. Only after the archive commit is
+durable does the launcher emit the closed `ReleaseReceipt`. Candidate code
+cannot mint, overwrite, skip, or treat absence of that receipt as success. No
+release document grants apply or migration authority.
 
 The checked-in `initial-catalog.proposed.json` and
 `initial-lock.proposed.json` exercise this serialized contract with 44 accepted
@@ -777,8 +869,9 @@ apply.
 
 ## Schema evolution
 
-Catalog, lock, captured-state, evidence, and attestation formats use independent
-explicit major versions. Adding an optional field with unchanged meaning may remain in
+Catalog, lock, captured-state, evidence, attestation, apply-authorization, and
+release-receipt formats use independent explicit major versions. Adding an
+optional field with unchanged meaning may remain in
 the current major version only when old readers reject or safely ignore it by
 contract; these v1 schemas use exact shapes, so additions normally require a
 new major version. Renaming a field, changing an enum or default, weakening an

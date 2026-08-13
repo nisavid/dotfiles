@@ -7,7 +7,8 @@ state.
 
 ## Fixed destination
 
-Build one Python 3.12+ controller, entered through chezmoi, with:
+Build one CPython 3.12+ controller, entered through chezmoi for read-only audit
+and through a separately authorized operator invocation for apply, with:
 
 - one versioned authored catalog and one generated resolved lock;
 - one pure resolver that preserves the canonical harness coverage record from
@@ -37,6 +38,7 @@ deferred.
 | `docs/agent-equipment/plan-action-set-v1.schema.json` | Closed projection of every independently validated automated plan action supplied to captured-state validation |
 | `docs/agent-equipment/adapter-contract-v1.schema.json` | Closed capability, request, observation, action, and receipt serialization contract |
 | `docs/agent-equipment/acceptance-evidence-v1.schema.json` | Closed expected-case, candidate evidence, and post-run attestation contract |
+| `docs/agent-equipment/execution-authority-v1.schema.json` | Closed pre-mutation apply authorization and terminal release-receipt contract |
 | `docs/agent-equipment/initial-catalog.proposed.json` | Schema-valid initial desired-state proposal; no live authority |
 | `docs/agent-equipment/initial-lock.proposed.json` | Generated 132-record lock bound to the proposed catalog digest |
 | `docs/agent-equipment/INVENTORY.md` and `initial-inventory.json` | Dated, secret-free read-only observation and initial classification |
@@ -47,6 +49,7 @@ deferred.
 | `scripts/agent_equipment_json_schema.py` and `tests/test_agent_equipment_json_schema.py` | Shared strict local-schema gate used by every public design, adapter, and capture validator |
 | `scripts/agent_equipment_acceptance_model.py` and `tests/test_agent_equipment_acceptance.py` | Disposable fake-manager convergence, checkpoint, compensation, and migration-boundary evidence |
 | `scripts/agent_equipment_acceptance_evidence.py` and `tests/test_agent_equipment_acceptance_evidence.py` | Design-only three-document release gate, adversarial binding checks, and strict CLI fixtures |
+| `tests/test_agent_equipment_deployment_contract.py` | Design-only apply-authorization, release-receipt, deployment-separation, and runtime-gate contract vectors |
 | `scripts/agent_equipment_captured_state.py` and `tests/test_agent_equipment_captured_state.py` | Captured-state capability/action-set digests and fail-closed cross-record semantic validation against separately supplied plan actions |
 | `scripts/agent_equipment_adapter_contract.py`, `tests/test_agent_equipment_adapter_contract.py`, and `tests/fixtures/agent-equipment/schema/*-adapter-*.json` | Cross-record semantic binding validator plus executable positive and fail-closed adapter-contract examples |
 
@@ -94,6 +97,7 @@ home/dot_local/lib/agent-equipment/schemas/captured-state-v1.schema.json
 home/dot_local/lib/agent-equipment/schemas/plan-action-set-v1.schema.json
 home/dot_local/lib/agent-equipment/schemas/adapter-contract-v1.schema.json
 home/dot_local/lib/agent-equipment/schemas/acceptance-evidence-v1.schema.json
+home/dot_local/lib/agent-equipment/schemas/execution-authority-v1.schema.json
 home/dot_local/lib/agent-equipment/agent_equipment/__init__.py
 home/dot_local/lib/agent-equipment/agent_equipment/model.py
 home/dot_local/lib/agent-equipment/agent_equipment/canonical.py
@@ -101,10 +105,10 @@ home/dot_local/lib/agent-equipment/agent_equipment/validator.py
 home/dot_local/lib/agent-equipment/agent_equipment/resolver.py
 home/dot_local/lib/agent-equipment/agent_equipment/inventory.py
 home/dot_local/lib/agent-equipment/agent_equipment/checkpoint.py
+home/dot_local/lib/agent-equipment/agent_equipment/authorization.py
 home/dot_local/lib/agent-equipment/agent_equipment/executor.py
 home/dot_local/lib/agent-equipment/agent_equipment/secrets.py
 home/dot_local/lib/agent-equipment/agent_equipment/evidence.py
-home/dot_local/lib/agent-equipment/agent_equipment/release.py
 home/dot_local/lib/agent-equipment/agent_equipment/adapters/base.py
 home/dot_local/lib/agent-equipment/agent_equipment/adapters/standalone_skills.py
 home/dot_local/lib/agent-equipment/agent_equipment/adapters/claude_projection.py
@@ -115,30 +119,53 @@ home/dot_local/lib/agent-equipment/agent_equipment/adapters/codex_skill_policy.p
 home/dot_local/lib/agent-equipment/agent_equipment/adapters/codex_mcp.py
 home/dot_local/lib/agent-equipment/agent_equipment/adapters/cursor_plugin.py
 home/dot_local/lib/agent-equipment/agent_equipment/adapters/cursor_mcp.py
-home/run_onchange_after_reconcile-agent-equipment.zsh.tmpl
+home/run_onchange_after_audit-agent-equipment.zsh.tmpl
 tests/agent_equipment/
 ```
+
+The candidate-independent release authority is a different protected source and
+deployment unit. Its exact source path is
+`agent-equipment-release-authority/src/executable_agent-equipment-release`; that
+path is not in this dotfiles repository or any evaluated controller candidate.
+An operator-owned installation step places its verified bytes at
+`/usr/local/libexec/agent-equipment-release/v1/agent-equipment-release` and its
+independent Schema/manifest set under
+`/usr/local/share/agent-equipment-release/v1/`. Both installed trees are
+root-owned and nonwritable by the controller user. They are excluded from the
+controller's installed-implementation manifest. The release authority has its
+own identity, manifest digest, invocation policy, and create-only archive
+capability; the candidate has none of those capabilities.
 
 Chezmoi installs the package verbatim below
 `~/.local/lib/agent-equipment/agent_equipment/`; the launcher resolves that
 directory relative to its own installed `~/.local/bin` path and prepends only
 that exact directory to its private Python import path. It never imports from a
-source checkout or the process working directory. The six authoritative
+source checkout or the process working directory. The seven authoritative
 Schemas install beside the package under `~/.local/lib/agent-equipment/schemas/`;
 the validator reads those exact bytes before semantic validation, verifies
 their compiled-in version and digest manifest, and fails closed on a missing or
-changed Schema. The installed CLI reads the catalog and lock from
+changed Schema. The installed wrapper first gates on CPython 3.12 or newer,
+before importing the package or reading runtime state. The complete installed-
+implementation manifest binds `cpython:<major>.<minor>.<micro>` and the selected
+interpreter executable digest alongside the launcher, package, and Schema bytes.
+A missing, older, changed, or non-CPython runtime exits before the first action
+checkpoint with no adapter call. A future independently installed pinned
+interpreter is acceptable only when all of its installed bytes enter that same
+manifest. The installed CLI reads the catalog and lock from
 `~/.config/agent-equipment/`. Checkpoints live under
 `~/.local/state/agent-equipment/checkpoints/`; neither checkpoints nor
 observed inventory are chezmoi-managed. The checked-in lock is regenerated only
-by `agent-equipment update` and reviewed like source. The chezmoi script invokes
-only `agent-equipment apply`. Its template input includes a canonical manifest
+by `agent-equipment update` and reviewed like source. The chezmoi `run_onchange`
+script invokes only `agent-equipment audit`; it accepts no authorization input
+and cannot invoke apply, open the authorization ledger, or create an action
+checkpoint. Its template input includes a canonical manifest
 of every installed package file path and content digest, the launcher digest,
 and the rendered catalog and lock digests, so any implementation-only change
-reruns reconciliation. The same complete installed-implementation manifest
+reruns the read-only audit. The same complete installed-implementation manifest
 digest is bound alongside the distinct candidate commit or artifact identity in
 plans, action sets, captures, checkpoints, receipts, and authorization evidence.
-It never performs source discovery or updates implicitly.
+It never performs source discovery, updates, or runtime reconciliation
+implicitly.
 
 Keep the production package free of third-party runtime dependencies. Use the
 standard library for JSON, hashing, filesystem inspection, subprocesses, and
@@ -157,8 +184,31 @@ resolve(command, catalog, lock, inventory, capabilities) -> Resolution
 The executor has one mutating entry point:
 
 ```python
-execute(validated_plan, adapters, checkpoint_store) -> ApplyReport
+execute(
+    validated_plan,
+    apply_authorization_bytes,
+    adapters,
+    checkpoint_store,
+    authorization_ledger,
+    *,
+    trusted_apply_authorization_digest,
+    trusted_clock,
+) -> ApplyReport
 ```
+
+The operator invocation supplies the exact authorization file from
+`~/.local/state/agent-equipment/authorization-inbox/<authorization_identity>.json`
+and its separately authenticated `trusted_apply_authorization_digest`. The CLI
+does not discover a newest authorization, infer its digest, or fall back to an
+environment/config value. Before the first action checkpoint it strictly parses
+and validates the record, checks the complete binding tuple and UTC window,
+performs the final authorized live comparison, and only then durably claims its
+execution nonce under
+`~/.local/state/agent-equipment/authorization-ledger/`. Exclusive creation plus
+file and parent-directory fsync make the claim one-time. A claimed, expired,
+misbound, or unpersistable authorization performs zero adapter calls. Recovery
+may reopen only the same claimed run and surviving checkpoints; a new action or
+run requires a fresh authorization and nonce.
 
 Every adapter implements:
 
@@ -243,10 +293,14 @@ validate_acceptance_evidence(
 ) -> tuple[Diagnostic, ...]
 
 release_candidate(
+    apply_authorization_bytes,
     expected_case_manifest_bytes,
     evidence_bundle_bytes,
     attestation_manifest_bytes,
     *,
+    trusted_apply_authorization_digest,
+    trusted_release_launcher_identity,
+    trusted_release_launcher_manifest_digest,
     trusted_candidate_identity,
     trusted_implementation_manifest_digest,
     authorized_expected_case_manifest_digest,
@@ -255,12 +309,20 @@ release_candidate(
 ) -> ReleaseReceipt
 ```
 
-The candidate-independent launcher obtains the expected-case manifest digest
-from the sealed pre-mutation authorization and the attestation digest from the
-separate post-run release authority. The release command strictly parses all
-three exact byte inputs, invokes the validator with both trusted digests,
-archives those bytes, and refuses a release receipt on any diagnostic. It does
-not call apply, adapters, native managers, or migration recovery.
+The candidate-independent release launcher obtains the expected-case manifest
+digest from the exact trusted pre-mutation authorization and the attestation
+digest from the separate post-run release authority. It first verifies its own
+installed bytes against the independently supplied launcher identity and
+manifest digest. The release command strictly parses all four exact byte inputs,
+invokes the validator with the trusted digests, and refuses a release receipt on
+any diagnostic. It stages and fsyncs the authorization, three release documents,
+and closed archive manifest, then commits generation `1` with a create-only
+compare-and-swap rename. An existing identical generation is an idempotent read;
+different existing bytes are a conflict. It emits a `ReleaseReceipt` only after
+that archive commit is durable. Candidate code cannot call the authority's
+receipt/archive capability, and a candidate-authored lookalike record is not a
+receipt. The launcher does not call apply, adapters, native managers, or
+migration recovery.
 
 ## Dependency-ordered implementation backlog
 
@@ -269,6 +331,10 @@ Later steps do not begin until the named evidence passes.
 
 ### 1. Promote the design validator into the production model
 
+- Add the CPython 3.12+ fail-before-import gate and bind the selected runtime
+  identity and executable digest into the installed-implementation manifest.
+  Prove an absent, older, changed, or non-CPython runtime reaches neither native
+  observation nor the checkpoint store.
 - Implement immutable typed model objects, canonical JSON, schema validation,
   template expansion, and every cross-field invariant.
 - Make the catalog digest and lock binding stable test vectors.
@@ -316,15 +382,24 @@ Later steps do not begin until the named evidence passes.
 
 ### 4. Implement checkpointing before any production adapter mutation
 
+- Implement the closed `ApplyAuthorization` parser and semantic validator plus
+  the durable authorization ledger. The public executor requires exact
+  authorization bytes and the separately supplied
+  `trusted_apply_authorization_digest`; validate the canonical identity, full
+  tuple, command, UTC window, run, and nonce before the first action checkpoint.
+  Claim the nonce with an exclusive, fsynced create. Test missing, extra,
+  expired, not-yet-valid, replayed, cross-run, cross-plan, and persistence-fault
+  cases for zero adapter calls and zero action checkpoints.
 - After complete-plan validation, emit its exact closed
   `agent-equipment-plan-action-set/v1` projection. Validate the separately
   produced action set and capture with their checked-in JSON Schemas, then run
   `agent_equipment_captured_state.py --authoritative-plan-actions SET
   --expected-candidate-identity CANDIDATE
   --expected-implementation-manifest-digest MANIFEST_DIGEST CAPTURE`. The
-  candidate-independent launcher supplies those last two values from the
+  explicit operator apply invocation supplies those last two values from the
   implementation it actually verified; neither validator input may be derived
-  from the action set or capture under review.
+  from the action set or capture under review. The separate release launcher
+  does not participate in apply or captured-state validation.
   The public API and CLI perform both checked-in schema gates before semantics;
   the CLI also rejects duplicate JSON object keys and non-JSON numeric
   constants before either gate;
@@ -493,9 +568,8 @@ Later steps do not begin until the named evidence passes.
 - Implement all accepted entries, non-automated reporting, idempotent repair,
   provider switching, manager-driven drift, and owned retirement in disposable
   homes.
-- Implement the production candidate evidence writer, separately authorized
-  attestation writer, pure acceptance-evidence validator, and nonmutating
-  `agent-equipment release` command. Project the complete static
+- Implement the production candidate evidence writer and pure acceptance-
+  evidence validator. Project the complete static
   requirement registry, sealed plan-action identities, and explicit
   verification and mutating migration nodes into one digest-bound expected-case
   manifest. Emit exact child receipts, derive aggregates, and reject missing,
@@ -510,6 +584,23 @@ Later steps do not begin until the named evidence passes.
   adapter exists. Record unsupported harness behavior explicitly.
 - Evidence: all `CMD-*`, `CON-*`, and `CHK-*` requirements plus adversarial
   acceptance-evidence writer, validator, and release-command fixtures.
+
+### 8a. Deploy the independent release authority
+
+- In the separate protected `agent-equipment-release-authority` source, build
+  the launcher without importing the candidate package or using its interpreter.
+  Install its independently verified v1 executable and Schemas at the exact
+  root-owned paths above. Supply its identity and manifest digest from the
+  external release authority, never from candidate output.
+- Give only that launcher the release archive capability. Implement strict
+  validation of the authorization plus all three release documents, create-only
+  compare-and-swap archival, idempotent retrieval of an identical generation,
+  conflict rejection, and the closed `ReleaseReceipt` identity/digest formula.
+  Test that candidate-owned paths, candidate-minted receipts, skipped archive
+  commits, and altered launcher bytes never satisfy release.
+- Evidence: deployment ownership inspection, launcher-manifest verification,
+  create-only archive concurrency/fault fixtures, and release-receipt vectors in
+  `tests/test_agent_equipment_deployment_contract.py`.
 
 ### 9. Request exact runtime-migration authorization
 
@@ -527,12 +618,16 @@ Later steps do not begin until the named evidence passes.
 - Ask for authorization naming that complete candidate, catalog, lock, plan,
   plan-action-set, capability-set, captured-state identity/digest, and expected-
   case-manifest digest tuple.
-  General approval of this architecture is not authorization to execute it.
-  After authorization and before any action checkpoint, recompute the installed
+  The authority emits the closed `ApplyAuthorization`, including command, issuer,
+  time window, run, and fresh execution nonce, then supplies its canonical
+  `trusted_apply_authorization_digest` independently of the file. General
+  approval of this architecture is not authorization to execute it. After
+  authorization and before any action checkpoint, recompute the installed
   manifest and compare it plus all affected live state and bound
   manager/capability evidence with the authorized sealed capture. Any mismatch
   requires recapture, resealing, re-resolution, and new authorization; mutate
-  nothing.
+  nothing. Only after that exact comparison succeeds, durably claim the fresh
+  nonce; a failed or existing claim stops before the first action checkpoint.
 
 ### 10. Execute and verify the migration
 
@@ -545,7 +640,8 @@ Later steps do not begin until the named evidence passes.
   evidence bundle, obtain a separate post-run attestation and its externally
   trusted digest, and run the release gate against both authorized manifest
   digests. Archive the exact expected-case manifest, bundle, attestation, and
-  release receipt; retain only successfully verified desired state.
+  release receipt from the independently trusted launcher after its create-only
+  archive commit; retain only successfully verified desired state.
 
 ## Retained and retired source map
 
@@ -590,16 +686,20 @@ No retirement rule deletes an unmanaged observation or a canonical
    commit from Issue #57. Do not merge its UI or throwaway resolver.
 3. Close Issues #55–#61 only after the design pull request is merged and every
    issue checklist points to merged evidence.
-4. Publish production steps 1–8 as dependency-ordered pull requests with the
-   acceptance evidence named above. Do not combine implementation with live
-   adoption merely to shorten the stack.
-5. Open a separate migration authorization containing the exact candidate
+4. Publish production steps 1–8 as dependency-ordered controller pull requests
+   with the acceptance evidence named above. Independently deploy and verify
+   step 8a from the protected release-authority source before any candidate can
+   receive a release receipt. Do not combine implementation with live adoption
+   merely to shorten the stack.
+5. Open a separate closed `ApplyAuthorization` containing the exact candidate
    implementation identity and installed-manifest digest, refreshed inventory,
    immutable plan, plan-action-set, capability-set, and already sealed
    captured-state identity/digest, sealed expected-case manifest and digest,
-   exact live mutations, rollback command, and review receipts. Require an exact
-   post-authorization implementation and live comparison before the first
-   checkpoint; drift requires a new capture and authorization.
+   exact live mutations, rollback command, review receipts, issuer, validity
+   window, run, and fresh execution nonce. Supply its
+   `trusted_apply_authorization_digest` outside the record. Require an exact post-
+   authorization implementation and live comparison before the first action
+   checkpoint; drift or nonce reuse requires a new capture and authorization.
 
 ## Stop conditions
 
@@ -610,11 +710,17 @@ automated mutation lacks pre-state compensation; the catalog-lock binding is
 stale; a secret value enters generated state; current state differs from
 captured or expected state; the capability-set digest or a route binding is
 invalid; the post-authorization comparison differs from the sealed capture; a
-checkpoint cannot be made durable; or the exact runtime plan, plan-action-set,
-captured-state, and expected-case-manifest digests lack authorization.
+checkpoint cannot be made durable; CPython 3.12 or the manifest-bound runtime is
+unavailable; the closed authorization is absent, expired, not yet valid,
+misbound, replayed, or cannot be claimed durably; its canonical digest differs
+from `trusted_apply_authorization_digest`; or the exact runtime plan, plan-
+action-set, captured-state, and expected-case-manifest digests lack
+authorization.
 
-Stop before release when the exact attestation digest lacks independent
-post-run authorization; any of the three documents or their bindings differ;
-an attestor predates a bound result or live sign-off; the canonical live
-operator differs from a passing live signer; or any required child or aggregate
-does not pass.
+Stop before release when the external launcher's identity or installed-manifest
+digest differs from its trusted input; the exact apply authorization or
+attestation digest lacks independent authorization; any release document or
+binding differs; an attestor predates a bound result or live sign-off; the
+canonical live operator differs from a passing live signer; any required child
+or aggregate does not pass; or the create-only archive commit is absent or
+conflicts. Candidate output never overrides a stop.

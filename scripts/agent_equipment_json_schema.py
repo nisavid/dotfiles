@@ -162,7 +162,7 @@ class _SchemaSet:
             return False
         if "$schema" in schema and schema["$schema"] != _DRAFT_2020_12:
             return False
-        if "$id" in schema and not _valid_schema_id(schema["$id"]):
+        if "$id" in schema and (location[1] or not _valid_schema_id(schema["$id"])):
             return False
         if "title" in schema and type(schema["title"]) is not str:
             return False

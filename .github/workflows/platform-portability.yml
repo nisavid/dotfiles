@@ -55,6 +55,7 @@ on:
       - "tests/test_agent_equipment_adapter_contract.py"
       - "tests/test_agent_equipment_captured_state.py"
       - "tests/test_agent_equipment_design.py"
+      - "tests/test_agent_equipment_deployment_contract.py"
       - "tests/test_agent_equipment_json_schema.py"
       - "tests/fixtures/agent-equipment/**"
   push:
@@ -204,6 +205,7 @@ jobs:
           python3 -m unittest tests/test_agent_equipment_acceptance_evidence.py
           python3 -m unittest tests/test_agent_equipment_adapter_contract.py
           python3 -m unittest tests/test_agent_equipment_captured_state.py
+          python3 -m unittest tests/test_agent_equipment_deployment_contract.py
           python3 -m unittest tests/test_agent_equipment_design.py
           python3 -m unittest tests/test_agent_equipment_json_schema.py
           uvx --from check-jsonschema==0.35.0 \
@@ -213,6 +215,7 @@ jobs:
             docs/agent-equipment/catalog-v1.schema.json \
             docs/agent-equipment/lock-v1.schema.json \
             docs/agent-equipment/captured-state-v1.schema.json \
+            docs/agent-equipment/execution-authority-v1.schema.json \
             docs/agent-equipment/plan-action-set-v1.schema.json
           uvx --from check-jsonschema==0.35.0 check-jsonschema \
             --schemafile docs/agent-equipment/adapter-contract-v1.schema.json \
