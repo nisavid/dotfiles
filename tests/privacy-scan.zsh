@@ -28,7 +28,7 @@ cp \
   "$repo_root/scripts/agent_equipment_public_data.py" \
   "$repo_root/scripts/privacy_age_envelopes.py" \
   "$isolated_tool"
-env -u PYTHONPYCACHEPREFIX \
+env -u PYTHONPYCACHEPREFIX -u PYTHONDONTWRITEBYTECODE \
   python3 "$isolated_tool/privacy-scan" --root "$test_root/clean"
 if [[ -e $isolated_tool/__pycache__ ]]; then
   print -u2 -r -- 'privacy scan created a bytecode cache beside its source'
