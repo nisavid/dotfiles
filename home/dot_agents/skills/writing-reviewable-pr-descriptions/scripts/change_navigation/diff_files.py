@@ -32,7 +32,8 @@ REMAINDER_RE = re.compile(
 COMPARISON_RE = re.compile(
     r"^  - \[Complete immutable comparison\]\(https://github\.com/"
     r"(?P<repository>[^/\s]+/[^/\s]+)/compare/"
-    r"(?P<base>[0-9a-f]{40})\.\.\.(?P<head>[0-9a-f]{40})\)$"
+    r"(?P<base>[0-9a-f]{40}|[0-9a-f]{64})\.\.\."
+    r"(?P<head>[0-9a-f]{40}|[0-9a-f]{64})\)$"
 )
 GROUP_DESCRIPTORS = {
     "IMPL": "implementation",

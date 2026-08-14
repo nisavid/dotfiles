@@ -269,6 +269,24 @@ class BoundedDiffTests(unittest.TestCase):
             [],
         )
 
+    def test_accepts_sha256_comparison_identity(self) -> None:
+        base_sha = "a" * 64
+        head_sha = "b" * 64
+        body = bounded_diff_body(101).replace(BASE_SHA, base_sha).replace(
+            HEAD_SHA, head_sha
+        )
+
+        self.assertEqual(
+            PRODUCTION_VALIDATE(
+                body,
+                REPOSITORY,
+                PR_NUMBER,
+                base_sha,
+                head_sha,
+            ),
+            [],
+        )
+
     def test_accepts_a_full_category_with_zero_files_in_the_shown_set(self) -> None:
         self.assertEqual(
             PRODUCTION_VALIDATE(
