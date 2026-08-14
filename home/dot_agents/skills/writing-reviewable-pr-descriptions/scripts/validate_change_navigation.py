@@ -30,6 +30,8 @@ from change_navigation.stack_inventory import (
 )
 from change_navigation.types import classify_disclosures
 
+OID_RE = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
+
 
 def validate(
     body: str,
@@ -47,9 +49,9 @@ def validate(
     if (expected_base_sha is None) != (expected_head_sha is None):
         errors.append("expected base and head SHAs must be supplied together")
     for label, sha in (("base", expected_base_sha), ("head", expected_head_sha)):
-        if sha is not None and not re.fullmatch(r"[0-9a-f]{40}", sha):
+        if sha is not None and OID_RE.fullmatch(sha) is None:
             errors.append(
-                f"expected {label} SHA must be 40 lowercase hexadecimal characters"
+                f"expected {label} SHA must be 40 or 64 lowercase hexadecimal characters"
             )
     expected_identity = (expected_repository, expected_pr)
     expected_comparison = (

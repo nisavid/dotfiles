@@ -80,6 +80,23 @@ class DiffInventoryPlanTests(unittest.TestCase):
             f"https://github.com/acme/app/compare/{BASE_SHA}...{HEAD_SHA}",
         )
 
+    def test_accepts_sha256_comparison_identity(self) -> None:
+        files = [ChangeFile(f"file-{index}", "OTHER", 0, 0) for index in range(101)]
+        base_sha = "a" * 64
+        head_sha = "b" * 64
+
+        plan = plan_diff_inventory(
+            files,
+            repository="acme/app",
+            base_sha=base_sha,
+            head_sha=head_sha,
+        )
+
+        self.assertEqual(
+            plan.comparison_url,
+            f"https://github.com/acme/app/compare/{base_sha}...{head_sha}",
+        )
+
     def test_requires_immutable_comparison_identity_for_a_bounded_inventory(
         self,
     ) -> None:

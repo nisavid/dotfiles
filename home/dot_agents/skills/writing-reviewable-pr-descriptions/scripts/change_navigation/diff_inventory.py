@@ -10,6 +10,7 @@ from typing import Literal
 INVENTORY_LIMIT = 100
 Category = Literal["IMPL", "TEST", "DOC", "GEN", "OTHER"]
 CATEGORY_ORDER: tuple[Category, ...] = ("IMPL", "TEST", "DOC", "GEN", "OTHER")
+OID_RE = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 
 
 @dataclass(frozen=True)
@@ -68,10 +69,14 @@ def plan_diff_inventory(
             )
         if not re.fullmatch(r"[^/\s]+/[^/\s]+", repository or ""):
             raise ValueError("repository must use OWNER/REPO")
-        if not re.fullmatch(r"[0-9a-f]{40}", base_sha or ""):
-            raise ValueError("base SHA must be 40 lowercase hexadecimal characters")
-        if not re.fullmatch(r"[0-9a-f]{40}", head_sha or ""):
-            raise ValueError("head SHA must be 40 lowercase hexadecimal characters")
+        if OID_RE.fullmatch(base_sha or "") is None:
+            raise ValueError(
+                "base SHA must be 40 or 64 lowercase hexadecimal characters"
+            )
+        if OID_RE.fullmatch(head_sha or "") is None:
+            raise ValueError(
+                "head SHA must be 40 or 64 lowercase hexadecimal characters"
+            )
     comparison_url = (
         f"https://github.com/{repository}/compare/{base_sha}...{head_sha}"
         if all(identity)
