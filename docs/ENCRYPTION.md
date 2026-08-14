@@ -76,10 +76,11 @@ The admission command requires age v1.3.1 from an absolute, trusted installation
 directory outside the repository, exactly one mode-`0600` post-quantum identity
 outside the repository, and exactly one ML-KEM-768+X25519 recipient stanza. The
 trusted directory should come from a checksum-verified package installation,
-not an ambient `PATH` lookup. Admission requires the ambient tool bytes to match
-that installation, then executes private staged copies before opening the
-identity. That identity
-must independently decrypt every exact candidate to EOF. The command reads each
+not an ambient `PATH` lookup. Every resolved executable in both the trusted
+directory and the ambient `PATH` must remain outside the repository. Admission
+requires the ambient tool bytes to match the trusted installation, then executes
+private staged copies before opening the identity. That identity must
+independently decrypt every exact candidate to EOF. The command reads each
 candidate once with a 4 MiB limit before atomically and durably replacing the
 manifest. It discards plaintext and age diagnostics. The command leaves the
 existing manifest unchanged if any path is unsafe, any envelope fails

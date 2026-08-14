@@ -90,11 +90,13 @@ def _validated_identities(raw_identities: list[Path], root: Path) -> list[int]:
     return identities
 
 
-def _read_age_tool(path: Path) -> bytes:
+def _read_age_tool(path: Path, *, root: Path) -> bytes:
     try:
         canonical = path.resolve(strict=True)
     except OSError as error:
         raise AgeEnvelopeError("pinned age tooling is unavailable") from error
+    if _is_within(canonical, root):
+        raise AgeEnvelopeError("age tooling executable must be outside repository")
     descriptor, info = open_regular_file_descriptor(canonical)
     try:
         if info.st_mode & 0o111 == 0:
@@ -115,7 +117,7 @@ def _read_age_tool(path: Path) -> bytes:
     return data
 
 
-def _stage_age_tool(path: Path, data: bytes) -> None:
+def _stage_age_tool(path: Path, data: bytes, *, root: Path) -> None:
     descriptor: int | None = None
     try:
         descriptor = os.open(
@@ -129,7 +131,7 @@ def _stage_age_tool(path: Path, data: bytes) -> None:
             stream.flush()
             os.fsync(stream.fileno())
             os.fchmod(stream.fileno(), 0o500)
-        if _read_age_tool(path) != data:
+        if _read_age_tool(path, root=root) != data:
             raise AgeEnvelopeError("age tooling changed during staging")
     except OSError as error:
         raise AgeEnvelopeError("age tooling staging failed") from error
@@ -138,15 +140,21 @@ def _stage_age_tool(path: Path, data: bytes) -> None:
             os.close(descriptor)
 
 
-def _validated_binary(name: str, trusted_directory: Path, stage: Path) -> str:
+def _validated_binary(
+    name: str,
+    trusted_directory: Path,
+    stage: Path,
+    *,
+    root: Path,
+) -> str:
     ambient = shutil.which(name)
     if ambient is None:
         raise AgeEnvelopeError("pinned age tooling is unavailable")
-    trusted_data = _read_age_tool(trusted_directory / name)
-    if _read_age_tool(Path(ambient)) != trusted_data:
+    trusted_data = _read_age_tool(trusted_directory / name, root=root)
+    if _read_age_tool(Path(ambient), root=root) != trusted_data:
         raise AgeEnvelopeError("untrusted age tooling provenance")
     staged = stage / name
-    _stage_age_tool(staged, trusted_data)
+    _stage_age_tool(staged, trusted_data, root=root)
     try:
         result = subprocess.run(
             [staged, "--version"],
@@ -332,9 +340,19 @@ def admit(root: Path, raw_identities: list[Path]) -> None:
     try:
         with tempfile.TemporaryDirectory(prefix="admit-age-tooling.") as raw_stage:
             stage = Path(raw_stage)
-            age = _validated_binary("age", trusted_tooling, stage)
-            age_keygen = _validated_binary("age-keygen", trusted_tooling, stage)
-            age_inspect = _validated_binary("age-inspect", trusted_tooling, stage)
+            age = _validated_binary("age", trusted_tooling, stage, root=root)
+            age_keygen = _validated_binary(
+                "age-keygen",
+                trusted_tooling,
+                stage,
+                root=root,
+            )
+            age_inspect = _validated_binary(
+                "age-inspect",
+                trusted_tooling,
+                stage,
+                root=root,
+            )
             identities = _validated_identities(raw_identities, root)
             try:
                 _validated_identity_recipients(age_keygen, identities)
