@@ -13,6 +13,7 @@ Use this reference only while constructing or revising the first-viewport
 - Colors are stable: `IMPL 0969DA`, `TEST 6F5F9A`, `DOC 3F7770`,
   `GEN 76652F`, `OTHER 57606A`, and `FILES 5F6B78`.
 - Operation badges `BINARY`, `MOVED`, and `COPIED` use neutral `5F6B78`.
+- The bounded Diff `REMAINDER` badge uses neutral `5F6B78`.
 - Encode badge text for URLs. Use the true minus sign `−` (`%E2%88%92`), not a
   hyphen, in visible deletion metrics.
 - Separate the label shield from metrics with `&nbsp;`; use ordinary spaces
@@ -111,13 +112,42 @@ exact pushed base/head first; stop rather than publish when it is unavailable:
 
 ### Diff Semantics
 
-- Summary category totals are additions/deletions from the exact pushed PR
-  base/head. Omit categories with no changed lines. `FILES` is total touched
-  files, including binary and operation-only files.
-- Expanded top-level items follow fixed category order. Each has the same
-  category total plus the number of files included in that category. Use these
-  exact descriptors: `implementation`, `test`, `documentation`, `generated`,
-  and `other`, with singular `file` or plural `files`.
+- Use a complete inventory for 100 or fewer touched files. Its summary category
+  totals are additions/deletions from the exact pushed PR base/head. Omit
+  categories with no changed lines. `FILES` is the total touched-file count,
+  including binary and operation-only files. List every changed target path.
+- Use a bounded inventory for more than 100 touched files. Select the first 100
+  unique target paths in exact GitHub API order, then group only those selected
+  paths in `IMPL`, `TEST`, `DOC`, `GEN`, `OTHER` order. Preserve relative API
+  order within each group. `plan_diff_inventory` in
+  `scripts/change_navigation/diff_inventory.py` implements this selection and
+  aggregation contract. Never sort or group before selecting the 100 files.
+- A bounded inventory keeps the existing Diff summary unchanged: full-diff
+  semantic-category statlines in canonical order, followed by the full
+  touched-file `FILES` count. Only the expanded view is bounded.
+- Expanded top-level category items follow fixed category order. Each category
+  metric is its full-diff addition/deletion total. A complete inventory labels
+  its category file count normally. A bounded inventory labels it `N shown
+  implementation files`, `N shown test files`, `N shown documentation files`,
+  `N shown generated files`, or `N shown other files`, with correct singulars.
+  The bounded counts sum to exactly 100; they never claim complete category file
+  counts. Include `0 shown` with plural `files` when a positive full-diff
+  category has no file among the selected 100.
+- A bounded inventory ends with exactly these two rows. This example shows 530
+  omitted files; the comparison SHAs equal the declared pushed base/head:
+
+  ```md
+  - <picture><img alt="REMAINDER: 530 changed files" src="https://img.shields.io/badge/REMAINDER-%2B530%20MORE-5F6B78?style=flat" height="16"></picture>
+    - [Complete immutable comparison](https://github.com/OWNER/REPO/compare/BASE_SHA...HEAD_SHA)
+  ```
+
+  The link exposes the complete diff; the 100 displayed rows remain explicitly
+  bounded. Reject missing or incorrect remainders, mutable refs, mismatched
+  repositories or SHAs, and prose that calls the displayed rows complete.
+- The planner owns the external GitHub API selection and grouping check. The
+  body validator verifies the rendered structure and declared immutable
+  identity; it cannot infer API order from Markdown alone. Do not hand-author
+  or reorder the planner's selected rows.
 - Nested items link every changed path to its actual Files changed anchor. Hash
   the exact GitHub diff path with SHA-256 only when GitHub's anchor convention
   is confirmed; otherwise read and verify the anchor from GitHub.
@@ -149,7 +179,8 @@ exact pushed base/head first; stop rather than publish when it is unavailable:
   metric; the summary `FILES` count preserves its presence.
 - Use singular `file` and plural `files` correctly in group badges.
 - The expansion contains only canonical category rows and their indented file
-  rows. Reject alternate list markers, prose, or other residual content.
+  rows, followed only by the canonical bounded remainder rows when applicable.
+  Reject alternate list markers, prose, or other residual content.
 
 ## Edge Checks
 
@@ -162,13 +193,16 @@ exact pushed base/head first; stop rather than publish when it is unavailable:
   applicable category, while the summary `FILES` badge counts its target path
   once. Every appearance of the same target path uses the same operation kind
   and, for a move or copy, the same source path. Never repeat a file within one
-  category. Otherwise use `OTHER` for that file's changed lines.
+  category. Otherwise use `OTHER` for that file's changed lines. A bounded
+  inventory renders each of its 100 selected target paths exactly once; assign a
+  mixed selected file to `OTHER` when one auditable category cannot own its row.
 - Deleted file: link the path GitHub uses for the deletion anchor and count it as
   removed in Stack operations.
 - Renamed stack title: refresh every linked title's `alt` and `title`, not only
   the visible list link.
-- Large stack or diff: keep the disclosures collapsed by default; do not truncate
-  the complete inventory merely to shorten the source.
+- Large stack or diff: keep disclosures collapsed by default. Keep Stack
+  inventories complete. Bound Diff file rows only through the 100-file contract
+  above.
 - Shields unavailable: meaningful `alt` text must leave the summaries and file
   metrics understandable.
 
@@ -179,8 +213,12 @@ wrong PR cannot pass:
 
 ```bash
 python3 "$HOME/.agents/skills/writing-reviewable-pr-descriptions/scripts/validate_change_navigation.py" \
-  --repository OWNER/REPO --pr PR_NUMBER /path/to/pr-body.md
+  --repository OWNER/REPO --pr PR_NUMBER \
+  --base-sha BASE_SHA --head-sha HEAD_SHA \
+  /path/to/pr-body.md
 ```
 
 Both the Stack current item and every Diff file link must match that repository
-and PR number.
+and PR number. A bounded Diff comparison must match that repository and the
+declared base/head SHAs. The SHA options remain optional for a complete Diff,
+but both are required to validate a bounded Diff.

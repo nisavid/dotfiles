@@ -30,13 +30,17 @@ title and body supplied to it. Generated `--fill` text is never a substitute.
 6. Read [references/change-navigation.md](references/change-navigation.md) and build
    its required first-viewport disclosures. A stacked PR gets collapsed Stack
    then Diff; every other PR gets collapsed Diff. Never add a separate
-   `## Stack` section. Stop rather than publish when the pushed diff cannot be
-   established.
+   `## Stack` section. For more than 100 changed files, plan the bounded Diff
+   inventory from the exact GitHub API file order before grouping its first 100
+   files by semantic category. Stop rather than publish when the pushed diff or
+   deterministic file order cannot be established.
 7. Validate a body containing those disclosures:
 
    ```bash
    python3 "$HOME/.agents/skills/writing-reviewable-pr-descriptions/scripts/validate_change_navigation.py" \
-     --repository OWNER/REPO --pr NUMBER /absolute/path/to/pr-body.md
+     --repository OWNER/REPO --pr NUMBER \
+     --base-sha BASE_SHA --head-sha HEAD_SHA \
+     /absolute/path/to/pr-body.md
    ```
 
 8. Compare the proposal with the live baseline for unintended loss, then pass
