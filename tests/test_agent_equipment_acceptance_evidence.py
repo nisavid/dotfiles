@@ -403,7 +403,10 @@ class AcceptanceEvidenceContractTests(unittest.TestCase):
             ),
             "fraction": ("2026-08-13t05:01:00.000Z", set()),
             "comma fraction": ("2026-08-13T05:01:00,000Z", set()),
-            "final LF": ("2026-08-13T05:01:00Z\n", set()),
+            "final LF": (
+                "2026-08-13T05:01:00Z\n",
+                {"ACCEPTANCE_ATTESTATION_SCHEMA_INVALID"},
+            ),
         }
         for label, (timestamp, expected_codes) in timestamp_variants.items():
             with self.subTest(timestamp=label):

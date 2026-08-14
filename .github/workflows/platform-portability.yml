@@ -163,6 +163,8 @@ jobs:
 
       - name: Verify platform bindings
         shell: bash
+        env:
+          AGE_TOOLING_DIRECTORY: ${{ runner.temp }}/chezmoi-bin
         run: |
           set -euo pipefail
           zsh -f tests/claude-skill-sync.zsh

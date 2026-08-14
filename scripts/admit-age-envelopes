@@ -30,6 +30,7 @@ from privacy_age_envelopes import (
 DECRYPT_TIMEOUT_SECONDS = 15
 MAX_INSPECTION_BYTES = 1024 * 1024
 MAX_RECIPIENT_BYTES = 4096
+MAX_AGE_TOOL_BYTES = 32 * 1024 * 1024
 SKIPPED_DIRECTORIES = {".git"}
 _POSTQUANTUM_RECIPIENT = re.compile(rb"age1pq1[a-z0-9]+\n\Z", re.ASCII)
 
@@ -89,13 +90,66 @@ def _validated_identities(raw_identities: list[Path], root: Path) -> list[int]:
     return identities
 
 
-def _validated_binary(name: str) -> str:
-    binary = shutil.which(name)
-    if binary is None:
+def _read_age_tool(path: Path) -> bytes:
+    try:
+        canonical = path.resolve(strict=True)
+    except OSError as error:
+        raise AgeEnvelopeError("pinned age tooling is unavailable") from error
+    descriptor, info = open_regular_file_descriptor(canonical)
+    try:
+        if info.st_mode & 0o111 == 0:
+            raise AgeEnvelopeError("pinned age tooling is unavailable")
+        chunks: list[bytes] = []
+        remaining = MAX_AGE_TOOL_BYTES + 1
+        while remaining:
+            chunk = os.read(descriptor, min(remaining, 64 * 1024))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+    finally:
+        os.close(descriptor)
+    data = b"".join(chunks)
+    if len(data) > MAX_AGE_TOOL_BYTES:
         raise AgeEnvelopeError("pinned age tooling is unavailable")
+    return data
+
+
+def _stage_age_tool(path: Path, data: bytes) -> None:
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(
+            path,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0),
+            0o600,
+        )
+        with os.fdopen(descriptor, "wb") as stream:
+            descriptor = None
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+            os.fchmod(stream.fileno(), 0o500)
+        if _read_age_tool(path) != data:
+            raise AgeEnvelopeError("age tooling changed during staging")
+    except OSError as error:
+        raise AgeEnvelopeError("age tooling staging failed") from error
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _validated_binary(name: str, trusted_directory: Path, stage: Path) -> str:
+    ambient = shutil.which(name)
+    if ambient is None:
+        raise AgeEnvelopeError("pinned age tooling is unavailable")
+    trusted_data = _read_age_tool(trusted_directory / name)
+    if _read_age_tool(Path(ambient)) != trusted_data:
+        raise AgeEnvelopeError("untrusted age tooling provenance")
+    staged = stage / name
+    _stage_age_tool(staged, trusted_data)
     try:
         result = subprocess.run(
-            [binary, "--version"],
+            [staged, "--version"],
             check=False,
             capture_output=True,
             timeout=DECRYPT_TIMEOUT_SECONDS,
@@ -104,7 +158,30 @@ def _validated_binary(name: str) -> str:
         raise AgeEnvelopeError("age tooling version check failed") from error
     if result.returncode != 0 or result.stdout.strip() != AGE_VERSION.encode("ascii"):
         raise AgeEnvelopeError("unexpected age tooling version")
-    return binary
+    return os.fspath(staged)
+
+
+def _validated_tooling_directory(root: Path) -> Path:
+    raw = os.environ.get("AGE_TOOLING_DIRECTORY")
+    if not raw:
+        raise AgeEnvelopeError("trusted age tooling provenance is unavailable")
+    directory = Path(raw)
+    if not directory.is_absolute():
+        raise AgeEnvelopeError("trusted age tooling provenance is unavailable")
+    lexical = Path(os.path.abspath(directory))
+    try:
+        canonical = lexical.resolve(strict=True)
+    except OSError as error:
+        raise AgeEnvelopeError(
+            "trusted age tooling provenance is unavailable"
+        ) from error
+    if (
+        not canonical.is_dir()
+        or _is_within(lexical, root)
+        or _is_within(canonical, root)
+    ):
+        raise AgeEnvelopeError("trusted age tooling provenance is unavailable")
+    return canonical
 
 
 def _has_authorized_postquantum_structure(
@@ -251,34 +328,45 @@ def admit(root: Path, raw_identities: list[Path]) -> None:
         raise AgeEnvelopeError("repository root is unavailable") from error
     if not root.is_dir():
         raise AgeEnvelopeError("repository root is not a directory")
-    identities = _validated_identities(raw_identities, root)
+    trusted_tooling = _validated_tooling_directory(root)
     try:
-        age = _validated_binary("age")
-        age_keygen = _validated_binary("age-keygen")
-        age_inspect = _validated_binary("age-inspect")
-        _validated_identity_recipients(age_keygen, identities)
-        discovered = discover_age_files(root, skipped_directories=SKIPPED_DIRECTORIES)
+        with tempfile.TemporaryDirectory(prefix="admit-age-tooling.") as raw_stage:
+            stage = Path(raw_stage)
+            age = _validated_binary("age", trusted_tooling, stage)
+            age_keygen = _validated_binary("age-keygen", trusted_tooling, stage)
+            age_inspect = _validated_binary("age-inspect", trusted_tooling, stage)
+            identities = _validated_identities(raw_identities, root)
+            try:
+                _validated_identity_recipients(age_keygen, identities)
+                discovered = discover_age_files(
+                    root,
+                    skipped_directories=SKIPPED_DIRECTORIES,
+                )
 
-        admitted: dict[str, str] = {}
-        for relative in sorted(discovered):
-            data = read_regular_file(
-                discovered[relative],
-                maximum=MAX_AGE_ENVELOPE_BYTES,
-            )
-            if not _has_authorized_postquantum_structure(
-                age_inspect,
-                data,
-                identity_count=1,
-            ):
-                raise AgeEnvelopeError("an envelope has an unauthorized recipient set")
-            if not _decrypts_to_eof(age, identities, data):
-                raise AgeEnvelopeError("an envelope did not decrypt to EOF")
-            admitted[relative] = "sha256:" + hashlib.sha256(data).hexdigest()
+                admitted: dict[str, str] = {}
+                for relative in sorted(discovered):
+                    data = read_regular_file(
+                        discovered[relative],
+                        maximum=MAX_AGE_ENVELOPE_BYTES,
+                    )
+                    if not _has_authorized_postquantum_structure(
+                        age_inspect,
+                        data,
+                        identity_count=1,
+                    ):
+                        raise AgeEnvelopeError(
+                            "an envelope has an unauthorized recipient set"
+                        )
+                    if not _decrypts_to_eof(age, identities, data):
+                        raise AgeEnvelopeError("an envelope did not decrypt to EOF")
+                    admitted[relative] = "sha256:" + hashlib.sha256(data).hexdigest()
 
-        _replace_manifest(root, canonical_manifest_bytes(admitted))
-    finally:
-        for descriptor in identities:
-            os.close(descriptor)
+                _replace_manifest(root, canonical_manifest_bytes(admitted))
+            finally:
+                for descriptor in identities:
+                    os.close(descriptor)
+    except OSError as error:
+        raise AgeEnvelopeError("age tooling validation failed") from error
 
 
 def main() -> int:

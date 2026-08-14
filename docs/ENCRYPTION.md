@@ -65,17 +65,23 @@ After adding, replacing, removing, or re-encrypting any age source, regenerate
 the inventory with the machine-local identity outside the repository:
 
 ```zsh
-python3 scripts/admit-age-envelopes \
+AGE_TOOLING_DIRECTORY=/absolute/path/to/checksum-verified-age-bin \
+  python3 scripts/admit-age-envelopes \
   --root . \
   --identity ~/.config/age/key.txt
 python3 scripts/privacy-scan --root . --require-age-manifest
 ```
 
-The admission command requires age v1.3.1, exactly one mode-`0600` post-quantum
-identity outside the repository, and exactly one ML-KEM-768+X25519 recipient
-stanza. That identity must independently decrypt every exact candidate to EOF. It reads
-each candidate once with a 4 MiB limit before atomically and durably replacing
-the manifest. It discards plaintext and age diagnostics. The command leaves the
+The admission command requires age v1.3.1 from an absolute, trusted installation
+directory outside the repository, exactly one mode-`0600` post-quantum identity
+outside the repository, and exactly one ML-KEM-768+X25519 recipient stanza. The
+trusted directory should come from a checksum-verified package installation,
+not an ambient `PATH` lookup. Admission requires the ambient tool bytes to match
+that installation, then executes private staged copies before opening the
+identity. That identity
+must independently decrypt every exact candidate to EOF. The command reads each
+candidate once with a 4 MiB limit before atomically and durably replacing the
+manifest. It discards plaintext and age diagnostics. The command leaves the
 existing manifest unchanged if any path is unsafe, any envelope fails
 decryption, or any other validation fails. Review the ciphertext and manifest
 together; do not hand-edit a digest to admit bytes that were not validated by

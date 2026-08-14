@@ -415,8 +415,6 @@ class AgentEquipmentJsonSchemaTests(unittest.TestCase):
             "2026-08-13T04:00:00-00:00",
             "2026-08-13T04:00:00,123Z",
             "2026-08-13t04:00:00,123z",
-            "2026-08-13T04:00:00Z\n",
-            "2026-08-13T04:00:00,123Z\n",
         )
         for value in accepted:
             with self.subTest(value=value):
@@ -430,6 +428,9 @@ class AgentEquipmentJsonSchemaTests(unittest.TestCase):
             "2026-01-01T00:00:00+24:00",
             "2026-01-01T00:00:00+00:60",
             "2026-01-01T00:00:00",
+            "2026-08-13T04:00:00Z\n",
+            "2026-08-13T04:00:00,123Z\n",
+            "2026-08-13T04:00:00Z\r\n",
             "2026-01-01T00:00:00Z\n\n",
             "2026-01-01T00:00:00Z\r",
         )

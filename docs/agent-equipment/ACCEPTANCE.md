@@ -49,11 +49,14 @@ Release replay independently requires the manifest's complete artifact-binding
 object and plan-action identities to equal the exact trusted plan and captured-
 state streams. It also projects every automated route's provider selector and
 manager identity from the plan, requires the same route identities and core
-capability tuple in captured state, and accepts only that exact sorted route
-binding set. The eleven release streams do not contain the full validated plan
-graph, so release does not reconstruct verification or migration nodes; their
-closed records remain authenticated by the pre-mutation authorized manifest
-digest and the manifest's semantic coverage checks.
+capability tuple in captured state, and accepts only that exact sorted automated
+route binding set. An operator-owned captured route with no planned actions is
+preserved as audited state without claiming automated authority and is excluded
+from that projection; any extra reconciler-owned route still fails the exact-set
+check. The eleven release streams do not contain the full validated plan graph,
+so release does not reconstruct verification or migration nodes; their closed
+records remain authenticated by the pre-mutation authorized manifest digest and
+the manifest's semantic coverage checks.
 
 Each case has a stable identity derived from exactly its requirement ID, fixture
 family, and sealed subject identity. `ADP-*`, `CAP-*`, and `LIVE-*` use explicit
@@ -255,7 +258,7 @@ operation. Run them again for every migration boundary named in `MIGRATION.md`.
 | `CHK-08` | Fail compensation and preserve a durable recoverable record. Audit-before-retry classifies state and never issues duplicate or destructive replay. | Fault and retry trace |
 | `CHK-09` | Inject a concurrent change immediately before every adapter mutation. Compare-before-mutate preserves it and stops before the native manager call. | Parameterized adapter call spies |
 | `CHK-10` | Before apply issuance, validate and seal one complete `CaptureObservationAuthoritySet` over all-and-only the plan actions, exact candidate/implementation/plan/action-set/capability/capture bindings, surfaces, controlled components, and normalized captured pre-state. Bind its independently trusted identity/digest into `ApplyAuthorization`; a coordinated reseal requires new apply authority. Derive and seal one complete `PreparedActionAuthoritySet` from that artifact and the adapter-derived normalized post-state, then bind its identity/digest into the same authorization. Every public validation seam takes both closed artifacts and obtains both expected tuples from the validated apply authorization; no raw observation list is accepted. Bind each checkpoint identity to that prepared authority plus apply identity/digest, execution domain/nonce/run, candidate and implementation, catalog/lock/plan/capability/capture, route capability/manager evidence, action/ordinal/step, operation, surface, compensation, and exact normalized pre/post state. Require checkpoints to form the canonical prepared plan prefix and one reachable cross-record forward or reverse-topological lifecycle frontier in addition to the local phase-history x phase x invocation-state matrix. Distinguish automatic apply compensation from public compensation; the latter requires a closed non-null original-authority transition claim and durable ledger evidence for restart. | Capture/prepared-set closure, coordinated reseal, cross-module identity, malformed normalized-state, component-set, phase-matrix, complete-plan, prefix/frontier, claim-type, and compensation-restart negatives |
-| `CHK-11` | Authenticate a closed `RunTerminalRecord` over the exact apply tuple, complete plan-action-set, validated capture-observation and prepared-action authority sets, checkpoint-set manifest, and store generation. `succeeded` requires one unique completed checkpoint for every plan action, with durable generations increasing in canonical action order. Release strictly parses eleven exact inputs, derives the plan, captured state, store generation, and full durable records only from the exact plan-action-set, captured-state, and sealed checkpoint-store-snapshot bytes, requires the snapshot generation to equal its maximum durable record generation, revalidates every exact artifact, and archives all eleven byte streams and digests; a lossy projection, stale store generation, naked checkpoint/state scalars, or a partial completed prefix fails. | Terminal coordinated-reseal, full-store-snapshot, partial-store, exact-byte, and receipt negatives |
+| `CHK-11` | Authenticate a closed `RunTerminalRecord` over the exact apply tuple, complete plan-action-set, validated capture-observation and prepared-action authority sets, checkpoint-set manifest, and store generation. Every checkpoint-set and terminal trusted store generation must equal the maximum durable generation represented by its complete durable records. `succeeded` requires one unique completed checkpoint for every plan action, with durable generations increasing in canonical action order. Release strictly parses eleven exact inputs, derives the plan, captured state, store generation, and full durable records only from the exact plan-action-set, captured-state, and sealed checkpoint-store-snapshot bytes, requires the snapshot generation to equal its maximum durable record generation, revalidates every exact artifact, and archives all eleven byte streams and digests; a lossy projection, stale store generation, naked checkpoint/state scalars, or a partial completed prefix fails. | Terminal coordinated-reseal, full-store-snapshot, partial-store, exact-byte, and receipt negatives |
 
 ## Migration and rollback fixtures
 

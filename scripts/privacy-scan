@@ -41,6 +41,8 @@ AGE_INSPECT_TIMEOUT_SECONDS = 5
 MAX_AGE_INSPECTION_BYTES = 1024 * 1024
 EXPECTED_AGE_RECIPIENT_STANZAS = 1
 MAX_PUBLIC_FILE_BYTES = 4 * 1024 * 1024
+MAX_PUBLIC_SOURCE_ENTRIES = 10_000
+MAX_PUBLIC_SOURCE_PATH_BYTES = 8 * 1024 * 1024
 AGE_NATIVE_MAGIC = b"age-encryption.org/v1\n"
 AGE_ARMORED_MAGIC = b"-----BEGIN AGE ENCRYPTED FILE-----"
 
@@ -62,40 +64,46 @@ class PublicScanError(RuntimeError):
     """A repository boundary could not be scanned completely."""
 
 
+class PublicSourceInventoryLimitError(PublicScanError):
+    """A source inventory exceeded its safe materialization limits."""
+
+
 def files(root: Path) -> Iterable[Path]:
     """Yield the complete bounded source inventory or fail closed."""
 
-    def walk_error(error: OSError) -> None:
-        raise PublicScanError("source inventory is unreadable") from error
-
-    try:
-        walker = os.walk(
-            root,
-            topdown=True,
-            onerror=walk_error,
-            followlinks=False,
-        )
-        for current, directory_names, file_names in walker:
-            current_path = Path(current)
-            retained_directories: list[str] = []
-            for name in directory_names:
-                if name == ".git":
-                    continue
-                path = current_path / name
-                try:
-                    info = path.lstat()
-                except OSError as error:
-                    raise PublicScanError("source inventory is unreadable") from error
-                if stat.S_ISLNK(info.st_mode):
-                    yield path
-                    continue
-                retained_directories.append(name)
-            directory_names[:] = retained_directories
-            for name in file_names:
-                path = current_path / name
-                yield path
-    except OSError as error:
-        raise PublicScanError("source inventory is unreadable") from error
+    pending_directories = [root]
+    entry_count = 0
+    path_bytes = 0
+    while pending_directories:
+        current_path = pending_directories.pop()
+        try:
+            with os.scandir(current_path) as entries:
+                for entry in entries:
+                    path = Path(entry.path)
+                    try:
+                        info = entry.stat(follow_symlinks=False)
+                    except OSError as error:
+                        raise PublicScanError(
+                            "source inventory is unreadable"
+                        ) from error
+                    if entry.name == ".git" and stat.S_ISDIR(info.st_mode):
+                        continue
+                    relative = path.relative_to(root).as_posix()
+                    entry_count += 1
+                    path_bytes += len(
+                        relative.encode("utf-8", errors="surrogateescape")
+                    )
+                    if (
+                        entry_count > MAX_PUBLIC_SOURCE_ENTRIES
+                        or path_bytes > MAX_PUBLIC_SOURCE_PATH_BYTES
+                    ):
+                        raise PublicSourceInventoryLimitError
+                    if stat.S_ISDIR(info.st_mode):
+                        pending_directories.append(path)
+                    else:
+                        yield path
+        except OSError as error:
+            raise PublicScanError("source inventory is unreadable") from error
 
 
 def read_public_file(path: Path) -> tuple[bytes | None, str | None]:
@@ -398,6 +406,12 @@ def main() -> int:
 
     try:
         source_paths = tuple(files(root))
+    except PublicSourceInventoryLimitError:
+        print(
+            "privacy scan failed: source inventory exceeds safe limits",
+            file=sys.stderr,
+        )
+        return 1
     except PublicScanError:
         print("privacy scan failed", file=sys.stderr)
         return 1

@@ -982,10 +982,19 @@ def valid_checkpoint_store_snapshot(
 def valid_checkpoint_set_manifest(
     snapshots: list[dict[str, object]] | None = None,
     *,
-    store_generation: int = 7,
+    store_generation: int | None = None,
     plan_action_set: dict[str, object] | None = None,
 ) -> dict[str, object]:
     plan_action_set = plan_action_set or valid_plan_action_set()
+    snapshots = (
+        snapshots
+        if snapshots is not None
+        else valid_checkpoint_snapshots(plan_action_set)
+    )
+    if store_generation is None:
+        durable_generations = [snapshot["durable_generation"] for snapshot in snapshots]
+        assert all(type(generation) is int for generation in durable_generations)
+        store_generation = max(durable_generations) if durable_generations else 0
     authorization = valid_apply_authorization(plan_action_set)
     authorization_digest = seal_apply_authorization(authorization)
     document: dict[str, object] = {
@@ -1004,11 +1013,7 @@ def valid_checkpoint_set_manifest(
         },
         "checkpoints": [
             checkpoint_manifest_entry(snapshot)
-            for snapshot in (
-                snapshots
-                if snapshots is not None
-                else valid_checkpoint_snapshots(plan_action_set)
-            )
+            for snapshot in snapshots
         ],
         "checkpoint_set_digest": DIGEST_D,
     }
@@ -1439,6 +1444,47 @@ def rebuilt_release_with_captured_state_transform(
         archive = valid_release_archive_manifest(plan_action_set)
         release_inputs = release_validation_inputs(archive, plan_action_set)
     return archive, release_inputs
+
+
+def append_unbound_captured_route(
+    captured_state: dict[str, object],
+    *,
+    control_owner: str,
+) -> None:
+    routes = captured_state["provider_routes"]
+    assert isinstance(routes, list)
+    first_route = routes[0]
+    assert isinstance(first_route, dict)
+    routes.append(
+        {
+            "route_id": f"route:fixture/{control_owner}-sidecar",
+            "route_digest": canonical_digest(
+                {"control_owner": control_owner, "route": "sidecar"}
+            ),
+            "harness": "claude",
+            "equipment_identities": [f"mcp:fixture/{control_owner}-sidecar"],
+            "controlled_equipment_identities": [],
+            "control_owner": control_owner,
+            "provenance_owner": f"source:fixture/{control_owner}-sidecar",
+            "capability_binding": copy.deepcopy(first_route["capability_binding"]),
+            "planned_actions": [],
+            "restore_evidence": {
+                "restore_class": "immutable",
+                "revision": "fixture-v1",
+                "artifact_reference": f"artifact:fixture/{control_owner}-sidecar",
+                "content_digest": DIGEST_A,
+            },
+            "surface_references": {
+                "installation": {"status": "not_applicable"},
+                "enablement": {"status": "not_applicable"},
+                "projector": {"status": "not_applicable"},
+                "mcp_selections": [],
+                "plugin_selections": [],
+                "skill_entries": [],
+                "canonical_skill_dependencies": [],
+            },
+        }
+    )
 
 
 def valid_release_receipt(
@@ -2976,6 +3022,19 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
             "CHECKPOINT_STORE_GENERATION_MISMATCH",
             diagnostics_for(manifest, trusted_generation=True),
         )
+        stale_generation = copy.deepcopy(manifest)
+        stale_generation["checkpoint_store_generation"] += 1
+        seal_checkpoint_set_manifest(stale_generation)
+        self.assertIn(
+            "CHECKPOINT_STORE_GENERATION_MISMATCH",
+            diagnostics_for(
+                stale_generation,
+                trusted_generation=stale_generation["checkpoint_store_generation"],
+                pretransition_generation=stale_generation[
+                    "checkpoint_store_generation"
+                ],
+            ),
+        )
         self.assertIn(
             "CHECKPOINT_STORE_CONCURRENT_CHANGE",
             diagnostics_for(manifest, pretransition_generation=True),
@@ -3278,9 +3337,7 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
         ]
         attach_public_compensation_claim(transitioned, authorization)
         current_snapshots[1]["durable_generation"] += 10
-        current_manifest = valid_checkpoint_set_manifest(
-            current_snapshots, store_generation=8
-        )
+        current_manifest = valid_checkpoint_set_manifest(current_snapshots)
 
         recovery_inputs = public_recovery_validation_inputs(
             authorization,
@@ -3315,9 +3372,7 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
         assert isinstance(automatic_record, dict)
         automatic_record["compensation_authority_kind"] = "automatic_apply"
         automatic_record["compensation_transition_claim"] = None
-        automatic_manifest = valid_checkpoint_set_manifest(
-            automatic_snapshots, store_generation=8
-        )
+        automatic_manifest = valid_checkpoint_set_manifest(automatic_snapshots)
         automatic_inputs = dict(recovery_inputs)
         automatic_inputs.update(
             {
@@ -3409,7 +3464,7 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
         )
         prepared_started_snapshots[1]["durable_generation"] += 1
         prepared_started_manifest = valid_checkpoint_set_manifest(
-            prepared_started_snapshots, store_generation=8
+            prepared_started_snapshots
         )
         prepared_started_inputs = public_recovery_validation_inputs(
             authorization,
@@ -3456,7 +3511,7 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
         forward_intent_record["invocation_state"] = "started"
         forward_intent_snapshots[1]["durable_generation"] += 1
         forward_intent_manifest = valid_checkpoint_set_manifest(
-            forward_intent_snapshots, store_generation=9
+            forward_intent_snapshots
         )
         forward_intent_inputs = public_recovery_validation_inputs(
             authorization,
@@ -3482,9 +3537,7 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
             blocked_record, authorization, "compensation_blocked"
         )
         blocked_snapshots[1]["durable_generation"] += 1
-        blocked_manifest = valid_checkpoint_set_manifest(
-            blocked_snapshots, store_generation=8
-        )
+        blocked_manifest = valid_checkpoint_set_manifest(blocked_snapshots)
         blocked_inputs = public_recovery_validation_inputs(
             authorization,
             original_manifest,
@@ -3512,9 +3565,7 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
             lower_record, completed_authorization, "compensated"
         )
         out_of_order[0]["durable_generation"] += 1
-        out_of_order_manifest = valid_checkpoint_set_manifest(
-            out_of_order, store_generation=8
-        )
+        out_of_order_manifest = valid_checkpoint_set_manifest(out_of_order)
         out_of_order_inputs = public_recovery_validation_inputs(
             completed_authorization,
             completed_manifest,
@@ -3658,6 +3709,52 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
                     "CHECKPOINT_SET_MEMBERSHIP_MISMATCH",
                     {diagnostic.code for diagnostic in diagnostics},
                 )
+
+    def test_run_terminal_rejects_store_generation_beyond_durable_records(
+        self,
+    ) -> None:
+        plan_action_set = valid_plan_action_set()
+        snapshots = valid_checkpoint_snapshots(plan_action_set)
+        checkpoint_set = valid_checkpoint_set_manifest(
+            snapshots,
+            store_generation=max(
+                snapshot["durable_generation"] for snapshot in snapshots
+            )
+            + 1,
+            plan_action_set=plan_action_set,
+        )
+        terminal = valid_run_terminal_record(checkpoint_set, plan_action_set)
+        diagnostics = EXECUTION_AUTHORITY.validate_run_terminal_record(
+            terminal,
+            checkpoint_set_manifest=checkpoint_set,
+            expected_apply_authorization_identity=checkpoint_set["bindings"][
+                "apply_authorization_identity"
+            ],
+            expected_apply_authorization_digest=checkpoint_set["bindings"][
+                "apply_authorization_digest"
+            ],
+            expected_execution_domain_identity=checkpoint_set["bindings"][
+                "execution_domain_identity"
+            ],
+            expected_execution_nonce=checkpoint_set["bindings"]["execution_nonce"],
+            expected_run_identity=checkpoint_set["bindings"]["run_identity"],
+            authoritative_plan_action_set=plan_action_set,
+            expected_plan_action_set_digest=plan_action_set["action_set_digest"],
+            expected_candidate_identity=plan_action_set["candidate_identity"],
+            expected_implementation_manifest_digest=plan_action_set[
+                "implementation_manifest_digest"
+            ],
+            expected_plan_digest=plan_action_set["plan_digest"],
+            trusted_checkpoint_store_generation=checkpoint_set[
+                "checkpoint_store_generation"
+            ],
+            trusted_checkpoint_records=snapshots,
+            **checkpoint_authority_inputs(plan_action_set),
+        )
+        self.assertIn(
+            "CHECKPOINT_STORE_GENERATION_MISMATCH",
+            {diagnostic.code for diagnostic in diagnostics},
+        )
 
     def test_raw_authority_boundary_rejects_ambiguous_or_unbounded_input(self) -> None:
         authorization = valid_apply_authorization()
@@ -4781,6 +4878,46 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
             )
         }
 
+        self.assertIn("EXPECTED_CASE_MANIFEST_ROUTE_BINDING_MISMATCH", codes)
+        self.assertNotIn("ARCHIVED_DOCUMENT_BYTES_MISMATCH", codes)
+
+    def test_release_allows_operator_owned_routes_without_automated_actions(
+        self,
+    ) -> None:
+        plan_action_set = valid_plan_action_set()
+        archive, release_inputs = rebuilt_release_with_captured_state_transform(
+            plan_action_set,
+            lambda captured_state: append_unbound_captured_route(
+                captured_state,
+                control_owner="operator_owned",
+            ),
+        )
+
+        self.assertEqual(
+            EXECUTION_AUTHORITY.validate_release_archive_manifest(
+                archive,
+                **release_inputs,
+            ),
+            (),
+        )
+
+    def test_release_rejects_unbound_extra_reconciler_owned_routes(self) -> None:
+        plan_action_set = valid_plan_action_set()
+        archive, release_inputs = rebuilt_release_with_captured_state_transform(
+            plan_action_set,
+            lambda captured_state: append_unbound_captured_route(
+                captured_state,
+                control_owner="reconciler_owned",
+            ),
+        )
+
+        codes = {
+            diagnostic.code
+            for diagnostic in EXECUTION_AUTHORITY.validate_release_archive_manifest(
+                archive,
+                **release_inputs,
+            )
+        }
         self.assertIn("EXPECTED_CASE_MANIFEST_ROUTE_BINDING_MISMATCH", codes)
         self.assertNotIn("ARCHIVED_DOCUMENT_BYTES_MISMATCH", codes)
 

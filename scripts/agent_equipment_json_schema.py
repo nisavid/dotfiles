@@ -76,7 +76,7 @@ _DATE_TIME_PATTERN = re.compile(
     r"(?P<day>0[1-9]|[12][0-9]|3[01])[Tt]"
     r"(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]"
     r"(?:[.,][0-9]+)?"
-    r"(?:[Zz]|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])$"
+    r"(?:[Zz]|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])\Z"
 )
 _SCHEMA_ID_PATTERN = re.compile(r"^[^#]*#?$")
 
@@ -675,7 +675,7 @@ def _matches_type(value: Any, expected: str) -> bool:
 
 
 def _valid_date_time(value: str) -> bool:
-    match = _DATE_TIME_PATTERN.search(value)
+    match = _DATE_TIME_PATTERN.fullmatch(value)
     if match is None:
         return False
     year = int(match.group("year"))
