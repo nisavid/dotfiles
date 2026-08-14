@@ -44,7 +44,13 @@ def _new_nonce() -> str:
     return secrets.token_hex(16)
 
 
-def _validate(body: str, repository: str, pr_number: int) -> None:
+def _validate(
+    body: str,
+    repository: str,
+    pr_number: int,
+    base_sha: str,
+    head_sha: str,
+) -> None:
     if not VALIDATOR.is_file():
         raise PublicationError(f"validator is missing: {VALIDATOR}")
     _run(
@@ -56,6 +62,10 @@ def _validate(body: str, repository: str, pr_number: int) -> None:
             repository,
             "--pr",
             str(pr_number),
+            "--base-sha",
+            base_sha,
+            "--head-sha",
+            head_sha,
         ],
         input_text=body,
     )
@@ -290,7 +300,13 @@ def publish(
     template = _body_template(template_path)
     provisional_pr_number = _provisional_pr_number(template)
     provisional_body = template.replace(PR_NUMBER_TOKEN, str(provisional_pr_number))
-    _validate(provisional_body, repository, provisional_pr_number)
+    _validate(
+        provisional_body,
+        repository,
+        provisional_pr_number,
+        base_oid,
+        head_oid,
+    )
 
     nonce = _new_nonce()
     transport_body = _transport_body(nonce)
@@ -326,7 +342,7 @@ def publish(
             raise PublicationError(
                 "created PR does not have the exact nonce-tagged transport state"
             )
-        _validate(body, repository, pr_number)
+        _validate(body, repository, pr_number, base_oid, head_oid)
         stored = _install_canonical_draft(
             expected=expected,
             title=title,

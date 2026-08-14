@@ -44,7 +44,13 @@ def _read_body(path: Path) -> str:
         raise PublicationError(f"cannot read body file: {error}") from error
 
 
-def _validate_body(body: str, repository: str, pr_number: int) -> None:
+def _validate_body(
+    body: str,
+    repository: str,
+    pr_number: int,
+    base_sha: str,
+    head_sha: str,
+) -> None:
     if not VALIDATOR.is_file():
         raise PublicationError(f"validator is missing: {VALIDATOR}")
     _run(
@@ -56,6 +62,10 @@ def _validate_body(body: str, repository: str, pr_number: int) -> None:
             repository,
             "--pr",
             str(pr_number),
+            "--base-sha",
+            base_sha,
+            "--head-sha",
+            head_sha,
         ],
         input_text=body,
     )
@@ -116,7 +126,13 @@ def update_text(
     if not title.strip():
         raise PublicationError("title must be non-empty")
     body = _read_body(body_path)
-    _validate_body(body, expected.repository, expected.pr_number)
+    _validate_body(
+        body,
+        expected.repository,
+        expected.pr_number,
+        expected.base_oid,
+        expected.head_oid,
+    )
     before = _preflight(
         expected=expected,
         expected_title_sha256=expected_title_sha256,
@@ -174,7 +190,13 @@ def mark_ready(
     )
     title = str(validated["title"])
     body = str(validated["body"])
-    _validate_body(body, expected.repository, expected.pr_number)
+    _validate_body(
+        body,
+        expected.repository,
+        expected.pr_number,
+        expected.base_oid,
+        expected.head_oid,
+    )
     before = _preflight(
         expected=expected,
         expected_title_sha256=expected_title_sha256,
