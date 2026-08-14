@@ -440,6 +440,9 @@ class BoundedDiffTests(unittest.TestCase):
             "misleading complete wording after disclosure": (
                 body + "\nComplete per-file inventory.\n"
             ),
+            "misleading unqualified complete wording after disclosure": (
+                body + "\nComplete inventory.\n"
+            ),
             "mutable comparison": body.replace(
                 comparison,
                 f"  - [Complete immutable comparison](https://github.com/{REPOSITORY}/compare/main...topic)",
@@ -449,6 +452,13 @@ class BoundedDiffTests(unittest.TestCase):
             "remainder before a category": body.replace(
                 f"{remainder}\n{comparison}\n\n</details>", "\n</details>"
             ).replace(group, f"{remainder}\n{comparison}\n{group}"),
+            "remainder before a file row": body.replace(
+                f"{first_file}\n",
+                f"{remainder}\n{comparison}\n{first_file}\n",
+            ).replace(
+                f"{remainder}\n{comparison}\n\n</details>",
+                "\n</details>",
+            ),
             "zero-shown zero-line category": body.replace(
                 remainder, f"{empty_category}\n{remainder}"
             ),
