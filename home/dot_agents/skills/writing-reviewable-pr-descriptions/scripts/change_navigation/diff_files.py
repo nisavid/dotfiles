@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
 
+from .diff_inventory import INVENTORY_LIMIT
 from .diff_metrics import (
     FileKey,
     Identity,
@@ -18,13 +18,21 @@ from .diff_metrics import (
 )
 from .metrics import Metric
 
-
 GROUP_RE = re.compile(
     r'^- <picture><img alt="(IMPL|TEST|DOC|GEN|OTHER): (\d+) additions, '
     r'(\d+) deletions"[^>]*></picture> '
-    r'<picture><img alt="FILES: (\d+) '
+    r'<picture><img alt="FILES: (\d+) (shown )?'
     r"(implementation|test|documentation|generated|other) "
     r'(file|files)"[^>]*></picture>$'
+)
+REMAINDER_RE = re.compile(
+    r'^- <picture><img alt="REMAINDER: ([1-9]\d*) changed files"[^>]*>'
+    r"</picture>$"
+)
+COMPARISON_RE = re.compile(
+    r"^  - \[Complete immutable comparison\]\(https://github\.com/"
+    r"(?P<repository>[^/\s]+/[^/\s]+)/compare/"
+    r"(?P<base>[0-9a-f]{40})\.\.\.(?P<head>[0-9a-f]{40})\)$"
 )
 GROUP_DESCRIPTORS = {
     "IMPL": "implementation",
@@ -33,7 +41,7 @@ GROUP_DESCRIPTORS = {
     "GEN": "generated",
     "OTHER": "other",
 }
-FileLine = Tuple[int, str]
+FileLine = tuple[int, str]
 
 
 @dataclass
@@ -42,10 +50,11 @@ class Group:
     additions: int
     deletions: int
     expected_files: int
+    shown_label: bool
     descriptor: str
     file_noun: str
     line_number: int
-    file_lines: List[FileLine] = field(default_factory=list)
+    file_lines: list[FileLine] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -59,11 +68,14 @@ class FileOperationCounts:
 def validate_diff_file_items(
     block: list[str],
     errors: list[str],
-    expected_files: Optional[int],
+    expected_files: int | None,
     summary_metrics: dict[str, Metric],
     expected_identity: Identity | None,
+    shown_files: int | None = None,
+    expected_comparison: tuple[str, str] | None = None,
 ) -> None:
-    _validate_expansion_grammar(block, errors)
+    bounded = shown_files is not None
+    _validate_expansion_grammar(block, errors, bounded)
     groups = _groups(block)
     if not groups:
         errors.append("Diff expansion needs at least one category group")
@@ -87,6 +99,11 @@ def validate_diff_file_items(
                 f"Diff {group.category} group claims {group.expected_files} files "
                 f"but lists {len(group.file_lines)}"
             )
+        if group.shown_label != bounded:
+            qualifier = "must" if bounded else "must not"
+            errors.append(
+                f"Diff {group.category} group {qualifier} label its file count shown"
+            )
         group_files: list[FileKey] = []
         for line_number, line in group.file_lines:
             validate_file_line(line, line_number, errors, expected_identity)
@@ -105,7 +122,9 @@ def validate_diff_file_items(
                     )
         if len(group_files) != len(set(group_files)):
             errors.append(f"Diff {group.category} group must not repeat a changed file")
-        if group.expected_files == 0:
+        if group.expected_files == 0 and (
+            not bounded or (group.additions, group.deletions) == (0, 0)
+        ):
             errors.append(
                 f"Diff {group.category} group on line {group.line_number} must not be empty"
             )
@@ -121,7 +140,12 @@ def validate_diff_file_items(
             )
         file_totals = atomic_totals(group.file_lines)
         group_totals = (group.additions, group.deletions)
-        if file_totals != group_totals:
+        totals_disagree = (
+            file_totals != group_totals
+            if not bounded
+            else any(shown > total for shown, total in zip(file_totals, group_totals))
+        )
+        if totals_disagree:
             errors.append(
                 f"Diff {group.category} group claims {group.additions} additions and "
                 f"{group.deletions} deletions but its file badges total "
@@ -139,10 +163,38 @@ def validate_diff_file_items(
     }
     if positive_groups != summary_metrics:
         errors.append("Diff summary categories do not match expanded category totals")
-    if expected_files is not None and len(unique_files) != expected_files:
+    if (
+        not bounded
+        and expected_files is not None
+        and len(unique_files) != expected_files
+    ):
         errors.append(
             f"Diff summary claims {expected_files} files but expansion lists "
             f"{len(unique_files)} unique files"
+        )
+    if bounded:
+        rendered_rows = sum(len(group.file_lines) for group in groups)
+        if (
+            shown_files != INVENTORY_LIMIT
+            or rendered_rows != INVENTORY_LIMIT
+            or len(unique_files) != INVENTORY_LIMIT
+        ):
+            errors.append(
+                f"bounded Diff expansion must show exactly {INVENTORY_LIMIT} "
+                "distinct file rows"
+            )
+        if expected_files is not None and expected_files <= INVENTORY_LIMIT:
+            errors.append(
+                f"bounded Diff inventory requires more than {INVENTORY_LIMIT} "
+                "touched files"
+            )
+        _validate_remainder(
+            block,
+            errors,
+            expected_files,
+            shown_files,
+            expected_identity,
+            expected_comparison,
         )
     if expected_identity is None and len(identities) > 1:
         errors.append("all Diff file links must target one repository and PR")
@@ -177,9 +229,25 @@ def file_operation_counts(block: list[str]) -> FileOperationCounts:
     )
 
 
+def diff_category_metrics(block: list[str]) -> dict[str, Metric]:
+    """Return positive full category totals from the expanded Diff groups."""
+
+    return {
+        group.category: (group.additions, group.deletions)
+        for group in _groups(block)
+        if (group.additions, group.deletions) != (0, 0)
+    }
+
+
+def is_bounded_inventory(block: list[str]) -> bool:
+    """Return whether the Diff uses shown counts plus an explicit remainder."""
+
+    return any(group.shown_label for group in _groups(block))
+
+
 def _groups(block: list[str]) -> list[Group]:
     groups: list[Group] = []
-    current: Optional[Group] = None
+    current: Group | None = None
     for line_number, line in enumerate(block, start=1):
         group_match = GROUP_RE.fullmatch(line)
         if group_match:
@@ -188,17 +256,20 @@ def _groups(block: list[str]) -> list[Group]:
                 additions=int(group_match.group(2)),
                 deletions=int(group_match.group(3)),
                 expected_files=int(group_match.group(4)),
-                descriptor=group_match.group(5),
-                file_noun=group_match.group(6),
+                shown_label=bool(group_match.group(5)),
+                descriptor=group_match.group(6),
+                file_noun=group_match.group(7),
                 line_number=line_number,
             )
             groups.append(current)
-        elif line.startswith("  - ") and current:
+        elif line.startswith("  - ") and current and not COMPARISON_RE.fullmatch(line):
             current.file_lines.append((line_number, line))
     return groups
 
 
-def _validate_expansion_grammar(block: list[str], errors: list[str]) -> None:
+def _validate_expansion_grammar(
+    block: list[str], errors: list[str], bounded: bool
+) -> None:
     significant = [line for line in block if line.strip()]
     if len(significant) < 5:
         errors.append("Diff expansion is incomplete")
@@ -210,7 +281,14 @@ def _validate_expansion_grammar(block: list[str], errors: list[str]) -> None:
         if GROUP_RE.fullmatch(line):
             saw_group = True
             expecting_group = False
-        elif line.startswith("  - ") and not expecting_group:
+        elif bounded and REMAINDER_RE.fullmatch(line):
+            expecting_group = True
+        elif (
+            bounded
+            and COMPARISON_RE.fullmatch(line)
+            or line.startswith("  - ")
+            and not expecting_group
+        ):
             continue
         else:
             errors.append(f"Diff expansion contains unsupported content: {line}")
@@ -220,3 +298,45 @@ def _validate_expansion_grammar(block: list[str], errors: list[str]) -> None:
             expecting_group = True
     if not saw_group:
         return
+
+
+def _validate_remainder(
+    block: list[str],
+    errors: list[str],
+    total_files: int | None,
+    shown_files: int | None,
+    expected_identity: Identity | None,
+    expected_comparison: tuple[str, str] | None,
+) -> None:
+    remainder_lines = [line for line in block if REMAINDER_RE.fullmatch(line)]
+    comparison_lines = [line for line in block if COMPARISON_RE.fullmatch(line)]
+    if len(remainder_lines) != 1 or len(comparison_lines) != 1:
+        errors.append(
+            "bounded Diff expansion needs one remainder and immutable comparison"
+        )
+        return
+    significant = [line for line in block if line.strip()]
+    if significant[-3:-1] != [remainder_lines[0], comparison_lines[0]]:
+        errors.append(
+            "bounded Diff remainder and comparison must be its final two rows"
+        )
+    remainder = int(REMAINDER_RE.fullmatch(remainder_lines[0]).group(1))
+    expected_remainder = (
+        total_files - shown_files
+        if total_files is not None and shown_files is not None
+        else None
+    )
+    if remainder != expected_remainder:
+        errors.append(
+            f"bounded Diff remainder must equal {expected_remainder} changed files"
+        )
+    comparison = COMPARISON_RE.fullmatch(comparison_lines[0])
+    assert comparison is not None
+    if expected_identity and comparison.group("repository") != expected_identity[0]:
+        errors.append("bounded Diff comparison must use the expected repository")
+    if expected_comparison is None:
+        errors.append("bounded Diff validation requires declared base and head SHAs")
+    elif (comparison.group("base"), comparison.group("head")) != expected_comparison:
+        errors.append(
+            "bounded Diff comparison SHAs must match the declared base and head"
+        )

@@ -9,14 +9,14 @@ from urllib.parse import parse_qs, urlsplit
 from .badge_colors import validate_color_and_label
 from .model import SHIELD_IMAGE_RE, alt, attribute_values, raw_attribute, source, title
 
-
 SUPPORTED_ALT_RE = re.compile(
     r"^(?:STACK|DIFF|STACK STATUS: TOP|BINARY|MOVED|COPIED|"
     r"STACK POSITION: \d+ OF \d+|"
     r"(?:BASE|DEP|NEXT): .+|"
+    r"REMAINDER: [1-9]\d* changed files|"
     r"(?:IMPL|TEST|DOC|GEN|OTHER): \d+ additions, \d+ deletions|"
     r"FILES: (?:\d+ touched|"
-    r"\d+ (?:implementation|test|documentation|generated|other) files?|"
+    r"\d+ (?:shown )?(?:implementation|test|documentation|generated|other) files?|"
     r"\d+ added, \d+ modified, \d+ removed"
     r"(?:, [1-9]\d* moved)?(?:, [1-9]\d* copied)?)|"
     r"\d+ additions, \d+ deletions)$"

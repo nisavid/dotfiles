@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 from urllib.parse import quote, unquote, urlsplit
 
-
 EXPECTED_BADGE_COLORS = {
     "IMPL": "0969DA",
     "TEST": "6F5F9A",
@@ -13,6 +12,7 @@ EXPECTED_BADGE_COLORS = {
     "GEN": "76652F",
     "OTHER": "57606A",
     "FILES": "5F6B78",
+    "REMAINDER": "5F6B78",
     "BASE": "5F6B78",
     "DEP": "5F6B78",
     "NEXT": "5F6B78",
@@ -57,11 +57,14 @@ def _expected_badge_path(image_alt: str) -> str | None:
         return f"FILES-{message}-5F6B78"
     files = re.fullmatch(
         r"FILES: (\d+) (?:touched|"
-        r"(?:implementation|test|documentation|generated|other) files?)",
+        r"(?:shown )?(?:implementation|test|documentation|generated|other) files?)",
         image_alt,
     )
     if files:
         return f"FILES-{files.group(1)}-5F6B78"
+    remainder = re.fullmatch(r"REMAINDER: ([1-9]\d*) changed files", image_alt)
+    if remainder:
+        return f"REMAINDER-+{remainder.group(1)} MORE-5F6B78"
     navigation = re.fullmatch(r"(BASE|DEP|NEXT): #(\d+) — .+", image_alt)
     if navigation:
         return f"{navigation.group(1)}-#{navigation.group(2)}-5F6B78"
