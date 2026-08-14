@@ -64,6 +64,26 @@ done
 run_failed_scan --root "$test_root/content-limit"
 [[ $scan_output == 'privacy scan failed: scan resource limits exceeded' ]]
 
+set +e
+scan_output=$(
+  python3 -c 'import sys; sys.stdout.buffer.write(b"x" * (1024 * 1024 + 1))' |
+    python3 "$scanner" --root "$test_root/clean" --denylist - 2>&1
+)
+scan_status=$?
+set -e
+(( scan_status != 0 ))
+[[ $scan_output == 'privacy scan failed: scan resource limits exceeded' ]]
+
+set +e
+scan_output=$(
+  python3 -c 'import sys; sys.stdout.write("".join(f"term-{i}\n" for i in range(10001)))' |
+    python3 "$scanner" --root "$test_root/clean" --denylist - 2>&1
+)
+scan_status=$?
+set -e
+(( scan_status != 0 ))
+[[ $scan_output == 'privacy scan failed: scan resource limits exceeded' ]]
+
 mkfifo "$test_root/denylist-fifo"
 run_failed_scan \
   --root "$test_root/clean" \

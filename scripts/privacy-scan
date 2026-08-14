@@ -46,6 +46,8 @@ MAX_PUBLIC_SOURCE_PATH_BYTES = 8 * 1024 * 1024
 MAX_PUBLIC_SOURCE_CONTENT_BYTES = 16 * 1024 * 1024
 MAX_PUBLIC_FINDINGS = 10_000
 MAX_PUBLIC_FINDING_BYTES = 4 * 1024 * 1024
+MAX_DENYLIST_BYTES = 1024 * 1024
+MAX_DENYLIST_TERMS = 10_000
 RESOURCE_LIMIT_DIAGNOSTIC = "privacy scan failed: scan resource limits exceeded"
 AGE_NATIVE_MAGIC = b"age-encryption.org/v1\n"
 AGE_ARMORED_MAGIC = b"-----BEGIN AGE ENCRYPTED FILE-----"
@@ -313,23 +315,30 @@ def exact_terms(source: str | None) -> tuple[str, ...]:
     if source is None:
         return ()
 
-    def read_terms(stream: Iterable[str]) -> set[str]:
-        return {
-            line.strip().casefold()
-            for line in stream
-            if line.strip() and not line.lstrip().startswith("#")
-        }
+    def read_terms(data: bytes) -> set[str]:
+        if len(data) > MAX_DENYLIST_BYTES:
+            raise PublicScanResourceLimitError
+        try:
+            lines = data.decode("utf-8").splitlines()
+        except UnicodeError as error:
+            raise PublicScanError("denylist is unreadable") from error
+        terms: set[str] = set()
+        for line in lines:
+            stripped = line.strip()
+            if not stripped or line.lstrip().startswith("#"):
+                continue
+            terms.add(stripped.casefold())
+            if len(terms) > MAX_DENYLIST_TERMS:
+                raise PublicScanResourceLimitError
+        return terms
 
     if source == "-":
-        terms = read_terms(sys.stdin)
+        terms = read_terms(sys.stdin.buffer.read(MAX_DENYLIST_BYTES + 1))
     else:
         data, finding = read_public_file(Path(source))
         if finding is not None or data is None:
             raise PublicScanError("denylist is unreadable")
-        try:
-            terms = read_terms(data.decode("utf-8").splitlines())
-        except UnicodeError as error:
-            raise PublicScanError("denylist is unreadable") from error
+        terms = read_terms(data)
     return tuple(sorted(terms, key=len, reverse=True))
 
 
@@ -472,6 +481,8 @@ def _main() -> int:
         return 1
     try:
         denylist = exact_terms(arguments.denylist)
+    except PublicScanResourceLimitError:
+        raise
     except PublicScanError:
         print("privacy scan failed", file=sys.stderr)
         return 1
