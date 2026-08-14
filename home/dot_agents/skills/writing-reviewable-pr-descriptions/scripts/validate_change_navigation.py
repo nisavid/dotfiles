@@ -92,7 +92,11 @@ def validate(
     if (
         len(blocks) > diff_index
         and is_bounded_inventory(blocks[diff_index])
-        and re.search(r"\bcomplete (?:per[- ]file|file) inventory\b", body, re.IGNORECASE)
+        and re.search(
+            r"\bcomplete(?: (?:per[- ]file|file))? inventory\b",
+            body,
+            re.IGNORECASE,
+        )
     ):
         errors.append("bounded Diff rows must not be described as a complete inventory")
 
