@@ -53,6 +53,16 @@ grep -Fq \
   'python3 scripts/privacy-scan --root . --require-age-manifest' \
   "$workflow" ||
   fail 'platform workflow does not enforce the age-envelope manifest'
+required_age_modules=$(
+  awk '
+    /REQUIRE_AGE_TOOLING=1/ { required = 1; next }
+    required && /python3 -m unittest/ { print; required = 0 }
+  ' "$workflow"
+)
+[[ $required_age_modules == *'tests/test_agent_equipment_public_data.py'* ]] ||
+  fail 'platform workflow may skip public-data age-inspect coverage'
+[[ $required_age_modules == *'tests/test_privacy_age_envelopes.py'* ]] ||
+  fail 'platform workflow may skip age-envelope tooling coverage'
 
 age_boundary_workflow=$repo_root/.github/workflows/privacy-age-integrity.yml
 grep -Fq '  pull_request_target:' "$age_boundary_workflow" ||

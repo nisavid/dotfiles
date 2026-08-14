@@ -18,6 +18,7 @@ from pathlib import Path
 import tomllib
 from agent_equipment_public_data import (
     contains_literal_credential,
+    serialized_syntax,
     string_looks_like_credential,
     string_looks_like_private_key,
 )
@@ -297,6 +298,8 @@ def public_path_label(
 def sensitive_text_rules(
     value: str,
     denylist: tuple[str, ...],
+    *,
+    syntax: str | None = None,
 ) -> tuple[str, ...]:
     """Return privacy rules matched by one value without retaining the value."""
 
@@ -306,7 +309,7 @@ def sensitive_text_rules(
         rules.append("exact-denylist")
     if string_looks_like_private_key(value):
         rules.append("private-key")
-    elif string_looks_like_credential(value):
+    elif string_looks_like_credential(value, syntax=syntax):
         rules.append("provider-token")
     if MAC_ADDRESS.search(value):
         rules.append("mac-address")
@@ -351,12 +354,13 @@ def sensitive_file_text_rules(
     denylist: tuple[str, ...],
     *,
     age_shaped: bool,
+    syntax: str | None = None,
 ) -> tuple[str, ...]:
     """Return rules while treating an exact root gitfile pointer as metadata."""
 
     if age_shaped:
         return sensitive_age_text_rules(value, denylist)
-    rules = sensitive_text_rules(value, denylist)
+    rules = sensitive_text_rules(value, denylist, syntax=syntax)
     if relative == ".git" and GITDIR_POINTER.fullmatch(value):
         return tuple(
             rule for rule in rules if rule not in {"exact-denylist", "user-home"}
@@ -494,6 +498,8 @@ def main() -> int:
         if not text_views:
             continue
         for text in text_views:
+            file_syntax = serialized_syntax(relative)
+            line_syntax = "line-invariants" if file_syntax is not None else None
             line_rules: set[str] = set()
             for line_number, line in enumerate(text.splitlines(), start=1):
                 matched_rules = sensitive_file_text_rules(
@@ -501,6 +507,7 @@ def main() -> int:
                     line,
                     denylist,
                     age_shaped=age_shaped,
+                    syntax=line_syntax,
                 )
                 line_rules.update(matched_rules)
                 findings.extend(
@@ -513,6 +520,7 @@ def main() -> int:
                     text,
                     denylist,
                     age_shaped=age_shaped,
+                    syntax=file_syntax,
                 )
                 if rule not in line_rules
             )

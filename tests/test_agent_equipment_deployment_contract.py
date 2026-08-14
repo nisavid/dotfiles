@@ -6,8 +6,17 @@ import importlib.util
 import json
 import sys
 import unittest
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest import mock
+
+if __package__:
+    from tests import (
+        agent_equipment_acceptance_evidence_fixtures as ACCEPTANCE_FIXTURES,
+    )
+else:
+    import agent_equipment_acceptance_evidence_fixtures as ACCEPTANCE_FIXTURES
 
 ROOT = Path(__file__).resolve().parent.parent
 SCHEMA_PATH = ROOT / "docs/agent-equipment/execution-authority-v1.schema.json"
@@ -55,8 +64,16 @@ def byte_digest(payload: bytes) -> str:
     return "sha256:" + hashlib.sha256(payload).hexdigest()
 
 
-def valid_apply_authorization() -> dict[str, object]:
-    plan_action_set = valid_plan_action_set()
+def valid_apply_authorization(
+    plan_action_set: dict[str, object] | None = None,
+    *,
+    expected_case_manifest_digest: str | None = None,
+) -> dict[str, object]:
+    plan_action_set = plan_action_set or valid_plan_action_set()
+    if expected_case_manifest_digest is None:
+        expected_case_manifest_digest = valid_release_expected_case_manifest(
+            plan_action_set
+        )["expected_case_manifest_digest"]
     prepared_authorities = valid_prepared_action_authority_set(plan_action_set)
     captured_state = valid_captured_state(plan_action_set)
     capture_observation_authorities = valid_capture_observation_authority_set(
@@ -99,7 +116,7 @@ def valid_apply_authorization() -> dict[str, object]:
             "capture_observation_authority_set_digest": (
                 capture_observation_authorities["authority_set_digest"]
             ),
-            "expected_case_manifest_digest": DIGEST_B,
+            "expected_case_manifest_digest": expected_case_manifest_digest,
             "operator_review_package_digest": DIGEST_C,
         },
     }
@@ -198,10 +215,250 @@ def valid_plan_action_set(action_count: int = 2) -> dict[str, object]:
     return document
 
 
+def valid_provider_family_plan_action_set(
+    provider_family: str,
+) -> dict[str, object]:
+    """Project one schema-valid release action for a provider family."""
+    document = valid_plan_action_set(1)
+    if provider_family == "native":
+        return document
+
+    evidence = document["actions"][0]
+    action = evidence["action_payload"]
+    if provider_family == "standalone":
+        harness = "claude"
+        route_slug = "claude-standalone"
+        provider = {
+            "kind": "standalone_skill",
+            "canonical_root": "agents_skills",
+        }
+        capability_identity = "capability:claude-standalone-skill-v1"
+        adapter_identity = "adapter:fixture/standalone-skill"
+        equipment_identity = "skill:fixture/example"
+        surface_identity = (
+            "surface:route:fixture/claude-standalone/skill:fixture/example"
+        )
+        write_target = {
+            "target_identity": "",
+            "write_surface_identity": surface_identity,
+            "surface_kind": "claude_skill_entry",
+            "equipment_identity": equipment_identity,
+            "locator": {"path": "~/.claude/skills/example"},
+        }
+        verification_dependencies = copy.deepcopy(action["verification_dependencies"])
+        verification_dependencies[0]["write_surface_identity"] = surface_identity
+    elif provider_family == "direct_mcp":
+        harness = "codex"
+        route_slug = "codex-direct-mcp"
+        provider = {
+            "kind": "direct_mcp",
+            "server_name": "context7",
+            "transport": "stdio",
+            "command": "npx",
+            "arguments": [
+                {"literal": "-y"},
+                {"literal": "@upstash/context7-mcp"},
+            ],
+        }
+        capability_identity = "capability:codex-direct-mcp-v1"
+        adapter_identity = "adapter:fixture/direct-mcp"
+        equipment_identity = "mcp:fixture/context7"
+        surface_identity = "surface:route:fixture/codex-direct-mcp/mcp:fixture/context7"
+        write_target = {
+            "target_identity": "",
+            "write_surface_identity": surface_identity,
+            "surface_kind": "mcp_selection",
+            "equipment_identity": equipment_identity,
+            "locator": {
+                "owner": "codex",
+                "source": "config",
+                "key_path": ["mcp_servers", "context7"],
+            },
+        }
+        verification_dependencies = []
+    else:
+        raise AssertionError(f"unknown provider family: {provider_family}")
+
+    route_identity = f"route:fixture/{route_slug}"
+    route_digest = canonical_digest(
+        {
+            "harness": harness,
+            "provider": provider,
+            "route_identity": route_identity,
+        }
+    )
+    write_target["target_identity"] = "target:" + canonical_digest(
+        {key: value for key, value in write_target.items() if key != "target_identity"}
+    )
+    action.update(
+        {
+            "capability_identity": capability_identity,
+            "capability_digest": canonical_digest(capability_identity),
+            "manager_version_evidence_digest": canonical_digest(provider_family),
+            "adapter_identity": adapter_identity,
+            "harness": harness,
+            "route_identity": route_identity,
+            "route_digest": route_digest,
+            "provider": provider,
+            "equipment_identities": [equipment_identity],
+            "activation_group": f"activation:fixture/{route_slug}",
+            "surface_scope": [surface_identity],
+            "write_targets": [write_target],
+            "operation": "configure",
+            "verification_dependencies": verification_dependencies,
+        }
+    )
+    preconditions = action["preconditions"]
+    assert isinstance(preconditions, dict)
+    for field in (
+        "capability_digest",
+        "manager_version_evidence_digest",
+        "adapter_identity",
+        "adapter_version",
+        "route_digest",
+        "activation_group",
+        "surface_scope",
+    ):
+        preconditions[field] = copy.deepcopy(action[field])
+    action["action_identity"] = EXECUTION_AUTHORITY._plan_action_identity(action)
+    evidence["action_digest"] = EXECUTION_AUTHORITY._plan_action_digest(action)
+    document["action_set_digest"] = EXECUTION_AUTHORITY._plan_action_set_digest(
+        document["candidate_identity"],
+        document["implementation_manifest_digest"],
+        document["plan_digest"],
+        document["actions"],
+    )
+    return document
+
+
+def _valid_non_native_captured_state(
+    plan_action_set: dict[str, object],
+) -> dict[str, object]:
+    document = json.loads(CAPTURED_STATE_FIXTURE_PATH.read_text(encoding="utf-8"))
+    evidence = plan_action_set["actions"][0]
+    action = evidence["action_payload"]
+    provider = action["provider"]
+    provider_kind = provider["kind"]
+    assert provider_kind in {"standalone_skill", "direct_mcp"}
+
+    capability_binding = {
+        "capability_identity": action["capability_identity"],
+        "capability_digest": action["capability_digest"],
+        "manager_version_evidence_digest": action["manager_version_evidence_digest"],
+    }
+    document["bindings"]["capability_bindings"] = [capability_binding]
+    document["bindings"]["capability_set_digest"] = canonical_digest(
+        [capability_binding]
+    )
+    document["bindings"]["plan_action_set_digest"] = plan_action_set[
+        "action_set_digest"
+    ]
+
+    route = document["provider_routes"][0]
+    route.update(
+        {
+            "route_id": action["route_identity"],
+            "route_digest": action["route_digest"],
+            "harness": action["harness"],
+            "equipment_identities": copy.deepcopy(action["equipment_identities"]),
+            "controlled_equipment_identities": copy.deepcopy(
+                action["controlled_equipment_identities"]
+            ),
+            "provenance_owner": f"source:fixture/{provider_kind}",
+            "capability_binding": copy.deepcopy(capability_binding),
+            "restore_evidence": {
+                "restore_class": "immutable",
+                "revision": "fixture-v1",
+                "artifact_reference": f"artifact:fixture/{provider_kind}",
+                "content_digest": DIGEST_A,
+            },
+        }
+    )
+    reference = route["planned_actions"][0]
+    reference["action_identity"] = action["action_identity"]
+    reference["action_digest"] = evidence["action_digest"]
+
+    references = route["surface_references"]
+    references.update(
+        {
+            "installation": {"status": "not_applicable"},
+            "enablement": {"status": "not_applicable"},
+            "projector": {"status": "not_applicable"},
+            "mcp_selections": [],
+            "plugin_selections": [],
+            "skill_entries": [],
+            "canonical_skill_dependencies": [],
+        }
+    )
+
+    if provider_kind == "standalone_skill":
+        skill_surface = copy.deepcopy(document["surfaces"][2])
+        canonical_surface = copy.deepcopy(document["surfaces"][1])
+        for surface in (skill_surface, canonical_surface):
+            surface["route_id"] = action["route_identity"]
+        skill_surface_id = skill_surface["surface_id"]
+        canonical_surface_id = canonical_surface["surface_id"]
+        references["skill_entries"] = [
+            {"status": "captured", "surface_id": skill_surface_id}
+        ]
+        references["canonical_skill_dependencies"] = [
+            {"status": "captured", "surface_id": canonical_surface_id}
+        ]
+        target = action["write_targets"][0]
+        dependency = action["verification_dependencies"][0]
+        reference["write_bindings"] = [
+            {
+                "target_identity": target["target_identity"],
+                "surface_id": skill_surface_id,
+            }
+        ]
+        reference["verification_dependency_bindings"] = [
+            {
+                "dependency_identity": dependency["dependency_identity"],
+                "surface_id": canonical_surface_id,
+            }
+        ]
+        document["surfaces"] = [canonical_surface, skill_surface]
+    else:
+        target = action["write_targets"][0]
+        selection_surface = {
+            "surface_id": "surface:fixture/mcp-selection",
+            "kind": "mcp_selection",
+            "route_id": action["route_identity"],
+            "equipment_identity": target["equipment_identity"],
+            "mutation_policy": "reconciler_owned",
+            "provenance": {
+                "classification": "catalog_owned_projection",
+                "evidence": [{"source": "codex config", "state_digest": DIGEST_B}],
+            },
+            "locator": copy.deepcopy(target["locator"]),
+            "observation": {"present": False},
+            "recovery": {"kind": "none", "reason": "absent_noop"},
+        }
+        references["mcp_selections"] = [
+            {
+                "status": "captured",
+                "surface_id": selection_surface["surface_id"],
+            }
+        ]
+        reference["write_bindings"] = [
+            {
+                "target_identity": target["target_identity"],
+                "surface_id": selection_surface["surface_id"],
+            }
+        ]
+        reference["verification_dependency_bindings"] = []
+        document["surfaces"] = [selection_surface]
+    return document
+
+
 def valid_captured_state(
     plan_action_set: dict[str, object] | None = None,
 ) -> dict[str, object]:
     plan_action_set = plan_action_set or valid_plan_action_set()
+    first_provider = plan_action_set["actions"][0]["action_payload"]["provider"]
+    if first_provider["kind"] != "native_plugin":
+        return _valid_non_native_captured_state(plan_action_set)
     document = json.loads(CAPTURED_STATE_FIXTURE_PATH.read_text(encoding="utf-8"))
     document["provider_routes"][0]["planned_actions"][0]["action_digest"] = (
         plan_action_set["actions"][0]["action_digest"]
@@ -437,26 +694,33 @@ def seal_capture_observation_authority_set(document: dict[str, object]) -> None:
 def valid_checkpoint_record(
     ordinal: int = 0,
     plan_action_set: dict[str, object] | None = None,
+    *,
+    apply_authorization: dict[str, object] | None = None,
+    authorization_digest: str | None = None,
+    prepared_authorities: dict[str, object] | None = None,
 ) -> dict[str, object]:
-    authorization = valid_apply_authorization()
-    authorization_digest = seal_apply_authorization(authorization)
     plan_action_set = plan_action_set or valid_plan_action_set()
+    if apply_authorization is None:
+        apply_authorization = valid_apply_authorization(plan_action_set)
+        authorization_digest = seal_apply_authorization(apply_authorization)
+    assert isinstance(authorization_digest, str)
     evidence = plan_action_set["actions"][ordinal]
     payload = evidence["action_payload"]
-    prepared_authority = valid_prepared_action_authority_set(plan_action_set)[
-        "authorities"
-    ][ordinal]
+    prepared_authorities = prepared_authorities or valid_prepared_action_authority_set(
+        plan_action_set
+    )
+    prepared_authority = prepared_authorities["authorities"][ordinal]
     assert isinstance(payload, dict)
     record = {
         "checkpoint_identity": "checkpoint:sha256:" + "0" * 64,
-        "apply_authorization_identity": authorization["authorization_identity"],
+        "apply_authorization_identity": apply_authorization["authorization_identity"],
         "apply_authorization_digest": authorization_digest,
-        "execution_nonce": authorization["execution_nonce"],
+        "execution_nonce": apply_authorization["execution_nonce"],
         "step_id": f"step-{ordinal:03d}",
         "action_identity": payload["action_identity"],
         "ordinal": ordinal,
-        "run_identity": authorization["run_identity"],
-        "execution_domain_identity": authorization["execution_domain_identity"],
+        "run_identity": apply_authorization["run_identity"],
+        "execution_domain_identity": apply_authorization["execution_domain_identity"],
         "phase": "completed",
         "phase_history": ["prepared", "completed"],
         "invocation_state": "started",
@@ -468,9 +732,21 @@ def valid_checkpoint_record(
         "catalog_digest": payload["catalog_digest"],
         "lock_digest": payload["lock_digest"],
         "plan_digest": plan_action_set["plan_digest"],
-        "capability_set_digest": authorization["bindings"]["capability_set_digest"],
-        "captured_state_identity": authorization["bindings"]["captured_state_identity"],
-        "captured_state_digest": authorization["bindings"]["captured_state_digest"],
+        "prepared_action_authority_set_identity": prepared_authorities[
+            "authority_set_identity"
+        ],
+        "prepared_action_authority_set_digest": prepared_authorities[
+            "authority_set_digest"
+        ],
+        "capability_set_digest": apply_authorization["bindings"][
+            "capability_set_digest"
+        ],
+        "captured_state_identity": apply_authorization["bindings"][
+            "captured_state_identity"
+        ],
+        "captured_state_digest": apply_authorization["bindings"][
+            "captured_state_digest"
+        ],
         "route_capability_binding": {
             "capability_identity": payload["capability_identity"],
             "capability_digest": payload["capability_digest"],
@@ -529,7 +805,7 @@ def checkpoint_authority_inputs(
     plan_action_set: dict[str, object] | None = None,
 ) -> dict[str, object]:
     plan_action_set = plan_action_set or valid_plan_action_set()
-    apply_authorization = valid_apply_authorization()
+    apply_authorization = valid_apply_authorization(plan_action_set)
     apply_bindings = apply_authorization["bindings"]
     assert isinstance(apply_bindings, dict)
     capture = valid_captured_state(plan_action_set)
@@ -634,20 +910,83 @@ def seal_checkpoint_set_manifest(document: dict[str, object]) -> str:
     return document["checkpoint_set_digest"]
 
 
-def valid_checkpoint_snapshots() -> list[dict[str, object]]:
-    plan_action_set = valid_plan_action_set()
+def valid_checkpoint_snapshots(
+    plan_action_set: dict[str, object] | None = None,
+) -> list[dict[str, object]]:
+    plan_action_set = plan_action_set or valid_plan_action_set()
+    actions = plan_action_set["actions"]
+    assert isinstance(actions, list)
+    apply_authorization = valid_apply_authorization(plan_action_set)
+    authorization_digest = seal_apply_authorization(apply_authorization)
+    prepared_authorities = valid_prepared_action_authority_set(plan_action_set)
     return [
-        checkpoint_snapshot(valid_checkpoint_record(0, plan_action_set), 1),
-        checkpoint_snapshot(valid_checkpoint_record(1, plan_action_set), 2),
+        checkpoint_snapshot(
+            valid_checkpoint_record(
+                ordinal,
+                plan_action_set,
+                apply_authorization=apply_authorization,
+                authorization_digest=authorization_digest,
+                prepared_authorities=prepared_authorities,
+            ),
+            ordinal + 1,
+        )
+        for ordinal in range(len(actions))
     ]
+
+
+def seal_checkpoint_store_snapshot(document: dict[str, object]) -> None:
+    identity_payload = copy.deepcopy(document)
+    identity_payload.pop("snapshot_identity", None)
+    identity_payload.pop("snapshot_digest", None)
+    document["snapshot_identity"] = "checkpoint-store-snapshot:" + canonical_digest(
+        identity_payload
+    )
+    digest_payload = copy.deepcopy(document)
+    digest_payload.pop("snapshot_digest", None)
+    document["snapshot_digest"] = canonical_digest(digest_payload)
+
+
+def valid_checkpoint_store_snapshot(
+    snapshots: list[dict[str, object]] | None = None,
+    *,
+    store_generation: int | None = None,
+    plan_action_set: dict[str, object] | None = None,
+) -> dict[str, object]:
+    plan_action_set = plan_action_set or valid_plan_action_set()
+    snapshots = (
+        snapshots
+        if snapshots is not None
+        else valid_checkpoint_snapshots(plan_action_set)
+    )
+    if store_generation is None:
+        durable_generations = [snapshot["durable_generation"] for snapshot in snapshots]
+        assert all(type(generation) is int for generation in durable_generations)
+        store_generation = max(durable_generations)
+    checkpoint_set = valid_checkpoint_set_manifest(
+        snapshots,
+        store_generation=store_generation,
+        plan_action_set=plan_action_set,
+    )
+    document: dict[str, object] = {
+        "schema_version": "agent-equipment-checkpoint-store-snapshot/v1",
+        "snapshot_identity": "checkpoint-store-snapshot:sha256:" + "0" * 64,
+        "snapshot_digest": DIGEST_A,
+        "checkpoint_store_generation": store_generation,
+        "bindings": copy.deepcopy(checkpoint_set["bindings"]),
+        "checkpoints": copy.deepcopy(snapshots),
+    }
+    seal_checkpoint_store_snapshot(document)
+    return document
 
 
 def valid_checkpoint_set_manifest(
     snapshots: list[dict[str, object]] | None = None,
     *,
     store_generation: int = 7,
+    plan_action_set: dict[str, object] | None = None,
 ) -> dict[str, object]:
-    authorization = valid_apply_authorization()
+    plan_action_set = plan_action_set or valid_plan_action_set()
+    authorization = valid_apply_authorization(plan_action_set)
     authorization_digest = seal_apply_authorization(authorization)
     document: dict[str, object] = {
         "schema_version": "agent-equipment-checkpoint-set/v1",
@@ -666,7 +1005,9 @@ def valid_checkpoint_set_manifest(
         "checkpoints": [
             checkpoint_manifest_entry(snapshot)
             for snapshot in (
-                snapshots if snapshots is not None else valid_checkpoint_snapshots()
+                snapshots
+                if snapshots is not None
+                else valid_checkpoint_snapshots(plan_action_set)
             )
         ],
         "checkpoint_set_digest": DIGEST_D,
@@ -896,13 +1237,37 @@ def public_recovery_validation_inputs(
     return recovery_inputs
 
 
-def valid_release_archive_manifest() -> dict[str, object]:
-    authorization = valid_apply_authorization()
-    authorization_digest = seal_apply_authorization(authorization)
-    checkpoint_set = valid_checkpoint_set_manifest()
-    run_terminal = valid_run_terminal_record(checkpoint_set)
-    prepared = valid_prepared_action_authority_set()
-    capture_observation_authorities = valid_capture_observation_authority_set()
+def valid_release_archive_manifest(
+    plan_action_set: dict[str, object] | None = None,
+) -> dict[str, object]:
+    plan_action_set = plan_action_set or valid_plan_action_set()
+    (
+        authorization,
+        expected_case_manifest,
+        evidence_bundle,
+        attestation_manifest,
+    ) = valid_release_evidence_documents(plan_action_set)
+    authorization_digest = canonical_digest(authorization)
+    snapshots = valid_checkpoint_snapshots(plan_action_set)
+    store_generation = max(snapshot["durable_generation"] for snapshot in snapshots)
+    assert type(store_generation) is int
+    checkpoint_set = valid_checkpoint_set_manifest(
+        snapshots,
+        store_generation=store_generation,
+        plan_action_set=plan_action_set,
+    )
+    run_terminal = valid_run_terminal_record(checkpoint_set, plan_action_set)
+    prepared = valid_prepared_action_authority_set(plan_action_set)
+    captured_state = valid_captured_state(plan_action_set)
+    capture_observation_authorities = valid_capture_observation_authority_set(
+        plan_action_set,
+        captured_state,
+    )
+    checkpoint_store_snapshot = valid_checkpoint_store_snapshot(
+        snapshots,
+        store_generation=store_generation,
+        plan_action_set=plan_action_set,
+    )
     payload = {
         "candidate_identity": authorization["bindings"]["candidate_identity"],
         "implementation_manifest_digest": authorization["bindings"][
@@ -923,7 +1288,13 @@ def valid_release_archive_manifest() -> dict[str, object]:
             "committed_generation": 1,
         },
         "archived_document_byte_digests": {
-            "apply_authorization_bytes_digest": DIGEST_D,
+            "apply_authorization_bytes_digest": byte_digest(
+                canonical_bytes(authorization)
+            ),
+            "plan_action_set_bytes_digest": byte_digest(
+                canonical_bytes(plan_action_set)
+            ),
+            "captured_state_bytes_digest": byte_digest(canonical_bytes(captured_state)),
             "capture_observation_authority_set_bytes_digest": byte_digest(
                 canonical_bytes(capture_observation_authorities)
             ),
@@ -933,24 +1304,141 @@ def valid_release_archive_manifest() -> dict[str, object]:
             "checkpoint_set_manifest_bytes_digest": byte_digest(
                 canonical_bytes(checkpoint_set)
             ),
+            "checkpoint_store_snapshot_bytes_digest": byte_digest(
+                canonical_bytes(checkpoint_store_snapshot)
+            ),
             "run_terminal_record_bytes_digest": byte_digest(
                 canonical_bytes(run_terminal)
             ),
-            "expected_case_manifest_bytes_digest": DIGEST_A,
-            "evidence_bundle_bytes_digest": DIGEST_B,
-            "attestation_manifest_bytes_digest": DIGEST_C,
+            "expected_case_manifest_bytes_digest": byte_digest(
+                canonical_bytes(expected_case_manifest)
+            ),
+            "evidence_bundle_bytes_digest": byte_digest(
+                canonical_bytes(evidence_bundle)
+            ),
+            "attestation_manifest_bytes_digest": byte_digest(
+                canonical_bytes(attestation_manifest)
+            ),
         },
     }
     document: dict[str, object] = {
         "schema_version": "agent-equipment-release-archive-manifest/v1",
-        "archive_identity": "release-archive:" + canonical_digest(payload),
+        "archive_identity": "",
         "payload": payload,
         "archive_manifest_digest": "",
     }
+    seal_release_archive_manifest(document)
+    return document
+
+
+def seal_release_archive_manifest(document: dict[str, object]) -> None:
+    payload = document["payload"]
+    assert isinstance(payload, dict)
+    document["archive_identity"] = "release-archive:" + canonical_digest(payload)
     unsigned = copy.deepcopy(document)
     del unsigned["archive_manifest_digest"]
     document["archive_manifest_digest"] = canonical_digest(unsigned)
-    return document
+
+
+def bind_release_archive_bytes(
+    document: dict[str, object],
+    field: str,
+    raw_bytes: bytes,
+) -> None:
+    payload = document["payload"]
+    assert isinstance(payload, dict)
+    archived_digests = payload["archived_document_byte_digests"]
+    assert isinstance(archived_digests, dict)
+    archived_digests[f"{field}_digest"] = byte_digest(raw_bytes)
+    seal_release_archive_manifest(document)
+
+
+def bind_coordinated_release_acceptance_tuple(
+    archive: dict[str, object],
+    release_inputs: dict[str, object],
+    manifest: dict[str, object],
+) -> tuple[dict[str, object], dict[str, object]]:
+    """Bind one internally coherent, resealed acceptance tuple for replay tests."""
+    ACCEPTANCE_FIXTURES.reseal_manifest(manifest)
+    bundle = ACCEPTANCE_FIXTURES.valid_evidence_bundle(manifest)
+    original_bundle = json.loads(release_inputs["evidence_bundle_bytes"])
+    bundle["execution_binding"] = copy.deepcopy(original_bundle["execution_binding"])
+    ACCEPTANCE_FIXTURES.reseal_bundle(bundle)
+    attestation = ACCEPTANCE_FIXTURES.valid_attestation_manifest(bundle, manifest)
+
+    mutated_inputs = dict(release_inputs)
+    mutated_inputs.update(
+        {
+            "expected_case_manifest_bytes": canonical_bytes(manifest),
+            "evidence_bundle_bytes": canonical_bytes(bundle),
+            "attestation_manifest_bytes": canonical_bytes(attestation),
+            "authorized_expected_case_manifest_digest": manifest[
+                "expected_case_manifest_digest"
+            ],
+            "authorized_attestation_manifest_digest": attestation[
+                "attestation_manifest_digest"
+            ],
+        }
+    )
+    bound_archive = copy.deepcopy(archive)
+    for field in (
+        "expected_case_manifest_bytes",
+        "evidence_bundle_bytes",
+        "attestation_manifest_bytes",
+    ):
+        raw_bytes = mutated_inputs[field]
+        assert isinstance(raw_bytes, bytes)
+        bind_release_archive_bytes(bound_archive, field, raw_bytes)
+    return bound_archive, mutated_inputs
+
+
+def rebuilt_release_with_expected_manifest_transform(
+    plan_action_set: dict[str, object],
+    transform: Callable[[dict[str, object]], None],
+) -> tuple[dict[str, object], dict[str, object]]:
+    """Rebuild every release binding around one transformed manifest."""
+    original_factory = valid_release_expected_case_manifest
+
+    def transformed_factory(
+        plan: dict[str, object],
+    ) -> dict[str, object]:
+        manifest = original_factory(plan)
+        transform(manifest)
+        ACCEPTANCE_FIXTURES.reseal_manifest(manifest)
+        return manifest
+
+    with mock.patch.object(
+        sys.modules[__name__],
+        "valid_release_expected_case_manifest",
+        transformed_factory,
+    ):
+        archive = valid_release_archive_manifest(plan_action_set)
+        release_inputs = release_validation_inputs(archive, plan_action_set)
+    return archive, release_inputs
+
+
+def rebuilt_release_with_captured_state_transform(
+    plan_action_set: dict[str, object],
+    transform: Callable[[dict[str, object]], None],
+) -> tuple[dict[str, object], dict[str, object]]:
+    """Rebuild every release binding around one transformed capture stream."""
+    original_factory = valid_captured_state
+
+    def transformed_factory(
+        plan: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        captured_state = original_factory(plan)
+        transform(captured_state)
+        return captured_state
+
+    with mock.patch.object(
+        sys.modules[__name__],
+        "valid_captured_state",
+        transformed_factory,
+    ):
+        archive = valid_release_archive_manifest(plan_action_set)
+        release_inputs = release_validation_inputs(archive, plan_action_set)
+    return archive, release_inputs
 
 
 def valid_release_receipt(
@@ -994,12 +1482,115 @@ def canonical_bytes(document: object) -> bytes:
     ).encode("utf-8")
 
 
+def valid_release_expected_case_manifest(
+    plan_action_set: dict[str, object],
+) -> dict[str, object]:
+    """Build the one expected-case record shared by every release fixture."""
+    captured_state = valid_captured_state(plan_action_set)
+    first_action = plan_action_set["actions"][0]["action_payload"]
+    assert isinstance(first_action, dict)
+    manifest = ACCEPTANCE_FIXTURES.valid_expected_case_manifest()
+    bindings = manifest["bindings"]
+    assert isinstance(bindings, dict)
+    bindings.update(
+        {
+            "candidate_identity": plan_action_set["candidate_identity"],
+            "implementation_manifest_digest": plan_action_set[
+                "implementation_manifest_digest"
+            ],
+            "catalog_digest": first_action["catalog_digest"],
+            "lock_digest": first_action["lock_digest"],
+            "plan_digest": plan_action_set["plan_digest"],
+            "plan_action_set_digest": plan_action_set["action_set_digest"],
+            "capability_set_digest": captured_state["bindings"][
+                "capability_set_digest"
+            ],
+            "captured_state_identity": "capture:fixture/run-v1",
+            "captured_state_digest": canonical_digest(captured_state),
+        }
+    )
+    manifest["plan_action_identities"] = sorted(
+        action["action_payload"]["action_identity"]
+        for action in plan_action_set["actions"]
+    )
+    route_capability_bindings = []
+    for evidence in plan_action_set["actions"]:
+        action = evidence["action_payload"]
+        provider = action["provider"]
+        if provider["kind"] == "native_plugin":
+            provider_selector = copy.deepcopy(provider)
+            manager_identity = f"manager:{provider['manager']}"
+        elif provider["kind"] == "standalone_skill":
+            provider_selector = copy.deepcopy(provider)
+            manager_identity = "manager:standalone_skills"
+        else:
+            provider_selector = {
+                "kind": "direct_mcp",
+                "transport": provider["transport"],
+                "overlay_family": {
+                    "claude": "claude_json",
+                    "codex": "codex_toml",
+                    "cursor": "cursor_json",
+                }[action["harness"]],
+            }
+            manager_identity = "manager:direct_mcp"
+        route_capability_bindings.append(
+            {
+                "route_identity": action["route_identity"],
+                "route_digest": action["route_digest"],
+                "harness": action["harness"],
+                "provider_selector": provider_selector,
+                "manager_identity": manager_identity,
+                "capability_identity": action["capability_identity"],
+                "capability_digest": action["capability_digest"],
+                "manager_version_evidence_digest": action[
+                    "manager_version_evidence_digest"
+                ],
+            }
+        )
+    manifest["route_capability_bindings"] = sorted(
+        route_capability_bindings,
+        key=lambda binding: binding["route_identity"],
+    )
+    ACCEPTANCE_FIXTURES.reseal_manifest(manifest)
+    return manifest
+
+
+def valid_release_evidence_documents(
+    plan_action_set: dict[str, object],
+) -> tuple[
+    dict[str, object],
+    dict[str, object],
+    dict[str, object],
+    dict[str, object],
+]:
+    manifest = valid_release_expected_case_manifest(plan_action_set)
+
+    apply_record = valid_apply_authorization(
+        plan_action_set,
+        expected_case_manifest_digest=manifest["expected_case_manifest_digest"],
+    )
+    apply_record_digest = seal_apply_authorization(apply_record)
+    bundle = ACCEPTANCE_FIXTURES.valid_evidence_bundle(manifest)
+    bundle["execution_binding"] = execution_binding(
+        apply_record,
+        apply_record_digest,
+    )
+    ACCEPTANCE_FIXTURES.reseal_bundle(bundle)
+    attestation = ACCEPTANCE_FIXTURES.valid_attestation_manifest(bundle, manifest)
+    return apply_record, manifest, bundle, attestation
+
+
 def valid_run_terminal_record(
     checkpoint_set: dict[str, object] | None = None,
+    plan_action_set: dict[str, object] | None = None,
 ) -> dict[str, object]:
-    authorization = valid_apply_authorization()
+    plan_action_set = plan_action_set or valid_plan_action_set()
+    authorization = valid_apply_authorization(plan_action_set)
     authorization_digest = seal_apply_authorization(authorization)
-    checkpoint_set = checkpoint_set or valid_checkpoint_set_manifest()
+    checkpoint_set = checkpoint_set or valid_checkpoint_set_manifest(
+        plan_action_set=plan_action_set
+    )
     document: dict[str, object] = {
         "schema_version": "agent-equipment-run-terminal-record/v1",
         "run_terminal_identity": "run-terminal:sha256:" + "0" * 64,
@@ -1025,35 +1616,59 @@ def valid_run_terminal_record(
 
 def release_validation_inputs(
     archive: dict[str, object] | None = None,
+    plan_action_set: dict[str, object] | None = None,
 ) -> dict[str, object]:
-    archive = archive or valid_release_archive_manifest()
+    plan_action_set = plan_action_set or valid_plan_action_set()
+    archive = archive or valid_release_archive_manifest(plan_action_set)
     payload = archive["payload"]
     assert isinstance(payload, dict)
     execution = payload["execution_binding"]
     assert isinstance(execution, dict)
-    checkpoint_set = valid_checkpoint_set_manifest()
-    run_terminal = valid_run_terminal_record(checkpoint_set)
-    snapshots = valid_checkpoint_snapshots()
+    snapshots = valid_checkpoint_snapshots(plan_action_set)
+    store_generation = max(snapshot["durable_generation"] for snapshot in snapshots)
+    assert type(store_generation) is int
+    checkpoint_set = valid_checkpoint_set_manifest(
+        snapshots,
+        store_generation=store_generation,
+        plan_action_set=plan_action_set,
+    )
+    run_terminal = valid_run_terminal_record(checkpoint_set, plan_action_set)
+    (
+        authorization,
+        expected_case_manifest,
+        evidence_bundle,
+        attestation_manifest,
+    ) = valid_release_evidence_documents(plan_action_set)
+    captured_state = valid_captured_state(plan_action_set)
+    checkpoint_store_snapshot = valid_checkpoint_store_snapshot(
+        snapshots,
+        store_generation=store_generation,
+        plan_action_set=plan_action_set,
+    )
     first_record = snapshots[0]["record"]
     assert isinstance(first_record, dict)
     destination = payload["archive_destination"]
     assert isinstance(destination, dict)
-    byte_digests = copy.deepcopy(payload["archived_document_byte_digests"])
-    byte_digests.pop("checkpoint_set_manifest_bytes_digest")
-    byte_digests.pop("capture_observation_authority_set_bytes_digest")
-    byte_digests.pop("prepared_action_authority_set_bytes_digest")
-    byte_digests.pop("run_terminal_record_bytes_digest")
+    authority_inputs = checkpoint_authority_inputs(plan_action_set)
+    authority_inputs.pop("authoritative_captured_state")
     return {
+        "apply_authorization_bytes": canonical_bytes(authorization),
+        "plan_action_set_bytes": canonical_bytes(plan_action_set),
+        "captured_state_bytes": canonical_bytes(captured_state),
+        "checkpoint_store_snapshot_bytes": canonical_bytes(checkpoint_store_snapshot),
         "checkpoint_set_manifest": checkpoint_set,
         "checkpoint_set_manifest_bytes": canonical_bytes(checkpoint_set),
         "capture_observation_authority_set_bytes": canonical_bytes(
-            valid_capture_observation_authority_set()
+            valid_capture_observation_authority_set(plan_action_set, captured_state)
         ),
         "prepared_action_authority_set_bytes": canonical_bytes(
-            valid_prepared_action_authority_set()
+            valid_prepared_action_authority_set(plan_action_set)
         ),
         "run_terminal_record": run_terminal,
         "run_terminal_record_bytes": canonical_bytes(run_terminal),
+        "expected_case_manifest_bytes": canonical_bytes(expected_case_manifest),
+        "evidence_bundle_bytes": canonical_bytes(evidence_bundle),
+        "attestation_manifest_bytes": canonical_bytes(attestation_manifest),
         "expected_apply_authorization_identity": execution[
             "apply_authorization_identity"
         ],
@@ -1061,23 +1676,23 @@ def release_validation_inputs(
         "expected_execution_domain_identity": execution["execution_domain_identity"],
         "expected_execution_nonce": execution["execution_nonce"],
         "expected_run_identity": execution["run_identity"],
-        "authoritative_plan_action_set": valid_plan_action_set(),
         "expected_plan_action_set_digest": payload["plan_action_set_digest"],
         "expected_candidate_identity": payload["candidate_identity"],
         "expected_implementation_manifest_digest": payload[
             "implementation_manifest_digest"
         ],
         "expected_plan_digest": first_record["plan_digest"],
-        "trusted_checkpoint_store_generation": checkpoint_set[
-            "checkpoint_store_generation"
+        "authorized_expected_case_manifest_digest": expected_case_manifest[
+            "expected_case_manifest_digest"
         ],
-        "trusted_checkpoint_records": snapshots,
-        **checkpoint_authority_inputs(),
+        "authorized_attestation_manifest_digest": attestation_manifest[
+            "attestation_manifest_digest"
+        ],
+        **authority_inputs,
         "expected_launcher_identity": payload["launcher_identity"],
         "expected_launcher_manifest_digest": payload["launcher_manifest_digest"],
         "expected_store_identity": destination["store_identity"],
         "expected_store_key": destination["store_key"],
-        "expected_archived_document_byte_digests": byte_digests,
     }
 
 
@@ -1288,13 +1903,16 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
     ) -> None:
         authorization = valid_apply_authorization()
         trusted_digest = seal_apply_authorization(authorization)
+        # These goldens include the expected-case manifest derived by
+        # valid_release_expected_case_manifest() from the shared acceptance
+        # fixture. Regenerate both when that fixture changes.
         self.assertEqual(
             authorization["authorization_identity"],
-            "apply-authorization:sha256:7efe1cc1915c066a43e085365de9bfa972f12268a776af121eaadbd2fdb80b9e",
+            "apply-authorization:sha256:8c641f126c8c894c470faaa628ba8acc28143dd5d7179221066256cf6f07f8f4",
         )
         self.assertEqual(
             trusted_digest,
-            "sha256:8a32cd6b574c1b43deeb7e995cffb6f1ff084e5e489a401e8438826683a9e871",
+            "sha256:39e82fbe3606c5c0ce5da5be65504ffbde40eb64f781782bb70e2a14e0c20053",
         )
 
         diagnostics = EXECUTION_AUTHORITY.validate_apply_authorization(
@@ -1760,6 +2378,270 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
                 )
             },
         )
+
+    def test_release_rejects_cross_action_catalog_or_lock_bindings(
+        self,
+    ) -> None:
+        for field in ("catalog_digest", "lock_digest"):
+            with self.subTest(field=field):
+                plan_action_set = valid_plan_action_set()
+                second_evidence = plan_action_set["actions"][1]
+                second_action = second_evidence["action_payload"]
+                second_action[field] = DIGEST_D
+                second_evidence["action_digest"] = (
+                    EXECUTION_AUTHORITY._plan_action_digest(second_action)
+                )
+                plan_action_set["action_set_digest"] = (
+                    EXECUTION_AUTHORITY._plan_action_set_digest(
+                        plan_action_set["candidate_identity"],
+                        plan_action_set["implementation_manifest_digest"],
+                        plan_action_set["plan_digest"],
+                        plan_action_set["actions"],
+                    )
+                )
+                codes = {
+                    diagnostic.code
+                    for diagnostic in EXECUTION_AUTHORITY.validate_plan_action_set(
+                        plan_action_set,
+                        expected_action_set_digest=plan_action_set["action_set_digest"],
+                        expected_candidate_identity=plan_action_set[
+                            "candidate_identity"
+                        ],
+                        expected_implementation_manifest_digest=plan_action_set[
+                            "implementation_manifest_digest"
+                        ],
+                        expected_plan_digest=plan_action_set["plan_digest"],
+                    )
+                }
+                self.assertIn("PLAN_ACTION_SET_BINDING_MISMATCH", codes)
+
+                archive = valid_release_archive_manifest(plan_action_set)
+                release_codes = {
+                    diagnostic.code
+                    for diagnostic in (
+                        EXECUTION_AUTHORITY.validate_release_archive_manifest(
+                            archive,
+                            **release_validation_inputs(archive, plan_action_set),
+                        )
+                    )
+                }
+                self.assertIn("PLAN_ACTION_SET_BINDING_MISMATCH", release_codes)
+
+    def test_plan_action_set_rejects_coordinated_per_action_authority_reseals(
+        self,
+    ) -> None:
+        action_field_mutations = {
+            "candidate_identity": "candidate:fixture/foreign",
+            "implementation_manifest_digest": DIGEST_D,
+            "plan_digest": DIGEST_D,
+        }
+        precondition_field_mutations = {
+            "candidate_identity": "candidate:fixture/foreign",
+            "implementation_manifest_digest": DIGEST_D,
+            "catalog_digest": DIGEST_D,
+            "lock_digest": DIGEST_D,
+            "plan_digest": DIGEST_D,
+            "route_digest": DIGEST_D,
+            "capability_digest": DIGEST_D,
+            "manager_version_evidence_digest": DIGEST_D,
+            "adapter_identity": "adapter:fixture/foreign",
+            "adapter_version": "fixture-2",
+            "activation_group": "activation:fixture/foreign",
+            "surface_scope": ["surface:fixture/foreign"],
+        }
+
+        for location, mutations in (
+            ("action_payload", action_field_mutations),
+            ("preconditions", precondition_field_mutations),
+        ):
+            for field, value in mutations.items():
+                with self.subTest(location=location, field=field):
+                    plan_action_set = valid_plan_action_set()
+                    second_evidence = plan_action_set["actions"][1]
+                    second_action = second_evidence["action_payload"]
+                    target = (
+                        second_action
+                        if location == "action_payload"
+                        else second_action["preconditions"]
+                    )
+                    target[field] = value
+                    if location == "action_payload" and field == "plan_digest":
+                        second_action["action_identity"] = (
+                            EXECUTION_AUTHORITY._plan_action_identity(second_action)
+                        )
+                    second_evidence["action_digest"] = (
+                        EXECUTION_AUTHORITY._plan_action_digest(second_action)
+                    )
+                    plan_action_set["action_set_digest"] = (
+                        EXECUTION_AUTHORITY._plan_action_set_digest(
+                            plan_action_set["candidate_identity"],
+                            plan_action_set["implementation_manifest_digest"],
+                            plan_action_set["plan_digest"],
+                            plan_action_set["actions"],
+                        )
+                    )
+
+                    codes = {
+                        diagnostic.code
+                        for diagnostic in EXECUTION_AUTHORITY.validate_plan_action_set(
+                            plan_action_set,
+                            expected_action_set_digest=plan_action_set[
+                                "action_set_digest"
+                            ],
+                            expected_candidate_identity=plan_action_set[
+                                "candidate_identity"
+                            ],
+                            expected_implementation_manifest_digest=plan_action_set[
+                                "implementation_manifest_digest"
+                            ],
+                            expected_plan_digest=plan_action_set["plan_digest"],
+                        )
+                    }
+
+                    self.assertIn("PLAN_ACTION_SET_BINDING_MISMATCH", codes)
+
+        invalid_control_owner = valid_plan_action_set()
+        control_owner_action = invalid_control_owner["actions"][1]["action_payload"]
+        control_owner_action["preconditions"]["control_owner"] = "operator_owned"
+        self.assertEqual(
+            {
+                diagnostic.code
+                for diagnostic in EXECUTION_AUTHORITY.validate_plan_action_set(
+                    invalid_control_owner,
+                    expected_action_set_digest=invalid_control_owner[
+                        "action_set_digest"
+                    ],
+                    expected_candidate_identity=invalid_control_owner[
+                        "candidate_identity"
+                    ],
+                    expected_implementation_manifest_digest=invalid_control_owner[
+                        "implementation_manifest_digest"
+                    ],
+                    expected_plan_digest=invalid_control_owner["plan_digest"],
+                )
+            },
+            {"PLAN_ACTION_SET_SCHEMA_INVALID"},
+        )
+
+    def test_plan_action_set_accepts_valid_empty_noop_membership(self) -> None:
+        plan_action_set = valid_plan_action_set()
+        plan_action_set["actions"] = []
+        plan_action_set["action_set_digest"] = (
+            EXECUTION_AUTHORITY._plan_action_set_digest(
+                plan_action_set["candidate_identity"],
+                plan_action_set["implementation_manifest_digest"],
+                plan_action_set["plan_digest"],
+                plan_action_set["actions"],
+            )
+        )
+
+        self.assertEqual(
+            EXECUTION_AUTHORITY.validate_plan_action_set(
+                plan_action_set,
+                expected_action_set_digest=plan_action_set["action_set_digest"],
+                expected_candidate_identity=plan_action_set["candidate_identity"],
+                expected_implementation_manifest_digest=plan_action_set[
+                    "implementation_manifest_digest"
+                ],
+                expected_plan_digest=plan_action_set["plan_digest"],
+            ),
+            (),
+        )
+
+    def test_release_rejects_empty_plan_action_set_without_crashing(self) -> None:
+        archive = valid_release_archive_manifest()
+        release_inputs = release_validation_inputs(archive)
+        plan_action_set = valid_plan_action_set()
+        plan_action_set["actions"] = []
+        plan_action_set["action_set_digest"] = (
+            EXECUTION_AUTHORITY._plan_action_set_digest(
+                plan_action_set["candidate_identity"],
+                plan_action_set["implementation_manifest_digest"],
+                plan_action_set["plan_digest"],
+                plan_action_set["actions"],
+            )
+        )
+        release_inputs["plan_action_set_bytes"] = canonical_bytes(plan_action_set)
+        release_inputs["expected_plan_action_set_digest"] = plan_action_set[
+            "action_set_digest"
+        ]
+
+        codes = {
+            diagnostic.code
+            for diagnostic in EXECUTION_AUTHORITY.validate_release_archive_manifest(
+                archive,
+                **release_inputs,
+            )
+        }
+
+        self.assertIn("RELEASE_PLAN_ACTION_SET_EMPTY", codes)
+
+    def test_plan_action_set_enforces_canonical_size_before_schema_work(self) -> None:
+        plan_action_set = valid_plan_action_set()
+        first_action = plan_action_set["actions"][0]["action_payload"]
+        first_action["provider"]["plugin_id"] = "x" * (
+            EXECUTION_AUTHORITY.MAX_PLAN_ACTION_SET_BYTES + 1
+        )
+        self.assertGreater(
+            len(canonical_bytes(plan_action_set)),
+            EXECUTION_AUTHORITY.MAX_PLAN_ACTION_SET_BYTES,
+        )
+        original_validate_schema = EXECUTION_AUTHORITY._validate_schema
+
+        def reject_oversized_schema_work(
+            candidate: object,
+            **kwargs: object,
+        ) -> bool:
+            if candidate is plan_action_set:
+                raise AssertionError("oversized plan reached Schema validation")
+            return original_validate_schema(candidate, **kwargs)
+
+        try:
+            EXECUTION_AUTHORITY._validate_schema = reject_oversized_schema_work
+            codes = {
+                diagnostic.code
+                for diagnostic in EXECUTION_AUTHORITY.validate_plan_action_set(
+                    plan_action_set,
+                    expected_action_set_digest=plan_action_set["action_set_digest"],
+                    expected_candidate_identity=plan_action_set["candidate_identity"],
+                    expected_implementation_manifest_digest=plan_action_set[
+                        "implementation_manifest_digest"
+                    ],
+                    expected_plan_digest=plan_action_set["plan_digest"],
+                )
+            }
+        finally:
+            EXECUTION_AUTHORITY._validate_schema = original_validate_schema
+        self.assertEqual(codes, {"PLAN_ACTION_SET_SCHEMA_INVALID"})
+
+    def test_custom_schema_requires_an_explicit_canonical_size_bound(self) -> None:
+        plan_action_set = valid_plan_action_set()
+        with mock.patch.object(
+            EXECUTION_AUTHORITY,
+            "_validate_schema",
+            wraps=EXECUTION_AUTHORITY._validate_schema,
+        ) as validate_schema:
+            self.assertFalse(
+                EXECUTION_AUTHORITY._schema_valid(
+                    plan_action_set,
+                    EXECUTION_AUTHORITY.PLAN_ACTION_SET_SCHEMA_NAME,
+                )
+            )
+            validate_schema.assert_not_called()
+
+        with mock.patch.object(
+            EXECUTION_AUTHORITY,
+            "_validate_schema",
+            wraps=EXECUTION_AUTHORITY._validate_schema,
+        ) as validate_schema:
+            self.assertTrue(
+                EXECUTION_AUTHORITY._schema_valid(
+                    plan_action_set,
+                    EXECUTION_AUTHORITY.PLAN_ACTION_SET_SCHEMA_NAME,
+                    maximum_bytes=EXECUTION_AUTHORITY.MAX_PLAN_ACTION_SET_BYTES,
+                )
+            )
+            validate_schema.assert_called_once()
 
     def test_prepared_action_authority_rejects_component_and_data_ambiguity(
         self,
@@ -2717,36 +3599,35 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
     ) -> None:
         authorization = valid_compensation_authorization()
         compensation_inputs = compensation_validation_inputs(authorization)
-        release_inputs = release_validation_inputs()
-        terminal = release_inputs["run_terminal_record"]
-        terminal_input_fields = {
-            "checkpoint_set_manifest",
-            "expected_apply_authorization_identity",
-            "expected_apply_authorization_digest",
-            "expected_execution_domain_identity",
-            "expected_execution_nonce",
-            "expected_run_identity",
-            "authoritative_plan_action_set",
-            "expected_plan_action_set_digest",
-            "expected_candidate_identity",
-            "expected_implementation_manifest_digest",
-            "expected_plan_digest",
-            "trusted_checkpoint_store_generation",
-            "trusted_checkpoint_records",
-            "authoritative_captured_state",
-            "expected_captured_state_identity",
-            "expected_captured_state_digest",
-            "capture_observation_authority_set",
-            "expected_capture_observation_authority_set_identity",
-            "expected_capture_observation_authority_set_digest",
-            "prepared_action_authority_set",
-            "expected_prepared_action_authority_set_identity",
-            "expected_prepared_action_authority_set_digest",
-        }
+        plan_action_set = valid_plan_action_set()
+        snapshots = valid_checkpoint_snapshots()
+        checkpoint_set = valid_checkpoint_set_manifest(snapshots)
+        terminal = valid_run_terminal_record(checkpoint_set)
         terminal_inputs = {
-            key: value
-            for key, value in release_inputs.items()
-            if key in terminal_input_fields
+            "checkpoint_set_manifest": checkpoint_set,
+            "expected_apply_authorization_identity": checkpoint_set["bindings"][
+                "apply_authorization_identity"
+            ],
+            "expected_apply_authorization_digest": checkpoint_set["bindings"][
+                "apply_authorization_digest"
+            ],
+            "expected_execution_domain_identity": checkpoint_set["bindings"][
+                "execution_domain_identity"
+            ],
+            "expected_execution_nonce": checkpoint_set["bindings"]["execution_nonce"],
+            "expected_run_identity": checkpoint_set["bindings"]["run_identity"],
+            "authoritative_plan_action_set": plan_action_set,
+            "expected_plan_action_set_digest": plan_action_set["action_set_digest"],
+            "expected_candidate_identity": plan_action_set["candidate_identity"],
+            "expected_implementation_manifest_digest": plan_action_set[
+                "implementation_manifest_digest"
+            ],
+            "expected_plan_digest": plan_action_set["plan_digest"],
+            "trusted_checkpoint_store_generation": checkpoint_set[
+                "checkpoint_store_generation"
+            ],
+            "trusted_checkpoint_records": snapshots,
+            **checkpoint_authority_inputs(plan_action_set),
         }
 
         for malformed_records in (object(), "not-a-checkpoint-sequence"):
@@ -3027,6 +3908,136 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
                 candidate["payload"]["archive_destination"][field] = value
                 self.assertFalse(self.validate(candidate))
 
+    def test_checkpoint_store_snapshot_closes_full_replay_records(self) -> None:
+        snapshot = valid_checkpoint_store_snapshot()
+        self.assertTrue(self.validate(snapshot))
+        bindings = snapshot["bindings"]
+        assert isinstance(bindings, dict)
+        validation_inputs = {
+            "expected_apply_authorization_identity": bindings[
+                "apply_authorization_identity"
+            ],
+            "expected_apply_authorization_digest": bindings[
+                "apply_authorization_digest"
+            ],
+            "expected_execution_domain_identity": bindings["execution_domain_identity"],
+            "expected_execution_nonce": bindings["execution_nonce"],
+            "expected_run_identity": bindings["run_identity"],
+            "expected_plan_action_set_digest": bindings["plan_action_set_digest"],
+        }
+        self.assertEqual(
+            EXECUTION_AUTHORITY.validate_checkpoint_store_snapshot(
+                snapshot,
+                **validation_inputs,
+            ),
+            (),
+        )
+        stale_generation = copy.deepcopy(snapshot)
+        stale_generation["checkpoint_store_generation"] += 1
+        seal_checkpoint_store_snapshot(stale_generation)
+        self.assertIn(
+            "CHECKPOINT_STORE_SNAPSHOT_MEMBERSHIP_INVALID",
+            {
+                diagnostic.code
+                for diagnostic in (
+                    EXECUTION_AUTHORITY.validate_checkpoint_store_snapshot(
+                        stale_generation,
+                        **validation_inputs,
+                    )
+                )
+            },
+        )
+        self.assertEqual(
+            snapshot["snapshot_identity"],
+            "checkpoint-store-snapshot:"
+            + canonical_digest(
+                {
+                    key: value
+                    for key, value in snapshot.items()
+                    if key not in {"snapshot_identity", "snapshot_digest"}
+                }
+            ),
+        )
+        for field in tuple(snapshot):
+            with self.subTest(snapshot_field=field):
+                candidate = copy.deepcopy(snapshot)
+                del candidate[field]
+                self.assertFalse(self.validate(candidate))
+        record = snapshot["checkpoints"][0]["record"]
+        assert isinstance(record, dict)
+        for field in tuple(record):
+            with self.subTest(checkpoint_record_field=field):
+                candidate = copy.deepcopy(snapshot)
+                del candidate["checkpoints"][0]["record"][field]
+                self.assertFalse(self.validate(candidate))
+
+        foreign_binding = copy.deepcopy(snapshot)
+        foreign_binding["bindings"]["run_identity"] = "run:sha256:" + "f" * 64
+        seal_checkpoint_store_snapshot(foreign_binding)
+        self.assertIn(
+            "CHECKPOINT_STORE_SNAPSHOT_BINDING_MISMATCH",
+            {
+                diagnostic.code
+                for diagnostic in (
+                    EXECUTION_AUTHORITY.validate_checkpoint_store_snapshot(
+                        foreign_binding,
+                        **validation_inputs,
+                    )
+                )
+            },
+        )
+
+        for field, value in (
+            ("apply_authorization_identity", "apply-authorization:sha256:" + "f" * 64),
+            ("apply_authorization_digest", DIGEST_D),
+            (
+                "execution_domain_identity",
+                "execution-domain:fixture/foreign-ledger-v1",
+            ),
+            ("execution_nonce", "execution-nonce:sha256:" + "f" * 64),
+            ("run_identity", "run:sha256:" + "f" * 64),
+        ):
+            with self.subTest(foreign_record_binding=field):
+                foreign_record_snapshot = copy.deepcopy(snapshot)
+                foreign_record = foreign_record_snapshot["checkpoints"][0]["record"]
+                assert isinstance(foreign_record, dict)
+                foreign_record[field] = value
+                foreign_record["checkpoint_identity"] = (
+                    EXECUTION_AUTHORITY.checkpoint_identity(
+                        "agent-equipment-checkpoint/v1",
+                        foreign_record,
+                    )
+                )
+                seal_checkpoint_store_snapshot(foreign_record_snapshot)
+                self.assertIn(
+                    "CHECKPOINT_STORE_SNAPSHOT_RECORD_BINDING_MISMATCH",
+                    {
+                        diagnostic.code
+                        for diagnostic in (
+                            EXECUTION_AUTHORITY.validate_checkpoint_store_snapshot(
+                                foreign_record_snapshot,
+                                **validation_inputs,
+                            )
+                        )
+                    },
+                )
+
+        out_of_order = copy.deepcopy(snapshot)
+        out_of_order["checkpoints"].reverse()
+        seal_checkpoint_store_snapshot(out_of_order)
+        self.assertIn(
+            "CHECKPOINT_STORE_SNAPSHOT_MEMBERSHIP_INVALID",
+            {
+                diagnostic.code
+                for diagnostic in (
+                    EXECUTION_AUTHORITY.validate_checkpoint_store_snapshot(
+                        out_of_order,
+                        **validation_inputs,
+                    )
+                )
+            },
+        )
+
     def test_release_archive_manifest_and_receipt_bind_exact_bytes_and_execution(
         self,
     ) -> None:
@@ -3047,12 +4058,32 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
         )
         payload = archive["payload"]
         assert isinstance(payload, dict)
-        trusted_execution = copy.deepcopy(payload["execution_binding"])
         release_inputs = release_validation_inputs(archive)
+        self.assertNotIn("authoritative_plan_action_set", release_inputs)
+        self.assertNotIn("authoritative_captured_state", release_inputs)
+        self.assertNotIn("trusted_checkpoint_store_generation", release_inputs)
+        self.assertNotIn("trusted_checkpoint_records", release_inputs)
         trusted_byte_digests = copy.deepcopy(payload["archived_document_byte_digests"])
-        self.assertNotEqual(
+        self.assertEqual(
             trusted_byte_digests["apply_authorization_bytes_digest"],
-            trusted_execution["apply_authorization_digest"],
+            byte_digest(release_inputs["apply_authorization_bytes"]),
+        )
+        self.assertNotIn("expected_archived_document_byte_digests", release_inputs)
+        self.assertTrue(
+            {
+                "apply_authorization_bytes",
+                "plan_action_set_bytes",
+                "captured_state_bytes",
+                "capture_observation_authority_set_bytes",
+                "prepared_action_authority_set_bytes",
+                "checkpoint_store_snapshot_bytes",
+                "checkpoint_set_manifest_bytes",
+                "run_terminal_record_bytes",
+                "expected_case_manifest_bytes",
+                "evidence_bundle_bytes",
+                "attestation_manifest_bytes",
+            }
+            <= release_inputs.keys()
         )
         destination = payload["archive_destination"]
         assert isinstance(destination, dict)
@@ -3069,10 +4100,17 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
         self.assertFalse(self.validate(missing_capture_bytes_digest))
 
         for field, malformed_bytes in (
+            ("apply_authorization_bytes", b"{"),
+            ("plan_action_set_bytes", b"{}"),
+            ("captured_state_bytes", b"{}"),
             ("capture_observation_authority_set_bytes", b"{}"),
             ("prepared_action_authority_set_bytes", "not-bytes"),
+            ("checkpoint_store_snapshot_bytes", b"{}"),
             ("checkpoint_set_manifest_bytes", bytearray(b"{}")),
             ("run_terminal_record_bytes", memoryview(b"{}")),
+            ("expected_case_manifest_bytes", b"{"),
+            ("evidence_bundle_bytes", b"["),
+            ("attestation_manifest_bytes", b"{" + b'"schema_version":'),
         ):
             with self.subTest(malformed_exact_bytes=field):
                 malformed_inputs = dict(release_inputs)
@@ -3085,6 +4123,211 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
                 }
                 self.assertIn("RELEASE_EVIDENCE_BYTES_MISMATCH", codes)
                 self.assertIn("ARCHIVED_DOCUMENT_BYTES_MISMATCH", codes)
+                if field == "captured_state_bytes":
+                    self.assertIn("CAPTURED_STATE_AUTHORITY_INVALID", codes)
+
+        for field in (
+            "apply_authorization_bytes",
+            "plan_action_set_bytes",
+            "captured_state_bytes",
+            "capture_observation_authority_set_bytes",
+            "prepared_action_authority_set_bytes",
+            "checkpoint_store_snapshot_bytes",
+            "checkpoint_set_manifest_bytes",
+            "run_terminal_record_bytes",
+            "expected_case_manifest_bytes",
+            "evidence_bundle_bytes",
+            "attestation_manifest_bytes",
+        ):
+            with self.subTest(duplicate_member_exact_bytes=field):
+                duplicate_inputs = dict(release_inputs)
+                exact_bytes = duplicate_inputs[field]
+                assert isinstance(exact_bytes, bytes)
+                duplicate_inputs[field] = exact_bytes.replace(
+                    b'"schema_version":',
+                    b'"schema_version":"foreign","schema_version":',
+                    1,
+                )
+                duplicate_bytes = duplicate_inputs[field]
+                original_bytes_digest = EXECUTION_AUTHORITY._bytes_digest
+
+                def reject_unparsed_hash(
+                    payload: bytes,
+                    unparsed: bytes = duplicate_bytes,
+                    original: object = original_bytes_digest,
+                ) -> str:
+                    if payload is unparsed:
+                        raise AssertionError("ambiguous release bytes reached hashing")
+                    assert callable(original)
+                    return original(payload)
+
+                try:
+                    EXECUTION_AUTHORITY._bytes_digest = reject_unparsed_hash
+                    duplicate_codes = {
+                        diagnostic.code
+                        for diagnostic in (
+                            EXECUTION_AUTHORITY.validate_release_archive_manifest(
+                                archive,
+                                **duplicate_inputs,
+                            )
+                        )
+                    }
+                finally:
+                    EXECUTION_AUTHORITY._bytes_digest = original_bytes_digest
+                self.assertIn(
+                    "RELEASE_EVIDENCE_BYTES_MISMATCH",
+                    duplicate_codes,
+                )
+                self.assertIn("ARCHIVED_DOCUMENT_BYTES_MISMATCH", duplicate_codes)
+
+        for field, maximum in (
+            (
+                "apply_authorization_bytes",
+                EXECUTION_AUTHORITY.MAX_EXECUTION_AUTHORITY_BYTES,
+            ),
+            ("plan_action_set_bytes", EXECUTION_AUTHORITY.MAX_PLAN_ACTION_SET_BYTES),
+            ("captured_state_bytes", EXECUTION_AUTHORITY.MAX_CAPTURED_STATE_BYTES),
+            (
+                "checkpoint_store_snapshot_bytes",
+                EXECUTION_AUTHORITY.MAX_CHECKPOINT_STORE_SNAPSHOT_BYTES,
+            ),
+            (
+                "capture_observation_authority_set_bytes",
+                EXECUTION_AUTHORITY.MAX_EXECUTION_AUTHORITY_BYTES,
+            ),
+            (
+                "prepared_action_authority_set_bytes",
+                EXECUTION_AUTHORITY.MAX_EXECUTION_AUTHORITY_BYTES,
+            ),
+            (
+                "checkpoint_set_manifest_bytes",
+                EXECUTION_AUTHORITY.MAX_EXECUTION_AUTHORITY_BYTES,
+            ),
+            (
+                "run_terminal_record_bytes",
+                EXECUTION_AUTHORITY.MAX_EXECUTION_AUTHORITY_BYTES,
+            ),
+            (
+                "expected_case_manifest_bytes",
+                EXECUTION_AUTHORITY.MAX_RELEASE_ACCEPTANCE_BYTES,
+            ),
+            (
+                "evidence_bundle_bytes",
+                EXECUTION_AUTHORITY.MAX_RELEASE_ACCEPTANCE_BYTES,
+            ),
+            (
+                "attestation_manifest_bytes",
+                EXECUTION_AUTHORITY.MAX_RELEASE_ACCEPTANCE_BYTES,
+            ),
+        ):
+            with self.subTest(oversized_exact_bytes=field):
+                oversized_inputs = dict(release_inputs)
+                oversized_bytes = b" " * (maximum + 1)
+                oversized_inputs[field] = oversized_bytes
+                original_bytes_digest = EXECUTION_AUTHORITY._bytes_digest
+
+                def reject_oversized_hash(
+                    payload: bytes,
+                    oversized: bytes = oversized_bytes,
+                    original: object = original_bytes_digest,
+                ) -> str:
+                    if payload is oversized:
+                        raise AssertionError("oversized release bytes reached hashing")
+                    assert callable(original)
+                    return original(payload)
+
+                try:
+                    EXECUTION_AUTHORITY._bytes_digest = reject_oversized_hash
+                    oversized_codes = {
+                        diagnostic.code
+                        for diagnostic in (
+                            EXECUTION_AUTHORITY.validate_release_archive_manifest(
+                                archive,
+                                **oversized_inputs,
+                            )
+                        )
+                    }
+                finally:
+                    EXECUTION_AUTHORITY._bytes_digest = original_bytes_digest
+                self.assertIn("RELEASE_EVIDENCE_BYTES_MISMATCH", oversized_codes)
+                self.assertIn("ARCHIVED_DOCUMENT_BYTES_MISMATCH", oversized_codes)
+
+        projection_mismatch_inputs = dict(release_inputs)
+        projection_mismatch_snapshot = valid_checkpoint_store_snapshot()
+        projection_mismatch_record = projection_mismatch_snapshot["checkpoints"][0][
+            "record"
+        ]
+        assert isinstance(projection_mismatch_record, dict)
+        projection_mismatch_record["phase"] = "prepared"
+        projection_mismatch_record["phase_history"] = ["prepared"]
+        seal_checkpoint_store_snapshot(projection_mismatch_snapshot)
+        projection_mismatch_inputs["checkpoint_store_snapshot_bytes"] = canonical_bytes(
+            projection_mismatch_snapshot
+        )
+        projection_mismatch_codes = {
+            diagnostic.code
+            for diagnostic in EXECUTION_AUTHORITY.validate_release_archive_manifest(
+                archive,
+                **projection_mismatch_inputs,
+            )
+        }
+        self.assertIn("CHECKPOINT_SET_MEMBERSHIP_MISMATCH", projection_mismatch_codes)
+
+        generation_mismatch_inputs = dict(release_inputs)
+        generation_mismatch_snapshot = valid_checkpoint_store_snapshot(
+            store_generation=8
+        )
+        generation_mismatch_inputs["checkpoint_store_snapshot_bytes"] = canonical_bytes(
+            generation_mismatch_snapshot
+        )
+        generation_mismatch_codes = {
+            diagnostic.code
+            for diagnostic in EXECUTION_AUTHORITY.validate_release_archive_manifest(
+                archive,
+                **generation_mismatch_inputs,
+            )
+        }
+        self.assertIn(
+            "CHECKPOINT_STORE_GENERATION_MISMATCH",
+            generation_mismatch_codes,
+        )
+
+        reverse_generation_inputs = dict(release_inputs)
+        reverse_generation_snapshots = valid_checkpoint_snapshots()
+        reverse_generation_snapshots[0]["durable_generation"] = 2
+        reverse_generation_snapshots[1]["durable_generation"] = 1
+        reverse_generation_checkpoint_set = valid_checkpoint_set_manifest(
+            reverse_generation_snapshots
+        )
+        reverse_generation_terminal = valid_run_terminal_record(
+            reverse_generation_checkpoint_set
+        )
+        reverse_generation_inputs.update(
+            {
+                "checkpoint_store_snapshot_bytes": canonical_bytes(
+                    valid_checkpoint_store_snapshot(reverse_generation_snapshots)
+                ),
+                "checkpoint_set_manifest": reverse_generation_checkpoint_set,
+                "checkpoint_set_manifest_bytes": canonical_bytes(
+                    reverse_generation_checkpoint_set
+                ),
+                "run_terminal_record": reverse_generation_terminal,
+                "run_terminal_record_bytes": canonical_bytes(
+                    reverse_generation_terminal
+                ),
+            }
+        )
+        reverse_generation_codes = {
+            diagnostic.code
+            for diagnostic in EXECUTION_AUTHORITY.validate_release_archive_manifest(
+                archive,
+                **reverse_generation_inputs,
+            )
+        }
+        self.assertIn(
+            "RUN_TERMINAL_CHECKPOINT_STATE_MISMATCH",
+            reverse_generation_codes,
+        )
 
         receipt_inputs = dict(release_inputs)
         receipt_inputs["release_archive_manifest"] = archive
@@ -3105,12 +4348,11 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
         self.assertIn("ARCHIVED_DOCUMENT_BYTES_MISMATCH", receipt_codes)
 
         incomplete_inputs = dict(release_inputs)
-        incomplete_inputs["trusted_checkpoint_records"] = release_inputs[
-            "trusted_checkpoint_records"
-        ][:-1]
-        incomplete_checkpoint_set = valid_checkpoint_set_manifest(
-            incomplete_inputs["trusted_checkpoint_records"]
+        incomplete_snapshots = valid_checkpoint_snapshots()[:-1]
+        incomplete_inputs["checkpoint_store_snapshot_bytes"] = canonical_bytes(
+            valid_checkpoint_store_snapshot(incomplete_snapshots)
         )
+        incomplete_checkpoint_set = valid_checkpoint_set_manifest(incomplete_snapshots)
         incomplete_inputs["checkpoint_set_manifest"] = incomplete_checkpoint_set
         incomplete_inputs["checkpoint_set_manifest_bytes"] = canonical_bytes(
             incomplete_checkpoint_set
@@ -3214,6 +4456,393 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
         }
         self.assertIn("RELEASE_RECEIPT_AUTHORITY_MISMATCH", codes)
 
+    def test_release_semantically_revalidates_the_four_added_replay_records(
+        self,
+    ) -> None:
+        archive = valid_release_archive_manifest()
+        release_inputs = release_validation_inputs(archive)
+
+        apply_record = json.loads(release_inputs["apply_authorization_bytes"])
+        apply_bindings = apply_record["bindings"]
+        assert isinstance(apply_bindings, dict)
+        apply_bindings["operator_review_package_digest"] = DIGEST_D
+        seal_apply_authorization(apply_record)
+
+        expected_case_manifest = json.loads(
+            release_inputs["expected_case_manifest_bytes"]
+        )
+        expected_bindings = expected_case_manifest["bindings"]
+        assert isinstance(expected_bindings, dict)
+        expected_bindings["plan_digest"] = DIGEST_D
+        ACCEPTANCE_FIXTURES.reseal_manifest(expected_case_manifest)
+
+        evidence_bundle = json.loads(release_inputs["evidence_bundle_bytes"])
+        evidence_bindings = evidence_bundle["bindings"]
+        assert isinstance(evidence_bindings, dict)
+        evidence_bindings["plan_digest"] = DIGEST_D
+        ACCEPTANCE_FIXTURES.reseal_bundle(evidence_bundle)
+
+        attestation_manifest = json.loads(release_inputs["attestation_manifest_bytes"])
+        attestors = attestation_manifest["attestors"]
+        assert isinstance(attestors, list)
+        first_attestor = attestors[0]
+        assert isinstance(first_attestor, dict)
+        first_attestor["version"] = "fixture-2"
+        ACCEPTANCE_FIXTURES.reseal_attestation(attestation_manifest)
+
+        for field, mutated_record, expected_code in (
+            (
+                "apply_authorization_bytes",
+                apply_record,
+                "RELEASE_APPLY_AUTHORIZATION_MISMATCH",
+            ),
+            (
+                "expected_case_manifest_bytes",
+                expected_case_manifest,
+                "FOREIGN_EXPECTED_CASE_MANIFEST",
+            ),
+            (
+                "evidence_bundle_bytes",
+                evidence_bundle,
+                "ATTESTATION_BUNDLE_DIGEST_MISMATCH",
+            ),
+            (
+                "attestation_manifest_bytes",
+                attestation_manifest,
+                "FOREIGN_ATTESTATION_MANIFEST",
+            ),
+        ):
+            with self.subTest(semantic_replay_record=field):
+                mutated_bytes = canonical_bytes(mutated_record)
+                bound_archive = copy.deepcopy(archive)
+                bind_release_archive_bytes(bound_archive, field, mutated_bytes)
+                mutated_inputs = dict(release_inputs)
+                mutated_inputs[field] = mutated_bytes
+                codes = {
+                    diagnostic.code
+                    for diagnostic in (
+                        EXECUTION_AUTHORITY.validate_release_archive_manifest(
+                            bound_archive,
+                            **mutated_inputs,
+                        )
+                    )
+                }
+                self.assertIn(expected_code, codes)
+                self.assertIn("RELEASE_EVIDENCE_BYTES_MISMATCH", codes)
+                self.assertNotIn("ARCHIVED_DOCUMENT_BYTES_MISMATCH", codes)
+
+    def test_release_rejects_coordinated_foreign_manifest_action_identities(
+        self,
+    ) -> None:
+        archive = valid_release_archive_manifest()
+        release_inputs = release_validation_inputs(archive)
+        manifest = json.loads(release_inputs["expected_case_manifest_bytes"])
+        manifest["plan_action_identities"] = ["action:sha256:" + "f" * 64]
+        bound_archive, mutated_inputs = bind_coordinated_release_acceptance_tuple(
+            archive,
+            release_inputs,
+            manifest,
+        )
+
+        codes = {
+            diagnostic.code
+            for diagnostic in EXECUTION_AUTHORITY.validate_release_archive_manifest(
+                bound_archive,
+                **mutated_inputs,
+            )
+        }
+
+        self.assertIn("EXPECTED_CASE_MANIFEST_PLAN_ACTION_SET_MISMATCH", codes)
+        self.assertNotIn("FOREIGN_EXPECTED_CASE_MANIFEST", codes)
+        self.assertNotIn("ARCHIVED_DOCUMENT_BYTES_MISMATCH", codes)
+
+    def test_release_rejects_coordinated_foreign_manifest_replay_bindings(
+        self,
+    ) -> None:
+        foreign_bindings = {
+            "candidate_identity": "candidate:fixture/foreign",
+            "implementation_manifest_digest": DIGEST_D,
+            "catalog_digest": DIGEST_D,
+            "lock_digest": DIGEST_D,
+            "plan_digest": DIGEST_D,
+            "plan_action_set_digest": DIGEST_D,
+            "capability_set_digest": DIGEST_D,
+            "captured_state_identity": "capture:fixture/foreign",
+            "captured_state_digest": DIGEST_D,
+        }
+        for field, foreign_value in foreign_bindings.items():
+            with self.subTest(binding=field):
+                archive = valid_release_archive_manifest()
+                release_inputs = release_validation_inputs(archive)
+                manifest = json.loads(release_inputs["expected_case_manifest_bytes"])
+                manifest["bindings"][field] = foreign_value
+                bound_archive, mutated_inputs = (
+                    bind_coordinated_release_acceptance_tuple(
+                        archive,
+                        release_inputs,
+                        manifest,
+                    )
+                )
+
+                codes = {
+                    diagnostic.code
+                    for diagnostic in (
+                        EXECUTION_AUTHORITY.validate_release_archive_manifest(
+                            bound_archive,
+                            **mutated_inputs,
+                        )
+                    )
+                }
+
+                self.assertIn("EXPECTED_CASE_MANIFEST_BINDING_MISMATCH", codes)
+                self.assertNotIn("FOREIGN_EXPECTED_CASE_MANIFEST", codes)
+                self.assertNotIn("ARCHIVED_DOCUMENT_BYTES_MISMATCH", codes)
+
+    def test_release_rejects_a_coordinated_foreign_manifest_route_binding(
+        self,
+    ) -> None:
+        foreign_values = {
+            "route_identity": "route:fixture/foreign",
+            "route_digest": DIGEST_D,
+            "capability_identity": "capability:fixture/foreign",
+            "capability_digest": DIGEST_D,
+            "manager_version_evidence_digest": DIGEST_D,
+        }
+        for field in (*foreign_values, "provider_selector", "manager_coordinates"):
+            with self.subTest(route_binding=field):
+                archive = valid_release_archive_manifest()
+                release_inputs = release_validation_inputs(archive)
+                manifest = json.loads(release_inputs["expected_case_manifest_bytes"])
+                route_binding = manifest["route_capability_bindings"][0]
+                if field == "provider_selector":
+                    route_binding["provider_selector"]["plugin_id"] = "foreign@fixture"
+                elif field == "manager_coordinates":
+                    route_binding["harness"] = "codex"
+                    route_binding["provider_selector"]["manager"] = "codex"
+                    route_binding["manager_identity"] = "manager:codex"
+                else:
+                    route_binding[field] = foreign_values[field]
+                bound_archive, mutated_inputs = (
+                    bind_coordinated_release_acceptance_tuple(
+                        archive,
+                        release_inputs,
+                        manifest,
+                    )
+                )
+
+                codes = {
+                    diagnostic.code
+                    for diagnostic in (
+                        EXECUTION_AUTHORITY.validate_release_archive_manifest(
+                            bound_archive,
+                            **mutated_inputs,
+                        )
+                    )
+                }
+
+                self.assertIn(
+                    "EXPECTED_CASE_MANIFEST_ROUTE_BINDING_MISMATCH",
+                    codes,
+                )
+                self.assertNotIn("FOREIGN_EXPECTED_CASE_MANIFEST", codes)
+                self.assertNotIn("ARCHIVED_DOCUMENT_BYTES_MISMATCH", codes)
+
+    def test_release_replays_every_provider_family_route_projection(self) -> None:
+        manifest_substitutions = {
+            "native": ("provider_selector", "plugin_id", "foreign@fixture"),
+            "standalone": ("manager_identity", None, "manager:claude"),
+            "direct_mcp": ("provider_selector", "overlay_family", "cursor_json"),
+        }
+        for provider_family, substitution in manifest_substitutions.items():
+            with self.subTest(provider_family=provider_family):
+                plan_action_set = valid_provider_family_plan_action_set(provider_family)
+                captured_state = valid_captured_state(plan_action_set)
+                for schema_name, document in (
+                    ("plan-action-set-v1.schema.json", plan_action_set),
+                    ("captured-state-v1.schema.json", captured_state),
+                ):
+                    self.assertTrue(
+                        SCHEMA.validate_document(
+                            document,
+                            schema_directory=SCHEMA_PATH.parent,
+                            root_schema_name=schema_name,
+                            allowed_schema_names=frozenset({schema_name}),
+                        ),
+                        schema_name,
+                    )
+
+                archive = valid_release_archive_manifest(plan_action_set)
+                release_inputs = release_validation_inputs(
+                    archive,
+                    plan_action_set,
+                )
+                self.assertEqual(
+                    EXECUTION_AUTHORITY.validate_release_archive_manifest(
+                        archive,
+                        **release_inputs,
+                    ),
+                    (),
+                )
+
+                binding_field, selector_field, foreign_value = substitution
+
+                def substitute_manifest_route(
+                    manifest: dict[str, object],
+                    binding_field: str = binding_field,
+                    selector_field: str | None = selector_field,
+                    foreign_value: str = foreign_value,
+                ) -> None:
+                    route_binding = manifest["route_capability_bindings"][0]
+                    if binding_field == "manager_identity":
+                        route_binding[binding_field] = foreign_value
+                    else:
+                        route_binding[binding_field][selector_field] = foreign_value
+
+                foreign_archive, foreign_inputs = (
+                    rebuilt_release_with_expected_manifest_transform(
+                        plan_action_set,
+                        substitute_manifest_route,
+                    )
+                )
+                foreign_codes = {
+                    diagnostic.code
+                    for diagnostic in (
+                        EXECUTION_AUTHORITY.validate_release_archive_manifest(
+                            foreign_archive,
+                            **foreign_inputs,
+                        )
+                    )
+                }
+                self.assertIn(
+                    "EXPECTED_CASE_MANIFEST_ROUTE_BINDING_MISMATCH",
+                    foreign_codes,
+                )
+                self.assertNotIn(
+                    "ARCHIVED_DOCUMENT_BYTES_MISMATCH",
+                    foreign_codes,
+                )
+
+                def substitute_captured_core_tuple(
+                    candidate: dict[str, object],
+                ) -> None:
+                    binding = candidate["bindings"]["capability_bindings"][0]
+                    binding["capability_digest"] = DIGEST_D
+                    candidate["bindings"]["capability_set_digest"] = canonical_digest(
+                        [binding]
+                    )
+                    candidate["provider_routes"][0]["capability_binding"][
+                        "capability_digest"
+                    ] = DIGEST_D
+
+                captured_archive, captured_inputs = (
+                    rebuilt_release_with_captured_state_transform(
+                        plan_action_set,
+                        substitute_captured_core_tuple,
+                    )
+                )
+                captured_codes = {
+                    diagnostic.code
+                    for diagnostic in (
+                        EXECUTION_AUTHORITY.validate_release_archive_manifest(
+                            captured_archive,
+                            **captured_inputs,
+                        )
+                    )
+                }
+                self.assertIn(
+                    "EXPECTED_CASE_MANIFEST_ROUTE_BINDING_MISMATCH",
+                    captured_codes,
+                )
+                self.assertNotIn(
+                    "ARCHIVED_DOCUMENT_BYTES_MISMATCH",
+                    captured_codes,
+                )
+
+    def test_release_requires_the_exact_captured_state_route_set(self) -> None:
+        archive = valid_release_archive_manifest()
+        release_inputs = release_validation_inputs(archive)
+        captured_state = json.loads(release_inputs["captured_state_bytes"])
+        captured_state["provider_routes"][0]["route_id"] = "route:fixture/foreign"
+        captured_state_bytes = canonical_bytes(captured_state)
+        bound_archive = copy.deepcopy(archive)
+        bind_release_archive_bytes(
+            bound_archive,
+            "captured_state_bytes",
+            captured_state_bytes,
+        )
+        mutated_inputs = dict(release_inputs)
+        mutated_inputs["captured_state_bytes"] = captured_state_bytes
+
+        codes = {
+            diagnostic.code
+            for diagnostic in EXECUTION_AUTHORITY.validate_release_archive_manifest(
+                bound_archive,
+                **mutated_inputs,
+            )
+        }
+
+        self.assertIn("EXPECTED_CASE_MANIFEST_ROUTE_BINDING_MISMATCH", codes)
+        self.assertNotIn("ARCHIVED_DOCUMENT_BYTES_MISMATCH", codes)
+
+    def test_release_replays_historical_apply_without_a_new_apply_time_gate(
+        self,
+    ) -> None:
+        archive = valid_release_archive_manifest()
+        receipt = valid_release_receipt(archive)
+        release_inputs = release_validation_inputs(archive)
+        apply_record = json.loads(release_inputs["apply_authorization_bytes"])
+        receipt_payload = receipt["payload"]
+        assert isinstance(receipt_payload, dict)
+        self.assertLess(apply_record["expires_at"], receipt_payload["issued_at"])
+
+        self.assertEqual(
+            EXECUTION_AUTHORITY.validate_release_archive_manifest(
+                archive,
+                **release_inputs,
+            ),
+            (),
+        )
+        self.assertEqual(
+            EXECUTION_AUTHORITY.validate_release_receipt(
+                receipt,
+                release_archive_manifest=archive,
+                **release_inputs,
+            ),
+            (),
+        )
+
+    def test_release_accepts_large_valid_plan_and_capture_replay_streams(self) -> None:
+        plan_action_set = valid_plan_action_set(75)
+        archive = valid_release_archive_manifest(plan_action_set)
+        release_inputs = release_validation_inputs(archive, plan_action_set)
+        plan_action_set_bytes = release_inputs["plan_action_set_bytes"]
+        captured_state_bytes = release_inputs["captured_state_bytes"]
+        assert isinstance(plan_action_set_bytes, bytes)
+        assert isinstance(captured_state_bytes, bytes)
+        self.assertGreater(
+            len(plan_action_set_bytes),
+            EXECUTION_AUTHORITY.MAX_EXECUTION_AUTHORITY_BYTES,
+        )
+        self.assertGreater(
+            len(captured_state_bytes),
+            EXECUTION_AUTHORITY.MAX_EXECUTION_AUTHORITY_BYTES,
+        )
+        self.assertLessEqual(
+            len(plan_action_set_bytes),
+            EXECUTION_AUTHORITY.MAX_PLAN_ACTION_SET_BYTES,
+        )
+        self.assertLessEqual(
+            len(captured_state_bytes),
+            EXECUTION_AUTHORITY.MAX_CAPTURED_STATE_BYTES,
+        )
+        self.assertEqual(
+            EXECUTION_AUTHORITY.validate_release_archive_manifest(
+                archive,
+                **release_inputs,
+            ),
+            (),
+        )
+
     def test_release_authority_uses_shared_public_data_policy(self) -> None:
         archive = valid_release_archive_manifest()
         payload = archive["payload"]
@@ -3242,16 +4871,14 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
     def test_archive_byte_digest_is_distinct_from_authorization_canonical_digest(
         self,
     ) -> None:
-        authorization = valid_apply_authorization()
-        canonical_authorization_digest = seal_apply_authorization(authorization)
-        compact_bytes = json.dumps(
-            authorization,
-            ensure_ascii=False,
-            separators=(",", ":"),
-            sort_keys=True,
-        ).encode("utf-8")
+        archive = valid_release_archive_manifest()
+        release_inputs = release_validation_inputs(archive)
+        compact_bytes = release_inputs["apply_authorization_bytes"]
+        assert isinstance(compact_bytes, bytes)
+        apply_record = json.loads(compact_bytes)
+        canonical_authorization_digest = canonical_digest(apply_record)
         pretty_bytes = json.dumps(
-            authorization,
+            apply_record,
             ensure_ascii=False,
             indent=2,
             sort_keys=True,
@@ -3261,37 +4888,27 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
         self.assertEqual(compact_digest, canonical_authorization_digest)
         self.assertNotEqual(pretty_digest, canonical_authorization_digest)
 
-        archive = valid_release_archive_manifest()
-        payload = archive["payload"]
-        assert isinstance(payload, dict)
-        destination = payload["archive_destination"]
-        assert isinstance(destination, dict)
-        payload["archived_document_byte_digests"][
-            "apply_authorization_bytes_digest"
-        ] = compact_digest
-        archive["archive_identity"] = "release-archive:" + canonical_digest(payload)
-        unsigned = copy.deepcopy(archive)
-        del unsigned["archive_manifest_digest"]
-        archive["archive_manifest_digest"] = canonical_digest(unsigned)
-        expected_byte_digests = copy.deepcopy(payload["archived_document_byte_digests"])
-        expected_byte_digests["apply_authorization_bytes_digest"] = pretty_digest
+        pretty_archive = copy.deepcopy(archive)
+        bind_release_archive_bytes(
+            pretty_archive,
+            "apply_authorization_bytes",
+            pretty_bytes,
+        )
+        pretty_inputs = dict(release_inputs)
+        pretty_inputs["apply_authorization_bytes"] = pretty_bytes
+        self.assertEqual(
+            EXECUTION_AUTHORITY.validate_release_archive_manifest(
+                pretty_archive,
+                **pretty_inputs,
+            ),
+            (),
+        )
 
         codes = {
             diagnostic.code
             for diagnostic in EXECUTION_AUTHORITY.validate_release_archive_manifest(
-                archive,
-                **{
-                    **release_validation_inputs(archive),
-                    "expected_archived_document_byte_digests": {
-                        key: value
-                        for key, value in expected_byte_digests.items()
-                        if key
-                        not in {
-                            "checkpoint_set_manifest_bytes_digest",
-                            "run_terminal_record_bytes_digest",
-                        }
-                    },
-                },
+                pretty_archive,
+                **release_inputs,
             )
         }
         self.assertIn("ARCHIVED_DOCUMENT_BYTES_MISMATCH", codes)

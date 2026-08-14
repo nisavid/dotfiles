@@ -68,7 +68,7 @@
         "CON-08", "CON-09", "CON-10", "CON-11",
         "ADP-01", "ADP-02", "ADP-03", "ADP-04", "ADP-05", "ADP-06", "ADP-07", "ADP-08",
         "CAP-01", "CAP-02", "CAP-03", "CAP-04", "CAP-05", "CAP-06", "CAP-07",
-        "CHK-01", "CHK-02", "CHK-03", "CHK-04", "CHK-05", "CHK-06", "CHK-07", "CHK-08", "CHK-09", "CHK-10",
+        "CHK-01", "CHK-02", "CHK-03", "CHK-04", "CHK-05", "CHK-06", "CHK-07", "CHK-08", "CHK-09", "CHK-10", "CHK-11",
         "MIG-01", "MIG-02", "MIG-03", "MIG-04", "MIG-05", "MIG-06", "MIG-07",
         "LIVE-01", "LIVE-02", "LIVE-03", "LIVE-04", "LIVE-05", "LIVE-06"
       ]
@@ -293,8 +293,8 @@
         "fixture_version": {"$ref": "#/$defs/opaqueIdentity"},
         "requirements": {
           "type": "array",
-          "minItems": 74,
-          "maxItems": 74,
+          "minItems": 75,
+          "maxItems": 75,
           "uniqueItems": true,
           "items": {"$ref": "#/$defs/requirement"}
         },
@@ -609,8 +609,8 @@
         },
         "aggregate_results": {
           "type": "array",
-          "minItems": 74,
-          "maxItems": 74,
+          "minItems": 75,
+          "maxItems": 75,
           "uniqueItems": true,
           "items": {"$ref": "#/$defs/aggregateResult"}
         },

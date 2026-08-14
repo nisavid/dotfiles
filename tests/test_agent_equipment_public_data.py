@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import unittest
@@ -11,10 +12,15 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from scripts.agent_equipment_public_data import (
+    _javascript_lexical_index,
+    _javascript_mappings_contain_literal_credential,
+    _lex_javascript,
     contains_literal_credential,
+    serialized_syntax,
     string_looks_like_credential,
     string_looks_like_private_key,
 )
+from tests.age_tooling_test_support import require_age_tooling_or_skip
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -137,6 +143,7 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
             "apply-authorization:sha256:" + "a" * 64,
             "authorization:fixture/apply",
             "authorization = validated_record",
+            "valid_checkpoint_record(authorization=apply_authorization,)",
             "https://token.example.com/mcp",
             "sk-version-public",
             "activation:example/canary-label",
@@ -871,6 +878,1529 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
             all(document.strip() not in result.stdout for document in documents)
         )
 
+    def test_nested_serialized_mapping_pairs_preserve_credential_policy(
+        self,
+    ) -> None:
+        field = "api" + "_key"
+        literal = "production-value-" + "73918462"
+        literal_documents = (
+            'const config = {"' + field + '": "' + literal + '"};\n',
+            "send({" + field + ': "' + literal + '"});\n',
+            "config: {" + field + ": " + literal + "}\n",
+            "items:\n  - " + field + ": " + literal + "\n",
+            "items: [{" + field + ": " + literal + "}]\n",
+            'const config = {"' + field + '":\n "' + literal + '"};\n',
+            ("const config = {" + field + ': {literal: "' + literal + '"}};\n'),
+            "const config = {" + field + ': ["' + literal + '"]};\n',
+            ("config: {" + field + ": {literal: " + literal + "}}\n"),
+            'const config = {"api\\x5fkey": "' + literal + '"};\n',
+            'const config = {["api_" + "key"]: "' + literal + '"};\n',
+            "const config = {" + field + ": ${TOKEN}-" + literal + "};\n",
+            ("const config = {" + field + ': "${API_KEY}" + "-' + literal + '"};\n'),
+            (
+                "const config = {"
+                + field
+                + ': {"secret_profile_reference":"context7"} && "'
+                + literal
+                + '"};\n'
+            ),
+            "const config = {" + field + ": `" + literal + "`};\n",
+            (
+                "const config = `${JSON.stringify({"
+                + field
+                + ': "'
+                + literal
+                + '"})}`;\n'
+            ),
+            "const config = {/* c */ " + field + ': "' + literal + '"};\n',
+            "const config = {" + field + ' /* c */: "' + literal + '"};\n',
+            'const config = {_api_key: "' + literal + '"};\n',
+            'const config = {$api_key: "' + literal + '"};\n',
+            'const config = {[`api_key`]: "' + literal + '"};\n',
+            'const config = {[("api_" + "key")]: "' + literal + '"};\n',
+            'const config = {api\\u{5f}key: "' + literal + '"};\n',
+            ('const quote=/"/; const config={' + field + ':"' + literal + '"};\n'),
+            "const config = {" + field + ': String("' + literal + '")};\n',
+            "const config = {" + field + ': lookup("' + literal + '")};\n',
+            "config: {? " + field + " : " + literal + "}\n",
+            "const config = {" + field + ": config.api_key};\n",
+            "send({" + field + ": lookup()});\n",
+            "const config = {" + field + ": lookup()};\n",
+        )
+        public_documents = (
+            "const config = {" + field + ": ${API_KEY}};\n",
+            "const config = {" + field + ": ${{ secrets.API_KEY }}};\n",
+            "const config = {" + field + ": secret_profile:context7};\n",
+            "const config = {" + field + ": secret_reference:TOKEN};\n",
+            ("const config = {" + field + ": pass://fixture-vault/item/password};\n"),
+            "const config = {" + field + ": __API_KEY__};\n",
+            "const config = {token: str};\n",
+            "const config = {token: false, password: null};\n",
+            ('{"' + field + '": {"secret_profile_reference": "context7"}}\n'),
+            (
+                '{"' + field + '": {"secret_reference": "API_KEY", '
+                '"template": "{reference}"}}\n'
+            ),
+            (
+                "const config = {"
+                + field
+                + ': {secret_profile_reference: "context7"}};\n'
+            ),
+            (
+                "config: {"
+                + field
+                + ': {secret_reference: API_KEY, template: "{reference}"}}\n'
+            ),
+            "const config = {" + field + ": process.env.API_KEY ?? fallback};\n",
+            "const config = {" + field + ': process.env.API_KEY || ""};\n',
+            "type Credentials = {" + field + ": string | undefined};\n",
+            "type Credentials = {" + field + ": Option<string>};\n",
+        )
+
+        for document in literal_documents:
+            with self.subTest(literal=document.splitlines()[0]):
+                syntax = (
+                    "yaml"
+                    if document.startswith(("config:", "items:"))
+                    else "javascript"
+                )
+                self.assertTrue(string_looks_like_credential(document, syntax=syntax))
+        for document in public_documents:
+            with self.subTest(public=document.splitlines()[0]):
+                syntax = "yaml" if document.startswith("config:") else "javascript"
+                self.assertFalse(string_looks_like_credential(document, syntax=syntax))
+
+    def test_privacy_scan_rejects_nested_serialized_mapping_credentials(
+        self,
+    ) -> None:
+        field = "api" + "_key"
+        literal = "production-value-" + "73918462"
+        documents = {
+            "credential.js": ('const config = {"' + field + '": "' + literal + '"};\n'),
+            "call.js": "send({" + field + ': "' + literal + '"});\n',
+            "credential.yaml": "config: {" + field + ": " + literal + "}\n",
+            "sequence.yaml": "items:\n  - " + field + ": " + literal + "\n",
+            "flow-sequence.yaml": ("items: [{" + field + ": " + literal + "}]\n"),
+            "cross-line.js": (
+                'const config = {"' + field + '":\n "' + literal + '"};\n'
+            ),
+            "object.js": (
+                "const config = {" + field + ': {literal: "' + literal + '"}};\n'
+            ),
+            "array.js": ("const config = {" + field + ': ["' + literal + '"]};\n'),
+            "escaped-key.js": ('const config = {"api\\x5fkey": "' + literal + '"};\n'),
+            "computed-key.js": (
+                'const config = {["api_" + "key"]: "' + literal + '"};\n'
+            ),
+            "template.js": ("const config = {" + field + ": `" + literal + "`};\n"),
+            "comment.js": (
+                "const config = {/* c */ " + field + ': "' + literal + '"};\n'
+            ),
+            "literal-call.js": (
+                "const config = {" + field + ': lookup("' + literal + '")};\n'
+            ),
+            "explicit-key.yaml": ("config: {? " + field + " : " + literal + "}\n"),
+            "config.json.tmpl": (
+                '{\n "config": {{ if .enabled }}{"'
+                + field
+                + '":"'
+                + literal
+                + '"}{{ end }}\n}\n'
+            ),
+            "settings.yaml.tmpl": (
+                "config: {{ if .enabled }}{" + field + ": " + literal + "}{{ end }}\n"
+            ),
+            "settings.js.tmpl": (
+                "const config = {{ if .enabled }}{"
+                + field
+                + ':"'
+                + literal
+                + '"}{{ end }};\n'
+            ),
+            "key-gap.js.tmpl": (
+                "const config = {"
+                + field
+                + '{{/* public comment */}}:"'
+                + literal
+                + '"};\n'
+            ),
+            "key-gap.json.tmpl": (
+                '{"' + field + '"{{- /* public comment */ -}}:"' + literal + '"}\n'
+            ),
+            "key-gap.yaml.tmpl": (
+                "config: {" + field + "{{/* public comment */}}: " + literal + "}\n"
+            ),
+            "key-gap.toml.tmpl": (
+                field + '{{/* public comment */}} = "' + literal + '"\n'
+            ),
+            "key-gap.js.j2": (
+                "const config = {"
+                + field
+                + '{# public comment #}:"'
+                + literal
+                + '"};\n'
+            ),
+            "key-control.json.j2": (
+                '{"'
+                + field
+                + '"{% if enabled %}:{% else %}:{% endif %}"'
+                + literal
+                + '"}\n'
+            ),
+            "generated-key.json.tmpl": ('{"{{ "api_key" }}":"' + literal + '"}\n'),
+            "split-key.json.tmpl": ('{"api_{{ "key" }}":"' + literal + '"}\n'),
+            "dynamic-key.json.tmpl": ('{"{{ .credentialKey }}":"' + literal + '"}\n'),
+            "helper-key.json.tmpl": (
+                '{"api_{{ printf "%s" "key" }}":"' + literal + '"}\n'
+            ),
+            "helper-key.yaml.tmpl": (
+                'config: {api_{{ printf "%s" "key" }}: ' + literal + "}\n"
+            ),
+            "helper-key.toml.tmpl": (
+                'api_{{ printf "%s" "key" }} = "' + literal + '"\n'
+            ),
+            "helper-key.js.tmpl": (
+                'const config = {"api_{{ printf "%s" "key" }}":"' + literal + '"};\n'
+            ),
+            "wrapped.tmpl.json": (
+                '{{ if .enabled }}{"' + field + '":"' + literal + '"}{{ end }}\n'
+            ),
+            "authorization.yaml": (
+                "headers:\n  authorization: Token " + literal + "\n"
+            ),
+            "authorization.conf": "authorization = Token " + literal + "\n",
+        }
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            for relative, document in documents.items():
+                (root / relative).write_text(document, encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts/privacy-scan"),
+                    "--root",
+                    str(root),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(result.returncode, 1)
+        finding_paths = {line.split(":", 1)[0] for line in result.stdout.splitlines()}
+        self.assertEqual(finding_paths, set(documents))
+        self.assertTrue(
+            all(
+                "[provider-token] review required" in line
+                for line in result.stdout.splitlines()
+            )
+        )
+        self.assertNotIn(literal, result.stdout + result.stderr)
+
+    def test_javascript_unresolved_computed_keys_fail_closed_for_credential_literals(
+        self,
+    ) -> None:
+        literal = "production-value-" + "73918462"
+        suspicious_documents = (
+            ('const key = "api_key";\nconst config = {[key]: "' + literal + '"};\n'),
+            (
+                'const parts = ["api", "key"];\n'
+                'const config = {[parts.join("_")]: "' + literal + '"};\n'
+            ),
+        )
+        public_documents = (
+            "const config = {[key]: process.env.API_KEY};\n",
+            'const config = {[key]: "public"};\n',
+            'const config = {["public_label"]: "' + literal + '"};\n',
+        )
+
+        for document in suspicious_documents:
+            with self.subTest(suspicious=document.splitlines()[0]):
+                self.assertTrue(
+                    string_looks_like_credential(document, syntax="javascript")
+                )
+        for document in public_documents:
+            with self.subTest(public=document):
+                self.assertFalse(
+                    string_looks_like_credential(document, syntax="javascript")
+                )
+
+    def test_path_specific_mapping_rules_fail_closed_without_rejecting_sources(
+        self,
+    ) -> None:
+        field = "api" + "_key"
+        authorization_field = "author" + "ization"
+        literal = "production-value-" + "73918462"
+        literal_javascript = (
+            (
+                "const config = {"
+                + field
+                + ': process.env.API_KEY\n + "-'
+                + literal
+                + '"};\n'
+            ),
+            "/* {" + field + ': "' + literal + '"} */\n',
+            "// {" + field + ': "' + literal + '"}\n',
+            ('const config = {["api_".concat("key")]: "' + literal + '"};\n'),
+            "const config = {[String.raw`api_key`]: `" + literal + "`};\n",
+            ('const config = {[`${"api_"}key`]: "' + literal + '"};\n'),
+            ('const config = {[("api_" + // ]\n "key")]: "' + literal + '"};\n'),
+            (
+                'const config = {["a" + "p" + "i" + "_" + "k" + "e" + "y"]: "'
+                + literal
+                + '"};\n'
+            ),
+            (
+                'const quote = () => /"/; const config = {'
+                + field
+                + ': "'
+                + literal
+                + '"};\n'
+            ),
+            (
+                'function quote() { return /"/; } const config = {'
+                + field
+                + ': "'
+                + literal
+                + '"};\n'
+            ),
+            "const config = {" + field + ": Number(73918462)};\n",
+            "const config = {" + field + ": lookup(productionValue)};\n",
+            "const config = {" + field + ": (productionValue)};\n",
+            "const config = {" + field + ": await lookup()};\n",
+            "const config = {" + field + ": (lookup())};\n",
+            (
+                "const config = {"
+                + field
+                + ": process.env.API_KEY + productionValue};\n"
+            ),
+            (
+                "const config = {"
+                + field
+                + ': process.env.API_KEY ?? "'
+                + literal
+                + '"};\n'
+            ),
+            (
+                "const config = {"
+                + field
+                + ': `${process.env.API_KEY || "'
+                + literal
+                + '"}`};\n'
+            ),
+            (
+                "let x=1,y=2; x++ / y; const config = {"
+                + field
+                + ':"'
+                + literal
+                + '"}; /z/.test("z");\n'
+            ),
+            'const config = {"\\141pi_key": "' + literal + '"};\n',
+            "const config = {'\\141pi_key': '" + literal + "'};\n",
+            "const config = {" + field + ': `${"' + literal + '"}`};\n',
+            "const config = {" + field + ': `${String("' + literal + '")}`};\n',
+            "const config = {" + field + ": `${73918462}`};\n",
+            ("const config = {" + field + ' // comment\n : "' + literal + '"};\n'),
+            (
+                "const config = {"
+                + field
+                + ': pass://fixture-vault/item/password + "-'
+                + literal
+                + '"};\n'
+            ),
+            (
+                "const config = {"
+                + field
+                + ': secret-service:// + "'
+                + literal
+                + '"};\n'
+            ),
+            (
+                'const config = {["api_key" + '
+                + " " * 5_000
+                + ']: "'
+                + literal
+                + '"};\n'
+            ),
+            (
+                'const production_value = "'
+                + literal
+                + '";\nconst config = {'
+                + field
+                + ": production_value};\n"
+            ),
+            (
+                'const lookup = () => "'
+                + literal
+                + '";\nconst config = {'
+                + field
+                + ": lookup()};\n"
+            ),
+            ('const config = {[api > key ? "public" : "other"]: "' + literal + '"};\n'),
+            "const config = {[api + key]: `" + literal + "`};\n",
+        )
+        public_javascript = (
+            "const config = {" + field + ": (process.env.API_KEY)};\n",
+            "const config = {" + field + ': process.env["API_KEY"]};\n',
+            "const config = {" + field + ": process?.env?.API_KEY};\n",
+            "const config = {" + field + ': getenv("API_KEY")};\n',
+            "const config = {" + field + ": `${process.env.API_KEY}`};\n",
+            "type Credentials = {" + field + "?: string};\n",
+            "const config = {" + field + ': process.env["CONTEXT7_API_KEY"]};\n',
+            "const config = {" + field + ': getenv("CONTEXT7_API_KEY")};\n',
+            'const config = {token: process.env["GITHUB_TOKEN"]};\n',
+            'const config = {password: Deno.env.get("DATABASE_PASSWORD")};\n',
+            "const {" + field + ": key} = config;\n",
+            "function use({" + field + ": credential}) {}\n",
+            "const {config:{" + field + ":key}}=source;\n",
+            "const {" + field + ": localKey}: Credentials = config;\n",
+            "type C={" + field + ":string|null};\n",
+            "type C={" + field + ":string[]};\n",
+            "type C={" + field + ":Record<string,string>};\n",
+            "type C={" + field + ":()=>string};\n",
+            "type C={" + field + ':"public"|undefined};\n',
+            "interface C {" + field + ": string}\n",
+            (
+                "const config = {"
+                + field
+                + ':{secret_profile_reference:"context7" // comment\n}};\n'
+            ),
+            'const source = "]:";\n',
+            "const regex = /]:/;\n",
+            '// ]: public\nconst source = "public";\n',
+            'const header = "Authorization:Bearer ${GITHUB_PERSONAL_ACCESS_TOKEN}";\n',
+            'const description = "api_key: supplied by the runtime";\n',
+            (
+                "const "
+                + authorization_field
+                + " = request.headers."
+                + authorization_field
+                + ";\n"
+            ),
+            (
+                "const config = {"
+                + authorization_field
+                + ": request.headers."
+                + authorization_field
+                + "};\n"
+            ),
+            (
+                "const config = {"
+                + authorization_field
+                + ": process.env.AUTHORIZATION};\n"
+            ),
+            (
+                'const docs = "'
+                + authorization_field
+                + ": request.headers."
+                + authorization_field
+                + '";\n'
+            ),
+        )
+        literal_yaml = (
+            "config: {api key: " + literal + "}\n",
+            "config: {api/key: " + literal + "}\n",
+            "config: {npm token: " + literal + "}\n",
+            "config: {" + field + ": lookup(" + literal + ")}\n",
+            "config: {\n  " + field + ": " + literal + "\n}\n",
+            "!!str " + field + ": " + literal + "\n",
+            "&name " + field + ": " + literal + "\n",
+            "config: {!!str " + field + ": " + literal + "}\n",
+            "config: {&name " + field + ": " + literal + "}\n",
+            "config: {" + field + ": $TOKEN\n  " + literal + "}\n",
+            "config: {" + field + ": __API_KEY__\n  " + literal + "}\n",
+        )
+        public_yaml = (
+            "config: {" + field + ": ${API_KEY}}\n",
+            "config: {" + field + ": ~}\n",
+            ("config: {" + field + ": {secret_profile_reference: context7}}\n"),
+            ("config: {" + field + ': {"secret_profile_reference": context7}}\n'),
+            (
+                "config: {"
+                + field
+                + ': {"secret_reference": API_KEY, '
+                + '"template": "{reference}"}}\n'
+            ),
+            (
+                "config: {"
+                + field
+                + ": {\n secret_profile_reference: context7 # comment\n}}\n"
+            ),
+        )
+
+        for document in literal_javascript:
+            with self.subTest(literal_javascript=document.splitlines()[0]):
+                self.assertTrue(
+                    string_looks_like_credential(document, syntax="javascript")
+                )
+        for document in public_javascript:
+            with self.subTest(public_javascript=document.splitlines()[0]):
+                self.assertFalse(
+                    string_looks_like_credential(document, syntax="javascript")
+                )
+        for document in literal_yaml:
+            with self.subTest(literal_yaml=document.splitlines()[0]):
+                self.assertTrue(string_looks_like_credential(document, syntax="yaml"))
+        for document in public_yaml:
+            with self.subTest(public_yaml=document.splitlines()[0]):
+                self.assertFalse(string_looks_like_credential(document, syntax="yaml"))
+
+    def test_path_specific_mapping_rules_have_bounded_nesting(self) -> None:
+        javascript = "/* public */\n" * 1_200 + "[" * 4_000 + "]" * 4_000
+        template = "`x${" * 1_100 + "source" + "}`" * 1_100
+        wrapped_source = (
+            "const config = {api_key: "
+            + "(" * 4_000
+            + "process.env.API_KEY"
+            + ")" * 4_000
+            + "};\n"
+        )
+
+        self.assertFalse(string_looks_like_credential(javascript, syntax="javascript"))
+        self.assertFalse(string_looks_like_credential(template, syntax="javascript"))
+        self.assertFalse(
+            string_looks_like_credential(wrapped_source, syntax="javascript")
+        )
+
+    def test_javascript_source_symbols_require_whole_file_certificates(self) -> None:
+        public_documents = (
+            (
+                'const description = "const process = fixture";\n'
+                "const config = {api_key: process.env.API_KEY};\n"
+            ),
+            ("// const Bun = fixture\nconst config = {api_key: Bun.env.API_KEY};\n"),
+            (
+                "const pattern = /function\\s+getenv\\(/;\n"
+                'const config = {api_key: getenv("API_KEY")};\n'
+            ),
+            (
+                "const fixture = {process: source};\n"
+                "const config = {api_key: process.env.API_KEY};\n"
+            ),
+        )
+        suspicious_documents = (
+            (
+                "function inspect() { process = fixture; }\n"
+                "const config = {api_key: process.env.API_KEY};\n"
+            ),
+            ("const config = {api_key: process.env.API_KEY};\nprocess = fixture;\n"),
+            (
+                "{ const process = fixture; use(process); }\n"
+                "const config = {api_key: process.env.API_KEY};\n"
+            ),
+            (
+                "try { inspect(); } catch (process) { inspect(process); }\n"
+                "const config = {api_key: process.env.API_KEY};\n"
+            ),
+            (
+                "for (const process of runtimes) { inspect(process); }\n"
+                "const config = {api_key: process.env.API_KEY};\n"
+            ),
+            (
+                "const tools = { inspect(process) { return process; } };\n"
+                "const config = {api_key: process.env.API_KEY};\n"
+            ),
+            (
+                "function inspect(process) { return process; }\n"
+                "const config = {api_key: process.env.API_KEY};\n"
+            ),
+            (
+                "const process = fixture;\n"
+                "const config = {api_key: process.env.API_KEY};\n"
+            ),
+            ("function use(process) {\n  return {api_key: process.env.API_KEY};\n}\n"),
+            ("process = fixture;\nconst config = {api_key: process.env.API_KEY};\n"),
+            (
+                "{\n"
+                "  const process = fixture;\n"
+                "  const config = {api_key: process.env.API_KEY};\n"
+                "}\n"
+            ),
+            (
+                "try { inspect(); } catch (process) {\n"
+                "  const config = {api_key: process.env.API_KEY};\n"
+                "}\n"
+            ),
+            (
+                "for (const process of runtimes) {\n"
+                "  const config = {api_key: process.env.API_KEY};\n"
+                "}\n"
+            ),
+            (
+                "const tools = {\n"
+                "  inspect(process) {\n"
+                "    return {api_key: process.env.API_KEY};\n"
+                "  },\n"
+                "};\n"
+            ),
+        )
+
+        for document in public_documents:
+            with self.subTest(public=document.splitlines()[0]):
+                self.assertFalse(
+                    string_looks_like_credential(document, syntax="javascript")
+                )
+        for document in suspicious_documents:
+            with self.subTest(suspicious=document.splitlines()[0]):
+                self.assertTrue(
+                    string_looks_like_credential(document, syntax="javascript")
+                )
+
+    def test_javascript_binding_patterns_shadow_only_bound_names(self) -> None:
+        public_documents = (
+            (
+                "const {process: localProcess} = runtime;\n"
+                "const config = {api_key: process.env.API_KEY};\n"
+            ),
+            (
+                "const {getenv: localGetenv} = runtime;\n"
+                'const config = {api_key: getenv("API_KEY")};\n'
+            ),
+            (
+                'import type {process} from "./types.js";\n'
+                "const config = {api_key: process.env.API_KEY};\n"
+            ),
+            (
+                'import {process as localProcess} from "./runtime.js";\n'
+                "const config = {api_key: process.env.API_KEY};\n"
+            ),
+            (
+                "({process: localProcess} = runtime);\n"
+                "const config = {api_key: process.env.API_KEY};\n"
+            ),
+        )
+        suspicious_documents = (
+            (
+                "function inspect({process}) { return process; }\n"
+                "const config = {api_key: process.env.API_KEY};\n"
+            ),
+            (
+                "const {process} = runtime;\n"
+                "const config = {api_key: process.env.API_KEY};\n"
+            ),
+            (
+                "const {runtime: Bun} = source;\n"
+                "const config = {api_key: Bun.env.API_KEY};\n"
+            ),
+            (
+                "const [Deno] = runtimes;\n"
+                'const config = {password: Deno.env.get("DATABASE_PASSWORD")};\n'
+            ),
+            (
+                "const {...os} = runtime;\n"
+                'const config = {password: os.env.get("DATABASE_PASSWORD")};\n'
+            ),
+            (
+                "const {environment: getenv} = runtime;\n"
+                'const config = {api_key: getenv("API_KEY")};\n'
+            ),
+            (
+                "function use({process}) {\n"
+                "  return {api_key: process.env.API_KEY};\n"
+                "}\n"
+            ),
+            ("const use = ({Bun}) => ({api_key: Bun.env.API_KEY});\n"),
+            (
+                'import {runtime as getenv} from "./runtime.js";\n'
+                'const config = {api_key: getenv("API_KEY")};\n'
+            ),
+            (
+                "({runtime: process} = source);\n"
+                "const config = {api_key: process.env.API_KEY};\n"
+            ),
+        )
+
+        for document in public_documents:
+            with self.subTest(public=document.splitlines()[0]):
+                self.assertFalse(
+                    string_looks_like_credential(document, syntax="javascript")
+                )
+        for document in suspicious_documents:
+            with self.subTest(suspicious=document.splitlines()[0]):
+                self.assertTrue(
+                    string_looks_like_credential(document, syntax="javascript")
+                )
+
+    def test_javascript_nonvalue_colons_do_not_hide_runtime_mappings(self) -> None:
+        literal = "production-value-" + "73918462"
+        public_documents = (
+            "const api_key: string = process.env.API_KEY;\n",
+            "function use(api_key: CredentialSource) { return api_key; }\n",
+            'const selected = ready ? api_key : "public";\n',
+            "class Credentials { api_key: string; }\n",
+            "type Credentials = {api_key: string};\n",
+            "interface Credentials { api_key: string }\n",
+            "const {api_key: localKey} = source;\n",
+            (
+                "function use({api_key: localKey}: "
+                "{api_key: string}) { return localKey; }\n"
+            ),
+            'type Credentials = {["api_key"]: string};\n',
+        )
+        suspicious_documents = (
+            'const config: Credentials = {api_key: "' + literal + '"};\n',
+            ('const {fallback = {api_key: "' + literal + '"}} = source;\n'),
+            (
+                'function use({fallback = {api_key: "'
+                + literal
+                + '"}}) { return fallback; }\n'
+            ),
+            (
+                "class Credentials {\n"
+                '  load() { return {api_key: "' + literal + '"}; }\n'
+                "}\n"
+            ),
+            'const config = {["api_key"]: "' + literal + '"};\n',
+        )
+
+        for document in public_documents:
+            with self.subTest(public=document.splitlines()[0]):
+                self.assertFalse(
+                    string_looks_like_credential(document, syntax="javascript")
+                )
+        for document in suspicious_documents:
+            with self.subTest(suspicious=document.splitlines()[0]):
+                self.assertTrue(
+                    string_looks_like_credential(document, syntax="javascript")
+                )
+
+    def test_javascript_source_certificates_fail_closed_on_ambiguous_code(
+        self,
+    ) -> None:
+        literal = "production-value-" + "73918462"
+        authorization_field = "author" + "ization"
+        public_documents = (
+            (
+                "if (ready) /const process = fixture/.test(source)\n"
+                "const config = {api_key: process.env.API_KEY}\n"
+            ),
+            (
+                "while (ready) /let Bun = fixture/.test(source)\n"
+                "const config = {api_key: Bun.env.API_KEY}\n"
+            ),
+            (
+                "for (; ready;) /getenv = fixture/.test(source)\n"
+                'const config = {api_key: getenv("API_KEY")}\n'
+            ),
+            (
+                "let x = 1, y = 2; x++ / y;\n"
+                "const config = {api_key: process.env.API_KEY}\n"
+            ),
+            (
+                'import {process as localProcess} from "./runtime.js"\n'
+                "const config = {api_key: process.env.API_KEY}\n"
+            ),
+            (
+                "type Source = {api_key: string; nested: {password: string}}\n"
+                "const config = {api_key: process.env.API_KEY}\n"
+            ),
+            (
+                "const fixture = {process: source}; type Source = process;\n"
+                'import {process as localProcess} from "./runtime.js";\n'
+                "runtime.process;\n"
+                "const config = {api_key: process.env.API_KEY}\n"
+            ),
+            ("runtime.eval(source);\nconst config = {api_key: process.env.API_KEY}\n"),
+            "const config = {api_key: process.env.API_KEY ?? fallback}\n",
+            (
+                "const config = {"
+                + authorization_field
+                + ": request.headers."
+                + authorization_field
+                + "}\n"
+            ),
+        )
+        suspicious_documents = (
+            ("function use(process, options = {api_key: process.env.API_KEY}) {}\n"),
+            (
+                "function use(...process) {\n"
+                "  return {api_key: process.env.API_KEY};\n"
+                "}\n"
+            ),
+            (
+                "const process: Runtime = fixture;\n"
+                "const config = {api_key: process.env.API_KEY}\n"
+            ),
+            (
+                "function use(process: Runtime) {}\n"
+                "const config = {api_key: process.env.API_KEY}\n"
+            ),
+            (
+                "type Source = {value: string}\n"
+                'const config = {api_key: lookup("' + literal + '")}\n'
+            ),
+            (
+                "const task = async function process() {};\n"
+                "const config = {api_key: process.env.API_KEY};\n"
+            ),
+            (
+                'import {runtime as process} from "./runtime.js"\n'
+                "const config = {api_key: process.env.API_KEY}\n"
+            ),
+            (
+                "const fallback = source;\n"
+                "const config = {api_key: process.env.API_KEY ?? fallback}\n"
+            ),
+            ('const config = {api_key: process.env.API_KEY ?? "' + literal + '"}\n'),
+            ("use(process);\nconst config = {api_key: process.env.API_KEY}\n"),
+            (
+                "const selected = ready ? process : runtime;\n"
+                "const config = {api_key: process.env.API_KEY}\n"
+            ),
+            ("process++;\nconst config = {api_key: process.env.API_KEY}\n"),
+            ("function process() {}\nconst config = {api_key: process.env.API_KEY}\n"),
+            ("class process {}\nconst config = {api_key: process.env.API_KEY}\n"),
+            ("eval(source);\nconst config = {api_key: process.env.API_KEY}\n"),
+            ("with (runtime) {}\nconst config = {api_key: process.env.API_KEY}\n"),
+            ("Function(source);\nconst config = {api_key: process.env.API_KEY}\n"),
+            "( const config = {api_key: process.env.API_KEY};\n",
+            "const config = {api_key: process.env.API_KEY}; (\n",
+            "} const config = {api_key: process.env.API_KEY};\n",
+            (
+                "const pro"
+                "\\u0063"
+                "ess = fixture;\n"
+                "const config = {api_key: process.env.API_KEY}\n"
+            ),
+            (
+                "const request = fixture;\n"
+                "const config = {"
+                + authorization_field
+                + ": request.headers."
+                + authorization_field
+                + "}\n"
+            ),
+        )
+
+        for document in public_documents:
+            with self.subTest(public=document.splitlines()[0]):
+                self.assertFalse(
+                    string_looks_like_credential(document, syntax="javascript")
+                )
+        for document in suspicious_documents:
+            with self.subTest(suspicious=document.splitlines()[0]):
+                self.assertTrue(
+                    string_looks_like_credential(document, syntax="javascript")
+                )
+
+    def test_javascript_typed_initializers_are_runtime_credential_sites(
+        self,
+    ) -> None:
+        literal = "production-value-" + "73918462"
+        suspicious_documents = (
+            'const api_key: string = "' + literal + '";\n',
+            'function use(api_key: string = "' + literal + '") {}\n',
+            'class Source { api_key: string = "' + literal + '"; }\n',
+            'class Source { api_key?: string = "' + literal + '"; }\n',
+            'class Source { api_key!: string = "' + literal + '"; }\n',
+            ('const {api_key: local = "' + literal + '"} = source;\n'),
+            (
+                "class Source {\n"
+                "  field: string\n"
+                '  load() { return {api_key: "' + literal + '"}; }\n'
+                "}\n"
+            ),
+            ('type Source = string const config = {api_key: "' + literal + '"};\n'),
+        )
+        public_documents = (
+            "const api_key: string = process.env.API_KEY;\n",
+            "function use(api_key: string = process.env.API_KEY) {}\n",
+            "class Source { api_key?: string = process.env.API_KEY; }\n",
+            ('type Source = {api_key: "public"; nested: {password: string}}\n'),
+        )
+
+        for document in suspicious_documents:
+            with self.subTest(suspicious=document.splitlines()[0]):
+                self.assertTrue(
+                    string_looks_like_credential(document, syntax="javascript")
+                )
+        for document in public_documents:
+            with self.subTest(public=document.splitlines()[0]):
+                self.assertFalse(
+                    string_looks_like_credential(document, syntax="javascript")
+                )
+
+    def test_javascript_ambiguous_type_ranges_do_not_swallow_runtime_blocks(
+        self,
+    ) -> None:
+        literal = "production-value-" + "73918462"
+        runtime_mapping = '{api_key: "' + literal + '"}'
+        suspicious_documents = (
+            (
+                "class Source { field: string [load]() { return "
+                + runtime_mapping
+                + "; } }\n"
+            ),
+            (
+                "class Source { field: string static [load]() { return "
+                + runtime_mapping
+                + "; } }\n"
+            ),
+            (
+                "class Source { field: string static load() { return "
+                + runtime_mapping
+                + "; } }\n"
+            ),
+            (
+                "class Source { field: string static { const config = "
+                + runtime_mapping
+                + "; } }\n"
+            ),
+            *(
+                "type Source = string "
+                + boundary
+                + " N { const config = "
+                + runtime_mapping
+                + "; }\n"
+                for boundary in ("namespace", "enum", "module", "using", "xyz")
+            ),
+            ("type Source = string xyz { const config = " + runtime_mapping + "; }\n"),
+            (
+                "type Source = string namespace N { export const config = "
+                + runtime_mapping
+                + "; }\n"
+            ),
+            (
+                "type Source = string module M { export const config = "
+                + runtime_mapping
+                + "; }\n"
+            ),
+            ('type Source = string enum E { api_key = "' + literal + '" }\n'),
+            ("type Source = string using c = " + runtime_mapping + ";\n"),
+        )
+        public_documents = (
+            "type Source = string & {nested: {password: string}};\n",
+            (
+                "type Source = string; namespace N { export const config = "
+                "{api_key: process.env.API_KEY}; }\n"
+            ),
+            (
+                "type Source = string; module M { export const config = "
+                "{api_key: process.env.API_KEY}; }\n"
+            ),
+            "type Source = string; enum E { api_key = 0 }\n",
+            ("type Source = string; using c = {api_key: process.env.API_KEY};\n"),
+            (
+                "type Factory = <T = string>() => T; "
+                "const config = {api_key: process.env.API_KEY};\n"
+            ),
+            (
+                "class Source { field: string; static [load]() { return "
+                "{api_key: process.env.API_KEY}; } }\n"
+            ),
+        )
+
+        for document in suspicious_documents:
+            with self.subTest(suspicious=document.splitlines()[0]):
+                self.assertTrue(
+                    string_looks_like_credential(document, syntax="javascript")
+                )
+        for document in public_documents:
+            with self.subTest(public=document):
+                self.assertFalse(
+                    string_looks_like_credential(document, syntax="javascript")
+                )
+
+    def test_javascript_direct_assignment_members_use_bounded_literal_fallback(
+        self,
+    ) -> None:
+        literal = "production-value-" + "73918462"
+        suspicious_documents = (
+            'type Source = string enum E { api_key = "' + literal + '" }\n',
+            'enum E { api_key = "' + literal + '" }\n',
+            'class E { api_key = "' + literal + '" }\n',
+        )
+        public_documents = (
+            'enum E { api_key = "public" }\n',
+            'class E { api_key = "short" }\n',
+            "class E { static api_key = process.env.API_KEY }\n",
+            "enum E { api_key = API_KEY }\n",
+            ('type E<api_key = "production-value-73918462"> = api_key;\n'),
+        )
+
+        for document in suspicious_documents:
+            with self.subTest(suspicious=document.splitlines()[0]):
+                self.assertTrue(
+                    string_looks_like_credential(document, syntax="javascript")
+                )
+        for document in public_documents:
+            with self.subTest(public=document.splitlines()[0]):
+                self.assertFalse(
+                    string_looks_like_credential(document, syntax="javascript")
+                )
+
+    def test_javascript_bindable_source_shorthands_require_certificates(
+        self,
+    ) -> None:
+        literal = "production-value-" + "73918462"
+        names = (
+            "str",
+            "string",
+            "object",
+            "unknown",
+            "int",
+            "bool",
+            "bytes",
+            "list",
+            "tuple",
+            "any",
+            "never",
+            "float",
+            "$API_KEY",
+            "__API_KEY__",
+            "undefined",
+            "FALSE",
+            "True",
+            "NULL",
+            "Undefined",
+        )
+
+        for name in names:
+            with self.subTest(unbound=name):
+                self.assertFalse(
+                    string_looks_like_credential(
+                        "const config = {api_key: " + name + "};\n",
+                        syntax="javascript",
+                    )
+                )
+            with self.subTest(bound=name):
+                self.assertTrue(
+                    string_looks_like_credential(
+                        "const "
+                        + name
+                        + ' = "'
+                        + literal
+                        + '";\nconst config = {api_key: '
+                        + name
+                        + "};\n",
+                        syntax="javascript",
+                    )
+                )
+            with self.subTest(template_bound=name):
+                self.assertTrue(
+                    string_looks_like_credential(
+                        "const "
+                        + name
+                        + ' = "'
+                        + literal
+                        + '";\nconst config = {api_key: `${'
+                        + name
+                        + "}`};\n",
+                        syntax="javascript",
+                    )
+                )
+
+        for literal_name in ("false", "null", "true"):
+            with self.subTest(literal=literal_name):
+                self.assertFalse(
+                    string_looks_like_credential(
+                        "const config = {api_key: " + literal_name + "};\n",
+                        syntax="javascript",
+                    )
+                )
+
+        self.assertTrue(
+            string_looks_like_credential(
+                'const undefined = "' + literal + '";\nconst config = {'
+                "api_key: process.env.API_KEY ?? undefined};\n",
+                syntax="javascript",
+            )
+        )
+
+    def test_javascript_dynamic_intrinsics_invalidate_source_certificates(
+        self,
+    ) -> None:
+        suspicious_prefixes = (
+            "(0, eval)(source);\n",
+            "(eval)(source);\n",
+            "eval?.(source);\n",
+            "globalThis.eval(source);\n",
+            "const indirect = eval;\n",
+            "Function.call(null, source);\n",
+            "globalThis.Function(source);\n",
+            "globalThis.process = makeRuntime(source);\n",
+            "global.process = makeRuntime(source);\n",
+            "window.process = makeRuntime(source);\n",
+            "self.process = makeRuntime(source);\n",
+            "this.process = makeRuntime(source);\n",
+            "top.process = makeRuntime(source);\n",
+            "parent.process = makeRuntime(source);\n",
+            "frames.process = makeRuntime(source);\n",
+            'this.eval("process = makeRuntime(source)");\n',
+            'top.eval("process = makeRuntime(source)");\n',
+            'setTimeout("process = makeRuntime(source)", 0);\n',
+            'setTimeout(("process = makeRuntime(source)"), 0);\n',
+            "setInterval(`process = makeRuntime(source)`, 1);\n",
+            "setTimeout(`process = ${makeRuntime(source)}`, 0);\n",
+            "setInterval(String.raw`process = ${makeRuntime(source)}`, 1);\n",
+            "setTimeout((String.raw)`process = ${makeRuntime(source)}`, 0);\n",
+            'setInterval(String["raw"]`process = ${makeRuntime(source)}`, 1);\n',
+            "(setTimeout)(`process = ${makeRuntime(source)}`, 0);\n",
+            "(0, setInterval)(String.raw`process = ${makeRuntime(source)}`, 1);\n",
+            'setTimeout.call(null, "process = makeRuntime(source)", 0);\n',
+            'setTimeout?.call(null, "process = makeRuntime(source)", 0);\n',
+            'setInterval.apply(null, ["process = makeRuntime(source)", 1]);\n',
+            '[].filter.constructor("process = makeRuntime(source)")();\n',
+            '(async () => {}).constructor("process = makeRuntime(source)")();\n',
+            '(runtime.constructor)("process = makeRuntime(source)")();\n',
+            '(0, runtime.constructor)("process = makeRuntime(source)")();\n',
+            'runtime.constructor.call(null, "process = makeRuntime(source)")();\n',
+            'runtime.constructor?.call(null, "process = makeRuntime(source)")();\n',
+            'Reflect.set(globalThis, "process", source);\n',
+        )
+        suffix = "const config = {api_key: process.env.API_KEY};\n"
+
+        for prefix in suspicious_prefixes:
+            with self.subTest(prefix=prefix.strip()):
+                self.assertTrue(
+                    string_looks_like_credential(
+                        prefix + suffix,
+                        syntax="javascript",
+                    )
+                )
+
+        self.assertFalse(
+            string_looks_like_credential(
+                "runtime.eval(source);\n" + suffix,
+                syntax="javascript",
+            )
+        )
+        self.assertFalse(
+            string_looks_like_credential(
+                "setTimeout(callback, 0);\n"
+                "setInterval?.(callback, 0);\n"
+                "const descriptor = runtime.constructor;\n" + suffix,
+                syntax="javascript",
+            )
+        )
+
+    def test_javascript_dynamic_callable_references_normalize_static_members_and_aliases(
+        self,
+    ) -> None:
+        suffix = "const config = {api_key: process.env.API_KEY};\n"
+        suspicious_prefixes = (
+            'setTimeout["call"](null, "process = makeRuntime(source)", 0);\n',
+            'setInterval[`apply`](null, ["process = makeRuntime(source)", 1]);\n',
+            'runtime["constructor"]("process = makeRuntime(source)")();\n',
+            (
+                'runtime["con" + "structor"]["call"]'
+                '(null, "process = makeRuntime(source)")();\n'
+            ),
+            (
+                'const C = [].filter["constructor"];\n'
+                'C("process = makeRuntime(source)")();\n'
+            ),
+            (
+                "const {constructor: C} = [].filter;\n"
+                'C("process = makeRuntime(source)")();\n'
+            ),
+            (
+                'const {["con" + "structor"]: C} = [].filter;\n'
+                'C("process = makeRuntime(source)")();\n'
+            ),
+            '[setTimeout][0]("process = makeRuntime(source)", 0);\n',
+            '[setTimeout, callback][0]("process = makeRuntime(source)", 0);\n',
+            '([setInterval])[0]("process = makeRuntime(source)", 1);\n',
+            (
+                '[callback, runtime["constructor"]][1]'
+                '("process = makeRuntime(source)")();\n'
+            ),
+            ('const timer = setTimeout;\ntimer("process = makeRuntime(source)", 0);\n'),
+        )
+
+        for prefix in suspicious_prefixes:
+            with self.subTest(prefix=prefix.splitlines()[0]):
+                self.assertTrue(
+                    string_looks_like_credential(prefix + suffix, syntax="javascript")
+                )
+
+        public_prefixes = (
+            'const descriptor = runtime["constructor"];\n',
+            "const timer = setTimeout;\ntimer(callback, 0);\n",
+            "[setTimeout][0](callback, 0);\n",
+            '[setTimeout][1]("process = makeRuntime(source)", 0);\n',
+            '[setTimeout]["00"]("process = makeRuntime(source)", 0);\n',
+            '[callback, setTimeout][0]("process = makeRuntime(source)", 0);\n',
+            "[runtime.constructor][0];\n",
+        )
+        for prefix in public_prefixes:
+            with self.subTest(public=prefix.splitlines()[0]):
+                self.assertFalse(
+                    string_looks_like_credential(prefix + suffix, syntax="javascript")
+                )
+
+    def test_javascript_ambiguous_runtime_candidates_fail_closed(self) -> None:
+        literal = "production-value-" + "73918462"
+        documents = (
+            (
+                'const config = {api_key: /[)]/.test(value) ? "'
+                + literal
+                + '" : process.env.API_KEY};\n'
+            ),
+            (
+                'const config = {api_key: /[}]/.test(value) ? "'
+                + literal
+                + '" : process.env.API_KEY};\n'
+            ),
+            (
+                'const config = {api_key: /[(]/.test(value) ? "'
+                + literal
+                + '" : process.env.API_KEY};\n'
+            ),
+            ('const config = {broken ? marker, api_key: "' + literal + '"};\n'),
+            ('const config = {broken ? api_key: "' + literal + '"};\n'),
+            (
+                'const config = {broken ? /* unresolved */ api_key: "'
+                + literal
+                + '"};\n'
+            ),
+        )
+
+        for document in documents:
+            with self.subTest(document=document.splitlines()[0]):
+                self.assertTrue(
+                    string_looks_like_credential(document, syntax="javascript")
+                )
+
+    def test_malformed_javascript_declaration_work_is_linear(self) -> None:
+        small = _javascript_lexical_index("const value " * 512).work_units
+        large = _javascript_lexical_index("const value " * 1024).work_units
+
+        self.assertLessEqual(large, small * 3)
+
+        small_types = _javascript_lexical_index("type T = string " * 512)
+        large_types = _javascript_lexical_index("type T = string " * 1024)
+
+        self.assertFalse(small_types.analysis_exhausted)
+        self.assertFalse(large_types.analysis_exhausted)
+        self.assertLessEqual(large_types.work_units, small_types.work_units * 3)
+
+        exhausted = _javascript_lexical_index(
+            "type T = string;",
+            work_budget=0,
+        )
+        self.assertTrue(exhausted.analysis_exhausted)
+        self.assertTrue(
+            _javascript_mappings_contain_literal_credential(
+                "const config = {api_key: process.env.API_KEY};",
+                work_budget=0,
+            )
+        )
+
+        callable_small = _javascript_lexical_index("x(): T " * 256)
+        callable_large = _javascript_lexical_index("x(): T " * 512)
+        self.assertTrue(callable_small.analysis_exhausted)
+        self.assertTrue(callable_large.analysis_exhausted)
+        self.assertLessEqual(callable_large.work_units, callable_small.work_units * 3)
+        self.assertTrue(
+            _javascript_mappings_contain_literal_credential(
+                "x(): T " * 512 + "const config = {api_key: process.env.API_KEY};\n"
+            )
+        )
+
+        for fragment in ("function f ", "class C ", "interface I ", "import x "):
+            with self.subTest(fragment=fragment.strip()):
+                family_small = _javascript_lexical_index(fragment * 256)
+                family_large = _javascript_lexical_index(fragment * 512)
+                self.assertLessEqual(
+                    family_large.work_units,
+                    family_small.work_units * 3,
+                )
+
+    def test_unterminated_template_opaque_spans_remain_ordered(self) -> None:
+        _, opaque_spans, _ = _lex_javascript(
+            '`outer ${ `inner ${ "production-value-73918462"'
+        )
+
+        self.assertEqual(
+            opaque_spans,
+            tuple(sorted(opaque_spans, key=lambda span: (span[0], span[1]))),
+        )
+
+    def test_template_output_actions_fail_closed_in_credential_context(self) -> None:
+        literal = "production-value-" + "73918462"
+        documents = (
+            (
+                'const config = {api_key: {{ printf "%q" "' + literal + '" }}};\n',
+                "javascript-template",
+            ),
+            (
+                '{"api_key": {{ printf "%q" "' + literal + '" }}}\n',
+                "template",
+            ),
+        )
+        public_documents = (
+            ("{{/* public comment */}}\n", "template"),
+            ("{{ if .enabled }}public{{ end }}\n", "template"),
+            (
+                "const config = {api_key: {{ .CredentialReference }}};\n",
+                "javascript-template",
+            ),
+        )
+
+        for document, syntax in documents:
+            with self.subTest(syntax=syntax):
+                self.assertTrue(string_looks_like_credential(document, syntax=syntax))
+        for document, syntax in public_documents:
+            with self.subTest(public=syntax):
+                self.assertFalse(string_looks_like_credential(document, syntax=syntax))
+
+    def test_template_local_binding_outputs_do_not_receive_source_certificates(
+        self,
+    ) -> None:
+        literal = "production-value-" + "73918462"
+        documents = (
+            (
+                '{{ $secret := "' + literal + '" }}\n{"api_key":"{{ $secret }}"}\n',
+                "template",
+            ),
+            (
+                '{{ $secret = "' + literal + '" }}\n'
+                "const config = {api_key: {{ $secret }}};\n",
+                "javascript-template",
+            ),
+            (
+                '{% set secret = "' + literal + '" %}\n'
+                "config: {api_key: {{ secret }}}\n",
+                "yaml-template",
+            ),
+            (
+                '{% set secret = "' + literal + '" %}\napi_key = "{{ secret }}"\n',
+                "toml-template",
+            ),
+        )
+        public_documents = (
+            '{"api_key":"{{ .CredentialReference }}"}\n',
+            '{"api_key":"{{ $CredentialReference }}"}\n',
+            '{"api_key":"{{ credential_reference }}"}\n',
+            (
+                "{{ $class := .dataClass }}\n"
+                '{"{{ $class }}_memory_enabled": {{ $class }}}\n'
+            ),
+        )
+
+        for document, syntax in documents:
+            with self.subTest(syntax=syntax):
+                self.assertTrue(string_looks_like_credential(document, syntax=syntax))
+        for document in public_documents:
+            with self.subTest(public=document):
+                self.assertFalse(
+                    string_looks_like_credential(document, syntax="template")
+                )
+
+    def test_template_output_actions_fail_closed_in_credential_keys(self) -> None:
+        literal = "production-value-" + "73918462"
+        documents = (
+            (
+                '{"api_{{ printf "%s" "key" }}":"' + literal + '"}\n',
+                "template",
+            ),
+            (
+                'const config = {"api_{{ printf "%s" "key" }}":"' + literal + '"};\n',
+                "javascript-template",
+            ),
+            (
+                'config: {api_{{ printf "%s" "key" }}: ' + literal + "}\n",
+                "yaml-template",
+            ),
+            (
+                'api_{{ printf "%s" "key" }} = "' + literal + '"\n',
+                "toml-template",
+            ),
+        )
+
+        for document, syntax in documents:
+            with self.subTest(syntax=syntax):
+                self.assertTrue(string_looks_like_credential(document, syntax=syntax))
+
+    def test_template_control_flow_cannot_concatenate_credential_key_branches(
+        self,
+    ) -> None:
+        literal = "production-value-" + "73918462"
+        documents = (
+            (
+                '{"api_{{ if .key }}key{{ else }}secret{{ end }}":"' + literal + '"}\n',
+                "template",
+            ),
+            (
+                'const config = {"{{if .key}}api_key{{else}}password{{end}}":"'
+                + literal
+                + '"};\n',
+                "javascript-template",
+            ),
+            (
+                'config: {"'
+                '{{if .key}}api_key{{else}}password{{end}}": ' + literal + "}\n",
+                "yaml-template",
+            ),
+            (
+                'api_{{ if .key }}key{{ else }}secret{{ end }} = "' + literal + '"\n',
+                "toml-template",
+            ),
+        )
+
+        for document, syntax in documents:
+            with self.subTest(syntax=syntax):
+                self.assertTrue(string_looks_like_credential(document, syntax=syntax))
+
+        self.assertFalse(
+            string_looks_like_credential(
+                "label: {{ if .enabled }}public{{ else }}reference{{ end }}\n",
+                syntax="yaml-template",
+            )
+        )
+
+    def test_privacy_scan_serialized_syntax_table_is_explicit(self) -> None:
+        cases = {
+            "source.js": "javascript",
+            "source.json": None,
+            "source.jsx": "javascript-conservative",
+            "source.ts": "javascript",
+            "source.tsx": "javascript-conservative",
+            "source.js.tmpl": "javascript-template",
+            "source.tsx.tmpl": "javascript-conservative-template",
+            "source.yaml": "yaml",
+            "source.yaml.j2": "yaml-template",
+            "source.toml": None,
+            "source.toml.tpl": "toml-template",
+            "source.tmpl": "template",
+            "source.txt": None,
+        }
+        for relative, expected in cases.items():
+            with self.subTest(relative=relative):
+                self.assertEqual(serialized_syntax(relative), expected)
+
+        literal = "production-value-" + "73918462"
+        self.assertTrue(
+            string_looks_like_credential(
+                'const node = <Box></Box>;\nconst config = {api_key: "'
+                + literal
+                + '"};\n',
+                syntax="javascript-conservative",
+            )
+        )
+        self.assertTrue(
+            string_looks_like_credential(
+                'const config = {api_key: {{ printf "%q" "' + literal + '" }}};\n',
+                syntax="javascript-conservative-template",
+            )
+        )
+
+    def test_privacy_scan_routes_syntax_aware_files_fail_closed(self) -> None:
+        literal = "production-value-" + "73918462"
+        documents = {
+            "closing.tsx": (
+                '<Box></Box>;\nconst config = {api_key: "' + literal + '"};\n'
+            ),
+            "closing.jsx": (
+                '<Box></Box>;\nconst config = {api_key: "' + literal + '"};\n'
+            ),
+            "helper.js.tmpl": (
+                'const config = {api_key: {{ printf "%q" "' + literal + '" }}};\n'
+            ),
+            "helper.json.tmpl": ('{"api_key": {{ printf "%q" "' + literal + '" }}}\n'),
+            "helper.tmpl": ('{"api_key": {{ printf "%q" "' + literal + '" }}}\n'),
+            "bound-helper.json.tmpl": (
+                '{{ $secret := "' + literal + '" }}\n{"api_key":"{{ $secret }}"}\n'
+            ),
+            "branch-key.json.tmpl": (
+                '{"api_{{ if .key }}key{{ else }}secret{{ end }}":"' + literal + '"}\n'
+            ),
+            "regex.ts": (
+                'const config = {api_key: /[)]/.test(value) ? "'
+                + literal
+                + '" : process.env.API_KEY};\n'
+            ),
+            "literal.ts": 'const config = {api_key: "' + literal + '"};\n',
+            "class-field.ts": (
+                "class Source {\n"
+                "  field: string\n"
+                '  load() { return {api_key: "' + literal + '"}; }\n'
+                "}\n"
+            ),
+            "same-line-computed-method.ts": (
+                'class Source { field: string [load]() { return {api_key: "'
+                + literal
+                + '"}; } }\n'
+            ),
+            "malformed-type.ts": (
+                'type Source = string const config = {api_key: "' + literal + '"};\n'
+            ),
+            "unknown-type-block.ts": (
+                'type Source = string namespace N { const config = {api_key: "'
+                + literal
+                + '"}; }\n'
+            ),
+            "unterminated-using.ts": (
+                'type Source = string using c = {api_key: "' + literal + '"};\n'
+            ),
+            "direct-assignment-class.ts": ('class E { api_key = "' + literal + '" }\n'),
+            "direct-assignment-enum.ts": ('enum E { api_key = "' + literal + '" }\n'),
+            "malformed-ternary.ts": (
+                'const config = {broken ? api_key: "' + literal + '"};\n'
+            ),
+            "dynamic-global.ts": (
+                "this.process = makeRuntime(source);\n"
+                "const config = {api_key: process.env.API_KEY};\n"
+            ),
+            "string-code.ts": (
+                "(setTimeout)(`process = ${makeRuntime(source)}`, 0);\n"
+                "const config = {api_key: process.env.API_KEY};\n"
+            ),
+            "string-raw-code.ts": (
+                'setInterval(String["raw"]`process = ${makeRuntime(source)}`, 1);\n'
+                "const config = {api_key: process.env.API_KEY};\n"
+            ),
+            "string-wrapped-raw-code.ts": (
+                "setTimeout((String.raw)`process = ${makeRuntime(source)}`, 0);\n"
+                "const config = {api_key: process.env.API_KEY};\n"
+            ),
+            "constructor-code.ts": (
+                '(0, [].filter.constructor)("process = makeRuntime(source)")();\n'
+                "const config = {api_key: process.env.API_KEY};\n"
+            ),
+            "computed-constructor-code.ts": (
+                'runtime["constructor"]["call"]'
+                '(null, "process = makeRuntime(source)")();\n'
+                "const config = {api_key: process.env.API_KEY};\n"
+            ),
+            "container-call.ts": (
+                '[setTimeout][0]("process = makeRuntime(source)", 0);\n'
+                "const config = {api_key: process.env.API_KEY};\n"
+            ),
+            "computed-local-key.ts": (
+                'const key = "api_key";\nconst config = {[key]: "' + literal + '"};\n'
+            ),
+            "types.ts": "interface Credentials {\n  api_key: CredentialSource\n}\n",
+        }
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            for relative, document in documents.items():
+                (root / relative).write_text(document, encoding="utf-8")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts/privacy-scan"),
+                    "--root",
+                    str(root),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(
+            set(result.stdout.splitlines()),
+            {
+                f"{relative}:0: [provider-token] review required"
+                for relative in documents
+                if relative != "types.ts"
+            },
+        )
+        self.assertNotIn(literal, result.stdout + result.stderr)
+
     def test_cross_line_yaml_alphanumeric_literals_are_credentials(self) -> None:
         firecrawl_field = "FIRECRAWL_API_" + "KEY"
         token_field = "TO" + "KEN"
@@ -1314,6 +2844,8 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
     def test_privacy_scan_scans_mislabeled_age_files_and_accepts_age_envelopes(
         self,
     ) -> None:
+        if shutil.which("age-inspect") is None:
+            require_age_tooling_or_skip("age-inspect is unavailable")
         credential = provider_credentials()[0]
         native_age = (ROOT / "home/.private-prd-01.toml.age").read_bytes()
         armored_age = (ROOT / "home/.private-agents.md.age").read_bytes()

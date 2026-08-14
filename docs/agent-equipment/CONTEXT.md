@@ -176,6 +176,14 @@ exclusive lease and rechecked immediately before a public compensation claim
 or transition.
 _Avoid_: Caller-supplied digest, partial checkpoint list, mutable store view
 
+**Checkpoint-store snapshot**:
+The sealed, bounded, nonempty ordered full-record image of one trusted
+checkpoint store generation for an exact apply, run, execution domain, and
+plan-action set. Release replay derives the store generation and durable
+checkpoint records from its exact archived bytes; the checkpoint-set manifest
+is only its validated projection.
+_Avoid_: Checkpoint-set projection, ambient record list, caller-supplied generation
+
 **Compensation transition claim**:
 The separate immutable provenance record for a public compensation transition.
 It binds one immutable checkpoint identity to the independently validated
@@ -196,7 +204,7 @@ _Avoid_: Fresh compensation authorization, inferred authority, automatic rollbac
 The closed authenticated success record for one exact apply execution tuple,
 complete plan-action set, validated checkpoint-set manifest, and trusted store
 generation. Success requires unique completed checkpoint coverage of every plan
-action.
+action and strictly increasing durable generations in canonical action order.
 _Avoid_: Caller-supplied state string, partial checkpoint prefix, release receipt
 
 **Expected acceptance case manifest**:
@@ -221,9 +229,9 @@ archives one exact release tuple and alone may issue its release receipt.
 _Avoid_: Candidate CLI, evidence writer, acceptance validator
 
 **Release archive manifest**:
-The closed record binding exact release-document byte digests, candidate and
-execution identity, trusted launcher, authority-store destination, and the
-create-only generation contract.
+The closed record binding all eleven exact release-document byte digests,
+candidate and execution identity, trusted launcher, authority-store
+destination, and the create-only generation contract.
 _Avoid_: Release receipt, candidate artifact index
 
 **Release receipt**:

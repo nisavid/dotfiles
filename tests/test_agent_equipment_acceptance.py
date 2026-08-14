@@ -621,7 +621,7 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
                 {"surface/a": {"version": 2}, "surface/b": {"version": 2}}
             )
 
-            def change_before_restore(action: object) -> None:
+            def change_before_restore(action: ACCEPTANCE.Mutation) -> None:
                 if action.step_id == "step-000":
                     fixture.adapter.state["surface/a"] = {"version": "external"}
 
@@ -662,7 +662,7 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
                 }
             )
 
-            def revert_completed_surface(action: object) -> None:
+            def revert_completed_surface(action: ACCEPTANCE.Mutation) -> None:
                 if action.step_id == "step-001":
                     fixture.adapter.state["surface/b"] = {"version": 1}
 
@@ -958,7 +958,7 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
                 {"surface/a": {"version": 2}, "surface/b": {"version": 2}}
             )
 
-            def change_before_restore(action: object) -> None:
+            def change_before_restore(action: ACCEPTANCE.Mutation) -> None:
                 if action.step_id == "step-000":
                     fixture.adapter.state[action.surface] = {"external": True}
 
@@ -1176,11 +1176,21 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
                 fixture.apply_authorization_digest,
             )
             self.assertEqual(checkpoint["execution_nonce"], fixture.execution_nonce)
+            self.assertEqual(
+                checkpoint["prepared_action_authority_set_identity"],
+                fixture.prepared_action_authority_set_identity,
+            )
+            self.assertEqual(
+                checkpoint["prepared_action_authority_set_digest"],
+                fixture.prepared_action_authority_set_digest,
+            )
 
             for field in (
                 "apply_authorization_identity",
                 "apply_authorization_digest",
                 "execution_nonce",
+                "prepared_action_authority_set_identity",
+                "prepared_action_authority_set_digest",
             ):
                 with self.subTest(field=field):
                     changed = dict(checkpoint)
@@ -1237,6 +1247,8 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
             "catalog_digest",
             "lock_digest",
             "plan_digest",
+            "prepared_action_authority_set_identity",
+            "prepared_action_authority_set_digest",
             "capability_set_digest",
             "captured_state_identity",
             "captured_state_digest",
@@ -1263,6 +1275,9 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
                                 "execution-domain:fixture/other-ledger-v1"
                             ),
                             "captured_state_identity": "captured-state:fixture/changed",
+                            "prepared_action_authority_set_identity": (
+                                "prepared-action-authority-set:sha256:" + "f" * 64
+                            ),
                         }.get(field, f"sha256:{'f' * 64}")
                         changed = replace(plan, **{field: changed_value})
                     else:
@@ -1291,6 +1306,8 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
                             "candidate_digest",
                             "implementation_manifest_digest",
                             "plan_digest",
+                            "prepared_action_authority_set_identity",
+                            "prepared_action_authority_set_digest",
                             "capability_set_digest",
                             "compensation",
                         }
@@ -1791,6 +1808,7 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
             "catalog_digest",
             "lock_digest",
             "plan_digest",
+            "prepared_action_authority_set_digest",
             "capability_set_digest",
             "captured_state_digest",
         )
@@ -1823,6 +1841,7 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
         plan_cases = {
             "run_identity": (1, ""),
             "execution_domain_identity": (1, ""),
+            "prepared_action_authority_set_identity": (1, ""),
             "captured_state_identity": (2, ""),
         }
         action_cases = {

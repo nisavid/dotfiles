@@ -244,6 +244,19 @@ class AgentEquipmentDesignTest(unittest.TestCase):
         )
         counts = inventory["counts"]
 
+        standalone_classification_counts = dict.fromkeys(
+            inventory["snapshot"]["classification_values"], 0
+        )
+        for group in inventory["standalone_skills"]["classification_groups"]:
+            self.assertIn(group["classification"], standalone_classification_counts)
+            standalone_classification_counts[group["classification"]] += len(
+                group["names"]
+            )
+        self.assertEqual(
+            standalone_classification_counts,
+            counts["standalone_by_classification"],
+        )
+
         standalone_names = [
             name
             for group in inventory["standalone_skills"]["classification_groups"]
@@ -402,6 +415,7 @@ class AgentEquipmentDesignTest(unittest.TestCase):
             len(lock["coverage"]),
             len(identities) * len(catalog["active_harnesses"]),
         )
+        self.assertEqual(len(catalog["retirements"]), 23)
         self.assertTrue(
             {
                 "mcp:chrome-devtools/server",
@@ -507,7 +521,6 @@ class AgentEquipmentDesignTest(unittest.TestCase):
             {diagnostic.code for diagnostic in result.diagnostics},
         )
         self.assertIsNone(result.mutation_plan)
-        self.assertEqual(len(catalog["retirements"]), 23)
 
         matt_record = next(
             entry.record

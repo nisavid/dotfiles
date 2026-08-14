@@ -22,6 +22,14 @@ try:
 except ModuleNotFoundError:  # Loaded as a repo module rather than an executable.
     from scripts.agent_equipment_public_data import contains_literal_credential
 try:
+    from agent_equipment_acceptance_evidence import (
+        validate_acceptance_evidence as _validate_acceptance_evidence,
+    )
+except ModuleNotFoundError:  # Loaded as a repo module rather than an executable.
+    from scripts.agent_equipment_acceptance_evidence import (
+        validate_acceptance_evidence as _validate_acceptance_evidence,
+    )
+try:
     from agent_equipment_captured_state import (
         plan_action_digest as _plan_action_digest,
     )
@@ -52,7 +60,12 @@ except ModuleNotFoundError:  # Loaded as a repo module rather than an executable
 SCHEMA_DIRECTORY = Path(__file__).resolve().parent.parent / "docs/agent-equipment"
 SCHEMA_NAME = "execution-authority-v1.schema.json"
 PLAN_ACTION_SET_SCHEMA_NAME = "plan-action-set-v1.schema.json"
+CAPTURED_STATE_SCHEMA_NAME = "captured-state-v1.schema.json"
 MAX_EXECUTION_AUTHORITY_BYTES = 262_144
+MAX_PLAN_ACTION_SET_BYTES = 16 * 1024 * 1024
+MAX_CAPTURED_STATE_BYTES = 16 * 1024 * 1024
+MAX_CHECKPOINT_STORE_SNAPSHOT_BYTES = 16 * 1024 * 1024
+MAX_RELEASE_ACCEPTANCE_BYTES = 16 * 1024 * 1024
 _UTC_TIMESTAMP_PATTERN = re.compile(
     r"^(?P<year>[0-9]{4})-(?P<month>[0-9]{2})-(?P<day>[0-9]{2})"
     r"[Tt](?P<hour>[0-9]{2}):(?P<minute>[0-9]{2}):(?P<second>[0-9]{2})"
@@ -74,6 +87,8 @@ _CHECKPOINT_BINDING_FIELDS = frozenset(
         "catalog_digest",
         "lock_digest",
         "plan_digest",
+        "prepared_action_authority_set_identity",
+        "prepared_action_authority_set_digest",
         "capability_set_digest",
         "captured_state_identity",
         "captured_state_digest",
@@ -177,13 +192,21 @@ def _diagnostic(code: str, path: str, message: str) -> Diagnostic:
     return Diagnostic(path=path, code=code, message=message)
 
 
-def _schema_valid(document: object, schema_name: str = SCHEMA_NAME) -> bool:
-    if schema_name == SCHEMA_NAME:
-        try:
-            if len(_canonical_bytes(document)) > MAX_EXECUTION_AUTHORITY_BYTES:
-                return False
-        except (RecursionError, TypeError, UnicodeEncodeError, ValueError):
+def _schema_valid(
+    document: object,
+    schema_name: str = SCHEMA_NAME,
+    *,
+    maximum_bytes: int | None = None,
+) -> bool:
+    if maximum_bytes is None:
+        if schema_name != SCHEMA_NAME:
             return False
+        maximum_bytes = MAX_EXECUTION_AUTHORITY_BYTES
+    try:
+        if len(_canonical_bytes(document)) > maximum_bytes:
+            return False
+    except (RecursionError, TypeError, UnicodeEncodeError, ValueError):
+        return False
     return _validate_schema(
         document,
         schema_directory=SCHEMA_DIRECTORY,
@@ -217,6 +240,35 @@ def _reject_constant(value: str) -> object:
     raise _AmbiguousJson("non-JSON numeric constant")
 
 
+def _parse_bounded_json_bytes(
+    raw_bytes: object,
+    *,
+    maximum_bytes: int,
+) -> object | None:
+    if type(raw_bytes) is not bytes or len(raw_bytes) > maximum_bytes:
+        return None
+    try:
+        text = raw_bytes.decode("utf-8", errors="strict")
+        document = json.loads(
+            text,
+            object_pairs_hook=_unique_object,
+            parse_float=_finite_number,
+            parse_constant=_reject_constant,
+        )
+        if len(_canonical_bytes(document)) > maximum_bytes:
+            return None
+        return document
+    except (
+        RecursionError,
+        UnicodeDecodeError,
+        UnicodeEncodeError,
+        json.JSONDecodeError,
+        _AmbiguousJson,
+        ValueError,
+    ):
+        return None
+
+
 def parse_execution_authority_bytes(
     raw_bytes: object,
 ) -> tuple[object | None, tuple[Diagnostic, ...]]:
@@ -230,15 +282,11 @@ def parse_execution_authority_bytes(
                 "The authority input is not one bounded raw byte stream.",
             ),
         )
-    try:
-        text = raw_bytes.decode("utf-8", errors="strict")
-        document = json.loads(
-            text,
-            object_pairs_hook=_unique_object,
-            parse_float=_finite_number,
-            parse_constant=_reject_constant,
-        )
-    except (UnicodeDecodeError, json.JSONDecodeError, _AmbiguousJson, ValueError):
+    document = _parse_bounded_json_bytes(
+        raw_bytes,
+        maximum_bytes=MAX_EXECUTION_AUTHORITY_BYTES,
+    )
+    if document is None:
         return None, (
             _diagnostic(
                 "EXECUTION_AUTHORITY_JSON_INVALID",
@@ -292,6 +340,19 @@ def _checkpoint_set_identity(document: Mapping[str, object]) -> str:
 
 def _checkpoint_set_digest(document: Mapping[str, object]) -> str:
     return _artifact_digest(document, "checkpoint_set_digest")
+
+
+def _checkpoint_store_snapshot_identity(document: Mapping[str, object]) -> str:
+    payload = {
+        key: value
+        for key, value in document.items()
+        if key not in {"snapshot_identity", "snapshot_digest"}
+    }
+    return "checkpoint-store-snapshot:" + canonical_digest(payload)
+
+
+def _checkpoint_store_snapshot_digest(document: Mapping[str, object]) -> str:
+    return _artifact_digest(document, "snapshot_digest")
 
 
 def checkpoint_identity(
@@ -389,7 +450,11 @@ def _validated_plan_action_index(
     if (
         not isinstance(document, Mapping)
         or document.get("schema_version") != "agent-equipment-plan-action-set/v1"
-        or not _schema_valid(document, PLAN_ACTION_SET_SCHEMA_NAME)
+        or not _schema_valid(
+            document,
+            PLAN_ACTION_SET_SCHEMA_NAME,
+            maximum_bytes=MAX_PLAN_ACTION_SET_BYTES,
+        )
     ):
         return {}, (
             _diagnostic(
@@ -410,6 +475,63 @@ def _validated_plan_action_index(
     diagnostics: list[Diagnostic] = []
     actions = document["actions"]
     assert isinstance(actions, list)
+    if actions:
+        first_payload = actions[0]["action_payload"]
+        assert isinstance(first_payload, Mapping)
+
+        expected_action_authority = {
+            "candidate_identity": expected_candidate_identity,
+            "implementation_manifest_digest": expected_implementation_manifest_digest,
+            "catalog_digest": first_payload.get("catalog_digest"),
+            "lock_digest": first_payload.get("lock_digest"),
+            "plan_digest": expected_plan_digest,
+        }
+
+        def action_authority_binding_valid(payload: object) -> bool:
+            if not isinstance(payload, Mapping):
+                return False
+            preconditions = payload.get("preconditions")
+            expected_preconditions = {
+                "candidate_identity": expected_candidate_identity,
+                "implementation_manifest_digest": (
+                    expected_implementation_manifest_digest
+                ),
+                "catalog_digest": first_payload.get("catalog_digest"),
+                "lock_digest": first_payload.get("lock_digest"),
+                "plan_digest": expected_plan_digest,
+                "route_digest": payload.get("route_digest"),
+                "capability_digest": payload.get("capability_digest"),
+                "manager_version_evidence_digest": payload.get(
+                    "manager_version_evidence_digest"
+                ),
+                "adapter_identity": payload.get("adapter_identity"),
+                "adapter_version": payload.get("adapter_version"),
+                "control_owner": "reconciler_owned",
+                "activation_group": payload.get("activation_group"),
+                "surface_scope": payload.get("surface_scope"),
+                "prepared_checkpoint_required": True,
+                "compare_before_mutate": True,
+            }
+            return (
+                all(
+                    payload.get(field) == expected
+                    for field, expected in expected_action_authority.items()
+                )
+                and preconditions == expected_preconditions
+            )
+
+        if any(
+            not isinstance(evidence, Mapping)
+            or not action_authority_binding_valid(evidence.get("action_payload"))
+            for evidence in actions
+        ):
+            diagnostics.append(
+                _diagnostic(
+                    "PLAN_ACTION_SET_BINDING_MISMATCH",
+                    "$.authoritative_plan_action_set.actions",
+                    "Every plan action must bind the independently trusted plan authority and its exact precondition projection.",
+                )
+            )
     try:
         computed_set_digest = _plan_action_set_digest(
             str(document["candidate_identity"]),
@@ -1455,6 +1577,134 @@ def validate_apply_authorization(
     return tuple(sorted(diagnostics))
 
 
+def validate_checkpoint_store_snapshot(
+    document: object,
+    *,
+    expected_apply_authorization_identity: str,
+    expected_apply_authorization_digest: str,
+    expected_execution_domain_identity: str,
+    expected_execution_nonce: str,
+    expected_run_identity: str,
+    expected_plan_action_set_digest: str,
+) -> tuple[Diagnostic, ...]:
+    """Validate one sealed, complete checkpoint-store replay snapshot."""
+
+    if (
+        not isinstance(document, Mapping)
+        or document.get("schema_version")
+        != "agent-equipment-checkpoint-store-snapshot/v1"
+        or not _schema_valid(
+            document,
+            maximum_bytes=MAX_CHECKPOINT_STORE_SNAPSHOT_BYTES,
+        )
+    ):
+        return (
+            _diagnostic(
+                "CHECKPOINT_STORE_SNAPSHOT_SCHEMA_INVALID",
+                "$.checkpoint_store_snapshot",
+                "The checkpoint-store snapshot does not satisfy the checked-in closed schema and size bound.",
+            ),
+        )
+    if contains_literal_credential(document):
+        return (
+            _diagnostic(
+                "CHECKPOINT_STORE_SNAPSHOT_LITERAL_SECRET",
+                "$.checkpoint_store_snapshot",
+                "The checkpoint-store snapshot contains credential-shaped literal material.",
+            ),
+        )
+
+    diagnostics: list[Diagnostic] = []
+    if document["snapshot_identity"] != _checkpoint_store_snapshot_identity(document):
+        diagnostics.append(
+            _diagnostic(
+                "CHECKPOINT_STORE_SNAPSHOT_IDENTITY_INVALID",
+                "$.checkpoint_store_snapshot.snapshot_identity",
+                "The checkpoint-store snapshot identity does not match its canonical payload.",
+            )
+        )
+    if document["snapshot_digest"] != _checkpoint_store_snapshot_digest(document):
+        diagnostics.append(
+            _diagnostic(
+                "CHECKPOINT_STORE_SNAPSHOT_DIGEST_INVALID",
+                "$.checkpoint_store_snapshot.snapshot_digest",
+                "The checkpoint-store snapshot digest does not match the complete snapshot.",
+            )
+        )
+
+    expected_bindings = {
+        "apply_authorization_identity": expected_apply_authorization_identity,
+        "apply_authorization_digest": expected_apply_authorization_digest,
+        "execution_domain_identity": expected_execution_domain_identity,
+        "execution_nonce": expected_execution_nonce,
+        "run_identity": expected_run_identity,
+        "plan_action_set_digest": expected_plan_action_set_digest,
+    }
+    if document["bindings"] != expected_bindings:
+        diagnostics.append(
+            _diagnostic(
+                "CHECKPOINT_STORE_SNAPSHOT_BINDING_MISMATCH",
+                "$.checkpoint_store_snapshot.bindings",
+                "The checkpoint-store snapshot does not bind the exact independently trusted apply run.",
+            )
+        )
+
+    checkpoints = document["checkpoints"]
+    assert isinstance(checkpoints, list)
+    expected_record_bindings = {
+        "apply_authorization_identity": expected_apply_authorization_identity,
+        "apply_authorization_digest": expected_apply_authorization_digest,
+        "execution_domain_identity": expected_execution_domain_identity,
+        "execution_nonce": expected_execution_nonce,
+        "run_identity": expected_run_identity,
+    }
+    if any(
+        not isinstance(record := _checkpoint_record(checkpoint), Mapping)
+        or any(
+            record.get(field) != expected
+            for field, expected in expected_record_bindings.items()
+        )
+        for checkpoint in checkpoints
+    ):
+        diagnostics.append(
+            _diagnostic(
+                "CHECKPOINT_STORE_SNAPSHOT_RECORD_BINDING_MISMATCH",
+                "$.checkpoint_store_snapshot.checkpoints",
+                "A full checkpoint record does not bind the snapshot's exact independently trusted apply run.",
+            )
+        )
+    projected = _project_checkpoint_entries(checkpoints)
+    store_generation = document["checkpoint_store_generation"]
+    generations = [
+        checkpoint.get("durable_generation")
+        for checkpoint in checkpoints
+        if isinstance(checkpoint, Mapping)
+    ]
+    if (
+        projected is None
+        or not projected
+        or projected
+        != sorted(
+            projected,
+            key=lambda entry: (entry["ordinal"], entry["checkpoint_identity"]),
+        )
+        or len({entry["checkpoint_identity"] for entry in projected}) != len(projected)
+        or len({entry["ordinal"] for entry in projected}) != len(projected)
+        or not generations
+        or any(type(generation) is not int for generation in generations)
+        or len(set(generations)) != len(generations)
+        or store_generation != max(generations)
+    ):
+        diagnostics.append(
+            _diagnostic(
+                "CHECKPOINT_STORE_SNAPSHOT_MEMBERSHIP_INVALID",
+                "$.checkpoint_store_snapshot.checkpoints",
+                "The checkpoint-store snapshot is not one ordered, unique, complete durable-record sequence at its latest durable generation.",
+            )
+        )
+    return tuple(sorted(set(diagnostics)))
+
+
 def validate_checkpoint_set_manifest(
     document: object,
     *,
@@ -1771,6 +2021,10 @@ def validate_checkpoint_set_manifest(
         or record.get("catalog_digest") != captured_bindings.get("catalog_digest")
         or record.get("lock_digest") != captured_bindings.get("lock_digest")
         or record.get("plan_digest") != captured_bindings.get("plan_digest")
+        or record.get("prepared_action_authority_set_identity")
+        != expected_prepared_action_authority_set_identity
+        or record.get("prepared_action_authority_set_digest")
+        != expected_prepared_action_authority_set_digest
         or record.get("capability_set_digest")
         != captured_bindings.get("capability_set_digest")
         or record.get("captured_state_identity") != expected_captured_state_identity
@@ -2557,6 +2811,10 @@ def validate_run_terminal_record(
         for record in trusted_records
         if record is not None
     }
+    terminal_checkpoint_generations = [
+        snapshot.get("durable_generation") if isinstance(snapshot, Mapping) else None
+        for snapshot in trusted_snapshots
+    ]
     if (
         any(
             record is None or record.get("phase") != "completed"
@@ -2564,38 +2822,465 @@ def validate_run_terminal_record(
         )
         or terminal_checkpoint_keys != set(plan_action_index)
         or len(terminal_checkpoint_keys) != len(trusted_records)
+        or any(
+            type(generation) is not int
+            for generation in terminal_checkpoint_generations
+        )
+        or terminal_checkpoint_generations
+        != sorted(set(terminal_checkpoint_generations))
     ):
         diagnostics.append(
             _diagnostic(
                 "RUN_TERMINAL_CHECKPOINT_STATE_MISMATCH",
                 "$.trusted_checkpoint_store",
-                "A successful run requires one completed trusted checkpoint for every action in the complete plan-action set.",
+                "A successful run requires one completed trusted checkpoint for every action in the complete plan-action set, with durable generations increasing in action order.",
             )
         )
     return tuple(sorted(set(diagnostics)))
 
 
+def _archived_apply_authorization_diagnostics(
+    document: object,
+    *,
+    authoritative_plan_action_set: object,
+    authoritative_captured_state: object,
+    expected_apply_authorization_identity: str,
+    expected_apply_authorization_digest: str,
+    expected_execution_domain_identity: str,
+    expected_execution_nonce: str,
+    expected_run_identity: str,
+    expected_plan_action_set_digest: str,
+    expected_candidate_identity: str,
+    expected_implementation_manifest_digest: str,
+    expected_plan_digest: str,
+    expected_captured_state_identity: str,
+    expected_captured_state_digest: str,
+    expected_capture_observation_authority_set_identity: str,
+    expected_capture_observation_authority_set_digest: str,
+    expected_prepared_action_authority_set_identity: str,
+    expected_prepared_action_authority_set_digest: str,
+    authorized_expected_case_manifest_digest: str,
+) -> tuple[Diagnostic, ...]:
+    """Revalidate archived apply authority without reapplying its time gate.
+
+    Release authenticates the complete historical record through the independently
+    trusted canonical digest, then checks every execution and artifact binding it
+    can derive from the other exact replay streams. Expiry is an apply-time gate,
+    not a reason to make a completed run unreleasable later.
+    """
+
+    if not isinstance(document, Mapping):
+        return (
+            _diagnostic(
+                "RELEASE_APPLY_AUTHORIZATION_MISMATCH",
+                "$.apply_authorization_bytes",
+                "The archived apply authorization is not one validated authority record.",
+            ),
+        )
+    plan_actions = (
+        authoritative_plan_action_set.get("actions")
+        if isinstance(authoritative_plan_action_set, Mapping)
+        else None
+    )
+    first_action = (
+        plan_actions[0].get("action_payload")
+        if isinstance(plan_actions, list)
+        and plan_actions
+        and isinstance(plan_actions[0], Mapping)
+        else None
+    )
+    captured_bindings = (
+        authoritative_captured_state.get("bindings")
+        if isinstance(authoritative_captured_state, Mapping)
+        else None
+    )
+    bindings = document.get("bindings")
+    expected_execution_fields = {
+        "authorization_identity": expected_apply_authorization_identity,
+        "execution_domain_identity": expected_execution_domain_identity,
+        "execution_nonce": expected_execution_nonce,
+        "run_identity": expected_run_identity,
+    }
+    expected_binding_fields = {
+        "candidate_identity": expected_candidate_identity,
+        "implementation_manifest_digest": expected_implementation_manifest_digest,
+        "catalog_digest": (
+            first_action.get("catalog_digest")
+            if isinstance(first_action, Mapping)
+            else None
+        ),
+        "lock_digest": (
+            first_action.get("lock_digest")
+            if isinstance(first_action, Mapping)
+            else None
+        ),
+        "plan_digest": expected_plan_digest,
+        "plan_action_set_digest": expected_plan_action_set_digest,
+        "prepared_action_authority_set_identity": (
+            expected_prepared_action_authority_set_identity
+        ),
+        "prepared_action_authority_set_digest": (
+            expected_prepared_action_authority_set_digest
+        ),
+        "capability_set_digest": (
+            captured_bindings.get("capability_set_digest")
+            if isinstance(captured_bindings, Mapping)
+            else None
+        ),
+        "captured_state_identity": expected_captured_state_identity,
+        "captured_state_digest": expected_captured_state_digest,
+        "capture_observation_authority_set_identity": (
+            expected_capture_observation_authority_set_identity
+        ),
+        "capture_observation_authority_set_digest": (
+            expected_capture_observation_authority_set_digest
+        ),
+        "expected_case_manifest_digest": authorized_expected_case_manifest_digest,
+    }
+    valid = (
+        document.get("authorization_identity") == _authorization_identity(document)
+        and canonical_digest(document) == expected_apply_authorization_digest
+        and all(
+            document.get(field) == expected
+            for field, expected in expected_execution_fields.items()
+        )
+        and isinstance(bindings, Mapping)
+        and all(
+            bindings.get(field) == expected
+            for field, expected in expected_binding_fields.items()
+        )
+    )
+    if valid:
+        return ()
+    return (
+        _diagnostic(
+            "RELEASE_APPLY_AUTHORIZATION_MISMATCH",
+            "$.apply_authorization_bytes",
+            "The archived apply authorization does not match the independently trusted execution tuple and exact replay artifacts.",
+        ),
+    )
+
+
+def _release_acceptance_diagnostics(
+    expected_case_manifest: object,
+    evidence_bundle: object,
+    attestation_manifest: object,
+    *,
+    expected_candidate_identity: str,
+    expected_implementation_manifest_digest: str,
+    authorized_expected_case_manifest_digest: str,
+    authorized_attestation_manifest_digest: str,
+    expected_apply_authorization_identity: str,
+    expected_apply_authorization_digest: str,
+    expected_execution_domain_identity: str,
+    expected_execution_nonce: str,
+    expected_run_identity: str,
+) -> tuple[Diagnostic, ...]:
+    if any(
+        document is None
+        for document in (
+            expected_case_manifest,
+            evidence_bundle,
+            attestation_manifest,
+        )
+    ):
+        return (
+            _diagnostic(
+                "RELEASE_ACCEPTANCE_EVIDENCE_INVALID",
+                "$.release_evidence_bytes",
+                "The exact expected-case, evidence-bundle, and attestation bytes are not bounded strict JSON.",
+            ),
+        )
+    try:
+        source_diagnostics = _validate_acceptance_evidence(
+            evidence_bundle,
+            expected_case_manifest,
+            attestation_manifest,
+            expected_candidate_identity=expected_candidate_identity,
+            expected_implementation_manifest_digest=(
+                expected_implementation_manifest_digest
+            ),
+            expected_case_manifest_digest=(authorized_expected_case_manifest_digest),
+            expected_attestation_manifest_digest=(
+                authorized_attestation_manifest_digest
+            ),
+            expected_apply_authorization_identity=(
+                expected_apply_authorization_identity
+            ),
+            expected_apply_authorization_digest=expected_apply_authorization_digest,
+            expected_execution_domain_identity=expected_execution_domain_identity,
+            expected_execution_nonce=expected_execution_nonce,
+            expected_run_identity=expected_run_identity,
+        )
+    except (RecursionError, TypeError, ValueError):
+        return (
+            _diagnostic(
+                "RELEASE_ACCEPTANCE_EVIDENCE_INVALID",
+                "$.release_evidence_bytes",
+                "The exact acceptance tuple could not be validated safely.",
+            ),
+        )
+    return tuple(
+        _diagnostic(
+            str(diagnostic.code),
+            "$.release_evidence" + str(diagnostic.path).removeprefix("$"),
+            str(diagnostic.message),
+        )
+        for diagnostic in source_diagnostics
+    )
+
+
+def _release_expected_case_replay_diagnostics(
+    expected_case_manifest: object,
+    authoritative_plan_action_set: object,
+    authoritative_captured_state: object,
+    *,
+    expected_candidate_identity: str,
+    expected_implementation_manifest_digest: str,
+    expected_plan_digest: str,
+    expected_plan_action_set_digest: str,
+    expected_captured_state_identity: str,
+    expected_captured_state_digest: str,
+) -> tuple[Diagnostic, ...]:
+    """Cross-check expected-case claims derivable from exact replay streams."""
+
+    actions = (
+        authoritative_plan_action_set.get("actions")
+        if isinstance(authoritative_plan_action_set, Mapping)
+        else None
+    )
+    if not isinstance(actions, list):
+        return ()
+    first_action = (
+        actions[0].get("action_payload")
+        if actions and isinstance(actions[0], Mapping)
+        else None
+    )
+    captured_bindings = (
+        authoritative_captured_state.get("bindings")
+        if isinstance(authoritative_captured_state, Mapping)
+        else None
+    )
+    expected_bindings = {
+        "candidate_identity": expected_candidate_identity,
+        "implementation_manifest_digest": expected_implementation_manifest_digest,
+        "catalog_digest": (
+            first_action.get("catalog_digest")
+            if isinstance(first_action, Mapping)
+            else None
+        ),
+        "lock_digest": (
+            first_action.get("lock_digest")
+            if isinstance(first_action, Mapping)
+            else None
+        ),
+        "plan_digest": expected_plan_digest,
+        "plan_action_set_digest": expected_plan_action_set_digest,
+        "capability_set_digest": (
+            captured_bindings.get("capability_set_digest")
+            if isinstance(captured_bindings, Mapping)
+            else None
+        ),
+        "captured_state_identity": expected_captured_state_identity,
+        "captured_state_digest": expected_captured_state_digest,
+    }
+    diagnostics: list[Diagnostic] = []
+    if (
+        not isinstance(expected_case_manifest, Mapping)
+        or expected_case_manifest.get("bindings") != expected_bindings
+    ):
+        diagnostics.append(
+            _diagnostic(
+                "EXPECTED_CASE_MANIFEST_BINDING_MISMATCH",
+                "$.release_evidence.bindings",
+                "The expected-case manifest does not bind the exact trusted and replayed plan and capture tuple.",
+            )
+        )
+
+    expected_action_identities: list[object] = []
+    for evidence in actions:
+        payload = (
+            evidence.get("action_payload") if isinstance(evidence, Mapping) else None
+        )
+        if not isinstance(payload, Mapping):
+            return tuple(diagnostics)
+        expected_action_identities.append(payload.get("action_identity"))
+    expected_action_identities.sort(key=str)
+
+    if (
+        not isinstance(expected_case_manifest, Mapping)
+        or expected_case_manifest.get("plan_action_identities")
+        != expected_action_identities
+    ):
+        diagnostics.append(
+            _diagnostic(
+                "EXPECTED_CASE_MANIFEST_PLAN_ACTION_SET_MISMATCH",
+                "$.release_evidence.plan_action_identities",
+                "The expected-case manifest does not name all and only the exact replayed plan actions.",
+            )
+        )
+
+    plan_routes: dict[str, dict[str, object]] = {}
+    route_projection_is_valid = True
+    overlay_by_harness = {
+        "claude": "claude_json",
+        "codex": "codex_toml",
+        "cursor": "cursor_json",
+    }
+    for evidence in actions:
+        assert isinstance(evidence, Mapping)
+        action = evidence["action_payload"]
+        assert isinstance(action, Mapping)
+        provider = action.get("provider")
+        harness = action.get("harness")
+        route_identity = action.get("route_identity")
+        if (
+            not isinstance(provider, Mapping)
+            or not isinstance(harness, str)
+            or not isinstance(route_identity, str)
+        ):
+            route_projection_is_valid = False
+            continue
+        provider_kind = provider.get("kind")
+        if provider_kind == "standalone_skill":
+            provider_selector: object = {
+                "kind": "standalone_skill",
+                "canonical_root": provider.get("canonical_root"),
+            }
+            manager_identity: object = "manager:standalone_skills"
+        elif provider_kind == "native_plugin":
+            manager = provider.get("manager")
+            provider_selector = {
+                "kind": "native_plugin",
+                "manager": manager,
+                "plugin_id": provider.get("plugin_id"),
+                "scope": provider.get("scope"),
+            }
+            manager_identity = f"manager:{manager}"
+        elif provider_kind == "direct_mcp":
+            provider_selector = {
+                "kind": "direct_mcp",
+                "transport": provider.get("transport"),
+                "overlay_family": overlay_by_harness.get(harness),
+            }
+            manager_identity = "manager:direct_mcp"
+        else:
+            route_projection_is_valid = False
+            continue
+        projection = {
+            "route_identity": route_identity,
+            "route_digest": action.get("route_digest"),
+            "harness": harness,
+            "provider_selector": provider_selector,
+            "manager_identity": manager_identity,
+            "capability_identity": action.get("capability_identity"),
+            "capability_digest": action.get("capability_digest"),
+            "manager_version_evidence_digest": action.get(
+                "manager_version_evidence_digest"
+            ),
+        }
+        existing_projection = plan_routes.get(route_identity)
+        if existing_projection is not None and existing_projection != projection:
+            route_projection_is_valid = False
+        plan_routes[route_identity] = projection
+
+    captured_routes = (
+        authoritative_captured_state.get("provider_routes")
+        if isinstance(authoritative_captured_state, Mapping)
+        else None
+    )
+    captured_route_projections: dict[str, dict[str, object]] = {}
+    if not isinstance(captured_routes, list):
+        route_projection_is_valid = False
+    else:
+        for route in captured_routes:
+            capability_binding = (
+                route.get("capability_binding") if isinstance(route, Mapping) else None
+            )
+            route_identity = (
+                route.get("route_id") if isinstance(route, Mapping) else None
+            )
+            if not isinstance(route_identity, str) or not isinstance(
+                capability_binding, Mapping
+            ):
+                route_projection_is_valid = False
+                continue
+            captured_projection = {
+                "route_digest": route.get("route_digest"),
+                "harness": route.get("harness"),
+                "capability_identity": capability_binding.get("capability_identity"),
+                "capability_digest": capability_binding.get("capability_digest"),
+                "manager_version_evidence_digest": capability_binding.get(
+                    "manager_version_evidence_digest"
+                ),
+            }
+            if route_identity in captured_route_projections:
+                route_projection_is_valid = False
+            captured_route_projections[route_identity] = captured_projection
+
+    if set(captured_route_projections) != set(plan_routes):
+        route_projection_is_valid = False
+    for route_identity, projection in plan_routes.items():
+        expected_captured_projection = {
+            field: projection[field]
+            for field in (
+                "route_digest",
+                "harness",
+                "capability_identity",
+                "capability_digest",
+                "manager_version_evidence_digest",
+            )
+        }
+        if (
+            captured_route_projections.get(route_identity)
+            != expected_captured_projection
+        ):
+            route_projection_is_valid = False
+
+    expected_route_bindings = sorted(
+        plan_routes.values(),
+        key=lambda binding: str(binding["route_identity"]),
+    )
+    if (
+        not route_projection_is_valid
+        or not isinstance(expected_case_manifest, Mapping)
+        or expected_case_manifest.get("route_capability_bindings")
+        != expected_route_bindings
+    ):
+        diagnostics.append(
+            _diagnostic(
+                "EXPECTED_CASE_MANIFEST_ROUTE_BINDING_MISMATCH",
+                "$.release_evidence.route_capability_bindings",
+                "The expected-case manifest does not bind every exact replayed plan and captured-state route capability tuple.",
+            )
+        )
+    return tuple(diagnostics)
+
+
 def _release_evidence_diagnostics(
     *,
+    apply_authorization_bytes: object,
+    plan_action_set_bytes: object,
+    captured_state_bytes: object,
+    checkpoint_store_snapshot_bytes: object,
     checkpoint_set_manifest: object,
     checkpoint_set_manifest_bytes: object,
     capture_observation_authority_set_bytes: object,
     prepared_action_authority_set_bytes: object,
     run_terminal_record: object,
     run_terminal_record_bytes: object,
+    expected_case_manifest_bytes: object,
+    evidence_bundle_bytes: object,
+    attestation_manifest_bytes: object,
     expected_apply_authorization_identity: str,
     expected_apply_authorization_digest: str,
     expected_execution_domain_identity: str,
     expected_execution_nonce: str,
     expected_run_identity: str,
-    authoritative_plan_action_set: object,
     expected_plan_action_set_digest: str,
     expected_candidate_identity: str,
     expected_implementation_manifest_digest: str,
     expected_plan_digest: str,
-    trusted_checkpoint_store_generation: int,
-    trusted_checkpoint_records: Sequence[Mapping[str, object]],
-    authoritative_captured_state: object,
     expected_captured_state_identity: str,
     expected_captured_state_digest: str,
     capture_observation_authority_set: object,
@@ -2604,8 +3289,193 @@ def _release_evidence_diagnostics(
     prepared_action_authority_set: object,
     expected_prepared_action_authority_set_identity: str,
     expected_prepared_action_authority_set_digest: str,
+    authorized_expected_case_manifest_digest: str,
+    authorized_attestation_manifest_digest: str,
 ) -> tuple[Diagnostic, ...]:
-    diagnostics = list(
+    apply_authorization: object | None = None
+    apply_parse_diagnostics: tuple[Diagnostic, ...] = ()
+    if type(apply_authorization_bytes) is bytes:
+        apply_authorization, apply_parse_diagnostics = parse_execution_authority_bytes(
+            apply_authorization_bytes
+        )
+    authoritative_plan_action_set = _parse_bounded_json_bytes(
+        plan_action_set_bytes,
+        maximum_bytes=MAX_PLAN_ACTION_SET_BYTES,
+    )
+    authoritative_captured_state = _parse_bounded_json_bytes(
+        captured_state_bytes,
+        maximum_bytes=MAX_CAPTURED_STATE_BYTES,
+    )
+    checkpoint_store_snapshot = _parse_bounded_json_bytes(
+        checkpoint_store_snapshot_bytes,
+        maximum_bytes=MAX_CHECKPOINT_STORE_SNAPSHOT_BYTES,
+    )
+    expected_case_manifest = _parse_bounded_json_bytes(
+        expected_case_manifest_bytes,
+        maximum_bytes=MAX_RELEASE_ACCEPTANCE_BYTES,
+    )
+    evidence_bundle = _parse_bounded_json_bytes(
+        evidence_bundle_bytes,
+        maximum_bytes=MAX_RELEASE_ACCEPTANCE_BYTES,
+    )
+    attestation_manifest = _parse_bounded_json_bytes(
+        attestation_manifest_bytes,
+        maximum_bytes=MAX_RELEASE_ACCEPTANCE_BYTES,
+    )
+
+    plan_diagnostics = (
+        validate_plan_action_set(
+            authoritative_plan_action_set,
+            expected_action_set_digest=expected_plan_action_set_digest,
+            expected_candidate_identity=expected_candidate_identity,
+            expected_implementation_manifest_digest=(
+                expected_implementation_manifest_digest
+            ),
+            expected_plan_digest=expected_plan_digest,
+        )
+        if _schema_valid(
+            authoritative_plan_action_set,
+            PLAN_ACTION_SET_SCHEMA_NAME,
+            maximum_bytes=MAX_PLAN_ACTION_SET_BYTES,
+        )
+        else (
+            _diagnostic(
+                "PLAN_ACTION_SET_SCHEMA_INVALID",
+                "$.authoritative_plan_action_set",
+                "The exact plan-action-set bytes do not satisfy the checked-in closed schema and size bound.",
+            ),
+        )
+    )
+    if (
+        isinstance(authoritative_plan_action_set, Mapping)
+        and authoritative_plan_action_set.get("actions") == []
+    ):
+        plan_diagnostics = plan_diagnostics + (
+            _diagnostic(
+                "RELEASE_PLAN_ACTION_SET_EMPTY",
+                "$.authoritative_plan_action_set.actions",
+                "Release requires at least one authenticated plan action and completed checkpoint.",
+            ),
+        )
+    captured_state_diagnostics: tuple[object, ...] = ()
+    captured_state_is_valid = False
+    if _schema_valid(
+        authoritative_captured_state,
+        CAPTURED_STATE_SCHEMA_NAME,
+        maximum_bytes=MAX_CAPTURED_STATE_BYTES,
+    ):
+        try:
+            captured_state_diagnostics = _validate_captured_state(
+                authoritative_captured_state,
+                authoritative_plan_action_set,
+                expected_candidate_identity=expected_candidate_identity,
+                expected_implementation_manifest_digest=(
+                    expected_implementation_manifest_digest
+                ),
+            )
+        except (RecursionError, TypeError, ValueError):
+            pass
+        else:
+            captured_state_is_valid = not captured_state_diagnostics
+    snapshot_diagnostics = validate_checkpoint_store_snapshot(
+        checkpoint_store_snapshot,
+        expected_apply_authorization_identity=expected_apply_authorization_identity,
+        expected_apply_authorization_digest=expected_apply_authorization_digest,
+        expected_execution_domain_identity=expected_execution_domain_identity,
+        expected_execution_nonce=expected_execution_nonce,
+        expected_run_identity=expected_run_identity,
+        expected_plan_action_set_digest=expected_plan_action_set_digest,
+    )
+    trusted_checkpoint_store_generation = (
+        checkpoint_store_snapshot.get("checkpoint_store_generation")
+        if isinstance(checkpoint_store_snapshot, Mapping)
+        and type(checkpoint_store_snapshot.get("checkpoint_store_generation")) is int
+        else -1
+    )
+    trusted_checkpoint_records = (
+        checkpoint_store_snapshot.get("checkpoints")
+        if isinstance(checkpoint_store_snapshot, Mapping)
+        and isinstance(checkpoint_store_snapshot.get("checkpoints"), list)
+        else ()
+    )
+
+    apply_diagnostics = (
+        apply_parse_diagnostics
+        if apply_parse_diagnostics
+        else _archived_apply_authorization_diagnostics(
+            apply_authorization,
+            authoritative_plan_action_set=authoritative_plan_action_set,
+            authoritative_captured_state=authoritative_captured_state,
+            expected_apply_authorization_identity=(
+                expected_apply_authorization_identity
+            ),
+            expected_apply_authorization_digest=expected_apply_authorization_digest,
+            expected_execution_domain_identity=expected_execution_domain_identity,
+            expected_execution_nonce=expected_execution_nonce,
+            expected_run_identity=expected_run_identity,
+            expected_plan_action_set_digest=expected_plan_action_set_digest,
+            expected_candidate_identity=expected_candidate_identity,
+            expected_implementation_manifest_digest=(
+                expected_implementation_manifest_digest
+            ),
+            expected_plan_digest=expected_plan_digest,
+            expected_captured_state_identity=expected_captured_state_identity,
+            expected_captured_state_digest=expected_captured_state_digest,
+            expected_capture_observation_authority_set_identity=(
+                expected_capture_observation_authority_set_identity
+            ),
+            expected_capture_observation_authority_set_digest=(
+                expected_capture_observation_authority_set_digest
+            ),
+            expected_prepared_action_authority_set_identity=(
+                expected_prepared_action_authority_set_identity
+            ),
+            expected_prepared_action_authority_set_digest=(
+                expected_prepared_action_authority_set_digest
+            ),
+            authorized_expected_case_manifest_digest=(
+                authorized_expected_case_manifest_digest
+            ),
+        )
+    )
+    acceptance_diagnostics = _release_acceptance_diagnostics(
+        expected_case_manifest,
+        evidence_bundle,
+        attestation_manifest,
+        expected_candidate_identity=expected_candidate_identity,
+        expected_implementation_manifest_digest=(
+            expected_implementation_manifest_digest
+        ),
+        authorized_expected_case_manifest_digest=(
+            authorized_expected_case_manifest_digest
+        ),
+        authorized_attestation_manifest_digest=(authorized_attestation_manifest_digest),
+        expected_apply_authorization_identity=expected_apply_authorization_identity,
+        expected_apply_authorization_digest=expected_apply_authorization_digest,
+        expected_execution_domain_identity=expected_execution_domain_identity,
+        expected_execution_nonce=expected_execution_nonce,
+        expected_run_identity=expected_run_identity,
+    )
+    expected_case_replay_diagnostics = _release_expected_case_replay_diagnostics(
+        expected_case_manifest,
+        authoritative_plan_action_set,
+        authoritative_captured_state,
+        expected_candidate_identity=expected_candidate_identity,
+        expected_implementation_manifest_digest=(
+            expected_implementation_manifest_digest
+        ),
+        expected_plan_digest=expected_plan_digest,
+        expected_plan_action_set_digest=expected_plan_action_set_digest,
+        expected_captured_state_identity=expected_captured_state_identity,
+        expected_captured_state_digest=expected_captured_state_digest,
+    )
+
+    diagnostics = list(plan_diagnostics)
+    diagnostics.extend(apply_diagnostics)
+    diagnostics.extend(acceptance_diagnostics)
+    diagnostics.extend(expected_case_replay_diagnostics)
+    diagnostics.extend(snapshot_diagnostics)
+    diagnostics.extend(
         validate_run_terminal_record(
             run_terminal_record,
             checkpoint_set_manifest=checkpoint_set_manifest,
@@ -2644,6 +3514,67 @@ def _release_evidence_diagnostics(
             ),
         )
     )
+    if not captured_state_is_valid:
+        diagnostics.append(
+            _diagnostic(
+                "CAPTURED_STATE_AUTHORITY_INVALID",
+                "$.authoritative_captured_state",
+                "The exact captured-state bytes are not valid for the exact plan-action set.",
+            )
+        )
+    exact_replay_artifacts = (
+        (
+            "apply authorization",
+            type(apply_authorization_bytes) is bytes
+            and apply_authorization is not None
+            and not apply_diagnostics,
+        ),
+        (
+            "plan action set",
+            type(plan_action_set_bytes) is bytes
+            and authoritative_plan_action_set is not None
+            and not plan_diagnostics,
+        ),
+        (
+            "captured state",
+            type(captured_state_bytes) is bytes
+            and authoritative_captured_state is not None
+            and captured_state_is_valid,
+        ),
+        (
+            "checkpoint store snapshot",
+            type(checkpoint_store_snapshot_bytes) is bytes
+            and checkpoint_store_snapshot is not None
+            and not snapshot_diagnostics,
+        ),
+        (
+            "expected-case manifest",
+            type(expected_case_manifest_bytes) is bytes
+            and expected_case_manifest is not None
+            and not acceptance_diagnostics,
+        ),
+        (
+            "evidence bundle",
+            type(evidence_bundle_bytes) is bytes
+            and evidence_bundle is not None
+            and not acceptance_diagnostics,
+        ),
+        (
+            "attestation manifest",
+            type(attestation_manifest_bytes) is bytes
+            and attestation_manifest is not None
+            and not acceptance_diagnostics,
+        ),
+    )
+    for label, valid in exact_replay_artifacts:
+        if not valid:
+            diagnostics.append(
+                _diagnostic(
+                    "RELEASE_EVIDENCE_BYTES_MISMATCH",
+                    "$.release_evidence_bytes",
+                    f"The exact {label} bytes do not decode to valid replay authority.",
+                )
+            )
     for label, artifact, raw_bytes in (
         (
             "capture observation authority set",
@@ -2676,25 +3607,28 @@ def _release_evidence_diagnostics(
 def validate_release_archive_manifest(
     document: object,
     *,
+    apply_authorization_bytes: bytes,
+    plan_action_set_bytes: bytes,
+    captured_state_bytes: bytes,
+    checkpoint_store_snapshot_bytes: bytes,
     checkpoint_set_manifest: object,
     checkpoint_set_manifest_bytes: bytes,
     capture_observation_authority_set_bytes: bytes,
     prepared_action_authority_set_bytes: bytes,
     run_terminal_record: object,
     run_terminal_record_bytes: bytes,
+    expected_case_manifest_bytes: bytes,
+    evidence_bundle_bytes: bytes,
+    attestation_manifest_bytes: bytes,
     expected_apply_authorization_identity: str,
     expected_apply_authorization_digest: str,
     expected_execution_domain_identity: str,
     expected_execution_nonce: str,
     expected_run_identity: str,
-    authoritative_plan_action_set: object,
     expected_plan_action_set_digest: str,
     expected_candidate_identity: str,
     expected_implementation_manifest_digest: str,
     expected_plan_digest: str,
-    trusted_checkpoint_store_generation: int,
-    trusted_checkpoint_records: Sequence[Mapping[str, object]],
-    authoritative_captured_state: object,
     expected_captured_state_identity: str,
     expected_captured_state_digest: str,
     capture_observation_authority_set: object,
@@ -2703,11 +3637,12 @@ def validate_release_archive_manifest(
     prepared_action_authority_set: object,
     expected_prepared_action_authority_set_identity: str,
     expected_prepared_action_authority_set_digest: str,
+    authorized_expected_case_manifest_digest: str,
+    authorized_attestation_manifest_digest: str,
     expected_launcher_identity: str,
     expected_launcher_manifest_digest: str,
     expected_store_identity: str,
     expected_store_key: str,
-    expected_archived_document_byte_digests: Mapping[str, object],
 ) -> tuple[Diagnostic, ...]:
     """Validate one archive from independently trusted execution artifacts."""
 
@@ -2735,6 +3670,10 @@ def validate_release_archive_manifest(
 
     diagnostics = list(
         _release_evidence_diagnostics(
+            apply_authorization_bytes=apply_authorization_bytes,
+            plan_action_set_bytes=plan_action_set_bytes,
+            captured_state_bytes=captured_state_bytes,
+            checkpoint_store_snapshot_bytes=checkpoint_store_snapshot_bytes,
             checkpoint_set_manifest=checkpoint_set_manifest,
             checkpoint_set_manifest_bytes=checkpoint_set_manifest_bytes,
             capture_observation_authority_set_bytes=(
@@ -2743,6 +3682,9 @@ def validate_release_archive_manifest(
             prepared_action_authority_set_bytes=(prepared_action_authority_set_bytes),
             run_terminal_record=run_terminal_record,
             run_terminal_record_bytes=run_terminal_record_bytes,
+            expected_case_manifest_bytes=expected_case_manifest_bytes,
+            evidence_bundle_bytes=evidence_bundle_bytes,
+            attestation_manifest_bytes=attestation_manifest_bytes,
             expected_apply_authorization_identity=(
                 expected_apply_authorization_identity
             ),
@@ -2750,16 +3692,12 @@ def validate_release_archive_manifest(
             expected_execution_domain_identity=expected_execution_domain_identity,
             expected_execution_nonce=expected_execution_nonce,
             expected_run_identity=expected_run_identity,
-            authoritative_plan_action_set=authoritative_plan_action_set,
             expected_plan_action_set_digest=expected_plan_action_set_digest,
             expected_candidate_identity=expected_candidate_identity,
             expected_implementation_manifest_digest=(
                 expected_implementation_manifest_digest
             ),
             expected_plan_digest=expected_plan_digest,
-            trusted_checkpoint_store_generation=(trusted_checkpoint_store_generation),
-            trusted_checkpoint_records=trusted_checkpoint_records,
-            authoritative_captured_state=authoritative_captured_state,
             expected_captured_state_identity=expected_captured_state_identity,
             expected_captured_state_digest=expected_captured_state_digest,
             capture_observation_authority_set=capture_observation_authority_set,
@@ -2775,6 +3713,12 @@ def validate_release_archive_manifest(
             ),
             expected_prepared_action_authority_set_digest=(
                 expected_prepared_action_authority_set_digest
+            ),
+            authorized_expected_case_manifest_digest=(
+                authorized_expected_case_manifest_digest
+            ),
+            authorized_attestation_manifest_digest=(
+                authorized_attestation_manifest_digest
             ),
         )
     )
@@ -2857,20 +3801,69 @@ def validate_release_archive_manifest(
         )
     archived_digests = payload["archived_document_byte_digests"]
     assert isinstance(archived_digests, Mapping)
-    computed_byte_digests = dict(expected_archived_document_byte_digests)
-    for field, raw_bytes in (
+    computed_byte_digests: dict[str, str] = {}
+    for field, raw_bytes, maximum_bytes in (
+        (
+            "apply_authorization_bytes_digest",
+            apply_authorization_bytes,
+            MAX_EXECUTION_AUTHORITY_BYTES,
+        ),
+        (
+            "plan_action_set_bytes_digest",
+            plan_action_set_bytes,
+            MAX_PLAN_ACTION_SET_BYTES,
+        ),
+        (
+            "captured_state_bytes_digest",
+            captured_state_bytes,
+            MAX_CAPTURED_STATE_BYTES,
+        ),
         (
             "capture_observation_authority_set_bytes_digest",
             capture_observation_authority_set_bytes,
+            MAX_EXECUTION_AUTHORITY_BYTES,
         ),
         (
             "prepared_action_authority_set_bytes_digest",
             prepared_action_authority_set_bytes,
+            MAX_EXECUTION_AUTHORITY_BYTES,
         ),
-        ("checkpoint_set_manifest_bytes_digest", checkpoint_set_manifest_bytes),
-        ("run_terminal_record_bytes_digest", run_terminal_record_bytes),
+        (
+            "checkpoint_set_manifest_bytes_digest",
+            checkpoint_set_manifest_bytes,
+            MAX_EXECUTION_AUTHORITY_BYTES,
+        ),
+        (
+            "checkpoint_store_snapshot_bytes_digest",
+            checkpoint_store_snapshot_bytes,
+            MAX_CHECKPOINT_STORE_SNAPSHOT_BYTES,
+        ),
+        (
+            "run_terminal_record_bytes_digest",
+            run_terminal_record_bytes,
+            MAX_EXECUTION_AUTHORITY_BYTES,
+        ),
+        (
+            "expected_case_manifest_bytes_digest",
+            expected_case_manifest_bytes,
+            MAX_RELEASE_ACCEPTANCE_BYTES,
+        ),
+        (
+            "evidence_bundle_bytes_digest",
+            evidence_bundle_bytes,
+            MAX_RELEASE_ACCEPTANCE_BYTES,
+        ),
+        (
+            "attestation_manifest_bytes_digest",
+            attestation_manifest_bytes,
+            MAX_RELEASE_ACCEPTANCE_BYTES,
+        ),
     ):
-        if type(raw_bytes) is bytes:
+        if (
+            _parse_bounded_json_bytes(raw_bytes, maximum_bytes=maximum_bytes)
+            is not None
+        ):
+            assert isinstance(raw_bytes, bytes)
             computed_byte_digests[field] = _bytes_digest(raw_bytes)
     if archived_digests != computed_byte_digests:
         diagnostics.append(
@@ -2887,25 +3880,28 @@ def validate_release_receipt(
     document: object,
     *,
     release_archive_manifest: object,
+    apply_authorization_bytes: bytes,
+    plan_action_set_bytes: bytes,
+    captured_state_bytes: bytes,
+    checkpoint_store_snapshot_bytes: bytes,
     checkpoint_set_manifest: object,
     checkpoint_set_manifest_bytes: bytes,
     capture_observation_authority_set_bytes: bytes,
     prepared_action_authority_set_bytes: bytes,
     run_terminal_record: object,
     run_terminal_record_bytes: bytes,
+    expected_case_manifest_bytes: bytes,
+    evidence_bundle_bytes: bytes,
+    attestation_manifest_bytes: bytes,
     expected_apply_authorization_identity: str,
     expected_apply_authorization_digest: str,
     expected_execution_domain_identity: str,
     expected_execution_nonce: str,
     expected_run_identity: str,
-    authoritative_plan_action_set: object,
     expected_plan_action_set_digest: str,
     expected_candidate_identity: str,
     expected_implementation_manifest_digest: str,
     expected_plan_digest: str,
-    trusted_checkpoint_store_generation: int,
-    trusted_checkpoint_records: Sequence[Mapping[str, object]],
-    authoritative_captured_state: object,
     expected_captured_state_identity: str,
     expected_captured_state_digest: str,
     capture_observation_authority_set: object,
@@ -2914,11 +3910,12 @@ def validate_release_receipt(
     prepared_action_authority_set: object,
     expected_prepared_action_authority_set_identity: str,
     expected_prepared_action_authority_set_digest: str,
+    authorized_expected_case_manifest_digest: str,
+    authorized_attestation_manifest_digest: str,
     expected_launcher_identity: str,
     expected_launcher_manifest_digest: str,
     expected_store_identity: str,
     expected_store_key: str,
-    expected_archived_document_byte_digests: Mapping[str, object],
 ) -> tuple[Diagnostic, ...]:
     """Validate a receipt by revalidating its exact archived execution evidence."""
 
@@ -2945,6 +3942,10 @@ def validate_release_receipt(
 
     archive_diagnostics = validate_release_archive_manifest(
         release_archive_manifest,
+        apply_authorization_bytes=apply_authorization_bytes,
+        plan_action_set_bytes=plan_action_set_bytes,
+        captured_state_bytes=captured_state_bytes,
+        checkpoint_store_snapshot_bytes=checkpoint_store_snapshot_bytes,
         checkpoint_set_manifest=checkpoint_set_manifest,
         checkpoint_set_manifest_bytes=checkpoint_set_manifest_bytes,
         capture_observation_authority_set_bytes=(
@@ -2953,21 +3954,20 @@ def validate_release_receipt(
         prepared_action_authority_set_bytes=prepared_action_authority_set_bytes,
         run_terminal_record=run_terminal_record,
         run_terminal_record_bytes=run_terminal_record_bytes,
+        expected_case_manifest_bytes=expected_case_manifest_bytes,
+        evidence_bundle_bytes=evidence_bundle_bytes,
+        attestation_manifest_bytes=attestation_manifest_bytes,
         expected_apply_authorization_identity=expected_apply_authorization_identity,
         expected_apply_authorization_digest=expected_apply_authorization_digest,
         expected_execution_domain_identity=expected_execution_domain_identity,
         expected_execution_nonce=expected_execution_nonce,
         expected_run_identity=expected_run_identity,
-        authoritative_plan_action_set=authoritative_plan_action_set,
         expected_plan_action_set_digest=expected_plan_action_set_digest,
         expected_candidate_identity=expected_candidate_identity,
         expected_implementation_manifest_digest=(
             expected_implementation_manifest_digest
         ),
         expected_plan_digest=expected_plan_digest,
-        trusted_checkpoint_store_generation=trusted_checkpoint_store_generation,
-        trusted_checkpoint_records=trusted_checkpoint_records,
-        authoritative_captured_state=authoritative_captured_state,
         expected_captured_state_identity=expected_captured_state_identity,
         expected_captured_state_digest=expected_captured_state_digest,
         capture_observation_authority_set=capture_observation_authority_set,
@@ -2984,13 +3984,14 @@ def validate_release_receipt(
         expected_prepared_action_authority_set_digest=(
             expected_prepared_action_authority_set_digest
         ),
+        authorized_expected_case_manifest_digest=(
+            authorized_expected_case_manifest_digest
+        ),
+        authorized_attestation_manifest_digest=(authorized_attestation_manifest_digest),
         expected_launcher_identity=expected_launcher_identity,
         expected_launcher_manifest_digest=expected_launcher_manifest_digest,
         expected_store_identity=expected_store_identity,
         expected_store_key=expected_store_key,
-        expected_archived_document_byte_digests=(
-            expected_archived_document_byte_digests
-        ),
     )
     diagnostics: list[Diagnostic] = list(archive_diagnostics)
     payload = document["payload"]
@@ -3075,7 +4076,12 @@ def validate_release_receipt(
 
 
 __all__ = (
+    "CAPTURED_STATE_SCHEMA_NAME",
+    "MAX_CAPTURED_STATE_BYTES",
+    "MAX_CHECKPOINT_STORE_SNAPSHOT_BYTES",
     "MAX_EXECUTION_AUTHORITY_BYTES",
+    "MAX_PLAN_ACTION_SET_BYTES",
+    "MAX_RELEASE_ACCEPTANCE_BYTES",
     "Diagnostic",
     "authorization_ledger_claim_identity",
     "canonical_digest",
@@ -3085,6 +4091,7 @@ __all__ = (
     "validate_apply_authorization",
     "validate_capture_observation_authority_set",
     "validate_checkpoint_set_manifest",
+    "validate_checkpoint_store_snapshot",
     "validate_compensation_authorization",
     "validate_plan_action_set",
     "validate_prepared_action_authority_set",

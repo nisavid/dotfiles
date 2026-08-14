@@ -100,7 +100,7 @@ Complete all of these before the executor opens an action checkpoint:
     manifest digest
     under the same candidate identity. Require the complete authorized tuple and
     live evidence to equal the sealed capture. Any drift invalidates the
-    authorization: mutate nothing, recapture, resolve, reseal, and obtain new
+    authorization. Mutate nothing, recapture, resolve, reseal, and obtain new
     authorization for the new exact tuple. Only after that comparison succeeds,
     atomically claim the nonce in the durable authorization ledger named by that
     domain. A previously claimed or unpersistable nonce, or a claim in another
@@ -308,12 +308,17 @@ node, and every explicit mutating migration boundary from the validated graph.
 
 The semantic validator derives one `CHK-02` through `CHK-09` case for every
 automated action and mutating migration boundary. It maps `MIG-*` only from each
-sealed node's explicit requirement list. A plan node absent from the manifest,
-or a manifest node absent from the plan projection, invalidates the release
-projection; this runbook is never parsed to invent a node.
+sealed node's explicit requirement list. Before authorization, the projection
+gate rejects a plan node absent from the manifest or a manifest node absent from
+the validated plan graph. Release replay does not reconstruct that graph from
+the eleven archived streams: it authenticates the closed verification and
+migration nodes through the authorized manifest digest while independently
+recomputing the manifest's exact artifact bindings, plan-action identities, and
+plan/captured-state route capability set. This runbook is never parsed to invent
+a node.
 
 During execution, the evidence writer records one exact child per expected case
-and derives the 74 aggregate results. Mutation cases bind before and after
+and derives the 75 aggregate results. Mutation cases bind before and after
 observation digests. Checkpoint cases bind the ordered checkpoint and
 compensation trace. Live cases require a live receipt and explicit human
 sign-off; an automated or fake-manager receipt cannot pass them. Opaque artifact
@@ -328,17 +333,19 @@ installed at
 `/usr/local/libexec/agent-equipment-release/v1/agent-equipment-release`, outside
 the evaluated candidate and its installed manifest. It verifies its own exact
 identity and manifest digest from external trust inputs, then strictly parses
-the eight exact release inputs: apply authorization, capture-observation-
-authority set, prepared-action-authority set, checkpoint-set manifest, run-
-terminal record, expected-case manifest, bundle, and attestation. It obtains the
+the eleven exact release inputs: apply authorization, complete plan-action set,
+captured-state manifest, capture-observation-authority set,
+prepared-action-authority set, complete checkpoint-store snapshot,
+checkpoint-set manifest, run-terminal record, expected-case manifest, bundle,
+and attestation. It obtains the
 expected capture-observation-authority identity/digest from the validated apply
 authorization and revalidates that artifact before it performs one create-only
 compare-and-swap archive commit using a closed `ReleaseArchiveManifest` over
 the exact input byte digests and execution tuple, including the independently
-trusted execution-domain identity, complete plan-action-set artifact, validated
-checkpoint-set manifest, and authenticated `RunTerminalRecord` with
-`state: succeeded`. The exact capture-observation-authority, prepared-authority,
-checkpoint-manifest, and terminal-record bytes are also archived and bound by
+trusted execution-domain identity, exact complete plan-action-set and captured-
+state artifacts, the sealed full-record checkpoint-store snapshot, its
+validated checkpoint-set projection, and authenticated `RunTerminalRecord` with
+`state: succeeded`. All eleven exact byte streams are archived and bound by
 byte digest. Only after generation `1` is
 durable does it emit the closed `ReleaseReceipt`. Candidate output cannot mint,
 overwrite, ignore, or substitute for that receipt. A compensated, blocked, or
@@ -648,8 +655,9 @@ result and live sign-off, and the release command validates all three documents
 against the authorized expected-case and attestation manifest digests. The
 external launcher also validates the exact apply authorization and its own trusted launcher
 identity/digest, then commits the authorization, capture-observation-authority
-set, prepared-action-authority set, checkpoint-set manifest, run-terminal record,
-three release documents, and
+set, prepared-action-authority set, plan-action set, captured-state manifest,
+checkpoint-store snapshot, checkpoint-set manifest, run-terminal record, three
+release documents, and
 closed archive manifest over their exact serialized byte digests and execution
 tuple, including `execution_domain_identity`, the validated checkpoint-set
 digest, and the authenticated run-terminal identity and run-terminal digest,
@@ -663,7 +671,8 @@ authority.
 
 Completion: the success marker is durable and fsynced, the apply lease is
 released, steady-state audit is a no-op, and the exact apply authorization,
-capture-observation-authority set, prepared-action-authority set, checkpoint-set
+plan-action set, captured-state manifest, capture-observation-authority set,
+prepared-action-authority set, checkpoint-store snapshot, checkpoint-set
 manifest, run-terminal record, expected-case manifest, evidence bundle,
 attestation, archive manifest, and
 closed `ReleaseReceipt` are durably present in the independent authority store.
@@ -764,12 +773,13 @@ Recovery rejects an ambiguous kind/claim pair and a canonically resealed foreign
 claim.
 
 Release validates a closed `RunTerminalRecord` against the independently
-validated checkpoint manifest, complete plan-action set, and trusted store
-snapshot/generation. `state: succeeded` requires one unique completed
-checkpoint for every complete plan action. The archive stores the exact capture-
-observation-authority-set, prepared-action-authority-set, checkpoint-manifest,
-and terminal-record bytes and binds all four byte digests; naked
-checkpoint-digest and terminal-state scalars are never release authority.
+validated checkpoint manifest and the exact plan-action-set, captured-state,
+and sealed full-record checkpoint-store-snapshot bytes. `state: succeeded`
+requires one unique completed checkpoint for every complete plan action, with
+durable generations increasing in canonical action order. The archive stores
+all eleven exact release streams and binds all eleven byte digests; a lossy
+checkpoint projection, naked checkpoint digest, and terminal-state scalar are
+never release authority.
 
 `compensation_blocked` is terminal for automatic recovery. It records an exact
 compare-before-restore or ambiguous-effect mismatch, preserves the observed
