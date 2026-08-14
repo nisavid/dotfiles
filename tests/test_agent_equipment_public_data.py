@@ -23,6 +23,31 @@ from scripts.agent_equipment_public_data import (
 from tests.age_tooling_test_support import require_age_tooling_or_skip
 
 ROOT = Path(__file__).resolve().parent.parent
+PRIVACY_SCAN_TIMEOUT_SECONDS = 10
+
+
+def run_privacy_scan(
+    root: Path,
+    *arguments: str,
+    environment: dict[str, str] | None = None,
+    input_text: str | None = None,
+    timeout: float = PRIVACY_SCAN_TIMEOUT_SECONDS,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "scripts/privacy-scan"),
+            "--root",
+            str(root),
+            *arguments,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+        input=input_text,
+        timeout=timeout,
+    )
 
 
 def write_age_manifest(root: Path, paths: list[str]) -> None:
@@ -636,17 +661,7 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
             unsafe = root / "unsafe.txt"
             unsafe.write_text("\n".join(credentials) + "\n", encoding="utf-8")
 
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    str(ROOT / "scripts/privacy-scan"),
-                    "--root",
-                    str(root),
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
+            result = run_privacy_scan(root)
 
         self.assertEqual(result.returncode, 1)
         self.assertEqual(
@@ -671,17 +686,7 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
             for relative, source in sources.items():
                 (root / relative).write_text(source, encoding="utf-8")
 
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    str(ROOT / "scripts/privacy-scan"),
-                    "--root",
-                    str(root),
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
+            result = run_privacy_scan(root)
 
         self.assertEqual(result.returncode, 1)
         self.assertEqual(
@@ -703,17 +708,7 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
             root = Path(directory)
             (root / "duplicate.json").write_text(document, encoding="utf-8")
 
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    str(ROOT / "scripts/privacy-scan"),
-                    "--root",
-                    str(root),
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
+            result = run_privacy_scan(root)
 
         self.assertEqual(result.returncode, 1)
         self.assertEqual(
@@ -736,17 +731,7 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    str(ROOT / "scripts/privacy-scan"),
-                    "--root",
-                    str(root),
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
+            result = run_privacy_scan(root)
 
         self.assertEqual(result.returncode, 1)
         self.assertIn(
@@ -769,17 +754,7 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    str(ROOT / "scripts/privacy-scan"),
-                    "--root",
-                    str(root),
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
+            result = run_privacy_scan(root)
 
         self.assertEqual(result.returncode, 1)
         self.assertEqual(
@@ -812,17 +787,7 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
             for relative, document in documents.items():
                 (root / relative).write_text(document, encoding="utf-8")
 
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    str(ROOT / "scripts/privacy-scan"),
-                    "--root",
-                    str(root),
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
+            result = run_privacy_scan(root)
 
         self.assertEqual(result.returncode, 1)
         self.assertEqual(
@@ -851,17 +816,7 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
                     encoding="utf-8",
                 )
 
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    str(ROOT / "scripts/privacy-scan"),
-                    "--root",
-                    str(root),
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
+            result = run_privacy_scan(root)
 
         self.assertEqual(result.returncode, 1)
         self.assertEqual(
@@ -1075,17 +1030,7 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
             for relative, document in documents.items():
                 (root / relative).write_text(document, encoding="utf-8")
 
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    str(ROOT / "scripts/privacy-scan"),
-                    "--root",
-                    str(root),
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
+            result = run_privacy_scan(root)
 
         self.assertEqual(result.returncode, 1)
         finding_paths = {line.split(":", 1)[0] for line in result.stdout.splitlines()}
@@ -2378,17 +2323,7 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
             root = Path(directory)
             for relative, document in documents.items():
                 (root / relative).write_text(document, encoding="utf-8")
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    str(ROOT / "scripts/privacy-scan"),
-                    "--root",
-                    str(root),
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
+            result = run_privacy_scan(root)
 
         self.assertEqual(result.returncode, 1)
         self.assertEqual(
@@ -2557,17 +2492,7 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
             )
             (root / "nul.txt").write_bytes(credential.encode("ascii") + b"\0public\n")
 
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    str(ROOT / "scripts/privacy-scan"),
-                    "--root",
-                    str(root),
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
+            result = run_privacy_scan(root)
 
         self.assertEqual(result.returncode, 1)
         self.assertIn(
@@ -2592,17 +2517,7 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    str(ROOT / "scripts/privacy-scan"),
-                    "--root",
-                    str(root),
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
+            result = run_privacy_scan(root)
 
         self.assertEqual(result.returncode, 1)
         self.assertEqual(
@@ -2623,19 +2538,11 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    str(ROOT / "scripts/privacy-scan"),
-                    "--root",
-                    str(root),
-                    "--denylist",
-                    "-",
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-                input="private-user\n",
+            result = run_privacy_scan(
+                root,
+                "--denylist",
+                "-",
+                input_text="private-user\n",
             )
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -2647,17 +2554,7 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
             root = Path(directory)
             (root / ".git").write_text(invalid_pointer, encoding="utf-8")
 
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    str(ROOT / "scripts/privacy-scan"),
-                    "--root",
-                    str(root),
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
+            result = run_privacy_scan(root)
 
         self.assertEqual(result.returncode, 1)
         self.assertEqual(result.stdout, ".git:1: [user-home] review required\n")
@@ -2671,17 +2568,7 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
 
             for root in roots:
                 with self.subTest(root=root.name):
-                    result = subprocess.run(
-                        [
-                            sys.executable,
-                            str(ROOT / "scripts/privacy-scan"),
-                            "--root",
-                            str(root),
-                        ],
-                        check=False,
-                        capture_output=True,
-                        text=True,
-                    )
+                    result = run_privacy_scan(root)
                     self.assertEqual(result.returncode, 1)
                     self.assertEqual(result.stdout, "")
                     self.assertEqual(result.stderr, "privacy scan failed\n")
@@ -2699,17 +2586,7 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
             unreadable_file.write_text("public\n", encoding="utf-8")
             unreadable_file.chmod(0)
             try:
-                file_result = subprocess.run(
-                    [
-                        sys.executable,
-                        str(ROOT / "scripts/privacy-scan"),
-                        "--root",
-                        str(unreadable_file_root),
-                    ],
-                    check=False,
-                    capture_output=True,
-                    text=True,
-                )
+                file_result = run_privacy_scan(unreadable_file_root)
             finally:
                 unreadable_file.chmod(0o600)
 
@@ -2719,17 +2596,7 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
             unreadable_directory.mkdir()
             try:
                 unreadable_directory.chmod(0)
-                tree_result = subprocess.run(
-                    [
-                        sys.executable,
-                        str(ROOT / "scripts/privacy-scan"),
-                        "--root",
-                        str(unreadable_tree_root),
-                    ],
-                    check=False,
-                    capture_output=True,
-                    text=True,
-                )
+                tree_result = run_privacy_scan(unreadable_tree_root)
             finally:
                 unreadable_directory.chmod(0o700)
 
@@ -2749,18 +2616,7 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
             root = Path(directory)
             os.mkfifo(root / "public.fifo")
 
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    str(ROOT / "scripts/privacy-scan"),
-                    "--root",
-                    str(root),
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=2,
-            )
+            result = run_privacy_scan(root, timeout=2)
 
         self.assertEqual(result.returncode, 1)
         self.assertEqual(
@@ -2780,17 +2636,7 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    str(ROOT / "scripts/privacy-scan"),
-                    "--root",
-                    str(root),
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
+            result = run_privacy_scan(root)
 
         self.assertEqual(result.returncode, 1)
         self.assertEqual(
@@ -2815,17 +2661,7 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
             root = Path(directory)
             (root / relative).write_bytes(b"\0binary contents")
 
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    str(ROOT / "scripts/privacy-scan"),
-                    "--root",
-                    str(root),
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
+            result = run_privacy_scan(root)
 
         self.assertEqual(result.returncode, 1)
         self.assertEqual(
@@ -2877,17 +2713,7 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
                 ],
             )
 
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    str(ROOT / "scripts/privacy-scan"),
-                    "--root",
-                    str(root),
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
+            result = run_privacy_scan(root)
 
         self.assertEqual(result.returncode, 1)
         self.assertEqual(
@@ -2911,23 +2737,56 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
             environment = os.environ.copy()
             environment["PATH"] = ""
 
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    str(ROOT / "scripts/privacy-scan"),
-                    "--root",
-                    str(root),
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-                env=environment,
-            )
+            result = run_privacy_scan(root, environment=environment)
 
         self.assertEqual(result.returncode, 1)
         self.assertEqual(
             result.stdout,
             "ciphertext.age:0: [age-parser-unavailable] review required\n",
+        )
+
+    def test_privacy_scan_checks_the_age_parser_version_once_per_scan(self) -> None:
+        native_age = (ROOT / "home/.private-prd-01.toml.age").read_bytes()
+        with TemporaryDirectory() as directory:
+            base = Path(directory)
+            root = base / "repository"
+            root.mkdir()
+            for relative in ("first.age", "second.age"):
+                (root / relative).write_bytes(native_age)
+            write_age_manifest(root, ["first.age", "second.age"])
+            fake_bin = base / "bin"
+            fake_bin.mkdir()
+            parser_log = base / "age-inspect.log"
+            parser = fake_bin / "age-inspect"
+            parser.write_text(
+                "#!/bin/sh\n"
+                'printf \'%s\\n\' "$1" >> "$AGE_INSPECT_LOG"\n'
+                'if [ "$1" = --version ]; then\n'
+                "  printf '%s\\n' v1.3.1\n"
+                "  exit 0\n"
+                "fi\n"
+                "/bin/cat >/dev/null\n"
+                "printf '%s\\n' "
+                '\'{"version":"age-encryption.org/v1",'
+                '"postquantum":"yes","armor":false,'
+                '"stanza_types":["mlkem768x25519"],'
+                '"sizes":{"header":1,"armor":0,"overhead":1,'
+                '"min_payload":1,"max_payload":1,"min_padding":0,'
+                '"max_padding":0}}\'\n',
+                encoding="utf-8",
+            )
+            parser.chmod(0o755)
+            environment = os.environ.copy()
+            environment["PATH"] = os.fspath(fake_bin)
+            environment["AGE_INSPECT_LOG"] = os.fspath(parser_log)
+
+            result = run_privacy_scan(root, environment=environment)
+            parser_invocations = parser_log.read_text(encoding="utf-8").splitlines()
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(
+            parser_invocations,
+            ["--version", "--json", "--json"],
         )
 
     def test_privacy_scan_fails_closed_when_age_parser_version_is_untrusted(
@@ -2951,18 +2810,7 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
             environment = os.environ.copy()
             environment["PATH"] = os.fspath(fake_bin)
 
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    str(ROOT / "scripts/privacy-scan"),
-                    "--root",
-                    str(root),
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-                env=environment,
-            )
+            result = run_privacy_scan(root, environment=environment)
 
         self.assertEqual(result.returncode, 1)
         self.assertEqual(
@@ -2994,19 +2842,7 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
             environment = os.environ.copy()
             environment["PATH"] = os.fspath(fake_bin)
 
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    str(ROOT / "scripts/privacy-scan"),
-                    "--root",
-                    str(root),
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-                env=environment,
-                timeout=10,
-            )
+            result = run_privacy_scan(root, environment=environment)
 
         self.assertEqual(result.returncode, 1)
         self.assertEqual(
@@ -3019,17 +2855,7 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
             root = Path(directory)
             (root / "oversized.age").write_bytes(b"x" * (4 * 1024 * 1024 + 1))
 
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    str(ROOT / "scripts/privacy-scan"),
-                    "--root",
-                    str(root),
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
+            result = run_privacy_scan(root)
 
         self.assertEqual(result.returncode, 1)
         self.assertEqual(
@@ -3057,18 +2883,10 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text("public contents\n", encoding="utf-8")
 
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    str(ROOT / "scripts/privacy-scan"),
-                    "--root",
-                    str(root),
-                    "--denylist",
-                    str(denylist),
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
+            result = run_privacy_scan(
+                root,
+                "--denylist",
+                str(denylist),
             )
 
         expected = {
@@ -3083,6 +2901,39 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
             all(relative not in result.stdout for relative in sensitive_paths)
         )
 
+    def test_privacy_scan_scales_large_casefolded_exact_denylist_matching(
+        self,
+    ) -> None:
+        matching_term = "private-machine-label"
+        unrelated_terms = [
+            f"unrelated-private-term-{index:05d}-" + "x" * 32 for index in range(9_999)
+        ]
+        public_lines = [f"public content line {index:06d}" for index in range(100_000)]
+        with TemporaryDirectory() as directory, TemporaryDirectory() as private:
+            root = Path(directory)
+            denylist = Path(private) / "denylist"
+            denylist.write_text(
+                "\n".join((*unrelated_terms, matching_term)) + "\n",
+                encoding="utf-8",
+            )
+            (root / "public.txt").write_text(
+                "\n".join((*public_lines, f"prefix {matching_term.upper()} suffix"))
+                + "\n",
+                encoding="utf-8",
+            )
+
+            result = run_privacy_scan(
+                root,
+                "--denylist",
+                str(denylist),
+            )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(
+            result.stdout,
+            "public.txt:100001: [exact-denylist] review required\n",
+        )
+
     def test_privacy_scan_does_not_follow_file_symlinks_outside_the_root(self) -> None:
         credential = provider_credentials()[0]
         with TemporaryDirectory() as root_directory, TemporaryDirectory() as outside:
@@ -3091,17 +2942,7 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
             target.write_text(credential + "\n", encoding="utf-8")
             (root / "public-link").symlink_to(target)
 
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    str(ROOT / "scripts/privacy-scan"),
-                    "--root",
-                    str(root),
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
+            result = run_privacy_scan(root)
 
         self.assertEqual(result.returncode, 0)
         self.assertEqual(result.stdout, "")
@@ -3112,17 +2953,7 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
             root = Path(directory)
             (root / "public-link").symlink_to("../" + credential)
 
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    str(ROOT / "scripts/privacy-scan"),
-                    "--root",
-                    str(root),
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
+            result = run_privacy_scan(root)
 
         self.assertEqual(result.returncode, 1)
         self.assertEqual(

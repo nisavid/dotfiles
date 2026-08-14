@@ -183,7 +183,7 @@
             "required": ["equipment_identity", "state"],
             "additionalProperties": false,
             "properties": {
-              "equipment_identity": {"type": "string", "pattern": "^(skill|plugin|mcp|hook|other):"},
+              "equipment_identity": {"type": "string", "pattern": "^(skill|plugin|mcp|hook|other):[a-z0-9][a-z0-9._/-]*$"},
               "state": {"enum": ["enabled", "disabled", "absent", "unknown"]}
             }
           }
@@ -288,7 +288,7 @@
           "uniqueItems": true,
           "items": {
             "type": "string",
-            "pattern": "^(skill|plugin|mcp|hook|other):"
+            "pattern": "^(skill|plugin|mcp|hook|other):[a-z0-9][a-z0-9._/-]*$"
           }
         },
         "normalized_pre_state": {"$ref": "#/$defs/normalizedState"},
@@ -718,7 +718,7 @@
         "phase_history",
         "invocation_state",
         "compensation_authority_kind",
-        "candidate_digest",
+        "candidate_identity",
         "implementation_manifest_digest",
         "catalog_digest",
         "lock_digest",
@@ -779,7 +779,7 @@
         "compensation_authority_kind": {
           "enum": ["none", "automatic_apply", "public_compensation"]
         },
-        "candidate_digest": {"$ref": "#/$defs/opaqueIdentity"},
+        "candidate_identity": {"$ref": "#/$defs/opaqueIdentity"},
         "implementation_manifest_digest": {"$ref": "#/$defs/digest"},
         "catalog_digest": {"$ref": "#/$defs/digest"},
         "lock_digest": {"$ref": "#/$defs/digest"},

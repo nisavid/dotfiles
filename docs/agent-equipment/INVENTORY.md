@@ -137,6 +137,13 @@ the captured pre-state if the manager channel advanced.
 | GitHub | Direct MCP | Native plugin | Direct MCP | Reviewed proposal: Claude retains process-scoped `secret-exec`; Codex keeps its app, MCP, and three skills while `yeet` is disabled; Cursor gains the direct route |
 | Greptile | Direct MCP | Intentional omission | Intentional omission | Recommended with explicit omissions: only the Claude route is currently observed |
 
+The proposed Cursor Context7 route deliberately converges the observed HTTP
+route to the pinned, `secret-exec`-wrapped stdio provider used by the other
+harnesses. This keeps credential injection process-scoped under the proposal's
+existing secret-profile contract instead of defining an HTTP authentication
+header contract. It is proposed desired state only; it does not change the
+observed live Cursor state before an authorized adoption.
+
 Every already-observed direct MCP selected by this proposal is classified for
 catalog adoption in the inventory. This includes the existing Codex Context7
 route; `explicitly_retained_unmanaged_runtime_observation` is reserved for
@@ -231,7 +238,7 @@ jq '.counts' docs/agent-equipment/initial-inventory.json
 jq '.plugin_component_inventory.summary' docs/agent-equipment/initial-inventory.json
 jq '[.plugin_component_inventory.observed_plugins[] | {harness, plugin_id}] | length' docs/agent-equipment/initial-inventory.json
 jq '.proposed_managed_slice.canonical_proposal' docs/agent-equipment/initial-inventory.json
-python3 scripts/privacy-scan --root .
+python3 scripts/privacy-scan --root . --require-age-manifest
 python3 -m unittest tests/test_agent_equipment_design.py
 ```
 

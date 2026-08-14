@@ -15,6 +15,18 @@ ROOT = Path(__file__).resolve().parents[1]
 GATE = ROOT / "scripts/privacy_age_integrity_gate.py"
 WORKFLOW = ROOT / ".github/workflows/privacy-age-integrity.yml"
 
+UNTRUSTED_HEAD_EXECUTION = re.compile(
+    r"(?mx)^\s*(?:"
+    r"(?:uses|working-directory):\s*(?:\./)?untrusted-head(?:/|$)"
+    r"|(?:run:\s*)?(?:\./)?untrusted-head/"
+    r"|(?:run:\s*)?[^\n]*(?:\b(?:cd|source)\s+|\.\s+)"
+    r"(?:[\"']?\$\{?GITHUB_WORKSPACE\}?/)?(?:\./)?untrusted-head(?:/|[\"']?(?:\s|$))"
+    r"|(?:run:\s*)?[^\n]*\b(?:python[0-9.]*|bash|sh|zsh|ruby|perl|node|make|npm|npx)"
+    r"\b[^\n]*\buntrusted-head/"
+    r"|(?:run:\s*)?[^\n]*(?:&&|\|\||;)\s*(?:\./)?untrusted-head/"
+    r")"
+)
+
 PROTECTED_FILES = {
     ".github/workflows/platform-portability.yml": "name: platform\n",
     ".github/workflows/privacy-age-integrity.yml": "name: boundary\n",
@@ -145,18 +157,18 @@ class PrivacyAgeIntegrityGateTests(TestCase):
                 '--root "$GITHUB_WORKSPACE/untrusted-head" \\',
             ),
         )
-        self.assertIsNone(
-            re.search(
-                r"(?m)^\s*(?:uses|working-directory):\s*(?:\./)?untrusted-head(?:/|$)",
-                source,
-            )
-        )
-        self.assertIsNone(
-            re.search(
-                r"(?m)^\s*(?:bash|sh|zsh|make|npm|npx)\b[^\n]*\buntrusted-head/",
-                source,
-            )
-        )
+        self.assertIsNone(UNTRUSTED_HEAD_EXECUTION.search(source))
+
+    def test_untrusted_head_execution_guard_rejects_inline_shell_forms(self) -> None:
+        for unsafe_line in (
+            "run: cd untrusted-head && ./scripts/privacy-scan",
+            "run: source untrusted-head/scripts/privacy-scan",
+            "run: . untrusted-head/scripts/privacy-scan",
+            "run: python3 untrusted-head/scripts/privacy-scan",
+            "run: printf ready && untrusted-head/scripts/privacy-scan",
+        ):
+            with self.subTest(unsafe_line=unsafe_line):
+                self.assertIsNotNone(UNTRUSTED_HEAD_EXECUTION.search(unsafe_line))
 
     def test_every_protected_surface_is_frozen(self) -> None:
         mutations = {
@@ -261,6 +273,7 @@ class PrivacyAgeIntegrityGateTests(TestCase):
             check=False,
             capture_output=True,
             text=True,
+            timeout=10,
         )
 
         self.assertEqual(result.returncode, 1)

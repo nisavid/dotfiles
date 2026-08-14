@@ -724,7 +724,7 @@
             "required": ["equipment_identity", "state"],
             "additionalProperties": false,
             "properties": {
-              "equipment_identity": {"type": "string", "pattern": "^(skill|plugin|mcp|hook|other):"},
+              "equipment_identity": {"type": "string", "pattern": "^(skill|plugin|mcp|hook|other):[a-z0-9][a-z0-9._/-]*$"},
               "state": {"enum": ["enabled", "disabled", "absent", "unknown"]}
             }
           }

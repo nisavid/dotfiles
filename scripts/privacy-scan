@@ -12,6 +12,7 @@ import shutil
 import stat
 import subprocess
 import sys
+from collections import deque
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -77,6 +78,54 @@ class PublicScanResourceLimitError(PublicScanError):
 
 
 Finding = tuple[str, int, str]
+
+
+class ExactSubstringMatcher:
+    """Match any case-folded exact substring in linear input time."""
+
+    def __init__(self, terms: Iterable[str]) -> None:
+        transitions: list[dict[str, int]] = [{}]
+        failures = [0]
+        matches = [False]
+        for term in terms:
+            state = 0
+            for character in term:
+                next_state = transitions[state].get(character)
+                if next_state is None:
+                    next_state = len(transitions)
+                    transitions[state][character] = next_state
+                    transitions.append({})
+                    failures.append(0)
+                    matches.append(False)
+                state = next_state
+            matches[state] = True
+
+        pending: deque[int] = deque(transitions[0].values())
+        while pending:
+            state = pending.popleft()
+            for character, next_state in transitions[state].items():
+                pending.append(next_state)
+                failure = failures[state]
+                while failure and character not in transitions[failure]:
+                    failure = failures[failure]
+                failures[next_state] = transitions[failure].get(character, 0)
+                matches[next_state] = (
+                    matches[next_state] or matches[failures[next_state]]
+                )
+
+        self._transitions = transitions
+        self._failures = failures
+        self._matches = matches
+
+    def matches(self, value: str) -> bool:
+        state = 0
+        for character in value.casefold():
+            while state and character not in self._transitions[state]:
+                state = self._failures[state]
+            state = self._transitions[state].get(character, 0)
+            if self._matches[state]:
+                return True
+        return False
 
 
 class Findings:
@@ -269,14 +318,12 @@ def structured_document_contains_credential(path: Path, text: str) -> bool:
     return contains_literal_credential(document)
 
 
-def age_envelope_finding(data: bytes) -> str | None:
-    """Return any exact-ciphertext or parser finding for the hosted policy."""
+def trusted_age_inspect_parser() -> str | None:
+    """Return the exact available age-inspect executable when its version is trusted."""
 
     parser = shutil.which("age-inspect")
     if parser is None:
-        return "age-parser-unavailable"
-    if len(data) > MAX_PUBLIC_FILE_BYTES:
-        return "invalid-age-envelope"
+        return None
     try:
         version = subprocess.run(
             [parser, "--version"],
@@ -285,9 +332,19 @@ def age_envelope_finding(data: bytes) -> str | None:
             timeout=AGE_INSPECT_TIMEOUT_SECONDS,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return "age-parser-unavailable"
+        return None
     if version.returncode != 0 or version.stdout.strip() != AGE_VERSION.encode("ascii"):
+        return None
+    return parser
+
+
+def age_envelope_finding(data: bytes, parser: str | None) -> str | None:
+    """Return any exact-ciphertext or parser finding for the hosted policy."""
+
+    if parser is None:
         return "age-parser-unavailable"
+    if len(data) > MAX_PUBLIC_FILE_BYTES:
+        return "invalid-age-envelope"
     try:
         result = subprocess.run(
             [parser, "--json", "-"],
@@ -348,14 +405,13 @@ def exact_terms(source: str | None) -> tuple[str, ...]:
 
 def public_path_label(
     relative: str,
-    denylist: tuple[str, ...],
+    denylist: ExactSubstringMatcher,
 ) -> tuple[str, str | None]:
     """Return a non-sensitive finding label and any filename finding rule."""
 
     raw_relative = relative.encode("utf-8", errors="surrogateescape")
-    folded = relative.casefold()
     rule = None
-    if any(term in folded for term in denylist):
+    if denylist.matches(relative):
         rule = "exact-denylist-filename"
     elif string_looks_like_private_key(relative):
         rule = "private-key-filename"
@@ -391,7 +447,7 @@ def public_path_label(
 
 def sensitive_text_rules(
     value: str,
-    denylist: tuple[str, ...],
+    denylist: ExactSubstringMatcher,
     *,
     syntax: str | None = None,
 ) -> tuple[str, ...]:
@@ -399,7 +455,7 @@ def sensitive_text_rules(
 
     rules: list[str] = []
     folded = value.casefold()
-    if any(term in folded for term in denylist):
+    if denylist.matches(value):
         rules.append("exact-denylist")
     if string_looks_like_private_key(value):
         rules.append("private-key")
@@ -428,12 +484,12 @@ def sensitive_text_rules(
 
 def sensitive_age_text_rules(
     value: str,
-    denylist: tuple[str, ...],
+    denylist: ExactSubstringMatcher,
 ) -> tuple[str, ...]:
     """Return high-confidence rules found in exact ciphertext bytes."""
 
     rules: list[str] = []
-    if any(term in value.casefold() for term in denylist):
+    if denylist.matches(value):
         rules.append("exact-denylist")
     if string_looks_like_private_key(value):
         rules.append("private-key")
@@ -445,7 +501,7 @@ def sensitive_age_text_rules(
 def sensitive_file_text_rules(
     relative: str,
     value: str,
-    denylist: tuple[str, ...],
+    denylist: ExactSubstringMatcher,
     *,
     age_shaped: bool,
     syntax: str | None = None,
@@ -484,13 +540,15 @@ def _main() -> int:
         print("privacy scan failed", file=sys.stderr)
         return 1
     try:
-        denylist = exact_terms(arguments.denylist)
+        denylist = ExactSubstringMatcher(exact_terms(arguments.denylist))
     except PublicScanResourceLimitError:
         raise
     except PublicScanError:
         print("privacy scan failed", file=sys.stderr)
         return 1
     findings = Findings()
+    unresolved_age_parser = object()
+    age_parser: str | None | object = unresolved_age_parser
 
     try:
         source_paths = tuple(files(root))
@@ -582,7 +640,10 @@ def _main() -> int:
             digest = "sha256:" + hashlib.sha256(age_data).hexdigest()
             if admitted is None or admitted.get(relative) != digest:
                 findings.append((public_relative, 0, "invalid-age-envelope"))
-            envelope_finding = age_envelope_finding(age_data)
+            if age_parser is unresolved_age_parser:
+                age_parser = trusted_age_inspect_parser()
+            assert age_parser is None or isinstance(age_parser, str)
+            envelope_finding = age_envelope_finding(age_data, age_parser)
             if envelope_finding is not None:
                 findings.append((public_relative, 0, envelope_finding))
             text_views = (age_data.decode("utf-8", "surrogateescape"),)

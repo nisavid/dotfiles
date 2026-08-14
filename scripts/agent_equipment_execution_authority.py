@@ -82,7 +82,7 @@ _CHECKPOINT_BINDING_FIELDS = frozenset(
         "ordinal",
         "run_identity",
         "execution_domain_identity",
-        "candidate_digest",
+        "candidate_identity",
         "implementation_manifest_digest",
         "catalog_digest",
         "lock_digest",
@@ -1318,7 +1318,7 @@ def _checkpoint_matches_plan_action(
         "step_id": f"step-{action.get('ordinal'):03d}",
         "action_identity": action.get("action_identity"),
         "ordinal": action.get("ordinal"),
-        "candidate_digest": action.get("candidate_identity"),
+        "candidate_identity": action.get("candidate_identity"),
         "implementation_manifest_digest": action.get("implementation_manifest_digest"),
         "catalog_digest": action.get("catalog_digest"),
         "lock_digest": action.get("lock_digest"),
@@ -2019,7 +2019,8 @@ def validate_checkpoint_set_manifest(
         or record.get("apply_authorization_digest")
         != expected_apply_authorization_digest
         or record.get("execution_nonce") != expected_execution_nonce
-        or record.get("candidate_digest") != captured_bindings.get("candidate_identity")
+        or record.get("candidate_identity")
+        != captured_bindings.get("candidate_identity")
         or record.get("implementation_manifest_digest")
         != captured_bindings.get("implementation_manifest_digest")
         or record.get("catalog_digest") != captured_bindings.get("catalog_digest")

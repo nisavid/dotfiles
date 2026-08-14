@@ -36,7 +36,10 @@
           "required": ["secret_reference", "template"],
           "properties": {
             "secret_reference": {"type": "string", "pattern": "^[A-Z_][A-Z0-9_]*$"},
-            "template": {"type": "string", "pattern": "\\{reference\\}"}
+            "template": {
+              "type": "string",
+              "pattern": "^(?:(?!\\{reference\\})[\\s\\S])*\\{reference\\}(?:(?!\\{reference\\})[\\s\\S])*$"
+            }
           }
         },
         {

@@ -725,7 +725,7 @@ def valid_checkpoint_record(
         "phase_history": ["prepared", "completed"],
         "invocation_state": "started",
         "compensation_authority_kind": "none",
-        "candidate_digest": plan_action_set["candidate_identity"],
+        "candidate_identity": plan_action_set["candidate_identity"],
         "implementation_manifest_digest": plan_action_set[
             "implementation_manifest_digest"
         ],
@@ -1173,7 +1173,7 @@ def compensation_validation_inputs(
         "pretransition_checkpoint_records": copy.deepcopy(checkpoint_snapshots),
         **checkpoint_authority_inputs(),
         "authoritative_plan_action_set": valid_plan_action_set(),
-        "expected_candidate_identity": first_checkpoint["candidate_digest"],
+        "expected_candidate_identity": first_checkpoint["candidate_identity"],
         "expected_implementation_manifest_digest": first_checkpoint[
             "implementation_manifest_digest"
         ],
@@ -1792,6 +1792,16 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
         candidate = copy.deepcopy(authority_set)
         candidate["bindings"]["unreviewed_digest"] = DIGEST_C
         self.assertFalse(self.validate(candidate))
+
+    def test_execution_schema_rejects_incomplete_normalized_component_identity(
+        self,
+    ) -> None:
+        authority_set = valid_capture_observation_authority_set()
+        authority_set["observations"][0]["normalized_pre_state"][
+            "component_states"
+        ].append({"equipment_identity": "plugin:", "state": "enabled"})
+
+        self.assertFalse(self.validate(authority_set))
 
     def test_capture_observation_reseal_cannot_escape_apply_authority(self) -> None:
         plan_action_set = valid_plan_action_set()
@@ -2857,7 +2867,7 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
             pretransition_checkpoint_records=copy.deepcopy(snapshots),
             **checkpoint_authority_inputs(),
             authoritative_plan_action_set=valid_plan_action_set(),
-            expected_candidate_identity=first_record["candidate_digest"],
+            expected_candidate_identity=first_record["candidate_identity"],
             expected_implementation_manifest_digest=first_record[
                 "implementation_manifest_digest"
             ],
@@ -2961,7 +2971,7 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
                         if expected_action_set is None
                         else expected_action_set
                     ),
-                    expected_candidate_identity=first_record["candidate_digest"],
+                    expected_candidate_identity=first_record["candidate_identity"],
                     expected_implementation_manifest_digest=first_record[
                         "implementation_manifest_digest"
                     ],

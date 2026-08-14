@@ -78,6 +78,7 @@ def canonical_json_sha256(document: JsonObject) -> str:
 
     payload = json.dumps(
         document,
+        allow_nan=False,
         ensure_ascii=False,
         separators=(",", ":"),
         sort_keys=True,
@@ -114,8 +115,13 @@ def _load_json_without_duplicate_members(path: Path) -> Any:
             result[key] = value
         return result
 
+    def reject_nonfinite_number(token: str) -> None:
+        raise ValueError(f"non-finite JSON number: {token}")
+
     return json.loads(
-        path.read_text(encoding="utf-8"), object_pairs_hook=reject_duplicates
+        path.read_text(encoding="utf-8"),
+        object_pairs_hook=reject_duplicates,
+        parse_constant=reject_nonfinite_number,
     )
 
 
