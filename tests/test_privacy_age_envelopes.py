@@ -550,10 +550,10 @@ class PrivacyAgeEnvelopeTests(TestCase):
             environment=environment,
         )
 
+        self.assertFalse(identity_capture.exists())
         self.assertEqual(result.returncode, 1)
         self.assertEqual(result.stdout, "")
         self.assertEqual(result.stderr, "age-envelope admission failed\n")
-        self.assertFalse(identity_capture.exists())
         self.assertEqual((self.root / MANIFEST).read_bytes(), sentinel)
 
     def test_admission_rejects_a_tooling_authority_inside_the_repository(
@@ -590,6 +590,84 @@ class PrivacyAgeEnvelopeTests(TestCase):
                     "age-envelope admission failed\n",
                 )
                 self.assertEqual((self.root / MANIFEST).read_bytes(), sentinel)
+
+    def test_admission_rejects_external_tooling_symlinked_to_repo_executables(
+        self,
+    ) -> None:
+        (self.root / "candidate.age").write_bytes(b"forged age envelope")
+        sentinel = manifest_bytes([])
+        (self.root / MANIFEST).write_bytes(sentinel)
+        repository_bin = self.root / "repo-controlled-age-bin"
+        repository_bin.mkdir()
+        external_bin = self.base / "external-age-bin"
+        external_bin.mkdir()
+        identity_capture = self.base / "captured-repo-symlink-identity"
+        wrapper = textwrap.dedent(
+            """\
+            #!/bin/sh
+            if [ "${1-}" = --version ]; then
+              printf '%s\\n' v1.3.1
+              exit 0
+            fi
+            for argument do
+              case "$argument" in
+                /dev/fd/*) /bin/cat "$argument" >"$MALICIOUS_AGE_IDENTITY_CAPTURE" ;;
+              esac
+            done
+            case "${0##*/}" in
+              age-keygen) printf '%s\\n' age1pq1repocontrolled ;;
+              age-inspect)
+                printf '%s\\n' '{"version":"age-encryption.org/v1","postquantum":"yes","armor":false,"stanza_types":["mlkem768x25519"],"sizes":{"header":1,"armor":0,"overhead":1,"min_payload":1,"max_payload":1,"min_padding":0,"max_padding":0}}'
+                ;;
+            esac
+            exit 0
+            """
+        )
+        for name in ("age", "age-keygen", "age-inspect"):
+            repository_tool = repository_bin / name
+            repository_tool.write_text(wrapper, encoding="utf-8")
+            repository_tool.chmod(0o755)
+            (external_bin / name).symlink_to(repository_tool)
+        environment = os.environ.copy()
+        environment["AGE_TOOLING_DIRECTORY"] = os.fspath(external_bin)
+        environment["MALICIOUS_AGE_IDENTITY_CAPTURE"] = os.fspath(identity_capture)
+        environment["PATH"] = os.fspath(repository_bin)
+
+        result = self.run_admitter_with(
+            identity=self.identity,
+            environment=environment,
+        )
+
+        self.assertFalse(identity_capture.exists())
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, "age-envelope admission failed\n")
+        self.assertEqual((self.root / MANIFEST).read_bytes(), sentinel)
+
+    def test_admission_rejects_matching_ambient_executables_inside_repository(
+        self,
+    ) -> None:
+        candidate = self.encrypt(b"repository ambient tooling fixture")
+        (self.root / "candidate.age").write_bytes(candidate)
+        sentinel = manifest_bytes([])
+        (self.root / MANIFEST).write_bytes(sentinel)
+        repository_bin = self.root / "matching-age-bin"
+        repository_bin.mkdir()
+        for name in ("age", "age-keygen", "age-inspect"):
+            shutil.copy2(self.age_tooling_directory / name, repository_bin / name)
+        environment = os.environ.copy()
+        environment["AGE_TOOLING_DIRECTORY"] = os.fspath(self.age_tooling_directory)
+        environment["PATH"] = os.fspath(repository_bin)
+
+        result = self.run_admitter_with(
+            identity=self.identity,
+            environment=environment,
+        )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, "age-envelope admission failed\n")
+        self.assertEqual((self.root / MANIFEST).read_bytes(), sentinel)
 
     def test_admission_rejects_incomplete_or_trailing_envelopes_without_mutation(
         self,

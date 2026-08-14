@@ -43,6 +43,10 @@ EXPECTED_AGE_RECIPIENT_STANZAS = 1
 MAX_PUBLIC_FILE_BYTES = 4 * 1024 * 1024
 MAX_PUBLIC_SOURCE_ENTRIES = 10_000
 MAX_PUBLIC_SOURCE_PATH_BYTES = 8 * 1024 * 1024
+MAX_PUBLIC_SOURCE_CONTENT_BYTES = 16 * 1024 * 1024
+MAX_PUBLIC_FINDINGS = 10_000
+MAX_PUBLIC_FINDING_BYTES = 4 * 1024 * 1024
+RESOURCE_LIMIT_DIAGNOSTIC = "privacy scan failed: scan resource limits exceeded"
 AGE_NATIVE_MAGIC = b"age-encryption.org/v1\n"
 AGE_ARMORED_MAGIC = b"-----BEGIN AGE ENCRYPTED FILE-----"
 
@@ -64,8 +68,47 @@ class PublicScanError(RuntimeError):
     """A repository boundary could not be scanned completely."""
 
 
-class PublicSourceInventoryLimitError(PublicScanError):
-    """A source inventory exceeded its safe materialization limits."""
+class PublicScanResourceLimitError(PublicScanError):
+    """A scan exceeded a safe aggregate resource limit."""
+
+
+Finding = tuple[str, int, str]
+
+
+class Findings:
+    """Retain unique findings within count and rendered-text budgets."""
+
+    def __init__(self) -> None:
+        self._values: set[Finding] = set()
+        self._text_bytes = 0
+
+    def append(self, finding: Finding) -> None:
+        if finding in self._values:
+            return
+        relative, line_number, rule = finding
+        text_bytes = (
+            len(relative.encode("utf-8", errors="surrogateescape"))
+            + len(str(line_number).encode("ascii"))
+            + len(rule.encode("ascii"))
+            + len(":: [] review required\n".encode("ascii"))
+        )
+        if (
+            len(self._values) >= MAX_PUBLIC_FINDINGS
+            or self._text_bytes + text_bytes > MAX_PUBLIC_FINDING_BYTES
+        ):
+            raise PublicScanResourceLimitError
+        self._values.add(finding)
+        self._text_bytes += text_bytes
+
+    def extend(self, findings: Iterable[Finding]) -> None:
+        for finding in findings:
+            self.append(finding)
+
+    def __iter__(self) -> Iterable[Finding]:
+        return iter(self._values)
+
+    def __bool__(self) -> bool:
+        return bool(self._values)
 
 
 def files(root: Path) -> Iterable[Path]:
@@ -97,13 +140,43 @@ def files(root: Path) -> Iterable[Path]:
                         entry_count > MAX_PUBLIC_SOURCE_ENTRIES
                         or path_bytes > MAX_PUBLIC_SOURCE_PATH_BYTES
                     ):
-                        raise PublicSourceInventoryLimitError
+                        raise PublicScanResourceLimitError
                     if stat.S_ISDIR(info.st_mode):
                         pending_directories.append(path)
                     else:
                         yield path
         except OSError as error:
             raise PublicScanError("source inventory is unreadable") from error
+
+
+def enforce_source_content_budget(source_paths: Iterable[Path]) -> None:
+    """Reject excessive potential regular-file read work before analysis."""
+
+    content_bytes = 0
+    for path in source_paths:
+        try:
+            info = path.lstat()
+        except OSError:
+            continue
+        if not stat.S_ISREG(info.st_mode):
+            continue
+        maximum = (
+            MAX_AGE_ENVELOPE_BYTES
+            if has_exact_age_suffix(path)
+            else MAX_PUBLIC_FILE_BYTES
+        )
+        content_bytes += min(info.st_size, maximum + 1)
+        if content_bytes > MAX_PUBLIC_SOURCE_CONTENT_BYTES:
+            raise PublicScanResourceLimitError
+
+
+def admit_source_content(content_bytes: int, data: bytes) -> int:
+    """Account for exact bytes before analyzing content read after preflight."""
+
+    admitted = content_bytes + len(data)
+    if admitted > MAX_PUBLIC_SOURCE_CONTENT_BYTES:
+        raise PublicScanResourceLimitError
+    return admitted
 
 
 def read_public_file(path: Path) -> tuple[bytes | None, str | None]:
@@ -376,7 +449,7 @@ def sensitive_file_text_rules(
     return rules
 
 
-def main() -> int:
+def _main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, default=Path.cwd())
     parser.add_argument(
@@ -402,19 +475,17 @@ def main() -> int:
     except PublicScanError:
         print("privacy scan failed", file=sys.stderr)
         return 1
-    findings: list[tuple[str, int, str]] = []
+    findings = Findings()
 
     try:
         source_paths = tuple(files(root))
-    except PublicSourceInventoryLimitError:
-        print(
-            "privacy scan failed: source inventory exceeds safe limits",
-            file=sys.stderr,
-        )
-        return 1
+    except PublicScanResourceLimitError:
+        raise
     except PublicScanError:
         print("privacy scan failed", file=sys.stderr)
         return 1
+    enforce_source_content_budget(source_paths)
+    admitted_content_bytes = 0
     age_candidates = {
         path.relative_to(root).as_posix()
         for path in source_paths
@@ -489,6 +560,10 @@ def main() -> int:
             except AgeEnvelopeError:
                 findings.append((public_relative, 0, "invalid-age-envelope"))
                 continue
+            admitted_content_bytes = admit_source_content(
+                admitted_content_bytes,
+                age_data,
+            )
             digest = "sha256:" + hashlib.sha256(age_data).hexdigest()
             if admitted is None or admitted.get(relative) != digest:
                 findings.append((public_relative, 0, "invalid-age-envelope"))
@@ -503,6 +578,10 @@ def main() -> int:
                 findings.append((public_relative, 0, read_finding))
                 continue
             assert public_data is not None
+            admitted_content_bytes = admit_source_content(
+                admitted_content_bytes,
+                public_data,
+            )
             age_shaped = has_age_magic(public_data)
             if age_shaped:
                 findings.append((public_relative, 0, "invalid-age-envelope-suffix"))
@@ -541,9 +620,17 @@ def main() -> int:
             if not age_shaped and structured_document_contains_credential(path, text):
                 findings.append((public_relative, 0, "provider-token"))
 
-    for relative, line_number, rule in sorted(set(findings)):
+    for relative, line_number, rule in sorted(findings):
         print(f"{relative}:{line_number}: [{rule}] review required")
     return 1 if findings else 0
+
+
+def main() -> int:
+    try:
+        return _main()
+    except PublicScanResourceLimitError:
+        print(RESOURCE_LIMIT_DIAGNOSTIC, file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

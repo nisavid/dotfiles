@@ -28,7 +28,41 @@ repeat 10001; do
   : >"$test_root/inventory-limit/$inventory_entry"
 done
 run_failed_scan --root "$test_root/inventory-limit"
-[[ $scan_output == 'privacy scan failed: source inventory exceeds safe limits' ]]
+[[ $scan_output == 'privacy scan failed: scan resource limits exceeded' ]]
+
+mkdir -p "$test_root/finding-limit"
+finding_field=AWS_
+finding_field+=ACCESS_KEY_ID
+repeat 10001; do
+  print -r -- "$finding_field=fixture-canary-value"
+done >"$test_root/finding-limit/findings.txt"
+run_failed_scan --root "$test_root/finding-limit"
+[[ $scan_output == 'privacy scan failed: scan resource limits exceeded' ]]
+
+finding_text_root=$test_root/finding-text-limit
+long_segment=$(printf 'x%.0s' {1..200})
+repeat 4; do
+  finding_text_root+=/$long_segment
+done
+mkdir -p "$finding_text_root"
+repeat 5001; do
+  print -r -- "$finding_field=fixture-canary-value"
+done >"$finding_text_root/findings.txt"
+run_failed_scan --root "$test_root/finding-text-limit"
+[[ $scan_output == 'privacy scan failed: scan resource limits exceeded' ]]
+
+mkdir -p "$test_root/content-limit"
+dd if=/dev/zero \
+  of="$test_root/content-limit/1.bin" \
+  bs=1 seek=4194304 count=0 2>/dev/null
+integer content_entry=1
+repeat 4; do
+  (( ++content_entry ))
+  ln "$test_root/content-limit/1.bin" \
+    "$test_root/content-limit/$content_entry.bin"
+done
+run_failed_scan --root "$test_root/content-limit"
+[[ $scan_output == 'privacy scan failed: scan resource limits exceeded' ]]
 
 mkfifo "$test_root/denylist-fifo"
 run_failed_scan \
