@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import re
-import shutil
 import stat
 import subprocess
 import sys
@@ -89,7 +88,15 @@ class PrivacyAgeIntegrityGateTests(TestCase):
         run("git", "init", "--quiet", cwd=base)
         write_files(base)
         base_commit = commit_all(base, "base")
-        shutil.copytree(base, head)
+        run(
+            "git",
+            "clone",
+            "--quiet",
+            "--no-local",
+            os.fspath(base),
+            os.fspath(head),
+            cwd=Path(temporary.name),
+        )
         return temporary, base, head, base_commit
 
     def verify(
