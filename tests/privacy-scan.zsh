@@ -21,6 +21,20 @@ print -r -- 'contact fixture@example.invalid from /home/test-user/work' \
   >"$test_root/clean/source.txt"
 python3 "$scanner" --root "$test_root/clean"
 
+isolated_tool=$test_root/isolated-tool
+mkdir -p "$isolated_tool"
+cp \
+  "$scanner" \
+  "$repo_root/scripts/agent_equipment_public_data.py" \
+  "$repo_root/scripts/privacy_age_envelopes.py" \
+  "$isolated_tool"
+env -u PYTHONPYCACHEPREFIX \
+  python3 "$isolated_tool/privacy-scan" --root "$test_root/clean"
+if [[ -e $isolated_tool/__pycache__ ]]; then
+  print -u2 -r -- 'privacy scan created a bytecode cache beside its source'
+  exit 1
+fi
+
 mkdir -p "$test_root/inventory-limit"
 integer inventory_entry=0
 repeat 10001; do

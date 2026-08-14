@@ -15,6 +15,8 @@ import sys
 from collections.abc import Iterable
 from pathlib import Path
 
+sys.dont_write_bytecode = True
+
 import tomllib
 from agent_equipment_public_data import (
     contains_literal_credential,
