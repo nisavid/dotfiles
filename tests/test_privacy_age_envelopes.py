@@ -19,7 +19,10 @@ from scripts.privacy_age_envelopes import (
     canonical_manifest_bytes,
     discover_age_files,
 )
-from tests.age_tooling_test_support import require_age_tooling_or_skip
+from tests.age_tooling_test_support import (
+    require_age_tooling_or_skip,
+    shared_age_tooling_directory_or_skip,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 SCANNER = ROOT / "scripts/privacy-scan"
@@ -44,7 +47,7 @@ def manifest_bytes(entries: list[tuple[str, bytes]]) -> bytes:
     return (json.dumps(document, indent=2) + "\n").encode("utf-8")
 
 
-def verify_age_tooling() -> None:
+def verify_age_tooling() -> Path:
     binaries = {
         name: shutil.which(name) for name in ("age", "age-keygen", "age-inspect")
     }
@@ -72,6 +75,10 @@ def verify_age_tooling() -> None:
         for result in versions.values()
     ):
         require_age_tooling_or_skip("age v1.3.1 tooling is unavailable")
+    return shared_age_tooling_directory_or_skip(
+        (binary for binary in binaries.values() if binary is not None),
+        "age v1.3.1 tooling does not share one trusted install directory",
+    )
 
 
 class PrivacyAgeToolingPolicyTests(TestCase):
@@ -137,7 +144,7 @@ class PrivacyAgeToolingPolicyTests(TestCase):
 class PrivacyAgeEnvelopeTests(TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        verify_age_tooling()
+        cls.age_tooling_directory = verify_age_tooling()
 
     def setUp(self) -> None:
         self.temporary_directory = TemporaryDirectory()
@@ -190,12 +197,19 @@ class PrivacyAgeEnvelopeTests(TestCase):
         ]
         for additional_identity in additional_identities or []:
             command.extend(("--identity", str(additional_identity)))
+        effective_environment = (
+            os.environ.copy() if environment is None else environment.copy()
+        )
+        effective_environment.setdefault(
+            "AGE_TOOLING_DIRECTORY",
+            os.fspath(self.age_tooling_directory),
+        )
         return subprocess.run(
             command,
             check=False,
             capture_output=True,
             text=True,
-            env=environment,
+            env=effective_environment,
             timeout=TOOL_TIMEOUT_SECONDS,
         )
 
@@ -488,6 +502,94 @@ class PrivacyAgeEnvelopeTests(TestCase):
         self.assertEqual(result.stdout, "")
         self.assertEqual(result.stderr, "age-envelope admission failed\n")
         self.assertEqual((self.root / MANIFEST).read_bytes(), sentinel)
+
+    def test_admission_rejects_same_version_path_wrappers_before_identity_use(
+        self,
+    ) -> None:
+        (self.root / "candidate.age").write_bytes(b"forged age envelope")
+        sentinel = manifest_bytes([])
+        (self.root / MANIFEST).write_bytes(sentinel)
+        trusted_age = shutil.which("age")
+        self.assertIsNotNone(trusted_age)
+        trusted_tooling_directory = Path(trusted_age).parent
+        fake_bin = self.base / "same-version-wrappers"
+        fake_bin.mkdir()
+        identity_capture = self.base / "captured-identity"
+        wrapper = textwrap.dedent(
+            """\
+            #!/bin/sh
+            if [ "${1-}" = --version ]; then
+              printf '%s\\n' v1.3.1
+              exit 0
+            fi
+            for argument do
+              case "$argument" in
+                /dev/fd/*) /bin/cat "$argument" >"$MALICIOUS_AGE_IDENTITY_CAPTURE" ;;
+              esac
+            done
+            case "${0##*/}" in
+              age-keygen) printf '%s\\n' age1pq1attackercontrolled ;;
+              age-inspect)
+                printf '%s\\n' '{"version":"age-encryption.org/v1","postquantum":"yes","armor":false,"stanza_types":["mlkem768x25519"],"sizes":{"header":1,"armor":0,"overhead":1,"min_payload":1,"max_payload":1,"min_padding":0,"max_padding":0}}'
+                ;;
+            esac
+            exit 0
+            """
+        )
+        for name in ("age", "age-keygen", "age-inspect"):
+            path = fake_bin / name
+            path.write_text(wrapper, encoding="utf-8")
+            path.chmod(0o755)
+        environment = os.environ.copy()
+        environment["AGE_TOOLING_DIRECTORY"] = os.fspath(trusted_tooling_directory)
+        environment["MALICIOUS_AGE_IDENTITY_CAPTURE"] = os.fspath(identity_capture)
+        environment["PATH"] = os.fspath(fake_bin)
+
+        result = self.run_admitter_with(
+            identity=self.identity,
+            environment=environment,
+        )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, "age-envelope admission failed\n")
+        self.assertFalse(identity_capture.exists())
+        self.assertEqual((self.root / MANIFEST).read_bytes(), sentinel)
+
+    def test_admission_rejects_a_tooling_authority_inside_the_repository(
+        self,
+    ) -> None:
+        candidate = self.encrypt(b"in-repository tooling authority fixture")
+        (self.root / "candidate.age").write_bytes(candidate)
+        sentinel = manifest_bytes([])
+        (self.root / MANIFEST).write_bytes(sentinel)
+        in_repository = self.root / "trusted-age-bin"
+        in_repository.mkdir()
+        for name in ("age", "age-keygen", "age-inspect"):
+            (in_repository / name).symlink_to(self.age_tooling_directory / name)
+        outside_symlink = self.base / "trusted-age-bin-link"
+        outside_symlink.symlink_to(in_repository, target_is_directory=True)
+
+        for label, tooling_directory in (
+            ("lexical", in_repository),
+            ("canonical", outside_symlink),
+        ):
+            with self.subTest(label):
+                environment = os.environ.copy()
+                environment["AGE_TOOLING_DIRECTORY"] = os.fspath(tooling_directory)
+
+                result = self.run_admitter_with(
+                    identity=self.identity,
+                    environment=environment,
+                )
+
+                self.assertEqual(result.returncode, 1)
+                self.assertEqual(result.stdout, "")
+                self.assertEqual(
+                    result.stderr,
+                    "age-envelope admission failed\n",
+                )
+                self.assertEqual((self.root / MANIFEST).read_bytes(), sentinel)
 
     def test_admission_rejects_incomplete_or_trailing_envelopes_without_mutation(
         self,

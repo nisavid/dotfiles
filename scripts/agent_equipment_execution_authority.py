@@ -1836,12 +1836,16 @@ def validate_checkpoint_set_manifest(
         type(trusted_checkpoint_store_generation) is not int
         or document["checkpoint_store_generation"]
         != trusted_checkpoint_store_generation
+        or projected is None
+        or not projected
+        or trusted_checkpoint_store_generation
+        != max(entry["durable_generation"] for entry in projected)
     ):
         diagnostics.append(
             _diagnostic(
                 "CHECKPOINT_STORE_GENERATION_MISMATCH",
                 "$.checkpoint_store_generation",
-                "The checkpoint manifest was not derived from the trusted store generation.",
+                "The checkpoint manifest generation is not the latest durable generation represented by the complete trusted store records.",
             )
         )
 
@@ -3204,6 +3208,11 @@ def _release_expected_case_replay_diagnostics(
                 capability_binding, Mapping
             ):
                 route_projection_is_valid = False
+                continue
+            if (
+                route.get("control_owner") == "operator_owned"
+                and route.get("planned_actions") == []
+            ):
                 continue
             captured_projection = {
                 "route_digest": route.get("route_digest"),

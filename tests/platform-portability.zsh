@@ -63,6 +63,8 @@ required_age_modules=$(
   fail 'platform workflow may skip public-data age-inspect coverage'
 [[ $required_age_modules == *'tests/test_privacy_age_envelopes.py'* ]] ||
   fail 'platform workflow may skip age-envelope tooling coverage'
+grep -Fq 'AGE_TOOLING_DIRECTORY: ${{ runner.temp }}/chezmoi-bin' "$workflow" ||
+  fail 'platform workflow does not anchor admission to the verified age install'
 
 age_boundary_workflow=$repo_root/.github/workflows/privacy-age-integrity.yml
 grep -Fq '  pull_request_target:' "$age_boundary_workflow" ||

@@ -21,6 +21,15 @@ print -r -- 'contact fixture@example.invalid from /home/test-user/work' \
   >"$test_root/clean/source.txt"
 python3 "$scanner" --root "$test_root/clean"
 
+mkdir -p "$test_root/inventory-limit"
+integer inventory_entry=0
+repeat 10001; do
+  (( ++inventory_entry ))
+  : >"$test_root/inventory-limit/$inventory_entry"
+done
+run_failed_scan --root "$test_root/inventory-limit"
+[[ $scan_output == 'privacy scan failed: source inventory exceeds safe limits' ]]
+
 mkfifo "$test_root/denylist-fifo"
 run_failed_scan \
   --root "$test_root/clean" \

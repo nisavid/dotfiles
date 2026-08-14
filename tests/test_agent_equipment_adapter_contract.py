@@ -1454,6 +1454,12 @@ class AdapterContractSchemaTests(unittest.TestCase):
                 ].__setitem__("observed_at", "2026-08-12T15:00:02"),
                 "ADAPTER_SCHEMA_INVALID",
             ),
+            (
+                lambda document: document["sequence"]["pre_state_observation"][
+                    "record"
+                ].__setitem__("observed_at", "2026-08-12T15:00:00Z\n"),
+                "ADAPTER_SCHEMA_INVALID",
+            ),
         )
         for build in builders:
             for mutate, expected_code in mutations:
@@ -1473,12 +1479,6 @@ class AdapterContractSchemaTests(unittest.TestCase):
                 "0000-01-01T00:00:00.1Z",
                 "0000-01-01T00:00:00.10Z",
                 "0000-01-01T00:00:00.1001Z",
-            ),
-            (
-                "2026-08-12T15:00:00Z\n",
-                "2026-08-12T15:00:01Z\n",
-                "2026-08-12T15:00:01Z\n",
-                "2026-08-12T15:00:02Z\n",
             ),
         )
         for build in (
