@@ -168,6 +168,21 @@ def iter_routes(value: object):
 
 
 class AgentEquipmentDesignTest(unittest.TestCase):
+    def test_inventory_records_privacy_and_context7_proposal_boundaries(self) -> None:
+        inventory = (ROOT / "docs/agent-equipment/INVENTORY.md").read_text(
+            encoding="utf-8"
+        )
+        normalized_inventory = " ".join(inventory.split())
+
+        self.assertIn(
+            "python3 scripts/privacy-scan --root . --require-age-manifest",
+            inventory,
+        )
+        self.assertIn(
+            "proposed desired state only; it does not change the observed live Cursor state",
+            normalized_inventory,
+        )
+
     def test_inventory_references_the_canonical_proposal_without_redeclaring_it(
         self,
     ) -> None:
@@ -589,6 +604,11 @@ class AgentEquipmentDesignTest(unittest.TestCase):
             "sha256:aa58fba8483623bed37c1b02edfccbdd9a53123837c20bfa4cb4049993a2872e",
         )
 
+    def test_canonical_digest_rejects_nonfinite_numbers(self) -> None:
+        for value in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                DESIGN.canonical_json_sha256({"value": value})
+
     def test_public_loader_validates_fixture_pair(self) -> None:
         result = DESIGN.load_and_validate(
             FIXTURES / "valid-catalog.json",
@@ -664,6 +684,40 @@ class AgentEquipmentDesignTest(unittest.TestCase):
                 )
                 self.assertEqual(result.coverage, ())
                 self.assertIsNone(result.mutation_plan)
+
+    def test_loader_classifies_nonfinite_numbers_as_invalid_json(self) -> None:
+        for nonfinite_token in ("NaN", "Infinity", "-Infinity"):
+            for invalid_document in ("catalog", "lock"):
+                with self.subTest(
+                    token=nonfinite_token,
+                    invalid_document=invalid_document,
+                ):
+                    catalog, lock = valid_pair()
+                    with TemporaryDirectory() as temporary_directory:
+                        directory = Path(temporary_directory)
+                        catalog_path = directory / "catalog.json"
+                        lock_path = directory / "lock.json"
+                        catalog_path.write_text(
+                            nonfinite_token
+                            if invalid_document == "catalog"
+                            else json.dumps(catalog),
+                            encoding="utf-8",
+                        )
+                        lock_path.write_text(
+                            nonfinite_token
+                            if invalid_document == "lock"
+                            else json.dumps(lock),
+                            encoding="utf-8",
+                        )
+
+                        result = DESIGN.load_and_validate(catalog_path, lock_path)
+
+                    self.assertEqual(
+                        {diagnostic.code for diagnostic in result.diagnostics},
+                        {"DOCUMENT_PARSE_INVALID"},
+                    )
+                    self.assertEqual(result.coverage, ())
+                    self.assertIsNone(result.mutation_plan)
 
     def test_public_validator_rejects_nested_lock_schema_extensions(self) -> None:
         catalog, lock = valid_pair()
@@ -1385,7 +1439,7 @@ class AgentEquipmentDesignTest(unittest.TestCase):
 
         managed_route(catalog)["provider"]["arguments"][-1][
             "secret_reference"
-        ] = "UNDECLARED_SECRET"
+        ] = "UNDECLARED_SECRET"  # noqa: S105
         locked_managed_route(lock)["provider"] = deepcopy(
             managed_route(catalog)["provider"]
         )
@@ -1429,11 +1483,53 @@ class AgentEquipmentDesignTest(unittest.TestCase):
 
         self.assertEqual(DESIGN.validate_design(catalog, lock).diagnostics, ())
 
+    def test_secret_reference_template_schema_requires_exactly_one_placeholder(
+        self,
+    ) -> None:
+        catalog, lock = valid_pair()
+        provider = {
+            "kind": "direct_mcp",
+            "server_name": "context7",
+            "transport": "stdio",
+            "command": "npx",
+            "arguments": [
+                {"literal": "-y"},
+                {"literal": "@upstash/context7-mcp@3.2.4"},
+                {
+                    "secret_reference": "EXAMPLE_API_KEY",
+                    "template": "prefix-{reference}-{reference}",
+                },
+            ],
+        }
+        managed_route(catalog)["provider"] = deepcopy(provider)
+        managed_route(catalog)["provenance"] = {"owner": "overlay:claude/mcp"}
+        managed_route(catalog)["secret_references"] = [
+            {"kind": "environment_variable", "name": "EXAMPLE_API_KEY"}
+        ]
+        locked_managed_route(lock)["provider"] = deepcopy(provider)
+        locked_managed_route(lock)["provenance"] = deepcopy(
+            managed_route(catalog)["provenance"]
+        )
+        locked_managed_route(lock)["secret_references"] = deepcopy(
+            managed_route(catalog)["secret_references"]
+        )
+        bind_managed_distribution_to_direct_mcp(
+            catalog, lock, package="@upstash/context7-mcp", channel="3.2.4"
+        )
+        lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
+
+        result = DESIGN.validate_design(catalog, lock)
+
+        self.assertIn(
+            "CATALOG_SCHEMA_INVALID",
+            {diagnostic.code for diagnostic in result.diagnostics},
+        )
+
     def test_literal_secret_material_fails_closed_without_echoing_it(self) -> None:
         catalog, lock = valid_pair()
-        secret_canary = (
+        secret_canary = (  # noqa: S105
             "Author" + "ization:" + " Bear" + "er secret-canary-value"
-        )  # noqa: S105
+        )
         provider = {
             "kind": "direct_mcp",
             "server_name": "context7",

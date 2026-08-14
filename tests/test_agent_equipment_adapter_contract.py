@@ -956,6 +956,19 @@ class AdapterContractSchemaTests(unittest.TestCase):
             validate_adapter_sequence(apply_sequence_document(valid_sequence())),
         )
 
+    def test_sequence_rejects_incomplete_normalized_component_identity(self) -> None:
+        document = apply_sequence_document(valid_sequence())
+        document["sequence"]["pre_state_observation"]["record"]["result"][
+            "normalized_state"
+        ]["component_states"].append(
+            {"equipment_identity": "plugin:", "state": "enabled"}
+        )
+
+        self.assertEqual(
+            document_diagnostic_codes(document),
+            {"ADAPTER_SCHEMA_INVALID"},
+        )
+
     def test_individual_record_does_not_grant_mutation_authority(self) -> None:
         self.assertEqual(
             {"APPLY_SEQUENCE_INVALID"},
@@ -1978,6 +1991,25 @@ class AdapterContractSchemaTests(unittest.TestCase):
                 str(path),
             )
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
+    def test_compensation_verified_state_mismatch_names_pre_state_observation(
+        self,
+    ) -> None:
+        document = valid_compensation_sequence_document()
+        document["sequence"]["pre_state_observation"]["record"]["result"][
+            "normalized_state"
+        ]["enablement"] = "disabled"
+
+        mismatch = next(
+            diagnostic
+            for diagnostic in validate_adapter_sequence(document)
+            if diagnostic.code == "VERIFIED_STATE_FRAGMENT_MISMATCH"
+        )
+
+        self.assertEqual(
+            mismatch.path,
+            "PreStateObservation.record.result.enablement",
+        )
 
     def test_sequence_rejects_coordinated_route_record_binding_mismatches(self) -> None:
         cases = ("route_identity", "activation_group", "secret_references")

@@ -145,7 +145,7 @@ class MutationPlan:
     execution_nonce: str
     run_identity: str
     execution_domain_identity: str
-    candidate_digest: str
+    candidate_identity: str
     implementation_manifest_digest: str
     catalog_digest: str
     lock_digest: str
@@ -188,7 +188,7 @@ BINDING_FIELDS = (
     "ordinal",
     "run_identity",
     "execution_domain_identity",
-    "candidate_digest",
+    "candidate_identity",
     "implementation_manifest_digest",
     "catalog_digest",
     "lock_digest",
@@ -603,7 +603,7 @@ class AcceptanceFixture:
         self.last_trace: tuple[str, ...] = ()
         self._adopted: dict[str, str] = {}
         self._imports: dict[str, ImportedObservation] = {}
-        self.candidate_digest = f"sha256:{'0' * 64}"
+        self.candidate_identity = f"sha256:{'0' * 64}"
         self.implementation_manifest_digest = f"sha256:{'9' * 64}"
         self.apply_authorization_identity = "apply-authorization:sha256:" + "a" * 64
         self.apply_authorization_digest = f"sha256:{'b' * 64}"
@@ -673,7 +673,7 @@ class AcceptanceFixture:
             execution_nonce=self.execution_nonce,
             run_identity="run:fixture/v1",
             execution_domain_identity="execution-domain:fixture/global-ledger-v1",
-            candidate_digest=self.candidate_digest,
+            candidate_identity=self.candidate_identity,
             implementation_manifest_digest=self.implementation_manifest_digest,
             catalog_digest=f"sha256:{'1' * 64}",
             lock_digest=f"sha256:{'2' * 64}",
@@ -722,7 +722,7 @@ class AcceptanceFixture:
             execution_nonce=plan.execution_nonce,
             run_identity=plan.run_identity,
             execution_domain_identity=plan.execution_domain_identity,
-            candidate_digest=plan.candidate_digest,
+            candidate_identity=plan.candidate_identity,
             implementation_manifest_digest=plan.implementation_manifest_digest,
             catalog_digest=plan.catalog_digest,
             lock_digest=plan.lock_digest,
@@ -766,8 +766,10 @@ class AcceptanceFixture:
         expected_checkpoint_prefix = [
             action.step_id for action in plan.actions[: len(existing_checkpoints)]
         ]
-        if sorted(existing_checkpoints) != expected_checkpoint_prefix or not (
-            self._checkpoint_lifecycle_frontier_valid(existing_checkpoints)
+        if (
+            sorted(existing_checkpoints, key=self._step_ordinal)
+            != expected_checkpoint_prefix
+            or not self._checkpoint_lifecycle_frontier_valid(existing_checkpoints)
         ):
             raise BindingMismatchError("checkpoint lifecycle frontier")
         for action in plan.actions:
@@ -889,7 +891,7 @@ class AcceptanceFixture:
             != self.prepared_action_authority_set_identity
             or plan.prepared_action_authority_set_digest
             != self.prepared_action_authority_set_digest
-            or plan.candidate_digest != self.candidate_digest
+            or plan.candidate_identity != self.candidate_identity
             or plan.implementation_manifest_digest
             != self.implementation_manifest_digest
             or not _is_prefixed_identity(plan.run_identity, "run:")
@@ -925,7 +927,7 @@ class AcceptanceFixture:
         capability_bindings = plan.capability_bindings
         plan_bindings = (
             plan.apply_authorization_digest,
-            plan.candidate_digest,
+            plan.candidate_identity,
             plan.implementation_manifest_digest,
             plan.catalog_digest,
             plan.lock_digest,
@@ -993,7 +995,7 @@ class AcceptanceFixture:
             "phase_history": [phase],
             "invocation_state": "not_started",
             "compensation_authority_kind": "none",
-            "candidate_digest": plan.candidate_digest,
+            "candidate_identity": plan.candidate_identity,
             "implementation_manifest_digest": plan.implementation_manifest_digest,
             "catalog_digest": plan.catalog_digest,
             "lock_digest": plan.lock_digest,
@@ -1029,10 +1031,17 @@ class AcceptanceFixture:
         checkpoint.setdefault("phase_history", []).append(phase)
 
     @staticmethod
+    def _step_ordinal(step_id: str) -> int:
+        return int(step_id.removeprefix("step-"))
+
+    @staticmethod
     def _checkpoint_lifecycle_frontier_valid(
         checkpoints: Mapping[str, Mapping[str, JsonValue]],
     ) -> bool:
-        phases = [checkpoints[step_id].get("phase") for step_id in sorted(checkpoints)]
+        phases = [
+            checkpoints[step_id].get("phase")
+            for step_id in sorted(checkpoints, key=AcceptanceFixture._step_ordinal)
+        ]
         compensation_phases = {
             "compensating",
             "compensated",
@@ -1318,11 +1327,17 @@ class AcceptanceFixture:
         expected_checkpoint_prefix = [
             action.step_id for action in plan.actions[: len(checkpoints)]
         ]
-        if sorted(checkpoints) != expected_checkpoint_prefix or not (
-            self._checkpoint_lifecycle_frontier_valid(checkpoints)
+        if (
+            sorted(checkpoints, key=self._step_ordinal)
+            != expected_checkpoint_prefix
+            or not self._checkpoint_lifecycle_frontier_valid(checkpoints)
         ):
             raise BindingMismatchError("checkpoint lifecycle frontier")
-        for step_id, checkpoint in sorted(checkpoints.items(), reverse=True):
+        for step_id, checkpoint in sorted(
+            checkpoints.items(),
+            key=lambda item: self._step_ordinal(item[0]),
+            reverse=True,
+        ):
             action = actions[step_id]
             expected = self._checkpoint(plan, action, "prepared")
             self._validate_checkpoint_binding(checkpoint, expected)

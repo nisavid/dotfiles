@@ -79,6 +79,23 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
             self.assertEqual(reapply.checkpoints(), {})
             self.assertEqual(reapply.adapter.state, desired)
 
+    def test_checkpoint_recovery_orders_four_digit_step_ordinals_numerically(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            fixture = ACCEPTANCE.AcceptanceFixture(Path(temporary_directory))
+            desired = {
+                f"surface/{index:04d}": {"version": 1} for index in range(1001)
+            }
+            plan = fixture.plan(desired)
+            fixture.execute(plan)
+
+            result = fixture.execute(plan)
+
+            self.assertEqual(result.status, "completed")
+            self.assertEqual(result.trace[0], "audit:step-000:post_state")
+            self.assertEqual(result.trace[-1], "audit:step-1000:post_state")
+
     def test_each_missing_owned_item_is_repaired_without_touching_other_state(
         self,
     ) -> None:
@@ -1242,7 +1259,7 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
         plan_fields = (
             "run_identity",
             "execution_domain_identity",
-            "candidate_digest",
+            "candidate_identity",
             "implementation_manifest_digest",
             "catalog_digest",
             "lock_digest",
@@ -1303,7 +1320,7 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
                         ACCEPTANCE.PlanValidationError
                         if field
                         in {
-                            "candidate_digest",
+                            "candidate_identity",
                             "implementation_manifest_digest",
                             "plan_digest",
                             "prepared_action_authority_set_identity",
@@ -1803,7 +1820,7 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
 
     def test_invalid_plan_bindings_fail_before_checkpoint_store_changes(self) -> None:
         fields = (
-            "candidate_digest",
+            "candidate_identity",
             "implementation_manifest_digest",
             "catalog_digest",
             "lock_digest",
@@ -1952,7 +1969,7 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
                     self.assertEqual(fixture.checkpoints(), {})
 
     def test_plan_rejects_foreign_candidate_authority_before_checkpoint(self) -> None:
-        fields = ("candidate_digest", "implementation_manifest_digest")
+        fields = ("candidate_identity", "implementation_manifest_digest")
         for field in fields:
             with self.subTest(field=field):
                 with tempfile.TemporaryDirectory() as temporary_directory:

@@ -142,10 +142,14 @@ encoded_field=AWS_
 encoded_field+=ACCESS_KEY_ID
 encoded_plaintext=$test_root/encoded-plaintext
 print -r -- "$encoded_field=fixture-canary-value" >"$encoded_plaintext"
-iconv -f UTF-8 -t UTF-32 "$encoded_plaintext" >"$test_root/encoded/value.txt"
+iconv -f UTF-8 -t UTF-32LE "$encoded_plaintext" \
+  >"$test_root/encoded/value-le.txt"
+iconv -f UTF-8 -t UTF-32BE "$encoded_plaintext" \
+  >"$test_root/encoded/value-be.txt"
 rm -- "$encoded_plaintext"
 run_failed_scan --root "$test_root/encoded"
-[[ $scan_output == *'[provider-token]'* ]]
+[[ $scan_output == *'value-le.txt:'*'[provider-token]'* ]]
+[[ $scan_output == *'value-be.txt:'*'[provider-token]'* ]]
 
 mkdir -p "$test_root/renamed"
 print -n -r -- $'age-encryption.org/v1\n' >"$test_root/renamed/payload.bin"

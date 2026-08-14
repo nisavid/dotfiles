@@ -236,9 +236,13 @@ def validate_sequence(
         captured_state_required=False,
     )
     if phase == "apply":
-        _validate_verified_state_fragment(diagnostics, action, post_observation)
+        _validate_verified_state_fragment(
+            diagnostics, "PostStateObservation", action, post_observation
+        )
     else:
-        _validate_verified_state_fragment(diagnostics, action, pre_observation)
+        _validate_verified_state_fragment(
+            diagnostics, "PreStateObservation", action, pre_observation
+        )
     _validate_action_echoes(diagnostics, pre_request, action)
     _validate_action_preconditions(diagnostics, action)
     _validate_receipt_echoes(diagnostics, action, receipt)
@@ -735,6 +739,7 @@ def _validate_action_echoes(
 
 def _validate_verified_state_fragment(
     diagnostics: list[Diagnostic],
+    observation_label: str,
     action: JsonObject,
     observation: JsonObject,
 ) -> None:
@@ -751,7 +756,7 @@ def _validate_verified_state_fragment(
             _expect_equal(
                 diagnostics,
                 "VERIFIED_STATE_FRAGMENT_MISMATCH",
-                f"PostStateObservation.record.result.{field}",
+                f"{observation_label}.record.result.{field}",
                 normalized_state.get(field),
                 desired_state.get(field),
             )
@@ -765,7 +770,7 @@ def _validate_verified_state_fragment(
         _expect_equal(
             diagnostics,
             "VERIFIED_STATE_FRAGMENT_MISMATCH",
-            "PostStateObservation.record.result.configuration",
+            f"{observation_label}.record.result.configuration",
             observed_configuration,
             expected_configuration,
         )
@@ -777,7 +782,7 @@ def _validate_verified_state_fragment(
             _expect_equal(
                 diagnostics,
                 "VERIFIED_STATE_FRAGMENT_MISMATCH",
-                (f"PostStateObservation.record.result.component_states[{identity}]"),
+                f"{observation_label}.record.result.component_states[{identity}]",
                 observed_components.get(identity),
                 state,
             )

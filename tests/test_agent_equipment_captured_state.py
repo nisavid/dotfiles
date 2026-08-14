@@ -834,6 +834,23 @@ class CapturedStateValidationTest(unittest.TestCase):
                 with self.subTest(index=index):
                     self.assertNotEqual(0, result.returncode)
 
+    def test_captured_at_requires_an_anchored_utc_z_timestamp(self) -> None:
+        for captured_at in (
+            "2026-08-12T00:00:00+00:00",
+            "2026-08-12T00:00:00Z\n",
+        ):
+            with self.subTest(captured_at=repr(captured_at)):
+                document = valid_document()
+                document["captured_at"] = captured_at
+
+                self.assertIn(
+                    "CAPTURED_STATE_SCHEMA_INVALID",
+                    {
+                        diagnostic.code
+                        for diagnostic in validate_document(document)
+                    },
+                )
+
     def test_skill_paths_reject_traversal_and_platform_separators_semantically(
         self,
     ) -> None:
@@ -867,6 +884,24 @@ class CapturedStateValidationTest(unittest.TestCase):
             "action_identity"
         ] = "action:not-canonical"
         cases.append(invalid_action_identity)
+
+        repeated_reference_placeholder = copy.deepcopy(fixture_document)
+        repeated_reference_placeholder["actions"][0]["action_payload"]["provider"] = {
+            "kind": "direct_mcp",
+            "server_name": "fixture",
+            "transport": "stdio",
+            "command": "fixture",
+            "arguments": [
+                {
+                    "secret_reference": "EXAMPLE_API_KEY",
+                    "template": "prefix-{reference}-{reference}",
+                }
+            ],
+        }
+        repeated_reference_placeholder["actions"][0]["action_payload"][
+            "secret_references"
+        ] = [{"kind": "environment_variable", "name": "EXAMPLE_API_KEY"}]
+        cases.append(repeated_reference_placeholder)
 
         for field in (
             "candidate_identity",
