@@ -43,7 +43,7 @@ REQUIRED_REQUIREMENTS = tuple(
         ("CON", 11),
         ("ADP", 8),
         ("CAP", 7),
-        ("CHK", 10),
+        ("CHK", 11),
         ("MIG", 7),
         ("LIVE", 6),
     )

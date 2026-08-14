@@ -8,6 +8,7 @@
     {"$ref": "#/$defs/preparedActionAuthoritySet"},
     {"$ref": "#/$defs/compensationAuthorization"},
     {"$ref": "#/$defs/compensationTransitionClaim"},
+    {"$ref": "#/$defs/checkpointStoreSnapshot"},
     {"$ref": "#/$defs/checkpointSetManifest"},
     {"$ref": "#/$defs/runTerminalRecord"},
     {"$ref": "#/$defs/releaseArchiveManifest"},
@@ -700,6 +701,178 @@
         }
       ]
     },
+    "checkpointRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "checkpoint_identity",
+        "apply_authorization_identity",
+        "apply_authorization_digest",
+        "execution_nonce",
+        "step_id",
+        "action_identity",
+        "ordinal",
+        "run_identity",
+        "execution_domain_identity",
+        "phase",
+        "phase_history",
+        "invocation_state",
+        "compensation_authority_kind",
+        "candidate_digest",
+        "implementation_manifest_digest",
+        "catalog_digest",
+        "lock_digest",
+        "plan_digest",
+        "prepared_action_authority_set_identity",
+        "prepared_action_authority_set_digest",
+        "capability_set_digest",
+        "captured_state_identity",
+        "captured_state_digest",
+        "route_capability_binding",
+        "route_digest",
+        "operation_digest",
+        "compensation_operation",
+        "pre_state_digest",
+        "expected_post_state_digest",
+        "pre_state",
+        "expected_post_state",
+        "surface",
+        "compensation_transition_claim"
+      ],
+      "properties": {
+        "checkpoint_identity": {
+          "type": "string",
+          "pattern": "^checkpoint:sha256:[0-9a-f]{64}$"
+        },
+        "apply_authorization_identity": {
+          "type": "string",
+          "pattern": "^apply-authorization:sha256:[0-9a-f]{64}$"
+        },
+        "apply_authorization_digest": {"$ref": "#/$defs/digest"},
+        "execution_nonce": {
+          "type": "string",
+          "pattern": "^execution-nonce:sha256:[0-9a-f]{64}$"
+        },
+        "step_id": {"type": "string", "minLength": 1},
+        "action_identity": {
+          "type": "string",
+          "pattern": "^action:sha256:[0-9a-f]{64}$"
+        },
+        "ordinal": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807},
+        "run_identity": {
+          "type": "string",
+          "pattern": "^run:sha256:[0-9a-f]{64}$"
+        },
+        "execution_domain_identity": {"$ref": "#/$defs/executionDomainIdentity"},
+        "phase": {
+          "enum": ["prepared", "completed", "compensating", "compensated", "compensation_blocked"]
+        },
+        "phase_history": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4,
+          "items": {
+            "enum": ["prepared", "completed", "compensating", "compensated", "compensation_blocked"]
+          }
+        },
+        "invocation_state": {"enum": ["not_started", "started"]},
+        "compensation_authority_kind": {
+          "enum": ["none", "automatic_apply", "public_compensation"]
+        },
+        "candidate_digest": {"$ref": "#/$defs/opaqueIdentity"},
+        "implementation_manifest_digest": {"$ref": "#/$defs/digest"},
+        "catalog_digest": {"$ref": "#/$defs/digest"},
+        "lock_digest": {"$ref": "#/$defs/digest"},
+        "plan_digest": {"$ref": "#/$defs/digest"},
+        "prepared_action_authority_set_identity": {
+          "type": "string",
+          "pattern": "^prepared-action-authority-set:sha256:[0-9a-f]{64}$"
+        },
+        "prepared_action_authority_set_digest": {"$ref": "#/$defs/digest"},
+        "capability_set_digest": {"$ref": "#/$defs/digest"},
+        "captured_state_identity": {"$ref": "#/$defs/opaqueIdentity"},
+        "captured_state_digest": {"$ref": "#/$defs/digest"},
+        "route_capability_binding": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["capability_identity", "capability_digest", "manager_version_evidence_digest"],
+          "properties": {
+            "capability_identity": {
+              "type": "string",
+              "pattern": "^capability:[a-z0-9][a-z0-9._:/+-]*$"
+            },
+            "capability_digest": {"$ref": "#/$defs/digest"},
+            "manager_version_evidence_digest": {"$ref": "#/$defs/digest"}
+          }
+        },
+        "route_digest": {"$ref": "#/$defs/digest"},
+        "operation_digest": {"$ref": "#/$defs/digest"},
+        "compensation_operation": {"const": "restore_captured_pre_state"},
+        "pre_state_digest": {"$ref": "#/$defs/digest"},
+        "expected_post_state_digest": {"$ref": "#/$defs/digest"},
+        "pre_state": {"$ref": "#/$defs/normalizedState"},
+        "expected_post_state": {"$ref": "#/$defs/normalizedState"},
+        "surface": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "compensation_transition_claim": {
+          "oneOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/compensationTransitionClaim"}
+          ]
+        }
+      }
+    },
+    "checkpointStoreEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["durable_generation", "record_version", "record"],
+      "properties": {
+        "durable_generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        },
+        "record_version": {"const": "agent-equipment-checkpoint/v1"},
+        "record": {"$ref": "#/$defs/checkpointRecord"}
+      }
+    },
+    "checkpointStoreSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "snapshot_identity",
+        "snapshot_digest",
+        "checkpoint_store_generation",
+        "bindings",
+        "checkpoints"
+      ],
+      "properties": {
+        "schema_version": {"const": "agent-equipment-checkpoint-store-snapshot/v1"},
+        "snapshot_identity": {
+          "type": "string",
+          "pattern": "^checkpoint-store-snapshot:sha256:[0-9a-f]{64}$"
+        },
+        "snapshot_digest": {"$ref": "#/$defs/digest"},
+        "checkpoint_store_generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        },
+        "bindings": {"$ref": "#/$defs/checkpointSetBindings"},
+        "checkpoints": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4096,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/checkpointStoreEntry"}
+        }
+      }
+    },
     "checkpointSetManifest": {
       "type": "object",
       "additionalProperties": false,
@@ -754,8 +927,11 @@
       "additionalProperties": false,
       "required": [
         "apply_authorization_bytes_digest",
+        "plan_action_set_bytes_digest",
+        "captured_state_bytes_digest",
         "capture_observation_authority_set_bytes_digest",
         "prepared_action_authority_set_bytes_digest",
+        "checkpoint_store_snapshot_bytes_digest",
         "checkpoint_set_manifest_bytes_digest",
         "run_terminal_record_bytes_digest",
         "expected_case_manifest_bytes_digest",
@@ -764,8 +940,11 @@
       ],
       "properties": {
         "apply_authorization_bytes_digest": {"$ref": "#/$defs/digest"},
+        "plan_action_set_bytes_digest": {"$ref": "#/$defs/digest"},
+        "captured_state_bytes_digest": {"$ref": "#/$defs/digest"},
         "capture_observation_authority_set_bytes_digest": {"$ref": "#/$defs/digest"},
         "prepared_action_authority_set_bytes_digest": {"$ref": "#/$defs/digest"},
+        "checkpoint_store_snapshot_bytes_digest": {"$ref": "#/$defs/digest"},
         "checkpoint_set_manifest_bytes_digest": {"$ref": "#/$defs/digest"},
         "run_terminal_record_bytes_digest": {"$ref": "#/$defs/digest"},
         "expected_case_manifest_bytes_digest": {"$ref": "#/$defs/digest"},

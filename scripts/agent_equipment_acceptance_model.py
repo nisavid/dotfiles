@@ -150,6 +150,8 @@ class MutationPlan:
     catalog_digest: str
     lock_digest: str
     plan_digest: str
+    prepared_action_authority_set_identity: str
+    prepared_action_authority_set_digest: str
     capability_bindings: tuple[CapabilityBinding, ...]
     capability_set_digest: str
     captured_state_identity: str
@@ -191,6 +193,8 @@ BINDING_FIELDS = (
     "catalog_digest",
     "lock_digest",
     "plan_digest",
+    "prepared_action_authority_set_identity",
+    "prepared_action_authority_set_digest",
     "capability_set_digest",
     "captured_state_identity",
     "captured_state_digest",
@@ -604,6 +608,10 @@ class AcceptanceFixture:
         self.apply_authorization_identity = "apply-authorization:sha256:" + "a" * 64
         self.apply_authorization_digest = f"sha256:{'b' * 64}"
         self.execution_nonce = "execution-nonce:sha256:" + "c" * 64
+        self.prepared_action_authority_set_identity = (
+            "prepared-action-authority-set:sha256:" + "6" * 64
+        )
+        self.prepared_action_authority_set_digest = f"sha256:{'7' * 64}"
         self.compensation_authorization_identity = (
             "compensation-authorization:sha256:" + "d" * 64
         )
@@ -670,6 +678,12 @@ class AcceptanceFixture:
             catalog_digest=f"sha256:{'1' * 64}",
             lock_digest=f"sha256:{'2' * 64}",
             plan_digest=plan_actions_digest(ordered_actions),
+            prepared_action_authority_set_identity=(
+                self.prepared_action_authority_set_identity
+            ),
+            prepared_action_authority_set_digest=(
+                self.prepared_action_authority_set_digest
+            ),
             capability_bindings=capability_bindings,
             capability_set_digest=capability_set_digest(capability_bindings),
             captured_state_identity="captured-state:fixture/v1",
@@ -713,6 +727,12 @@ class AcceptanceFixture:
             catalog_digest=plan.catalog_digest,
             lock_digest=plan.lock_digest,
             plan_digest=plan_actions_digest(actions),
+            prepared_action_authority_set_identity=(
+                plan.prepared_action_authority_set_identity
+            ),
+            prepared_action_authority_set_digest=(
+                plan.prepared_action_authority_set_digest
+            ),
             capability_bindings=plan.capability_bindings,
             capability_set_digest=plan.capability_set_digest,
             captured_state_identity=plan.captured_state_identity,
@@ -865,6 +885,10 @@ class AcceptanceFixture:
             plan.apply_authorization_identity != self.apply_authorization_identity
             or plan.apply_authorization_digest != self.apply_authorization_digest
             or plan.execution_nonce != self.execution_nonce
+            or plan.prepared_action_authority_set_identity
+            != self.prepared_action_authority_set_identity
+            or plan.prepared_action_authority_set_digest
+            != self.prepared_action_authority_set_digest
             or plan.candidate_digest != self.candidate_digest
             or plan.implementation_manifest_digest
             != self.implementation_manifest_digest
@@ -906,6 +930,7 @@ class AcceptanceFixture:
             plan.catalog_digest,
             plan.lock_digest,
             plan.plan_digest,
+            plan.prepared_action_authority_set_digest,
             plan.capability_set_digest,
             plan.captured_state_digest,
         )
@@ -973,6 +998,12 @@ class AcceptanceFixture:
             "catalog_digest": plan.catalog_digest,
             "lock_digest": plan.lock_digest,
             "plan_digest": plan.plan_digest,
+            "prepared_action_authority_set_identity": (
+                plan.prepared_action_authority_set_identity
+            ),
+            "prepared_action_authority_set_digest": (
+                plan.prepared_action_authority_set_digest
+            ),
             "capability_set_digest": plan.capability_set_digest,
             "captured_state_identity": plan.captured_state_identity,
             "captured_state_digest": plan.captured_state_digest,

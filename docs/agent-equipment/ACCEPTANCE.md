@@ -29,7 +29,7 @@ adapter contract's closed manager vocabulary: native-plugin manager and harness
 match, direct-MCP overlay family matches its harness and `direct_mcp` manager,
 and standalone skills use the `standalone_skills` manager. It contains:
 
-- the complete canonical 74-ID v1 requirement registry;
+- the complete canonical 75-ID v1 requirement registry;
 - one or more static cases for every requirement except the derived `CHK-02`
   through `CHK-09` and `MIG-01` through `MIG-07` matrices;
 - every sealed automated plan-action identity;
@@ -44,6 +44,16 @@ production plan or migration nodes from this prose. A complete production
 release manifest therefore requires non-empty action, verification-node, and
 migration-boundary sets; an empty or static-only design fixture cannot pass the
 release gate.
+
+Release replay independently requires the manifest's complete artifact-binding
+object and plan-action identities to equal the exact trusted plan and captured-
+state streams. It also projects every automated route's provider selector and
+manager identity from the plan, requires the same route identities and core
+capability tuple in captured state, and accepts only that exact sorted route
+binding set. The eleven release streams do not contain the full validated plan
+graph, so release does not reconstruct verification or migration nodes; their
+closed records remain authenticated by the pre-mutation authorized manifest
+digest and the manifest's semantic coverage checks.
 
 Each case has a stable identity derived from exactly its requirement ID, fixture
 family, and sealed subject identity. `ADP-*`, `CAP-*`, and `LIVE-*` use explicit
@@ -245,7 +255,7 @@ operation. Run them again for every migration boundary named in `MIGRATION.md`.
 | `CHK-08` | Fail compensation and preserve a durable recoverable record. Audit-before-retry classifies state and never issues duplicate or destructive replay. | Fault and retry trace |
 | `CHK-09` | Inject a concurrent change immediately before every adapter mutation. Compare-before-mutate preserves it and stops before the native manager call. | Parameterized adapter call spies |
 | `CHK-10` | Before apply issuance, validate and seal one complete `CaptureObservationAuthoritySet` over all-and-only the plan actions, exact candidate/implementation/plan/action-set/capability/capture bindings, surfaces, controlled components, and normalized captured pre-state. Bind its independently trusted identity/digest into `ApplyAuthorization`; a coordinated reseal requires new apply authority. Derive and seal one complete `PreparedActionAuthoritySet` from that artifact and the adapter-derived normalized post-state, then bind its identity/digest into the same authorization. Every public validation seam takes both closed artifacts and obtains both expected tuples from the validated apply authorization; no raw observation list is accepted. Bind each checkpoint identity to that prepared authority plus apply identity/digest, execution domain/nonce/run, candidate and implementation, catalog/lock/plan/capability/capture, route capability/manager evidence, action/ordinal/step, operation, surface, compensation, and exact normalized pre/post state. Require checkpoints to form the canonical prepared plan prefix and one reachable cross-record forward or reverse-topological lifecycle frontier in addition to the local phase-history x phase x invocation-state matrix. Distinguish automatic apply compensation from public compensation; the latter requires a closed non-null original-authority transition claim and durable ledger evidence for restart. | Capture/prepared-set closure, coordinated reseal, cross-module identity, malformed normalized-state, component-set, phase-matrix, complete-plan, prefix/frontier, claim-type, and compensation-restart negatives |
-| `CHK-11` | Authenticate a closed `RunTerminalRecord` over the exact apply tuple, complete plan-action-set, validated capture-observation and prepared-action authority sets, checkpoint-set manifest, and trusted store generation. `succeeded` requires one unique completed checkpoint for every plan action. Release strictly parses the eight exact inputs, revalidates all exact artifacts, and archives the exact capture-observation-set, prepared-action-set, checkpoint-manifest, and terminal-record bytes plus all eight byte digests; naked checkpoint/state scalars and a partial completed prefix fail. | Terminal coordinated-reseal, partial-store, exact-byte, and receipt negatives |
+| `CHK-11` | Authenticate a closed `RunTerminalRecord` over the exact apply tuple, complete plan-action-set, validated capture-observation and prepared-action authority sets, checkpoint-set manifest, and store generation. `succeeded` requires one unique completed checkpoint for every plan action, with durable generations increasing in canonical action order. Release strictly parses eleven exact inputs, derives the plan, captured state, store generation, and full durable records only from the exact plan-action-set, captured-state, and sealed checkpoint-store-snapshot bytes, requires the snapshot generation to equal its maximum durable record generation, revalidates every exact artifact, and archives all eleven byte streams and digests; a lossy projection, stale store generation, naked checkpoint/state scalars, or a partial completed prefix fails. | Terminal coordinated-reseal, full-store-snapshot, partial-store, exact-byte, and receipt negatives |
 
 ## Migration and rollback fixtures
 
@@ -285,7 +295,7 @@ authorizing runtime migration.
 ## Outer release-gate implementation evidence
 
 The acceptance-evidence validator and attestation are the non-circular outer
-release gate. They are not a child requirement inside the 74-ID bundle and do
+release gate. They are not a child requirement inside the 75-ID bundle and do
 not create a self-referential evidence result. CI and review trace that gate to
 the 26 methods in `AcceptanceEvidenceContractTests`:
 
@@ -299,27 +309,29 @@ the 26 methods in `AcceptanceEvidenceContractTests`:
 ## Execution-authority design evidence
 
 The capture-observation-authority set, prepared-action-authority set, apply
-authorization, checkpoint-set manifest, compensation authorization and
-transition claim, run-terminal record, release
+authorization, checkpoint-store snapshot, checkpoint-set manifest,
+compensation authorization and transition claim, run-terminal record, release
 archive manifest, and release receipt are execution-authority records,
-not children inside the candidate's 74-ID evidence bundle. The methods in
+not children inside the candidate's 75-ID evidence bundle. The methods in
 `AgentEquipmentDeploymentContractTests` pin their closed source shape and the
 future deployment separation:
 
 | Gate family | Exact test methods |
 | --- | --- |
 | Apply authority | `test_apply_authorization_is_closed_over_the_complete_binding_tuple`; `test_apply_authorization_requires_command_time_run_and_replay_identity`; `test_apply_authorization_identity_and_operator_review_are_semantic_authority`; `test_apply_authorization_validates_the_complete_tuple_and_time_window` |
+| Plan-action-set authority | `test_release_rejects_cross_action_catalog_or_lock_bindings`; `test_plan_action_set_enforces_canonical_size_before_schema_work` |
 | Capture-observation authority | `test_capture_observation_authority_is_closed_and_apply_bound`; `test_capture_observation_reseal_cannot_escape_apply_authority`; `test_capture_observation_authority_rejects_partial_raw_and_secret_inputs` |
 | Prepared-state authority | `test_prepared_action_authority_is_complete_and_semantically_bound`; `test_prepared_action_authority_rejects_component_and_data_ambiguity`; `test_prepared_action_authority_requires_exact_controlled_components` |
 | Compensation authority | Closed-schema, canonical-identity, trusted-digest/domain, original-run/checkpoint-set, time-window, fresh-nonce, original-ledger-claim restart, monotonic descendant, and provenance-takeover vectors in `AgentEquipmentDeploymentContractTests` |
-| Checkpoint-set authority | `test_checkpoint_set_manifest_is_closed_and_matches_the_trusted_store`; `test_checkpoint_set_rejects_incomplete_foreign_or_stale_store_views`; `test_compensation_derives_checkpoint_digest_from_the_trusted_store` |
-| Release authority | `test_release_archive_manifest_and_receipt_bind_exact_bytes_and_execution`; `test_archive_byte_digest_is_distinct_from_authorization_canonical_digest`; `test_release_authority_uses_shared_public_data_policy`; `test_release_receipt_binds_launcher_authority_and_one_cas_archive`; `test_source_shape_keeps_audit_candidate_and_release_authority_separate` |
+| Checkpoint-set authority | `test_checkpoint_store_snapshot_closes_full_replay_records`; `test_checkpoint_set_manifest_is_closed_and_matches_the_trusted_store`; `test_checkpoint_set_rejects_incomplete_foreign_or_stale_store_views`; `test_compensation_derives_checkpoint_digest_from_the_trusted_store` |
+| Release authority | `test_release_archive_manifest_and_receipt_bind_exact_bytes_and_execution`; `test_release_semantically_revalidates_the_four_added_replay_records`; `test_release_rejects_coordinated_foreign_manifest_action_identities`; `test_release_rejects_coordinated_foreign_manifest_replay_bindings`; `test_release_rejects_a_coordinated_foreign_manifest_route_binding`; `test_release_requires_the_exact_captured_state_route_set`; `test_release_replays_historical_apply_without_a_new_apply_time_gate`; `test_archive_byte_digest_is_distinct_from_authorization_canonical_digest`; `test_release_authority_uses_shared_public_data_policy`; `test_release_receipt_binds_launcher_authority_and_one_cas_archive`; `test_source_shape_keeps_audit_candidate_and_release_authority_separate` |
 | Runtime boundary | `test_runtime_gate_and_external_authority_precede_every_mutation`; `test_raw_authority_boundary_rejects_ambiguous_or_unbounded_input` |
 
 These are pure design-contract vectors. They prove canonical identities and
 digests, complete apply-bound capture/prepared authority equality, bounded strict
-raw parsing, trusted-clock ordering, exact archive-byte digest bindings, and receipt-to-
-archive equality. Production must
+raw parsing, apply-time trusted-clock ordering, semantic revalidation of all
+eleven release streams against the trusted release tuple, byte-owned archive
+digest recomputation, and receipt-to-archive equality. Production must
 still prove authoritative execution-domain ownership, durable apply and
 compensation nonce replay rejection, the exclusive-lease store enumeration and
 generation/CAS recheck represented by the pure checkpoint-set validator,

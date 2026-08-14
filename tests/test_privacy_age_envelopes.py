@@ -19,6 +19,7 @@ from scripts.privacy_age_envelopes import (
     canonical_manifest_bytes,
     discover_age_files,
 )
+from tests.age_tooling_test_support import require_age_tooling_or_skip
 
 ROOT = Path(__file__).resolve().parents[1]
 SCANNER = ROOT / "scripts/privacy-scan"
@@ -43,16 +44,100 @@ def manifest_bytes(entries: list[tuple[str, bytes]]) -> bytes:
     return (json.dumps(document, indent=2) + "\n").encode("utf-8")
 
 
+def verify_age_tooling() -> None:
+    binaries = {
+        name: shutil.which(name) for name in ("age", "age-keygen", "age-inspect")
+    }
+    if any(binary is None for binary in binaries.values()):
+        require_age_tooling_or_skip("age v1.3.1 tooling is unavailable")
+    try:
+        versions = {
+            name: subprocess.run(
+                [binary, "--version"],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=TOOL_TIMEOUT_SECONDS,
+            )
+            for name, binary in binaries.items()
+            if binary is not None
+        }
+    except (OSError, subprocess.TimeoutExpired) as error:
+        require_age_tooling_or_skip(
+            "age v1.3.1 tooling is unavailable",
+            cause=error,
+        )
+    if any(
+        result.returncode != 0 or result.stdout.strip() != AGE_VERSION
+        for result in versions.values()
+    ):
+        require_age_tooling_or_skip("age v1.3.1 tooling is unavailable")
+
+
+class PrivacyAgeToolingPolicyTests(TestCase):
+    def test_optional_and_required_tooling_policy(self) -> None:
+        scenarios = {
+            "missing": {
+                "which": None,
+                "run": None,
+            },
+            "version-mismatch": {
+                "which": "/tools/age",
+                "run": subprocess.CompletedProcess(
+                    ["age", "--version"],
+                    0,
+                    stdout="v9.9.9\n",
+                    stderr="",
+                ),
+            },
+            "os-error": {
+                "which": "/tools/age",
+                "run": OSError("unavailable"),
+            },
+            "timeout": {
+                "which": "/tools/age",
+                "run": subprocess.TimeoutExpired(["age", "--version"], 1),
+            },
+        }
+        for required, expected in (
+            (False, unittest.SkipTest),
+            (True, AssertionError),
+        ):
+            for name, scenario in scenarios.items():
+                with (
+                    self.subTest(required=required, scenario=name),
+                    mock.patch.dict(
+                        os.environ,
+                        {"REQUIRE_AGE_TOOLING": "1" if required else "0"},
+                    ),
+                    mock.patch(
+                        "shutil.which",
+                        return_value=scenario["which"],
+                    ),
+                    mock.patch(
+                        "subprocess.run",
+                        side_effect=(
+                            scenario["run"]
+                            if isinstance(scenario["run"], BaseException)
+                            else None
+                        ),
+                        return_value=(
+                            scenario["run"]
+                            if isinstance(scenario["run"], subprocess.CompletedProcess)
+                            else None
+                        ),
+                    ),
+                    self.assertRaises(
+                        expected,
+                    ),
+                ):
+                    verify_age_tooling()
+
+
 class PrivacyAgeEnvelopeTests(TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        missing = [
-            name
-            for name in ("age", "age-keygen", "age-inspect")
-            if not shutil.which(name)
-        ]
-        if missing:
-            raise unittest.SkipTest("age v1.3.1 tooling is unavailable")
+        verify_age_tooling()
 
     def setUp(self) -> None:
         self.temporary_directory = TemporaryDirectory()

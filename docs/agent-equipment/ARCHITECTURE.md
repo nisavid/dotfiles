@@ -129,7 +129,7 @@ URLs, native output, or secret values. Manager and harness version strings are
 public native-manager observations; diagnostics never echo their supplied
 contents.
 
-`execution-authority-v1.schema.json` owns nine closed records with independent
+`execution-authority-v1.schema.json` owns ten closed records with independent
 purposes. `CaptureObservationAuthoritySet` replaces the former raw observation-
 list input with one closed, canonically sealed artifact. Its bindings name the
 exact candidate, installed implementation, plan, plan-action set, capability
@@ -247,7 +247,8 @@ and public recovery cannot replace durable `automatic_apply` provenance.
 `RunTerminalRecord` authenticates success for one exact apply tuple. It binds
 the complete plan-action-set digest, validated checkpoint-set identity/digest
 and store generation, and `state: succeeded`. Terminal validation requires one
-unique completed checkpoint for every action in the complete plan-action set.
+unique completed checkpoint for every action in the complete plan-action set,
+with durable generations increasing in canonical action order.
 An early-crash checkpoint prefix may authorize compensation but cannot
 authorize release. Terminal validation revalidates the exact capture-observation-
 authority and prepared-action-authority sets against the tuple bound by the
@@ -259,10 +260,16 @@ installed implementation, exact execution binding including the execution
 domain, complete plan-action-set digest, checkpoint-set identity/digest,
 authenticated run-terminal identity/digest, launcher
 identity/manifest, authority-store identity/key, `absent` compare token,
-generation `1`, and eight SHA-256 digests of the exact UTF-8 byte streams of the
-authorization, capture-observation-authority set, prepared-action-authority set,
-checkpoint-set manifest,
-run-terminal record, expected-case manifest, evidence bundle, and attestation.
+generation `1`, and eleven SHA-256 digests of the exact UTF-8 byte streams of
+the authorization, complete plan-action set, captured-state manifest,
+capture-observation-authority set, prepared-action-authority set, complete
+checkpoint-store snapshot, checkpoint-set manifest, run-terminal record,
+expected-case manifest, evidence bundle, and attestation. The sealed
+checkpoint-store snapshot contains the ordered full durable records and is the
+replay authority; the checkpoint-set manifest remains its closed projection.
+Every checkpoint-store generation advance is a durable record write, so a
+complete snapshot's `checkpoint_store_generation` must equal its maximum
+`durable_generation`; a lower or higher generation is not the named store image.
 Exact-byte digests are distinct
 from semantic canonical digests: differently formatted JSON may have the same
 semantic digest but different archive byte digests. The archive identity is
@@ -681,6 +688,10 @@ pre-state digest. A planned action is immutable. A changed desired state,
 capability, adapter version, activation-group membership, or surface scope
 requires a new action identity and plan digest.
 
+Every action in one complete plan-action set binds the same catalog and lock
+digests. A self-consistent action and set reseal with a different catalog or lock
+on any later action is foreign authority and invalidates the whole set.
+
 The identity digest is the SHA-256 of canonical JSON for exactly
 `plan_digest`, `ordinal`, `route_id` (from `route_identity`), `operation`, and
 `desired_state_digest`. This is the same formula used by the closed
@@ -946,6 +957,14 @@ duplicate members, non-finite numbers, and non-JSON values, then validates the
 closed `ApplyAuthorization`. Each parsed-object authority validator first
 canonicalizes only to enforce the same 256 KiB ceiling before Schema, regex,
 credential, or digest work; UTC fractional seconds are limited to nine digits.
+The release replay boundary retains that 256 KiB ceiling for each ordinary
+execution-authority record but gives the aggregate plan-action-set,
+captured-state, full checkpoint-store-snapshot, expected-case, evidence-bundle,
+and attestation streams separate 16 MiB raw and canonical byte ceilings. Each
+raw-byte ceiling is enforced before UTF-8
+decoding or parsing. After strict parsing, the parsed object is canonicalized
+only to enforce its corresponding canonical ceiling before Schema, regex,
+credential, or digest work.
 The executor
 validates its Schema and semantic digest/identity formulas, and requires its complete
 tuple to equal the independently validated local artifacts and
@@ -1055,11 +1074,18 @@ canonical semantic bundle digest. The release validator is pure. The
 candidate-independent release
 launcher supplies its own externally trusted identity and manifest digest plus
 the trusted execution tuple, including the execution domain, apply-authorization,
-expected-case, and attestation digests. It strictly parses the eight exact
-release inputs and validates the closed records. It writes the exact
-authorization, capture-observation-authority set, prepared-action-authority set,
-checkpoint-set manifest, run-terminal record, expected-case manifest, evidence
-bundle, attestation, and archive manifest into
+expected-case, and attestation digests. It strictly parses the eleven exact
+release inputs, recomputes all eleven archive byte digests solely from those
+streams, and validates the closed records. For the historical apply
+authorization, release rechecks its closed schema, canonical identity and
+trusted digest, execution tuple, and every binding derivable from the replay
+streams. It does not rerun the apply-time issuer, clock-window, or nonce-claim
+gates: those inputs are unavailable at release, and later expiry cannot make a
+completed run unarchivable. It writes the exact
+authorization, plan-action set, captured-state manifest,
+capture-observation-authority set, prepared-action-authority set,
+checkpoint-store snapshot, checkpoint-set manifest, run-terminal record,
+expected-case manifest, evidence bundle, attestation, and archive manifest into
 a same-filesystem staging directory, fsyncs them, and performs one create-only
 compare-and-swap rename to the tuple's authority-store identity. `absent` is the
 only first-write compare token and generation `1` is the only first committed
@@ -1080,7 +1106,8 @@ apply.
 
 Catalog, lock, captured-state, plan-action-set, capture-observation-authority-set,
 prepared-action-authority-set, apply-authorization, compensation-authorization,
-compensation-transition-claim, checkpoint-set, run-terminal, evidence,
+compensation-transition-claim, checkpoint-store-snapshot, checkpoint-set,
+run-terminal, evidence,
 attestation, release-archive-manifest, and release-receipt formats use
 independent explicit major versions. Adding an
 optional field with unchanged meaning may remain in
