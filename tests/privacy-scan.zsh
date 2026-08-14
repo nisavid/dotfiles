@@ -84,6 +84,14 @@ set -e
 (( scan_status != 0 ))
 [[ $scan_output == 'privacy scan failed: scan resource limits exceeded' ]]
 
+dd if=/dev/zero \
+  of="$test_root/oversized-denylist" \
+  bs=1 seek=4194305 count=0 2>/dev/null
+run_failed_scan \
+  --root "$test_root/clean" \
+  --denylist "$test_root/oversized-denylist"
+[[ $scan_output == 'privacy scan failed: scan resource limits exceeded' ]]
+
 mkfifo "$test_root/denylist-fifo"
 run_failed_scan \
   --root "$test_root/clean" \
