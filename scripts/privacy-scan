@@ -336,6 +336,8 @@ def exact_terms(source: str | None) -> tuple[str, ...]:
         terms = read_terms(sys.stdin.buffer.read(MAX_DENYLIST_BYTES + 1))
     else:
         data, finding = read_public_file(Path(source))
+        if finding == "oversized-public-file":
+            raise PublicScanResourceLimitError
         if finding is not None or data is None:
             raise PublicScanError("denylist is unreadable")
         terms = read_terms(data)
