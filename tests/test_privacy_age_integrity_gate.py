@@ -135,7 +135,8 @@ class PrivacyAgeIntegrityGateTests(TestCase):
         self.assertIn('\nenv:\n  AGE_VERSION: "1.3.1"\n', source)
         self.assertEqual(source.count('AGE_VERSION: "1.3.1"'), 1)
         self.assertIn(
-            'test "$(age-inspect --version)" = "v${AGE_VERSION}"',
+            'test "$("$AGE_TOOLING_DIRECTORY/age-inspect" --version)" '
+            '= "v${AGE_VERSION}"',
             source,
         )
         self.assertIn(

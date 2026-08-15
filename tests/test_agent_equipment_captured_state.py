@@ -1363,6 +1363,34 @@ class CapturedStateValidationTest(unittest.TestCase):
     def test_valid_manifest_has_no_semantic_diagnostics(self) -> None:
         self.assertEqual(validate_document(valid_document()), ())
 
+    def test_authoritative_plan_action_identities_are_unique(self) -> None:
+        authority = authoritative_plan_action_set()
+        second_action = copy.deepcopy(authority["actions"][0])
+        second_action["action_payload"]["ordinal"] = 1
+        second_action["action_payload"]["action_identity"] = (
+            CAPTURED_STATE.plan_action_identity(second_action["action_payload"])
+        )
+        authority["actions"].append(second_action)
+        rehash_authoritative_plan_action_set(authority)
+
+        distinct_diagnostics = validate_document(valid_document(), authority)
+
+        self.assertNotIn(
+            "DUPLICATE_PLAN_ACTION_IDENTITY",
+            {diagnostic.code for diagnostic in distinct_diagnostics},
+        )
+
+        second_action["action_payload"]["action_identity"] = authority[
+            "actions"
+        ][0]["action_payload"]["action_identity"]
+        rehash_authoritative_plan_action_set(authority)
+        duplicate_diagnostics = validate_document(valid_document(), authority)
+
+        self.assertIn(
+            "DUPLICATE_PLAN_ACTION_IDENTITY",
+            {diagnostic.code for diagnostic in duplicate_diagnostics},
+        )
+
     def test_full_plan_projection_binds_all_automated_action_authority(self) -> None:
         mutations: list[tuple[str, object, str]] = [
             (

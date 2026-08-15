@@ -33,6 +33,16 @@ def run_privacy_scan(
     input_text: str | None = None,
     timeout: float = PRIVACY_SCAN_TIMEOUT_SECONDS,
 ) -> subprocess.CompletedProcess[str]:
+    effective_environment = (
+        os.environ.copy() if environment is None else environment.copy()
+    )
+    if environment is None:
+        parser = shutil.which("age-inspect", path=effective_environment.get("PATH"))
+        if parser is not None:
+            effective_environment.setdefault(
+                "AGE_TOOLING_DIRECTORY",
+                os.fspath(Path(parser).parent),
+            )
     return subprocess.run(
         [
             sys.executable,
@@ -44,7 +54,7 @@ def run_privacy_scan(
         check=False,
         capture_output=True,
         text=True,
-        env=environment,
+        env=effective_environment,
         input=input_text,
         timeout=timeout,
     )
@@ -2735,6 +2745,7 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
             (root / "ciphertext.age").write_bytes(native_age)
             write_age_manifest(root, ["ciphertext.age"])
             environment = os.environ.copy()
+            environment.pop("AGE_TOOLING_DIRECTORY", None)
             environment["PATH"] = ""
 
             result = run_privacy_scan(root, environment=environment)
@@ -2789,6 +2800,54 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_privacy_scan_requires_a_usable_trusted_age_parser_directory(self) -> None:
+        plausible_malformed_age = b"age-encryption.org/v1\nmalformed\n"
+        with TemporaryDirectory() as directory:
+            base = Path(directory)
+            root = base / "repository"
+            root.mkdir()
+            (root / "ciphertext.age").write_bytes(plausible_malformed_age)
+            write_age_manifest(root, ["ciphertext.age"])
+            fake_bin = base / "ambient-bin"
+            fake_bin.mkdir()
+            parser = fake_bin / "age-inspect"
+            parser.write_text(
+                "#!/bin/sh\n"
+                'if [ "$1" = --version ]; then\n'
+                "  printf '%s\\n' v1.3.1\n"
+                "  exit 0\n"
+                "fi\n"
+                "/bin/cat >/dev/null\n"
+                "printf '%s\\n' "
+                '\'{"version":"age-encryption.org/v1",'
+                '"postquantum":"yes","armor":false,'
+                '"stanza_types":["mlkem768x25519"],'
+                '"sizes":{"header":1,"armor":0,"overhead":1,'
+                '"min_payload":1,"max_payload":1,"min_padding":0,'
+                '"max_padding":0}}\'\n',
+                encoding="utf-8",
+            )
+            parser.chmod(0o755)
+            for label, configured in (
+                ("absent", None),
+                ("relative", "ambient-bin"),
+                ("missing", os.fspath(base / "missing-age-bin")),
+            ):
+                with self.subTest(label):
+                    environment = os.environ.copy()
+                    environment.pop("AGE_TOOLING_DIRECTORY", None)
+                    if configured is not None:
+                        environment["AGE_TOOLING_DIRECTORY"] = configured
+                    environment["PATH"] = os.fspath(fake_bin)
+
+                    result = run_privacy_scan(root, environment=environment)
+
+                    self.assertEqual(result.returncode, 1)
+                    self.assertEqual(
+                        result.stdout,
+                        "ciphertext.age:0: [age-parser-unavailable] review required\n",
+                    )
+
     def test_privacy_scan_checks_the_age_parser_version_once_per_scan(self) -> None:
         native_age = (ROOT / "home/.private-prd-01.toml.age").read_bytes()
         with TemporaryDirectory() as directory:
@@ -2821,6 +2880,7 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
             )
             parser.chmod(0o755)
             environment = os.environ.copy()
+            environment["AGE_TOOLING_DIRECTORY"] = os.fspath(fake_bin)
             environment["PATH"] = os.fspath(fake_bin)
             environment["AGE_INSPECT_LOG"] = os.fspath(parser_log)
 
@@ -2852,6 +2912,7 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
             )
             parser.chmod(0o755)
             environment = os.environ.copy()
+            environment["AGE_TOOLING_DIRECTORY"] = os.fspath(fake_bin)
             environment["PATH"] = os.fspath(fake_bin)
 
             result = run_privacy_scan(root, environment=environment)
@@ -2884,6 +2945,7 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
             )
             parser.chmod(0o755)
             environment = os.environ.copy()
+            environment["AGE_TOOLING_DIRECTORY"] = os.fspath(fake_bin)
             environment["PATH"] = os.fspath(fake_bin)
 
             result = run_privacy_scan(root, environment=environment)

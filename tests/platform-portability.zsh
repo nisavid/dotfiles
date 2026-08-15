@@ -88,6 +88,8 @@ grep -Fq 'python3 trusted-base/scripts/privacy_age_integrity_gate.py' \
   fail 'age boundary does not execute the trusted transition verifier'
 grep -Fq 'python3 trusted-base/scripts/privacy-scan' "$age_boundary_workflow" ||
   fail 'age boundary does not execute the trusted privacy scanner'
+grep -Fq 'AGE_TOOLING_DIRECTORY: ${{ runner.temp }}/age-bin' "$age_boundary_workflow" ||
+  fail 'age boundary does not bind scanning to the checksum-verified parser directory'
 ! grep -Eq \
   "$untrusted_head_execution_pattern" \
   "$age_boundary_workflow" ||
