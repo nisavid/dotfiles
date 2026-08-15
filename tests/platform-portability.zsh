@@ -70,9 +70,13 @@ required_age_modules=$(
   fail 'platform workflow may skip age-envelope tooling coverage'
 grep -Fq 'AGE_TOOLING_DIRECTORY: ${{ runner.temp }}/chezmoi-bin' "$workflow" ||
   fail 'platform workflow does not anchor admission to the verified age install'
+grep -Fq -- \
+  '--base-uri "file://$PWD/docs/agent-equipment/adapter-contract-v1.schema.json"' \
+  "$workflow" ||
+  fail 'platform workflow does not anchor adapter schema references to the local file'
 
 age_boundary_workflow=$repo_root/.github/workflows/privacy-age-integrity.yml
-untrusted_head_execution_pattern='^[[:space:]]*((uses|working-directory):[[:space:]]*(\./)?untrusted-head(/|$)|(run:[[:space:]]*)?(\./)?untrusted-head/|(run:[[:space:]]*)?.*((cd|source)[[:space:]]+|\.[[:space:]]+)([^[:space:]]*/)?untrusted-head(/|[[:space:]]|$)|(run:[[:space:]]*)?.*(python[0-9.]*|bash|sh|zsh|ruby|perl|node|npm|npx|make)([[:space:]]|$).*untrusted-head/|(run:[[:space:]]*)?.*(&&|\|\||;)[[:space:]]*(\./)?untrusted-head/)'
+untrusted_head_execution_pattern='^[[:space:]]*((uses|working-directory):[[:space:]]*(\./)?untrusted-head(/|$)|(run:[[:space:]]*)?(\./)?untrusted-head/|(run:[[:space:]]*)?.*((cd|source)[[:space:]]+|\.[[:space:]]+)([^[:space:]]*/)?untrusted-head(/|[[:space:]]|$)|(run:[[:space:]]*)?.*(^|[^[:alnum:]_])(python[0-9.]*|bash|sh|zsh|ruby|perl|node|npm|npx|make)([[:space:]]|$).*untrusted-head/|(run:[[:space:]]*)?.*(&&|\|\||;)[[:space:]]*(\./)?untrusted-head/)'
 grep -Fq '  pull_request_target:' "$age_boundary_workflow" ||
   fail 'age boundary does not execute from the trusted base event'
 grep -Fq '          path: trusted-base' "$age_boundary_workflow" ||
@@ -90,12 +94,20 @@ grep -Fq 'python3 trusted-base/scripts/privacy-scan' "$age_boundary_workflow" ||
   fail 'age boundary executes candidate code'
 for unsafe_line in \
   'run: cd untrusted-head && ./scripts/privacy-scan' \
+  'run: cd /tmp/work/untrusted-head && ./scripts/privacy-scan' \
   'run: source untrusted-head/scripts/privacy-scan' \
   'run: . untrusted-head/scripts/privacy-scan' \
   'run: python3 untrusted-head/scripts/privacy-scan' \
+  'run: /usr/bin/python3.12 untrusted-head/scripts/privacy-scan' \
   'run: printf ready && untrusted-head/scripts/privacy-scan'; do
   print -r -- "$unsafe_line" | grep -Eq "$untrusted_head_execution_pattern" ||
     fail "age boundary execution guard missed: $unsafe_line"
+done
+for safe_line in \
+  'run: echo cpython3 untrusted-head/data' \
+  'run: echo shell untrusted-head/data'; do
+  ! print -r -- "$safe_line" | grep -Eq "$untrusted_head_execution_pattern" ||
+    fail "age boundary execution guard overmatched: $safe_line"
 done
 
 chezmoi -S "$repo_root/home" execute-template \

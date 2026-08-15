@@ -321,21 +321,29 @@ def structured_document_contains_credential(path: Path, text: str) -> bool:
 def trusted_age_inspect_parser() -> str | None:
     """Return the exact available age-inspect executable when its version is trusted."""
 
-    parser = shutil.which("age-inspect")
-    if parser is None:
-        return None
-    try:
-        version = subprocess.run(
-            [parser, "--version"],
-            check=False,
-            capture_output=True,
-            timeout=AGE_INSPECT_TIMEOUT_SECONDS,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    if version.returncode != 0 or version.stdout.strip() != AGE_VERSION.encode("ascii"):
-        return None
-    return parser
+    candidates: list[str] = []
+    tooling_directory = os.environ.get("AGE_TOOLING_DIRECTORY")
+    if tooling_directory and Path(tooling_directory).is_absolute():
+        candidates.append(os.fspath(Path(tooling_directory) / "age-inspect"))
+    ambient = shutil.which("age-inspect")
+    if ambient is not None and ambient not in candidates:
+        candidates.append(ambient)
+
+    for parser in candidates:
+        try:
+            version = subprocess.run(
+                [parser, "--version"],
+                check=False,
+                capture_output=True,
+                timeout=AGE_INSPECT_TIMEOUT_SECONDS,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if version.returncode == 0 and version.stdout.strip() == AGE_VERSION.encode(
+            "ascii"
+        ):
+            return parser
+    return None
 
 
 def age_envelope_finding(data: bytes, parser: str | None) -> str | None:

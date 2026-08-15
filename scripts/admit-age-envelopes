@@ -289,7 +289,7 @@ def _replace_manifest(root: Path, data: bytes) -> None:
         with stream:
             stream.write(data)
             stream.flush()
-            temporary.chmod(0o644)
+            os.fchmod(stream.fileno(), 0o644)
             os.fsync(stream.fileno())
         os.replace(temporary, root / AGE_MANIFEST_NAME)
         temporary = None

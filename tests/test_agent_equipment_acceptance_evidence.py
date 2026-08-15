@@ -467,10 +467,10 @@ class AcceptanceEvidenceContractTests(unittest.TestCase):
             {"ACCEPTANCE_ATTESTATION_SCHEMA_INVALID"},
         )
 
-    def test_timestamp_ordering_handles_arbitrary_fractional_precision(self) -> None:
+    def test_timestamp_ordering_handles_nanosecond_fractional_precision(self) -> None:
         manifest = valid_expected_case_manifest()
         bundle = valid_evidence_bundle(manifest)
-        prefix = "2026-08-13T05:00:00." + "0" * 5_000
+        prefix = "2026-08-13T05:00:00." + "0" * 8
         evidence_time = prefix + "2Z"
         earlier_attestation_time = prefix + "1Z"
         later_attestation_time = prefix + "3Z"
@@ -497,6 +497,16 @@ class AcceptanceEvidenceContractTests(unittest.TestCase):
             attestor["attested_at"] = later_attestation_time
         reseal_attestation(late)
         self.assertEqual(validation_diagnostics(bundle, manifest, late), ())
+
+        overprecision = valid_attestation_manifest(bundle, manifest)
+        overprecision["attestors"][0]["attested_at"] = (
+            "2026-08-13T05:01:00." + "0" * 10 + "Z"
+        )
+        reseal_attestation(overprecision)
+        self.assertEqual(
+            diagnostic_codes(bundle, manifest, overprecision),
+            {"ACCEPTANCE_ATTESTATION_SCHEMA_INVALID"},
+        )
 
     def test_public_validator_accepts_the_complete_closed_evidence_projection(
         self,

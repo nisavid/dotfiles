@@ -92,7 +92,7 @@ def load_and_validate(catalog_path: Path, lock_path: Path) -> DesignValidationRe
     try:
         catalog = _load_json_without_duplicate_members(Path(catalog_path))
         lock = _load_json_without_duplicate_members(Path(lock_path))
-    except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
+    except (OSError, UnicodeError, json.JSONDecodeError, RecursionError, ValueError):
         return DesignValidationResult(
             diagnostics=(
                 Diagnostic(
@@ -874,6 +874,7 @@ def _route_is_valid(
                 route_identity=route_identity,
             )
         )
+        valid = False
     restore = route.get("restore")
     if not _restore_is_valid(restore):
         restore_class = restore.get("class") if isinstance(restore, dict) else None

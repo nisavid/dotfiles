@@ -20,7 +20,7 @@ UNTRUSTED_HEAD_EXECUTION = re.compile(
     r"(?:uses|working-directory):\s*(?:\./)?untrusted-head(?:/|$)"
     r"|(?:run:\s*)?(?:\./)?untrusted-head/"
     r"|(?:run:\s*)?[^\n]*(?:\b(?:cd|source)\s+|\.\s+)"
-    r"(?:[\"']?\$\{?GITHUB_WORKSPACE\}?/)?(?:\./)?untrusted-head(?:/|[\"']?(?:\s|$))"
+    r"(?:[\"']?[^\s\"']*/)?(?:\./)?untrusted-head(?:/|[\"']?(?:\s|$))"
     r"|(?:run:\s*)?[^\n]*\b(?:python[0-9.]*|bash|sh|zsh|ruby|perl|node|make|npm|npx)"
     r"\b[^\n]*\buntrusted-head/"
     r"|(?:run:\s*)?[^\n]*(?:&&|\|\||;)\s*(?:\./)?untrusted-head/"
@@ -28,6 +28,7 @@ UNTRUSTED_HEAD_EXECUTION = re.compile(
 )
 
 PROTECTED_FILES = {
+    ".github/actions/privacy-boundary/action.yml": "name: boundary action\n",
     ".github/workflows/platform-portability.yml": "name: platform\n",
     ".github/workflows/privacy-age-integrity.yml": "name: boundary\n",
     ".privacy-age-envelopes.json": "{}\n",
@@ -131,6 +132,12 @@ class PrivacyAgeIntegrityGateTests(TestCase):
     def test_workflow_rechecks_retargets_and_treats_fork_head_as_data(self) -> None:
         source = WORKFLOW.read_text(encoding="utf-8")
 
+        self.assertIn('\nenv:\n  AGE_VERSION: "1.3.1"\n', source)
+        self.assertEqual(source.count('AGE_VERSION: "1.3.1"'), 1)
+        self.assertIn(
+            'test "$(age-inspect --version)" = "v${AGE_VERSION}"',
+            source,
+        )
         self.assertIn(
             "pull_request_target:\n    branches:\n      - main\n    types:\n",
             source,
@@ -162,13 +169,22 @@ class PrivacyAgeIntegrityGateTests(TestCase):
     def test_untrusted_head_execution_guard_rejects_inline_shell_forms(self) -> None:
         for unsafe_line in (
             "run: cd untrusted-head && ./scripts/privacy-scan",
+            "run: cd /tmp/work/untrusted-head && ./scripts/privacy-scan",
             "run: source untrusted-head/scripts/privacy-scan",
             "run: . untrusted-head/scripts/privacy-scan",
             "run: python3 untrusted-head/scripts/privacy-scan",
+            "run: /usr/bin/python3.12 untrusted-head/scripts/privacy-scan",
             "run: printf ready && untrusted-head/scripts/privacy-scan",
         ):
             with self.subTest(unsafe_line=unsafe_line):
                 self.assertIsNotNone(UNTRUSTED_HEAD_EXECUTION.search(unsafe_line))
+
+        for safe_line in (
+            "run: echo cpython3 untrusted-head/data",
+            "run: echo shell untrusted-head/data",
+        ):
+            with self.subTest(safe_line=safe_line):
+                self.assertIsNone(UNTRUSTED_HEAD_EXECUTION.search(safe_line))
 
     def test_every_protected_surface_is_frozen(self) -> None:
         mutations = {

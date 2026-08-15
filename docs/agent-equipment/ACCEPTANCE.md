@@ -11,14 +11,14 @@ prototype alone does not satisfy the production gate.
 
 ## Evidence record
 
-`acceptance-evidence-v1.schema.json` defines three closed documents: the pre-
-mutation expected-case manifest emitted from the independently validated plan,
-the candidate's secret-free evidence bundle, and a separate post-run release
-attestation. The candidate-independent launcher supplies its own externally
-trusted identity and manifest digest, the trusted apply-authorization digest,
-the trusted candidate identity and installed-implementation manifest digest,
-the authorized expected-case manifest digest, and the independently trusted
-attestation digest; none is learned from the files under validation.
+`acceptance-evidence-v1.schema.json` defines three closed documents: the
+expected-case manifest emitted from the independently validated plan before
+mutation, the candidate's secret-free evidence bundle, and a separate post-run
+release attestation. The candidate-independent launcher supplies its own
+externally trusted identity and manifest digest, the trusted apply-authorization
+digest, the trusted candidate identity and installed-implementation manifest
+digest, the authorized expected-case manifest digest, and the independently
+trusted attestation digest; none is learned from the files under validation.
 
 The expected-case manifest binds the candidate implementation identity and
 complete installed-implementation manifest digest, catalog digest, lock digest,
@@ -100,11 +100,12 @@ carries a closed unavailable-reason record, not fabricated execution evidence.
 Live cases never silently pass from schema, prototype, fake-manager, or
 automated-receipt evidence.
 
-The expected-case manifest is intentionally pre-authorization and contains no
-execution binding. The evidence bundle is never its own trust root. After the run, the separate
-attestation binds the recomputed complete bundle digest, expected-case manifest
-digest, exact candidate/artifact binding tuple, and the same exact execution
-binding. Its canonical attestor set
+The expected-case manifest is generated before apply issuance and contains no
+execution binding. It is a bound input to `ApplyAuthorization`, not authority
+by itself. The evidence bundle is never its own trust root. After the run, the
+separate attestation binds the recomputed complete bundle digest, expected-case
+manifest digest, exact candidate/artifact binding tuple, and the same exact
+execution binding. Its canonical attestor set
 contains exactly `automated_runner`, `live_operator`, and `release_reviewer`,
 with one distinct identity, implementation version, and UTC attestation time
 for each role. The automated runner may use a `service:`, `operator:`, or
@@ -112,7 +113,7 @@ for each role. The automated runner may use a `service:`, `operator:`, or
 reviewer use only `operator:` or `person:` identities; a service cannot claim a
 human role. Every attestor time is at or after the latest result and live
 sign-off, and every passing live signer is the canonical live-operator
-attestor. Fractional-second ordering is exact at arbitrary schema-valid
+attestor. Fractional-second ordering is exact at the schema's one-to-nine-digit
 precision. The attestation's own digest excludes only its digest field.
 Changing a manager or harness version, live sign-off, receipt, aggregate, child,
 binding, or attestor therefore requires a new attestation and a new externally
@@ -124,10 +125,11 @@ tokens, common GitHub and AWS credential shapes, and credential-bearing query
 parameters. Diagnostics name only the document and rule; they never echo the
 rejected value.
 
-Expected-case authorization is a pre-mutation authority boundary. Release
-attestation is a distinct post-run authority boundary. Neither substitutes for
-the other, and the candidate cannot authorize a rewritten bundle by resealing
-both files itself.
+`ApplyAuthorization` is the pre-mutation authority boundary and binds the exact
+expected-case manifest digest as an input. Release attestation is a distinct
+post-run authority boundary. Neither substitutes for the other, and the
+candidate cannot authorize a rewritten bundle by resealing both evidence files
+itself.
 
 The design-only semantic seam is:
 

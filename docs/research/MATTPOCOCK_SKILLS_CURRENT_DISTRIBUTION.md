@@ -12,7 +12,7 @@ Claude currently exposes that plugin format through two marketplaces:
 
 | Distribution | Native identity | Current entry point | Current contents |
 | --- | --- | --- | --- |
-| Claude official plugin | `mattpocock-skills@claude-plugins-official` | `claude plugins install mattpocock-skills` | Official marketplace entry pinned to upstream commit `84fdeffd…`; one plugin whose manifest exports 25 skills |
+| Claude official plugin | `mattpocock-skills@claude-plugins-official` | `claude plugin install mattpocock-skills` | Official marketplace entry pinned to upstream commit `84fdeffd…`; one plugin whose manifest exports 25 skills |
 | Claude publisher plugin | `mattpocock-skills@mattpocock` | Add marketplace `mattpocock/skills`, then install `mattpocock-skills@mattpocock` | Same plugin through Matt's own rolling marketplace |
 | Standalone Agent Skills | source `mattpocock/skills` | `skills add mattpocock/skills`, selecting individual skills and target harnesses | Independently selectable copies under the Agent Skills-standard harness directories |
 

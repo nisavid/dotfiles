@@ -29,12 +29,16 @@ SPEC.loader.exec_module(CONTRACT)
 
 
 def run_check_jsonschema(*arguments: str) -> subprocess.CompletedProcess[str]:
+    base_uri_arguments = (
+        () if "--check-metaschema" in arguments else ("--base-uri", SCHEMA.as_uri())
+    )
     return subprocess.run(
         [
             "uvx",
             "--from",
             "check-jsonschema==0.35.0",
             "check-jsonschema",
+            *base_uri_arguments,
             *arguments,
         ],
         cwd=ROOT,
@@ -717,6 +721,11 @@ class AdapterContractSchemaTests(unittest.TestCase):
                 )
 
     def test_schema_is_valid_draft_2020_12(self) -> None:
+        schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
+        self.assertEqual(
+            schema["$id"],
+            "https://nisavid.github.io/dotfiles/agent-equipment/adapter-contract-v1.schema.json",
+        )
         result = run_check_jsonschema("--check-metaschema", str(SCHEMA))
 
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)

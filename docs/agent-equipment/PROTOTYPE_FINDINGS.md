@@ -81,10 +81,11 @@ are:
 | GitHub | Direct overlay | Plugin MCP | Direct overlay | Claude keeps process-scoped secret injection; Codex preserves the app and three enabled skills, disables `yeet`, and retires its direct duplicate only after live component verification. |
 | Greptile | Direct overlay | `no_provider` pending evidence | `no_provider` pending evidence | Do not invent a provider from name similarity or opaque state. |
 
-These selections are resolved in `initial-catalog.proposed.json` and its bound
-lock, but remain proposals rather than runtime adoption. Fresh inventory and
-live capability checks may revise them before a production lock or migration
-plan is authorized.
+These selections are resolved in
+`docs/agent-equipment/initial-catalog.proposed.json` and its bound
+`docs/agent-equipment/initial-lock.proposed.json`, but remain proposals rather
+than runtime adoption. Fresh inventory and live capability checks may revise
+them before a production lock or migration plan is authorized.
 
 ### Fail-closed output is easier to inspect
 

@@ -344,6 +344,19 @@ class AgentEquipmentJsonSchemaTests(unittest.TestCase):
             with self.subTest(label=label):
                 self.assertTrue(self.validate(document, {"root.json": schema}))
 
+    def test_accepts_annotation_keywords_without_applying_their_values(self) -> None:
+        schema = {
+            "type": "string",
+            "description": {"ignored": True},
+            "$comment": ["ignored"],
+            "examples": {"ignored": "value"},
+            "default": {"ignored": "value"},
+            "deprecated": "ignored",
+        }
+
+        self.assertTrue(self.validate("value", {"root.json": schema}))
+        self.assertFalse(self.validate(3, {"root.json": schema}))
+
     def test_accepts_nonnegative_integer_valued_float_schema_limits(self) -> None:
         instances = {
             "minLength": "x",

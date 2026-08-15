@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import importlib.util
-from copy import deepcopy
 import json
-from pathlib import Path
 import sys
-from tempfile import TemporaryDirectory
 import unittest
-
+from copy import deepcopy
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parent.parent
@@ -640,6 +640,20 @@ class AgentEquipmentDesignTest(unittest.TestCase):
                 self.assertEqual(result.coverage, ())
                 self.assertIsNone(result.mutation_plan)
 
+    def test_public_loader_classifies_parser_recursion_as_invalid_json(self) -> None:
+        with patch.object(DESIGN.json, "loads", side_effect=RecursionError):
+            result = DESIGN.load_and_validate(
+                FIXTURES / "valid-catalog.json",
+                FIXTURES / "valid-lock.json",
+            )
+
+        self.assertEqual(
+            {diagnostic.code for diagnostic in result.diagnostics},
+            {"DOCUMENT_PARSE_INVALID"},
+        )
+        self.assertEqual(result.coverage, ())
+        self.assertIsNone(result.mutation_plan)
+
     def test_public_validator_rejects_nested_catalog_schema_extensions(self) -> None:
         catalog, lock = valid_pair()
         catalog["coverage_templates"][0]["undocumented_extension"] = True
@@ -1247,8 +1261,10 @@ class AgentEquipmentDesignTest(unittest.TestCase):
         route = managed_route(catalog)
         route["distribution"] = "distribution:example/native-plugin"
         route["restore"] = native_restore
+        route["provenance"] = {"owner": "source:example/native-plugin"}
         locked_managed_route(lock)["distribution"] = route["distribution"]
         locked_managed_route(lock)["restore"] = deepcopy(native_restore)
+        locked_managed_route(lock)["provenance"] = deepcopy(route["provenance"])
         lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
 
         result = DESIGN.validate_design(catalog, lock)
@@ -2361,9 +2377,9 @@ class AgentEquipmentDesignTest(unittest.TestCase):
         catalog, lock = valid_pair()
         second_identity = "skill:example/route-conflict"
         second_record = deepcopy(catalog["coverage_templates"][0]["record"])
-        second_record["provider_selection"]["routes"][0]["provenance"] = {
-            "owner": "source:example/different-owner"
-        }
+        second_record["provider_selection"]["routes"][0]["operations"]["inspect"][
+            "disposition"
+        ] = "operator_action"
         catalog["equipment"].append(
             {
                 "identity": second_identity,
@@ -2501,6 +2517,13 @@ class AgentEquipmentDesignTest(unittest.TestCase):
         self.assertIn(
             "PROVENANCE_OWNER_INVALID",
             {diagnostic.code for diagnostic in result.diagnostics},
+        )
+        self.assertNotIn(
+            ("plugin:example/matt", "claude"),
+            {
+                (entry.equipment_identity, entry.harness)
+                for entry in result.coverage
+            },
         )
         self.assertIsNone(result.mutation_plan)
 

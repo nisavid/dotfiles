@@ -26,9 +26,11 @@ skill path, or skill body to the source tree.
 Before publication, run both scan layers:
 
 ```zsh
-python3 scripts/privacy-scan --root . --require-age-manifest
+AGE_TOOLING_DIRECTORY=/absolute/path/to/checksum-verified-age-bin \
+  python3 scripts/privacy-scan --root . --require-age-manifest
 chezmoi decrypt home/.private-privacy-denylist.txt.age |
-  python3 scripts/privacy-scan --root . --require-age-manifest --denylist -
+  AGE_TOOLING_DIRECTORY=/absolute/path/to/checksum-verified-age-bin \
+    python3 scripts/privacy-scan --root . --require-age-manifest --denylist -
 ```
 
 The scanner reports only a path, line, and rule. It never echoes the matched
@@ -37,13 +39,13 @@ value.
 ### Ciphertext admission
 
 The root `.privacy-age-envelopes.json` is the closed, canonical inventory of
-every regular `*.age` source path and its exact SHA-256 digest. Hosted scans
-require the inventory and age v1.3.1's structural parser, reject an unlisted,
-missing, renamed, malformed, oversized, or byte-changed ciphertext, and still
-scan the exact ciphertext bytes for plaintext credential and private-key
-canaries. `age-inspect` does not authenticate a payload and cannot by itself
-distinguish a complete native envelope from a truncated or extended byte
-stream.
+every regular `*.age` source path and its exact SHA-256 digest. Hosted and local
+scans require the inventory and age v1.3.1's structural parser. Both reject an
+unlisted, missing, renamed, malformed, oversized, or byte-changed ciphertext
+and still scan the exact ciphertext bytes for plaintext credential and
+private-key canaries. `age-inspect` does not authenticate a payload and cannot
+by itself distinguish a complete native envelope from a truncated or extended
+byte stream.
 
 The manifest is an integrity inventory, not an authenticated admission
 receipt. The `pull_request_target` boundary executes only verifier and scanner

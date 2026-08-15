@@ -18,6 +18,9 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  AGE_VERSION: "1.3.1"
+
 jobs:
   verify:
     name: Verify trusted base against candidate data
@@ -50,8 +53,6 @@ jobs:
 
       - name: Install the pinned age parser
         shell: bash
-        env:
-          AGE_VERSION: "1.3.1"
         run: |
           set -euo pipefail
           archive="age-v${AGE_VERSION}-linux-amd64.tar.gz"
@@ -82,7 +83,7 @@ jobs:
           [[ "$PRIVACY_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$(git -C trusted-base rev-parse HEAD)" = "$PRIVACY_BASE_SHA"
           test "$(git -C untrusted-head rev-parse HEAD)" = "$PRIVACY_HEAD_SHA"
-          test "$(age-inspect --version)" = "v1.3.1"
+          test "$(age-inspect --version)" = "v${AGE_VERSION}"
           python3 trusted-base/scripts/privacy_age_integrity_gate.py \
             --base-repository trusted-base \
             --base-commit "$PRIVACY_BASE_SHA" \

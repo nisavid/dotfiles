@@ -605,6 +605,9 @@ its operation dispositions or change its provider selection.
 `verify_post_state` or `verify_compensation`; the executor derives that request
 from the action or receipt, supplies a new request identity and exact expected
 state digest, and preserves every binding without loss.
+Automatic-compensation verification remains part of the original `apply`
+command. `compensate` is reserved for a separately authorized public
+`CompensationAuthorization` flow and is not an `ObserveRequest` command value.
 
 | Field | Contract |
 | --- | --- |

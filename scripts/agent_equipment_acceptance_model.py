@@ -16,10 +16,11 @@ import os
 import re
 import shutil
 import stat
+from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 JsonValue = Any
 DesiredState = Mapping[str, JsonValue]
@@ -534,7 +535,9 @@ def assert_secret_free(
 ) -> None:
     encoded = canonical_bytes(artifact)
     for value in forbidden_values:
-        if value.encode("utf-8") in encoded:
+        raw_value = value.encode("utf-8")
+        escaped_value = canonical_bytes(value)[1:-1]
+        if raw_value in encoded or escaped_value in encoded:
             raise ValueError("secret value present in artifact")
 
 

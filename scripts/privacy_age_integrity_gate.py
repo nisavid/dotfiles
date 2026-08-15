@@ -29,7 +29,7 @@ PROTECTED_EXACT_PATHS = frozenset(
     }
 )
 PROTECTED_OPTIONAL_PATHS = frozenset({b".gitattributes", b".gitmodules"})
-PROTECTED_PREFIXES = (b".github/workflows/",)
+PROTECTED_PREFIXES = (b".github/actions/", b".github/workflows/")
 
 
 class IntegrityGateError(RuntimeError):
