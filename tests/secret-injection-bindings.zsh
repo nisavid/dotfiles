@@ -197,7 +197,7 @@ cat > "$fixture_home/.config/opencode/opencode.json" <<EOF
       "url": "https://mcp.context7.com/mcp",
       "headers": {"$context7_field": "literal-canary"},
       "env": {"$context7_field": "environment-canary"},
-      "env_vars": ["CONTEXT7_API_KEY"],
+      "env_vars": ["$context7_field"],
       "http_headers": {"X-API-Key": "$http_header_canary"},
       "bearer_token_env_var": "CONTEXT7_API_KEY",
       "timeout": 60000

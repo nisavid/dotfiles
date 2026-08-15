@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import textwrap
@@ -14,6 +15,8 @@ from tempfile import TemporaryDirectory
 from unittest import TestCase, mock
 
 from scripts.privacy_age_envelopes import (
+    MAX_AGE_ENVELOPE_BYTES,
+    MAX_AGE_MANIFEST_BYTES,
     AgeEnvelopeError,
     age_inspection_has_exact_postquantum_stanzas,
     canonical_manifest_bytes,
@@ -367,6 +370,7 @@ class PrivacyAgeEnvelopeTests(TestCase):
         self.assertIsInstance(valid_sizes, dict)
         cases = {
             "non-PQ marker": {**valid, "postquantum": "no"},
+            "non-boolean armor": {**valid, "armor": 0},
             "non-string stanza": {**valid, "stanza_types": [None]},
             "wrong stanza type": {**valid, "stanza_types": ["X25519"]},
             "missing stanza": {**valid, "stanza_types": []},
@@ -377,6 +381,20 @@ class PrivacyAgeEnvelopeTests(TestCase):
             "boolean size": {
                 **valid,
                 "sizes": {**valid_sizes, "header": True},
+            },
+            "missing size": {
+                **valid,
+                "sizes": {
+                    key: value for key, value in valid_sizes.items() if key != "header"
+                },
+            },
+            "extra size": {
+                **valid,
+                "sizes": {**valid_sizes, "trailer": 0},
+            },
+            "negative size": {
+                **valid,
+                "sizes": {**valid_sizes, "header": -1},
             },
             "unknown member": {**valid, "unknown": True},
         }
@@ -923,6 +941,46 @@ class PrivacyAgeEnvelopeTests(TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(marker.read_text(encoding="utf-8"), "directory fsynced\n")
 
+    def test_admission_sets_manifest_mode_through_the_open_descriptor(self) -> None:
+        candidate = self.encrypt(b"descriptor mode fixture")
+        (self.root / "candidate.age").write_bytes(candidate)
+        hook_directory = self.base / "manifest-chmod-hook"
+        hook_directory.mkdir()
+        (hook_directory / "sitecustomize.py").write_text(
+            textwrap.dedent(
+                f"""
+                import os
+                from pathlib import Path
+
+                _original_chmod = Path.chmod
+
+                def _chmod(path, *args, **kwargs):
+                    if os.path.basename(os.fspath(path)).startswith({MANIFEST!r} + "."):
+                        raise OSError("pathname chmod must not be used")
+                    return _original_chmod(path, *args, **kwargs)
+
+                Path.chmod = _chmod
+                """
+            ),
+            encoding="utf-8",
+        )
+        environment = os.environ.copy()
+        environment["PYTHONPATH"] = os.pathsep.join(
+            filter(
+                None,
+                [os.fspath(hook_directory), environment.get("PYTHONPATH", "")],
+            )
+        )
+
+        result = self.run_admitter_with(
+            identity=self.identity,
+            environment=environment,
+        )
+
+        manifest = self.root / MANIFEST
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(stat.S_IMODE(manifest.stat().st_mode), 0o644)
+
     def test_admission_reports_durability_uncertain_after_directory_fsync_failure(
         self,
     ) -> None:
@@ -1050,8 +1108,26 @@ class PrivacyAgeEnvelopeTests(TestCase):
         self,
     ) -> None:
         digest = "sha256:" + "a" * 64
-        entries = {f"{'a' * 480}{index:04d}.age": digest for index in range(4096)}
+        path_prefix = "a" * 480
+        entry_count = 1
+        while True:
+            entries = {
+                f"{path_prefix}{index:04d}.age": digest for index in range(entry_count)
+            }
+            document = {
+                "version": MANIFEST_VERSION,
+                "envelopes": [
+                    {"path": path, "sha256": entries[path]} for path in sorted(entries)
+                ],
+            }
+            serialized = (
+                json.dumps(document, ensure_ascii=True, indent=2) + "\n"
+            ).encode("ascii")
+            if len(serialized) > MAX_AGE_MANIFEST_BYTES:
+                break
+            entry_count *= 2
 
+        self.assertGreater(len(serialized), MAX_AGE_MANIFEST_BYTES)
         with self.assertRaises(AgeEnvelopeError):
             canonical_manifest_bytes(entries)
 
@@ -1099,7 +1175,7 @@ class PrivacyAgeEnvelopeTests(TestCase):
         self.assertEqual(manifest.read_bytes(), sentinel)
 
         (self.root / "candidate.AGE").unlink()
-        candidate.write_bytes(b"x" * (4 * 1024 * 1024 + 1))
+        candidate.write_bytes(b"x" * (MAX_AGE_ENVELOPE_BYTES + 1))
         result = self.run_admitter()
         self.assertEqual(result.returncode, 1)
         self.assertEqual(manifest.read_bytes(), sentinel)

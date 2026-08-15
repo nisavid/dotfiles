@@ -2378,6 +2378,18 @@ class AgentEquipmentAcceptanceTest(unittest.TestCase):
             self.assertNotIn(secret_value.encode(), encoded)
             ACCEPTANCE.assert_secret_free(evidence, forbidden_values={secret_value})
 
+    def test_secret_scan_detects_json_escaped_forbidden_values(self) -> None:
+        secret_value = "fixture-secret\nsecond-line"
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "secret value present in artifact",
+        ):
+            ACCEPTANCE.assert_secret_free(
+                {"value": secret_value},
+                forbidden_values={secret_value},
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

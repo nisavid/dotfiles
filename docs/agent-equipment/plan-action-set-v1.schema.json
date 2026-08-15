@@ -10,7 +10,11 @@
     "candidate_identity": {"$ref": "#/$defs/nonEmptyString"},
     "implementation_manifest_digest": {"$ref": "#/$defs/digest"},
     "plan_digest": {"$ref": "#/$defs/digest"},
-    "actions": {"type": "array", "items": {"$ref": "#/$defs/actionEvidence"}},
+    "actions": {
+      "type": "array",
+      "maxItems": 4096,
+      "items": {"$ref": "#/$defs/actionEvidence"}
+    },
     "action_set_digest": {"$ref": "#/$defs/digest"}
   },
   "$defs": {
@@ -18,7 +22,6 @@
     "nonEmptyString": {"type": "string", "minLength": 1},
     "stringSet": {
       "type": "array",
-      "minItems": 1,
       "uniqueItems": true,
       "items": {"$ref": "#/$defs/nonEmptyString"}
     },
@@ -184,7 +187,9 @@
         "adapter_version": {"$ref": "#/$defs/nonEmptyString"},
         "control_owner": {"const": "reconciler_owned"},
         "activation_group": {"$ref": "#/$defs/nonEmptyString"},
-        "surface_scope": {"$ref": "#/$defs/stringSet"},
+        "surface_scope": {
+          "allOf": [{"$ref": "#/$defs/stringSet"}, {"minItems": 1}]
+        },
         "prepared_checkpoint_required": {"const": true},
         "compare_before_mutate": {"const": true}
       }
@@ -331,14 +336,18 @@
         "route_identity": {"type": "string", "pattern": "^route:[a-z0-9][a-z0-9._/-]*$"},
         "route_digest": {"$ref": "#/$defs/digest"},
         "provider": {"$ref": "#/$defs/provider"},
-        "equipment_identities": {"$ref": "#/$defs/stringSet"},
+        "equipment_identities": {
+          "allOf": [{"$ref": "#/$defs/stringSet"}, {"minItems": 1}]
+        },
         "controlled_equipment_identities": {
           "type": "array",
           "uniqueItems": true,
           "items": {"$ref": "#/$defs/nonEmptyString"}
         },
         "activation_group": {"type": "string", "pattern": "^activation:[a-z0-9][a-z0-9._/-]*$"},
-        "surface_scope": {"$ref": "#/$defs/stringSet"},
+        "surface_scope": {
+          "allOf": [{"$ref": "#/$defs/stringSet"}, {"minItems": 1}]
+        },
         "write_targets": {
           "type": "array",
           "minItems": 1,

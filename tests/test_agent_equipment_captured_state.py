@@ -865,6 +865,21 @@ class CapturedStateValidationTest(unittest.TestCase):
         fixture_document = json.loads(
             PLAN_ACTION_SET_FIXTURE.read_text(encoding="utf-8")
         )
+        schema = json.loads(PLAN_ACTION_SET_SCHEMA.read_text(encoding="utf-8"))
+        self.assertEqual(schema["properties"]["actions"]["maxItems"], 4096)
+        self.assertNotIn("minItems", schema["properties"]["actions"])
+        self.assertNotIn("minItems", schema["$defs"]["stringSet"])
+        for field in ("equipment_identities", "surface_scope"):
+            self.assertIn(
+                {"minItems": 1},
+                schema["$defs"]["actionPayload"]["properties"][field]["allOf"],
+            )
+        self.assertIn(
+            {"minItems": 1},
+            schema["$defs"]["preconditions"]["properties"]["surface_scope"][
+                "allOf"
+            ],
+        )
         cases: list[dict[str, object]] = []
 
         extra_top_level = copy.deepcopy(fixture_document)

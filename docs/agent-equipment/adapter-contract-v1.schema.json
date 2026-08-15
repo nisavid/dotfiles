@@ -1,5 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nisavid.github.io/dotfiles/agent-equipment/adapter-contract-v1.schema.json",
   "title": "Global agent equipment adapter contract v1",
   "oneOf": [
     {"$ref": "#/$defs/applySequenceEnvelope"},

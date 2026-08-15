@@ -2745,6 +2745,50 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
             "ciphertext.age:0: [age-parser-unavailable] review required\n",
         )
 
+    def test_privacy_scan_prefers_the_configured_age_tooling_directory(self) -> None:
+        native_age = (ROOT / "home/.private-prd-01.toml.age").read_bytes()
+        with TemporaryDirectory() as directory:
+            base = Path(directory)
+            root = base / "repository"
+            root.mkdir()
+            (root / "ciphertext.age").write_bytes(native_age)
+            write_age_manifest(root, ["ciphertext.age"])
+            tooling = base / "trusted-age-bin"
+            tooling.mkdir()
+            parser = tooling / "age-inspect"
+            parser.write_text(
+                "#!/bin/sh\n"
+                'if [ "$1" = --version ]; then\n'
+                "  printf '%s\\n' v1.3.1\n"
+                "  exit 0\n"
+                "fi\n"
+                "/bin/cat >/dev/null\n"
+                "printf '%s\\n' "
+                '\'{"version":"age-encryption.org/v1",'
+                '"postquantum":"yes","armor":false,'
+                '"stanza_types":["mlkem768x25519"],'
+                '"sizes":{"header":1,"armor":0,"overhead":1,'
+                '"min_payload":1,"max_payload":1,"min_padding":0,'
+                '"max_padding":0}}\'\n',
+                encoding="utf-8",
+            )
+            parser.chmod(0o755)
+            ambient = base / "ambient-bin"
+            ambient.mkdir()
+            ambient_parser = ambient / "age-inspect"
+            ambient_parser.write_text(
+                "#!/bin/sh\nprintf '%s\\n' v9.9.9\n",
+                encoding="utf-8",
+            )
+            ambient_parser.chmod(0o755)
+            environment = os.environ.copy()
+            environment["AGE_TOOLING_DIRECTORY"] = os.fspath(tooling)
+            environment["PATH"] = os.fspath(ambient)
+
+            result = run_privacy_scan(root, environment=environment)
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_privacy_scan_checks_the_age_parser_version_once_per_scan(self) -> None:
         native_age = (ROOT / "home/.private-prd-01.toml.age").read_bytes()
         with TemporaryDirectory() as directory:

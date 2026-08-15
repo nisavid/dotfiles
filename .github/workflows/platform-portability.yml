@@ -16,6 +16,7 @@ permissions:
   contents: read
 
 env:
+  # Keep this aligned with privacy_age_envelopes.AGE_VERSION and the protected boundary workflow.
   AGE_VERSION: "1.3.1"
   CHEZMOI_VERSION: "2.71.0"
 
@@ -206,6 +207,7 @@ jobs:
             docs/agent-equipment/execution-authority-v1.schema.json \
             docs/agent-equipment/plan-action-set-v1.schema.json
           uvx --from check-jsonschema==0.35.0 check-jsonschema \
+            --base-uri "file://$PWD/docs/agent-equipment/adapter-contract-v1.schema.json" \
             --schemafile docs/agent-equipment/adapter-contract-v1.schema.json \
             tests/fixtures/agent-equipment/schema/valid-adapter-*.json
           uvx --from check-jsonschema==0.35.0 check-jsonschema \
