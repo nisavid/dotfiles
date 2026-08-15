@@ -8,7 +8,6 @@ import hashlib
 import json
 import os
 import re
-import shutil
 import stat
 import subprocess
 import sys
@@ -318,32 +317,50 @@ def structured_document_contains_credential(path: Path, text: str) -> bool:
     return contains_literal_credential(document)
 
 
-def trusted_age_inspect_parser() -> str | None:
+def trusted_age_inspect_parser(root: Path) -> str | None:
     """Return the exact available age-inspect executable when its version is trusted."""
 
-    candidates: list[str] = []
-    tooling_directory = os.environ.get("AGE_TOOLING_DIRECTORY")
-    if tooling_directory and Path(tooling_directory).is_absolute():
-        candidates.append(os.fspath(Path(tooling_directory) / "age-inspect"))
-    ambient = shutil.which("age-inspect")
-    if ambient is not None and ambient not in candidates:
-        candidates.append(ambient)
+    configured = os.environ.get("AGE_TOOLING_DIRECTORY")
+    if not configured:
+        return None
+    directory = Path(configured)
+    if not directory.is_absolute():
+        return None
+    lexical_directory = Path(os.path.abspath(directory))
+    try:
+        trusted_directory = lexical_directory.resolve(strict=True)
+        parser = (trusted_directory / "age-inspect").resolve(strict=True)
+    except OSError:
+        return None
 
-    for parser in candidates:
+    def is_within_repository(path: Path) -> bool:
         try:
-            version = subprocess.run(
-                [parser, "--version"],
-                check=False,
-                capture_output=True,
-                timeout=AGE_INSPECT_TIMEOUT_SECONDS,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            continue
-        if version.returncode == 0 and version.stdout.strip() == AGE_VERSION.encode(
-            "ascii"
-        ):
-            return parser
-    return None
+            path.relative_to(root)
+        except ValueError:
+            return False
+        return True
+
+    if (
+        not trusted_directory.is_dir()
+        or not parser.is_file()
+        or not os.access(parser, os.X_OK)
+        or is_within_repository(lexical_directory)
+        or is_within_repository(trusted_directory)
+        or is_within_repository(parser)
+    ):
+        return None
+    try:
+        version = subprocess.run(
+            [parser, "--version"],
+            check=False,
+            capture_output=True,
+            timeout=AGE_INSPECT_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if version.returncode != 0 or version.stdout.strip() != AGE_VERSION.encode("ascii"):
+        return None
+    return os.fspath(parser)
 
 
 def age_envelope_finding(data: bytes, parser: str | None) -> str | None:
@@ -649,7 +666,7 @@ def _main() -> int:
             if admitted is None or admitted.get(relative) != digest:
                 findings.append((public_relative, 0, "invalid-age-envelope"))
             if age_parser is unresolved_age_parser:
-                age_parser = trusted_age_inspect_parser()
+                age_parser = trusted_age_inspect_parser(root)
             assert age_parser is None or isinstance(age_parser, str)
             envelope_finding = age_envelope_finding(age_data, age_parser)
             if envelope_finding is not None:

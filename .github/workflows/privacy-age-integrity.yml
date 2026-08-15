@@ -73,6 +73,7 @@ jobs:
       - name: Verify the protected transition and scan candidate data
         shell: bash
         env:
+          AGE_TOOLING_DIRECTORY: ${{ runner.temp }}/age-bin
           PRIVACY_BASE_REF: ${{ github.event.pull_request.base.ref }}
           PRIVACY_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PRIVACY_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -83,7 +84,7 @@ jobs:
           [[ "$PRIVACY_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$(git -C trusted-base rev-parse HEAD)" = "$PRIVACY_BASE_SHA"
           test "$(git -C untrusted-head rev-parse HEAD)" = "$PRIVACY_HEAD_SHA"
-          test "$(age-inspect --version)" = "v${AGE_VERSION}"
+          test "$("$AGE_TOOLING_DIRECTORY/age-inspect" --version)" = "v${AGE_VERSION}"
           python3 trusted-base/scripts/privacy_age_integrity_gate.py \
             --base-repository trusted-base \
             --base-commit "$PRIVACY_BASE_SHA" \

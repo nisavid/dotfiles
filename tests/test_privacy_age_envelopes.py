@@ -172,11 +172,16 @@ class PrivacyAgeEnvelopeTests(TestCase):
         ).stdout.strip()
 
     def run_scanner(self) -> subprocess.CompletedProcess[str]:
+        environment = os.environ.copy()
+        environment["AGE_TOOLING_DIRECTORY"] = os.fspath(
+            self.age_tooling_directory
+        )
         return subprocess.run(
             [sys.executable, str(SCANNER), "--root", str(self.root)],
             check=False,
             capture_output=True,
             text=True,
+            env=environment,
             timeout=TOOL_TIMEOUT_SECONDS,
         )
 

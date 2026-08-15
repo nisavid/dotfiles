@@ -71,7 +71,8 @@ AGE_TOOLING_DIRECTORY=/absolute/path/to/checksum-verified-age-bin \
   python3 scripts/admit-age-envelopes \
   --root . \
   --identity ~/.config/age/key.txt
-python3 scripts/privacy-scan --root . --require-age-manifest
+AGE_TOOLING_DIRECTORY=/absolute/path/to/checksum-verified-age-bin \
+  python3 scripts/privacy-scan --root . --require-age-manifest
 ```
 
 The admission command requires age v1.3.1 from an absolute, trusted installation

@@ -14,11 +14,11 @@ prototype alone does not satisfy the production gate.
 `acceptance-evidence-v1.schema.json` defines three closed documents: the
 expected-case manifest emitted from the independently validated plan before
 mutation, the candidate's secret-free evidence bundle, and a separate post-run
-release attestation. The candidate-independent launcher supplies its own
-externally trusted identity and manifest digest, the trusted apply-authorization
-digest, the trusted candidate identity and installed-implementation manifest
-digest, the authorized expected-case manifest digest, and the independently
-trusted attestation digest; none is learned from the files under validation.
+release attestation. The candidate-independent release launcher supplies the trusted
+candidate identity, installed-implementation manifest digest, expected-case
+manifest digest, attestation manifest digest, apply-authorization identity and
+digest, execution-domain identity, execution nonce, and run identity; none is
+learned from the files under validation.
 
 The expected-case manifest binds the candidate implementation identity and
 complete installed-implementation manifest digest, catalog digest, lock digest,
