@@ -21,6 +21,7 @@ PROTECTED_EXACT_PATHS = frozenset(
         b".privacy-age-envelopes.json",
         b"docs/ENCRYPTION.md",
         b"home/.chezmoi.toml.tmpl",
+        b"home/private_dot_local/lib/agent-equipment/agent_equipment/secrets.py",
         b"scripts/admit-age-envelopes",
         b"scripts/agent_equipment_public_data.py",
         b"scripts/privacy-scan",
