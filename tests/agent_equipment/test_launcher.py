@@ -172,6 +172,7 @@ class LauncherTests(unittest.TestCase):
         cwd: Path | None = None,
         environment: dict[str, str] | None = None,
         launcher: Path | None = None,
+        timeout: float | None = None,
     ) -> subprocess.CompletedProcess[str]:
         path = os.environ.get("PATH", "")
         if fake_bin is not None:
@@ -183,6 +184,7 @@ class LauncherTests(unittest.TestCase):
             capture_output=True,
             text=True,
             check=False,
+            timeout=timeout,
         )
 
     def test_old_cpython_exits_before_candidate_import(self) -> None:
@@ -287,6 +289,20 @@ class LauncherTests(unittest.TestCase):
         (self.package_dir / "__init__.py").unlink()
 
         result = self.run_launcher()
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(
+            result.stderr,
+            "agent-equipment: installed implementation manifest is invalid\n",
+        )
+        self.assert_no_candidate_effects()
+
+    def test_package_fifo_fails_promptly_and_redacted_before_import(self) -> None:
+        fifo_source = self.package_dir / "secrets.py"
+        fifo_source.unlink()
+        os.mkfifo(fifo_source)
+
+        result = self.run_launcher(timeout=2.0)
 
         self.assertEqual(result.returncode, 1)
         self.assertEqual(
