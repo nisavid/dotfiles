@@ -294,7 +294,7 @@ def _capture_installed_implementation(
         parent_descriptor = hold_directory(parts[:-1])
         descriptor = _open_descriptor(
             parts[-1],
-            os.O_RDONLY,
+            os.O_RDONLY | os.O_NONBLOCK,
             directory_descriptor=parent_descriptor,
         )
         descriptors.callback(os.close, descriptor)
@@ -351,7 +351,10 @@ def _capture_installed_implementation(
     selected_runtime = Path(runtime_executable)
     resolved_runtime = selected_runtime.resolve(strict=True)
     runtime_before = resolved_runtime.lstat()
-    runtime_descriptor = _open_descriptor(resolved_runtime, os.O_RDONLY)
+    runtime_descriptor = _open_descriptor(
+        resolved_runtime,
+        os.O_RDONLY | os.O_NONBLOCK,
+    )
     descriptors.callback(os.close, runtime_descriptor)
     runtime_opened = os.fstat(runtime_descriptor)
     if _entry_identity(runtime_before) != _entry_identity(runtime_opened):
