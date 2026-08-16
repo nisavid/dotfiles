@@ -10,6 +10,7 @@ import json
 import os
 import stat
 import sys
+from collections.abc import Callable
 from contextlib import ExitStack
 from pathlib import Path
 from types import MappingProxyType, ModuleType
@@ -191,7 +192,7 @@ def _capture_installed_implementation(
     tuple[tuple[str, str], ...],
     str,
     str,
-    object,
+    Callable[[], None],
 ]:
     root_before = installed_root.lstat()
     if stat.S_ISLNK(root_before.st_mode) or not stat.S_ISDIR(root_before.st_mode):
