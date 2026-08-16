@@ -52,9 +52,13 @@ grep -Fq \
   "$workflow" ||
   fail 'platform workflow does not discover production agent-equipment tests'
 grep -Fq \
-  'uvx --from mypy==1.18.2 mypy --strict home/private_dot_local/lib/agent-equipment/agent_equipment' \
+  'uvx --from mypy==1.18.2 mypy --strict \' \
   "$workflow" ||
   fail 'platform workflow does not statically type-check agent-equipment'
+grep -Fq \
+  'home/private_dot_local/bin/executable_agent-equipment' \
+  "$workflow" ||
+  fail 'platform workflow does not statically type-check the installed launcher'
 workflow_path_filter_pattern='^[[:space:]]+paths(-ignore)?:'
 ! grep -Eq "$workflow_path_filter_pattern" "$workflow" ||
   fail 'platform workflow does not run the privacy gate for every change'
