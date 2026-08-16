@@ -292,16 +292,36 @@ it in the external authority's compare-and-swap archive.
 ## Runtime and launcher trust boundary
 
 The production candidate requires CPython 3.12 or newer in isolated,
-no-bytecode, and no-site mode. Before importing the candidate package, reading
-a native manager, acquiring the apply lease, or opening the checkpoint store,
-the installed wrapper requires `sys.implementation.name == "cpython"`,
-`sys.version_info >= (3, 12)`, and the corresponding interpreter flags.
-It computes the selected interpreter's implementation/version identity and
-executable digest and requires both in the complete installed-implementation
-manifest. A missing, older, changed, or non-CPython runtime fails before the
-first action checkpoint and performs no harness mutation. The future
-implementation may instead ship a pinned interpreter, but that interpreter's
-complete installed bytes remain part of the same manifest binding.
+no-bytecode, and no-site mode. Before importing any candidate module, reading a
+native manager, acquiring the apply lease, or opening the checkpoint store, the
+installed launcher requires `sys.implementation.name == "cpython"`,
+`sys.version_info >= (3, 12)`, and the corresponding interpreter flags. Its
+launcher-owned bootstrap opens the installed root and selected runtime through
+held descriptors, walks only the closed launcher/package/Schema/runtime
+inventory descriptor-relatively without following links, captures the exact
+bytes, and hashes that same byte set into the complete installed-implementation
+manifest. The manifest binds the selected interpreter's implementation/version
+identity and executable digest alongside every launcher, package, and Schema
+digest.
+
+The launcher never adds the candidate package or a source checkout to
+`sys.path`. A closed launcher-owned loader compiles and executes candidate
+modules only from the captured package-byte mapping and has no filesystem
+fallback. Schema validation receives the captured Schema-byte mapping and does
+not reread a Schema path. Immediately before invoking `main`, the bootstrap
+revalidates every held descriptor and path identity, stable metadata, and each
+closed directory inventory. A missing or altered byte, link, duplicate inode,
+path replacement, inventory change, absent or incompatible runtime, loader
+fallback attempt, or revalidation failure reaches no candidate entry point,
+native observation, adapter, apply lease, or checkpoint store. A future pinned
+interpreter is acceptable only when all of its installed bytes enter the same
+capture and manifest.
+
+This bootstrap computes candidate evidence; it does not authenticate its own
+expected digest. The independently trusted expected-manifest input and
+comparison remain at the Step 4 authorization and Step 9 runtime-migration
+boundaries. They do not grant the separate receipt/archive capability assigned
+only to the Step 8a release authority.
 
 The candidate-independent release launcher is a separately deployed,
 root-owned executable outside the candidate package, candidate installed-

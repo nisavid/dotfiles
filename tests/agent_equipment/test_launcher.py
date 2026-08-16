@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -32,6 +34,11 @@ SCHEMA_NAMES = (
     "execution-authority-v1.schema.json",
     "lock-v1.schema.json",
     "plan-action-set-v1.schema.json",
+)
+MANIFEST_PATHS = (
+    "bin/agent-equipment",
+    *(f"lib/agent-equipment/agent_equipment/{name}" for name in PACKAGE_NAMES),
+    *(f"lib/agent-equipment/schemas/{name}" for name in SCHEMA_NAMES),
 )
 
 
@@ -67,7 +74,8 @@ class LauncherTests(unittest.TestCase):
             f"    Path({str(self.manifest_marker)!r}).touch()\n"
             "    return 'fixture-manifest'\n"
             "def main(manifest):\n"
-            "    assert manifest == 'fixture-manifest'\n"
+            "    assert manifest.schema_version == "
+            "'agent-equipment-installed-implementation/v1'\n"
             f"    assert Path({str(self.manifest_marker)!r}).exists()\n"
             f"    subprocess.run([{str(self.native_fake)!r}], check=True)\n"
             f"    Path({str(self.observation_marker)!r}).touch()\n"
@@ -77,6 +85,23 @@ class LauncherTests(unittest.TestCase):
         )
         for name in PACKAGE_NAMES[1:]:
             (self.package_dir / name).write_text("", encoding="utf-8")
+        (self.package_dir / "model.py").write_text(
+            "from pathlib import Path\n"
+            "class InstalledFile:\n"
+            "    def __init__(self, path, digest):\n"
+            "        self.path = path\n"
+            "        self.digest = digest\n"
+            "class InstalledImplementationManifest:\n"
+            "    def __init__(self, schema_version, runtime_identity, "
+            "runtime_executable_digest, files, digest):\n"
+            "        self.schema_version = schema_version\n"
+            "        self.runtime_identity = runtime_identity\n"
+            "        self.runtime_executable_digest = runtime_executable_digest\n"
+            "        self.files = files\n"
+            "        self.digest = digest\n"
+            f"        Path({str(self.manifest_marker)!r}).touch()\n",
+            encoding="utf-8",
+        )
         schema_dir = self.install_root / "lib/agent-equipment/schemas"
         schema_dir.mkdir()
         for name in SCHEMA_NAMES:
@@ -216,6 +241,161 @@ class LauncherTests(unittest.TestCase):
             "agent-equipment: installed implementation manifest is invalid\n",
         )
         self.assert_no_candidate_effects()
+
+    def test_candidate_import_cannot_reseal_changed_installed_bytes(self) -> None:
+        (self.package_dir / "__init__.py").write_text(
+            "from pathlib import Path\n"
+            f"Path({str(self.import_marker)!r}).touch()\n"
+            "Path(__file__).with_name('secrets.py').write_text('changed\\n')\n"
+            "def build_installed_implementation_manifest():\n"
+            f"    Path({str(self.manifest_marker)!r}).touch()\n"
+            "    return 'coordinated-reseal'\n"
+            "def main(manifest):\n"
+            f"    Path({str(self.native_marker)!r}).touch()\n"
+            f"    Path({str(self.observation_marker)!r}).touch()\n"
+            f"    Path({str(self.checkpoint_marker)!r}).touch()\n"
+            "    return 0\n",
+            encoding="utf-8",
+        )
+
+        result = self.run_launcher()
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(
+            result.stderr,
+            "agent-equipment: installed implementation manifest is invalid\n",
+        )
+        self.assertTrue(self.import_marker.exists())
+        for marker in (
+            self.manifest_marker,
+            self.native_marker,
+            self.observation_marker,
+            self.checkpoint_marker,
+        ):
+            with self.subTest(marker=marker.name):
+                self.assertFalse(marker.exists())
+
+    def test_main_receives_launcher_owned_prebound_manifest(self) -> None:
+        manifest_output = self.root / "received-manifest.json"
+        (self.package_dir / "model.py").write_text(
+            "class InstalledFile:\n"
+            "    def __init__(self, path, digest):\n"
+            "        self.path = path\n"
+            "        self.digest = digest\n"
+            "class InstalledImplementationManifest:\n"
+            "    def __init__(self, schema_version, runtime_identity, "
+            "runtime_executable_digest, files, digest):\n"
+            "        self.schema_version = schema_version\n"
+            "        self.runtime_identity = runtime_identity\n"
+            "        self.runtime_executable_digest = runtime_executable_digest\n"
+            "        self.files = files\n"
+            "        self.digest = digest\n",
+            encoding="utf-8",
+        )
+        (self.package_dir / "__init__.py").write_text(
+            "import json\n"
+            "from pathlib import Path\n"
+            f"Path({str(self.import_marker)!r}).touch()\n"
+            "def build_installed_implementation_manifest():\n"
+            f"    Path({str(self.manifest_marker)!r}).touch()\n"
+            "    raise AssertionError('candidate builder must not run')\n"
+            "def main(manifest):\n"
+            f"    Path({str(manifest_output)!r}).write_text(json.dumps({{\n"
+            "        'schema_version': manifest.schema_version,\n"
+            "        'runtime_identity': manifest.runtime_identity,\n"
+            "        'runtime_executable_digest': "
+            "manifest.runtime_executable_digest,\n"
+            "        'files': [\n"
+            "            {'path': item.path, 'digest': item.digest}\n"
+            "            for item in manifest.files\n"
+            "        ],\n"
+            "        'digest': manifest.digest,\n"
+            "    }))\n"
+            "    return 0\n",
+            encoding="utf-8",
+        )
+        expected_files = [
+            {
+                "path": relative,
+                "digest": "sha256:"
+                + hashlib.sha256(
+                    (self.install_root / relative).read_bytes()
+                ).hexdigest(),
+            }
+            for relative in MANIFEST_PATHS
+        ]
+        expected_payload = {
+            "schema_version": "agent-equipment-installed-implementation/v1",
+            "runtime_identity": (
+                f"cpython:{sys.version_info.major}.{sys.version_info.minor}."
+                f"{sys.version_info.micro}"
+            ),
+            "runtime_executable_digest": "sha256:"
+            + hashlib.sha256(Path(sys.executable).resolve().read_bytes()).hexdigest(),
+            "files": expected_files,
+        }
+        expected_manifest = expected_payload | {
+            "digest": "sha256:"
+            + hashlib.sha256(
+                json.dumps(
+                    expected_payload,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode("utf-8")
+            ).hexdigest()
+        }
+
+        result = self.run_launcher()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.manifest_marker.exists())
+        self.assertEqual(json.loads(manifest_output.read_text()), expected_manifest)
+
+    def test_import_executes_captured_bytes_before_rejecting_path_replacement(
+        self,
+    ) -> None:
+        captured_source = self.root / "captured-validator-source"
+        replacement_imported = self.root / "replacement-validator-imported"
+        replacement_source = (
+            "from pathlib import Path\n"
+            f"Path({str(replacement_imported)!r}).touch()\n"
+            "SOURCE = 'path'\n"
+        )
+        (self.package_dir / "validator.py").write_text(
+            "SOURCE = 'captured'\n",
+            encoding="utf-8",
+        )
+        (self.package_dir / "__init__.py").write_text(
+            "import os\n"
+            "from pathlib import Path\n"
+            f"Path({str(self.import_marker)!r}).touch()\n"
+            "validator_path = Path(__file__).with_name('validator.py')\n"
+            "replacement = validator_path.with_name('.validator-replacement')\n"
+            f"replacement.write_text({replacement_source!r})\n"
+            "os.replace(replacement, validator_path)\n"
+            "from . import validator\n"
+            f"Path({str(captured_source)!r}).write_text(validator.SOURCE)\n"
+            "def build_installed_implementation_manifest():\n"
+            f"    Path({str(self.manifest_marker)!r}).touch()\n"
+            "    return 'coordinated-reseal'\n"
+            "def main(manifest):\n"
+            f"    Path({str(self.native_marker)!r}).touch()\n"
+            "    return 0\n",
+            encoding="utf-8",
+        )
+
+        result = self.run_launcher()
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(
+            result.stderr,
+            "agent-equipment: installed implementation manifest is invalid\n",
+        )
+        self.assertEqual(captured_source.read_text(), "captured")
+        self.assertFalse(replacement_imported.exists())
+        self.assertFalse(self.manifest_marker.exists())
+        self.assertFalse(self.native_marker.exists())
 
     def test_direct_python_without_isolation_exits_before_candidate_import(
         self,
@@ -390,6 +570,41 @@ class LauncherTests(unittest.TestCase):
         self.assertFalse(native_marker.exists())
         self.assertEqual(list(runtime_home.iterdir()), [])
         self.assertEqual(list(self.root.rglob("__pycache__")), [])
+
+    @unittest.skipUnless(
+        sys.implementation.name == "cpython" and sys.version_info >= (3, 12),
+        "requires an external CPython 3.12+ interpreter",
+    )
+    def test_runtime_validation_uses_prebound_schema_bytes(self) -> None:
+        self.install_real_package()
+        validation_marker = self.root / "schema-validation-result"
+        catalog = ROOT / "docs/agent-equipment/initial-catalog.proposed.json"
+        lock = ROOT / "docs/agent-equipment/initial-lock.proposed.json"
+        schema = (
+            self.install_root / "lib/agent-equipment/schemas/catalog-v1.schema.json"
+        )
+        package_source = (self.package_dir / "__init__.py").read_text(encoding="utf-8")
+        (self.package_dir / "__init__.py").write_text(
+            package_source
+            + "\nimport json\n"
+            + "def main(installed_implementation_manifest):\n"
+            + "    Path = __import__('pathlib').Path\n"
+            + f"    Path({str(schema)!r}).write_text('{{}}\\n')\n"
+            + "    result = validate_catalog_lock(\n"
+            + f"        json.loads(Path({str(catalog)!r}).read_text()),\n"
+            + f"        json.loads(Path({str(lock)!r}).read_text()),\n"
+            + "    )\n"
+            + f"    Path({str(validation_marker)!r}).write_text(\n"
+            + "        'valid' if result.model is not None else 'invalid'\n"
+            + "    )\n"
+            + "    return 0 if result.model is not None else 1\n",
+            encoding="utf-8",
+        )
+
+        result = self.run_launcher()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(validation_marker.read_text(), "valid")
 
     def install_real_package(self) -> None:
         shutil.rmtree(self.package_dir)

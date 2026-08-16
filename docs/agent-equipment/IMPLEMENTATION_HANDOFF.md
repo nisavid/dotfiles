@@ -138,23 +138,36 @@ own identity, manifest digest, invocation policy, and create-only archive
 capability; the candidate has none of those capabilities.
 
 Chezmoi installs the package verbatim below
-`~/.local/lib/agent-equipment/agent_equipment/`; the launcher resolves that
-directory relative to its own installed `~/.local/bin` path and prepends only
-that exact directory to its private Python import path. It starts CPython in
-isolated, no-bytecode, and no-site mode, so ambient `.pth`, `sitecustomize`, and
-user or global site-package paths are unavailable. It never imports from a
-source checkout or the process working directory. The seven authoritative
-Schemas install beside the package under `~/.local/lib/agent-equipment/schemas/`;
-the validator reads those exact bytes before semantic validation, verifies
-their compiled-in version and digest manifest, and fails closed on a missing or
-changed Schema. The installed wrapper first gates on CPython 3.12 or newer,
-before importing the package or reading runtime state. The complete installed-
-implementation manifest binds `cpython:<major>.<minor>.<micro>` and the selected
-interpreter executable digest alongside the launcher, package, and Schema bytes.
-A missing, older, changed, or non-CPython runtime exits before the first action
-checkpoint with no adapter call. A future independently installed pinned
-interpreter is acceptable only when all of its installed bytes enter that same
-manifest. The installed CLI reads the catalog and lock from
+`~/.local/lib/agent-equipment/agent_equipment/`. The installed launcher first
+gates CPython 3.12 or newer plus isolated, no-bytecode, and no-site flags, before
+importing any candidate module or reading runtime state. Its launcher-owned
+bootstrap then opens the installed root and selected runtime through held
+descriptors; walks only the closed launcher, package, Schema, and runtime
+inventory descriptor-relatively without following links; captures the exact
+bytes; and hashes that same captured set into the complete installed-
+implementation manifest. The manifest binds
+`cpython:<major>.<minor>.<micro>` and the selected interpreter executable digest
+alongside the launcher, package, and Schema bytes.
+
+The candidate package directory is not placed on `sys.path`. The bootstrap
+executes candidate modules only from the captured package-byte mapping through
+a closed launcher-owned loader with no filesystem or source-checkout fallback.
+It supplies the captured Schema-byte mapping directly to schema and semantic
+validation, which performs no Schema reread. Immediately before invoking
+`main`, the launcher revalidates every held descriptor and path identity plus
+each closed directory inventory; any replacement, metadata change, extra or
+missing entry, duplicate inode, or read/validation failure exits without a
+candidate entry point, native observation, adapter call, or checkpoint-store
+access. A future independently installed pinned interpreter is acceptable only
+when all of its installed bytes enter that same capture and manifest.
+
+Step 1 computes the candidate's complete installed manifest but does not select,
+authenticate, or compare an expected digest. The independent expected-manifest
+input enters the Step 4 authorization boundary, and Step 9 rechecks the current
+capture against the exactly authorized digest before mutation. Neither boundary
+is the candidate-independent release authority deployed in Step 8a.
+
+The installed CLI reads the catalog and lock from
 `~/.config/agent-equipment/`. Checkpoints live under
 `~/.local/state/agent-equipment/checkpoints/`; neither checkpoints nor
 observed inventory are chezmoi-managed. The checked-in lock is regenerated only
@@ -432,10 +445,23 @@ Later steps do not begin until the named evidence passes.
 
 ### 1. Promote the design validator into the production model
 
-- Add the CPython 3.12+ fail-before-import gate and bind the selected runtime
-  identity and executable digest into the installed-implementation manifest.
-  Prove an absent, older, changed, or non-CPython runtime reaches neither native
-  observation nor the checkpoint store.
+- Add the CPython 3.12+ and isolated/no-bytecode/no-site fail-before-import
+  gate. In launcher-owned bootstrap code, descriptor-relatively capture and
+  hash the closed launcher, package, Schema, and runtime byte set into the
+  complete installed-implementation manifest before any candidate import.
+  Bind the selected runtime identity and executable digest into that manifest.
+- Execute the candidate namespace only from captured package bytes through a
+  closed launcher-owned loader with no filesystem or source-checkout import
+  fallback. Supply captured Schema bytes directly to validation without a
+  reread, then revalidate all held descriptors, path identities, stable
+  metadata, and closed inventories immediately before invoking `main`.
+- Prove an absent, older, changed, or non-CPython runtime; missing or altered
+  installed byte; path, inode, metadata, or inventory race; Schema reread; or
+  filesystem import attempt reaches neither the candidate entry point, native
+  observation, nor checkpoint store.
+- Treat the computed manifest as candidate evidence only. Expected-digest
+  authentication and comparison remain the Step 4 and Step 9 boundaries;
+  independent release-launcher trust remains Step 8a.
 - Implement immutable typed model objects, canonical JSON, schema validation,
   template expansion, and every cross-field invariant.
 - Make the catalog digest and lock binding stable test vectors.
