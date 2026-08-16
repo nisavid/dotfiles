@@ -296,13 +296,21 @@ no-bytecode, and no-site mode. Before importing any candidate module, reading a
 native manager, acquiring the apply lease, or opening the checkpoint store, the
 installed launcher requires `sys.implementation.name == "cpython"`,
 `sys.version_info >= (3, 12)`, and the corresponding interpreter flags. Its
-launcher-owned bootstrap opens the installed root and selected runtime through
-held descriptors, walks only the closed launcher/package/Schema/runtime
-inventory descriptor-relatively without following links, captures the exact
-bytes, and hashes that same byte set into the complete installed-implementation
-manifest. The manifest binds the selected interpreter's implementation/version
-identity and executable digest alongside every launcher, package, and Schema
-digest.
+launcher-owned bootstrap may resolve the selected launcher and system-CPython
+executable targets once, then holds descriptors for those resolved targets.
+Child paths are opened descriptor-relatively without following links, and the
+package and Schema directory inventories are closed. The bootstrap captures
+the exact launcher, package, and Schema bytes and the bytes at the selected
+interpreter executable path, then hashes that closed v1 byte set into the
+installed-implementation manifest. Every launcher, package, Schema, and
+runtime-executable read and every closed-inventory enumeration is bounded; a
+bound or validation failure emits only a redacted launcher diagnostic and
+exits before candidate import. The manifest binds the stable selected system-
+CPython implementation/version identity and the digest of the exact bytes read
+from its executable path alongside every launcher, package, and Schema digest.
+This Step 1 runtime measurement is not a claim that v1 captures the complete
+standard-library, dynamic-loader, or shared-library closure, or that the
+selected executable bytes authenticate the already-running process image.
 
 The launcher never adds the candidate package or a source checkout to
 `sys.path`. A closed launcher-owned loader compiles and executes candidate
@@ -310,12 +318,17 @@ modules only from the captured package-byte mapping and has no filesystem
 fallback. Schema validation receives the captured Schema-byte mapping and does
 not reread a Schema path. Immediately before invoking `main`, the bootstrap
 revalidates every held descriptor and path identity, stable metadata, and each
-closed directory inventory. A missing or altered byte, link, duplicate inode,
-path replacement, inventory change, absent or incompatible runtime, loader
-fallback attempt, or revalidation failure reaches no candidate entry point,
-native observation, adapter, apply lease, or checkpoint store. A future pinned
-interpreter is acceptable only when all of its installed bytes enter the same
-capture and manifest.
+closed directory inventory. A stable byte change to an allowed package or
+Schema entry before a new capture begins is evidence for a new candidate
+manifest, not a capture failure. Once capture begins, a missing or extra closed-
+inventory entry, a disallowed link, shared inode, or nonregular entry, or any
+in-flight path, byte, metadata, or inventory change fails before the candidate
+entry point, native observation, adapter, apply lease, or checkpoint store. An
+absent or incompatible runtime, loader fallback attempt, or other revalidation
+failure fails at the same boundary. Assurance for the executing process image
+or a complete runtime closure requires a future pinned interpreter or runtime-
+native bootstrap that establishes and measures that stronger boundary before
+candidate execution.
 
 This bootstrap computes candidate evidence; it does not authenticate its own
 expected digest. The independently trusted expected-manifest input and

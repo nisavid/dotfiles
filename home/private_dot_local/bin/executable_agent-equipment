@@ -38,6 +38,11 @@ _INSTALLED_PATHS = (
     *(f"lib/agent-equipment/schemas/{name}" for name in _SCHEMA_NAMES),
 )
 _MANIFEST_SCHEMA_VERSION = "agent-equipment-installed-implementation/v1"
+_MAX_LAUNCHER_BYTES = 256 * 1024
+_MAX_PACKAGE_SOURCE_BYTES = 1024 * 1024
+_MAX_SCHEMA_BYTES = 512 * 1024
+_MAX_CAPTURED_IMPLEMENTATION_BYTES = 8 * 1024 * 1024
+_MAX_RUNTIME_EXECUTABLE_BYTES = 256 * 1024 * 1024
 
 
 def _stable_metadata(metadata: os.stat_result) -> tuple[int, ...]:
@@ -75,24 +80,69 @@ def _open_descriptor(
     )
 
 
-def _read_regular_file(descriptor: int) -> bytes:
+def _read_regular_file(
+    descriptor: int,
+    *,
+    max_bytes: int,
+) -> bytes:
+    if max_bytes < 0:
+        raise ValueError("installed capture bound is exhausted")
     before = os.fstat(descriptor)
     if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
         raise ValueError("installed entry is not a unique regular file")
+    if before.st_size > max_bytes:
+        raise ValueError("installed entry exceeds its capture bound")
     os.lseek(descriptor, 0, os.SEEK_SET)
     chunks: list[bytes] = []
-    while block := os.read(descriptor, 1024 * 1024):
+    captured_bytes = 0
+    while block := os.read(
+        descriptor,
+        min(1024 * 1024, (max_bytes + 1) - captured_bytes),
+    ):
+        captured_bytes += len(block)
+        if captured_bytes > max_bytes:
+            raise ValueError("installed entry exceeds its capture bound")
         chunks.append(block)
     if _stable_metadata(before) != _stable_metadata(os.fstat(descriptor)):
         raise ValueError("installed entry changed while being captured")
     return b"".join(chunks)
 
 
+def _hash_regular_file(descriptor: int, *, max_bytes: int) -> str:
+    if max_bytes < 0:
+        raise ValueError("installed hash bound is exhausted")
+    before = os.fstat(descriptor)
+    if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+        raise ValueError("installed entry is not a unique regular file")
+    if before.st_size > max_bytes:
+        raise ValueError("installed entry exceeds its hash bound")
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    digest = hashlib.sha256()
+    hashed_bytes = 0
+    while block := os.read(
+        descriptor,
+        min(1024 * 1024, (max_bytes + 1) - hashed_bytes),
+    ):
+        hashed_bytes += len(block)
+        if hashed_bytes > max_bytes:
+            raise ValueError("installed entry exceeds its hash bound")
+        digest.update(block)
+    if _stable_metadata(before) != _stable_metadata(os.fstat(descriptor)):
+        raise ValueError("installed entry changed while being hashed")
+    return f"sha256:{digest.hexdigest()}"
+
+
 def _require_closed_directory(
     descriptor: int,
     expected_names: tuple[str, ...],
 ) -> None:
-    if tuple(sorted(os.listdir(descriptor))) != tuple(sorted(expected_names)):
+    observed_names: set[str] = set()
+    with os.scandir(descriptor) as entries:
+        for entry in entries:
+            if len(observed_names) >= len(expected_names):
+                raise ValueError("installed directory inventory is not closed")
+            observed_names.add(entry.name)
+    if observed_names != set(expected_names):
         raise ValueError("installed directory inventory is not closed")
 
 
@@ -237,6 +287,7 @@ def _capture_installed_implementation(
         return descriptor
 
     captured: dict[str, bytes] = {}
+    captured_size = 0
     installed_inodes: set[tuple[int, int]] = set()
     for relative_path in _INSTALLED_PATHS:
         parts = tuple(relative_path.split("/"))
@@ -261,7 +312,21 @@ def _capture_installed_implementation(
                 _stable_metadata(metadata),
             )
         )
-        captured[relative_path] = _read_regular_file(descriptor)
+        if relative_path == "bin/agent-equipment":
+            max_bytes = _MAX_LAUNCHER_BYTES
+        elif relative_path.startswith("lib/agent-equipment/agent_equipment/"):
+            max_bytes = _MAX_PACKAGE_SOURCE_BYTES
+        else:
+            max_bytes = _MAX_SCHEMA_BYTES
+        capture = _read_regular_file(
+            descriptor,
+            max_bytes=min(
+                max_bytes,
+                _MAX_CAPTURED_IMPLEMENTATION_BYTES - captured_size,
+            ),
+        )
+        captured[relative_path] = capture
+        captured_size += len(capture)
 
     inventories = (
         (
@@ -291,8 +356,10 @@ def _capture_installed_implementation(
     runtime_opened = os.fstat(runtime_descriptor)
     if _entry_identity(runtime_before) != _entry_identity(runtime_opened):
         raise ValueError("selected runtime changed before capture")
-    runtime_bytes = _read_regular_file(runtime_descriptor)
-    runtime_digest = f"sha256:{hashlib.sha256(runtime_bytes).hexdigest()}"
+    runtime_digest = _hash_regular_file(
+        runtime_descriptor,
+        max_bytes=_MAX_RUNTIME_EXECUTABLE_BYTES,
+    )
     runtime_identity = (
         f"cpython:{sys.version_info.major}.{sys.version_info.minor}."
         f"{sys.version_info.micro}"
@@ -357,15 +424,13 @@ if sys.implementation.name != "cpython" or sys.version_info < (3, 12):
     print("agent-equipment requires CPython 3.12 or newer", file=sys.stderr)
     raise SystemExit(1)
 
-launcher_path = Path(__file__).resolve()
-installed_root = launcher_path.parent.parent
-package_root = installed_root / "lib" / "agent-equipment"
-if not (package_root / "agent_equipment" / "__init__.py").is_file():
-    print("agent-equipment installed package is missing", file=sys.stderr)
-    raise SystemExit(1)
-
 with ExitStack() as descriptors:
     try:
+        launcher_path = Path(__file__).resolve()
+        installed_root = launcher_path.parent.parent
+        package_root = installed_root / "lib" / "agent-equipment"
+        if not (package_root / "agent_equipment" / "__init__.py").is_file():
+            raise ValueError("installed package is missing")
         (
             captured_bytes,
             file_records,
