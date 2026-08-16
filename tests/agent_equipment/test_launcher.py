@@ -111,11 +111,13 @@ class LauncherTests(unittest.TestCase):
         self,
         *,
         implementation: str,
+        runtime_executable: Path | None = None,
         version: tuple[int, int, int],
     ) -> Path:
         fake_bin = self.root / f"fake-{implementation}-{version[0]}{version[1]}"
         fake_bin.mkdir()
         interpreter = fake_bin / "python3"
+        selected_executable = str(runtime_executable or Path(sys.executable))
         interpreter.write_text(
             f"#!{sys.executable}\n"
             + textwrap.dedent(
@@ -128,13 +130,31 @@ class LauncherTests(unittest.TestCase):
                     raise SystemExit("launcher did not request -I -B -S")
                 launcher = sys.argv[4]
                 sys.argv = [launcher, *sys.argv[5:]]
-                sys.implementation = types.SimpleNamespace(name={implementation!r})
-                sys.version_info = {version!r}
-                sys.flags = types.SimpleNamespace(
+                implementation_values = {{
+                    name: getattr(sys.implementation, name)
+                    for name in dir(sys.implementation)
+                    if not name.startswith("_")
+                }}
+                implementation_values["name"] = {implementation!r}
+                sys.implementation = types.SimpleNamespace(**implementation_values)
+                class EmulatedVersionInfo(tuple):
+                    major = property(lambda value: value[0])
+                    minor = property(lambda value: value[1])
+                    micro = property(lambda value: value[2])
+
+                sys.version_info = EmulatedVersionInfo({version!r})
+                flag_values = {{
+                    name: getattr(sys.flags, name)
+                    for name in dir(sys.flags)
+                    if not name.startswith("_")
+                }}
+                flag_values.update(
                     isolated=1,
                     dont_write_bytecode=1,
                     no_site=1,
                 )
+                sys.flags = types.SimpleNamespace(**flag_values)
+                sys.executable = {selected_executable!r}
                 namespace = {{"__file__": launcher, "__name__": "__main__"}}
                 source = pathlib.Path(launcher).read_bytes()
                 exec(compile(source, launcher, "exec"), namespace)
@@ -207,6 +227,25 @@ class LauncherTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assert_no_candidate_effects()
 
+    def test_runtime_over_256_mebibytes_fails_redacted_before_import(self) -> None:
+        oversized_runtime = self.root / "oversized-python-runtime"
+        with oversized_runtime.open("wb") as stream:
+            stream.truncate((256 * 1024 * 1024) + 1)
+        fake_bin = self.emulated_interpreter(
+            implementation="cpython",
+            runtime_executable=oversized_runtime,
+            version=(3, 12, 4),
+        )
+
+        result = self.run_launcher(fake_bin=fake_bin)
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(
+            result.stderr,
+            "agent-equipment: installed implementation manifest is invalid\n",
+        )
+        self.assert_no_candidate_effects()
+
     def test_extra_import_root_entry_fails_before_candidate_import(self) -> None:
         shadow_marker = self.root / "shadow-imported"
         shadow = self.install_root / "lib/agent-equipment/subprocess.py"
@@ -232,6 +271,130 @@ class LauncherTests(unittest.TestCase):
             "this is not valid Python !!!\n",
             encoding="utf-8",
         )
+
+        result = self.run_launcher()
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(
+            result.stderr,
+            "agent-equipment: installed implementation manifest is invalid\n",
+        )
+        self.assert_no_candidate_effects()
+
+    def test_missing_package_precheck_fails_with_redacted_bootstrap_error(
+        self,
+    ) -> None:
+        (self.package_dir / "__init__.py").unlink()
+
+        result = self.run_launcher()
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(
+            result.stderr,
+            "agent-equipment: installed implementation manifest is invalid\n",
+        )
+        self.assert_no_candidate_effects()
+
+    def test_launcher_resolution_failure_uses_redacted_bootstrap_error(self) -> None:
+        cycle_a = self.root / "launcher-cycle-a"
+        cycle_b = self.root / "launcher-cycle-b"
+        cycle_a.symlink_to(cycle_b)
+        cycle_b.symlink_to(cycle_a)
+        bootstrap = (
+            "from pathlib import Path\n"
+            f"source = Path({str(self.launcher)!r}).read_bytes()\n"
+            f"reported_path = {str(cycle_a)!r}\n"
+            "namespace = {'__file__': reported_path, '__name__': '__main__'}\n"
+            "exec(compile(source, reported_path, 'exec'), namespace)\n"
+        )
+
+        result = subprocess.run(
+            [sys.executable, "-I", "-B", "-S", "-c", bootstrap],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(
+            result.stderr,
+            "agent-equipment: installed implementation manifest is invalid\n",
+        )
+        self.assert_no_candidate_effects()
+
+    def test_package_source_over_one_mebibyte_fails_redacted_before_import(
+        self,
+    ) -> None:
+        oversized_source = self.package_dir / "secrets.py"
+        with oversized_source.open("wb") as stream:
+            stream.truncate((1024 * 1024) + 1)
+
+        result = self.run_launcher()
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(
+            result.stderr,
+            "agent-equipment: installed implementation manifest is invalid\n",
+        )
+        self.assert_no_candidate_effects()
+
+    def test_schema_over_512_kibibytes_fails_redacted_before_import(self) -> None:
+        oversized_schema = (
+            self.install_root / "lib/agent-equipment/schemas/catalog-v1.schema.json"
+        )
+        with oversized_schema.open("wb") as stream:
+            stream.truncate((512 * 1024) + 1)
+
+        result = self.run_launcher()
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(
+            result.stderr,
+            "agent-equipment: installed implementation manifest is invalid\n",
+        )
+        self.assert_no_candidate_effects()
+
+    def test_launcher_over_256_kibibytes_fails_redacted_before_import(self) -> None:
+        target_size = (256 * 1024) + 1
+        padding_size = target_size - self.launcher.stat().st_size
+        self.assertGreater(padding_size, 2)
+        with self.launcher.open("ab") as stream:
+            stream.write(b"\n#" + (b"x" * (padding_size - 2)))
+
+        result = self.run_launcher()
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(
+            result.stderr,
+            "agent-equipment: installed implementation manifest is invalid\n",
+        )
+        self.assert_no_candidate_effects()
+
+    def test_aggregate_capture_over_eight_mebibytes_fails_before_import(
+        self,
+    ) -> None:
+        package_target = 900 * 1024
+        for name in PACKAGE_NAMES:
+            path = self.package_dir / name
+            padding_size = package_target - path.stat().st_size
+            self.assertGreater(padding_size, 2)
+            with path.open("ab") as stream:
+                stream.write(b"\n#" + (b"x" * (padding_size - 2)))
+
+        schema_target = 400 * 1024
+        schema_dir = self.install_root / "lib/agent-equipment/schemas"
+        for name in SCHEMA_NAMES:
+            path = schema_dir / name
+            padding_size = schema_target - path.stat().st_size
+            self.assertGreater(padding_size, 0)
+            with path.open("ab") as stream:
+                stream.write(b" " * padding_size)
+
+        aggregate_size = sum(
+            (self.install_root / relative_path).stat().st_size
+            for relative_path in MANIFEST_PATHS
+        )
+        self.assertGreater(aggregate_size, 8 * 1024 * 1024)
 
         result = self.run_launcher()
 

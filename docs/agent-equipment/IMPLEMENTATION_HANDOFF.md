@@ -141,13 +141,20 @@ Chezmoi installs the package verbatim below
 `~/.local/lib/agent-equipment/agent_equipment/`. The installed launcher first
 gates CPython 3.12 or newer plus isolated, no-bytecode, and no-site flags, before
 importing any candidate module or reading runtime state. Its launcher-owned
-bootstrap then opens the installed root and selected runtime through held
-descriptors; walks only the closed launcher, package, Schema, and runtime
-inventory descriptor-relatively without following links; captures the exact
-bytes; and hashes that same captured set into the complete installed-
-implementation manifest. The manifest binds
-`cpython:<major>.<minor>.<micro>` and the selected interpreter executable digest
-alongside the launcher, package, and Schema bytes.
+bootstrap may resolve the selected launcher and system-CPython executable
+targets once, then holds descriptors for those resolved targets. It opens child
+paths descriptor-relatively without following links, requires the package and
+Schema directory inventories to be closed, captures the exact launcher,
+package, and Schema bytes plus the bytes at the selected interpreter executable
+path, and hashes that closed v1 byte set into the installed-implementation
+manifest. Every launcher, package, Schema, and runtime-executable read and
+every closed-inventory enumeration is bounded; a bound or validation failure
+emits only a redacted launcher diagnostic and exits before candidate import.
+The manifest binds the stable selected system-CPython identity
+`cpython:<major>.<minor>.<micro>` and the digest of the exact bytes read from
+its executable path alongside the launcher, package, and Schema bytes. It does
+not claim a complete standard-library, dynamic-loader, or shared-library
+closure or authenticate the already-running process image.
 
 The candidate package directory is not placed on `sys.path`. The bootstrap
 executes candidate modules only from the captured package-byte mapping through
@@ -155,17 +162,22 @@ a closed launcher-owned loader with no filesystem or source-checkout fallback.
 It supplies the captured Schema-byte mapping directly to schema and semantic
 validation, which performs no Schema reread. Immediately before invoking
 `main`, the launcher revalidates every held descriptor and path identity plus
-each closed directory inventory; any replacement, metadata change, extra or
-missing entry, duplicate inode, or read/validation failure exits without a
-candidate entry point, native observation, adapter call, or checkpoint-store
-access. A future independently installed pinned interpreter is acceptable only
-when all of its installed bytes enter that same capture and manifest.
+each closed directory inventory. A stable byte change to an allowed package or
+Schema entry before a new capture begins produces a new candidate manifest; it
+does not fail capture. Once capture begins, any missing or extra closed-
+inventory entry, disallowed link, shared inode, or nonregular entry, or any in-
+flight path, byte, metadata, or inventory change exits without a candidate
+entry point, native observation, adapter call, or checkpoint-store access.
+Assurance for the executing process image or a complete runtime closure
+requires a future pinned interpreter or runtime-native bootstrap that
+establishes and measures that stronger boundary before candidate execution.
 
-Step 1 computes the candidate's complete installed manifest but does not select,
-authenticate, or compare an expected digest. The independent expected-manifest
-input enters the Step 4 authorization boundary, and Step 9 rechecks the current
-capture against the exactly authorized digest before mutation. Neither boundary
-is the candidate-independent release authority deployed in Step 8a.
+Step 1 computes the candidate's closed v1 installed manifest but does not
+select, authenticate, or compare an expected digest. The independent expected-
+manifest input enters the Step 4 authorization boundary, and Step 9 rechecks
+the current capture against the exactly authorized digest before mutation.
+Neither boundary is the candidate-independent release authority deployed in
+Step 8a.
 
 The installed CLI reads the catalog and lock from
 `~/.config/agent-equipment/`. Checkpoints live under
@@ -177,11 +189,11 @@ and cannot invoke apply, open the authorization ledger, or create an action
 checkpoint. Its template input includes a canonical manifest
 of every installed package file path and content digest, the launcher digest,
 and the rendered catalog and lock digests, so any implementation-only change
-reruns the read-only audit. The same complete installed-implementation manifest
-digest is bound alongside the distinct candidate commit or artifact identity in
-plans, action sets, captures, checkpoints, receipts, and authorization evidence.
-It never performs source discovery, updates, or runtime reconciliation
-implicitly.
+reruns the read-only audit. The same closed v1 installed-implementation
+manifest digest is bound alongside the distinct candidate commit or artifact
+identity in plans, action sets, captures, checkpoints, receipts, and
+authorization evidence. It never performs source discovery, updates, or
+runtime reconciliation implicitly.
 
 Keep the production package free of third-party runtime dependencies. Use the
 standard library for JSON, hashing, filesystem inspection, subprocesses, and
@@ -446,19 +458,28 @@ Later steps do not begin until the named evidence passes.
 ### 1. Promote the design validator into the production model
 
 - Add the CPython 3.12+ and isolated/no-bytecode/no-site fail-before-import
-  gate. In launcher-owned bootstrap code, descriptor-relatively capture and
-  hash the closed launcher, package, Schema, and runtime byte set into the
-  complete installed-implementation manifest before any candidate import.
-  Bind the selected runtime identity and executable digest into that manifest.
+  gate. In launcher-owned bootstrap code, resolve the selected launcher and
+  system-CPython executable targets once and hold their descriptors. Open child
+  paths descriptor-relatively without following links, require the package and
+  Schema inventories to be closed, and capture and hash the exact launcher,
+  package, and Schema bytes plus the bytes at the selected executable path into
+  the closed v1 installed-implementation manifest before any candidate import.
+  Bind the stable selected runtime identity and executable-byte digest into
+  that manifest; do not claim a complete runtime closure or executing-image
+  authentication.
 - Execute the candidate namespace only from captured package bytes through a
   closed launcher-owned loader with no filesystem or source-checkout import
   fallback. Supply captured Schema bytes directly to validation without a
   reread, then revalidate all held descriptors, path identities, stable
   metadata, and closed inventories immediately before invoking `main`.
-- Prove an absent, older, changed, or non-CPython runtime; missing or altered
-  installed byte; path, inode, metadata, or inventory race; Schema reread; or
-  filesystem import attempt reaches neither the candidate entry point, native
-  observation, nor checkpoint store.
+- Prove an absent, older, or non-CPython runtime; missing, extra, or disallowed
+  closed-inventory entry; in-flight path, byte, metadata, or inventory change
+  after capture starts; Schema reread; or filesystem import attempt reaches
+  neither the candidate entry point, native observation, nor checkpoint store.
+  Prove a stable pre-capture byte change to an allowed package or Schema entry
+  instead yields a new candidate manifest. Bound every capture read and closed-
+  inventory enumeration; prove limit failures expose only a redacted launcher
+  error before candidate import.
 - Treat the computed manifest as candidate evidence only. Expected-digest
   authentication and comparison remain the Step 4 and Step 9 boundaries;
   independent release-launcher trust remains Step 8a.
