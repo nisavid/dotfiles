@@ -34,6 +34,9 @@ PROTECTED_FILES = {
     ".privacy-age-envelopes.json": "{}\n",
     "docs/ENCRYPTION.md": "# Encryption\n",
     "home/.chezmoi.toml.tmpl": "recipient = 'fixture'\n",
+    "home/private_dot_local/lib/agent-equipment/agent_equipment/secrets.py": (
+        "# classifier implementation\n"
+    ),
     "home/private.age": "ciphertext fixture\n",
     "scripts/admit-age-envelopes": "#!/bin/sh\n",
     "scripts/agent_equipment_public_data.py": "# policy\n",
