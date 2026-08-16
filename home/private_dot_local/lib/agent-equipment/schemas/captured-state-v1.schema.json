@@ -1,0 +1,1249 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nisavid.github.io/dotfiles/agent-equipment/captured-state-v1.schema.json",
+  "title": "Global agent equipment migration captured state v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "migration_id",
+    "captured_at",
+    "bindings",
+    "provider_routes",
+    "surfaces"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "agent-equipment-captured-state/v1"
+    },
+    "migration_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "captured_at": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])[Tt]([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]([.,][0-9]{1,9})?Z$"
+    },
+    "bindings": {
+      "$ref": "#/$defs/bindings"
+    },
+    "provider_routes": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/providerRoute"
+      }
+    },
+    "surfaces": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/surface"
+      }
+    }
+  },
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "capabilityBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "capability_identity",
+        "capability_digest",
+        "manager_version_evidence_digest"
+      ],
+      "properties": {
+        "capability_identity": {
+          "type": "string",
+          "pattern": "^capability:[a-z0-9][a-z0-9._:/+-]*$"
+        },
+        "capability_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "manager_version_evidence_digest": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "plannedActionReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action_identity",
+        "action_digest",
+        "write_bindings",
+        "verification_dependency_bindings"
+      ],
+      "properties": {
+        "action_identity": {
+          "type": "string",
+          "pattern": "^action:sha256:[0-9a-f]{64}$"
+        },
+        "action_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "write_bindings": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/actionWriteBinding"
+          }
+        },
+        "verification_dependency_bindings": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/verificationDependencyBinding"
+          }
+        }
+      }
+    },
+    "actionWriteBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target_identity",
+        "surface_id"
+      ],
+      "properties": {
+        "target_identity": {
+          "type": "string",
+          "pattern": "^target:sha256:[0-9a-f]{64}$"
+        },
+        "surface_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "verificationDependencyBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dependency_identity",
+        "surface_id"
+      ],
+      "properties": {
+        "dependency_identity": {
+          "type": "string",
+          "minLength": 1
+        },
+        "surface_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "bindings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidate_identity",
+        "implementation_manifest_digest",
+        "catalog_digest",
+        "lock_digest",
+        "plan_digest",
+        "plan_action_set_digest",
+        "capability_bindings",
+        "capability_set_digest"
+      ],
+      "properties": {
+        "candidate_identity": {
+          "type": "string",
+          "minLength": 1
+        },
+        "implementation_manifest_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "catalog_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "lock_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "plan_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "plan_action_set_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "capability_bindings": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/capabilityBinding"
+          }
+        },
+        "capability_set_digest": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "surfaceReference": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "surface_id"
+          ],
+          "properties": {
+            "status": {
+              "const": "captured"
+            },
+            "surface_id": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status"
+          ],
+          "properties": {
+            "status": {
+              "const": "not_applicable"
+            }
+          }
+        }
+      ]
+    },
+    "routeSurfaceReferences": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "installation",
+        "enablement",
+        "projector",
+        "mcp_selections",
+        "plugin_selections",
+        "skill_entries",
+        "canonical_skill_dependencies"
+      ],
+      "properties": {
+        "installation": {
+          "$ref": "#/$defs/surfaceReference"
+        },
+        "enablement": {
+          "$ref": "#/$defs/surfaceReference"
+        },
+        "projector": {
+          "$ref": "#/$defs/surfaceReference"
+        },
+        "mcp_selections": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/surfaceReference"
+          }
+        },
+        "plugin_selections": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/surfaceReference"
+          }
+        },
+        "skill_entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/surfaceReference"
+          }
+        },
+        "canonical_skill_dependencies": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/surfaceReference"
+          }
+        }
+      }
+    },
+    "restoreEvidence": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "restore_class",
+            "revision",
+            "artifact_reference",
+            "content_digest"
+          ],
+          "properties": {
+            "restore_class": {
+              "const": "immutable"
+            },
+            "revision": {
+              "type": "string",
+              "minLength": 1
+            },
+            "artifact_reference": {
+              "type": "string",
+              "minLength": 1
+            },
+            "content_digest": {
+              "$ref": "#/$defs/digest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "restore_class",
+            "channel",
+            "observed_version",
+            "observation_source",
+            "native_update_control",
+            "exact_prior_artifact_restore"
+          ],
+          "properties": {
+            "restore_class": {
+              "const": "native_rolling"
+            },
+            "channel": {
+              "type": "string",
+              "minLength": 1
+            },
+            "observed_version": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "status",
+                    "value"
+                  ],
+                  "properties": {
+                    "status": {
+                      "const": "observed"
+                    },
+                    "value": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "status"
+                  ],
+                  "properties": {
+                    "status": {
+                      "const": "route_absent"
+                    }
+                  }
+                }
+              ]
+            },
+            "observation_source": {
+              "type": "string",
+              "minLength": 1
+            },
+            "native_update_control": {
+              "enum": [
+                "unknown",
+                "suppressible",
+                "unsuppressible"
+              ]
+            },
+            "exact_prior_artifact_restore": {
+              "const": false
+            }
+          }
+        }
+      ]
+    },
+    "providerRoute": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "route_id",
+        "route_digest",
+        "harness",
+        "equipment_identities",
+        "controlled_equipment_identities",
+        "control_owner",
+        "provenance_owner",
+        "capability_binding",
+        "planned_actions",
+        "restore_evidence",
+        "surface_references"
+      ],
+      "properties": {
+        "route_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "route_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "harness": {
+          "enum": [
+            "claude",
+            "codex",
+            "cursor"
+          ]
+        },
+        "equipment_identities": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "controlled_equipment_identities": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "control_owner": {
+          "enum": [
+            "reconciler_owned",
+            "operator_owned"
+          ]
+        },
+        "provenance_owner": {
+          "type": "string",
+          "minLength": 1
+        },
+        "capability_binding": {
+          "$ref": "#/$defs/capabilityBinding"
+        },
+        "planned_actions": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/plannedActionReference"
+          }
+        },
+        "restore_evidence": {
+          "$ref": "#/$defs/restoreEvidence"
+        },
+        "surface_references": {
+          "$ref": "#/$defs/routeSurfaceReferences"
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "state_digest"
+      ],
+      "properties": {
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "state_digest": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "classification",
+        "evidence"
+      ],
+      "properties": {
+        "classification": {
+          "enum": [
+            "catalog_owned_projection",
+            "native_manager",
+            "unmanaged",
+            "unknown"
+          ]
+        },
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/evidence"
+          }
+        }
+      }
+    },
+    "digestStatus": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "digest"
+          ],
+          "properties": {
+            "status": {
+              "const": "observed"
+            },
+            "digest": {
+              "$ref": "#/$defs/digest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status"
+          ],
+          "properties": {
+            "status": {
+              "enum": [
+                "none",
+                "unsupported"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "pathMetadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "capture_platform",
+        "mode",
+        "uid",
+        "gid",
+        "mtime_ns",
+        "flags",
+        "acl",
+        "xattrs"
+      ],
+      "properties": {
+        "capture_platform": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mode": {
+          "type": "string",
+          "pattern": "^0[0-7]{3,6}$"
+        },
+        "uid": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "gid": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "mtime_ns": {
+          "type": "string",
+          "pattern": "^[0-9]+$"
+        },
+        "flags": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "const": "unsupported"
+            }
+          ]
+        },
+        "acl": {
+          "$ref": "#/$defs/digestStatus"
+        },
+        "xattrs": {
+          "$ref": "#/$defs/digestStatus"
+        }
+      }
+    },
+    "pathEntryObservation": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "entry_type"
+          ],
+          "properties": {
+            "entry_type": {
+              "const": "absent"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "entry_type",
+            "metadata",
+            "size_bytes",
+            "content_digest"
+          ],
+          "properties": {
+            "entry_type": {
+              "const": "regular_file"
+            },
+            "metadata": {
+              "$ref": "#/$defs/pathMetadata"
+            },
+            "size_bytes": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "content_digest": {
+              "$ref": "#/$defs/digest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "entry_type",
+            "metadata",
+            "tree_manifest_digest"
+          ],
+          "properties": {
+            "entry_type": {
+              "const": "directory"
+            },
+            "metadata": {
+              "$ref": "#/$defs/pathMetadata"
+            },
+            "tree_manifest_digest": {
+              "$ref": "#/$defs/digest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "entry_type",
+            "metadata",
+            "link_text",
+            "resolution"
+          ],
+          "properties": {
+            "entry_type": {
+              "const": "symlink"
+            },
+            "metadata": {
+              "$ref": "#/$defs/pathMetadata"
+            },
+            "link_text": {
+              "type": "string",
+              "minLength": 1
+            },
+            "resolution": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "state",
+                    "resolved_target"
+                  ],
+                  "properties": {
+                    "state": {
+                      "const": "resolved"
+                    },
+                    "resolved_target": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "state"
+                  ],
+                  "properties": {
+                    "state": {
+                      "const": "broken"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "recoveryMaterial": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "reason"
+          ],
+          "properties": {
+            "kind": {
+              "const": "none"
+            },
+            "reason": {
+              "enum": [
+                "verification_only",
+                "absent_noop",
+                "already_desired",
+                "operator_owned"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "state_digest"
+          ],
+          "properties": {
+            "kind": {
+              "const": "structured_snapshot"
+            },
+            "state_digest": {
+              "$ref": "#/$defs/digest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "reference",
+            "content_digest"
+          ],
+          "properties": {
+            "kind": {
+              "const": "private_blob"
+            },
+            "reference": {
+              "type": "string",
+              "pattern": "^checkpoint-cas:sha256:[0-9a-f]{64}$"
+            },
+            "content_digest": {
+              "$ref": "#/$defs/digest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "inverse_operation",
+            "expected_pre_state_digest"
+          ],
+          "properties": {
+            "kind": {
+              "const": "native_inverse"
+            },
+            "inverse_operation": {
+              "enum": [
+                "install",
+                "configure",
+                "enable",
+                "disable",
+                "remove",
+                "restore",
+                "suppress_native_update"
+              ]
+            },
+            "expected_pre_state_digest": {
+              "$ref": "#/$defs/digest"
+            }
+          }
+        }
+      ]
+    },
+    "verificationOnlyRecovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "reason"
+      ],
+      "properties": {
+        "kind": {
+          "const": "none"
+        },
+        "reason": {
+          "const": "verification_only"
+        }
+      }
+    },
+    "canonicalSkillLocator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^~/\\.agents/skills/(?:[^./\\\\\u0000]|\\.[^./\\\\\u0000]|\\.\\.[^/\\\\\u0000])[^/\\\\\u0000]*$"
+        }
+      }
+    },
+    "claudeSkillLocator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^~/\\.claude/skills/(?:[^./\\\\\u0000]|\\.[^./\\\\\u0000]|\\.\\.[^/\\\\\u0000])[^/\\\\\u0000]*$"
+        }
+      }
+    },
+    "nativeLocator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "manager",
+        "native_identity",
+        "scope"
+      ],
+      "properties": {
+        "manager": {
+          "type": "string",
+          "minLength": 1
+        },
+        "native_identity": {
+          "type": "string",
+          "minLength": 1
+        },
+        "scope": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "selectionLocator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "owner",
+        "source",
+        "key_path"
+      ],
+      "properties": {
+        "owner": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "key_path": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "legacyProjectorObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "present",
+        "mode",
+        "enabled",
+        "implementation_digest"
+      ],
+      "properties": {
+        "present": {
+          "type": "boolean"
+        },
+        "mode": {
+          "enum": [
+            "blanket",
+            "catalog_driven",
+            "retired"
+          ]
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "implementation_digest": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/digest"
+            },
+            {
+              "const": "absent"
+            }
+          ]
+        }
+      }
+    },
+    "pluginInstallationObservation": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "installed"
+          ],
+          "properties": {
+            "installed": {
+              "const": false
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "installed",
+            "channel",
+            "observed_version",
+            "observation_source"
+          ],
+          "properties": {
+            "installed": {
+              "const": true
+            },
+            "channel": {
+              "type": "string",
+              "minLength": 1
+            },
+            "observed_version": {
+              "type": "string",
+              "minLength": 1
+            },
+            "observation_source": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      ]
+    },
+    "pluginEnablementObservation": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "applicable",
+            "enabled"
+          ],
+          "properties": {
+            "applicable": {
+              "const": true
+            },
+            "enabled": {
+              "type": "boolean"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "applicable",
+            "reason"
+          ],
+          "properties": {
+            "applicable": {
+              "const": false
+            },
+            "reason": {
+              "enum": [
+                "not_installed",
+                "unsupported"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "selectionObservation": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "present"
+          ],
+          "properties": {
+            "present": {
+              "const": false
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "present",
+            "state_digest",
+            "secret_reference_names"
+          ],
+          "properties": {
+            "present": {
+              "const": true
+            },
+            "state_digest": {
+              "$ref": "#/$defs/digest"
+            },
+            "secret_reference_names": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "surfaceBase": {
+      "type": "object",
+      "required": [
+        "surface_id",
+        "kind",
+        "mutation_policy",
+        "provenance",
+        "locator",
+        "observation",
+        "recovery"
+      ],
+      "properties": {
+        "surface_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "type": "string"
+        },
+        "route_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "equipment_identity": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mutation_policy": {
+          "enum": [
+            "forbidden",
+            "reconciler_owned",
+            "operator_owned"
+          ]
+        },
+        "provenance": {
+          "$ref": "#/$defs/provenance"
+        },
+        "locator": {
+          "type": "object"
+        },
+        "observation": {
+          "type": "object"
+        },
+        "recovery": {
+          "$ref": "#/$defs/recoveryMaterial"
+        }
+      }
+    },
+    "surface": {
+      "oneOf": [
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/surfaceBase"
+            },
+            {
+              "type": "object",
+              "required": [
+                "route_id",
+                "equipment_identity"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "canonical_skill_entry"
+                },
+                "mutation_policy": {
+                  "const": "forbidden"
+                },
+                "locator": {
+                  "$ref": "#/$defs/canonicalSkillLocator"
+                },
+                "observation": {
+                  "$ref": "#/$defs/pathEntryObservation"
+                },
+                "recovery": {
+                  "$ref": "#/$defs/verificationOnlyRecovery"
+                }
+              }
+            }
+          ],
+          "unevaluatedProperties": false
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/surfaceBase"
+            },
+            {
+              "type": "object",
+              "required": [
+                "route_id",
+                "equipment_identity"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "claude_skill_entry"
+                },
+                "mutation_policy": {
+                  "enum": [
+                    "reconciler_owned",
+                    "operator_owned"
+                  ]
+                },
+                "locator": {
+                  "$ref": "#/$defs/claudeSkillLocator"
+                },
+                "observation": {
+                  "$ref": "#/$defs/pathEntryObservation"
+                }
+              }
+            }
+          ],
+          "unevaluatedProperties": false
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/surfaceBase"
+            },
+            {
+              "type": "object",
+              "required": [
+                "route_id"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "legacy_projector"
+                },
+                "locator": {
+                  "$ref": "#/$defs/selectionLocator"
+                },
+                "observation": {
+                  "$ref": "#/$defs/legacyProjectorObservation"
+                }
+              }
+            }
+          ],
+          "unevaluatedProperties": false
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/surfaceBase"
+            },
+            {
+              "type": "object",
+              "required": [
+                "route_id"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "plugin_installation"
+                },
+                "locator": {
+                  "$ref": "#/$defs/nativeLocator"
+                },
+                "observation": {
+                  "$ref": "#/$defs/pluginInstallationObservation"
+                }
+              }
+            }
+          ],
+          "unevaluatedProperties": false
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/surfaceBase"
+            },
+            {
+              "type": "object",
+              "required": [
+                "route_id"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "plugin_enablement"
+                },
+                "locator": {
+                  "$ref": "#/$defs/nativeLocator"
+                },
+                "observation": {
+                  "$ref": "#/$defs/pluginEnablementObservation"
+                }
+              }
+            }
+          ],
+          "unevaluatedProperties": false
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/surfaceBase"
+            },
+            {
+              "type": "object",
+              "required": [
+                "route_id",
+                "equipment_identity"
+              ],
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "mcp_selection",
+                    "plugin_selection"
+                  ]
+                },
+                "locator": {
+                  "$ref": "#/$defs/selectionLocator"
+                },
+                "observation": {
+                  "$ref": "#/$defs/selectionObservation"
+                }
+              }
+            }
+          ],
+          "unevaluatedProperties": false
+        }
+      ]
+    }
+  }
+}

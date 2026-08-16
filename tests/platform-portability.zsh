@@ -47,6 +47,14 @@ grep -Fq 'test "$(age-inspect --version)" = "v${AGE_VERSION}"' "$workflow" ||
   fail 'platform workflow does not verify the age parser version'
 grep -Fq 'python3 -m pip install uv==0.11.32' "$workflow" ||
   fail 'platform workflow does not install the pinned uv runtime'
+grep -Fq \
+  "python3 -m unittest discover -s tests/agent_equipment -t . -p 'test_*.py'" \
+  "$workflow" ||
+  fail 'platform workflow does not discover production agent-equipment tests'
+grep -Fq \
+  'uvx --from mypy==1.18.2 mypy --strict home/private_dot_local/lib/agent-equipment/agent_equipment' \
+  "$workflow" ||
+  fail 'platform workflow does not statically type-check agent-equipment'
 workflow_path_filter_pattern='^[[:space:]]+paths(-ignore)?:'
 ! grep -Eq "$workflow_path_filter_pattern" "$workflow" ||
   fail 'platform workflow does not run the privacy gate for every change'

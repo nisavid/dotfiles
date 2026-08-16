@@ -1,0 +1,627 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nisavid.github.io/dotfiles/agent-equipment/acceptance-evidence-v1.schema.json",
+  "title": "Agent equipment acceptance expectations, evidence, and attestation v1",
+  "oneOf": [
+    {"$ref": "#/$defs/expectedCaseManifest"},
+    {"$ref": "#/$defs/evidenceBundle"},
+    {"$ref": "#/$defs/attestationManifest"}
+  ],
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "caseIdentity": {
+      "type": "string",
+      "pattern": "^case:sha256:[0-9a-f]{64}$"
+    },
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1
+    },
+    "opaqueIdentity": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]*:[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+    },
+    "artifactReference": {
+      "type": "string",
+      "pattern": "^artifact:[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*$"
+    },
+    "receiptReference": {
+      "type": "string",
+      "pattern": "^receipt:[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*$"
+    },
+    "signerIdentity": {
+      "type": "string",
+      "pattern": "^(operator|person|service):[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*$"
+    },
+    "humanIdentity": {
+      "type": "string",
+      "pattern": "^(operator|person):[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*$"
+    },
+    "publicVersion": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._+:/() -]{0,255}$"
+    },
+    "managerIdentity": {
+      "enum": [
+        "manager:claude",
+        "manager:codex",
+        "manager:cursor",
+        "manager:direct_mcp",
+        "manager:standalone_skills"
+      ]
+    },
+    "utcTimestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])[Tt]([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]([.,][0-9]{1,9})?Z$"
+    },
+    "requirementId": {
+      "enum": [
+        "CAT-01", "CAT-02", "CAT-03", "CAT-04", "CAT-05", "CAT-06", "CAT-07",
+        "CAT-08", "CAT-09", "CAT-10", "CAT-11", "CAT-12", "CAT-13", "CAT-14",
+        "RES-01", "RES-02", "RES-03", "RES-04", "RES-05",
+        "CMD-01", "CMD-02", "CMD-03", "CMD-04", "CMD-05", "CMD-06",
+        "CON-01", "CON-02", "CON-03", "CON-04", "CON-05", "CON-06", "CON-07",
+        "CON-08", "CON-09", "CON-10", "CON-11",
+        "ADP-01", "ADP-02", "ADP-03", "ADP-04", "ADP-05", "ADP-06", "ADP-07", "ADP-08",
+        "CAP-01", "CAP-02", "CAP-03", "CAP-04", "CAP-05", "CAP-06", "CAP-07",
+        "CHK-01", "CHK-02", "CHK-03", "CHK-04", "CHK-05", "CHK-06", "CHK-07", "CHK-08", "CHK-09", "CHK-10", "CHK-11",
+        "MIG-01", "MIG-02", "MIG-03", "MIG-04", "MIG-05", "MIG-06", "MIG-07",
+        "LIVE-01", "LIVE-02", "LIVE-03", "LIVE-04", "LIVE-05", "LIVE-06"
+      ]
+    },
+    "bindings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidate_identity",
+        "implementation_manifest_digest",
+        "catalog_digest",
+        "lock_digest",
+        "plan_digest",
+        "plan_action_set_digest",
+        "capability_set_digest",
+        "captured_state_identity",
+        "captured_state_digest"
+      ],
+      "properties": {
+        "candidate_identity": {"$ref": "#/$defs/opaqueIdentity"},
+        "implementation_manifest_digest": {"$ref": "#/$defs/digest"},
+        "catalog_digest": {"$ref": "#/$defs/digest"},
+        "lock_digest": {"$ref": "#/$defs/digest"},
+        "plan_digest": {"$ref": "#/$defs/digest"},
+        "plan_action_set_digest": {"$ref": "#/$defs/digest"},
+        "capability_set_digest": {"$ref": "#/$defs/digest"},
+        "captured_state_identity": {"$ref": "#/$defs/opaqueIdentity"},
+        "captured_state_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "executionBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apply_authorization_identity",
+        "apply_authorization_digest",
+        "execution_domain_identity",
+        "execution_nonce",
+        "run_identity"
+      ],
+      "properties": {
+        "apply_authorization_identity": {
+          "type": "string",
+          "pattern": "^apply-authorization:sha256:[0-9a-f]{64}$"
+        },
+        "apply_authorization_digest": {"$ref": "#/$defs/digest"},
+        "execution_domain_identity": {
+          "type": "string",
+          "pattern": "^execution-domain:[A-Za-z0-9][A-Za-z0-9._/-]*$"
+        },
+        "execution_nonce": {
+          "type": "string",
+          "pattern": "^execution-nonce:sha256:[0-9a-f]{64}$"
+        },
+        "run_identity": {
+          "type": "string",
+          "pattern": "^run:sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "requirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requirement_id", "evidence_mode"],
+      "properties": {
+        "requirement_id": {"$ref": "#/$defs/requirementId"},
+        "evidence_mode": {"enum": ["automated", "live"]}
+      }
+    },
+    "providerSelector": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "canonical_root"],
+          "properties": {
+            "kind": {"const": "standalone_skill"},
+            "canonical_root": {"const": "agents_skills"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "manager", "plugin_id", "scope"],
+          "properties": {
+            "kind": {"const": "native_plugin"},
+            "manager": {"enum": ["claude", "codex", "cursor"]},
+            "plugin_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._@/-]*$"
+            },
+            "scope": {"const": "user"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "transport", "overlay_family"],
+          "properties": {
+            "kind": {"const": "direct_mcp"},
+            "transport": {"enum": ["stdio", "http"]},
+            "overlay_family": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9._-]*$"
+            }
+          }
+        }
+      ]
+    },
+    "routeCapabilityBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "route_identity",
+        "route_digest",
+        "harness",
+        "provider_selector",
+        "manager_identity",
+        "capability_identity",
+        "capability_digest",
+        "manager_version_evidence_digest"
+      ],
+      "properties": {
+        "route_identity": {"$ref": "#/$defs/opaqueIdentity"},
+        "route_digest": {"$ref": "#/$defs/digest"},
+        "harness": {"enum": ["claude", "codex", "cursor"]},
+        "provider_selector": {"$ref": "#/$defs/providerSelector"},
+        "manager_identity": {"$ref": "#/$defs/managerIdentity"},
+        "capability_identity": {"$ref": "#/$defs/opaqueIdentity"},
+        "capability_digest": {"$ref": "#/$defs/digest"},
+        "manager_version_evidence_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "expectedCase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "case_identity",
+        "requirement_id",
+        "fixture_family",
+        "subject_identity",
+        "evidence_kind"
+      ],
+      "properties": {
+        "case_identity": {"$ref": "#/$defs/caseIdentity"},
+        "requirement_id": {"$ref": "#/$defs/requirementId"},
+        "fixture_family": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$"
+        },
+        "subject_identity": {"$ref": "#/$defs/opaqueIdentity"},
+        "evidence_kind": {
+          "enum": [
+            "automated_receipt",
+            "mutation_receipt",
+            "checkpoint_trace",
+            "live_receipt"
+          ]
+        }
+      }
+    },
+    "verificationNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["node_identity", "requirement_ids", "evidence_kind"],
+      "properties": {
+        "node_identity": {
+          "type": "string",
+          "pattern": "^verification:sha256:[0-9a-f]{64}$"
+        },
+        "requirement_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/requirementId"}
+        },
+        "evidence_kind": {
+          "const": "automated_receipt"
+        }
+      }
+    },
+    "migrationNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["node_identity", "requirement_ids", "evidence_kind"],
+      "properties": {
+        "node_identity": {
+          "type": "string",
+          "pattern": "^migration:sha256:[0-9a-f]{64}$"
+        },
+        "requirement_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/requirementId"}
+        },
+        "evidence_kind": {
+          "const": "mutation_receipt"
+        }
+      }
+    },
+    "expectedCaseManifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "bindings",
+        "fixture_version",
+        "requirements",
+        "static_cases",
+        "plan_action_identities",
+        "verification_nodes",
+        "migration_nodes",
+        "route_capability_bindings",
+        "expected_case_manifest_digest"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "agent-equipment-acceptance-expected-cases/v1"
+        },
+        "bindings": {"$ref": "#/$defs/bindings"},
+        "fixture_version": {"$ref": "#/$defs/opaqueIdentity"},
+        "requirements": {
+          "type": "array",
+          "minItems": 75,
+          "maxItems": 75,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/requirement"}
+        },
+        "static_cases": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/expectedCase"}
+        },
+        "plan_action_identities": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^action:sha256:[0-9a-f]{64}$"
+          }
+        },
+        "verification_nodes": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/verificationNode"}
+        },
+        "migration_nodes": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/migrationNode"}
+        },
+        "route_capability_bindings": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/routeCapabilityBinding"}
+        },
+        "expected_case_manifest_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "aggregateResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requirement_id",
+        "status",
+        "artifact_reference",
+        "artifact_digest",
+        "recorded_at"
+      ],
+      "properties": {
+        "requirement_id": {"$ref": "#/$defs/requirementId"},
+        "status": {"enum": ["pass", "fail", "blocked", "not_run"]},
+        "artifact_reference": {"$ref": "#/$defs/artifactReference"},
+        "artifact_digest": {"$ref": "#/$defs/digest"},
+        "recorded_at": {"$ref": "#/$defs/utcTimestamp"}
+      }
+    },
+    "receiptCore": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "artifact_reference", "artifact_digest"],
+      "properties": {
+        "kind": {"const": "automated_receipt"},
+        "artifact_reference": {"$ref": "#/$defs/artifactReference"},
+        "artifact_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "mutationReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "artifact_reference",
+        "artifact_digest",
+        "before_observation_digest",
+        "after_observation_digest"
+      ],
+      "properties": {
+        "kind": {"const": "mutation_receipt"},
+        "artifact_reference": {"$ref": "#/$defs/artifactReference"},
+        "artifact_digest": {"$ref": "#/$defs/digest"},
+        "before_observation_digest": {"$ref": "#/$defs/digest"},
+        "after_observation_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "checkpointTrace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "artifact_reference",
+        "artifact_digest",
+        "before_observation_digest",
+        "after_observation_digest",
+        "checkpoint_trace_digest"
+      ],
+      "properties": {
+        "kind": {"const": "checkpoint_trace"},
+        "artifact_reference": {"$ref": "#/$defs/artifactReference"},
+        "artifact_digest": {"$ref": "#/$defs/digest"},
+        "before_observation_digest": {"$ref": "#/$defs/digest"},
+        "after_observation_digest": {"$ref": "#/$defs/digest"},
+        "checkpoint_trace_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "humanSignoff": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["signer_identity", "signed_at", "signoff_digest"],
+      "properties": {
+        "signer_identity": {"$ref": "#/$defs/humanIdentity"},
+        "signed_at": {"$ref": "#/$defs/utcTimestamp"},
+        "signoff_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "liveReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "artifact_reference",
+        "artifact_digest",
+        "live_receipt_reference",
+        "live_receipt_digest",
+        "human_signoff"
+      ],
+      "properties": {
+        "kind": {"const": "live_receipt"},
+        "artifact_reference": {"$ref": "#/$defs/artifactReference"},
+        "artifact_digest": {"$ref": "#/$defs/digest"},
+        "live_receipt_reference": {"$ref": "#/$defs/receiptReference"},
+        "live_receipt_digest": {"$ref": "#/$defs/digest"},
+        "human_signoff": {"$ref": "#/$defs/humanSignoff"}
+      }
+    },
+    "unavailableEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "reason_code"],
+      "properties": {
+        "kind": {"const": "unavailable"},
+        "reason_code": {
+          "enum": [
+            "not_run",
+            "blocked_by_environment",
+            "blocked_by_capability",
+            "blocked_by_authorization",
+            "fixture_failed"
+          ]
+        }
+      }
+    },
+    "childResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "case_identity",
+        "requirement_id",
+        "fixture_family",
+        "subject_identity",
+        "status",
+        "recorded_at",
+        "evidence"
+      ],
+      "properties": {
+        "case_identity": {"$ref": "#/$defs/caseIdentity"},
+        "requirement_id": {"$ref": "#/$defs/requirementId"},
+        "fixture_family": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$"
+        },
+        "subject_identity": {"$ref": "#/$defs/opaqueIdentity"},
+        "status": {"enum": ["pass", "fail", "blocked", "not_run"]},
+        "recorded_at": {"$ref": "#/$defs/utcTimestamp"},
+        "evidence": {
+          "oneOf": [
+            {"$ref": "#/$defs/receiptCore"},
+            {"$ref": "#/$defs/mutationReceipt"},
+            {"$ref": "#/$defs/checkpointTrace"},
+            {"$ref": "#/$defs/liveReceipt"},
+            {"$ref": "#/$defs/unavailableEvidence"}
+          ]
+        }
+      }
+    },
+    "harnessVersion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["harness", "version"],
+      "properties": {
+        "harness": {"enum": ["claude", "codex", "cursor"]},
+        "version": {"$ref": "#/$defs/publicVersion"}
+      }
+    },
+    "managerVersion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["manager_identity", "version", "evidence_digest"],
+      "properties": {
+        "manager_identity": {"$ref": "#/$defs/managerIdentity"},
+        "version": {"$ref": "#/$defs/publicVersion"},
+        "evidence_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "attestor": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["role", "identity", "version", "attested_at"],
+          "properties": {
+            "role": {"const": "automated_runner"},
+            "identity": {"$ref": "#/$defs/signerIdentity"},
+            "version": {"$ref": "#/$defs/publicVersion"},
+            "attested_at": {"$ref": "#/$defs/utcTimestamp"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["role", "identity", "version", "attested_at"],
+          "properties": {
+            "role": {"const": "live_operator"},
+            "identity": {"$ref": "#/$defs/humanIdentity"},
+            "version": {"$ref": "#/$defs/publicVersion"},
+            "attested_at": {"$ref": "#/$defs/utcTimestamp"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["role", "identity", "version", "attested_at"],
+          "properties": {
+            "role": {"const": "release_reviewer"},
+            "identity": {"$ref": "#/$defs/humanIdentity"},
+            "version": {"$ref": "#/$defs/publicVersion"},
+            "attested_at": {"$ref": "#/$defs/utcTimestamp"}
+          }
+        }
+      ]
+    },
+    "attestationManifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "bindings",
+        "execution_binding",
+        "expected_case_manifest_digest",
+        "bundle_digest",
+        "attestors",
+        "attestation_manifest_digest"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "agent-equipment-acceptance-attestation/v1"
+        },
+        "bindings": {"$ref": "#/$defs/bindings"},
+        "execution_binding": {"$ref": "#/$defs/executionBinding"},
+        "expected_case_manifest_digest": {"$ref": "#/$defs/digest"},
+        "bundle_digest": {"$ref": "#/$defs/digest"},
+        "attestors": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/attestor"}
+        },
+        "attestation_manifest_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "evidenceBundle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "bindings",
+        "execution_binding",
+        "fixture_version",
+        "expected_case_manifest_digest",
+        "route_capability_bindings",
+        "harness_versions",
+        "manager_versions",
+        "aggregate_results",
+        "child_results",
+        "bundle_digest"
+      ],
+      "properties": {
+        "schema_version": {"const": "agent-equipment-acceptance-evidence/v1"},
+        "bindings": {"$ref": "#/$defs/bindings"},
+        "execution_binding": {"$ref": "#/$defs/executionBinding"},
+        "fixture_version": {"$ref": "#/$defs/opaqueIdentity"},
+        "expected_case_manifest_digest": {"$ref": "#/$defs/digest"},
+        "route_capability_bindings": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/routeCapabilityBinding"}
+        },
+        "harness_versions": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/harnessVersion"}
+        },
+        "manager_versions": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/managerVersion"}
+        },
+        "aggregate_results": {
+          "type": "array",
+          "minItems": 75,
+          "maxItems": 75,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/aggregateResult"}
+        },
+        "child_results": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/childResult"}
+        },
+        "bundle_digest": {"$ref": "#/$defs/digest"}
+      }
+    }
+  }
+}

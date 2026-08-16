@@ -90,35 +90,36 @@ Add these exact source paths in dependency order:
 ```text
 home/dot_config/agent-equipment/catalog-v1.json
 home/dot_config/agent-equipment/lock-v1.json
-home/dot_local/bin/executable_agent-equipment
-home/dot_local/lib/agent-equipment/schemas/catalog-v1.schema.json
-home/dot_local/lib/agent-equipment/schemas/lock-v1.schema.json
-home/dot_local/lib/agent-equipment/schemas/captured-state-v1.schema.json
-home/dot_local/lib/agent-equipment/schemas/plan-action-set-v1.schema.json
-home/dot_local/lib/agent-equipment/schemas/adapter-contract-v1.schema.json
-home/dot_local/lib/agent-equipment/schemas/acceptance-evidence-v1.schema.json
-home/dot_local/lib/agent-equipment/schemas/execution-authority-v1.schema.json
-home/dot_local/lib/agent-equipment/agent_equipment/__init__.py
-home/dot_local/lib/agent-equipment/agent_equipment/model.py
-home/dot_local/lib/agent-equipment/agent_equipment/canonical.py
-home/dot_local/lib/agent-equipment/agent_equipment/validator.py
-home/dot_local/lib/agent-equipment/agent_equipment/resolver.py
-home/dot_local/lib/agent-equipment/agent_equipment/inventory.py
-home/dot_local/lib/agent-equipment/agent_equipment/checkpoint.py
-home/dot_local/lib/agent-equipment/agent_equipment/authorization.py
-home/dot_local/lib/agent-equipment/agent_equipment/executor.py
-home/dot_local/lib/agent-equipment/agent_equipment/secrets.py
-home/dot_local/lib/agent-equipment/agent_equipment/evidence.py
-home/dot_local/lib/agent-equipment/agent_equipment/adapters/base.py
-home/dot_local/lib/agent-equipment/agent_equipment/adapters/standalone_skills.py
-home/dot_local/lib/agent-equipment/agent_equipment/adapters/claude_projection.py
-home/dot_local/lib/agent-equipment/agent_equipment/adapters/claude_plugin.py
-home/dot_local/lib/agent-equipment/agent_equipment/adapters/claude_mcp.py
-home/dot_local/lib/agent-equipment/agent_equipment/adapters/codex_plugin.py
-home/dot_local/lib/agent-equipment/agent_equipment/adapters/codex_skill_policy.py
-home/dot_local/lib/agent-equipment/agent_equipment/adapters/codex_mcp.py
-home/dot_local/lib/agent-equipment/agent_equipment/adapters/cursor_plugin.py
-home/dot_local/lib/agent-equipment/agent_equipment/adapters/cursor_mcp.py
+home/private_dot_local/bin/executable_agent-equipment
+home/private_dot_local/lib/agent-equipment/schemas/catalog-v1.schema.json
+home/private_dot_local/lib/agent-equipment/schemas/lock-v1.schema.json
+home/private_dot_local/lib/agent-equipment/schemas/captured-state-v1.schema.json
+home/private_dot_local/lib/agent-equipment/schemas/plan-action-set-v1.schema.json
+home/private_dot_local/lib/agent-equipment/schemas/adapter-contract-v1.schema.json
+home/private_dot_local/lib/agent-equipment/schemas/acceptance-evidence-v1.schema.json
+home/private_dot_local/lib/agent-equipment/schemas/execution-authority-v1.schema.json
+home/private_dot_local/lib/agent-equipment/agent_equipment/__init__.py
+home/private_dot_local/lib/agent-equipment/agent_equipment/model.py
+home/private_dot_local/lib/agent-equipment/agent_equipment/canonical.py
+home/private_dot_local/lib/agent-equipment/agent_equipment/_json_schema.py
+home/private_dot_local/lib/agent-equipment/agent_equipment/validator.py
+home/private_dot_local/lib/agent-equipment/agent_equipment/resolver.py
+home/private_dot_local/lib/agent-equipment/agent_equipment/inventory.py
+home/private_dot_local/lib/agent-equipment/agent_equipment/checkpoint.py
+home/private_dot_local/lib/agent-equipment/agent_equipment/authorization.py
+home/private_dot_local/lib/agent-equipment/agent_equipment/executor.py
+home/private_dot_local/lib/agent-equipment/agent_equipment/secrets.py
+home/private_dot_local/lib/agent-equipment/agent_equipment/evidence.py
+home/private_dot_local/lib/agent-equipment/agent_equipment/adapters/base.py
+home/private_dot_local/lib/agent-equipment/agent_equipment/adapters/standalone_skills.py
+home/private_dot_local/lib/agent-equipment/agent_equipment/adapters/claude_projection.py
+home/private_dot_local/lib/agent-equipment/agent_equipment/adapters/claude_plugin.py
+home/private_dot_local/lib/agent-equipment/agent_equipment/adapters/claude_mcp.py
+home/private_dot_local/lib/agent-equipment/agent_equipment/adapters/codex_plugin.py
+home/private_dot_local/lib/agent-equipment/agent_equipment/adapters/codex_skill_policy.py
+home/private_dot_local/lib/agent-equipment/agent_equipment/adapters/codex_mcp.py
+home/private_dot_local/lib/agent-equipment/agent_equipment/adapters/cursor_plugin.py
+home/private_dot_local/lib/agent-equipment/agent_equipment/adapters/cursor_mcp.py
 home/run_onchange_after_audit-agent-equipment.zsh.tmpl
 tests/agent_equipment/
 ```
@@ -139,7 +140,9 @@ capability; the candidate has none of those capabilities.
 Chezmoi installs the package verbatim below
 `~/.local/lib/agent-equipment/agent_equipment/`; the launcher resolves that
 directory relative to its own installed `~/.local/bin` path and prepends only
-that exact directory to its private Python import path. It never imports from a
+that exact directory to its private Python import path. It starts CPython in
+isolated, no-bytecode, and no-site mode, so ambient `.pth`, `sitecustomize`, and
+user or global site-package paths are unavailable. It never imports from a
 source checkout or the process working directory. The seven authoritative
 Schemas install beside the package under `~/.local/lib/agent-equipment/schemas/`;
 the validator reads those exact bytes before semantic validation, verifies
@@ -440,8 +443,11 @@ Later steps do not begin until the named evidence passes.
   production-source change; its `.proposed.json` name conveys zero live
   authority.
 - Reject all malformed input before native capability discovery.
-- Evidence: all `CAT-*` fixtures in `ACCEPTANCE.md`, static type checking, and
-  mutation testing of each cross-field guard.
+- Evidence: `CAT-01` through `CAT-09`, the catalog-level compensation and
+  fail-closed portion of `CAT-10`, and `CAT-11` through `CAT-14` in
+  `ACCEPTANCE.md`; static type checking; and mutation testing of each
+  catalog/lock cross-field guard. Matching adapter capability remains a Step 2
+  resolver gate because Step 1 has no capability records.
 
 ### 2. Implement read-only inventory and the pure resolver
 
@@ -455,6 +461,9 @@ Later steps do not begin until the named evidence passes.
   owned overlay proposals. Derive a complete action-dependency graph, reject
   missing dependencies, orphans, and cycles, then topologically order it with
   lexical tie-breaks only among ready actions.
+- Close the remaining `CAT-10` fixture by rejecting an unsupported automated
+  final action against the matching adapter capability before producing a plan
+  or opening the checkpoint store.
 - Make every losing-route retirement depend on verification of the complete
   preferred winner activation group. Projector readiness precedes the Matt
   winner; verified Matt installation and enablement precede each identified

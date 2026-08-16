@@ -22,12 +22,17 @@ print -r -- 'contact fixture@example.invalid from /home/test-user/work' \
 python3 "$scanner" --root "$test_root/clean"
 
 isolated_tool=$test_root/isolated-tool
+isolated_policy_root=$test_root/home/private_dot_local/lib/agent-equipment/agent_equipment
 mkdir -p "$isolated_tool"
+mkdir -p "$isolated_policy_root"
 cp \
   "$scanner" \
   "$repo_root/scripts/agent_equipment_public_data.py" \
   "$repo_root/scripts/privacy_age_envelopes.py" \
   "$isolated_tool"
+cp \
+  "$repo_root/home/private_dot_local/lib/agent-equipment/agent_equipment/secrets.py" \
+  "$isolated_policy_root"
 env -u PYTHONPYCACHEPREFIX -u PYTHONDONTWRITEBYTECODE \
   python3 "$isolated_tool/privacy-scan" --root "$test_root/clean"
 if [[ -e $isolated_tool/__pycache__ ]]; then

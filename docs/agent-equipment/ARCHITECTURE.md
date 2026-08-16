@@ -291,10 +291,11 @@ it in the external authority's compare-and-swap archive.
 
 ## Runtime and launcher trust boundary
 
-The production candidate requires CPython 3.12 or newer. Before importing the
-candidate package, reading a native manager, acquiring the apply lease, or
-opening the checkpoint store, the installed wrapper requires
-`sys.implementation.name == "cpython"` and `sys.version_info >= (3, 12)`.
+The production candidate requires CPython 3.12 or newer in isolated,
+no-bytecode, and no-site mode. Before importing the candidate package, reading
+a native manager, acquiring the apply lease, or opening the checkpoint store,
+the installed wrapper requires `sys.implementation.name == "cpython"`,
+`sys.version_info >= (3, 12)`, and the corresponding interpreter flags.
 It computes the selected interpreter's implementation/version identity and
 executable digest and requires both in the complete installed-implementation
 manifest. A missing, older, changed, or non-CPython runtime fails before the
