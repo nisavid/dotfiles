@@ -1,0 +1,1289 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nisavid.github.io/dotfiles/agent-equipment/adapter-contract-v1.schema.json",
+  "title": "Global agent equipment adapter contract v1",
+  "oneOf": [
+    {"$ref": "#/$defs/applySequenceEnvelope"},
+    {"$ref": "#/$defs/capabilityDiscoveryEnvelope"},
+    {"$ref": "#/$defs/observeRequestEnvelope"},
+    {"$ref": "#/$defs/runtimeObservationEnvelope"},
+    {"$ref": "#/$defs/plannedActionEnvelope"},
+    {"$ref": "#/$defs/mutationReceiptEnvelope"}
+  ],
+  "$defs": {
+    "nonEmptyString": {"type": "string", "minLength": 1},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "actionIdentity": {"type": "string", "pattern": "^action:sha256:[0-9a-f]{64}$"},
+    "nullableDigest": {
+      "oneOf": [
+        {"$ref": "#/$defs/digest"},
+        {"type": "null"}
+      ]
+    },
+    "harness": {"enum": ["claude", "codex", "cursor"]},
+    "controlOwner": {"enum": ["reconciler_owned", "operator_owned"]},
+    "operation": {
+      "enum": [
+        "install",
+        "configure",
+        "enable",
+        "disable",
+        "remove",
+        "restore",
+        "suppress_native_update"
+      ]
+    },
+    "stringSet": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/nonEmptyString"}
+    },
+    "equipmentSet": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^(skill|plugin|mcp|hook|other):[a-z0-9][a-z0-9._/-]*$"
+      }
+    },
+    "controlledEquipmentSet": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^(skill|plugin|mcp|hook|other):[a-z0-9][a-z0-9._/-]*$"
+      }
+    },
+    "secretReference": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "name"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {"const": "environment_variable"},
+            "name": {"type": "string", "pattern": "^[A-Z_][A-Z0-9_]*$"}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "name"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {"const": "secret_profile"},
+            "name": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"}
+          }
+        }
+      ]
+    },
+    "managerVersionEvidence": {
+      "type": "object",
+      "required": ["manager", "manager_version", "observation_source", "evidence_digest"],
+      "additionalProperties": false,
+      "properties": {
+        "manager": {"enum": ["claude", "codex", "cursor", "direct_mcp", "standalone_skills"]},
+        "manager_version": {"$ref": "#/$defs/nonEmptyString"},
+        "observation_source": {"$ref": "#/$defs/nonEmptyString"},
+        "evidence_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "surfaceIdentityRule": {
+      "type": "object",
+      "required": ["rule", "version"],
+      "additionalProperties": false,
+      "properties": {
+        "rule": {
+          "enum": [
+            "shared_equipment_identity",
+            "route_and_equipment_identity",
+            "route_identity"
+          ]
+        },
+        "version": {"const": 1}
+      }
+    },
+    "providerMatch": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "canonical_root"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {"const": "standalone_skill"},
+            "canonical_root": {"const": "agents_skills"}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "manager", "scope"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {"const": "native_plugin"},
+            "manager": {"$ref": "#/$defs/harness"},
+            "scope": {"const": "user"}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "transport", "overlay_family"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {"const": "direct_mcp"},
+            "transport": {"enum": ["stdio", "http"]},
+            "overlay_family": {"enum": ["claude_json", "codex_toml", "cursor_json"]}
+          }
+        }
+      ]
+    },
+    "capabilityProviderBinding": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "provider_match": {
+              "type": "object",
+              "properties": {"kind": {"const": "standalone_skill"}}
+            },
+            "manager_version_evidence": {
+              "type": "object",
+              "properties": {"manager": {"const": "standalone_skills"}}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "properties": {
+            "harness": {"const": "claude"},
+            "provider_match": {
+              "type": "object",
+              "properties": {
+                "kind": {"const": "native_plugin"},
+                "manager": {"const": "claude"}
+              }
+            },
+            "manager_version_evidence": {
+              "type": "object",
+              "properties": {"manager": {"const": "claude"}}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "properties": {
+            "harness": {"const": "codex"},
+            "provider_match": {
+              "type": "object",
+              "properties": {
+                "kind": {"const": "native_plugin"},
+                "manager": {"const": "codex"}
+              }
+            },
+            "manager_version_evidence": {
+              "type": "object",
+              "properties": {"manager": {"const": "codex"}}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "properties": {
+            "harness": {"const": "cursor"},
+            "provider_match": {
+              "type": "object",
+              "properties": {
+                "kind": {"const": "native_plugin"},
+                "manager": {"const": "cursor"}
+              }
+            },
+            "manager_version_evidence": {
+              "type": "object",
+              "properties": {"manager": {"const": "cursor"}}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "properties": {
+            "harness": {"const": "claude"},
+            "provider_match": {
+              "type": "object",
+              "properties": {
+                "kind": {"const": "direct_mcp"},
+                "overlay_family": {"const": "claude_json"}
+              }
+            },
+            "manager_version_evidence": {
+              "type": "object",
+              "properties": {"manager": {"const": "direct_mcp"}}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "properties": {
+            "harness": {"const": "codex"},
+            "provider_match": {
+              "type": "object",
+              "properties": {
+                "kind": {"const": "direct_mcp"},
+                "overlay_family": {"const": "codex_toml"}
+              }
+            },
+            "manager_version_evidence": {
+              "type": "object",
+              "properties": {"manager": {"const": "direct_mcp"}}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "properties": {
+            "harness": {"const": "cursor"},
+            "provider_match": {
+              "type": "object",
+              "properties": {
+                "kind": {"const": "direct_mcp"},
+                "overlay_family": {"const": "cursor_json"}
+              }
+            },
+            "manager_version_evidence": {
+              "type": "object",
+              "properties": {"manager": {"const": "direct_mcp"}}
+            }
+          }
+        }
+      ]
+    },
+    "automatedInspect": {
+      "type": "object",
+      "required": ["mode", "normalized_fields"],
+      "additionalProperties": false,
+      "properties": {
+        "mode": {"const": "automated"},
+        "normalized_fields": {"$ref": "#/$defs/stringSet"}
+      }
+    },
+    "automatedMutation": {
+      "type": "object",
+      "required": ["mode", "compare_before_mutate", "idempotency", "compensation"],
+      "additionalProperties": false,
+      "properties": {
+        "mode": {"const": "automated"},
+        "compare_before_mutate": {"const": true},
+        "idempotency": {"const": "state_convergent"},
+        "compensation": {"const": "restore_captured_pre_state"}
+      }
+    },
+    "inspectOnly": {
+      "type": "object",
+      "required": ["mode", "normalized_fields"],
+      "additionalProperties": false,
+      "properties": {
+        "mode": {"const": "inspect_only"},
+        "normalized_fields": {"$ref": "#/$defs/stringSet"}
+      }
+    },
+    "operatorAction": {
+      "type": "object",
+      "required": ["mode", "operator_action_reference"],
+      "additionalProperties": false,
+      "properties": {
+        "mode": {"const": "operator_action"},
+        "operator_action_reference": {"$ref": "#/$defs/nonEmptyString"}
+      }
+    },
+    "unavailable": {
+      "type": "object",
+      "required": ["mode"],
+      "additionalProperties": false,
+      "properties": {"mode": {"const": "unavailable"}}
+    },
+    "mutationSupport": {
+      "oneOf": [
+        {"$ref": "#/$defs/automatedMutation"},
+        {"$ref": "#/$defs/inspectOnly"},
+        {"$ref": "#/$defs/operatorAction"},
+        {"$ref": "#/$defs/unavailable"}
+      ]
+    },
+    "operationSupport": {
+      "type": "object",
+      "required": ["inspect", "install", "configure", "enable", "disable", "remove", "restore", "suppress_native_update"],
+      "additionalProperties": false,
+      "properties": {
+        "inspect": {
+          "oneOf": [
+            {"$ref": "#/$defs/automatedInspect"},
+            {"$ref": "#/$defs/inspectOnly"},
+            {"$ref": "#/$defs/unavailable"}
+          ]
+        },
+        "install": {"$ref": "#/$defs/mutationSupport"},
+        "configure": {"$ref": "#/$defs/mutationSupport"},
+        "enable": {"$ref": "#/$defs/mutationSupport"},
+        "disable": {"$ref": "#/$defs/mutationSupport"},
+        "remove": {"$ref": "#/$defs/mutationSupport"},
+        "restore": {"$ref": "#/$defs/mutationSupport"},
+        "suppress_native_update": {"$ref": "#/$defs/mutationSupport"}
+      }
+    },
+    "componentControlSupport": {
+      "type": "object",
+      "required": ["mode", "selector_granularity", "supported_equipment_identities", "supported_states", "mutation_boundary"],
+      "additionalProperties": false,
+      "properties": {
+        "mode": {"enum": ["automated", "inspect_only", "operator_action", "unavailable"]},
+        "selector_granularity": {"const": "equipment_identity"},
+        "supported_equipment_identities": {"$ref": "#/$defs/stringSet"},
+        "supported_states": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"enum": ["enabled", "disabled"]}
+        },
+        "mutation_boundary": {"enum": ["selected_component", "none"]}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"mode": {"const": "automated"}}},
+          "then": {
+            "properties": {
+              "supported_equipment_identities": {"minItems": 1},
+              "supported_states": {"minItems": 1},
+              "mutation_boundary": {"const": "selected_component"}
+            }
+          },
+          "else": {
+            "properties": {"mutation_boundary": {"const": "none"}}
+          }
+        },
+        {
+          "if": {"properties": {"mode": {"const": "unavailable"}}},
+          "then": {
+            "properties": {
+              "supported_equipment_identities": {"maxItems": 0},
+              "supported_states": {"maxItems": 0}
+            }
+          }
+        }
+      ]
+    },
+    "nativeUpdateSupport": {
+      "type": "object",
+      "required": ["native_update_control", "version_observation", "baseline_comparison", "suppression", "suppression_scope"],
+      "additionalProperties": false,
+      "properties": {
+        "native_update_control": {"enum": ["unknown", "suppressible", "unsuppressible", "not_applicable"]},
+        "version_observation": {"enum": ["automated", "inspect_only", "unavailable"]},
+        "baseline_comparison": {"enum": ["automated", "inspect_only", "unavailable"]},
+        "suppression": {"$ref": "#/$defs/mutationSupport"},
+        "suppression_scope": {"enum": ["route", "manager", "none"]}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "native_update_control": {
+                "enum": ["unsuppressible", "not_applicable"]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "suppression": {"$ref": "#/$defs/unavailable"},
+              "suppression_scope": {"const": "none"}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "suppression": {
+                "type": "object",
+                "required": ["mode"],
+                "properties": {"mode": {"const": "unavailable"}}
+              }
+            }
+          },
+          "then": {
+            "properties": {"suppression_scope": {"const": "none"}}
+          },
+          "else": {
+            "properties": {"suppression_scope": {"enum": ["route", "manager"]}}
+          }
+        }
+      ]
+    },
+    "recordVersions": {
+      "type": "object",
+      "required": ["observe_request", "runtime_observation", "planned_action", "mutation_receipt", "captured_state"],
+      "additionalProperties": false,
+      "properties": {
+        "observe_request": {"const": "adapter-contract-v1"},
+        "runtime_observation": {"const": "adapter-contract-v1"},
+        "planned_action": {"const": "adapter-contract-v1"},
+        "mutation_receipt": {"const": "adapter-contract-v1"},
+        "captured_state": {"const": "agent-equipment-captured-state/v1"}
+      }
+    },
+    "capabilityRecord": {
+      "type": "object",
+      "required": ["contract_version", "capability_identity", "adapter_identity", "adapter_version", "harness", "provider_match", "manager_version_evidence", "surface_identity_rule", "operation_support", "component_control_support", "native_update_support", "record_versions", "automated_control_owners", "capability_digest"],
+      "additionalProperties": false,
+      "properties": {
+        "contract_version": {"const": "adapter-contract-v1"},
+        "capability_identity": {"$ref": "#/$defs/nonEmptyString"},
+        "adapter_identity": {"$ref": "#/$defs/nonEmptyString"},
+        "adapter_version": {"$ref": "#/$defs/nonEmptyString"},
+        "harness": {"$ref": "#/$defs/harness"},
+        "provider_match": {"$ref": "#/$defs/providerMatch"},
+        "manager_version_evidence": {"$ref": "#/$defs/managerVersionEvidence"},
+        "surface_identity_rule": {"$ref": "#/$defs/surfaceIdentityRule"},
+        "operation_support": {"$ref": "#/$defs/operationSupport"},
+        "component_control_support": {"$ref": "#/$defs/componentControlSupport"},
+        "native_update_support": {"$ref": "#/$defs/nativeUpdateSupport"},
+        "record_versions": {"$ref": "#/$defs/recordVersions"},
+        "automated_control_owners": {"const": ["reconciler_owned"]},
+        "capability_digest": {"$ref": "#/$defs/digest"}
+      },
+      "allOf": [
+        {"$ref": "#/$defs/capabilityProviderBinding"},
+        {
+          "if": {
+            "properties": {
+              "operation_support": {
+                "type": "object",
+                "required": ["suppress_native_update"],
+                "properties": {
+                  "suppress_native_update": {
+                    "type": "object",
+                    "required": ["mode"],
+                    "properties": {"mode": {"const": "automated"}}
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "native_update_support": {
+                "type": "object",
+                "properties": {
+                  "suppression": {"$ref": "#/$defs/automatedMutation"}
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "operation_support": {
+                "type": "object",
+                "required": ["suppress_native_update"],
+                "properties": {
+                  "suppress_native_update": {
+                    "type": "object",
+                    "required": ["mode"],
+                    "properties": {"mode": {"const": "inspect_only"}}
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "native_update_support": {
+                "type": "object",
+                "properties": {
+                  "suppression": {"$ref": "#/$defs/inspectOnly"}
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "operation_support": {
+                "type": "object",
+                "required": ["suppress_native_update"],
+                "properties": {
+                  "suppress_native_update": {
+                    "type": "object",
+                    "required": ["mode"],
+                    "properties": {"mode": {"const": "operator_action"}}
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "native_update_support": {
+                "type": "object",
+                "properties": {
+                  "suppression": {"$ref": "#/$defs/operatorAction"}
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "operation_support": {
+                "type": "object",
+                "required": ["suppress_native_update"],
+                "properties": {
+                  "suppress_native_update": {
+                    "type": "object",
+                    "required": ["mode"],
+                    "properties": {"mode": {"const": "unavailable"}}
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "native_update_support": {
+                "type": "object",
+                "properties": {
+                  "suppression": {"$ref": "#/$defs/unavailable"}
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "routeRecord": {
+      "$ref": "catalog-v1.schema.json#/$defs/route"
+    },
+    "requestBindings": {
+      "type": "object",
+      "required": ["contract_version", "request_identity", "correlation_identity", "command", "purpose", "candidate_identity", "implementation_manifest_digest", "catalog_digest", "lock_digest", "plan_digest", "capability_identity", "capability_digest", "manager_version_evidence_digest", "harness", "route_identity", "route_digest", "route_record", "equipment_identities", "controlled_equipment_identities", "activation_group", "surface_scope", "secret_references", "expected_state_digest"],
+      "additionalProperties": false,
+      "properties": {
+        "contract_version": {"const": "adapter-contract-v1"},
+        "request_identity": {"$ref": "#/$defs/nonEmptyString"},
+        "correlation_identity": {"$ref": "#/$defs/nonEmptyString"},
+        "command": {"enum": ["audit", "import", "update", "adopt", "apply"]},
+        "purpose": {"enum": ["inventory", "capture_pre_state", "verify_post_state", "recovery", "verify_compensation"]},
+        "candidate_identity": {"$ref": "#/$defs/nonEmptyString"},
+        "implementation_manifest_digest": {"$ref": "#/$defs/digest"},
+        "catalog_digest": {"$ref": "#/$defs/digest"},
+        "lock_digest": {"$ref": "#/$defs/digest"},
+        "plan_digest": {"$ref": "#/$defs/nullableDigest"},
+        "capability_identity": {"$ref": "#/$defs/nonEmptyString"},
+        "capability_digest": {"$ref": "#/$defs/digest"},
+        "manager_version_evidence_digest": {"$ref": "#/$defs/digest"},
+        "harness": {"$ref": "#/$defs/harness"},
+        "route_identity": {"type": "string", "pattern": "^route:[a-z0-9][a-z0-9._/-]*$"},
+        "route_digest": {"$ref": "#/$defs/digest"},
+        "route_record": {"$ref": "#/$defs/routeRecord"},
+        "equipment_identities": {"$ref": "#/$defs/equipmentSet"},
+        "controlled_equipment_identities": {"$ref": "#/$defs/controlledEquipmentSet"},
+        "activation_group": {"type": "string", "pattern": "^activation:[a-z0-9][a-z0-9._/-]*$"},
+        "surface_scope": {"$ref": "#/$defs/stringSet"},
+        "secret_references": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/secretReference"}
+        },
+        "expected_state_digest": {"$ref": "#/$defs/nullableDigest"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"plan_digest": {"type": "null"}}},
+          "then": {
+            "properties": {
+              "command": {"enum": ["audit", "import", "update", "adopt"]},
+              "purpose": {"const": "inventory"}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "purpose": {
+                "enum": ["verify_post_state", "recovery", "verify_compensation"]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "plan_digest": {"$ref": "#/$defs/digest"},
+              "expected_state_digest": {"$ref": "#/$defs/digest"}
+            }
+          }
+        },
+        {
+          "if": {"properties": {"command": {"const": "apply"}}},
+          "then": {"properties": {"plan_digest": {"$ref": "#/$defs/digest"}}}
+        }
+      ]
+    },
+    "evidenceReference": {
+      "type": "object",
+      "required": ["kind", "identity", "digest"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {"enum": ["surface", "manager", "checkpoint", "captured_state", "native_result"]},
+        "identity": {"$ref": "#/$defs/nonEmptyString"},
+        "digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "commonError": {
+      "type": "object",
+      "required": ["status", "code", "classification", "message", "retry", "mutation_state", "evidence_references"],
+      "additionalProperties": false,
+      "properties": {
+        "status": {"const": "error"},
+        "code": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]*$"},
+        "classification": {"enum": ["invalid_request", "unsupported", "capability_changed", "concurrent_change", "secret_resolution_failed", "native_failure", "partial_change"]},
+        "message": {"$ref": "#/$defs/nonEmptyString"},
+        "retry": {"enum": ["never", "after_audit"]},
+        "mutation_state": {"enum": ["not_started", "possibly_changed", "unknown"]},
+        "evidence_references": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/evidenceReference"}
+        }
+      }
+    },
+    "observationError": {
+      "allOf": [
+        {"$ref": "#/$defs/commonError"},
+        {
+          "type": "object",
+          "properties": {"mutation_state": {"const": "not_started"}}
+        }
+      ]
+    },
+    "configurationObservation": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["status", "digest"],
+          "additionalProperties": false,
+          "properties": {
+            "status": {"const": "observed"},
+            "digest": {"$ref": "#/$defs/digest"}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["status"],
+          "additionalProperties": false,
+          "properties": {"status": {"enum": ["not_applicable", "unknown"]}}
+        }
+      ]
+    },
+    "observedVersion": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["status", "value"],
+          "additionalProperties": false,
+          "properties": {
+            "status": {"const": "observed"},
+            "value": {"$ref": "#/$defs/nonEmptyString"}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["status"],
+          "additionalProperties": false,
+          "properties": {"status": {"enum": ["route_absent", "unknown"]}}
+        }
+      ]
+    },
+    "managerDrift": {
+      "type": "object",
+      "required": ["status", "reviewed_baseline", "observation_source"],
+      "additionalProperties": false,
+      "properties": {
+        "status": {"enum": ["none", "changed_from_reviewed_baseline", "unobservable", "not_applicable"]},
+        "reviewed_baseline": {"oneOf": [{"$ref": "#/$defs/nonEmptyString"}, {"type": "null"}]},
+        "observation_source": {"oneOf": [{"$ref": "#/$defs/nonEmptyString"}, {"type": "null"}]}
+      }
+    },
+    "normalizedState": {
+      "type": "object",
+      "required": ["route_presence", "enablement", "configuration", "component_states", "observed_version", "native_update_control", "native_update_suppression_state", "manager_drift"],
+      "additionalProperties": false,
+      "properties": {
+        "route_presence": {"enum": ["present", "absent", "partial", "unknown"]},
+        "enablement": {"enum": ["enabled", "disabled", "mixed", "not_applicable", "unknown"]},
+        "configuration": {"$ref": "#/$defs/configurationObservation"},
+        "component_states": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "required": ["equipment_identity", "state"],
+            "additionalProperties": false,
+            "properties": {
+              "equipment_identity": {"type": "string", "pattern": "^(skill|plugin|mcp|hook|other):[a-z0-9][a-z0-9._/-]*$"},
+              "state": {"enum": ["enabled", "disabled", "absent", "unknown"]}
+            }
+          }
+        },
+        "observed_version": {"$ref": "#/$defs/observedVersion"},
+        "native_update_control": {"enum": ["unknown", "suppressible", "unsuppressible", "not_applicable"]},
+        "native_update_suppression_state": {"enum": ["enabled", "disabled", "unavailable", "unknown", "not_applicable"]},
+        "manager_drift": {"$ref": "#/$defs/managerDrift"}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"native_update_control": {"const": "not_applicable"}}
+          },
+          "then": {
+            "properties": {"native_update_suppression_state": {"const": "not_applicable"}}
+          }
+        },
+        {
+          "if": {
+            "properties": {"native_update_control": {"const": "unsuppressible"}}
+          },
+          "then": {
+            "properties": {"native_update_suppression_state": {"const": "unavailable"}}
+          }
+        },
+        {
+          "if": {
+            "properties": {"native_update_control": {"const": "suppressible"}}
+          },
+          "then": {
+            "properties": {
+              "native_update_suppression_state": {
+                "enum": ["enabled", "disabled", "unknown", "unavailable"]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"native_update_control": {"const": "unknown"}}
+          },
+          "then": {
+            "properties": {
+              "native_update_suppression_state": {"enum": ["unknown", "unavailable"]}
+            }
+          }
+        }
+      ]
+    },
+    "observationSuccess": {
+      "type": "object",
+      "required": ["status", "normalized_state", "surface_evidence", "captured_state", "state_digest"],
+      "additionalProperties": false,
+      "properties": {
+        "status": {"const": "ok"},
+        "normalized_state": {"$ref": "#/$defs/normalizedState"},
+        "surface_evidence": {
+          "type": "array",
+          "items": {
+            "allOf": [
+              {"$ref": "#/$defs/evidenceReference"},
+              {"properties": {"kind": {"enum": ["surface", "manager"]}}}
+            ]
+          }
+        },
+        "captured_state": {
+          "oneOf": [
+            {
+              "type": "object",
+              "required": ["status", "identity", "digest"],
+              "additionalProperties": false,
+              "properties": {
+                "status": {"const": "captured"},
+                "identity": {"$ref": "#/$defs/nonEmptyString"},
+                "digest": {"$ref": "#/$defs/digest"}
+              }
+            },
+            {
+              "type": "object",
+              "required": ["status"],
+              "additionalProperties": false,
+              "properties": {"status": {"const": "not_applicable"}}
+            }
+          ]
+        },
+        "state_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "runtimeObservation": {
+      "type": "object",
+      "required": ["contract_version", "request_identity", "correlation_identity", "candidate_identity", "implementation_manifest_digest", "catalog_digest", "lock_digest", "plan_digest", "capability_identity", "capability_digest", "manager_version_evidence_digest", "harness", "route_identity", "route_digest", "control_owner", "equipment_identities", "controlled_equipment_identities", "activation_group", "surface_scope", "observed_at", "result"],
+      "additionalProperties": false,
+      "properties": {
+        "contract_version": {"const": "adapter-contract-v1"},
+        "request_identity": {"$ref": "#/$defs/nonEmptyString"},
+        "correlation_identity": {"$ref": "#/$defs/nonEmptyString"},
+        "candidate_identity": {"$ref": "#/$defs/nonEmptyString"},
+        "implementation_manifest_digest": {"$ref": "#/$defs/digest"},
+        "catalog_digest": {"$ref": "#/$defs/digest"},
+        "lock_digest": {"$ref": "#/$defs/digest"},
+        "plan_digest": {"$ref": "#/$defs/nullableDigest"},
+        "capability_identity": {"$ref": "#/$defs/nonEmptyString"},
+        "capability_digest": {"$ref": "#/$defs/digest"},
+        "manager_version_evidence_digest": {"$ref": "#/$defs/digest"},
+        "harness": {"$ref": "#/$defs/harness"},
+        "route_identity": {"type": "string", "pattern": "^route:[a-z0-9][a-z0-9._/-]*$"},
+        "route_digest": {"$ref": "#/$defs/digest"},
+        "control_owner": {"$ref": "#/$defs/controlOwner"},
+        "equipment_identities": {"$ref": "#/$defs/equipmentSet"},
+        "controlled_equipment_identities": {"$ref": "#/$defs/controlledEquipmentSet"},
+        "activation_group": {"type": "string", "pattern": "^activation:[a-z0-9][a-z0-9._/-]*$"},
+        "surface_scope": {"$ref": "#/$defs/stringSet"},
+        "observed_at": {"type": "string", "format": "date-time", "pattern": "Z$"},
+        "result": {"oneOf": [{"$ref": "#/$defs/observationSuccess"}, {"$ref": "#/$defs/observationError"}]}
+      }
+    },
+    "preconditions": {
+      "type": "object",
+      "required": ["candidate_identity", "implementation_manifest_digest", "catalog_digest", "lock_digest", "plan_digest", "route_digest", "capability_digest", "manager_version_evidence_digest", "adapter_identity", "adapter_version", "control_owner", "activation_group", "surface_scope", "prepared_checkpoint_required", "compare_before_mutate"],
+      "additionalProperties": false,
+      "properties": {
+        "candidate_identity": {"$ref": "#/$defs/nonEmptyString"},
+        "implementation_manifest_digest": {"$ref": "#/$defs/digest"},
+        "catalog_digest": {"$ref": "#/$defs/digest"},
+        "lock_digest": {"$ref": "#/$defs/digest"},
+        "plan_digest": {"$ref": "#/$defs/digest"},
+        "route_digest": {"$ref": "#/$defs/digest"},
+        "capability_digest": {"$ref": "#/$defs/digest"},
+        "manager_version_evidence_digest": {"$ref": "#/$defs/digest"},
+        "adapter_identity": {"$ref": "#/$defs/nonEmptyString"},
+        "adapter_version": {"$ref": "#/$defs/nonEmptyString"},
+        "control_owner": {"const": "reconciler_owned"},
+        "activation_group": {"$ref": "#/$defs/nonEmptyString"},
+        "surface_scope": {"$ref": "#/$defs/stringSet"},
+        "prepared_checkpoint_required": {"const": true},
+        "compare_before_mutate": {"const": true}
+      }
+    },
+    "plannedAction": {
+      "type": "object",
+      "required": ["contract_version", "action_identity", "correlation_identity", "ordinal", "candidate_identity", "implementation_manifest_digest", "catalog_digest", "lock_digest", "plan_digest", "capability_identity", "capability_digest", "manager_version_evidence_digest", "adapter_identity", "adapter_version", "harness", "route_identity", "route_digest", "route_record", "equipment_identities", "controlled_equipment_identities", "activation_group", "surface_scope", "operation", "operation_disposition", "desired_state", "desired_state_digest", "secret_references", "preconditions", "compensation"],
+      "additionalProperties": false,
+      "properties": {
+        "contract_version": {"const": "adapter-contract-v1"},
+        "action_identity": {"$ref": "#/$defs/actionIdentity"},
+        "correlation_identity": {"$ref": "#/$defs/nonEmptyString"},
+        "ordinal": {"type": "integer", "minimum": 0, "maximum": 2147483647},
+        "candidate_identity": {"$ref": "#/$defs/nonEmptyString"},
+        "implementation_manifest_digest": {"$ref": "#/$defs/digest"},
+        "catalog_digest": {"$ref": "#/$defs/digest"},
+        "lock_digest": {"$ref": "#/$defs/digest"},
+        "plan_digest": {"$ref": "#/$defs/digest"},
+        "capability_identity": {"$ref": "#/$defs/nonEmptyString"},
+        "capability_digest": {"$ref": "#/$defs/digest"},
+        "manager_version_evidence_digest": {"$ref": "#/$defs/digest"},
+        "adapter_identity": {"$ref": "#/$defs/nonEmptyString"},
+        "adapter_version": {"$ref": "#/$defs/nonEmptyString"},
+        "harness": {"$ref": "#/$defs/harness"},
+        "route_identity": {"type": "string", "pattern": "^route:[a-z0-9][a-z0-9._/-]*$"},
+        "route_digest": {"$ref": "#/$defs/digest"},
+        "route_record": {"$ref": "#/$defs/routeRecord"},
+        "equipment_identities": {"$ref": "#/$defs/equipmentSet"},
+        "controlled_equipment_identities": {"$ref": "#/$defs/controlledEquipmentSet"},
+        "activation_group": {"type": "string", "pattern": "^activation:[a-z0-9][a-z0-9._/-]*$"},
+        "surface_scope": {"$ref": "#/$defs/stringSet"},
+        "operation": {"$ref": "#/$defs/operation"},
+        "operation_disposition": {"const": "automated"},
+        "desired_state": {"$ref": "#/$defs/desiredState"},
+        "desired_state_digest": {"$ref": "#/$defs/digest"},
+        "secret_references": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/secretReference"}
+        },
+        "preconditions": {"$ref": "#/$defs/preconditions"},
+        "compensation": {
+          "type": "object",
+          "required": ["kind", "captured_state_version"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {"const": "restore_captured_pre_state"},
+            "captured_state_version": {"const": "agent-equipment-captured-state/v1"}
+          }
+        }
+      },
+      "allOf": [
+        {
+          "properties": {
+            "route_record": {
+              "type": "object",
+              "properties": {"control_owner": {"const": "reconciler_owned"}}
+            }
+          }
+        }
+      ]
+    },
+    "desiredState": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": false,
+      "properties": {
+        "route_presence": {"enum": ["present", "absent"]},
+        "enablement": {"enum": ["enabled", "disabled"]},
+        "configuration": {
+          "oneOf": [
+            {
+              "type": "object",
+              "required": ["status", "digest"],
+              "additionalProperties": false,
+              "properties": {
+                "status": {"const": "desired"},
+                "digest": {"$ref": "#/$defs/digest"}
+              }
+            },
+            {
+              "type": "object",
+              "required": ["status"],
+              "additionalProperties": false,
+              "properties": {"status": {"const": "not_applicable"}}
+            }
+          ]
+        },
+        "component_states": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "required": ["equipment_identity", "state"],
+            "additionalProperties": false,
+            "properties": {
+              "equipment_identity": {
+                "type": "string",
+                "pattern": "^(skill|plugin|mcp|hook|other):[a-z0-9][a-z0-9._/-]*$"
+              },
+              "state": {"enum": ["enabled", "disabled"]}
+            }
+          }
+        },
+        "native_update_suppression_state": {
+          "enum": ["enabled", "disabled", "not_applicable"]
+        }
+      }
+    },
+    "receiptSuccess": {
+      "type": "object",
+      "required": ["status", "effect", "expected_pre_state_digest", "observed_pre_state_digest", "comparison", "expected_post_state_digest", "observed_post_state_digest", "native_result_digest", "surface_evidence", "compensation_evidence"],
+      "additionalProperties": false,
+      "properties": {
+        "status": {"const": "ok"},
+        "effect": {"enum": ["changed", "already_satisfied"]},
+        "expected_pre_state_digest": {"$ref": "#/$defs/digest"},
+        "observed_pre_state_digest": {"$ref": "#/$defs/digest"},
+        "comparison": {"const": "equal"},
+        "expected_post_state_digest": {"$ref": "#/$defs/digest"},
+        "observed_post_state_digest": {"$ref": "#/$defs/digest"},
+        "native_result_digest": {"$ref": "#/$defs/digest"},
+        "surface_evidence": {
+          "type": "array",
+          "items": {
+            "allOf": [
+              {"$ref": "#/$defs/evidenceReference"},
+              {"properties": {"kind": {"const": "surface"}}}
+            ]
+          }
+        },
+        "compensation_evidence": {
+          "oneOf": [
+            {
+              "type": "object",
+              "required": ["status", "kind", "captured_state_identity", "captured_state_digest", "expected_post_state_digest"],
+              "additionalProperties": false,
+              "properties": {
+                "status": {"const": "prepared"},
+                "kind": {"const": "restore_captured_pre_state"},
+                "captured_state_identity": {"$ref": "#/$defs/nonEmptyString"},
+                "captured_state_digest": {"$ref": "#/$defs/digest"},
+                "expected_post_state_digest": {"$ref": "#/$defs/digest"}
+              }
+            },
+            {
+              "type": "object",
+              "required": ["status", "kind", "captured_state_identity", "captured_state_digest", "restored_state_digest", "comparison"],
+              "additionalProperties": false,
+              "properties": {
+                "status": {"const": "restored"},
+                "kind": {"const": "restore_captured_pre_state"},
+                "captured_state_identity": {"$ref": "#/$defs/nonEmptyString"},
+                "captured_state_digest": {"$ref": "#/$defs/digest"},
+                "restored_state_digest": {"$ref": "#/$defs/digest"},
+                "comparison": {"const": "equal"}
+              }
+            }
+          ]
+        }
+      }
+    },
+    "receiptError": {
+      "type": "object",
+      "required": ["status", "code", "classification", "message", "retry", "mutation_state", "evidence_references"],
+      "additionalProperties": false,
+      "properties": {
+        "status": {"const": "error"},
+        "code": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]*$"},
+        "classification": {"enum": ["invalid_request", "unsupported", "capability_changed", "concurrent_change", "secret_resolution_failed", "native_failure", "partial_change"]},
+        "message": {"$ref": "#/$defs/nonEmptyString"},
+        "retry": {"enum": ["never", "after_audit"]},
+        "mutation_state": {"enum": ["not_started", "possibly_changed", "unknown"]},
+        "evidence_references": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/evidenceReference"}
+        },
+        "expected_pre_state_digest": {"$ref": "#/$defs/digest"},
+        "observed_pre_state_digest": {"$ref": "#/$defs/digest"},
+        "observed_post_state_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "mutationReceipt": {
+      "type": "object",
+      "required": ["contract_version", "receipt_identity", "attempt_identity", "action_identity", "correlation_identity", "ordinal", "candidate_identity", "implementation_manifest_digest", "catalog_digest", "lock_digest", "plan_digest", "capability_identity", "capability_digest", "manager_version_evidence_digest", "adapter_identity", "adapter_version", "harness", "route_identity", "route_digest", "control_owner", "equipment_identities", "controlled_equipment_identities", "activation_group", "surface_scope", "operation", "operation_disposition", "secret_references", "phase", "started_at", "finished_at", "prepared_checkpoint_reference", "result"],
+      "additionalProperties": false,
+      "properties": {
+        "contract_version": {"const": "adapter-contract-v1"},
+        "receipt_identity": {"$ref": "#/$defs/nonEmptyString"},
+        "attempt_identity": {"$ref": "#/$defs/nonEmptyString"},
+        "action_identity": {"$ref": "#/$defs/actionIdentity"},
+        "correlation_identity": {"$ref": "#/$defs/nonEmptyString"},
+        "ordinal": {"type": "integer", "minimum": 0, "maximum": 2147483647},
+        "candidate_identity": {"$ref": "#/$defs/nonEmptyString"},
+        "implementation_manifest_digest": {"$ref": "#/$defs/digest"},
+        "catalog_digest": {"$ref": "#/$defs/digest"},
+        "lock_digest": {"$ref": "#/$defs/digest"},
+        "plan_digest": {"$ref": "#/$defs/digest"},
+        "capability_identity": {"$ref": "#/$defs/nonEmptyString"},
+        "capability_digest": {"$ref": "#/$defs/digest"},
+        "manager_version_evidence_digest": {"$ref": "#/$defs/digest"},
+        "adapter_identity": {"$ref": "#/$defs/nonEmptyString"},
+        "adapter_version": {"$ref": "#/$defs/nonEmptyString"},
+        "harness": {"$ref": "#/$defs/harness"},
+        "route_identity": {"type": "string", "pattern": "^route:[a-z0-9][a-z0-9._/-]*$"},
+        "route_digest": {"$ref": "#/$defs/digest"},
+        "control_owner": {"const": "reconciler_owned"},
+        "equipment_identities": {"$ref": "#/$defs/equipmentSet"},
+        "controlled_equipment_identities": {"$ref": "#/$defs/controlledEquipmentSet"},
+        "activation_group": {"type": "string", "pattern": "^activation:[a-z0-9][a-z0-9._/-]*$"},
+        "surface_scope": {"$ref": "#/$defs/stringSet"},
+        "operation": {"$ref": "#/$defs/operation"},
+        "operation_disposition": {"const": "automated"},
+        "secret_references": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/secretReference"}
+        },
+        "phase": {"enum": ["apply", "compensate"]},
+        "started_at": {"type": "string", "format": "date-time", "pattern": "Z$"},
+        "finished_at": {"type": "string", "format": "date-time", "pattern": "Z$"},
+        "prepared_checkpoint_reference": {"$ref": "#/$defs/nonEmptyString"},
+        "result": {"oneOf": [{"$ref": "#/$defs/receiptSuccess"}, {"$ref": "#/$defs/receiptError"}]}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "phase": {"const": "apply"},
+              "result": {
+                "type": "object",
+                "required": ["status"],
+                "properties": {"status": {"const": "ok"}}
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "result": {
+                "type": "object",
+                "properties": {
+                  "compensation_evidence": {
+                    "type": "object",
+                    "properties": {"status": {"const": "prepared"}}
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "phase": {"const": "compensate"},
+              "result": {
+                "type": "object",
+                "required": ["status"],
+                "properties": {"status": {"const": "ok"}}
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "result": {
+                "type": "object",
+                "properties": {
+                  "compensation_evidence": {
+                    "type": "object",
+                    "properties": {"status": {"const": "restored"}}
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "applyAuthority": {
+      "type": "object",
+      "required": ["contract_version", "command", "purpose", "phase", "request_identity", "action_identity", "correlation_identity", "candidate_identity", "implementation_manifest_digest", "catalog_digest", "lock_digest", "plan_digest", "capability_identity", "capability_digest", "manager_version_evidence_digest", "adapter_identity", "adapter_version", "harness", "route_identity", "route_digest", "equipment_identities", "controlled_equipment_identities", "activation_group", "operation", "read_surface_scope", "write_surface_scope", "selected_component_controls", "captured_state_identity", "captured_state_digest", "captured_pre_state", "captured_pre_state_digest", "expected_pre_state_digest", "expected_post_state", "expected_post_state_digest", "forward_post_state_digest", "prepared_checkpoint_reference"],
+      "additionalProperties": false,
+      "properties": {
+        "contract_version": {"const": "adapter-contract-v1"},
+        "command": {"const": "apply"},
+        "purpose": {"enum": ["capture_pre_state", "recovery"]},
+        "phase": {"enum": ["apply", "compensate"]},
+        "request_identity": {"$ref": "#/$defs/nonEmptyString"},
+        "action_identity": {"$ref": "#/$defs/actionIdentity"},
+        "correlation_identity": {"$ref": "#/$defs/nonEmptyString"},
+        "candidate_identity": {"$ref": "#/$defs/nonEmptyString"},
+        "implementation_manifest_digest": {"$ref": "#/$defs/digest"},
+        "catalog_digest": {"$ref": "#/$defs/digest"},
+        "lock_digest": {"$ref": "#/$defs/digest"},
+        "plan_digest": {"$ref": "#/$defs/digest"},
+        "capability_identity": {"$ref": "#/$defs/nonEmptyString"},
+        "capability_digest": {"$ref": "#/$defs/digest"},
+        "manager_version_evidence_digest": {"$ref": "#/$defs/digest"},
+        "adapter_identity": {"$ref": "#/$defs/nonEmptyString"},
+        "adapter_version": {"$ref": "#/$defs/nonEmptyString"},
+        "harness": {"$ref": "#/$defs/harness"},
+        "route_identity": {"type": "string", "pattern": "^route:[a-z0-9][a-z0-9._/-]*$"},
+        "route_digest": {"$ref": "#/$defs/digest"},
+        "equipment_identities": {"$ref": "#/$defs/equipmentSet"},
+        "controlled_equipment_identities": {"$ref": "#/$defs/controlledEquipmentSet"},
+        "activation_group": {"type": "string", "pattern": "^activation:[a-z0-9][a-z0-9._/-]*$"},
+        "operation": {"$ref": "#/$defs/operation"},
+        "read_surface_scope": {
+          "allOf": [{"$ref": "#/$defs/stringSet"}, {"minItems": 1}]
+        },
+        "write_surface_scope": {
+          "allOf": [{"$ref": "#/$defs/stringSet"}, {"minItems": 1}]
+        },
+        "selected_component_controls": {
+          "type": "array",
+          "items": {"$ref": "catalog-v1.schema.json#/$defs/componentControl"}
+        },
+        "captured_state_identity": {"$ref": "#/$defs/nonEmptyString"},
+        "captured_state_digest": {"$ref": "#/$defs/digest"},
+        "captured_pre_state": {"$ref": "#/$defs/normalizedState"},
+        "captured_pre_state_digest": {"$ref": "#/$defs/digest"},
+        "expected_pre_state_digest": {"$ref": "#/$defs/digest"},
+        "expected_post_state": {"$ref": "#/$defs/normalizedState"},
+        "expected_post_state_digest": {"$ref": "#/$defs/digest"},
+        "forward_post_state_digest": {"$ref": "#/$defs/digest"},
+        "prepared_checkpoint_reference": {"$ref": "#/$defs/nonEmptyString"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"phase": {"const": "apply"}}},
+          "then": {"properties": {"purpose": {"const": "capture_pre_state"}}}
+        },
+        {
+          "if": {"properties": {"phase": {"const": "compensate"}}},
+          "then": {"properties": {"purpose": {"const": "recovery"}}}
+        }
+      ]
+    },
+    "applySequenceEnvelope": {
+      "type": "object",
+      "required": ["record_type", "sequence"],
+      "additionalProperties": false,
+      "properties": {
+        "record_type": {"const": "ApplySequence"},
+        "sequence": {
+          "type": "object",
+          "required": ["authority", "capability_discovery", "pre_state_request", "pre_state_observation", "planned_action", "mutation_receipt", "post_state_request", "post_state_observation"],
+          "additionalProperties": false,
+          "properties": {
+            "authority": {"$ref": "#/$defs/applyAuthority"},
+            "capability_discovery": {"$ref": "#/$defs/capabilityDiscoveryEnvelope"},
+            "pre_state_request": {"$ref": "#/$defs/observeRequestEnvelope"},
+            "pre_state_observation": {"$ref": "#/$defs/runtimeObservationEnvelope"},
+            "planned_action": {"$ref": "#/$defs/plannedActionEnvelope"},
+            "mutation_receipt": {"$ref": "#/$defs/mutationReceiptEnvelope"},
+            "post_state_request": {"$ref": "#/$defs/observeRequestEnvelope"},
+            "post_state_observation": {"$ref": "#/$defs/runtimeObservationEnvelope"}
+          }
+        }
+      }
+    },
+    "capabilityDiscoveryEnvelope": {
+      "type": "object",
+      "required": ["record_type", "result"],
+      "additionalProperties": false,
+      "properties": {
+        "record_type": {"const": "CapabilityDiscovery"},
+        "result": {
+          "oneOf": [
+            {
+              "type": "object",
+              "required": ["status", "records"],
+              "additionalProperties": false,
+              "properties": {
+                "status": {"const": "ok"},
+                "records": {
+                  "type": "array",
+                  "minItems": 1,
+                  "uniqueItems": true,
+                  "items": {"$ref": "#/$defs/capabilityRecord"}
+                }
+              }
+            },
+            {"$ref": "#/$defs/observationError"}
+          ]
+        }
+      }
+    },
+    "observeRequestEnvelope": {
+      "type": "object",
+      "required": ["record_type", "record"],
+      "additionalProperties": false,
+      "properties": {
+        "record_type": {"const": "ObserveRequest"},
+        "record": {"$ref": "#/$defs/requestBindings"}
+      }
+    },
+    "runtimeObservationEnvelope": {
+      "type": "object",
+      "required": ["record_type", "record"],
+      "additionalProperties": false,
+      "properties": {
+        "record_type": {"const": "RuntimeObservation"},
+        "record": {"$ref": "#/$defs/runtimeObservation"}
+      }
+    },
+    "plannedActionEnvelope": {
+      "type": "object",
+      "required": ["record_type", "record"],
+      "additionalProperties": false,
+      "properties": {
+        "record_type": {"const": "PlannedAction"},
+        "record": {"$ref": "#/$defs/plannedAction"}
+      }
+    },
+    "mutationReceiptEnvelope": {
+      "type": "object",
+      "required": ["record_type", "record"],
+      "additionalProperties": false,
+      "properties": {
+        "record_type": {"const": "MutationReceipt"},
+        "record": {"$ref": "#/$defs/mutationReceipt"}
+      }
+    }
+  }
+}

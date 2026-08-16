@@ -1,0 +1,121 @@
+#!/usr/bin/env -S python3 -I -B -S
+# ruff: noqa: EXE001
+from __future__ import annotations
+
+import os
+import stat
+import sys
+from pathlib import Path
+
+_PACKAGE_NAMES = (
+    "__init__.py",
+    "_json_schema.py",
+    "canonical.py",
+    "model.py",
+    "secrets.py",
+    "validator.py",
+)
+_SCHEMA_NAMES = (
+    "acceptance-evidence-v1.schema.json",
+    "adapter-contract-v1.schema.json",
+    "captured-state-v1.schema.json",
+    "catalog-v1.schema.json",
+    "execution-authority-v1.schema.json",
+    "lock-v1.schema.json",
+    "plan-action-set-v1.schema.json",
+)
+
+if not sys.flags.isolated or not sys.flags.dont_write_bytecode or not sys.flags.no_site:
+    print(
+        "agent-equipment requires Python isolation, no-bytecode, and no-site mode",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+if sys.implementation.name != "cpython" or sys.version_info < (3, 12):
+    print("agent-equipment requires CPython 3.12 or newer", file=sys.stderr)
+    raise SystemExit(1)
+
+package_root = Path(__file__).resolve().parent.parent / "lib" / "agent-equipment"
+if not (package_root / "agent_equipment" / "__init__.py").is_file():
+    print("agent-equipment installed package is missing", file=sys.stderr)
+    raise SystemExit(1)
+
+
+def _stable_metadata(metadata: os.stat_result) -> tuple[int, ...]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_nlink,
+        metadata.st_uid,
+        metadata.st_gid,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
+
+
+def _require_closed_directory(
+    directory: Path,
+    *,
+    expected_files: tuple[str, ...] = (),
+    expected_directories: tuple[str, ...] = (),
+) -> None:
+    descriptor = os.open(
+        directory,
+        os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+    )
+    try:
+        before = os.fstat(descriptor)
+        expected_names = tuple(sorted((*expected_files, *expected_directories)))
+        if tuple(sorted(os.listdir(descriptor))) != expected_names:
+            raise ValueError("installed directory inventory is not closed")
+        for name in expected_files:
+            metadata = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+                raise ValueError("installed entry is not a unique regular file")
+        for name in expected_directories:
+            metadata = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+            if not stat.S_ISDIR(metadata.st_mode):
+                raise ValueError("installed entry is not a real directory")
+        if _stable_metadata(before) != _stable_metadata(os.fstat(descriptor)):
+            raise ValueError("installed directory changed during preflight")
+    finally:
+        os.close(descriptor)
+
+
+try:
+    _require_closed_directory(
+        package_root,
+        expected_directories=("agent_equipment", "schemas"),
+    )
+    _require_closed_directory(
+        package_root / "agent_equipment",
+        expected_files=_PACKAGE_NAMES,
+    )
+    _require_closed_directory(
+        package_root / "schemas",
+        expected_files=_SCHEMA_NAMES,
+    )
+except (OSError, ValueError):
+    print(
+        "agent-equipment: installed implementation manifest is invalid",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+sys.path.insert(0, str(package_root))
+
+try:
+    from agent_equipment import build_installed_implementation_manifest, main
+
+    installed_implementation_manifest = build_installed_implementation_manifest()
+except (Exception, SystemExit):  # noqa: BLE001
+    print(
+        "agent-equipment: installed implementation manifest is invalid",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+raise SystemExit(main(installed_implementation_manifest))
