@@ -72,6 +72,19 @@ EXPECTED_SCHEMA_SHA256 = MappingProxyType(
         "plan-action-set-v1.schema.json": "fcfede41027b76c96c20161fcecfd8fb9a8d38fa0675f3d749a094055ba0e12e",
     }
 )
+_captured_schema_bytes = globals().pop(
+    "_AGENT_EQUIPMENT_CAPTURED_SCHEMA_BYTES",
+    None,
+)
+if _captured_schema_bytes is None:
+    _CAPTURED_SCHEMA_BYTES: Mapping[str, bytes] | None = None
+elif isinstance(_captured_schema_bytes, Mapping) and all(
+    type(name) is str and type(payload) is bytes
+    for name, payload in _captured_schema_bytes.items()
+):
+    _CAPTURED_SCHEMA_BYTES = MappingProxyType(dict(_captured_schema_bytes))
+else:
+    _CAPTURED_SCHEMA_BYTES = MappingProxyType({})
 
 
 @dataclass(frozen=True, order=True)
@@ -133,10 +146,10 @@ def load_catalog_lock(
 ) -> CatalogLockValidation:
     """Strictly load and validate one catalog/lock pair without planning."""
 
-    return _load_catalog_lock_for_tests(
+    return _load_catalog_lock_with_schemas(
         catalog_path,
         lock_path,
-        schema_directory=SCHEMA_DIRECTORY,
+        schemas=_installed_schema_documents(),
     )
 
 
@@ -148,7 +161,19 @@ def _load_catalog_lock_for_tests(
 ) -> CatalogLockValidation:
     """Private fixture seam for exercising invalid installed Schema sets."""
 
-    schemas = _trusted_schema_documents(schema_directory)
+    return _load_catalog_lock_with_schemas(
+        catalog_path,
+        lock_path,
+        schemas=_trusted_schema_documents(schema_directory),
+    )
+
+
+def _load_catalog_lock_with_schemas(
+    catalog_path: Path,
+    lock_path: Path,
+    *,
+    schemas: dict[str, dict[str, Any]] | None,
+) -> CatalogLockValidation:
     if schemas is None:
         return _schema_manifest_failure()
     try:
@@ -165,10 +190,10 @@ def validate_catalog_lock(
 ) -> CatalogLockValidation:
     """Validate detached in-memory documents and return only immutable state."""
 
-    return _validate_catalog_lock_for_tests(
+    return _validate_catalog_lock_with_installed_schemas(
         catalog,
         lock,
-        schema_directory=SCHEMA_DIRECTORY,
+        schemas=_installed_schema_documents(),
     )
 
 
@@ -180,7 +205,19 @@ def _validate_catalog_lock_for_tests(
 ) -> CatalogLockValidation:
     """Private fixture seam for exercising invalid installed Schema sets."""
 
-    schemas = _trusted_schema_documents(schema_directory)
+    return _validate_catalog_lock_with_installed_schemas(
+        catalog,
+        lock,
+        schemas=_trusted_schema_documents(schema_directory),
+    )
+
+
+def _validate_catalog_lock_with_installed_schemas(
+    catalog: object,
+    lock: object,
+    *,
+    schemas: dict[str, dict[str, Any]] | None,
+) -> CatalogLockValidation:
     if schemas is None:
         return _schema_manifest_failure()
     try:
@@ -250,22 +287,35 @@ def _validate_catalog_lock_with_schemas(
 def _trusted_schema_documents(
     schema_directory: Path,
 ) -> dict[str, dict[str, Any]] | None:
-    schemas: dict[str, dict[str, Any]] = {}
     try:
         directory = Path(schema_directory)
-        for name in sorted(EXPECTED_SCHEMA_SHA256):
+        schema_bytes: dict[str, bytes] = {}
+        for name in EXPECTED_SCHEMA_SHA256:
             with (directory / name).open("rb") as schema_file:
-                payload = schema_file.read(MAX_SCHEMA_BYTES + 1)
-            if (
-                len(payload) > MAX_SCHEMA_BYTES
-                or hashlib.sha256(payload).hexdigest() != EXPECTED_SCHEMA_SHA256[name]
-            ):
+                schema_bytes[name] = schema_file.read(MAX_SCHEMA_BYTES + 1)
+    except OSError:
+        return None
+    return _trusted_schema_documents_from_bytes(schema_bytes)
+
+
+def _trusted_schema_documents_from_bytes(
+    schema_bytes: Mapping[str, bytes],
+) -> dict[str, dict[str, Any]] | None:
+    if set(schema_bytes) != set(EXPECTED_SCHEMA_SHA256):
+        return None
+    schemas: dict[str, dict[str, Any]] = {}
+    try:
+        for name in sorted(EXPECTED_SCHEMA_SHA256):
+            payload = schema_bytes[name]
+            if type(payload) is not bytes or len(payload) > MAX_SCHEMA_BYTES:
+                return None
+            if hashlib.sha256(payload).hexdigest() != EXPECTED_SCHEMA_SHA256[name]:
                 return None
             parsed = thaw_json(strict_load_json_bytes(payload))
             if type(parsed) is not dict:
                 return None
             schemas[name] = parsed
-    except (OSError, TypeError, UnicodeError, ValueError, RecursionError):
+    except (KeyError, TypeError, UnicodeError, ValueError, RecursionError):
         return None
     if not _validate_schema_documents(
         schemas,
@@ -273,6 +323,12 @@ def _trusted_schema_documents(
     ):
         return None
     return schemas
+
+
+def _installed_schema_documents() -> dict[str, dict[str, Any]] | None:
+    if _CAPTURED_SCHEMA_BYTES is not None:
+        return _trusted_schema_documents_from_bytes(_CAPTURED_SCHEMA_BYTES)
+    return _trusted_schema_documents(SCHEMA_DIRECTORY)
 
 
 def _schema_manifest_failure() -> CatalogLockValidation:

@@ -2,10 +2,17 @@
 # ruff: noqa: EXE001
 from __future__ import annotations
 
+import hashlib
+import importlib
+import importlib.abc
+import importlib.util
+import json
 import os
 import stat
 import sys
+from contextlib import ExitStack
 from pathlib import Path
+from types import MappingProxyType, ModuleType
 
 _PACKAGE_NAMES = (
     "__init__.py",
@@ -24,22 +31,12 @@ _SCHEMA_NAMES = (
     "lock-v1.schema.json",
     "plan-action-set-v1.schema.json",
 )
-
-if not sys.flags.isolated or not sys.flags.dont_write_bytecode or not sys.flags.no_site:
-    print(
-        "agent-equipment requires Python isolation, no-bytecode, and no-site mode",
-        file=sys.stderr,
-    )
-    raise SystemExit(1)
-
-if sys.implementation.name != "cpython" or sys.version_info < (3, 12):
-    print("agent-equipment requires CPython 3.12 or newer", file=sys.stderr)
-    raise SystemExit(1)
-
-package_root = Path(__file__).resolve().parent.parent / "lib" / "agent-equipment"
-if not (package_root / "agent_equipment" / "__init__.py").is_file():
-    print("agent-equipment installed package is missing", file=sys.stderr)
-    raise SystemExit(1)
+_INSTALLED_PATHS = (
+    "bin/agent-equipment",
+    *(f"lib/agent-equipment/agent_equipment/{name}" for name in _PACKAGE_NAMES),
+    *(f"lib/agent-equipment/schemas/{name}" for name in _SCHEMA_NAMES),
+)
+_MANIFEST_SCHEMA_VERSION = "agent-equipment-installed-implementation/v1"
 
 
 def _stable_metadata(metadata: os.stat_result) -> tuple[int, ...]:
@@ -56,66 +53,393 @@ def _stable_metadata(metadata: os.stat_result) -> tuple[int, ...]:
     )
 
 
-def _require_closed_directory(
-    directory: Path,
+def _entry_identity(metadata: os.stat_result) -> tuple[int, int, int]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        stat.S_IFMT(metadata.st_mode),
+    )
+
+
+def _open_descriptor(
+    path: str | Path,
+    flags: int,
     *,
-    expected_files: tuple[str, ...] = (),
-    expected_directories: tuple[str, ...] = (),
+    directory_descriptor: int | None = None,
+) -> int:
+    return os.open(
+        path,
+        flags | os.O_CLOEXEC | os.O_NOFOLLOW,
+        dir_fd=directory_descriptor,
+    )
+
+
+def _read_regular_file(descriptor: int) -> bytes:
+    before = os.fstat(descriptor)
+    if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+        raise ValueError("installed entry is not a unique regular file")
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    chunks: list[bytes] = []
+    while block := os.read(descriptor, 1024 * 1024):
+        chunks.append(block)
+    if _stable_metadata(before) != _stable_metadata(os.fstat(descriptor)):
+        raise ValueError("installed entry changed while being captured")
+    return b"".join(chunks)
+
+
+def _require_closed_directory(
+    descriptor: int,
+    expected_names: tuple[str, ...],
 ) -> None:
-    descriptor = os.open(
-        directory,
-        os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
-    )
+    if tuple(sorted(os.listdir(descriptor))) != tuple(sorted(expected_names)):
+        raise ValueError("installed directory inventory is not closed")
+
+
+def _canonical_manifest_digest(payload: dict[str, object]) -> str:
+    canonical = json.dumps(
+        payload,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return f"sha256:{hashlib.sha256(canonical).hexdigest()}"
+
+
+class _CapturedModuleLoader(importlib.abc.Loader):
+    def __init__(
+        self,
+        *,
+        fullname: str,
+        source: bytes,
+        origin: str,
+        schema_bytes: MappingProxyType[str, bytes],
+    ) -> None:
+        self._fullname = fullname
+        self._source = source
+        self._origin = origin
+        self._schema_bytes = schema_bytes
+
+    def create_module(self, spec: object) -> ModuleType | None:
+        return None
+
+    def exec_module(self, module: ModuleType) -> None:
+        module.__file__ = self._origin
+        if self._fullname == "agent_equipment.validator":
+            module.__dict__["_AGENT_EQUIPMENT_CAPTURED_SCHEMA_BYTES"] = (
+                self._schema_bytes
+            )
+        code = compile(
+            self._source,
+            self._origin,
+            "exec",
+            dont_inherit=True,
+        )
+        exec(code, module.__dict__)  # noqa: S102
+
+
+class _CapturedModuleFinder(importlib.abc.MetaPathFinder):
+    def __init__(
+        self,
+        modules: MappingProxyType[str, tuple[bytes, str]],
+        schema_bytes: MappingProxyType[str, bytes],
+    ) -> None:
+        self._modules = modules
+        self._schema_bytes = schema_bytes
+
+    def find_spec(
+        self,
+        fullname: str,
+        path: object = None,
+        target: ModuleType | None = None,
+    ) -> importlib.machinery.ModuleSpec | None:
+        captured = self._modules.get(fullname)
+        if captured is None:
+            if fullname == "agent_equipment" or fullname.startswith("agent_equipment."):
+                raise ModuleNotFoundError(
+                    "module is outside the captured agent-equipment package"
+                )
+            return None
+        source, origin = captured
+        loader = _CapturedModuleLoader(
+            fullname=fullname,
+            source=source,
+            origin=origin,
+            schema_bytes=self._schema_bytes,
+        )
+        return importlib.util.spec_from_loader(
+            fullname,
+            loader,
+            origin=origin,
+            is_package=fullname == "agent_equipment",
+        )
+
+
+def _remove_finder(finder: _CapturedModuleFinder) -> None:
     try:
-        before = os.fstat(descriptor)
-        expected_names = tuple(sorted((*expected_files, *expected_directories)))
-        if tuple(sorted(os.listdir(descriptor))) != expected_names:
-            raise ValueError("installed directory inventory is not closed")
-        for name in expected_files:
-            metadata = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
-            if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
-                raise ValueError("installed entry is not a unique regular file")
-        for name in expected_directories:
-            metadata = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
-            if not stat.S_ISDIR(metadata.st_mode):
-                raise ValueError("installed entry is not a real directory")
-        if _stable_metadata(before) != _stable_metadata(os.fstat(descriptor)):
-            raise ValueError("installed directory changed during preflight")
-    finally:
-        os.close(descriptor)
+        sys.meta_path.remove(finder)
+    except ValueError:
+        pass
 
 
-try:
-    _require_closed_directory(
-        package_root,
-        expected_directories=("agent_equipment", "schemas"),
+def _capture_installed_implementation(
+    descriptors: ExitStack,
+    *,
+    installed_root: Path,
+) -> tuple[
+    dict[str, bytes],
+    tuple[tuple[str, str], ...],
+    str,
+    str,
+    object,
+]:
+    root_before = installed_root.lstat()
+    if stat.S_ISLNK(root_before.st_mode) or not stat.S_ISDIR(root_before.st_mode):
+        raise ValueError("installed root must be a real directory")
+    root_descriptor = _open_descriptor(
+        installed_root,
+        os.O_RDONLY | os.O_DIRECTORY,
     )
-    _require_closed_directory(
-        package_root / "agent_equipment",
-        expected_files=_PACKAGE_NAMES,
+    descriptors.callback(os.close, root_descriptor)
+    root_opened = os.fstat(root_descriptor)
+    if _entry_identity(root_before) != _entry_identity(root_opened):
+        raise ValueError("installed root changed before capture")
+
+    held_entries: list[tuple[int, str, int, tuple[int, int, int], tuple[int, ...]]] = []
+    directory_descriptors: dict[tuple[str, ...], int] = {(): root_descriptor}
+
+    def hold_directory(parts: tuple[str, ...]) -> int:
+        if parts in directory_descriptors:
+            return directory_descriptors[parts]
+        parent_parts = parts[:-1]
+        parent_descriptor = hold_directory(parent_parts)
+        name = parts[-1]
+        descriptor = _open_descriptor(
+            name,
+            os.O_RDONLY | os.O_DIRECTORY,
+            directory_descriptor=parent_descriptor,
+        )
+        descriptors.callback(os.close, descriptor)
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISDIR(metadata.st_mode):
+            raise ValueError("installed path parent is not a directory")
+        held_entries.append(
+            (
+                parent_descriptor,
+                name,
+                descriptor,
+                _entry_identity(metadata),
+                _stable_metadata(metadata),
+            )
+        )
+        directory_descriptors[parts] = descriptor
+        return descriptor
+
+    captured: dict[str, bytes] = {}
+    installed_inodes: set[tuple[int, int]] = set()
+    for relative_path in _INSTALLED_PATHS:
+        parts = tuple(relative_path.split("/"))
+        parent_descriptor = hold_directory(parts[:-1])
+        descriptor = _open_descriptor(
+            parts[-1],
+            os.O_RDONLY,
+            directory_descriptor=parent_descriptor,
+        )
+        descriptors.callback(os.close, descriptor)
+        metadata = os.fstat(descriptor)
+        inode = (metadata.st_dev, metadata.st_ino)
+        if inode in installed_inodes:
+            raise ValueError("installed files must not share an inode")
+        installed_inodes.add(inode)
+        held_entries.append(
+            (
+                parent_descriptor,
+                parts[-1],
+                descriptor,
+                _entry_identity(metadata),
+                _stable_metadata(metadata),
+            )
+        )
+        captured[relative_path] = _read_regular_file(descriptor)
+
+    inventories = (
+        (
+            directory_descriptors[("lib", "agent-equipment")],
+            ("agent_equipment", "schemas"),
+        ),
+        (
+            directory_descriptors[("lib", "agent-equipment", "agent_equipment")],
+            _PACKAGE_NAMES,
+        ),
+        (
+            directory_descriptors[("lib", "agent-equipment", "schemas")],
+            _SCHEMA_NAMES,
+        ),
     )
-    _require_closed_directory(
-        package_root / "schemas",
-        expected_files=_SCHEMA_NAMES,
+    for descriptor, expected_names in inventories:
+        _require_closed_directory(descriptor, expected_names)
+
+    runtime_executable = sys.executable
+    if type(runtime_executable) is not str or not runtime_executable:
+        raise ValueError("selected runtime executable is unavailable")
+    selected_runtime = Path(runtime_executable)
+    resolved_runtime = selected_runtime.resolve(strict=True)
+    runtime_before = resolved_runtime.lstat()
+    runtime_descriptor = _open_descriptor(resolved_runtime, os.O_RDONLY)
+    descriptors.callback(os.close, runtime_descriptor)
+    runtime_opened = os.fstat(runtime_descriptor)
+    if _entry_identity(runtime_before) != _entry_identity(runtime_opened):
+        raise ValueError("selected runtime changed before capture")
+    runtime_bytes = _read_regular_file(runtime_descriptor)
+    runtime_digest = f"sha256:{hashlib.sha256(runtime_bytes).hexdigest()}"
+    runtime_identity = (
+        f"cpython:{sys.version_info.major}.{sys.version_info.minor}."
+        f"{sys.version_info.micro}"
     )
-except (OSError, ValueError):
+    file_records = tuple(
+        (
+            relative_path,
+            f"sha256:{hashlib.sha256(captured[relative_path]).hexdigest()}",
+        )
+        for relative_path in _INSTALLED_PATHS
+    )
+
+    def revalidate() -> None:
+        if _stable_metadata(root_opened) != _stable_metadata(os.fstat(root_descriptor)):
+            raise ValueError("installed root changed during capture")
+        if _entry_identity(installed_root.lstat()) != _entry_identity(root_opened):
+            raise ValueError("installed root path changed during capture")
+        for descriptor, expected_names in inventories:
+            _require_closed_directory(descriptor, expected_names)
+        for (
+            parent_descriptor,
+            name,
+            descriptor,
+            identity,
+            stable,
+        ) in reversed(held_entries):
+            if _stable_metadata(os.fstat(descriptor)) != stable:
+                raise ValueError("installed entry changed during capture")
+            current = os.stat(
+                name,
+                dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+            if _entry_identity(current) != identity:
+                raise ValueError("installed path changed during capture")
+        if _stable_metadata(os.fstat(runtime_descriptor)) != _stable_metadata(
+            runtime_opened
+        ):
+            raise ValueError("selected runtime changed during capture")
+        if _entry_identity(resolved_runtime.lstat()) != _entry_identity(runtime_opened):
+            raise ValueError("selected runtime path changed during capture")
+        if selected_runtime.resolve(strict=True) != resolved_runtime:
+            raise ValueError("selected runtime resolution changed during capture")
+
+    return (
+        captured,
+        file_records,
+        runtime_identity,
+        runtime_digest,
+        revalidate,
+    )
+
+
+if not sys.flags.isolated or not sys.flags.dont_write_bytecode or not sys.flags.no_site:
     print(
-        "agent-equipment: installed implementation manifest is invalid",
+        "agent-equipment requires Python isolation, no-bytecode, and no-site mode",
         file=sys.stderr,
     )
     raise SystemExit(1)
 
-sys.path.insert(0, str(package_root))
-
-try:
-    from agent_equipment import build_installed_implementation_manifest, main
-
-    installed_implementation_manifest = build_installed_implementation_manifest()
-except (Exception, SystemExit):  # noqa: BLE001
-    print(
-        "agent-equipment: installed implementation manifest is invalid",
-        file=sys.stderr,
-    )
+if sys.implementation.name != "cpython" or sys.version_info < (3, 12):
+    print("agent-equipment requires CPython 3.12 or newer", file=sys.stderr)
     raise SystemExit(1)
 
-raise SystemExit(main(installed_implementation_manifest))
+launcher_path = Path(__file__).resolve()
+installed_root = launcher_path.parent.parent
+package_root = installed_root / "lib" / "agent-equipment"
+if not (package_root / "agent_equipment" / "__init__.py").is_file():
+    print("agent-equipment installed package is missing", file=sys.stderr)
+    raise SystemExit(1)
+
+with ExitStack() as descriptors:
+    try:
+        (
+            captured_bytes,
+            file_records,
+            runtime_identity,
+            runtime_executable_digest,
+            revalidate,
+        ) = _capture_installed_implementation(
+            descriptors,
+            installed_root=installed_root,
+        )
+        payload: dict[str, object] = {
+            "schema_version": _MANIFEST_SCHEMA_VERSION,
+            "runtime_identity": runtime_identity,
+            "runtime_executable_digest": runtime_executable_digest,
+            "files": [
+                {"path": path, "digest": digest} for path, digest in file_records
+            ],
+        }
+        manifest_digest = _canonical_manifest_digest(payload)
+        revalidate()
+
+        if any(
+            name == "agent_equipment" or name.startswith("agent_equipment.")
+            for name in sys.modules
+        ):
+            raise ValueError("candidate package was imported before capture")
+        module_bytes = MappingProxyType(
+            {
+                "agent_equipment": (
+                    captured_bytes["lib/agent-equipment/agent_equipment/__init__.py"],
+                    str(package_root / "agent_equipment" / "__init__.py"),
+                ),
+                **{
+                    f"agent_equipment.{name.removesuffix('.py')}": (
+                        captured_bytes[f"lib/agent-equipment/agent_equipment/{name}"],
+                        str(package_root / "agent_equipment" / name),
+                    )
+                    for name in _PACKAGE_NAMES
+                    if name != "__init__.py"
+                },
+            }
+        )
+        schema_bytes = MappingProxyType(
+            {
+                name: captured_bytes[f"lib/agent-equipment/schemas/{name}"]
+                for name in _SCHEMA_NAMES
+            }
+        )
+        finder = _CapturedModuleFinder(module_bytes, schema_bytes)
+        sys.meta_path.insert(0, finder)
+        descriptors.callback(_remove_finder, finder)
+
+        package = importlib.import_module("agent_equipment")
+        model = importlib.import_module("agent_equipment.model")
+        revalidate()
+        installed_files = tuple(
+            model.InstalledFile(path=path, digest=digest)
+            for path, digest in file_records
+        )
+        installed_implementation_manifest = model.InstalledImplementationManifest(
+            schema_version=_MANIFEST_SCHEMA_VERSION,
+            runtime_identity=runtime_identity,
+            runtime_executable_digest=runtime_executable_digest,
+            files=installed_files,
+            digest=manifest_digest,
+        )
+        main = package.main
+        revalidate()
+    except (Exception, SystemExit):  # noqa: BLE001
+        print(
+            "agent-equipment: installed implementation manifest is invalid",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+    result = main(installed_implementation_manifest)
+
+raise SystemExit(result)
