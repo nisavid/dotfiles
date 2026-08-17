@@ -37,7 +37,9 @@ PACKAGE_NAMES = (
     "__init__.py",
     "_json_schema.py",
     "canonical.py",
+    "inventory.py",
     "model.py",
+    "resolver.py",
     "secrets.py",
     "validator.py",
 )
@@ -92,7 +94,7 @@ class InstallationTests(unittest.TestCase):
                     (DOCUMENTS / name).read_bytes(),
                 )
 
-    def test_step_one_package_source_inventory_is_closed(self) -> None:
+    def test_package_source_inventory_is_closed(self) -> None:
         self.assertEqual(
             tuple(path.name for path in sorted(PACKAGE_SOURCE_ROOT.glob("*.py"))),
             PACKAGE_NAMES,

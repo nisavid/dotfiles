@@ -537,6 +537,7 @@ def normalized_state(*, present: bool) -> dict[str, object]:
         "configuration": {"status": "not_applicable"},
         "component_states": [],
         "observed_version": {"status": "route_absent"},
+        "immutable_content": {"status": "not_applicable"},
         "native_update_control": "not_applicable",
         "native_update_suppression_state": "not_applicable",
         "manager_drift": {
@@ -1011,10 +1012,7 @@ def valid_checkpoint_set_manifest(
                 "plan_action_set_digest"
             ],
         },
-        "checkpoints": [
-            checkpoint_manifest_entry(snapshot)
-            for snapshot in snapshots
-        ],
+        "checkpoints": [checkpoint_manifest_entry(snapshot) for snapshot in snapshots],
         "checkpoint_set_digest": DIGEST_D,
     }
     seal_checkpoint_set_manifest(document)
@@ -1964,11 +1962,11 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
         # fixture. Regenerate both when that fixture changes.
         self.assertEqual(
             authorization["authorization_identity"],
-            "apply-authorization:sha256:8c641f126c8c894c470faaa628ba8acc28143dd5d7179221066256cf6f07f8f4",
+            "apply-authorization:sha256:5486730a10870abab272a13e62d15936335c22760a4534ac33bee7d0ce8165be",
         )
         self.assertEqual(
             trusted_digest,
-            "sha256:39e82fbe3606c5c0ce5da5be65504ffbde40eb64f781782bb70e2a14e0c20053",
+            "sha256:15f7694e5934008940e26c20c7a2691d8d07c01e4cec81879a7f8295e6ad449c",
         )
 
         diagnostics = EXECUTION_AUTHORITY.validate_apply_authorization(
@@ -2221,6 +2219,84 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
         authorization["not_before"] = "2026-08-13T07:00:00.0000000001Z"
         seal_apply_authorization(authorization)
         self.assertFalse(self.validate(authorization))
+
+    def test_immutable_content_survives_capture_preparation_and_checkpoint_identity(
+        self,
+    ) -> None:
+        plan = valid_plan_action_set(action_count=1)
+        immutable_state = normalized_state(present=True)
+        immutable_state.update(
+            {
+                "observed_version": {"status": "not_applicable"},
+                "immutable_content": {
+                    "status": "observed",
+                    "revision": "0123456789abcdef0123456789abcdef01234567",
+                    "content_digest": DIGEST_B,
+                },
+                "manager_drift": {
+                    "status": "not_applicable",
+                    "reviewed_baseline": None,
+                    "observation_source": None,
+                },
+            }
+        )
+        evidence = plan["actions"][0]
+        action = evidence["action_payload"]
+        action["expected_post_state_digest"] = canonical_digest(immutable_state)
+        evidence["action_digest"] = EXECUTION_AUTHORITY._plan_action_digest(action)
+        plan["action_set_digest"] = EXECUTION_AUTHORITY._plan_action_set_digest(
+            plan["candidate_identity"],
+            plan["implementation_manifest_digest"],
+            plan["plan_digest"],
+            plan["actions"],
+        )
+
+        capture = valid_captured_state(plan)
+        capture_authorities = valid_capture_observation_authority_set(plan, capture)
+        observation = capture_authorities["observations"][0]
+        observation["normalized_pre_state"] = copy.deepcopy(immutable_state)
+        observation["normalized_pre_state_digest"] = canonical_digest(immutable_state)
+        seal_capture_observation_authority_set(capture_authorities)
+
+        prepared = valid_prepared_action_authority_set(plan)
+        authority = prepared["authorities"][0]
+        authority["captured_pre_state"] = copy.deepcopy(immutable_state)
+        authority["captured_pre_state_digest"] = canonical_digest(immutable_state)
+        authority["expected_post_state"] = copy.deepcopy(immutable_state)
+        authority["expected_post_state_digest"] = canonical_digest(immutable_state)
+        seal_prepared_action_authority(authority)
+        seal_prepared_action_authority_set(prepared)
+        inputs = prepared_validation_inputs(plan, capture, prepared)
+        inputs["capture_observation_authority_set"] = capture_authorities
+        inputs["expected_capture_observation_authority_set_identity"] = (
+            capture_authorities["authority_set_identity"]
+        )
+        inputs["expected_capture_observation_authority_set_digest"] = (
+            capture_authorities["authority_set_digest"]
+        )
+
+        self.assertEqual(
+            (),
+            EXECUTION_AUTHORITY.validate_prepared_action_authority_set(
+                prepared, **inputs
+            ),
+        )
+        checkpoint = valid_checkpoint_record(
+            0,
+            plan,
+            prepared_authorities=prepared,
+        )
+        self.assertEqual(immutable_state, checkpoint["pre_state"])
+        self.assertEqual(immutable_state, checkpoint["expected_post_state"])
+
+        changed = copy.deepcopy(checkpoint)
+        changed["pre_state"]["immutable_content"]["content_digest"] = DIGEST_C
+        self.assertNotEqual(
+            checkpoint["checkpoint_identity"],
+            EXECUTION_AUTHORITY.checkpoint_identity(
+                "agent-equipment-checkpoint/v1", changed
+            ),
+        )
 
     def test_prepared_action_authority_is_complete_and_semantically_bound(self) -> None:
         plan = valid_plan_action_set()

@@ -153,7 +153,32 @@
           "type": "object",
           "required": ["status"],
           "additionalProperties": false,
-          "properties": {"status": {"enum": ["route_absent", "unknown"]}}
+          "properties": {"status": {"enum": ["route_absent", "unknown", "not_applicable"]}}
+        }
+      ]
+    },
+    "immutableContent": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["status", "revision", "content_digest"],
+          "additionalProperties": false,
+          "properties": {
+            "status": {"const": "observed"},
+            "revision": {
+              "type": "string",
+              "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+            },
+            "content_digest": {"$ref": "#/$defs/digest"}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["status"],
+          "additionalProperties": false,
+          "properties": {
+            "status": {"enum": ["route_absent", "unknown", "not_applicable"]}
+          }
         }
       ]
     },
@@ -169,7 +194,7 @@
     },
     "normalizedState": {
       "type": "object",
-      "required": ["route_presence", "enablement", "configuration", "component_states", "observed_version", "native_update_control", "native_update_suppression_state", "manager_drift"],
+      "required": ["route_presence", "enablement", "configuration", "component_states", "observed_version", "immutable_content", "native_update_control", "native_update_suppression_state", "manager_drift"],
       "additionalProperties": false,
       "properties": {
         "route_presence": {"enum": ["present", "absent", "partial", "unknown"]},
@@ -189,11 +214,50 @@
           }
         },
         "observed_version": {"$ref": "#/$defs/observedVersion"},
+        "immutable_content": {"$ref": "#/$defs/immutableContent"},
         "native_update_control": {"enum": ["unknown", "suppressible", "unsuppressible", "not_applicable"]},
         "native_update_suppression_state": {"enum": ["enabled", "disabled", "unavailable", "unknown", "not_applicable"]},
         "manager_drift": {"$ref": "#/$defs/managerDrift"}
       },
       "allOf": [
+        {
+          "if": {
+            "properties": {
+              "immutable_content": {
+                "properties": {"status": {"const": "observed"}}
+              }
+            }
+          },
+          "then": {
+            "properties": {"route_presence": {"const": "present"}}
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "immutable_content": {
+                "properties": {"status": {"const": "route_absent"}}
+              }
+            }
+          },
+          "then": {
+            "properties": {"route_presence": {"const": "absent"}}
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "immutable_content": {
+                "properties": {"status": {"const": "unknown"}}
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "route_presence": {"enum": ["present", "partial", "unknown"]}
+            }
+          }
+        },
         {
           "if": {
             "properties": {"native_update_control": {"const": "not_applicable"}}

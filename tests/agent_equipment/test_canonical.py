@@ -18,15 +18,20 @@ from agent_equipment.canonical import (
 )
 from agent_equipment.model import thaw_json
 
+ACCEPTANCE_EVIDENCE_SCHEMA_PATH = (
+    "lib/agent-equipment/schemas/acceptance-evidence-v1.schema.json"
+)
 MANIFEST_PATHS = (
     "bin/agent-equipment",
     "lib/agent-equipment/agent_equipment/__init__.py",
     "lib/agent-equipment/agent_equipment/_json_schema.py",
     "lib/agent-equipment/agent_equipment/canonical.py",
+    "lib/agent-equipment/agent_equipment/inventory.py",
     "lib/agent-equipment/agent_equipment/model.py",
+    "lib/agent-equipment/agent_equipment/resolver.py",
     "lib/agent-equipment/agent_equipment/secrets.py",
     "lib/agent-equipment/agent_equipment/validator.py",
-    "lib/agent-equipment/schemas/acceptance-evidence-v1.schema.json",
+    ACCEPTANCE_EVIDENCE_SCHEMA_PATH,
     "lib/agent-equipment/schemas/adapter-contract-v1.schema.json",
     "lib/agent-equipment/schemas/captured-state-v1.schema.json",
     "lib/agent-equipment/schemas/catalog-v1.schema.json",
@@ -200,7 +205,7 @@ class CanonicalJsonTest(unittest.TestCase):
         cases = (
             (MANIFEST_PATHS[0], (256 * 1024) + 1),
             (MANIFEST_PATHS[1], (1024 * 1024) + 1),
-            (MANIFEST_PATHS[7], (512 * 1024) + 1),
+            (ACCEPTANCE_EVIDENCE_SCHEMA_PATH, (512 * 1024) + 1),
         )
         for relative_path, oversized_bytes in cases:
             with (
@@ -405,7 +410,7 @@ class CanonicalJsonTest(unittest.TestCase):
             root = base / "installed"
             write_installed_tree(root)
             parent = root / "lib/agent-equipment/schemas"
-            target = MANIFEST_PATHS[7]
+            target = ACCEPTANCE_EVIDENCE_SCHEMA_PATH
 
             def swap_parent(role: str, relative_path: str) -> None:
                 if role == "installed" and relative_path == target:

@@ -362,7 +362,12 @@ coverage outcomes.
 
 Resolution phases are fixed:
 
-1. Parse and structurally validate every input.
+1. Parse and structurally validate every input. At the public resolver boundary,
+   serialize the typed capability discovery and runtime inventory back into the
+   closed adapter envelopes, re-admit both through the captured production
+   Schemas, and require exact typed equality before deriving an operation
+   matrix. A failed or non-identical re-admission is one fatal, secret-free
+   diagnostic and no plan.
 2. Bind the lock to the canonical catalog digest.
 3. Expand distribution selections and coverage templates.
 4. Require exactly one coverage record per identity and active harness.
@@ -372,15 +377,36 @@ Resolution phases are fixed:
 7. Resolve preferred and supplementary routes and bind overlap exceptions.
 8. Validate route control, provenance, restore, operation, and compensation
    invariants.
-9. Classify runtime state and manager-driven drift from observations.
+9. Classify runtime state and manager-driven drift from observations. A present
+   native-rolling route must report a concrete observed version and classify it
+   as `none` when it equals the reviewed baseline or
+   `changed_from_reviewed_baseline` otherwise; an absent route must report
+   `route_absent`. `unknown`, an inconsistent classification, or a mismatched
+   reviewed-baseline or observation-source binding is fatal before planning.
+   The selected capability must declare `version_observation` and
+   `baseline_comparison` as `automated` or `inspect_only`; `unavailable` cannot
+   authorize the version or drift evidence used for a native-rolling plan.
+   A present immutable route reports freshly verified `immutable_content` as
+   `observed`, or `unknown` when installed content or provenance cannot be
+   verified. An absent immutable route reports `route_absent`; partial or
+   unknown presence reports `unknown`. Only a present observed revision and
+   content digest exactly equal to `route_record.restore` is converged. A known
+   mismatch requires the reviewed `restore` operation, confirmed absence
+   requires the reviewed `install` operation, and unknown evidence is fatal
+   before planning. An immutable retirement is eligible for removal only when
+   its observed tuple exactly equals the reviewed losing-route tuple.
 10. Derive the selected command's report, proposal, or candidate action set.
 11. Derive the complete action-dependency graph, including every required
     verification prerequisite and provider-switch dependency.
 12. Reject a graph with a missing dependency, orphan action, cycle, or
     incomplete provider-switch dependency before returning any executable plan.
-13. Produce a deterministic topological action order. Use the canonical
-    equipment, harness, route, operation, and action-identity tuple only to
-    break ties among actions whose dependencies are already satisfied.
+13. Produce a deterministic topological node order. Among nodes whose
+    predecessors are already satisfied, compare only a closed pre-plan semantic
+    key. A mutation key is its canonical equipment-identity tuple, harness,
+    route identity, operation, and desired-state digest. A verification key is
+    its purpose, harness or the empty string, route identity or the empty
+    string, predicate digest, and semantic-definition digest. Final plan-bound
+    action and verification identities never participate in ordering.
 14. Validate the complete result before returning any executable plan.
 
 Every diagnostic has a stable code, equipment identity when applicable,
@@ -393,10 +419,12 @@ Fatal validation yields no mutation plan.
 The dependency graph is the ordering authority. An edge means a mutation
 predecessor's post-state must be verified and its action checkpoint completed,
 or a read-only verification predecessor's plan-bound evidence must be accepted
-in the run journal, before the successor can start. A provider switch therefore includes explicit edges from verified
-projector readiness to winner activation, from the winner's complete verified
-active activation group to every losing-route retirement, and from all route
-changes to final coverage verification. Existing desired winner state may
+in the run journal, before the successor can start. A provider switch that
+retires Claude standalone projections includes explicit edges from verified
+projector readiness through any required winner mutations to winner activation.
+Every provider switch includes edges from the winner's complete verified active
+activation group to each losing-route retirement, and every route change leads
+to final coverage verification. Existing desired winner state may
 discharge an activation prerequisite only through a plan-bound fresh
 observation; absence of a mutation does not erase the dependency.
 
@@ -416,18 +444,74 @@ array cannot reconstruct or authorize a missing graph. The executor revalidates
 graph closure, acyclicity, topological ordinals, and the required
 winner-verification edges before it creates any checkpoint.
 
+The plan digest is the SHA-256 digest of one versioned canonical plan preimage.
+The preimage excludes `plan_digest`, final action and node identities,
+correlation or run identities, timestamps, observations, verification results,
+and every other runtime result. It contains the exact candidate identity,
+installed-implementation-manifest digest, catalog digest, lock digest,
+inventory digest, capability-set digest, every closed semantic node definition
+in deterministic topological order with its zero-based ordinal, and the
+complete edge set normalized to predecessor and successor ordinals and sorted
+by that pair. Semantic node definitions contain no predecessor field;
+dependencies are represented once by those ordinal edges in the preimage.
+
+After computing `plan_digest`, derive each mutation action identity from the
+exact canonical object with members `plan_digest`, `ordinal`, `route_id`,
+`operation`, and `desired_state_digest`. Derive each verification identity as
+`verification:sha256:<hex>` from its canonical identity preimage containing
+`plan_digest`, node ordinal, semantic-definition digest, and predecessor
+identities in predecessor-ordinal order. Derive verification identities in
+topological order.
+
+Validation strips every derived identity and runtime-only field, normalizes
+final edge endpoints and verification predecessors back to ordinals,
+reconstructs the exact canonical preimage, recomputes `plan_digest`, re-derives
+every identity, and requires byte-for-byte equality before any checkpoint store
+is opened. The final serialized plan binds both the exact identity-addressed
+graph and this normalized preimage.
+
 The graph has two closed node kinds:
 
 - A `mutation` node references exactly one validated `PlannedAction`. It owns a
   durable action checkpoint and participates in reverse compensation.
 - A `verification` node is read-only and has an identity
-  `verification:sha256:<hex>` derived from its canonical definition excluding
-  the identity and runtime result. That definition contains its purpose
-  (`projector_readiness`, `winner_activation`, or `final_coverage`), exact
-  candidate/catalog/lock/plan, route and capability bindings when applicable,
-  active activation membership, read-surface scope, required normalized-state
-  predicate or coverage predicate, and predecessor identities. The complete
-  node definition and graph edges are included in `plan_digest`.
+  `verification:sha256:<hex>` derived from the canonical identity preimage
+  described above. Its semantic definition contains its purpose
+  (`projector_readiness`, `winner_activation`, `coalesced_route_state`, or
+  `final_coverage`), exact
+  candidate/catalog/lock, route and capability bindings when applicable,
+  active activation membership, read-surface scope, and the required projector-
+  policy, normalized-state, or coverage predicate. The semantic definition
+  contains no predecessor ordinal or identity. The normalized preimage edge set
+  binds predecessor ordinals; after sealing, the verification-identity preimage
+  binds predecessor identities in predecessor-ordinal order, and the final
+  `PlanNode.dependencies` stores that same identity tuple. The semantic node
+  definition and graph edges are included in `plan_digest`.
+
+`projector_readiness` is one plan-level desired-policy predicate, not a claim
+about the current winner observation. It has no route or capability binding.
+Its only read surface is the fixed
+`surface:claude/standalone-skill-projector` control surface. The desired policy
+uses `catalog_driven` mode; includes exactly the Claude skill identities whose
+validated preferred provider is `standalone_skill`; and excludes every other
+Claude skill identity in validated coverage, including every identity whose
+winner is the Matt plugin. The policy binds the exact catalog, lock, and
+installed implementation-manifest digests and carries its own canonical digest.
+The later projector adapter and executor must freshly verify that exact policy;
+missing policy state fails the node and blocks winner mutation. Resolver input
+inventory is not projector-readiness evidence.
+
+`winner_activation` and each active-route predicate inside `final_coverage`
+bind a native-rolling route to an exact observed version equal to its reviewed
+baseline and to `manager_drift: none` with the exact reviewed baseline and
+observation source. A fresh post-mutation observation at another version cannot
+satisfy either predicate.
+
+`coalesced_route_state` verifies each dependent route whose identical physical-
+surface mutation was coalesced. It runs after the retained route's complete
+relevant mutation sequence and preserves the dependent route's original
+successors with exact route, capability, scope, and normalized-state predicate
+bindings.
 
 Executing a verification node produces a fresh, secret-free observation or
 coverage report bound to the node identity, its predicate digest, the complete
@@ -469,6 +553,15 @@ unsupported outcome uses the exact string `no_provider`.
   classification is `unknown`; and `automated`, `operator_action`, or
   `unavailable` only when the route is `suppressible`. Automated suppression
   retains the ordinary captured-pre-state compensation requirement.
+- A selected capability's `native_update_control` exactly equals the route's
+  reviewed classification. Its `native_update_support.suppression` record is
+  exactly the same closed authority record as
+  `operation_support.suppress_native_update`; a different mode, operator
+  reference, or mutation guarantee is fatal before planning.
+- A selected native-rolling capability's `version_observation` and
+  `baseline_comparison` are each `automated` or `inspect_only`. Either field
+  being `unavailable` is fatal before the resolver relies on version or drift
+  evidence.
 - `operator_owned` routes are verify-and-report-only. Their mutating operations
   are `operator_action` or `unavailable`.
 - Every automated mutating operation declares
@@ -615,6 +708,12 @@ their respective field. Unavailable has only `mode`. The map contains exactly
 `inspect`, `install`, `configure`, `enable`, `disable`, `remove`, `restore`,
 and `suppress_native_update`.
 
+An inspect capability selected for an immutable route includes
+`immutable_content` among its normalized fields. A capability that cannot
+verify immutable content may still report the closed `unknown` tag, but it
+cannot make that route eligible for mutation. A native-rolling capability
+reports `immutable_content` as `not_applicable`.
+
 Surface-identity rule v1 is exact. `shared_equipment_identity` emits one
 `surface:shared/<equipment-identity>` per selected equipment identity;
 `route_and_equipment_identity` emits one
@@ -680,7 +779,8 @@ metadata are outside the payload. Its fields are:
 | `enablement` | `enabled`, `disabled`, `mixed`, `not_applicable`, or `unknown`. |
 | `configuration` | Tagged `observed` with the digest of the adapter-owned normalized configuration, or tagged `not_applicable` or `unknown`; never raw secret-bearing configuration. |
 | `component_states` | Sorted exact equipment-identity records with `enabled`, `disabled`, `absent`, or `unknown`. The list covers every selected control and does not invent controls. |
-| `observed_version` | Tagged `observed` with a value, `route_absent`, or `unknown`. Unknown version makes a native-rolling route ineligible for mutation and cannot be written as captured-state restore evidence. |
+| `observed_version` | Tagged `observed` with a value, `route_absent`, `unknown`, or `not_applicable`. Native-rolling routes use observed, absent, or unknown version evidence; immutable routes use `not_applicable`. Unknown version makes a native-rolling route ineligible for mutation and cannot be written as captured-state restore evidence. |
+| `immutable_content` | Tagged `observed` with a full lowercase 40- or 64-hex Git revision and SHA-256 content digest, or tagged `route_absent`, `unknown`, or `not_applicable`. Native-rolling routes use `not_applicable`. |
 | `native_update_control` | Route classification: `unknown`, `suppressible`, `unsuppressible`, or `not_applicable`. It echoes the reviewed route classification; it is not observed toggle state. |
 | `native_update_suppression_state` | Observed toggle state: `enabled`, `disabled`, `unavailable`, `unknown`, or `not_applicable`. This does not claim suppression can be automated. |
 | `manager_drift` | `none`, `changed_from_reviewed_baseline`, `unobservable`, or `not_applicable`, with the reviewed baseline and observation source when applicable. The resolver, not the adapter, decides the command consequence. |
@@ -691,6 +791,21 @@ metadata are outside the payload. Its fields are:
 An error result carries the common error shape and echoes the same identities
 and bindings. It has no `state_digest`, and cannot be interpreted as absence,
 an empty component set, or permission to proceed.
+
+For an immutable route, `present` permits `immutable_content` `observed` or
+`unknown`; `absent` requires `route_absent`; and `partial` or `unknown`
+presence requires `unknown`. `observed` implies present. Its
+`observed_version`, native-update control, native-update suppression state, and
+manager drift are all `not_applicable`. A native-rolling route always reports
+`immutable_content` as `not_applicable` and follows the version and drift rules
+above. The adapter derives the revision from integrity-bound installed
+provenance and recomputes the content digest from installed state under the
+route's canonical content-digest algorithm. It emits an observed immutable
+tuple only after both verify. It never copies revision or digest values from
+the request, catalog, or lock as observation evidence; a failed or unavailable
+verification yields `unknown`.
+The tuple remains inside `normalized_state`, so the state, inventory, plan,
+capture, checkpoint, and verification digests bind it.
 
 The two native-update fields have one interpretation: `not_applicable` control
 maps to `not_applicable` state; `unsuppressible` maps to `unavailable`;
@@ -713,7 +828,7 @@ capability are both `automated`. The record contains:
 | `harness`, `route_identity`, `route_digest`, `route_record` | Complete selected route and digest. `route_record.control_owner` must be `reconciler_owned`. |
 | `equipment_identities`, `controlled_equipment_identities`, `activation_group`, `surface_scope` | Sorted active membership, the exact identity projection of selected component controls, and surfaces derived from their union. A disabled `no_provider` duplicate is controlled without becoming active coverage. One activation group maps to one route identity per harness. |
 | `operation`, `operation_disposition` | One required operation and the exact value `automated`. Inspect is never emitted as a mutating action. |
-| `desired_state`, `desired_state_digest` | Non-empty, closed, secret-free normalized target fragment and its digest. It may contain only route presence, enablement, normalized configuration digest, selected component states, and native-update suppression state. |
+| `desired_state`, `desired_state_digest` | Non-empty, closed, secret-free normalized target fragment and its digest. It may contain only route presence, enablement, normalized configuration digest, selected component states, and native-update suppression state. It never duplicates immutable revision or content evidence; the exact immutable target remains in `route_record.restore` and is bound by `route_digest`. |
 | `secret_references` | Unresolved references copied from the route; no value or value-derived digest is allowed. |
 | `preconditions` | Exact candidate, installed implementation-manifest, catalog, lock, plan, route, capability, adapter, ownership, activation-group, and surface bindings; `prepared_checkpoint_required: true`; and `compare_before_mutate: true`. The executor supplies the captured pre-state digest separately to `apply`. |
 | `compensation` | Exact `restore_captured_pre_state`, plus the captured-state version required by the capability. |
@@ -852,11 +967,20 @@ records say whether the harness can realize each control. The resolver rejects
 a selected control without an exact supported capability before it returns an
 executable plan. Adapters do not silently broaden a control to a whole plugin.
 When the route selects component controls, desired component state must contain
-every selected control exactly once and no others. Each must name selected
-action equipment, exactly match the route state, and be covered by an
-`automated` capability with `selected_component` mutation boundary and exact
-identity and state support. Recomputed route, capability, action, or plan
-digests do not broaden this authority.
+every selected control exactly once and no others. Each must name controlled
+equipment, exactly match the route state, and have its identity and
+selected state in the capability record. The capability need not advertise an
+unselected state. An `enabled` control is bounded by the reviewed `enable`
+disposition and a `disabled` control by `disable`: `automated` requires an
+`automated` capability with `selected_component` mutation boundary;
+`operator_action` permits only `operator_action` or narrower `inspect_only`;
+and `unavailable` permits only read-only `inspect_only`. Every selected state
+must authorize the capability's single component-control mode. Recomputed
+route, capability, action, or plan digests do not broaden this authority.
+A nonautomated component-control mode can yield a plan only when the admitted
+normalized configuration and every selected component state already equal the
+reviewed target; the resolver never places those controls in an automated
+configuration transition from drift.
 
 Adapters may mutate only the surface named by an automated action. They preserve
 unrelated keys and native state, compare the current observation with the
@@ -941,6 +1065,15 @@ a changed enum; a changed canonicalization rule; or weaker precondition,
 ownership, idempotency, compensation, or redaction semantics requires a new
 major. A catalog-schema change requires a new adapter-contract major only when
 the resolved route projection or any adapter semantic changes.
+
+Before any production producer emits or production consumer accepts a record
+for a major, a contract correction may remain in that current major only as one
+atomic change to its normative prose, authoritative and installed Schemas,
+digest pins, semantic validators, and complete fixture set. Partial rollout,
+mixed old and corrected readers, or conversion of an existing record is
+forbidden. The first emitted or accepted production record irreversibly closes
+this pre-release exception for that major; every later shape or semantic change
+follows the major-version rules above.
 
 Changing `adapter_version` or any live capability produces a new
 `capability_digest`. Existing observations may remain historical evidence, but
@@ -1152,6 +1285,11 @@ the current major version only when old readers reject or safely ignore it by
 contract; these v1 schemas use exact shapes, so additions normally require a
 new major version. Renaming a field, changing an enum or default, weakening an
 invariant, or changing canonicalization always requires a new major version.
+Before any production producer emits or production consumer accepts a record
+for one of these formats, a current-major correction is permitted only as the
+same atomic prose, Schema, installed-copy, digest-pin, validator, and fixture
+update defined for adapter contracts above. The first emitted or accepted
+production record irreversibly freezes that format major.
 
 An update implementation must provide a pure, deterministic migration from the
 immediately previous version, emit a reviewable semantic diff, bind a newly

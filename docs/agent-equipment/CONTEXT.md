@@ -106,6 +106,12 @@ A secret-free statement of equipment state reported through a supported file,
 CLI, or harness surface without claiming ownership.
 _Avoid_: Desired state, adoption
 
+**Immutable-content observation**:
+A tagged runtime statement that an immutable route is absent, unknown, or at
+one freshly verified revision and content digest; native-rolling routes mark it
+not applicable. It never treats an echoed restore claim as observed evidence.
+_Avoid_: Observed version, configuration digest, requested content digest
+
 **Mutation plan**:
 A fully validated, deterministically ordered set of reconciler-owned automated
 operations derived from one authored catalog, resolved lock, and runtime

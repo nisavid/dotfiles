@@ -26,6 +26,20 @@ skill, plugin, and MCP entries. Hooks and other plugin components participate
 in coverage and conflict resolution even when their standalone adapters remain
 deferred.
 
+## V1 foundation freeze
+
+At this handoff boundary, no production adapter or execution-authority v1
+record has been emitted or accepted. The required immutable-content correction
+therefore remains eligible for the atomic pre-release exception.
+
+Before any production producer emits or production consumer accepts a v1
+adapter or execution-authority record, a contract correction may keep the v1
+major only when normative prose, authoritative and installed Schemas, digest
+pins, validators, and all fixtures change atomically. The first emitted or
+accepted production record permanently freezes that major. Every later field,
+enum, canonicalization, or semantic change requires the new major prescribed by
+`ARCHITECTURE.md`; a partial current-major rollout is never permitted.
+
 ## Authoritative artifacts
 
 | Artifact | Role |
@@ -36,9 +50,9 @@ deferred.
 | `docs/agent-equipment/lock-v1.schema.json` | Expanded lock serialization contract |
 | `docs/agent-equipment/captured-state-v1.schema.json` | Pre-mutation runtime capture and recovery-evidence contract |
 | `docs/agent-equipment/plan-action-set-v1.schema.json` | Closed projection of every independently validated automated plan action supplied to captured-state validation |
-| `docs/agent-equipment/adapter-contract-v1.schema.json` | Closed capability, request, observation, action, and receipt serialization contract |
+| `docs/agent-equipment/adapter-contract-v1.schema.json` | Closed capability, request, observation, action, and receipt serialization contract, including immutable-content evidence |
 | `docs/agent-equipment/acceptance-evidence-v1.schema.json` | Closed expected-case, candidate evidence, and post-run attestation contract |
-| `docs/agent-equipment/execution-authority-v1.schema.json` | Ten closed records: apply authorization, capture-observation-authority set, prepared-action-authority set, checkpoint-store snapshot, checkpoint set, compensation authorization and transition claim, run terminal, release archive manifest, and release receipt |
+| `docs/agent-equipment/execution-authority-v1.schema.json` | Ten closed records with the same normalized immutable-content state: apply authorization, capture-observation-authority set, prepared-action-authority set, checkpoint-store snapshot, checkpoint set, compensation authorization and transition claim, run terminal, release archive manifest, and release receipt |
 | `docs/agent-equipment/initial-catalog.proposed.json` | Schema-valid initial desired-state proposal; no live authority |
 | `docs/agent-equipment/initial-lock.proposed.json` | Generated 132-record lock bound to the proposed catalog digest |
 | `docs/agent-equipment/INVENTORY.md` and `initial-inventory.json` | Dated, secret-free read-only observation and initial classification |
@@ -499,6 +513,17 @@ Later steps do not begin until the named evidence passes.
 ### 2. Implement read-only inventory and the pure resolver
 
 - Implement adapter capability and observation records without mutation.
+- Require every normalized state to carry closed `immutable_content` evidence.
+  Immutable present state admits freshly verified observed revision and content
+  digest or truthful `unknown`; absence uses `route_absent`; partial or unknown
+  presence uses `unknown`. Immutable `observed_version`, native-update control,
+  native-update suppression state, and manager drift are `not_applicable`;
+  native-rolling routes tag `immutable_content` as `not_applicable`.
+- Classify an immutable active route as converged only when its observed tuple
+  exactly equals `route_record.restore`. Plan `install` for confirmed absence,
+  `restore` for a known mismatch, and no mutation for unknown evidence. Remove
+  an immutable losing route only when its observed tuple exactly matches the
+  reviewed retirement tuple.
 - Preserve exactly one complete coverage record per identity and harness.
 - Apply selective component controls before forming activation groups.
 - Keep active `equipment_identities` separate from exact
@@ -557,6 +582,10 @@ Later steps do not begin until the named evidence passes.
   records, and timestamps with more than nine fractional digits. At every
   parsed-object authority boundary, canonicalize only to enforce the same 256
   KiB ceiling before Schema, regular-expression, credential, or digest work.
+- Carry the required `immutable_content` tag through every execution-authority
+  normalized pre-state and expected post-state. Capture-observation,
+  prepared-action, checkpoint, snapshot, and checkpoint-set validation must
+  preserve the exact tuple in their canonical digests and compare guards.
 - Implement the separate closed `CompensationAuthorization` parser and public
   `compensate` boundary. Require `command: compensate`, canonical
   `compensation_authorization_identity`, independently trusted complete digest,
@@ -767,6 +796,10 @@ Later steps do not begin until the named evidence passes.
 
 - Fetch immutable artifacts into staging, verify commit and content digest,
   then replace only an adopted canonical entry.
+- Emit observed immutable content only after freshly verifying installed bytes
+  and integrity-bound installed provenance. Never echo the requested catalog or
+  lock revision or digest as observation evidence; emit `unknown` when either
+  verification is unavailable or fails.
 - Inspect existing entries with `lstat`; preserve file type, metadata, link
   text, resolved target, and broken-link state. Never follow an existing link
   for a write.

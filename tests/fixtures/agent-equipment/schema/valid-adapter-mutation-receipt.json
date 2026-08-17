@@ -39,11 +39,11 @@
     "result": {
       "status": "ok",
       "effect": "changed",
-      "expected_pre_state_digest": "sha256:5f1e1002517a1c11e2a97f743123e0a8030e2971bdf621e42fd9421696894335",
-      "observed_pre_state_digest": "sha256:5f1e1002517a1c11e2a97f743123e0a8030e2971bdf621e42fd9421696894335",
+      "expected_pre_state_digest": "sha256:6d56a256dad3604063078b0b4c68152f6015b07d97b10a991f5d0a2edea0d2ae",
+      "observed_pre_state_digest": "sha256:6d56a256dad3604063078b0b4c68152f6015b07d97b10a991f5d0a2edea0d2ae",
       "comparison": "equal",
-      "expected_post_state_digest": "sha256:7c049b2642875ca097c3dbe659a22465da5a9b74cb69d64a7478639b5fa97f3d",
-      "observed_post_state_digest": "sha256:7c049b2642875ca097c3dbe659a22465da5a9b74cb69d64a7478639b5fa97f3d",
+      "expected_post_state_digest": "sha256:5cf1e1b7b9f44b05b66c4b86ed82dc6b5e7b444acfca452b795cf1f713b5009e",
+      "observed_post_state_digest": "sha256:5cf1e1b7b9f44b05b66c4b86ed82dc6b5e7b444acfca452b795cf1f713b5009e",
       "native_result_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
       "surface_evidence": [
         {
@@ -57,7 +57,7 @@
         "kind": "restore_captured_pre_state",
         "captured_state_identity": "captured-state:candidate-001/action-001",
         "captured_state_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
-        "expected_post_state_digest": "sha256:7c049b2642875ca097c3dbe659a22465da5a9b74cb69d64a7478639b5fa97f3d"
+        "expected_post_state_digest": "sha256:5cf1e1b7b9f44b05b66c4b86ed82dc6b5e7b444acfca452b795cf1f713b5009e"
       }
     }
   }

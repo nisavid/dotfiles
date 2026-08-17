@@ -18,6 +18,8 @@ PROPOSED_CATALOG = ROOT / "docs/agent-equipment/initial-catalog.proposed.json"
 FIXTURES = ROOT / "tests/fixtures/agent-equipment/schema"
 TRUSTED_CANDIDATE_IDENTITY = "candidate:001"
 TRUSTED_IMPLEMENTATION_MANIFEST_DIGEST = "sha256:" + "9" * 64
+IMMUTABLE_REVISION = "0123456789abcdef0123456789abcdef01234567"
+IMMUTABLE_CONTENT_DIGEST = "sha256:" + "1" * 64
 SPEC = importlib.util.spec_from_file_location(
     "agent_equipment_adapter_contract",
     ROOT / "scripts/agent_equipment_adapter_contract.py",
@@ -265,8 +267,10 @@ def apply_sequence_document(
     }
 
 
-def valid_compensation_sequence_document() -> dict[str, object]:
-    sequence = list(copy.deepcopy(valid_sequence()))
+def valid_compensation_sequence_document(
+    records: tuple[dict[str, object], ...] | list[dict[str, object]] | None = None,
+) -> dict[str, object]:
+    sequence = list(copy.deepcopy(records if records is not None else valid_sequence()))
     captured_pre_state = copy.deepcopy(
         sequence[2]["record"]["result"]["normalized_state"]
     )
@@ -432,6 +436,127 @@ def rebind_sequence_provider(
             route_provider
         )
     rebind_route_digest(sequence)
+
+
+def immutable_sequence() -> list[dict[str, object]]:
+    sequence = list(copy.deepcopy(valid_sequence()))
+    rebind_sequence_provider(
+        sequence,
+        {"kind": "standalone_skill", "canonical_root": "agents_skills"},
+        "standalone_skills",
+        {"kind": "standalone_skill", "canonical_root": "agents_skills"},
+    )
+    capability = capability_record(sequence[0])
+    inspect_support = capability["operation_support"]["inspect"]
+    inspect_support["normalized_fields"] = sorted(
+        {*inspect_support["normalized_fields"], "immutable_content"}
+    )
+    capability["native_update_support"] = {
+        "native_update_control": "not_applicable",
+        "version_observation": "unavailable",
+        "baseline_comparison": "unavailable",
+        "suppression": {"mode": "unavailable"},
+        "suppression_scope": "none",
+    }
+    capability["operation_support"]["suppress_native_update"] = {"mode": "unavailable"}
+    rebind_capability_digest(sequence)
+
+    immutable_restore = {
+        "class": "immutable",
+        "revision": IMMUTABLE_REVISION,
+        "artifact_ref": (
+            "git+https://example.invalid/fixture.git@" + IMMUTABLE_REVISION
+        ),
+        "content_digest": IMMUTABLE_CONTENT_DIGEST,
+        "native_update_control": "not_applicable",
+    }
+    for index in (1, 3):
+        sequence[index]["record"]["route_record"]["restore"] = copy.deepcopy(
+            immutable_restore
+        )
+        sequence[index]["record"]["route_record"]["operations"][
+            "suppress_native_update"
+        ] = {"disposition": "unavailable"}
+    rebind_route_digest(sequence)
+
+    normalized_state = sequence[2]["record"]["result"]["normalized_state"]
+    normalized_state.update(
+        {
+            "observed_version": {"status": "not_applicable"},
+            "immutable_content": {
+                "status": "observed",
+                "revision": IMMUTABLE_REVISION,
+                "content_digest": IMMUTABLE_CONTENT_DIGEST,
+            },
+            "native_update_control": "not_applicable",
+            "native_update_suppression_state": "not_applicable",
+            "manager_drift": {
+                "status": "not_applicable",
+                "reviewed_baseline": None,
+                "observation_source": None,
+            },
+        }
+    )
+    pre_state_digest = set_normalized_state(
+        sequence[2]["record"]["result"], normalized_state
+    )
+    receipt_result = sequence[4]["record"]["result"]
+    receipt_result["expected_pre_state_digest"] = pre_state_digest
+    receipt_result["observed_pre_state_digest"] = pre_state_digest
+    rebind_desired_state(sequence)
+    return sequence
+
+
+def replace_pre_state(
+    document: dict[str, object], normalized_state: dict[str, object]
+) -> None:
+    sequence = document["sequence"]
+    result = sequence["pre_state_observation"]["record"]["result"]
+    state_digest = set_normalized_state(result, normalized_state)
+    authority = sequence["authority"]
+    authority["captured_pre_state"] = copy.deepcopy(normalized_state)
+    authority["captured_pre_state_digest"] = state_digest
+    authority["expected_pre_state_digest"] = state_digest
+    receipt_result = sequence["mutation_receipt"]["record"]["result"]
+    receipt_result["expected_pre_state_digest"] = state_digest
+    receipt_result["observed_pre_state_digest"] = state_digest
+
+
+def replace_verified_post_state(
+    document: dict[str, object], normalized_state: dict[str, object]
+) -> None:
+    sequence = document["sequence"]
+    result = sequence["post_state_observation"]["record"]["result"]
+    state_digest = set_normalized_state(result, normalized_state)
+    sequence["post_state_request"]["record"]["expected_state_digest"] = state_digest
+    authority = sequence["authority"]
+    authority["expected_post_state"] = copy.deepcopy(normalized_state)
+    authority["expected_post_state_digest"] = state_digest
+    authority["forward_post_state_digest"] = state_digest
+    receipt_result = sequence["mutation_receipt"]["record"]["result"]
+    receipt_result["expected_post_state_digest"] = state_digest
+    receipt_result["observed_post_state_digest"] = state_digest
+    receipt_result["compensation_evidence"]["expected_post_state_digest"] = state_digest
+
+
+def replace_compensation_restore_state(
+    document: dict[str, object], normalized_state: dict[str, object]
+) -> None:
+    sequence = document["sequence"]
+    state_digest = canonical_digest(normalized_state)
+    authority = sequence["authority"]
+    authority["captured_pre_state"] = copy.deepcopy(normalized_state)
+    authority["captured_pre_state_digest"] = state_digest
+    authority["expected_post_state"] = copy.deepcopy(normalized_state)
+    authority["expected_post_state_digest"] = state_digest
+    sequence["post_state_request"]["record"]["expected_state_digest"] = state_digest
+    set_normalized_state(
+        sequence["post_state_observation"]["record"]["result"], normalized_state
+    )
+    receipt_result = sequence["mutation_receipt"]["record"]["result"]
+    receipt_result["expected_post_state_digest"] = state_digest
+    receipt_result["observed_post_state_digest"] = state_digest
+    receipt_result["compensation_evidence"]["restored_state_digest"] = state_digest
 
 
 def diagnostic_codes(sequence: tuple[dict[str, object], ...]) -> set[str]:
@@ -610,32 +735,32 @@ class AdapterContractSchemaTests(unittest.TestCase):
             "if": [],
         }
         for keyword, invalid_value in invalid_values.items():
-            with self.subTest(keyword=keyword):
-                with tempfile.TemporaryDirectory() as directory:
-                    schema_directory = Path(directory)
-                    invalid_schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
-                    invalid_schema[keyword] = invalid_value
-                    (schema_directory / SCHEMA.name).write_text(
-                        json.dumps(invalid_schema), encoding="utf-8"
+            with (
+                self.subTest(keyword=keyword),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                schema_directory = Path(directory)
+                invalid_schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
+                invalid_schema[keyword] = invalid_value
+                (schema_directory / SCHEMA.name).write_text(
+                    json.dumps(invalid_schema), encoding="utf-8"
+                )
+                catalog_schema = ROOT / "docs/agent-equipment/catalog-v1.schema.json"
+                (schema_directory / catalog_schema.name).write_text(
+                    catalog_schema.read_text(encoding="utf-8"),
+                    encoding="utf-8",
+                )
+                original_directory = CONTRACT.SCHEMA_DIRECTORY
+                CONTRACT.SCHEMA_DIRECTORY = schema_directory
+                try:
+                    self.assertIn(
+                        "ADAPTER_SCHEMA_INVALID",
+                        document_diagnostic_codes(
+                            apply_sequence_document(valid_sequence())
+                        ),
                     )
-                    catalog_schema = (
-                        ROOT / "docs/agent-equipment/catalog-v1.schema.json"
-                    )
-                    (schema_directory / catalog_schema.name).write_text(
-                        catalog_schema.read_text(encoding="utf-8"),
-                        encoding="utf-8",
-                    )
-                    original_directory = CONTRACT.SCHEMA_DIRECTORY
-                    CONTRACT.SCHEMA_DIRECTORY = schema_directory
-                    try:
-                        self.assertIn(
-                            "ADAPTER_SCHEMA_INVALID",
-                            document_diagnostic_codes(
-                                apply_sequence_document(valid_sequence())
-                            ),
-                        )
-                    finally:
-                        CONTRACT.SCHEMA_DIRECTORY = original_directory
+                finally:
+                    CONTRACT.SCHEMA_DIRECTORY = original_directory
 
     def test_public_schema_gate_rejects_nested_schema_ids(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -790,6 +915,163 @@ class AdapterContractSchemaTests(unittest.TestCase):
             )
 
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
+    def test_normalized_state_requires_one_closed_immutable_content_tag(self) -> None:
+        cases = []
+        missing = apply_sequence_document(valid_sequence())
+        missing["sequence"]["pre_state_observation"]["record"]["result"][
+            "normalized_state"
+        ].pop("immutable_content")
+        cases.append(missing)
+
+        partial = apply_sequence_document(valid_sequence())
+        partial["sequence"]["pre_state_observation"]["record"]["result"][
+            "normalized_state"
+        ]["immutable_content"] = {
+            "status": "observed",
+            "revision": IMMUTABLE_REVISION,
+        }
+        cases.append(partial)
+
+        for document in cases:
+            with self.subTest(document=document):
+                self.assertIn(
+                    "ADAPTER_SCHEMA_INVALID",
+                    document_diagnostic_codes(document),
+                )
+
+    def test_immutable_route_admits_exact_and_truthfully_unknown_prestate(self) -> None:
+        exact = apply_sequence_document(immutable_sequence())
+        self.assertEqual((), validate_adapter_sequence(exact))
+
+        for route_presence, immutable_content in (
+            ("present", {"status": "unknown"}),
+            ("absent", {"status": "route_absent"}),
+            ("partial", {"status": "unknown"}),
+            ("unknown", {"status": "unknown"}),
+        ):
+            with self.subTest(route_presence=route_presence):
+                document = apply_sequence_document(immutable_sequence())
+                pre_state = copy.deepcopy(
+                    document["sequence"]["authority"]["captured_pre_state"]
+                )
+                pre_state["route_presence"] = route_presence
+                pre_state["immutable_content"] = immutable_content
+                replace_pre_state(document, pre_state)
+
+                self.assertEqual((), validate_adapter_sequence(document))
+
+    def test_restore_classes_reject_crossed_observation_tags(self) -> None:
+        immutable_crossings = (
+            ("immutable_content", {"status": "not_applicable"}),
+            ("observed_version", {"status": "observed", "value": "1.2.3"}),
+            (
+                "manager_drift",
+                {
+                    "status": "none",
+                    "reviewed_baseline": "1.2.3",
+                    "observation_source": "manager --version",
+                },
+            ),
+        )
+        for field, value in immutable_crossings:
+            with self.subTest(restore_class="immutable", field=field):
+                document = apply_sequence_document(immutable_sequence())
+                pre_state = copy.deepcopy(
+                    document["sequence"]["authority"]["captured_pre_state"]
+                )
+                pre_state[field] = value
+                replace_pre_state(document, pre_state)
+                self.assertIn(
+                    "RESTORE_OBSERVATION_CLASS_MISMATCH",
+                    document_diagnostic_codes(document),
+                )
+
+        for field, value in (
+            (
+                "immutable_content",
+                {
+                    "status": "observed",
+                    "revision": IMMUTABLE_REVISION,
+                    "content_digest": IMMUTABLE_CONTENT_DIGEST,
+                },
+            ),
+            ("observed_version", {"status": "not_applicable"}),
+        ):
+            with self.subTest(restore_class="native_rolling", field=field):
+                document = apply_sequence_document(valid_sequence())
+                pre_state = copy.deepcopy(
+                    document["sequence"]["authority"]["captured_pre_state"]
+                )
+                pre_state[field] = value
+                replace_pre_state(document, pre_state)
+                self.assertIn(
+                    "RESTORE_OBSERVATION_CLASS_MISMATCH",
+                    document_diagnostic_codes(document),
+                )
+
+    def test_immutable_observation_presence_tags_must_cohere(self) -> None:
+        cases = (
+            ("present", {"status": "route_absent"}),
+            ("absent", {"status": "unknown"}),
+            (
+                "partial",
+                {
+                    "status": "observed",
+                    "revision": IMMUTABLE_REVISION,
+                    "content_digest": IMMUTABLE_CONTENT_DIGEST,
+                },
+            ),
+            ("unknown", {"status": "route_absent"}),
+        )
+        for route_presence, immutable_content in cases:
+            with self.subTest(route_presence=route_presence):
+                document = apply_sequence_document(immutable_sequence())
+                pre_state = copy.deepcopy(
+                    document["sequence"]["authority"]["captured_pre_state"]
+                )
+                pre_state["route_presence"] = route_presence
+                pre_state["immutable_content"] = immutable_content
+                replace_pre_state(document, pre_state)
+                self.assertIn(
+                    "ADAPTER_SCHEMA_INVALID",
+                    document_diagnostic_codes(document),
+                )
+
+    def test_immutable_route_capability_must_advertise_content_observation(
+        self,
+    ) -> None:
+        sequence = immutable_sequence()
+        capability = capability_record(sequence[0])
+        capability["operation_support"]["inspect"]["normalized_fields"].remove(
+            "immutable_content"
+        )
+        rebind_capability_digest(sequence)
+
+        self.assertIn(
+            "IMMUTABLE_CONTENT_CAPABILITY_MISMATCH",
+            diagnostic_codes(tuple(sequence)),
+        )
+
+    def test_verified_immutable_post_state_binds_revision_and_content_digest(
+        self,
+    ) -> None:
+        for field, value in (
+            ("revision", "f" * 40),
+            ("content_digest", "sha256:" + "f" * 64),
+        ):
+            with self.subTest(field=field):
+                document = apply_sequence_document(immutable_sequence())
+                post_state = copy.deepcopy(
+                    document["sequence"]["authority"]["expected_post_state"]
+                )
+                post_state["immutable_content"][field] = value
+                replace_verified_post_state(document, post_state)
+
+                self.assertIn(
+                    "IMMUTABLE_CONTENT_BINDING_MISMATCH",
+                    document_diagnostic_codes(document),
+                )
 
     def test_planned_action_identity_uses_the_canonical_digest_vocabulary(self) -> None:
         document = load_document("valid-adapter-planned-action.json")
@@ -2000,6 +2282,46 @@ class AdapterContractSchemaTests(unittest.TestCase):
                 str(path),
             )
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
+    def test_compensation_preserves_captured_immutable_content(self) -> None:
+        document = valid_compensation_sequence_document(immutable_sequence())
+        captured_state = copy.deepcopy(
+            document["sequence"]["authority"]["captured_pre_state"]
+        )
+        captured_state["immutable_content"] = {
+            "status": "observed",
+            "revision": "a" * 40,
+            "content_digest": "sha256:" + "a" * 64,
+        }
+        replace_compensation_restore_state(document, captured_state)
+
+        self.assertEqual((), validate_adapter_sequence(document))
+
+        mismatched = copy.deepcopy(document)
+        restored_state = copy.deepcopy(
+            mismatched["sequence"]["authority"]["expected_post_state"]
+        )
+        restored_state["immutable_content"]["content_digest"] = "sha256:" + "b" * 64
+        result = mismatched["sequence"]["post_state_observation"]["record"]["result"]
+        restored_digest = set_normalized_state(result, restored_state)
+        mismatched["sequence"]["post_state_request"]["record"][
+            "expected_state_digest"
+        ] = restored_digest
+        receipt_result = mismatched["sequence"]["mutation_receipt"]["record"]["result"]
+        receipt_result["expected_post_state_digest"] = restored_digest
+        receipt_result["observed_post_state_digest"] = restored_digest
+        receipt_result["compensation_evidence"]["restored_state_digest"] = (
+            restored_digest
+        )
+        mismatched["sequence"]["authority"]["expected_post_state"] = restored_state
+        mismatched["sequence"]["authority"]["expected_post_state_digest"] = (
+            restored_digest
+        )
+
+        self.assertIn(
+            "COMPENSATION_RESTORE_MISMATCH",
+            document_diagnostic_codes(mismatched),
+        )
 
     def test_compensation_verified_state_mismatch_names_pre_state_observation(
         self,
