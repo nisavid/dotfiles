@@ -445,6 +445,30 @@ class ObservationAdmissionTests(unittest.TestCase):
 
 
 class RuntimeInventoryAdmissionTests(unittest.TestCase):
+    def test_inventory_globally_sorts_reversed_capability_snapshots(self) -> None:
+        later = load_fixture("valid-adapter-capability-record.json")
+        earlier = copy.deepcopy(later)
+        earlier_record = earlier["result"]["records"][0]  # type: ignore[index]
+        assert isinstance(earlier_record, dict)
+        earlier_record["capability_identity"] = "capability:aaa-native-plugin-v1"
+        earlier_record["adapter_identity"] = "adapter:aaa-native-plugin"
+        reseal_capability(earlier_record)
+        observation = load_fixture("valid-adapter-runtime-observation.json")
+
+        admitted = admit_runtime_inventory([later, earlier], [observation])
+
+        self.assertIsInstance(admitted, RuntimeInventory)
+        assert isinstance(admitted, RuntimeInventory)
+        self.assertEqual(
+            tuple(
+                record.capability_identity for record in admitted.capabilities.records
+            ),
+            (
+                "capability:aaa-native-plugin-v1",
+                "capability:claude-native-plugin-v1",
+            ),
+        )
+
     def test_immutable_revision_and_content_each_change_state_and_inventory_digests(
         self,
     ) -> None:
@@ -1047,6 +1071,46 @@ class ReadOnlyCollectorTests(unittest.TestCase):
         self.assertIsInstance(collected, RuntimeInventory)
         assert isinstance(collected, RuntimeInventory)
         self.assertIs(collected.capabilities, discovery)
+
+    def test_collector_globally_sorts_reversed_adapter_capabilities(self) -> None:
+        later = load_fixture("valid-adapter-capability-record.json")
+        earlier = copy.deepcopy(later)
+        earlier_record = earlier["result"]["records"][0]  # type: ignore[index]
+        assert isinstance(earlier_record, dict)
+        earlier_record["capability_identity"] = "capability:aaa-native-plugin-v1"
+        earlier_record["adapter_identity"] = "adapter:aaa-native-plugin"
+        reseal_capability(earlier_record)
+        request = admit_observe_request(bound_observe_request_snapshot())
+        observation = bound_runtime_observation_snapshot()
+        assert isinstance(request, ObserveRequest)
+
+        class Adapter:
+            def __init__(self, capability: dict[str, object]) -> None:
+                self.capability = capability
+
+            def capabilities(self) -> object:
+                return self.capability
+
+            def observe(self, _: ObserveRequest) -> object:
+                return observation
+
+        collected = collect_runtime_inventory(
+            (Adapter(later), Adapter(earlier)),
+            (request,),
+            validated_catalog_lock=VALIDATED_CATALOG_LOCK,
+        )
+
+        self.assertIsInstance(collected, RuntimeInventory)
+        assert isinstance(collected, RuntimeInventory)
+        self.assertEqual(
+            tuple(
+                record.capability_identity for record in collected.capabilities.records
+            ),
+            (
+                "capability:aaa-native-plugin-v1",
+                "capability:claude-native-plugin-v1",
+            ),
+        )
 
     def test_collector_readmits_typed_adapter_errors_before_returning_them(
         self,
