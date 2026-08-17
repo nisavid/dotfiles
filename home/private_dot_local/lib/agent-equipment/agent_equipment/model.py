@@ -636,12 +636,14 @@ class ValidatedPlan:
                 )
             if node.identity != expected_identity:
                 raise ValueError("validated plan node identity is not canonical")
-        expected_edges.sort(
-            key=lambda edge: (
+
+        def edge_order_key(edge: tuple[str, str]) -> tuple[int, int]:
+            return (
                 ordinal_by_identity[edge[0]],
                 ordinal_by_identity[edge[1]],
             )
-        )
+
+        expected_edges.sort(key=edge_order_key)
         if self.edges != tuple(expected_edges):
             raise ValueError(
                 "validated plan edges must equal every node dependency exactly"

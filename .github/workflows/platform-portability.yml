@@ -186,9 +186,11 @@ jobs:
           fi
           python3 -m unittest discover -s tests/agent_equipment -t . -p 'test_*.py'
           uvx --from pyrefly==1.2.0 pyrefly check \
+            --preset strict \
+            --min-severity warn \
             --search-path home/private_dot_local/lib/agent-equipment \
             --progress-bar no \
-            --summary full \
+            --summary=full \
             home/private_dot_local/lib/agent-equipment/agent_equipment \
             home/private_dot_local/bin/executable_agent-equipment
           python3 -m unittest tests/test_chezmoi_source_ownership.py

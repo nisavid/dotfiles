@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import importlib
 import importlib.abc
+import importlib.machinery
 import importlib.util
 import json
 import os
@@ -14,6 +15,7 @@ from collections.abc import Callable
 from contextlib import ExitStack
 from pathlib import Path
 from types import MappingProxyType, ModuleType
+from typing import override
 
 _PACKAGE_NAMES = (
     "__init__.py",
@@ -173,9 +175,11 @@ class _CapturedModuleLoader(importlib.abc.Loader):
         self._origin = origin
         self._schema_bytes = schema_bytes
 
+    @override
     def create_module(self, spec: object) -> ModuleType | None:
         return None
 
+    @override
     def exec_module(self, module: ModuleType) -> None:
         module.__file__ = self._origin
         if self._fullname == "agent_equipment.validator":
@@ -200,6 +204,7 @@ class _CapturedModuleFinder(importlib.abc.MetaPathFinder):
         self._modules = modules
         self._schema_bytes = schema_bytes
 
+    @override
     def find_spec(
         self,
         fullname: str,

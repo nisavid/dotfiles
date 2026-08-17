@@ -707,12 +707,11 @@ def _desired_component_states(group: _RouteLike) -> tuple[FrozenJsonObject, ...]
         if not isinstance(control, FrozenJsonObject):
             raise TypeError("validated route controls must be frozen JSON objects")
         typed_controls.append(control)
-    return tuple(
-        sorted(
-            typed_controls,
-            key=lambda control: str(control.get("equipment_identity")),
-        )
-    )
+
+    def control_order_key(control: FrozenJsonObject) -> str:
+        return str(control.get("equipment_identity"))
+
+    return tuple(sorted(typed_controls, key=control_order_key))
 
 
 def _desired_configuration(group: _RouteLike) -> FrozenJsonObject:
@@ -1727,15 +1726,13 @@ def resolve(
         diagnostics.extend(_route_state_coherence_diagnostics(group, observation))
         diagnostics.extend(_native_rolling_version_diagnostics(group, observation))
 
-    operation_matrix = tuple(
-        sorted(
-            matrix_records,
-            key=lambda matrix: (
-                str(matrix.get("harness")),
-                str(matrix.get("route_identity")),
-            ),
+    def matrix_order_key(matrix: FrozenJsonObject) -> tuple[str, str]:
+        return (
+            str(matrix.get("harness")),
+            str(matrix.get("route_identity")),
         )
-    )
+
+    operation_matrix = tuple(sorted(matrix_records, key=matrix_order_key))
     if contains_literal_credential(
         {
             "provider_selections": provider_selections,
@@ -1941,7 +1938,11 @@ def _retirement_route_groups(
                 route=route,
             )
         )
-    return tuple(sorted(groups, key=lambda group: group.retirement_identity))
+
+    def retirement_order_key(group: _RetirementRouteGroup) -> str:
+        return group.retirement_identity
+
+    return tuple(sorted(groups, key=retirement_order_key))
 
 
 @dataclass(frozen=True, slots=True)
@@ -1998,6 +1999,12 @@ def _logical_node_order(node: _LogicalNode) -> tuple[tuple[str, ...], str, str]:
         canonical_json_sha256(node.definition),
         node.key,
     )
+
+
+def _route_group_order(
+    item: tuple[FrozenJsonObject, list[_LogicalNode]],
+) -> tuple[tuple[str, ...], str, str]:
+    return min(_logical_node_order(node) for node in item[1])
 
 
 def _mutation_surface_scope(node: _LogicalNode) -> tuple[str, ...] | None:
@@ -2414,9 +2421,7 @@ def _normalize_logical_graph(
             continue
         ordered_routes = sorted(
             route_groups.items(),
-            key=lambda item: min(
-                (_logical_node_order(node) for node in item[1]),
-            ),
+            key=_route_group_order,
         )
         _, writer_list = ordered_routes[0]
         writer_nodes = tuple(writer_list)
