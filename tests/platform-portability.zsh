@@ -54,9 +54,11 @@ grep -Fq \
 expected_pyrefly_type_gate=$(
   print -rl -- \
     '          uvx --from pyrefly==1.2.0 pyrefly check \' \
+    '            --preset strict \' \
+    '            --min-severity warn \' \
     '            --search-path home/private_dot_local/lib/agent-equipment \' \
     '            --progress-bar no \' \
-    '            --summary full \' \
+    '            --summary=full \' \
     '            home/private_dot_local/lib/agent-equipment/agent_equipment \' \
     '            home/private_dot_local/bin/executable_agent-equipment'
 )

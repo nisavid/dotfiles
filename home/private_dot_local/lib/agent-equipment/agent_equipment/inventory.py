@@ -58,6 +58,24 @@ class ReadOnlyAdapter(Protocol):
         """Return one plain or typed RuntimeObservation snapshot."""
 
 
+def _runtime_observation_sort_key(
+    observation: RuntimeObservation,
+) -> tuple[str, str, str]:
+    return (
+        observation.harness,
+        observation.route_identity,
+        observation.request_identity,
+    )
+
+
+def _observe_request_sort_key(request: ObserveRequest) -> tuple[str, str, str]:
+    return (
+        request.harness,
+        request.route_identity,
+        request.request_identity,
+    )
+
+
 def admit_capability_discovery(snapshot: object) -> CapabilityDiscovery | AdapterError:
     """Admit one complete canonical CapabilityDiscovery snapshot."""
 
@@ -353,13 +371,7 @@ def admit_runtime_inventory(
             return observation.error
         observations.append(observation)
     records.sort(key=_capability_record_sort_key)
-    observations.sort(
-        key=lambda observation: (
-            observation.harness,
-            observation.route_identity,
-            observation.request_identity,
-        )
-    )
+    observations.sort(key=_runtime_observation_sort_key)
     if not records or len(records) > MAX_CAPABILITY_RECORDS:
         return _admission_error("RUNTIME_INVENTORY_INVALID", _INVENTORY_INVALID_MESSAGE)
     try:
@@ -420,11 +432,7 @@ def collect_runtime_inventory(
     ordered_requests = tuple(
         sorted(
             requests,
-            key=lambda request: (
-                request.harness,
-                request.route_identity,
-                request.request_identity,
-            ),
+            key=_observe_request_sort_key,
         )
     )
     if len({request.request_identity for request in ordered_requests}) != len(
@@ -576,13 +584,7 @@ def collect_runtime_inventory(
         (record for discovery in discoveries for record in discovery.records),
         key=_capability_record_sort_key,
     )
-    observations.sort(
-        key=lambda observation: (
-            observation.harness,
-            observation.route_identity,
-            observation.request_identity,
-        )
-    )
+    observations.sort(key=_runtime_observation_sort_key)
     try:
         capabilities = (
             discoveries[0]
@@ -919,7 +921,9 @@ def _request_matches_capability(
     equipment = _frozen_string_tuple(document.get("equipment_identities"))
     controlled = _frozen_string_tuple(document.get("controlled_equipment_identities"))
     if (
-        equipment != authorized_equipment
+        equipment is None
+        or controlled is None
+        or equipment != authorized_equipment
         or controlled != authorized_controls
         or not authorized_equipment
     ):
@@ -1133,8 +1137,11 @@ def _capability_digests_are_canonical(record: dict[str, object]) -> bool:
 def _capability_sort_key(record: object) -> tuple[str, ...]:
     if type(record) is not dict:
         return ("", "", "", "", "")
-    provider = record.get("provider_match")
-    if type(provider) is not dict:
+    provider_value = record.get("provider_match")
+    provider: dict[object, object]
+    if type(provider_value) is dict:
+        provider = provider_value
+    else:
         provider = {}
     kind = provider.get("kind")
     if type(kind) is not str:
