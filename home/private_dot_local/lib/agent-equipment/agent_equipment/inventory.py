@@ -16,6 +16,7 @@ from .model import (
     RuntimeInventory,
     RuntimeObservation,
     ValidatedCatalogLock,
+    _capability_record_sort_key,
     _runtime_inventory_digest,
     freeze_json,
     thaw_json,
@@ -332,7 +333,7 @@ def admit_runtime_inventory(
         if observation.error is not None:
             return observation.error
         observations.append(observation)
-    records.sort(key=lambda record: _capability_sort_key(record.document))
+    records.sort(key=_capability_record_sort_key)
     observations.sort(
         key=lambda observation: (
             observation.harness,
@@ -554,7 +555,7 @@ def collect_runtime_inventory(
 
     records = sorted(
         (record for discovery in discoveries for record in discovery.records),
-        key=lambda record: _capability_sort_key(record.document),
+        key=_capability_record_sort_key,
     )
     observations.sort(
         key=lambda observation: (
