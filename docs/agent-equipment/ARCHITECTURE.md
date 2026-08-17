@@ -1159,3 +1159,34 @@ generated lock to the migrated catalog digest, and validate the result before
 authored files change. Apply never migrates schemas. Unsupported future
 versions fail closed. A production release retains golden old-version fixtures
 and round-trip or one-way migration evidence for every supported transition.
+
+### Coordinated six-distribution release boundary
+
+The coordinated release tracked in
+[`nisavid/agents#41`](https://github.com/nisavid/agents/issues/41) contains six
+distributions: Rolecasting, Tricritical, Versionkeeping, Mergecraft, Artifact
+Customs, and Task Witness. "Agent Plugins v1" is not a name for this release.
+Agent Plugins Specification v1.0.0 is the packaging standard. The current exact
+agent-equipment v1 model and Schemas support distributions that use that
+standard, but they do not define or bind a source-skill reconciliation receipt.
+This boundary does not defer support for Agent Plugins Specification v1.0.0.
+
+The receipt contract is owned by
+[`nisavid/agents#45`](https://github.com/nisavid/agents/issues/45),
+[`#49`](https://github.com/nisavid/agents/issues/49),
+[`#50`](https://github.com/nisavid/agents/issues/50), and
+[`#51`](https://github.com/nisavid/agents/issues/51). Until that contract is
+defined, the current exact agent-equipment v1 Schemas must not add a placeholder,
+accept an open extension, or overload `ReleaseReceipt`. Step 8b in
+[`nisavid/dotfiles#80`](https://github.com/nisavid/dotfiles/issues/80) owns the
+integration before Step 9 can request live `ApplyAuthorization` for a candidate
+that contains the coordinated six-distribution release.
+
+That integration must use either a new closed, versioned adjacent record or a
+new major version of each affected closed Schema. It must bind the exact
+receipt bytes and its canonical identity and digest to the exact candidate
+identity, catalog digest, lock digest, and coordinated release identity chain.
+The release archive must retain those exact bytes. For a candidate that
+contains the coordinated six-distribution release, a missing, malformed,
+duplicate, noncanonical, untrusted, misbound, or byte-different receipt fails
+closed before live authorization or release.
