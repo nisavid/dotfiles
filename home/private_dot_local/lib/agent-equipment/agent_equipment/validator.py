@@ -70,10 +70,10 @@ _DOCUMENT_READ_CHUNK_BYTES = 1024 * 1024
 EXPECTED_SCHEMA_SHA256 = MappingProxyType(
     {
         "acceptance-evidence-v1.schema.json": "5264aad08075c115cb3633f3d0f9a46b8a0a2027758b931c4334a2f234e660d5",
-        "adapter-contract-v1.schema.json": "b448a9c44bfbaf637baf1477dae45521beeae72fba3c5f60504fb3225f2cc5f6",
+        "adapter-contract-v1.schema.json": "700b6b4783ccfebf4451684d8ff09f8721bae4629be2753a49718eb04bfdf625",
         "captured-state-v1.schema.json": "d0c30850f03366dd612208d12ee35b2462d84e5e6901e3ca7d0a6b0ed3bdf693",
         "catalog-v1.schema.json": "a8e2942347501dd2ba16aebc5762e0a234f55847bd95b75a805fad867ac41a02",
-        "execution-authority-v1.schema.json": "ce853f1561bfbf85225bd1db65a1cafbb4bf8f23b6bb21630170dbe18a22ff5d",
+        "execution-authority-v1.schema.json": "30c61c9fdbbc52679bf1f18bf80cf99d7429d7efc07a8b6ccf80dde7ee4d5b48",
         "lock-v1.schema.json": "f16c7e89523257b469a291984e4ad18491373942cd8605a62469a08bec9f98d7",
         "plan-action-set-v1.schema.json": "fcfede41027b76c96c20161fcecfd8fb9a8d38fa0675f3d749a094055ba0e12e",
     }
@@ -118,8 +118,19 @@ class _DesignValidationResult:
 
 
 @dataclass(frozen=True, slots=True)
+class _HeldPathEntry:
+    parent_descriptor: int | None
+    name: str
+    descriptor: int
+    identity: tuple[int, int, int]
+    stable_metadata: tuple[int, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class _HeldDocument:
-    path: Path
+    path_entries: tuple[_HeldPathEntry, ...]
+    parent_descriptor: int
+    leaf_name: str
     descriptor: int
     identity: tuple[int, int, int]
     stable_metadata: tuple[int, ...]
@@ -176,6 +187,16 @@ def _stable_document_metadata(metadata: os.stat_result) -> tuple[int, ...]:
     )
 
 
+def _stable_directory_metadata(metadata: os.stat_result) -> tuple[int, ...]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_uid,
+        metadata.st_gid,
+    )
+
+
 def _hold_bounded_document(
     descriptors: ExitStack,
     path: Path,
@@ -186,7 +207,19 @@ def _hold_bounded_document(
     nonblocking = getattr(os, "O_NONBLOCK", None)
     if type(no_follow) is not int or type(nonblocking) is not int:
         raise OSError("safe nonblocking document reads are unavailable")
-    before = os.stat(path, follow_symlinks=False)
+    path_entries, parent_descriptor = _hold_document_parent(
+        descriptors,
+        path,
+        no_follow=no_follow,
+    )
+    leaf_name = path.name
+    if not leaf_name:
+        raise ValueError("document leaf name is unavailable")
+    before = os.stat(
+        leaf_name,
+        dir_fd=parent_descriptor,
+        follow_symlinks=False,
+    )
     if (
         not stat.S_ISREG(before.st_mode)
         or before.st_nlink != 1
@@ -194,7 +227,7 @@ def _hold_bounded_document(
     ):
         raise ValueError("document leaf is not an admissible regular file")
     flags = os.O_RDONLY | no_follow | nonblocking | getattr(os, "O_CLOEXEC", 0)
-    descriptor = os.open(path, flags)
+    descriptor = os.open(leaf_name, flags, dir_fd=parent_descriptor)
     descriptors.callback(os.close, descriptor)
     os.set_inheritable(descriptor, False)
     opened = os.fstat(descriptor)
@@ -207,11 +240,68 @@ def _hold_bounded_document(
     ):
         raise ValueError("document leaf changed before capture")
     return _HeldDocument(
-        path=path,
+        path_entries=path_entries,
+        parent_descriptor=parent_descriptor,
+        leaf_name=leaf_name,
         descriptor=descriptor,
         identity=_document_identity(opened),
         stable_metadata=_stable_document_metadata(opened),
     )
+
+
+def _hold_document_parent(
+    descriptors: ExitStack,
+    path: Path,
+    *,
+    no_follow: int,
+) -> tuple[tuple[_HeldPathEntry, ...], int]:
+    directory_flag = getattr(os, "O_DIRECTORY", None)
+    if type(directory_flag) is not int:
+        raise OSError("safe directory descriptor reads are unavailable")
+    flags = os.O_RDONLY | directory_flag | no_follow | getattr(os, "O_CLOEXEC", 0)
+    if path.is_absolute():
+        anchor = path.anchor
+        parent_parts = path.parent.parts[1:]
+    else:
+        anchor = "."
+        parent_parts = path.parent.parts
+
+    entries: list[_HeldPathEntry] = []
+    parent_descriptor: int | None = None
+    for name in (anchor, *parent_parts):
+        before = os.stat(
+            name,
+            dir_fd=parent_descriptor,
+            follow_symlinks=False,
+        )
+        if not stat.S_ISDIR(before.st_mode):
+            raise ValueError("document path parent is not a directory")
+        descriptor = os.open(
+            name,
+            flags,
+            dir_fd=parent_descriptor,
+        )
+        descriptors.callback(os.close, descriptor)
+        os.set_inheritable(descriptor, False)
+        opened = os.fstat(descriptor)
+        if (
+            not stat.S_ISDIR(opened.st_mode)
+            or _document_identity(before) != _document_identity(opened)
+            or _stable_directory_metadata(before) != _stable_directory_metadata(opened)
+        ):
+            raise ValueError("document path parent changed before capture")
+        entries.append(
+            _HeldPathEntry(
+                parent_descriptor=parent_descriptor,
+                name=name,
+                descriptor=descriptor,
+                identity=_document_identity(opened),
+                stable_metadata=_stable_directory_metadata(opened),
+            )
+        )
+        parent_descriptor = descriptor
+    assert parent_descriptor is not None
+    return tuple(entries), parent_descriptor
 
 
 def _read_bounded_document_descriptor(
@@ -253,8 +343,26 @@ def _read_bounded_document_descriptor(
 
 
 def _revalidate_held_document(held: _HeldDocument) -> None:
+    for entry in held.path_entries:
+        descriptor_metadata = os.fstat(entry.descriptor)
+        path_metadata = os.stat(
+            entry.name,
+            dir_fd=entry.parent_descriptor,
+            follow_symlinks=False,
+        )
+        if (
+            _document_identity(descriptor_metadata) != entry.identity
+            or _document_identity(path_metadata) != entry.identity
+            or _stable_directory_metadata(descriptor_metadata) != entry.stable_metadata
+            or _stable_directory_metadata(path_metadata) != entry.stable_metadata
+        ):
+            raise ValueError("document parent path changed during validation")
     descriptor_metadata = os.fstat(held.descriptor)
-    path_metadata = os.stat(held.path, follow_symlinks=False)
+    path_metadata = os.stat(
+        held.leaf_name,
+        dir_fd=held.parent_descriptor,
+        follow_symlinks=False,
+    )
     if (
         _document_identity(descriptor_metadata) != held.identity
         or _document_identity(path_metadata) != held.identity
@@ -302,34 +410,43 @@ def _load_catalog_lock_with_schemas(
         return _schema_manifest_failure()
     try:
         with ExitStack() as descriptors:
-            catalog_document = _hold_bounded_document(
-                descriptors,
-                Path(catalog_path),
-                maximum_bytes=MAX_CATALOG_BYTES,
-            )
-            lock_document = _hold_bounded_document(
-                descriptors,
-                Path(lock_path),
-                maximum_bytes=MAX_LOCK_BYTES,
-            )
-            if catalog_document.identity[:2] == lock_document.identity[:2]:
-                raise ValueError("catalog and lock must be distinct files")
-            catalog_bytes = _read_bounded_document_descriptor(
-                catalog_document.descriptor,
-                maximum_bytes=MAX_CATALOG_BYTES,
-            )
-            lock_bytes = _read_bounded_document_descriptor(
-                lock_document.descriptor,
-                maximum_bytes=MAX_LOCK_BYTES,
-            )
-            catalog = thaw_json(strict_load_json_bytes(catalog_bytes))
-            lock = thaw_json(strict_load_json_bytes(lock_bytes))
-            result = _validate_catalog_lock_with_schemas(catalog, lock, schemas)
-            _revalidate_held_document(catalog_document)
-            _revalidate_held_document(lock_document)
+            try:
+                catalog_document = _hold_bounded_document(
+                    descriptors,
+                    Path(catalog_path),
+                    maximum_bytes=MAX_CATALOG_BYTES,
+                )
+                lock_document = _hold_bounded_document(
+                    descriptors,
+                    Path(lock_path),
+                    maximum_bytes=MAX_LOCK_BYTES,
+                )
+                if catalog_document.identity[:2] == lock_document.identity[:2]:
+                    raise ValueError("catalog and lock must be distinct files")
+                catalog_bytes = _read_bounded_document_descriptor(
+                    catalog_document.descriptor,
+                    maximum_bytes=MAX_CATALOG_BYTES,
+                )
+                lock_bytes = _read_bounded_document_descriptor(
+                    lock_document.descriptor,
+                    maximum_bytes=MAX_LOCK_BYTES,
+                )
+            except (OSError, TypeError, UnicodeError, ValueError):
+                return _document_capture_failure()
+            try:
+                catalog = thaw_json(strict_load_json_bytes(catalog_bytes))
+                lock = thaw_json(strict_load_json_bytes(lock_bytes))
+                result = _validate_catalog_lock_with_schemas(catalog, lock, schemas)
+            except (TypeError, UnicodeError, ValueError, RecursionError):
+                return _document_parse_failure()
+            try:
+                _revalidate_held_document(catalog_document)
+                _revalidate_held_document(lock_document)
+            except (OSError, TypeError, UnicodeError, ValueError):
+                return _document_capture_failure()
             return result
-    except (OSError, TypeError, UnicodeError, ValueError, RecursionError):
-        return _document_parse_failure()
+    except (OSError, TypeError, UnicodeError, ValueError):
+        return _document_capture_failure()
 
 
 def validate_catalog_lock(
@@ -531,6 +648,19 @@ def _document_parse_failure() -> CatalogLockValidation:
             Diagnostic(
                 "DOCUMENT_PARSE_INVALID",
                 "Catalog and lock inputs must be strict finite UTF-8 JSON documents.",
+            ),
+        ),
+    )
+
+
+def _document_capture_failure() -> CatalogLockValidation:
+    return CatalogLockValidation(
+        None,
+        (
+            Diagnostic(
+                "DOCUMENT_CAPTURE_INVALID",
+                "Catalog and lock inputs must be stable, size-bounded, unique "
+                "regular files reached without symbolic links.",
             ),
         ),
     )

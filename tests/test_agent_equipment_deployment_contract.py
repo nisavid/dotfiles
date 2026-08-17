@@ -536,7 +536,11 @@ def normalized_state(*, present: bool) -> dict[str, object]:
         "enablement": "enabled" if present else "disabled",
         "configuration": {"status": "not_applicable"},
         "component_states": [],
-        "observed_version": {"status": "route_absent"},
+        "observed_version": (
+            {"status": "observed", "value": "fixture-v1"}
+            if present
+            else {"status": "route_absent"}
+        ),
         "immutable_content": {"status": "not_applicable"},
         "native_update_control": "not_applicable",
         "native_update_suppression_state": "not_applicable",
@@ -1840,6 +1844,7 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
         forged = copy.deepcopy(authority_set)
         forged_pre_state = forged["observations"][0]["normalized_pre_state"]
         forged_pre_state["route_presence"] = "unknown"
+        forged_pre_state["observed_version"] = {"status": "unknown"}
         forged["observations"][0]["normalized_pre_state_digest"] = canonical_digest(
             forged_pre_state
         )
@@ -1962,11 +1967,11 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
         # fixture. Regenerate both when that fixture changes.
         self.assertEqual(
             authorization["authorization_identity"],
-            "apply-authorization:sha256:5486730a10870abab272a13e62d15936335c22760a4534ac33bee7d0ce8165be",
+            "apply-authorization:sha256:176cc103aec3f22e4ed27afd0515740f7929ac507b4da72aa31045c8816dcc8d",
         )
         self.assertEqual(
             trusted_digest,
-            "sha256:15f7694e5934008940e26c20c7a2691d8d07c01e4cec81879a7f8295e6ad449c",
+            "sha256:f9e9deff6a343b0ddb3f2dd49dc87cd0fa8fc773faccbc18208b4a48b12ac355",
         )
 
         diagnostics = EXECUTION_AUTHORITY.validate_apply_authorization(
@@ -2316,6 +2321,9 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
         resealed_observations["observations"][0]["normalized_pre_state"][
             "route_presence"
         ] = "unknown"
+        resealed_observations["observations"][0]["normalized_pre_state"][
+            "observed_version"
+        ] = {"status": "unknown"}
         resealed_observations["observations"][0]["normalized_pre_state_digest"] = (
             canonical_digest(
                 resealed_observations["observations"][0]["normalized_pre_state"]
@@ -2387,6 +2395,9 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
         coordinated_reseal = copy.deepcopy(prepared)
         coordinated_authority = coordinated_reseal["authorities"][0]
         coordinated_authority["captured_pre_state"]["route_presence"] = "unknown"
+        coordinated_authority["captured_pre_state"]["observed_version"] = {
+            "status": "unknown"
+        }
         coordinated_authority["captured_pre_state_digest"] = canonical_digest(
             coordinated_authority["captured_pre_state"]
         )

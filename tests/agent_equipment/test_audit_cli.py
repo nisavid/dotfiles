@@ -446,7 +446,7 @@ def _rewrite_request(
 
 
 def _install_reviewed_config(root: Path) -> Path:
-    home = root / "reviewed home"
+    home = root.resolve(strict=True) / "reviewed home"
     installed_config = home / ".config/agent-equipment"
     installed_config.mkdir(parents=True)
     shutil.copyfile(CATALOG_PATH, installed_config / "catalog-v1.json")
@@ -474,7 +474,8 @@ class AuditCliTests(unittest.TestCase):
 
         outputs: list[str] = []
         with tempfile.TemporaryDirectory() as temporary:
-            home = Path(temporary) / "reviewed home"
+            temporary_root = Path(temporary).resolve(strict=True)
+            home = temporary_root / "reviewed home"
             installed_config = home / ".config/agent-equipment"
             installed_config.mkdir(parents=True)
             shutil.copyfile(CATALOG_PATH, installed_config / "catalog-v1.json")
@@ -487,14 +488,13 @@ class AuditCliTests(unittest.TestCase):
                         os.environ,
                         {
                             "HOME": str(home),
-                            "XDG_CONFIG_HOME": str(Path(temporary) / "hostile"),
+                            "XDG_CONFIG_HOME": str(temporary_root / "hostile"),
                         },
                     ),
                     patch.object(
                         agent_equipment,
                         "_audit_runtime_inputs",
                         side_effect=runtime_inputs,
-                        create=True,
                     ),
                     patch.object(sys, "argv", ["agent-equipment", "audit"]),
                     redirect_stdout(stdout),
@@ -776,7 +776,10 @@ class AuditCliTests(unittest.TestCase):
 
         with (
             tempfile.TemporaryDirectory() as temporary,
-            patch.dict(os.environ, {"HOME": temporary}),
+            patch.dict(
+                os.environ,
+                {"HOME": str(Path(temporary).resolve(strict=True))},
+            ),
             patch.object(sys, "argv", ["agent-equipment", "audit"]),
             redirect_stdout(stdout),
             redirect_stderr(stderr),
@@ -809,7 +812,7 @@ class AuditCliTests(unittest.TestCase):
         manifest = installed_manifest()
         stdout = io.StringIO()
         with tempfile.TemporaryDirectory() as temporary:
-            home = Path(temporary)
+            home = Path(temporary).resolve(strict=True)
             installed_config = home / ".config/agent-equipment"
             installed_config.mkdir(parents=True)
             shutil.copyfile(CATALOG_PATH, installed_config / "catalog-v1.json")
@@ -838,7 +841,7 @@ class AuditCliTests(unittest.TestCase):
         stdout = io.StringIO()
         stderr = io.StringIO()
         with tempfile.TemporaryDirectory() as temporary:
-            home = Path(temporary)
+            home = Path(temporary).resolve(strict=True)
             installed_config = home / ".config/agent-equipment"
             installed_config.mkdir(parents=True)
             shutil.copyfile(CATALOG_PATH, installed_config / "catalog-v1.json")

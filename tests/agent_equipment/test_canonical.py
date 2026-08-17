@@ -16,7 +16,7 @@ from agent_equipment.canonical import (
     strict_load_json_bytes,
     strict_load_json_path,
 )
-from agent_equipment.model import thaw_json
+from agent_equipment.model import _canonical_json_bytes, thaw_json
 
 ACCEPTANCE_EVIDENCE_SCHEMA_PATH = (
     "lib/agent-equipment/schemas/acceptance-evidence-v1.schema.json"
@@ -74,6 +74,28 @@ class CanonicalJsonTest(unittest.TestCase):
             canonical_json_sha256(document),
             "sha256:aa58fba8483623bed37c1b02edfccbdd9a53123837c20bfa4cb4049993a2872e",
         )
+
+    def test_model_and_public_canonical_serializers_remain_byte_identical(
+        self,
+    ) -> None:
+        corpus = (
+            None,
+            True,
+            0,
+            -17,
+            1.25,
+            "é/雪",
+            [],
+            {},
+            {"z": [3, {"b": False, "a": None}], "a": "ordered"},
+        )
+
+        for document in corpus:
+            with self.subTest(document=document):
+                self.assertEqual(
+                    _canonical_json_bytes(document),
+                    canonical_json_bytes(document),
+                )
 
     def test_strict_load_rejects_ambiguous_or_non_json_input(self) -> None:
         loaded = strict_load_json_bytes(b'{"items":[true,null,1.25]}')

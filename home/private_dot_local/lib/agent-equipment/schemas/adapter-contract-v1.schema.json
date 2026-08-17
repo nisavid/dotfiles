@@ -765,6 +765,18 @@
         {
           "if": {
             "properties": {
+              "observed_version": {
+                "properties": {"status": {"const": "route_absent"}}
+              }
+            }
+          },
+          "then": {
+            "properties": {"route_presence": {"const": "absent"}}
+          }
+        },
+        {
+          "if": {
+            "properties": {
               "immutable_content": {
                 "properties": {"status": {"const": "observed"}}
               }
