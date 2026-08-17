@@ -52,6 +52,14 @@ _CATALOG_LOCK_VALIDATION = load_catalog_lock(
 )
 assert _CATALOG_LOCK_VALIDATION.model is not None
 VALIDATED_CATALOG_LOCK: ValidatedCatalogLock = _CATALOG_LOCK_VALIDATION.model
+NON_OBJECT_JSON_ROOTS: tuple[object, ...] = (
+    [],
+    "scalar",
+    0,
+    1.25,
+    True,
+    None,
+)
 
 
 def load_fixture(name: str) -> dict[str, object]:
@@ -228,6 +236,17 @@ def padded_runtime_observation(
 
 
 class CapabilityAdmissionTests(unittest.TestCase):
+    def test_non_object_json_roots_return_the_capability_admission_error(
+        self,
+    ) -> None:
+        for snapshot in NON_OBJECT_JSON_ROOTS:
+            with self.subTest(snapshot=snapshot):
+                admitted = admit_capability_discovery(snapshot)
+
+                self.assertIsInstance(admitted, AdapterError)
+                assert isinstance(admitted, AdapterError)
+                self.assertEqual(admitted.code, "CAPABILITY_DISCOVERY_INVALID")
+
     def test_valid_discovery_becomes_one_immutable_typed_capability(self) -> None:
         snapshot = load_fixture("valid-adapter-capability-record.json")
 
@@ -368,6 +387,17 @@ class CapabilityAdmissionTests(unittest.TestCase):
 
 
 class ObservationAdmissionTests(unittest.TestCase):
+    def test_non_object_json_roots_return_the_observe_request_admission_error(
+        self,
+    ) -> None:
+        for snapshot in NON_OBJECT_JSON_ROOTS:
+            with self.subTest(snapshot=snapshot):
+                admitted = admit_observe_request(snapshot)
+
+                self.assertIsInstance(admitted, AdapterError)
+                assert isinstance(admitted, AdapterError)
+                self.assertEqual(admitted.code, "OBSERVE_REQUEST_INVALID")
+
     def test_valid_observe_request_becomes_an_immutable_detached_record(self) -> None:
         snapshot = load_fixture("valid-adapter-observe-request.json")
 
@@ -402,6 +432,17 @@ class ObservationAdmissionTests(unittest.TestCase):
             "sha256:6d56a256dad3604063078b0b4c68152f6015b07d97b10a991f5d0a2edea0d2ae",
         )
         self.assertEqual(admitted.route_identity, "route:claude/mattpocock-plugin")
+
+    def test_non_object_json_roots_return_the_observation_admission_error(
+        self,
+    ) -> None:
+        for snapshot in NON_OBJECT_JSON_ROOTS:
+            with self.subTest(snapshot=snapshot):
+                admitted = admit_runtime_observation(snapshot)
+
+                self.assertIsInstance(admitted, AdapterError)
+                assert isinstance(admitted, AdapterError)
+                self.assertEqual(admitted.code, "RUNTIME_OBSERVATION_INVALID")
 
     def test_runtime_observation_accepts_repeated_acyclic_containers(self) -> None:
         snapshot = load_fixture("valid-adapter-runtime-observation.json")
@@ -473,6 +514,30 @@ class ObservationAdmissionTests(unittest.TestCase):
 
 
 class RuntimeInventoryAdmissionTests(unittest.TestCase):
+    def test_non_object_capability_roots_return_the_inventory_admission_error(
+        self,
+    ) -> None:
+        observation = load_fixture("valid-adapter-runtime-observation.json")
+        for snapshot in NON_OBJECT_JSON_ROOTS:
+            with self.subTest(snapshot=snapshot):
+                admitted = admit_runtime_inventory([snapshot], [observation])
+
+                self.assertIsInstance(admitted, AdapterError)
+                assert isinstance(admitted, AdapterError)
+                self.assertEqual(admitted.code, "RUNTIME_INVENTORY_INVALID")
+
+    def test_non_object_observation_roots_return_the_inventory_admission_error(
+        self,
+    ) -> None:
+        capability = load_fixture("valid-adapter-capability-record.json")
+        for snapshot in NON_OBJECT_JSON_ROOTS:
+            with self.subTest(snapshot=snapshot):
+                admitted = admit_runtime_inventory([capability], [snapshot])
+
+                self.assertIsInstance(admitted, AdapterError)
+                assert isinstance(admitted, AdapterError)
+                self.assertEqual(admitted.code, "RUNTIME_INVENTORY_INVALID")
+
     def test_inventory_globally_sorts_reversed_capability_snapshots(self) -> None:
         later = load_fixture("valid-adapter-capability-record.json")
         earlier = copy.deepcopy(later)
@@ -714,6 +779,63 @@ class RuntimeInventoryAdmissionTests(unittest.TestCase):
 
 
 class ReadOnlyCollectorTests(unittest.TestCase):
+    def test_non_object_capability_roots_return_the_capability_admission_error(
+        self,
+    ) -> None:
+        request = admit_observe_request(bound_observe_request_snapshot())
+        assert isinstance(request, ObserveRequest)
+
+        class Adapter:
+            def __init__(self, snapshot: object) -> None:
+                self.snapshot = snapshot
+
+            def capabilities(self) -> object:
+                return self.snapshot
+
+            def observe(self, _: ObserveRequest) -> object:
+                raise AssertionError("invalid discovery reached observation")
+
+        for snapshot in NON_OBJECT_JSON_ROOTS:
+            with self.subTest(snapshot=snapshot):
+                collected = collect_runtime_inventory(
+                    (Adapter(snapshot),),
+                    (request,),
+                    validated_catalog_lock=VALIDATED_CATALOG_LOCK,
+                )
+
+                self.assertIsInstance(collected, AdapterError)
+                assert isinstance(collected, AdapterError)
+                self.assertEqual(collected.code, "CAPABILITY_DISCOVERY_INVALID")
+
+    def test_non_object_observation_roots_return_the_observation_admission_error(
+        self,
+    ) -> None:
+        capability = load_fixture("valid-adapter-capability-record.json")
+        request = admit_observe_request(bound_observe_request_snapshot())
+        assert isinstance(request, ObserveRequest)
+
+        class Adapter:
+            def __init__(self, snapshot: object) -> None:
+                self.snapshot = snapshot
+
+            def capabilities(self) -> object:
+                return capability
+
+            def observe(self, _: ObserveRequest) -> object:
+                return self.snapshot
+
+        for snapshot in NON_OBJECT_JSON_ROOTS:
+            with self.subTest(snapshot=snapshot):
+                collected = collect_runtime_inventory(
+                    (Adapter(snapshot),),
+                    (request,),
+                    validated_catalog_lock=VALIDATED_CATALOG_LOCK,
+                )
+
+                self.assertIsInstance(collected, AdapterError)
+                assert isinstance(collected, AdapterError)
+                self.assertEqual(collected.code, "RUNTIME_OBSERVATION_INVALID")
+
     def test_capability_system_exit_is_redacted_without_catching_interrupts(
         self,
     ) -> None:
