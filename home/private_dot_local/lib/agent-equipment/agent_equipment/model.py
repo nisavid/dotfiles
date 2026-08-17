@@ -109,9 +109,9 @@ class Diagnostic:
     route_identity: str | None = None
 
     def __post_init__(self) -> None:
+        _require_string(self.code)
+        _require_string(self.message)
         for value in (
-            self.code,
-            self.message,
             self.equipment_identity,
             self.harness,
             self.route_identity,

@@ -22,7 +22,7 @@
     },
     "opaqueIdentity": {
       "type": "string",
-      "pattern": "^[a-z][a-z0-9_-]*:[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+      "pattern": "^[a-z][a-z0-9_-]{0,31}:[A-Za-z0-9][A-Za-z0-9._:/-]{0,254}$"
     },
     "artifactReference": {
       "type": "string",
@@ -117,7 +117,7 @@
         "apply_authorization_digest": {"$ref": "#/$defs/digest"},
         "execution_domain_identity": {
           "type": "string",
-          "pattern": "^execution-domain:[A-Za-z0-9][A-Za-z0-9._/-]*$"
+          "pattern": "^execution-domain:[A-Za-z0-9][A-Za-z0-9._/-]{0,254}$"
         },
         "execution_nonce": {
           "type": "string",

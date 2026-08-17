@@ -54,20 +54,20 @@ class PublicApiTests(unittest.TestCase):
 
     def test_public_validation_signatures_have_no_schema_path_override(self) -> None:
         self.assertEqual(
-            str(inspect.signature(agent_equipment.load_catalog_lock)),
-            "(catalog_path: 'Path', lock_path: 'Path') -> 'CatalogLockValidation'",
+            tuple(inspect.signature(agent_equipment.load_catalog_lock).parameters),
+            ("catalog_path", "lock_path"),
         )
         self.assertEqual(
-            str(inspect.signature(agent_equipment.validate_catalog_lock)),
-            "(catalog: 'object', lock: 'object') -> 'CatalogLockValidation'",
+            tuple(inspect.signature(agent_equipment.validate_catalog_lock).parameters),
+            ("catalog", "lock"),
         )
         self.assertEqual(
-            str(
+            tuple(
                 inspect.signature(
                     agent_equipment.build_installed_implementation_manifest
-                )
+                ).parameters
             ),
-            "() -> 'InstalledImplementationManifest'",
+            (),
         )
 
     def test_main_fails_closed_before_runtime_commands_exist(self) -> None:

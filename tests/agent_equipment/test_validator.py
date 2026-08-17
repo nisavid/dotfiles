@@ -27,8 +27,8 @@ FIXTURES = ROOT / "tests/fixtures/agent-equipment/schema"
 class CatalogLockValidatorTests(unittest.TestCase):
     def fixture_pair(self) -> tuple[dict[str, object], dict[str, object]]:
         return (
-            json.loads((FIXTURES / "valid-catalog.json").read_text()),
-            json.loads((FIXTURES / "valid-lock.json").read_text()),
+            json.loads((FIXTURES / "valid-catalog.json").read_text(encoding="utf-8")),
+            json.loads((FIXTURES / "valid-lock.json").read_text(encoding="utf-8")),
         )
 
     def bind_catalog_digest(
@@ -54,8 +54,8 @@ class CatalogLockValidatorTests(unittest.TestCase):
                 self.assertFalse(hasattr(validator, legacy_name))
 
     def test_public_validation_does_not_construct_a_mutation_plan(self) -> None:
-        catalog = json.loads(CATALOG.read_text())
-        lock = json.loads(LOCK.read_text())
+        catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
+        lock = json.loads(LOCK.read_text(encoding="utf-8"))
 
         with patch.object(
             validator,

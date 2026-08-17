@@ -4,10 +4,12 @@ import inspect
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Self
 from unittest.mock import patch
 
 from agent_equipment.canonical import (
     _build_installed_implementation_manifest,
+    _require_closed_directory,
     build_installed_implementation_manifest,
     canonical_json_bytes,
     canonical_json_sha256,
@@ -148,9 +150,7 @@ class CanonicalJsonTest(unittest.TestCase):
             "sha256:70590403b684cc601172740a8415e1c4d77aa505136ca72c91b9df6e7908bf04",
         )
 
-    def test_installed_manifest_rejects_false_or_empty_runtime_and_inventory(
-        self,
-    ) -> None:
+    def test_installed_manifest_rejects_invalid_runtime(self) -> None:
         with TemporaryDirectory() as directory:
             base = Path(directory)
             runtime = base / "python"
@@ -177,8 +177,86 @@ class CanonicalJsonTest(unittest.TestCase):
                         version=version,
                     )
 
+    def test_installed_manifest_rejects_invalid_runtime_path(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory) / "installed"
+            write_installed_tree(root)
+
             with self.assertRaises(ValueError):
-                fixture_manifest(root=root, runtime=Path(), relative_paths=())
+                fixture_manifest(root=root, runtime=Path())
+
+    def test_installed_manifest_rejects_empty_inventory(self) -> None:
+        with TemporaryDirectory() as directory:
+            base = Path(directory)
+            runtime = base / "python"
+            runtime.write_bytes(b"runtime")
+            root = base / "installed"
+            write_installed_tree(root)
+
+            with self.assertRaises(ValueError):
+                fixture_manifest(root=root, runtime=runtime, relative_paths=())
+
+    def test_installed_manifest_rejects_entries_over_role_bounds(self) -> None:
+        cases = (
+            (MANIFEST_PATHS[0], (256 * 1024) + 1),
+            (MANIFEST_PATHS[1], (1024 * 1024) + 1),
+            (MANIFEST_PATHS[7], (512 * 1024) + 1),
+        )
+        for relative_path, oversized_bytes in cases:
+            with (
+                self.subTest(relative_path=relative_path),
+                TemporaryDirectory() as directory,
+            ):
+                base = Path(directory)
+                runtime = base / "python"
+                runtime.write_bytes(b"runtime")
+                root = base / "installed"
+                write_installed_tree(root)
+                with (root / relative_path).open("wb") as stream:
+                    stream.truncate(oversized_bytes)
+
+                with self.assertRaises(ValueError):
+                    fixture_manifest(root=root, runtime=runtime)
+
+    def test_installed_manifest_rejects_runtime_over_256_mebibytes(self) -> None:
+        with TemporaryDirectory() as directory:
+            base = Path(directory)
+            runtime = base / "python"
+            with runtime.open("wb") as stream:
+                stream.truncate((256 * 1024 * 1024) + 1)
+            root = base / "installed"
+            write_installed_tree(root)
+
+            with self.assertRaises(ValueError):
+                fixture_manifest(root=root, runtime=runtime)
+
+    def test_installed_manifest_rejects_aggregate_over_eight_mebibytes(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as directory:
+            base = Path(directory)
+            runtime = base / "python"
+            runtime.write_bytes(b"runtime")
+            root = base / "installed"
+            write_installed_tree(root)
+            for relative_path in MANIFEST_PATHS:
+                if relative_path.startswith("lib/agent-equipment/agent_equipment/"):
+                    target_size = 900 * 1024
+                elif relative_path.startswith("lib/agent-equipment/schemas/"):
+                    target_size = 400 * 1024
+                else:
+                    continue
+                with (root / relative_path).open("wb") as stream:
+                    stream.truncate(target_size)
+
+            aggregate_size = sum(
+                (root / relative_path).stat().st_size
+                for relative_path in MANIFEST_PATHS
+            )
+            self.assertGreater(aggregate_size, 8 * 1024 * 1024)
+
+            with self.assertRaises(ValueError):
+                fixture_manifest(root=root, runtime=runtime)
 
     def test_installed_manifest_rejects_missing_symlinked_or_hardlinked_files(
         self,
@@ -236,6 +314,41 @@ class CanonicalJsonTest(unittest.TestCase):
 
                 with self.assertRaises(ValueError):
                     fixture_manifest(root=root, runtime=runtime)
+
+    def test_closed_inventory_stops_at_the_first_excess_entry(self) -> None:
+        class Entry:
+            def __init__(self, name: str) -> None:
+                self.name = name
+
+        class Scanner:
+            def __init__(self) -> None:
+                self._names = ("first", "second", "extra", "must-not-be-read")
+                self.yielded = 0
+
+            def __enter__(self) -> Self:
+                return self
+
+            def __exit__(self, *_args: object) -> None:
+                return None
+
+            def __iter__(self) -> Scanner:
+                return self
+
+            def __next__(self) -> Entry:
+                if self.yielded >= 3:
+                    raise AssertionError("closed inventory enumeration continued")
+                entry = Entry(self._names[self.yielded])
+                self.yielded += 1
+                return entry
+
+        scanner = Scanner()
+        with (
+            patch("agent_equipment.canonical.os.scandir", return_value=scanner),
+            self.assertRaises(ValueError),
+        ):
+            _require_closed_directory(-1, ("first", "second"))
+
+        self.assertEqual(scanner.yielded, 3)
 
     def test_installed_manifest_fails_if_a_file_is_swapped_during_hash(self) -> None:
         with TemporaryDirectory() as directory:
