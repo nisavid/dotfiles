@@ -569,7 +569,7 @@
         "contract_version": {"const": "adapter-contract-v1"},
         "request_identity": {"$ref": "#/$defs/nonEmptyString"},
         "correlation_identity": {"$ref": "#/$defs/nonEmptyString"},
-        "command": {"enum": ["audit", "import", "update", "adopt", "apply"]},
+        "command": {"enum": ["status", "unmanaged", "update", "add", "apply"]},
         "purpose": {"enum": ["inventory", "capture_pre_state", "verify_post_state", "recovery", "verify_compensation"]},
         "candidate_identity": {"$ref": "#/$defs/nonEmptyString"},
         "implementation_manifest_digest": {"$ref": "#/$defs/digest"},
@@ -599,7 +599,7 @@
           "if": {"properties": {"plan_digest": {"type": "null"}}},
           "then": {
             "properties": {
-              "command": {"enum": ["audit", "import", "update", "adopt"]},
+              "command": {"enum": ["status", "unmanaged", "update", "add"]},
               "purpose": {"const": "inventory"}
             }
           }
@@ -644,7 +644,7 @@
         "code": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]*$"},
         "classification": {"enum": ["invalid_request", "unsupported", "capability_changed", "concurrent_change", "secret_resolution_failed", "native_failure", "partial_change"]},
         "message": {"$ref": "#/$defs/nonEmptyString"},
-        "retry": {"enum": ["never", "after_audit"]},
+        "retry": {"enum": ["never", "after_status"]},
         "mutation_state": {"enum": ["not_started", "possibly_changed", "unknown"]},
         "evidence_references": {
           "type": "array",
@@ -1109,7 +1109,7 @@
         "code": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]*$"},
         "classification": {"enum": ["invalid_request", "unsupported", "capability_changed", "concurrent_change", "secret_resolution_failed", "native_failure", "partial_change"]},
         "message": {"$ref": "#/$defs/nonEmptyString"},
-        "retry": {"enum": ["never", "after_audit"]},
+        "retry": {"enum": ["never", "after_status"]},
         "mutation_state": {"enum": ["not_started", "possibly_changed", "unknown"]},
         "evidence_references": {
           "type": "array",

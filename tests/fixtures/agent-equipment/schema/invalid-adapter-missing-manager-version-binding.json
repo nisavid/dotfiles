@@ -29,7 +29,7 @@
       "code": "CAPABILITY_CHANGED",
       "classification": "capability_changed",
       "message": "The manager version no longer matches the reviewed capability.",
-      "retry": "after_audit",
+      "retry": "after_status",
       "mutation_state": "not_started",
       "evidence_references": []
     }

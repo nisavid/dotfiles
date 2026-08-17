@@ -11,7 +11,7 @@ semantics.
 | --- | --- | --- |
 | Authored catalog | dotfiles repository | Desired distributions, equipment, coverage, ownership, restore claims, and exceptions |
 | Resolved lock | generated dotfiles artifact | Exact expanded inventory and complete route records bound to the catalog digest |
-| Native manager locks | native manager | Import and provenance evidence only |
+| Native manager locks | native manager | Observation and provenance evidence only |
 | Harness files and CLIs | harness or native manager | Observable runtime state |
 | Caches, databases, credentials, usage state | harness or native manager | Never catalog state |
 | Apply authorization | external operator authority | One time-bounded, one-run grant for one exact pre-mutation binding tuple and execution domain |
@@ -577,21 +577,34 @@ operations rather than additional operation kinds.
 
 | Command | Runtime reads | Network | Authored writes | Runtime writes |
 | --- | --- | --- | --- | --- |
-| `audit` | Yes | No by default | None | None |
-| `import` | Yes | No by default | Emits a proposal only | None |
-| `update` | Yes | Allowed for source resolution | Proposed atomic catalog and resolved-lock pair | None |
-| `adopt` | Yes | No by default | Proposed catalog ownership transfer | None |
+| `status` | Yes | No by default | None | None |
+| `unmanaged` | Yes | No by default | None | None |
+| `add` | Yes, including a fresh targeted unmanaged observation and revalidation | No by default | One atomic proposed catalog addition | None |
+| `update` | Yes | As allowed by the configured source tracking policy | One atomic proposed catalog and resolved-lock update | None |
 | `apply` | Yes | Allowed only for locked restore | Checkpoint and authorization ledgers only | Automated operations on reconciler-owned routes, after exact external authorization |
 | `compensate` | Yes | No by default | Checkpoint and authorization ledgers only | Guarded restoration for one original run, after exact compensation authorization |
 
-`import` does not claim ownership. `adopt` requires the exact imported
-observation identity and changes authored ownership only; a later apply performs
-any runtime reconciliation. `update` advances the catalog's resolved route
-evidence and the digest-bound lock together for immutable revisions or reviewed
-native-rolling baselines, without installing them. Apply never advances either
-artifact.
+`unmanaged` reads both runtime state and the authored catalog. It emits
+canonical secret-free observation records only for equipment positively
+observed on the machine and absent from the catalog. Cataloged operator-owned
+routes are not unmanaged. The command changes neither runtime state nor the
+authored catalog, and a runtime observation remains factual rather than a
+proposal.
 
-Chezmoi's `run_onchange` integration invokes `audit` only. It can report a
+`add` does not consume or require a record from an earlier `unmanaged`
+invocation. During the same invocation it performs a fresh targeted unmanaged
+observation, derives one proposed catalog addition, then revalidates the
+observed state and every binding before emitting that proposal. If the runtime
+state or any binding changes, it fails without a partial proposal. It never
+changes runtime state.
+
+`update` follows the configured source tracking policy. It advances resolved
+route evidence and the digest-bound lock together for immutable revisions or
+reviewed native-rolling baselines, emits exactly one atomic proposed catalog
+and resolved-lock update, and installs nothing. Apply never advances either
+authored artifact.
+
+Chezmoi's `run_onchange` integration invokes `status` only. It can report a
 candidate plan but cannot accept an authorization path or digest, open the
 authorization ledger, create an action checkpoint, or invoke `apply`. An
 explicit operator workflow invokes `apply` with exact authorization bytes and a
@@ -601,13 +614,12 @@ the authorization record itself. A later public `compensate` invocation has the
 same closed-input rule for exact `CompensationAuthorization` bytes and
 `trusted_compensation_authorization_digest`. It cannot reuse `ApplyAuthorization`.
 
-An imported observation identity is the canonical digest of its surface,
-observed-state digest, catalog digest, and inventory digest. Adoption accepts
-only a previously emitted observation record whose identity, bindings, value,
-and digest still agree; a newly constructed self-consistent record is not an
-import reference. The production controller persists imported observations as
-authored proposals, while the disposable acceptance fixture keeps the same
-registry in memory.
+An unmanaged observation record identity is the canonical digest of its
+surface, observed-state digest, catalog digest, and inventory digest.
+`unmanaged` emits that canonical, secret-free record shape, and the targeted
+observation inside `add` uses the same factual shape internally. The `add`
+proposal is separate authored output and is emitted only after fresh
+revalidation succeeds.
 
 ## Adapter interface
 
@@ -653,8 +665,10 @@ contains `code`, `classification`, `message`, `retry`, `mutation_state`, and
 `classification` is one of `invalid_request`, `unsupported`,
 `capability_changed`, `concurrent_change`, `secret_resolution_failed`,
 `native_failure`, or `partial_change`; `retry` is `never` or
-`after_audit`; and `mutation_state` is `not_started`, `possibly_changed`, or
-`unknown`. Observation failures use `not_started`. Capability discovery is
+`after_status`; the latter schema literal requires a fresh read-only status
+observation before retry and is not a public command name. `mutation_state` is
+`not_started`, `possibly_changed`, or `unknown`. Observation failures use
+`not_started`. Capability discovery is
 all-or-error: on discovery failure it returns this error envelope and no
 partial records. Messages and referenced evidence are redacted by
 construction. Native stdout, stderr, environment, and resolved secret values
@@ -745,7 +759,7 @@ command. `compensate` is reserved for a separately authorized public
 | Field | Contract |
 | --- | --- |
 | `contract_version`, `request_identity`, `correlation_identity` | Record version, one-call identity, and command-run correlation identity. Recovery creates a new request identity under the same run correlation. |
-| `command`, `purpose` | Command is `audit`, `import`, `update`, `adopt`, or `apply`; purpose is `inventory`, `capture_pre_state`, `verify_post_state`, `recovery`, or `verify_compensation`. Neither field grants mutation authority. |
+| `command`, `purpose` | Command is `status`, `unmanaged`, `add`, `update`, or `apply`; purpose is `inventory`, `capture_pre_state`, `verify_post_state`, `recovery`, or `verify_compensation`. Neither field grants mutation authority. |
 | `candidate_identity`, `implementation_manifest_digest`, `catalog_digest`, `lock_digest`, `plan_digest` | Exact input bindings. Candidate identity names the immutable implementation candidate commit or artifact; the distinct manifest digest authenticates the canonical installed implementation manifest for that candidate. `plan_digest` is `null` only for non-apply inventory before a plan exists; the member and all other binding fields remain required. |
 | `capability_identity`, `capability_digest`, `manager_version_evidence_digest` | Exact discovered capability and manager-version evidence selected by the resolver. A mismatch or disappearance is an error, not a fallback. |
 | `harness`, `route_identity`, `route_digest`, `route_record` | The exact resolved route. `route_record` is complete and must digest to `route_digest`; its harness comes from the coverage record and its `control_owner` remains visible to the adapter. |
@@ -1192,8 +1206,9 @@ can prove this run's effect only when its durable invocation intent is
 - any other state: preserve it, report concurrent or partial drift, and stop.
 
 A completion-checkpoint write failure therefore cannot cause duplicate replay.
-A compensation failure remains durable and requires the same audit before a
-retry. A fresh/public compensation request, including classification of an
+A compensation failure remains durable and requires the same fresh read-only
+status observation before a retry. A fresh/public compensation request,
+including classification of an
 ambiguous `prepared` action before beginning restoration, first validates the
 closed `CompensationAuthorization`, its independently trusted digest and clock,
 the trusted execution domain, original execution tuple, checkpoint-set digest,
