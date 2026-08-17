@@ -51,10 +51,26 @@ grep -Fq \
   "python3 -m unittest discover -s tests/agent_equipment -t . -p 'test_*.py'" \
   "$workflow" ||
   fail 'platform workflow does not discover production agent-equipment tests'
-grep -Fq \
-  'uvx --from mypy==1.18.2 mypy --strict \' \
-  "$workflow" ||
-  fail 'platform workflow does not statically type-check agent-equipment'
+expected_pyrefly_type_gate=$(
+  print -rl -- \
+    '          uvx --from pyrefly==1.2.0 pyrefly check \' \
+    '            --search-path home/private_dot_local/lib/agent-equipment \' \
+    '            --progress-bar no \' \
+    '            --summary full \' \
+    '            home/private_dot_local/lib/agent-equipment/agent_equipment \' \
+    '            home/private_dot_local/bin/executable_agent-equipment'
+)
+workflow_type_gate=$(
+  awk '
+    /uvx --from (mypy|pyrefly)==/ { in_gate = 1 }
+    in_gate { print }
+    in_gate && /home\/private_dot_local\/bin\/executable_agent-equipment/ { exit }
+  ' "$workflow"
+)
+[[ $workflow_type_gate == "$expected_pyrefly_type_gate" ]] ||
+  fail 'platform workflow does not run the exact pinned Pyrefly gate'
+! grep -Fq 'mypy' "$workflow" ||
+  fail 'platform workflow still runs the superseded Mypy gate'
 grep -Fq \
   'home/private_dot_local/bin/executable_agent-equipment' \
   "$workflow" ||
