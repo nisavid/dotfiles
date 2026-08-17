@@ -1274,7 +1274,7 @@ class ReadOnlyCollectorTests(unittest.TestCase):
                     code="NATIVE_FAILURE",
                     classification="native_failure",
                     message="gh" + "p_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456",
-                    retry="after_audit",
+                    retry="after_status",
                     mutation_state="not_started",
                 )
 

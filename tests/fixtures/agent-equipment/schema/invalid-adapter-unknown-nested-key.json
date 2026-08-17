@@ -30,7 +30,7 @@
       "code": "NATIVE_FAILURE",
       "classification": "native_failure",
       "message": "The manager rejected the inspection request.",
-      "retry": "after_audit",
+      "retry": "after_status",
       "mutation_state": "not_started",
       "evidence_references": [],
       "details": "This unknown nested key must fail closed."

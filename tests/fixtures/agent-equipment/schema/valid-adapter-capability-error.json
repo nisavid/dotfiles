@@ -5,7 +5,7 @@
     "code": "NATIVE_FAILURE",
     "classification": "native_failure",
     "message": "The manager version could not be observed.",
-    "retry": "after_audit",
+    "retry": "after_status",
     "mutation_state": "not_started",
     "evidence_references": []
   }

@@ -151,7 +151,7 @@ class AdapterError:
             raise ValueError("adapter error classification is unsupported")
         if not _require_string(self.message):
             raise ValueError("adapter error messages must be nonempty")
-        if self.retry not in {"never", "after_audit"}:
+        if self.retry not in {"never", "after_status"}:
             raise ValueError("adapter error retry disposition is unsupported")
         if self.mutation_state not in {
             "not_started",
@@ -745,8 +745,8 @@ class Resolution:
     digest: str
 
     def __post_init__(self) -> None:
-        if self.command not in {"audit", "apply"}:
-            raise ValueError("resolution command must be audit or apply")
+        if self.command not in {"status", "apply"}:
+            raise ValueError("resolution command must be status or apply")
         if type(self.diagnostics) is not tuple or any(
             type(value) is not Diagnostic for value in self.diagnostics
         ):

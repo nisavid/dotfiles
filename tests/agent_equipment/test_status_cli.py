@@ -98,6 +98,8 @@ def _provider_match(provider: FrozenJsonObject, harness: str) -> dict[str, objec
 def _fake_runtime_inputs(
     validated: ValidatedCatalogLock,
     manifest: InstalledImplementationManifest,
+    *,
+    command: str = "status",
 ) -> tuple[tuple[ReadOnlyAdapter, ...], tuple[ObserveRequest, ...], ReadOnlyAdapter]:
     active_groups = _active_route_groups(validated)
     retirement_groups = _retirement_route_groups(validated)
@@ -245,7 +247,7 @@ def _fake_runtime_inputs(
     for index, group in enumerate(groups):
         capability = _matching_capability(group, discovery.records)
         assert capability is not None
-        request_identity = f"request:audit-{index:03d}"
+        request_identity = f"request:status-{index:03d}"
         identities = sorted(
             set(group.equipment_identities) | set(group.controlled_equipment_identities)
         )
@@ -255,8 +257,8 @@ def _fake_runtime_inputs(
         request_record = {
             "contract_version": "adapter-contract-v1",
             "request_identity": request_identity,
-            "correlation_identity": "correlation:audit-read-only",
-            "command": "audit",
+            "correlation_identity": "correlation:status-read-only",
+            "command": command,
             "purpose": "inventory",
             "candidate_identity": candidate_identity,
             "implementation_manifest_digest": manifest.digest,
@@ -401,7 +403,7 @@ def _fake_runtime_inputs(
             return observations[request.request_identity]
 
         def apply(self, *_: object) -> object:
-            raise AssertionError("read-only audit invoked mutation")
+            raise AssertionError("read-only status invoked mutation")
 
     adapter = Adapter()
     return (adapter,), tuple(requests), adapter
@@ -454,8 +456,8 @@ def _install_reviewed_config(root: Path) -> Path:
     return home
 
 
-class AuditCliTests(unittest.TestCase):
-    def test_exact_audit_ignores_xdg_and_resolves_reviewed_home_inputs_read_only(
+class StatusCliTests(unittest.TestCase):
+    def test_exact_status_ignores_xdg_and_resolves_reviewed_home_inputs_read_only(
         self,
     ) -> None:
         manifest = installed_manifest()
@@ -468,6 +470,7 @@ class AuditCliTests(unittest.TestCase):
             registered, requests, adapter = _fake_runtime_inputs(
                 validated,
                 received_manifest,
+                command="status",
             )
             adapters.append(adapter)
             return registered, requests
@@ -493,10 +496,10 @@ class AuditCliTests(unittest.TestCase):
                     ),
                     patch.object(
                         agent_equipment,
-                        "_audit_runtime_inputs",
+                        "_status_runtime_inputs",
                         side_effect=runtime_inputs,
                     ),
-                    patch.object(sys, "argv", ["agent-equipment", "audit"]),
+                    patch.object(sys, "argv", ["agent-equipment", "status"]),
                     redirect_stdout(stdout),
                     redirect_stderr(stderr),
                 ):
@@ -508,11 +511,11 @@ class AuditCliTests(unittest.TestCase):
 
         self.assertEqual(outputs[0], outputs[1])
         report = json.loads(outputs[0])
-        self.assertEqual(report["command"], "audit")
+        self.assertEqual(report["command"], "status")
         self.assertEqual(report["status"], "ok")
         self.assertEqual(report["implementation_manifest_digest"], manifest.digest)
         resolution = report["resolution"]
-        self.assertEqual(resolution["command"], "audit")
+        self.assertEqual(resolution["command"], "status")
         self.assertEqual(resolution["diagnostics"], [])
         self.assertEqual(len(resolution["coverage"]), 132)
         self.assertIsNotNone(resolution["candidate_plan"])
@@ -570,10 +573,10 @@ class AuditCliTests(unittest.TestCase):
                         patch.dict(os.environ, {"HOME": str(home)}),
                         patch.object(
                             agent_equipment,
-                            "_audit_runtime_inputs",
+                            "_status_runtime_inputs",
                             side_effect=runtime_inputs_for(changes, adapters),
                         ),
-                        patch.object(sys, "argv", ["agent-equipment", "audit"]),
+                        patch.object(sys, "argv", ["agent-equipment", "status"]),
                         redirect_stdout(stdout),
                     ):
                         status = agent_equipment.main(manifest)
@@ -611,10 +614,10 @@ class AuditCliTests(unittest.TestCase):
                 patch.dict(os.environ, {"HOME": str(home)}),
                 patch.object(
                     agent_equipment,
-                    "_audit_runtime_inputs",
+                    "_status_runtime_inputs",
                     side_effect=runtime_inputs,
                 ),
-                patch.object(sys, "argv", ["agent-equipment", "audit"]),
+                patch.object(sys, "argv", ["agent-equipment", "status"]),
                 redirect_stdout(stdout),
             ):
                 status = agent_equipment.main(manifest)
@@ -666,10 +669,10 @@ class AuditCliTests(unittest.TestCase):
                         patch.dict(os.environ, {"HOME": str(home)}),
                         patch.object(
                             agent_equipment,
-                            "_audit_runtime_inputs",
+                            "_status_runtime_inputs",
                             side_effect=runtime_inputs_for(field, value, adapters),
                         ),
-                        patch.object(sys, "argv", ["agent-equipment", "audit"]),
+                        patch.object(sys, "argv", ["agent-equipment", "status"]),
                         redirect_stdout(stdout),
                     ):
                         status = agent_equipment.main(manifest)
@@ -690,7 +693,7 @@ class AuditCliTests(unittest.TestCase):
                     "collect_runtime_inventory",
                     side_effect=AssertionError("empty registry reached collector"),
                 ) as collector,
-                patch.object(sys, "argv", ["agent-equipment", "audit"]),
+                patch.object(sys, "argv", ["agent-equipment", "status"]),
                 redirect_stdout(stdout),
             ):
                 status = agent_equipment.main(manifest)
@@ -720,10 +723,10 @@ class AuditCliTests(unittest.TestCase):
                 patch.dict(os.environ, {"HOME": str(home)}),
                 patch.object(
                     agent_equipment,
-                    "_audit_runtime_inputs",
+                    "_status_runtime_inputs",
                     side_effect=runtime_inputs,
                 ),
-                patch.object(sys, "argv", ["agent-equipment", "audit"]),
+                patch.object(sys, "argv", ["agent-equipment", "status"]),
                 redirect_stdout(stdout),
             ):
                 status = agent_equipment.main(manifest)
@@ -732,7 +735,7 @@ class AuditCliTests(unittest.TestCase):
         self.assertEqual(len(adapters), 1)
         self.assertEqual(adapters[0].calls, [])  # type: ignore[attr-defined]
 
-    def test_audit_inventory_request_may_bind_an_expected_state_digest(self) -> None:
+    def test_status_inventory_request_may_bind_an_expected_state_digest(self) -> None:
         manifest = installed_manifest()
 
         def runtime_inputs(
@@ -758,10 +761,10 @@ class AuditCliTests(unittest.TestCase):
                 patch.dict(os.environ, {"HOME": str(home)}),
                 patch.object(
                     agent_equipment,
-                    "_audit_runtime_inputs",
+                    "_status_runtime_inputs",
                     side_effect=runtime_inputs,
                 ),
-                patch.object(sys, "argv", ["agent-equipment", "audit"]),
+                patch.object(sys, "argv", ["agent-equipment", "status"]),
                 redirect_stdout(stdout),
             ):
                 status = agent_equipment.main(manifest)
@@ -769,7 +772,7 @@ class AuditCliTests(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertEqual(json.loads(stdout.getvalue())["status"], "ok")
 
-    def test_audit_fails_closed_with_one_stable_read_only_diagnostic(self) -> None:
+    def test_status_fails_closed_with_one_stable_read_only_diagnostic(self) -> None:
         manifest = installed_manifest()
         stdout = io.StringIO()
         stderr = io.StringIO()
@@ -780,7 +783,7 @@ class AuditCliTests(unittest.TestCase):
                 os.environ,
                 {"HOME": str(Path(temporary).resolve(strict=True))},
             ),
-            patch.object(sys, "argv", ["agent-equipment", "audit"]),
+            patch.object(sys, "argv", ["agent-equipment", "status"]),
             redirect_stdout(stdout),
             redirect_stderr(stderr),
         ):
@@ -792,11 +795,11 @@ class AuditCliTests(unittest.TestCase):
         self.assertEqual(
             report,
             {
-                "command": "audit",
+                "command": "status",
                 "diagnostics": [
                     {
-                        "code": "AUDIT_RUNTIME_UNAVAILABLE",
-                        "message": "Read-only audit inputs are unavailable.",
+                        "code": "STATUS_RUNTIME_UNAVAILABLE",
+                        "message": "Read-only status inputs are unavailable.",
                     }
                 ],
                 "implementation_manifest_digest": manifest.digest,
@@ -819,7 +822,7 @@ class AuditCliTests(unittest.TestCase):
             shutil.copyfile(LOCK_PATH, installed_config / "lock-v1.json")
             with (
                 patch.dict(os.environ, {"HOME": str(home)}),
-                patch.object(sys, "argv", ["agent-equipment", "audit"]),
+                patch.object(sys, "argv", ["agent-equipment", "status"]),
                 redirect_stdout(stdout),
             ):
                 status = agent_equipment.main(manifest)
@@ -829,13 +832,13 @@ class AuditCliTests(unittest.TestCase):
             json.loads(stdout.getvalue())["diagnostics"],
             [
                 {
-                    "code": "AUDIT_RUNTIME_UNAVAILABLE",
-                    "message": "Read-only audit inputs are unavailable.",
+                    "code": "STATUS_RUNTIME_UNAVAILABLE",
+                    "message": "Read-only status inputs are unavailable.",
                 }
             ],
         )
 
-    def test_audit_redacts_system_exit_from_the_private_adapter_registry(self) -> None:
+    def test_status_redacts_system_exit_from_the_private_adapter_registry(self) -> None:
         manifest = installed_manifest()
         canary = "gh" + "p_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456"
         stdout = io.StringIO()
@@ -850,10 +853,10 @@ class AuditCliTests(unittest.TestCase):
                 patch.dict(os.environ, {"HOME": str(home)}),
                 patch.object(
                     agent_equipment,
-                    "_audit_runtime_inputs",
+                    "_status_runtime_inputs",
                     side_effect=SystemExit(canary),
                 ),
-                patch.object(sys, "argv", ["agent-equipment", "audit"]),
+                patch.object(sys, "argv", ["agent-equipment", "status"]),
                 redirect_stdout(stdout),
                 redirect_stderr(stderr),
             ):
@@ -864,7 +867,7 @@ class AuditCliTests(unittest.TestCase):
         self.assertNotIn(canary, stdout.getvalue())
         self.assertEqual(
             json.loads(stdout.getvalue())["diagnostics"][0]["code"],
-            "AUDIT_RUNTIME_UNAVAILABLE",
+            "STATUS_RUNTIME_UNAVAILABLE",
         )
 
     def test_cli_rejects_mutation_commands_and_authority_arguments_without_echo(
@@ -876,7 +879,10 @@ class AuditCliTests(unittest.TestCase):
         rejected_arguments = (
             ["apply", "--authorization", canary],
             ["compensate", "--authorization", canary],
-            ["audit", "--authorization", canary],
+            ["status", "--authorization", canary],
+            ["audit"],
+            ["import"],
+            ["adopt"],
         )
         for arguments in rejected_arguments:
             with self.subTest(arguments=arguments[:-1]):
@@ -897,11 +903,11 @@ class AuditCliTests(unittest.TestCase):
                 self.assertEqual(stdout.getvalue(), "")
                 self.assertEqual(
                     stderr.getvalue(),
-                    "agent-equipment: only the read-only audit command is available\n",
+                    "agent-equipment: only the read-only status command is available\n",
                 )
                 self.assertNotIn(canary, stderr.getvalue())
 
-    def test_audit_seam_accepts_only_an_immutable_typed_resolution(self) -> None:
+    def test_status_seam_accepts_only_an_immutable_typed_resolution(self) -> None:
         manifest = installed_manifest()
         resolution = freeze_json(
             {
@@ -915,7 +921,7 @@ class AuditCliTests(unittest.TestCase):
         self.assertIsInstance(resolution, FrozenJsonObject)
         assert isinstance(resolution, FrozenJsonObject)
 
-        status, report = agent_equipment._audit_report(  # type: ignore[attr-defined]
+        status, report = agent_equipment._status_report(  # type: ignore[attr-defined]
             manifest,
             resolution=resolution,
         )
@@ -924,19 +930,19 @@ class AuditCliTests(unittest.TestCase):
         self.assertEqual(
             thaw_json(report),
             {
-                "command": "audit",
+                "command": "status",
                 "implementation_manifest_digest": manifest.digest,
                 "resolution": thaw_json(resolution),
                 "status": "ok",
             },
         )
         with self.assertRaises(TypeError):
-            agent_equipment._audit_report(  # type: ignore[attr-defined]
+            agent_equipment._status_report(  # type: ignore[attr-defined]
                 manifest,
                 resolution={"diagnostics": []},
             )
 
-    def test_audit_seam_redacts_a_literal_credential_before_rendering(self) -> None:
+    def test_status_seam_redacts_a_literal_credential_before_rendering(self) -> None:
         manifest = installed_manifest()
         canary = "sk-" + "x" * 32
         resolution = freeze_json(
@@ -948,7 +954,7 @@ class AuditCliTests(unittest.TestCase):
         self.assertIsInstance(resolution, FrozenJsonObject)
         assert isinstance(resolution, FrozenJsonObject)
 
-        status, report = agent_equipment._audit_report(  # type: ignore[attr-defined]
+        status, report = agent_equipment._status_report(  # type: ignore[attr-defined]
             manifest,
             resolution=resolution,
         )
@@ -957,11 +963,11 @@ class AuditCliTests(unittest.TestCase):
         self.assertEqual(
             thaw_json(report),
             {
-                "command": "audit",
+                "command": "status",
                 "diagnostics": [
                     {
-                        "code": "AUDIT_SECRET_MATERIAL",
-                        "message": "Audit resolution contains literal secret material.",
+                        "code": "STATUS_SECRET_MATERIAL",
+                        "message": "Status resolution contains literal secret material.",
                     }
                 ],
                 "implementation_manifest_digest": manifest.digest,
@@ -970,7 +976,7 @@ class AuditCliTests(unittest.TestCase):
         )
         self.assertNotIn(canary, repr(thaw_json(report)))
 
-    def test_audit_resolution_with_fatal_diagnostics_exits_nonzero(self) -> None:
+    def test_status_resolution_with_fatal_diagnostics_exits_nonzero(self) -> None:
         manifest = installed_manifest()
         resolution = freeze_json(
             {
@@ -985,7 +991,7 @@ class AuditCliTests(unittest.TestCase):
         )
         assert isinstance(resolution, FrozenJsonObject)
 
-        status, report = agent_equipment._audit_report(  # type: ignore[attr-defined]
+        status, report = agent_equipment._status_report(  # type: ignore[attr-defined]
             manifest,
             resolution=resolution,
         )

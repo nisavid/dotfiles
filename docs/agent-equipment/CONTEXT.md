@@ -102,9 +102,25 @@ records.
 _Avoid_: Native manager lock, cache
 
 **Runtime observation**:
-A secret-free statement of equipment state reported through a supported file,
-CLI, or harness surface without claiming ownership.
-_Avoid_: Desired state, adoption
+A secret-free factual statement of equipment state reported through a
+supported file, CLI, or harness surface. It never claims ownership or proposes
+authored state.
+_Avoid_: Desired state, proposal
+
+**Unmanaged equipment**:
+Equipment positively observed on the machine but absent from the authored
+catalog. A cataloged operator-owned route is not unmanaged.
+_Avoid_: Unknown runtime state, manually managed provider
+
+**Unmanaged observation record**:
+A canonical, secret-free runtime observation record emitted for unmanaged
+equipment. It is factual evidence, not a catalog proposal or ownership claim.
+_Avoid_: Proposed catalog addition, desired state
+
+**Proposed catalog addition**:
+One atomic, reviewable authored-catalog change that adds positively observed
+unmanaged equipment without changing runtime state.
+_Avoid_: Unmanaged observation record, runtime mutation
 
 **Immutable-content observation**:
 A tagged runtime statement that an immutable route is absent, unknown, or at
@@ -116,7 +132,7 @@ _Avoid_: Observed version, configuration digest, requested content digest
 A fully validated, deterministically ordered set of reconciler-owned automated
 operations derived from one authored catalog, resolved lock, and runtime
 inventory.
-_Avoid_: Audit report, adapter command list
+_Avoid_: Status report, adapter command list
 
 **Checkpoint**:
 A durable record that binds one planned mutation to its captured pre-state,

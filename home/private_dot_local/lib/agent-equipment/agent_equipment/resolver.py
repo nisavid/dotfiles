@@ -1550,8 +1550,8 @@ def resolve(
 ) -> Resolution:
     """Resolve immutable desired and observed state without side effects."""
 
-    if command not in {"audit", "apply"}:
-        raise ValueError("resolver command must be audit or apply")
+    if command not in {"status", "apply"}:
+        raise ValueError("resolver command must be status or apply")
     if type(catalog) is not Catalog or type(lock) is not ResolvedLock:
         raise TypeError("resolver requires typed catalog and lock models")
     if type(inventory) is not RuntimeInventory:

@@ -573,7 +573,7 @@ class ResolverMatrixTest(unittest.TestCase):
         )
 
         resolution = resolve(
-            "audit",
+            "status",
             self.validated.catalog,
             self.validated.lock,
             inventory,
@@ -614,7 +614,7 @@ class ResolverMatrixTest(unittest.TestCase):
         )
 
         resolution = resolve(
-            "audit",
+            "status",
             self.validated.catalog,
             self.validated.lock,
             forged_inventory,
@@ -870,7 +870,7 @@ class ResolverMatrixTest(unittest.TestCase):
         )
 
         resolution = resolve(
-            "audit",
+            "status",
             self.validated.catalog,
             self.validated.lock,
             inventory,
@@ -1211,14 +1211,14 @@ class ResolverMatrixTest(unittest.TestCase):
         inventory, capabilities = runtime_inventory(self.validated)
 
         first = resolve(
-            "audit",
+            "status",
             self.validated.catalog,
             self.validated.lock,
             inventory,
             capabilities,
         )
         second = resolve(
-            "audit",
+            "status",
             self.validated.catalog,
             self.validated.lock,
             inventory,
@@ -1259,7 +1259,7 @@ class ResolverMatrixTest(unittest.TestCase):
         )
 
         resolution = resolve(
-            "audit",
+            "status",
             self.validated.catalog,
             self.validated.lock,
             inventory,
@@ -1280,7 +1280,7 @@ class ResolverMatrixTest(unittest.TestCase):
         )
 
         resolution = resolve(
-            "audit",
+            "status",
             self.validated.catalog,
             self.validated.lock,
             inventory,
@@ -1343,7 +1343,7 @@ class ResolverMatrixTest(unittest.TestCase):
                     state,
                 )
                 resolution = resolve(
-                    "audit",
+                    "status",
                     self.validated.catalog,
                     self.validated.lock,
                     changed_inventory,
@@ -1531,7 +1531,7 @@ class ResolverMatrixTest(unittest.TestCase):
             "content_digest": restore["content_digest"],
         }
         absent_resolution = resolve(
-            "audit",
+            "status",
             self.validated.catalog,
             self.validated.lock,
             inventory,
@@ -1580,7 +1580,7 @@ class ResolverMatrixTest(unittest.TestCase):
                     {**base_present, "immutable_content": immutable_content},
                 )
                 resolution = resolve(
-                    "audit",
+                    "status",
                     self.validated.catalog,
                     self.validated.lock,
                     changed,
@@ -1759,7 +1759,7 @@ class ResolverMatrixTest(unittest.TestCase):
             with self.subTest(name=name):
                 changed = with_normalized_state(inventory, route_identity, state)
                 resolution = resolve(
-                    "audit",
+                    "status",
                     self.validated.catalog,
                     self.validated.lock,
                     changed,
@@ -1841,7 +1841,7 @@ class ResolverMatrixTest(unittest.TestCase):
             with self.subTest(name=name):
                 changed = with_normalized_state(inventory, route_identity, state)
                 resolution = resolve(
-                    "audit",
+                    "status",
                     self.validated.catalog,
                     self.validated.lock,
                     changed,
@@ -1902,7 +1902,7 @@ class ResolverMatrixTest(unittest.TestCase):
         )
 
         resolution = resolve(
-            "audit",
+            "status",
             self.validated.catalog,
             self.validated.lock,
             inventory,
@@ -1976,7 +1976,7 @@ class ResolverMatrixTest(unittest.TestCase):
         )
         resolutions = tuple(
             resolve(
-                "audit",
+                "status",
                 self.validated.catalog,
                 self.validated.lock,
                 changed,
@@ -2017,7 +2017,7 @@ class ResolverMatrixTest(unittest.TestCase):
         assert isinstance(permuted, RuntimeInventory)
         self.assertEqual(
             resolve(
-                "audit",
+                "status",
                 self.validated.catalog,
                 self.validated.lock,
                 permuted,
@@ -2116,7 +2116,7 @@ class ResolverMatrixTest(unittest.TestCase):
                     state,
                 )
                 resolution = resolve(
-                    "audit",
+                    "status",
                     self.validated.catalog,
                     self.validated.lock,
                     changed_inventory,
@@ -2137,7 +2137,7 @@ class ResolverMatrixTest(unittest.TestCase):
     ) -> None:
         inventory, capabilities = runtime_inventory(self.validated)
         resolution = resolve(
-            "audit",
+            "status",
             self.validated.catalog,
             self.validated.lock,
             inventory,
@@ -2193,7 +2193,7 @@ class ResolverMatrixTest(unittest.TestCase):
     def test_projector_readiness_is_one_exact_desired_catalog_policy(self) -> None:
         inventory, capabilities = runtime_inventory(self.validated)
         resolution = resolve(
-            "audit",
+            "status",
             self.validated.catalog,
             self.validated.lock,
             inventory,
@@ -2289,7 +2289,7 @@ class ResolverMatrixTest(unittest.TestCase):
     ) -> None:
         inventory, capabilities = runtime_inventory(self.validated)
         resolution = resolve(
-            "audit",
+            "status",
             self.validated.catalog,
             self.validated.lock,
             inventory,
@@ -2349,7 +2349,7 @@ class ResolverMatrixTest(unittest.TestCase):
     ) -> None:
         inventory, capabilities = runtime_inventory(self.validated)
         resolution = resolve(
-            "audit",
+            "status",
             self.validated.catalog,
             self.validated.lock,
             inventory,

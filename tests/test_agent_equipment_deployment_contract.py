@@ -4077,7 +4077,7 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
                 self.assertFalse(self.validate(candidate))
 
         candidate = copy.deepcopy(authorization)
-        candidate["command"] = "audit"
+        candidate["command"] = "status"
         self.assertFalse(self.validate(candidate))
 
     def test_release_receipt_binds_launcher_authority_and_one_cas_archive(self) -> None:
@@ -5151,7 +5151,9 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
         self,
     ) -> None:
         handoff = (ROOT / "docs/agent-equipment/IMPLEMENTATION_HANDOFF.md").read_text()
-        self.assertIn("home/run_onchange_after_audit-agent-equipment.zsh.tmpl", handoff)
+        self.assertIn(
+            "home/run_onchange_after_status-agent-equipment.zsh.tmpl", handoff
+        )
         self.assertNotIn(
             "home/run_onchange_after_reconcile-agent-equipment.zsh.tmpl", handoff
         )

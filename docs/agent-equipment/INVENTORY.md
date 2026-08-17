@@ -7,7 +7,7 @@ contains no credential values, environment values, machine-local absolute
 paths, or opaque application-database content.
 
 Nothing in this inventory authorizes a runtime mutation. In particular, an
-unmanaged observation cannot be deleted until an explicit `adopt` proposal is
+unmanaged observation cannot be deleted until an explicit `add` proposal is
 accepted and a later validated `apply` owns that exact projection or route.
 
 This JSON is a runtime observation and classification artifact, not the

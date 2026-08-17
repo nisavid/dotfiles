@@ -7,7 +7,7 @@ state.
 
 ## Fixed destination
 
-Build one CPython 3.12+ controller, entered through chezmoi for read-only audit
+Build one CPython 3.12+ controller, entered through chezmoi for read-only status
 and through a separately authorized operator invocation for apply, with:
 
 - one versioned authored catalog and one generated resolved lock;
@@ -15,10 +15,10 @@ and through a separately authorized operator invocation for apply, with:
   catalog through lock, inventory, plan, and adapter request;
 - native-manager and narrow file-overlay adapters for global Claude Code,
   Codex, and Cursor;
-- distinct `audit`, `import`, `adopt`, `update`, and `apply` commands with the
+- distinct `status`, `unmanaged`, `add`, `update`, and `apply` commands with the
   mutation boundaries in `ARCHITECTURE.md`; and
 - a durable per-operation checkpoint executor with pre-state-restoring
-  compensation and audit-before-retry.
+  compensation and fresh status observation before retry.
 
 The first complete production release inventories all observed skills,
 plugins, plugin components, and MCPs. It actively reconciles only accepted
@@ -134,7 +134,7 @@ home/private_dot_local/lib/agent-equipment/agent_equipment/adapters/codex_skill_
 home/private_dot_local/lib/agent-equipment/agent_equipment/adapters/codex_mcp.py
 home/private_dot_local/lib/agent-equipment/agent_equipment/adapters/cursor_plugin.py
 home/private_dot_local/lib/agent-equipment/agent_equipment/adapters/cursor_mcp.py
-home/run_onchange_after_audit-agent-equipment.zsh.tmpl
+home/run_onchange_after_status-agent-equipment.zsh.tmpl
 tests/agent_equipment/
 ```
 
@@ -198,12 +198,12 @@ The installed CLI reads the catalog and lock from
 `~/.local/state/agent-equipment/checkpoints/`; neither checkpoints nor
 observed inventory are chezmoi-managed. The checked-in lock is regenerated only
 by `agent-equipment update` and reviewed like source. The chezmoi `run_onchange`
-script invokes only `agent-equipment audit`; it accepts no authorization input
+script invokes only `agent-equipment status`; it accepts no authorization input
 and cannot invoke apply, open the authorization ledger, or create an action
 checkpoint. Its template input includes a canonical manifest
 of every installed package file path and content digest, the launcher digest,
 and the rendered catalog and lock digests, so any implementation-only change
-reruns the read-only audit. The same closed v1 installed-implementation
+reruns the read-only status command. The same closed v1 installed-implementation
 manifest digest is bound alongside the distinct candidate commit or artifact
 identity in plans, action sets, captures, checkpoints, receipts, and
 authorization evidence. It never performs source discovery, updates, or
@@ -500,9 +500,9 @@ Later steps do not begin until the named evidence passes.
 - Implement immutable typed model objects, canonical JSON, schema validation,
   template expansion, and every cross-field invariant.
 - Make the catalog digest and lock binding stable test vectors.
-- Promote the checked-in proposed catalog only through a reviewed `adopt` or
-  production-source change; its `.proposed.json` name conveys zero live
-  authority.
+- Promote the checked-in proposed catalog only through a reviewed catalog
+  addition or production-source change; its `.proposed.json` name conveys zero
+  live authority.
 - Reject all malformed input before native capability discovery.
 - Evidence: `CAT-01` through `CAT-09`, the catalog-level compensation and
   fail-closed portion of `CAT-10`, and `CAT-11` through `CAT-14` in
@@ -550,14 +550,24 @@ Later steps do not begin until the named evidence passes.
 
 ### 3. Implement authored proposal commands
 
-- `import` emits unowned observation proposals.
-- `adopt` requires an exact imported observation and emits catalog ownership
-  changes only.
-- `update` resolves immutable revisions and reviewed native-rolling baselines
-  into one proposed catalog-and-lock pair. Resolved route evidence in the
-  catalog and the digest-bound lock advance atomically or neither does.
+- `unmanaged` reads runtime state and the authored catalog without changing
+  either. It emits canonical secret-free observation records only for equipment
+  positively observed on the machine and absent from the catalog. Exclude every
+  cataloged operator-owned route.
+- Treat each runtime observation as fact, never as a proposal or ownership
+  claim.
+- `add` always performs a fresh targeted unmanaged observation during its own
+  invocation; a prior `unmanaged` invocation is neither required nor consumed.
+  Revalidate the observed state and every binding before emitting one atomic
+  proposed catalog addition. If state or bindings change, fail with no partial
+  proposal.
+- `update` follows the configured source tracking policy and resolves immutable
+  revisions and reviewed native-rolling baselines into one atomic proposed
+  catalog-and-resolved-lock update. It installs nothing; the catalog and
+  digest-bound lock advance together or neither does.
 - None opens a runtime checkpoint store or invokes a mutating adapter method.
-- Evidence: `CMD-02` through `CMD-04` with byte-identical runtime snapshots.
+- Evidence: `CMD-02` through `CMD-04` with byte-identical runtime snapshots and
+  catalog snapshots for `unmanaged`.
 
 ### 4. Implement checkpointing before any production adapter mutation
 
@@ -768,8 +778,9 @@ Later steps do not begin until the named evidence passes.
   plus a durable `prepared` invocation intent that advances from `not_started`
   to `started` after compare and before the adapter call. A failed intent write
   forbids invocation; only `started` can attribute expected post-state to this
-  run. Preserve immutable plan bindings, audit-before-retry, and reverse
-  compensation. A restore-guard mismatch persists `compensation_blocked`,
+  run. Preserve immutable plan bindings, fresh status observation before retry,
+  and reverse compensation. A restore-guard mismatch persists
+  `compensation_blocked`,
   moves the run to `needs_operator`, and can never report recovered.
 - Make current-state comparison an executor precondition rather than optional
   adapter behavior.
@@ -795,7 +806,7 @@ Later steps do not begin until the named evidence passes.
 ### 5. Implement standalone-skill and projection adapters
 
 - Fetch immutable artifacts into staging, verify commit and content digest,
-  then replace only an adopted canonical entry.
+  then replace only a catalog-owned canonical entry.
 - Emit observed immutable content only after freshly verifying installed bytes
   and integrity-bound installed provenance. Never echo the requested catalog or
   lock revision or digest as observation evidence; emit `unknown` when either
@@ -929,7 +940,7 @@ Later steps do not begin until the named evidence passes.
 
 - Refresh upstream source manifests, live inventory, harness versions, plugin
   capabilities, symlink set, and manager locks.
-- Run `agent-equipment audit`, acquire the apply lease, capture every affected
+- Run `agent-equipment status`, acquire the apply lease, capture every affected
   route and surface, emit the independently validated plan-action projection,
   validate both Schemas then cross-record semantics, seal the action set and
   capture, and resolve again against them. Produce the exact candidate
@@ -983,12 +994,12 @@ Later steps do not begin until the named evidence passes.
 | Path | Disposition |
 | --- | --- |
 | `home/run_after_sync-global-agent-skills-to-claude.zsh` | Retain unchanged until the production catalog projector passes fresh-home, no-op, and rollback gates. It remains the live owner. |
-| `home/dot_claude/skills/symlink_*` | Retain until each projection is explicitly adopted into the catalog and both owners cannot run concurrently. |
+| `home/dot_claude/skills/symlink_*` | Retain until each projection has an explicit reviewed catalog addition and both owners cannot run concurrently. |
 | `home/modify_private_dot_claude.json.tmpl` | Retain as live Claude MCP owner until accepted keys move atomically to the Claude MCP adapter. |
 | `home/dot_claude/modify_private_settings.json.tmpl` | Retain as live Claude plugin-selection owner until the Claude plugin adapter owns the same exact keys. |
 | `home/dot_codex/modify_private_config.toml.tmpl` | Retain unrelated preferences and runtime-field preservation. Later remove only MCP and skill-policy branches transferred to adapters. |
 | `home/dot_config/modify_private_mcp-config.json.tmpl` | Retain as live Cursor MCP owner until accepted keys move atomically to the Cursor MCP adapter. |
-| Native manager locks | Retain outside chezmoi authority as import and provenance evidence. |
+| Native manager locks | Retain outside chezmoi authority as observation and provenance evidence. |
 | Harness caches, credentials, databases, timestamps, and usage state | Retain as harness-owned runtime state; never add to chezmoi. |
 
 ### Retired by this design pull request
@@ -1003,12 +1014,12 @@ Later steps do not begin until the named evidence passes.
 | Path or behavior | Retirement gate |
 | --- | --- |
 | `home/run_after_sync-global-agent-skills-to-claude.zsh` | Catalog projector is installed first and passes `CON-01`, `CON-02`, `MIG-01`, and rollback injection. |
-| Catalog-adopted `home/dot_claude/skills/symlink_*` entries | Generated projection owns the exact same link and dual ownership is removed in one reviewed change. |
+| Catalog-owned `home/dot_claude/skills/symlink_*` entries | Generated projection owns the exact same link and dual ownership is removed in one reviewed change. |
 | MCP/plugin branches in existing modify overlays | Corresponding adapter passes fresh-home, narrow-diff, compensation, and secret-canary tests. |
 | The 21 observed Matt symlinks in `~/.claude/skills` | Exact pre-state still matches, catalog marks only those projections owned and losing, the new projector is active, the official plugin is installed and enabled with its complete active Matt activation group verified, and plugin installation can be compensated after every removed link is restorable. |
 
-No retirement rule deletes an unmanaged observation or a canonical
-`~/.agents/skills` entry.
+No retirement rule deletes unmanaged equipment, a cataloged operator-owned
+route, or a canonical `~/.agents/skills` entry.
 
 ## Publication plan
 
@@ -1025,7 +1036,8 @@ No retirement rule deletes an unmanaged observation or a canonical
    receive a release receipt. For a candidate that contains the coordinated
    six-distribution release, complete its source-skill reconciliation receipt
    binding in Step 8b before Step 9 can request live `ApplyAuthorization`. Do
-   not combine implementation with live adoption merely to shorten the stack.
+   not combine implementation with a live catalog addition merely to shorten
+   the stack.
 5. Open a separate closed `ApplyAuthorization` containing the exact candidate
    implementation identity and installed-manifest digest, refreshed inventory,
    immutable plan, plan-action-set, already validated and sealed capture-

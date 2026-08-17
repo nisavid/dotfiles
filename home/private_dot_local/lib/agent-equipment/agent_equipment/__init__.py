@@ -41,9 +41,9 @@ from .resolver import resolve
 from .secrets import contains_literal_credential
 from .validator import load_catalog_lock, validate_catalog_lock
 
-_AUDIT_CONFIG_DIRECTORY = "agent-equipment"
-_AUDIT_CATALOG_NAME = "catalog-v1.json"
-_AUDIT_LOCK_NAME = "lock-v1.json"
+_STATUS_CONFIG_DIRECTORY = "agent-equipment"
+_STATUS_CATALOG_NAME = "catalog-v1.json"
+_STATUS_LOCK_NAME = "lock-v1.json"
 
 __all__ = (
     "CapabilityDiscovery",
@@ -74,30 +74,30 @@ __all__ = (
 )
 
 
-def _audit_runtime_inputs(
+def _status_runtime_inputs(
     validated: ValidatedCatalogLock,
     installed_implementation_manifest: InstalledImplementationManifest,
 ) -> tuple[tuple[ReadOnlyAdapter, ...], tuple[ObserveRequest, ...]]:
     """Return the closed private read-only adapter registry and requests.
 
-    The installed registry is empty, so audit fails closed. Adapter modules
+    The installed registry is empty, so status fails closed. Adapter modules
     populate this private boundary without widening the exact public command or
-    giving audit mutation authority.
+    giving status mutation authority.
     """
 
     if type(validated) is not ValidatedCatalogLock:
-        raise TypeError("audit inputs require one validated catalog and lock")
+        raise TypeError("status inputs require one validated catalog and lock")
     if type(installed_implementation_manifest) is not InstalledImplementationManifest:
-        raise TypeError("audit inputs require one installed implementation manifest")
+        raise TypeError("status inputs require one installed implementation manifest")
     return (), ()
 
 
-def _installed_audit_paths() -> tuple[Path, Path]:
-    audit_root = Path.home() / ".config" / _AUDIT_CONFIG_DIRECTORY
-    return audit_root / _AUDIT_CATALOG_NAME, audit_root / _AUDIT_LOCK_NAME
+def _installed_status_paths() -> tuple[Path, Path]:
+    status_root = Path.home() / ".config" / _STATUS_CONFIG_DIRECTORY
+    return status_root / _STATUS_CATALOG_NAME, status_root / _STATUS_LOCK_NAME
 
 
-def _audit_requests_are_authorized(
+def _status_requests_are_authorized(
     requests: object,
     validated: ValidatedCatalogLock,
     installed_implementation_manifest: InstalledImplementationManifest,
@@ -124,7 +124,7 @@ def _audit_requests_are_authorized(
         candidate_identity = document.get("candidate_identity")
         correlation_identity = document.get("correlation_identity")
         if (
-            document.get("command") != "audit"
+            document.get("command") != "status"
             or document.get("purpose") != "inventory"
             or document.get("plan_digest") is not None
             or document.get("implementation_manifest_digest")
@@ -144,12 +144,12 @@ def _audit_requests_are_authorized(
     return len(candidate_identities) == 1 and len(correlation_identities) == 1
 
 
-def _audit_report(
+def _status_report(
     installed_implementation_manifest: InstalledImplementationManifest,
     *,
     resolution: FrozenJsonObject | None = None,
 ) -> tuple[int, FrozenJsonObject]:
-    """Build one immutable audit report without acquiring runtime authority."""
+    """Build one immutable status report without acquiring runtime authority."""
 
     if type(installed_implementation_manifest) is not InstalledImplementationManifest:
         raise TypeError(
@@ -164,11 +164,11 @@ def _audit_report(
     if resolution is None:
         status = 69
         document = {
-            "command": "audit",
+            "command": "status",
             "diagnostics": [
                 {
-                    "code": "AUDIT_RUNTIME_UNAVAILABLE",
-                    "message": "Read-only audit inputs are unavailable.",
+                    "code": "STATUS_RUNTIME_UNAVAILABLE",
+                    "message": "Read-only status inputs are unavailable.",
                 }
             ],
             "implementation_manifest_digest": installed_implementation_manifest.digest,
@@ -177,11 +177,11 @@ def _audit_report(
     elif contains_literal_credential(resolution):
         status = 65
         document = {
-            "command": "audit",
+            "command": "status",
             "diagnostics": [
                 {
-                    "code": "AUDIT_SECRET_MATERIAL",
-                    "message": "Audit resolution contains literal secret material.",
+                    "code": "STATUS_SECRET_MATERIAL",
+                    "message": "Status resolution contains literal secret material.",
                 }
             ],
             "implementation_manifest_digest": installed_implementation_manifest.digest,
@@ -191,71 +191,71 @@ def _audit_report(
         has_fatal_diagnostics = bool(resolution.get("diagnostics"))
         status = 65 if has_fatal_diagnostics else 0
         document = {
-            "command": "audit",
+            "command": "status",
             "implementation_manifest_digest": installed_implementation_manifest.digest,
             "resolution": resolution,
             "status": "error" if has_fatal_diagnostics else "ok",
         }
     report = freeze_json(document)
     if type(report) is not FrozenJsonObject:
-        raise TypeError("audit report must be an immutable JSON object")
+        raise TypeError("status report must be an immutable JSON object")
     return status, report
 
 
-def _run_audit(
+def _run_status(
     installed_implementation_manifest: InstalledImplementationManifest,
 ) -> tuple[int, FrozenJsonObject]:
-    """Load reviewed inputs and run the closed read-only audit pipeline."""
+    """Load reviewed inputs and run the closed read-only status pipeline."""
 
     try:
-        catalog_path, lock_path = _installed_audit_paths()
+        catalog_path, lock_path = _installed_status_paths()
         validation = load_catalog_lock(catalog_path, lock_path)
         validated = validation.model
         if validated is None:
-            return _audit_report(installed_implementation_manifest)
-        adapters, requests = _audit_runtime_inputs(
+            return _status_report(installed_implementation_manifest)
+        adapters, requests = _status_runtime_inputs(
             validated,
             installed_implementation_manifest,
         )
         if (
             type(adapters) is not tuple
             or not adapters
-            or not _audit_requests_are_authorized(
+            or not _status_requests_are_authorized(
                 requests,
                 validated,
                 installed_implementation_manifest,
             )
         ):
-            return _audit_report(installed_implementation_manifest)
+            return _status_report(installed_implementation_manifest)
         inventory = collect_runtime_inventory(
             adapters,
             requests,
             validated_catalog_lock=validated,
         )
         if isinstance(inventory, AdapterError):
-            return _audit_report(installed_implementation_manifest)
+            return _status_report(installed_implementation_manifest)
         if (
             inventory.implementation_manifest_digest
             != installed_implementation_manifest.digest
             or inventory.catalog_digest != validated.catalog.digest
             or inventory.lock_digest != validated.lock.digest
         ):
-            return _audit_report(installed_implementation_manifest)
+            return _status_report(installed_implementation_manifest)
         resolution = resolve(
-            "audit",
+            "status",
             validated.catalog,
             validated.lock,
             inventory,
             inventory.capabilities,
         )
         if resolution.mutation_plan is not None:
-            return _audit_report(installed_implementation_manifest)
-        return _audit_report(
+            return _status_report(installed_implementation_manifest)
+        return _status_report(
             installed_implementation_manifest,
             resolution=resolution.as_json(),
         )
     except (Exception, SystemExit):  # noqa: BLE001 - untrusted read boundaries
-        return _audit_report(installed_implementation_manifest)
+        return _status_report(installed_implementation_manifest)
 
 
 def main(
@@ -268,12 +268,12 @@ def main(
             "installed_implementation_manifest must be an "
             "InstalledImplementationManifest"
         )
-    if sys.argv[1:] == ["audit"]:
-        status, report = _run_audit(installed_implementation_manifest)
+    if sys.argv[1:] == ["status"]:
+        status, report = _run_status(installed_implementation_manifest)
         print(canonical_json_bytes(report).decode("utf-8"))
         return status
     print(
-        "agent-equipment: only the read-only audit command is available",
+        "agent-equipment: only the read-only status command is available",
         file=sys.stderr,
     )
     return 64

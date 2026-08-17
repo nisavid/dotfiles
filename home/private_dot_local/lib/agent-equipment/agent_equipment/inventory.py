@@ -1062,7 +1062,7 @@ def _collection_error() -> AdapterError:
         code="ADAPTER_COLLECTION_FAILED",
         classification="native_failure",
         message=_COLLECTION_FAILED_MESSAGE,
-        retry="after_audit",
+        retry="after_status",
         mutation_state="not_started",
     )
 

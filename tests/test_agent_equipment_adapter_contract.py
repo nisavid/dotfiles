@@ -1287,9 +1287,9 @@ class AdapterContractSchemaTests(unittest.TestCase):
         cases: list[tuple[str, str, dict[str, object]]] = []
 
         non_apply = apply_sequence_document(valid_sequence())
-        non_apply["sequence"]["authority"]["command"] = "audit"
+        non_apply["sequence"]["authority"]["command"] = "status"
         non_apply["sequence"]["authority"]["purpose"] = "inventory"
-        non_apply["sequence"]["pre_state_request"]["record"]["command"] = "audit"
+        non_apply["sequence"]["pre_state_request"]["record"]["command"] = "status"
         non_apply["sequence"]["pre_state_request"]["record"]["purpose"] = "inventory"
         cases.append(("non-apply command", "ADAPTER_SCHEMA_INVALID", non_apply))
 
@@ -1444,7 +1444,7 @@ class AdapterContractSchemaTests(unittest.TestCase):
             "code": "NATIVE_FAILURE",
             "classification": "native_failure",
             "message": "redacted mutation failure",
-            "retry": "after_audit",
+            "retry": "after_status",
             "mutation_state": "unknown",
             "evidence_references": [],
         }
@@ -2992,7 +2992,7 @@ class AdapterContractSchemaTests(unittest.TestCase):
             "code": "NATIVE_FAILURE",
             "classification": "native_failure",
             "message": "redacted observation failure",
-            "retry": "after_audit",
+            "retry": "after_status",
             "mutation_state": "possibly_changed",
             "evidence_references": [],
         }

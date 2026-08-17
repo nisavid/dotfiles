@@ -70,7 +70,7 @@ _DOCUMENT_READ_CHUNK_BYTES = 1024 * 1024
 EXPECTED_SCHEMA_SHA256 = MappingProxyType(
     {
         "acceptance-evidence-v1.schema.json": "5264aad08075c115cb3633f3d0f9a46b8a0a2027758b931c4334a2f234e660d5",
-        "adapter-contract-v1.schema.json": "700b6b4783ccfebf4451684d8ff09f8721bae4629be2753a49718eb04bfdf625",
+        "adapter-contract-v1.schema.json": "b7ea9ca7c9c2c9c114a1090c4df1f2b3241616e2ae915558d2ca286c945b68d5",
         "captured-state-v1.schema.json": "d0c30850f03366dd612208d12ee35b2462d84e5e6901e3ca7d0a6b0ed3bdf693",
         "catalog-v1.schema.json": "a8e2942347501dd2ba16aebc5762e0a234f55847bd95b75a805fad867ac41a02",
         "execution-authority-v1.schema.json": "30c61c9fdbbc52679bf1f18bf80cf99d7429d7efc07a8b6ccf80dde7ee4d5b48",

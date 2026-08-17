@@ -756,7 +756,7 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(result.returncode, 64, result.stderr)
         self.assertEqual(
             result.stderr,
-            "agent-equipment: only the read-only audit command is available\n",
+            "agent-equipment: only the read-only status command is available\n",
         )
         for marker in (pythonpath_marker, cwd_marker, sitecustomize_marker):
             with self.subTest(poison_marker=marker.name):
