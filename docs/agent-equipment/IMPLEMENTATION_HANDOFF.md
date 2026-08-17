@@ -861,6 +861,37 @@ Later steps do not begin until the named evidence passes.
   create-only archive concurrency/fault fixtures, and release-receipt vectors in
   `tests/test_agent_equipment_deployment_contract.py`.
 
+### 8b. Bind the coordinated six-distribution source-skill reconciliation receipt
+
+- Treat the release tracked in
+  [`nisavid/agents#41`](https://github.com/nisavid/agents/issues/41) as one
+  coordinated release of six distributions: Rolecasting, Tricritical,
+  Versionkeeping, Mergecraft, Artifact Customs, and Task Witness. Do not call
+  this release "Agent Plugins v1". Agent Plugins Specification v1.0.0 is the
+  packaging standard, and this step does not defer support for that standard.
+- Use the source-skill reconciliation receipt contract defined by
+  [`nisavid/agents#45`](https://github.com/nisavid/agents/issues/45),
+  [`#49`](https://github.com/nisavid/agents/issues/49),
+  [`#50`](https://github.com/nisavid/agents/issues/50), and
+  [`#51`](https://github.com/nisavid/agents/issues/51). The current exact
+  agent-equipment v1 model and Schemas do not define or bind this receipt. Do
+  not add a placeholder field, accept an open extension, or overload
+  `ReleaseReceipt`.
+- Complete the integration tracked in
+  [`nisavid/dotfiles#80`](https://github.com/nisavid/dotfiles/issues/80) before
+  Step 9 requests live `ApplyAuthorization` for a candidate that contains the
+  coordinated six-distribution release. Use either a new closed, versioned
+  adjacent record or a new major version of each affected closed Schema.
+- Bind the exact receipt bytes and its canonical identity and digest to the
+  exact candidate identity, catalog digest, lock digest, and coordinated
+  release identity chain. Retain the exact receipt bytes in the release archive.
+  For a candidate that contains the coordinated six-distribution release, fail
+  closed before live authorization or release when the receipt is missing,
+  malformed, duplicate, noncanonical, untrusted, misbound, or byte-different.
+- Evidence: closed-Schema fixtures, canonical identity/digest vectors,
+  candidate/catalog/lock/release cross-binding tests, archive byte-replay tests,
+  and fail-closed Step 9 authorization tests.
+
 ### 9. Request exact runtime-migration authorization
 
 - Refresh upstream source manifests, live inventory, harness versions, plugin
@@ -957,9 +988,11 @@ No retirement rule deletes an unmanaged observation or a canonical
    issue checklist points to merged evidence.
 4. Publish production steps 1–8 as dependency-ordered controller pull requests
    with the acceptance evidence named above. Independently deploy and verify
-   step 8a from the protected release-authority source before any candidate can
-   receive a release receipt. Do not combine implementation with live adoption
-   merely to shorten the stack.
+   Step 8a from the protected release-authority source before any candidate can
+   receive a release receipt. For a candidate that contains the coordinated
+   six-distribution release, complete its source-skill reconciliation receipt
+   binding in Step 8b before Step 9 can request live `ApplyAuthorization`. Do
+   not combine implementation with live adoption merely to shorten the stack.
 5. Open a separate closed `ApplyAuthorization` containing the exact candidate
    implementation identity and installed-manifest digest, refreshed inventory,
    immutable plan, plan-action-set, already validated and sealed capture-
