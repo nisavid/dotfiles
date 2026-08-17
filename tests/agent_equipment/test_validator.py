@@ -119,7 +119,7 @@ class CatalogLockValidatorTests(unittest.TestCase):
         )
         for payload in invalid_catalogs:
             with self.subTest(payload=payload), TemporaryDirectory() as directory:
-                root = Path(directory)
+                root = Path(directory).resolve(strict=True)
                 catalog_path = root / "catalog.json"
                 lock_path = root / "lock.json"
                 catalog_path.write_bytes(payload)
@@ -143,7 +143,7 @@ class CatalogLockValidatorTests(unittest.TestCase):
         )
         for role, maximum_bytes in cases:
             with self.subTest(role=role), TemporaryDirectory() as directory:
-                root = Path(directory)
+                root = Path(directory).resolve(strict=True)
                 catalog_path = root / "catalog.json"
                 lock_path = root / "lock.json"
                 shutil.copyfile(CATALOG, catalog_path)
@@ -171,14 +171,19 @@ class CatalogLockValidatorTests(unittest.TestCase):
                 self.assertIsNone(result.model)
                 self.assertEqual(
                     tuple(diagnostic.code for diagnostic in result.diagnostics),
-                    ("DOCUMENT_PARSE_INVALID",),
+                    ("DOCUMENT_CAPTURE_INVALID",),
+                )
+                self.assertEqual(
+                    result.diagnostics[0].message,
+                    "Catalog and lock inputs must be stable, size-bounded, "
+                    "unique regular files reached without symbolic links.",
                 )
                 self.assertEqual(oversized_parse_calls, 0)
 
     def test_file_loading_rejects_symlinked_and_hardlinked_leaves(self) -> None:
         for kind in ("symlink", "hardlink"):
             with self.subTest(kind=kind), TemporaryDirectory() as directory:
-                root = Path(directory)
+                root = Path(directory).resolve(strict=True)
                 source = root / "catalog-source.json"
                 catalog_path = root / "catalog.json"
                 lock_path = root / "lock.json"
@@ -194,13 +199,38 @@ class CatalogLockValidatorTests(unittest.TestCase):
                 self.assertIsNone(result.model)
                 self.assertEqual(
                     tuple(diagnostic.code for diagnostic in result.diagnostics),
-                    ("DOCUMENT_PARSE_INVALID",),
+                    ("DOCUMENT_CAPTURE_INVALID",),
                 )
+
+    @unittest.skipUnless(
+        hasattr(os, "O_DIRECTORY") and hasattr(os, "O_NOFOLLOW"),
+        "requires safe POSIX directory descriptors",
+    )
+    def test_file_loading_rejects_a_symlinked_parent_directory(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory).resolve(strict=True)
+            actual = root / "actual"
+            actual.mkdir()
+            shutil.copyfile(CATALOG, actual / "catalog.json")
+            shutil.copyfile(LOCK, actual / "lock.json")
+            linked = root / "linked"
+            linked.symlink_to(actual, target_is_directory=True)
+
+            result = load_catalog_lock(
+                linked / "catalog.json",
+                linked / "lock.json",
+            )
+
+        self.assertIsNone(result.model)
+        self.assertEqual(
+            tuple(diagnostic.code for diagnostic in result.diagnostics),
+            ("DOCUMENT_CAPTURE_INVALID",),
+        )
 
     @unittest.skipUnless(hasattr(os, "mkfifo"), "requires POSIX FIFO support")
     def test_file_loading_rejects_a_fifo_without_blocking(self) -> None:
         with TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve(strict=True)
             catalog_path = root / "catalog.json"
             lock_path = root / "lock.json"
             os.mkfifo(catalog_path)
@@ -224,11 +254,11 @@ class CatalogLockValidatorTests(unittest.TestCase):
             )
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
-        self.assertEqual(completed.stdout, "DOCUMENT_PARSE_INVALID\n")
+        self.assertEqual(completed.stdout, "DOCUMENT_CAPTURE_INVALID\n")
 
     def test_file_loading_rejects_a_nonregular_directory(self) -> None:
         with TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve(strict=True)
             catalog_path = root / "catalog.json"
             lock_path = root / "lock.json"
             catalog_path.mkdir()
@@ -239,51 +269,75 @@ class CatalogLockValidatorTests(unittest.TestCase):
         self.assertIsNone(result.model)
         self.assertEqual(
             tuple(diagnostic.code for diagnostic in result.diagnostics),
-            ("DOCUMENT_PARSE_INVALID",),
+            ("DOCUMENT_CAPTURE_INVALID",),
         )
 
     @unittest.skipUnless(
         hasattr(os, "O_NOFOLLOW") and hasattr(os, "O_NONBLOCK"),
         "requires safe POSIX descriptor flags",
     )
-    def test_file_loading_holds_both_nonblocking_nofollow_descriptors(self) -> None:
+    def test_file_loading_holds_and_closes_nofollow_descriptors(self) -> None:
         with TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve(strict=True)
             catalog_path = root / "catalog.json"
             lock_path = root / "lock.json"
             shutil.copyfile(CATALOG, catalog_path)
             shutil.copyfile(LOCK, lock_path)
             original_open = os.open
-            opened_descriptors: list[int] = []
-            open_flags: list[int] = []
+            original_close = os.close
+            opened_descriptors: list[tuple[int, int]] = []
+            closed_descriptors: list[int] = []
 
-            def record_open(path: Path, flags: int, mode: int = 0o777) -> int:
-                if opened_descriptors:
-                    os.fstat(opened_descriptors[0])
-                descriptor = original_open(path, flags, mode)
-                opened_descriptors.append(descriptor)
-                open_flags.append(flags)
+            def record_open(
+                path: str | Path,
+                flags: int,
+                mode: int = 0o777,
+                *,
+                dir_fd: int | None = None,
+            ) -> int:
+                if dir_fd is None:
+                    descriptor = original_open(path, flags, mode)
+                else:
+                    descriptor = original_open(path, flags, mode, dir_fd=dir_fd)
+                opened_descriptors.append((descriptor, flags))
                 return descriptor
 
-            with patch.object(validator.os, "open", side_effect=record_open):
+            def record_close(descriptor: int) -> None:
+                closed_descriptors.append(descriptor)
+                original_close(descriptor)
+
+            with (
+                patch.object(validator.os, "open", side_effect=record_open),
+                patch.object(validator.os, "close", side_effect=record_close),
+            ):
                 result = load_catalog_lock(catalog_path, lock_path)
 
-        self.assertIsNotNone(result.model)
-        self.assertEqual(len(opened_descriptors), 2)
+        self.assertIsNotNone(result.model, result.diagnostics)
+        descriptor_numbers = [descriptor for descriptor, _ in opened_descriptors]
+        open_flags = [flags for _, flags in opened_descriptors]
+        self.assertGreater(len(opened_descriptors), 2)
+        self.assertEqual(len(closed_descriptors), len(descriptor_numbers))
+        self.assertCountEqual(closed_descriptors, descriptor_numbers)
         self.assertTrue(
             all(flags & os.O_NOFOLLOW for flags in open_flags),  # type: ignore[attr-defined]
         )
-        self.assertTrue(all(flags & os.O_NONBLOCK for flags in open_flags))
-        for descriptor in opened_descriptors:
-            with self.assertRaises(OSError):
-                os.fstat(descriptor)
+        leaf_flags = [flags for flags in open_flags if flags & os.O_NONBLOCK]
+        parent_flags = [flags for flags in open_flags if not flags & os.O_NONBLOCK]
+        self.assertEqual(len(leaf_flags), 2)
+        self.assertTrue(parent_flags)
+        self.assertTrue(
+            all(flags & os.O_DIRECTORY for flags in parent_flags),  # type: ignore[attr-defined]
+        )
+        self.assertTrue(
+            all(not flags & os.O_DIRECTORY for flags in leaf_flags),  # type: ignore[attr-defined]
+        )
 
     def test_file_loading_rejects_path_swap_and_in_place_change_after_reads(
         self,
     ) -> None:
         for race in ("path-swap", "in-place-change"):
             with self.subTest(race=race), TemporaryDirectory() as directory:
-                root = Path(directory)
+                root = Path(directory).resolve(strict=True)
                 catalog_path = root / "catalog.json"
                 lock_path = root / "lock.json"
                 replacement = root / "replacement.json"
@@ -340,7 +394,59 @@ class CatalogLockValidatorTests(unittest.TestCase):
                 )
 
                 self.assertEqual(completed.returncode, 0, completed.stderr)
-                self.assertEqual(completed.stdout, "2\nDOCUMENT_PARSE_INVALID\n")
+                self.assertEqual(completed.stdout, "2\nDOCUMENT_CAPTURE_INVALID\n")
+
+    @unittest.skipUnless(
+        hasattr(os, "O_DIRECTORY") and hasattr(os, "O_NOFOLLOW"),
+        "requires safe POSIX directory descriptors",
+    )
+    def test_file_loading_rejects_a_parent_path_swap_after_reads(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory).resolve(strict=True)
+            original_parent = root / "config"
+            original_parent.mkdir()
+            catalog_path = original_parent / "catalog.json"
+            lock_path = original_parent / "lock.json"
+            shutil.copyfile(CATALOG, catalog_path)
+            shutil.copyfile(LOCK, lock_path)
+
+            replacement_parent = root / "replacement"
+            replacement_parent.mkdir()
+            shutil.copyfile(CATALOG, replacement_parent / "catalog.json")
+            shutil.copyfile(LOCK, replacement_parent / "lock.json")
+            moved_parent = root / "config-original"
+            original_reader = validator._read_bounded_document_descriptor
+            read_calls = 0
+
+            def read_and_swap_parent(
+                descriptor: int,
+                *,
+                maximum_bytes: int,
+            ) -> bytes:
+                nonlocal read_calls
+                payload = original_reader(
+                    descriptor,
+                    maximum_bytes=maximum_bytes,
+                )
+                read_calls += 1
+                if read_calls == 2:
+                    original_parent.rename(moved_parent)
+                    replacement_parent.rename(original_parent)
+                return payload
+
+            with patch.object(
+                validator,
+                "_read_bounded_document_descriptor",
+                side_effect=read_and_swap_parent,
+            ):
+                result = load_catalog_lock(catalog_path, lock_path)
+
+        self.assertEqual(read_calls, 2)
+        self.assertIsNone(result.model)
+        self.assertEqual(
+            tuple(diagnostic.code for diagnostic in result.diagnostics),
+            ("DOCUMENT_CAPTURE_INVALID",),
+        )
 
     def test_representative_catalog_failures_return_diagnostics_without_a_plan(
         self,

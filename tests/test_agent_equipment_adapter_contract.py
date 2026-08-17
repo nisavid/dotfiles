@@ -1038,6 +1038,22 @@ class AdapterContractSchemaTests(unittest.TestCase):
                     document_diagnostic_codes(document),
                 )
 
+    def test_absent_observed_version_requires_an_absent_route(self) -> None:
+        for route_presence in ("present", "partial", "unknown"):
+            with self.subTest(route_presence=route_presence):
+                document = apply_sequence_document(valid_sequence())
+                pre_state = copy.deepcopy(
+                    document["sequence"]["authority"]["captured_pre_state"]
+                )
+                pre_state["route_presence"] = route_presence
+                pre_state["observed_version"] = {"status": "route_absent"}
+                replace_pre_state(document, pre_state)
+
+                self.assertIn(
+                    "ADAPTER_SCHEMA_INVALID",
+                    document_diagnostic_codes(document),
+                )
+
     def test_immutable_route_capability_must_advertise_content_observation(
         self,
     ) -> None:

@@ -1178,13 +1178,16 @@ def _plain_snapshot_canonical_bytes(
 ) -> bytes | None:
     if maximum_bytes < 0:
         return None
-    pending: list[tuple[object, int]] = [(document, 0)]
-    seen_containers: set[int] = set()
+    pending: list[tuple[object, int, bool]] = [(document, 0, False)]
+    active_containers: set[int] = set()
     nodes = 0
     estimated_bytes = 0
     try:
         while pending:
-            value, depth = pending.pop()
+            value, depth, leaving = pending.pop()
+            if leaving:
+                active_containers.discard(id(value))
+                continue
             nodes += 1
             estimated_bytes += 8
             if (
@@ -1208,20 +1211,22 @@ def _plain_snapshot_canonical_bytes(
                 continue
             if type(value) is dict:
                 identity = id(value)
-                if identity in seen_containers:
+                if identity in active_containers:
                     return None
-                seen_containers.add(identity)
+                active_containers.add(identity)
+                pending.append((value, depth, True))
                 for key, member in value.items():
                     if type(key) is not str:
                         return None
                     estimated_bytes += len(key.encode("utf-8"))
-                    pending.append((member, depth + 1))
+                    pending.append((member, depth + 1, False))
             elif type(value) is list:
                 identity = id(value)
-                if identity in seen_containers:
+                if identity in active_containers:
                     return None
-                seen_containers.add(identity)
-                pending.extend((member, depth + 1) for member in value)
+                active_containers.add(identity)
+                pending.append((value, depth, True))
+                pending.extend((member, depth + 1, False) for member in value)
             else:
                 return None
         encoded = canonical_json_bytes(document)

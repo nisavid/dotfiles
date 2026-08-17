@@ -191,6 +191,19 @@ class ImmutableContentSchemaTests(unittest.TestCase):
         }
         self.assert_state_invalid_for_both_contracts(invalid)
 
+    def test_absent_observed_version_requires_an_absent_route(self) -> None:
+        absent = normalized_state()
+        absent["route_presence"] = "absent"
+        absent["observed_version"] = {"status": "route_absent"}
+        absent["immutable_content"] = {"status": "not_applicable"}
+        self.assert_state_valid_for_both_contracts(absent)
+
+        for route_presence in ("present", "partial", "unknown"):
+            with self.subTest(route_presence=route_presence):
+                invalid = deepcopy(absent)
+                invalid["route_presence"] = route_presence
+                self.assert_state_invalid_for_both_contracts(invalid)
+
     def test_authoritative_and_installed_schemas_are_valid_and_digest_pinned(
         self,
     ) -> None:

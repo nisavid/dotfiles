@@ -1190,8 +1190,7 @@ class ResolverMatrixTest(unittest.TestCase):
             (),
         )
 
-        mutable = observation.document.__class__(observation.document._items)
-        changed = {key: value for key, value in mutable.items()}
+        changed = dict(observation.document)
         changed["route_digest"] = "sha256:" + "0" * 64
         forged_document = freeze_json(changed)
         assert isinstance(forged_document, FrozenJsonObject)

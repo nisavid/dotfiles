@@ -403,6 +403,34 @@ class ObservationAdmissionTests(unittest.TestCase):
         )
         self.assertEqual(admitted.route_identity, "route:claude/mattpocock-plugin")
 
+    def test_runtime_observation_accepts_repeated_acyclic_containers(self) -> None:
+        snapshot = load_fixture("valid-adapter-runtime-observation.json")
+        record = snapshot["record"]
+        assert isinstance(record, dict)
+        result = record["result"]
+        assert isinstance(result, dict)
+        normalized_state = result["normalized_state"]
+        assert isinstance(normalized_state, dict)
+        shared_empty_components: list[object] = []
+        record["controlled_equipment_identities"] = shared_empty_components
+        normalized_state["component_states"] = shared_empty_components
+
+        admitted = admit_runtime_observation(snapshot)
+
+        self.assertIsInstance(admitted, RuntimeObservation)
+
+    def test_runtime_observation_rejects_a_recursive_container(self) -> None:
+        snapshot = load_fixture("valid-adapter-runtime-observation.json")
+        recursive: dict[str, object] = {}
+        recursive["self"] = recursive
+        snapshot["recursive"] = recursive
+
+        admitted = admit_runtime_observation(snapshot)
+
+        self.assertIsInstance(admitted, AdapterError)
+        assert isinstance(admitted, AdapterError)
+        self.assertEqual(admitted.code, "RUNTIME_OBSERVATION_INVALID")
+
     def test_tampered_normalized_state_digest_rejects_the_observation(self) -> None:
         snapshot = load_fixture("valid-adapter-runtime-observation.json")
         snapshot["record"]["result"]["normalized_state"]["enablement"] = "enabled"  # type: ignore[index]
