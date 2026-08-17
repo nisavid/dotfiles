@@ -43,6 +43,9 @@
           "status": "observed",
           "value": "1.2.3"
         },
+        "immutable_content": {
+          "status": "not_applicable"
+        },
         "native_update_control": "suppressible",
         "native_update_state": "disabled",
         "manager_drift": {

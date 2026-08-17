@@ -683,6 +683,13 @@ def _validate_request_observation(
         capability_control,
         route_control,
     )
+    _validate_restore_observation(
+        diagnostics,
+        label,
+        capability,
+        request,
+        normalized_state,
+    )
     captured_state = result.get("captured_state")
     expected_capture_status = (
         "captured" if captured_state_required else "not_applicable"
@@ -751,6 +758,25 @@ def _validate_verified_state_fragment(
     if not isinstance(normalized_state, dict):
         return
 
+    route_record = action.get("route_record")
+    restore = route_record.get("restore") if isinstance(route_record, dict) else None
+    if (
+        isinstance(restore, dict)
+        and restore.get("class") == "immutable"
+        and normalized_state.get("route_presence") == "present"
+    ):
+        _expect_equal(
+            diagnostics,
+            "IMMUTABLE_CONTENT_BINDING_MISMATCH",
+            f"{observation_label}.record.result.normalized_state.immutable_content",
+            normalized_state.get("immutable_content"),
+            {
+                "status": "observed",
+                "revision": restore.get("revision"),
+                "content_digest": restore.get("content_digest"),
+            },
+        )
+
     for field in ("route_presence", "enablement", "native_update_suppression_state"):
         if field in desired_state:
             _expect_equal(
@@ -786,6 +812,125 @@ def _validate_verified_state_fragment(
                 observed_components.get(identity),
                 state,
             )
+
+
+def _validate_restore_observation(
+    diagnostics: list[Diagnostic],
+    label: str,
+    capability: JsonObject,
+    request: JsonObject,
+    normalized_state: JsonObject,
+) -> None:
+    route_record = request.get("route_record")
+    restore = route_record.get("restore") if isinstance(route_record, dict) else None
+    if not isinstance(restore, dict):
+        return
+
+    restore_class = restore.get("class")
+    immutable_content = normalized_state.get("immutable_content")
+    observed_version = normalized_state.get("observed_version")
+    if restore_class == "native_rolling":
+        _expect_equal(
+            diagnostics,
+            "RESTORE_OBSERVATION_CLASS_MISMATCH",
+            f"{label}Observation.record.result.normalized_state.immutable_content",
+            immutable_content,
+            {"status": "not_applicable"},
+        )
+        if (
+            isinstance(observed_version, dict)
+            and observed_version.get("status") == "not_applicable"
+        ):
+            diagnostics.append(
+                Diagnostic(
+                    "RESTORE_OBSERVATION_CLASS_MISMATCH",
+                    f"{label}Observation.record.result.normalized_state.observed_version",
+                    "A native-rolling route must not use the immutable-only not-applicable version tag.",
+                )
+            )
+        return
+
+    if restore_class != "immutable":
+        return
+
+    inspect_support = _nested(capability, "operation_support", "inspect")
+    normalized_fields = (
+        inspect_support.get("normalized_fields")
+        if isinstance(inspect_support, dict)
+        else None
+    )
+    if not isinstance(normalized_fields, list) or "immutable_content" not in (
+        normalized_fields
+    ):
+        diagnostics.append(
+            Diagnostic(
+                "IMMUTABLE_CONTENT_CAPABILITY_MISMATCH",
+                "CapabilityDiscovery.result.records[].operation_support.inspect.normalized_fields",
+                "An adapter that inspects an immutable route must advertise immutable-content observation.",
+            )
+        )
+
+    immutable_class_fields = (
+        (
+            "observed_version",
+            observed_version,
+            {"status": "not_applicable"},
+        ),
+        (
+            "native_update_control",
+            normalized_state.get("native_update_control"),
+            "not_applicable",
+        ),
+        (
+            "native_update_suppression_state",
+            normalized_state.get("native_update_suppression_state"),
+            "not_applicable",
+        ),
+        (
+            "manager_drift",
+            normalized_state.get("manager_drift"),
+            {
+                "status": "not_applicable",
+                "reviewed_baseline": None,
+                "observation_source": None,
+            },
+        ),
+    )
+    for field, actual, expected in immutable_class_fields:
+        _expect_equal(
+            diagnostics,
+            "RESTORE_OBSERVATION_CLASS_MISMATCH",
+            f"{label}Observation.record.result.normalized_state.{field}",
+            actual,
+            expected,
+        )
+
+    content_status = (
+        immutable_content.get("status") if isinstance(immutable_content, dict) else None
+    )
+    if content_status == "not_applicable":
+        diagnostics.append(
+            Diagnostic(
+                "RESTORE_OBSERVATION_CLASS_MISMATCH",
+                f"{label}Observation.record.result.normalized_state.immutable_content",
+                "An immutable route must not use the native-rolling not-applicable content tag.",
+            )
+        )
+    route_presence = normalized_state.get("route_presence")
+    allowed_statuses = {
+        "present": frozenset({"observed", "unknown"}),
+        "absent": frozenset({"route_absent"}),
+        "partial": frozenset({"unknown"}),
+        "unknown": frozenset({"unknown"}),
+    }.get(route_presence, frozenset())
+    if content_status not in allowed_statuses:
+        diagnostics.append(
+            Diagnostic(
+                "IMMUTABLE_CONTENT_PRESENCE_MISMATCH",
+                f"{label}Observation.record.result.normalized_state.immutable_content",
+                "Immutable-content status must truthfully match route presence.",
+            )
+        )
 
 
 def _validate_action_preconditions(

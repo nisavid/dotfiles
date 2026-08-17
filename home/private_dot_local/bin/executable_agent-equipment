@@ -19,7 +19,9 @@ _PACKAGE_NAMES = (
     "__init__.py",
     "_json_schema.py",
     "canonical.py",
+    "inventory.py",
     "model.py",
+    "resolver.py",
     "secrets.py",
     "validator.py",
 )

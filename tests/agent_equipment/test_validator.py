@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import subprocess
 import sys
+import textwrap
 import unittest
 from copy import deepcopy
 from pathlib import Path
@@ -128,6 +132,215 @@ class CatalogLockValidatorTests(unittest.TestCase):
                     tuple(diagnostic.code for diagnostic in result.diagnostics),
                     ("DOCUMENT_PARSE_INVALID",),
                 )
+
+    def test_file_loading_rejects_oversized_documents_before_json_parsing(
+        self,
+    ) -> None:
+        original_loader = validator.strict_load_json_bytes
+        cases = (
+            ("catalog", 4 * 1024 * 1024),
+            ("lock", 16 * 1024 * 1024),
+        )
+        for role, maximum_bytes in cases:
+            with self.subTest(role=role), TemporaryDirectory() as directory:
+                root = Path(directory)
+                catalog_path = root / "catalog.json"
+                lock_path = root / "lock.json"
+                shutil.copyfile(CATALOG, catalog_path)
+                shutil.copyfile(LOCK, lock_path)
+                oversized = catalog_path if role == "catalog" else lock_path
+                with oversized.open("wb") as stream:
+                    stream.truncate(maximum_bytes + 1)
+
+                oversized_parse_calls = 0
+
+                def reject_oversized_parse(payload: bytes) -> object:
+                    nonlocal oversized_parse_calls
+                    if len(payload) > 4 * 1024 * 1024:
+                        oversized_parse_calls += 1
+                        raise AssertionError("oversized input reached JSON parsing")
+                    return original_loader(payload)
+
+                with patch.object(
+                    validator,
+                    "strict_load_json_bytes",
+                    side_effect=reject_oversized_parse,
+                ):
+                    result = load_catalog_lock(catalog_path, lock_path)
+
+                self.assertIsNone(result.model)
+                self.assertEqual(
+                    tuple(diagnostic.code for diagnostic in result.diagnostics),
+                    ("DOCUMENT_PARSE_INVALID",),
+                )
+                self.assertEqual(oversized_parse_calls, 0)
+
+    def test_file_loading_rejects_symlinked_and_hardlinked_leaves(self) -> None:
+        for kind in ("symlink", "hardlink"):
+            with self.subTest(kind=kind), TemporaryDirectory() as directory:
+                root = Path(directory)
+                source = root / "catalog-source.json"
+                catalog_path = root / "catalog.json"
+                lock_path = root / "lock.json"
+                shutil.copyfile(CATALOG, source)
+                shutil.copyfile(LOCK, lock_path)
+                if kind == "symlink":
+                    catalog_path.symlink_to(source.name)
+                else:
+                    os.link(source, catalog_path)
+
+                result = load_catalog_lock(catalog_path, lock_path)
+
+                self.assertIsNone(result.model)
+                self.assertEqual(
+                    tuple(diagnostic.code for diagnostic in result.diagnostics),
+                    ("DOCUMENT_PARSE_INVALID",),
+                )
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "requires POSIX FIFO support")
+    def test_file_loading_rejects_a_fifo_without_blocking(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            catalog_path = root / "catalog.json"
+            lock_path = root / "lock.json"
+            os.mkfifo(catalog_path)
+            shutil.copyfile(LOCK, lock_path)
+            script = (
+                "from pathlib import Path; "
+                "from agent_equipment.validator import load_catalog_lock; "
+                f"result=load_catalog_lock(Path({str(catalog_path)!r}), "
+                f"Path({str(lock_path)!r})); "
+                "print(result.diagnostics[0].code)"
+            )
+            environment = os.environ | {"PYTHONPATH": str(PACKAGE_ROOT)}
+
+            completed = subprocess.run(
+                [sys.executable, "-c", script],
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=3,
+                check=False,
+            )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(completed.stdout, "DOCUMENT_PARSE_INVALID\n")
+
+    def test_file_loading_rejects_a_nonregular_directory(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            catalog_path = root / "catalog.json"
+            lock_path = root / "lock.json"
+            catalog_path.mkdir()
+            shutil.copyfile(LOCK, lock_path)
+
+            result = load_catalog_lock(catalog_path, lock_path)
+
+        self.assertIsNone(result.model)
+        self.assertEqual(
+            tuple(diagnostic.code for diagnostic in result.diagnostics),
+            ("DOCUMENT_PARSE_INVALID",),
+        )
+
+    @unittest.skipUnless(
+        hasattr(os, "O_NOFOLLOW") and hasattr(os, "O_NONBLOCK"),
+        "requires safe POSIX descriptor flags",
+    )
+    def test_file_loading_holds_both_nonblocking_nofollow_descriptors(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            catalog_path = root / "catalog.json"
+            lock_path = root / "lock.json"
+            shutil.copyfile(CATALOG, catalog_path)
+            shutil.copyfile(LOCK, lock_path)
+            original_open = os.open
+            opened_descriptors: list[int] = []
+            open_flags: list[int] = []
+
+            def record_open(path: Path, flags: int, mode: int = 0o777) -> int:
+                if opened_descriptors:
+                    os.fstat(opened_descriptors[0])
+                descriptor = original_open(path, flags, mode)
+                opened_descriptors.append(descriptor)
+                open_flags.append(flags)
+                return descriptor
+
+            with patch.object(validator.os, "open", side_effect=record_open):
+                result = load_catalog_lock(catalog_path, lock_path)
+
+        self.assertIsNotNone(result.model)
+        self.assertEqual(len(opened_descriptors), 2)
+        self.assertTrue(
+            all(flags & os.O_NOFOLLOW for flags in open_flags),  # type: ignore[attr-defined]
+        )
+        self.assertTrue(all(flags & os.O_NONBLOCK for flags in open_flags))
+        for descriptor in opened_descriptors:
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
+
+    def test_file_loading_rejects_path_swap_and_in_place_change_after_reads(
+        self,
+    ) -> None:
+        for race in ("path-swap", "in-place-change"):
+            with self.subTest(race=race), TemporaryDirectory() as directory:
+                root = Path(directory)
+                catalog_path = root / "catalog.json"
+                lock_path = root / "lock.json"
+                replacement = root / "replacement.json"
+                shutil.copyfile(CATALOG, catalog_path)
+                shutil.copyfile(CATALOG, replacement)
+                shutil.copyfile(LOCK, lock_path)
+                script = textwrap.dedent(
+                    f"""
+                    from pathlib import Path
+                    from unittest.mock import patch
+                    import agent_equipment.validator as validator
+
+                    catalog_path = Path({str(catalog_path)!r})
+                    lock_path = Path({str(lock_path)!r})
+                    replacement = Path({str(replacement)!r})
+                    race = {race!r}
+                    original_reader = validator._read_bounded_document_descriptor
+                    calls = 0
+
+                    def read_and_race(descriptor: int, *, maximum_bytes: int) -> bytes:
+                        global calls
+                        payload = original_reader(
+                            descriptor,
+                            maximum_bytes=maximum_bytes,
+                        )
+                        calls += 1
+                        if calls == 2:
+                            if race == "path-swap":
+                                replacement.replace(catalog_path)
+                            else:
+                                with catalog_path.open("ab") as stream:
+                                    stream.write(b"\\n")
+                        return payload
+
+                    with patch.object(
+                        validator,
+                        "_read_bounded_document_descriptor",
+                        side_effect=read_and_race,
+                    ):
+                        result = validator.load_catalog_lock(catalog_path, lock_path)
+
+                    print(calls)
+                    print(result.diagnostics[0].code)
+                    """
+                )
+                environment = os.environ | {"PYTHONPATH": str(PACKAGE_ROOT)}
+                completed = subprocess.run(
+                    [sys.executable, "-c", script],
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=False,
+                )
+
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                self.assertEqual(completed.stdout, "2\nDOCUMENT_PARSE_INVALID\n")
 
     def test_representative_catalog_failures_return_diagnostics_without_a_plan(
         self,

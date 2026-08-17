@@ -22,7 +22,9 @@ PACKAGE_NAMES = (
     "__init__.py",
     "_json_schema.py",
     "canonical.py",
+    "inventory.py",
     "model.py",
+    "resolver.py",
     "secrets.py",
     "validator.py",
 )
@@ -533,30 +535,37 @@ class LauncherTests(unittest.TestCase):
         self.assertFalse(self.manifest_marker.exists())
         self.assertEqual(json.loads(manifest_output.read_text()), expected_manifest)
 
-    def test_import_executes_captured_bytes_before_rejecting_path_replacement(
+    def test_package_modules_execute_captured_bytes_before_tree_changes_fail_closed(
         self,
     ) -> None:
-        captured_source = self.root / "captured-validator-source"
-        replacement_imported = self.root / "replacement-validator-imported"
+        captured_source = self.root / "captured-module-sources"
+        replacement_imported = self.root / "replacement-inventory-imported"
         replacement_source = (
             "from pathlib import Path\n"
             f"Path({str(replacement_imported)!r}).touch()\n"
-            "SOURCE = 'path'\n"
+            "SOURCE = 'filesystem-inventory'\n"
         )
-        (self.package_dir / "validator.py").write_text(
-            "SOURCE = 'captured'\n",
+        (self.package_dir / "inventory.py").write_text(
+            "SOURCE = 'captured-inventory'\n",
+            encoding="utf-8",
+        )
+        (self.package_dir / "resolver.py").write_text(
+            "SOURCE = 'captured-resolver'\n",
             encoding="utf-8",
         )
         (self.package_dir / "__init__.py").write_text(
             "import os\n"
             "from pathlib import Path\n"
             f"Path({str(self.import_marker)!r}).touch()\n"
-            "validator_path = Path(__file__).with_name('validator.py')\n"
-            "replacement = validator_path.with_name('.validator-replacement')\n"
+            "inventory_path = Path(__file__).with_name('inventory.py')\n"
+            "replacement = inventory_path.with_name('.inventory-replacement')\n"
             f"replacement.write_text({replacement_source!r})\n"
-            "os.replace(replacement, validator_path)\n"
-            "from . import validator\n"
-            f"Path({str(captured_source)!r}).write_text(validator.SOURCE)\n"
+            "os.replace(replacement, inventory_path)\n"
+            "Path(__file__).with_name('resolver.py').unlink()\n"
+            "from . import inventory, resolver\n"
+            f"Path({str(captured_source)!r}).write_text(\n"
+            "    inventory.SOURCE + '\\n' + resolver.SOURCE\n"
+            ")\n"
             "def build_installed_implementation_manifest():\n"
             f"    Path({str(self.manifest_marker)!r}).touch()\n"
             "    return 'coordinated-reseal'\n"
@@ -573,7 +582,10 @@ class LauncherTests(unittest.TestCase):
             result.stderr,
             "agent-equipment: installed implementation manifest is invalid\n",
         )
-        self.assertEqual(captured_source.read_text(), "captured")
+        self.assertEqual(
+            captured_source.read_text(),
+            "captured-inventory\ncaptured-resolver",
+        )
         self.assertFalse(replacement_imported.exists())
         self.assertFalse(self.manifest_marker.exists())
         self.assertFalse(self.native_marker.exists())
@@ -744,7 +756,7 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(result.returncode, 64, result.stderr)
         self.assertEqual(
             result.stderr,
-            "agent-equipment: no runtime commands are available\n",
+            "agent-equipment: only the read-only audit command is available\n",
         )
         for marker in (pythonpath_marker, cwd_marker, sitecustomize_marker):
             with self.subTest(poison_marker=marker.name):

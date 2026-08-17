@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import stat
 from collections.abc import Mapping
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -61,13 +64,16 @@ OPERATIONS = (
 MUTATING_OPERATIONS = frozenset(OPERATIONS) - {"inspect"}
 SCHEMA_DIRECTORY = Path(__file__).resolve().parent.parent / "schemas"
 MAX_SCHEMA_BYTES = 1024 * 1024
+MAX_CATALOG_BYTES = 4 * 1024 * 1024
+MAX_LOCK_BYTES = 16 * 1024 * 1024
+_DOCUMENT_READ_CHUNK_BYTES = 1024 * 1024
 EXPECTED_SCHEMA_SHA256 = MappingProxyType(
     {
         "acceptance-evidence-v1.schema.json": "5264aad08075c115cb3633f3d0f9a46b8a0a2027758b931c4334a2f234e660d5",
-        "adapter-contract-v1.schema.json": "5c7dd10109639c323c6c3508139aa076d494831d7a13b437885fa8a356c6cf37",
+        "adapter-contract-v1.schema.json": "b448a9c44bfbaf637baf1477dae45521beeae72fba3c5f60504fb3225f2cc5f6",
         "captured-state-v1.schema.json": "d0c30850f03366dd612208d12ee35b2462d84e5e6901e3ca7d0a6b0ed3bdf693",
         "catalog-v1.schema.json": "a8e2942347501dd2ba16aebc5762e0a234f55847bd95b75a805fad867ac41a02",
-        "execution-authority-v1.schema.json": "80628d53dc75216c9d41db5b38d95d4d9c56357bb5d15ef8bce965853b48c1db",
+        "execution-authority-v1.schema.json": "ce853f1561bfbf85225bd1db65a1cafbb4bf8f23b6bb21630170dbe18a22ff5d",
         "lock-v1.schema.json": "f16c7e89523257b469a291984e4ad18491373942cd8605a62469a08bec9f98d7",
         "plan-action-set-v1.schema.json": "fcfede41027b76c96c20161fcecfd8fb9a8d38fa0675f3d749a094055ba0e12e",
     }
@@ -111,6 +117,14 @@ class _DesignValidationResult:
     mutation_plan: tuple[_PlannedOperation, ...] | None
 
 
+@dataclass(frozen=True, slots=True)
+class _HeldDocument:
+    path: Path
+    descriptor: int
+    identity: tuple[int, int, int]
+    stable_metadata: tuple[int, ...]
+
+
 def _diagnostic_sort_key(item: Diagnostic) -> tuple[str, str, str, str, str]:
     return (
         item.equipment_identity or "",
@@ -138,6 +152,116 @@ def canonical_json_sha256(document: JsonObject) -> str:
     """Return the digest of UTF-8 RFC-style canonical JSON for *document*."""
 
     return _canonical_json_sha256(document)
+
+
+def _document_identity(metadata: os.stat_result) -> tuple[int, int, int]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        stat.S_IFMT(metadata.st_mode),
+    )
+
+
+def _stable_document_metadata(metadata: os.stat_result) -> tuple[int, ...]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_nlink,
+        metadata.st_uid,
+        metadata.st_gid,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
+
+
+def _hold_bounded_document(
+    descriptors: ExitStack,
+    path: Path,
+    *,
+    maximum_bytes: int,
+) -> _HeldDocument:
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    nonblocking = getattr(os, "O_NONBLOCK", None)
+    if type(no_follow) is not int or type(nonblocking) is not int:
+        raise OSError("safe nonblocking document reads are unavailable")
+    before = os.stat(path, follow_symlinks=False)
+    if (
+        not stat.S_ISREG(before.st_mode)
+        or before.st_nlink != 1
+        or before.st_size > maximum_bytes
+    ):
+        raise ValueError("document leaf is not an admissible regular file")
+    flags = os.O_RDONLY | no_follow | nonblocking | getattr(os, "O_CLOEXEC", 0)
+    descriptor = os.open(path, flags)
+    descriptors.callback(os.close, descriptor)
+    os.set_inheritable(descriptor, False)
+    opened = os.fstat(descriptor)
+    if (
+        _document_identity(before) != _document_identity(opened)
+        or _stable_document_metadata(before) != _stable_document_metadata(opened)
+        or not stat.S_ISREG(opened.st_mode)
+        or opened.st_nlink != 1
+        or opened.st_size > maximum_bytes
+    ):
+        raise ValueError("document leaf changed before capture")
+    return _HeldDocument(
+        path=path,
+        descriptor=descriptor,
+        identity=_document_identity(opened),
+        stable_metadata=_stable_document_metadata(opened),
+    )
+
+
+def _read_bounded_document_descriptor(
+    descriptor: int,
+    *,
+    maximum_bytes: int,
+) -> bytes:
+    if maximum_bytes < 0:
+        raise ValueError("document capture bound is invalid")
+    before = os.fstat(descriptor)
+    if (
+        not stat.S_ISREG(before.st_mode)
+        or before.st_nlink != 1
+        or before.st_size > maximum_bytes
+    ):
+        raise ValueError("document leaf is not an admissible regular file")
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    chunks: list[bytes] = []
+    captured_bytes = 0
+    while True:
+        block = os.read(
+            descriptor,
+            min(
+                _DOCUMENT_READ_CHUNK_BYTES,
+                maximum_bytes + 1 - captured_bytes,
+            ),
+        )
+        if not block:
+            break
+        captured_bytes += len(block)
+        if captured_bytes > maximum_bytes:
+            raise ValueError("document exceeds its capture bound")
+        chunks.append(block)
+    if _stable_document_metadata(before) != _stable_document_metadata(
+        os.fstat(descriptor)
+    ):
+        raise ValueError("document changed during capture")
+    return b"".join(chunks)
+
+
+def _revalidate_held_document(held: _HeldDocument) -> None:
+    descriptor_metadata = os.fstat(held.descriptor)
+    path_metadata = os.stat(held.path, follow_symlinks=False)
+    if (
+        _document_identity(descriptor_metadata) != held.identity
+        or _document_identity(path_metadata) != held.identity
+        or _stable_document_metadata(descriptor_metadata) != held.stable_metadata
+        or _stable_document_metadata(path_metadata) != held.stable_metadata
+    ):
+        raise ValueError("document path or bytes changed during validation")
 
 
 def load_catalog_lock(
@@ -177,11 +301,35 @@ def _load_catalog_lock_with_schemas(
     if schemas is None:
         return _schema_manifest_failure()
     try:
-        catalog = thaw_json(strict_load_json_bytes(Path(catalog_path).read_bytes()))
-        lock = thaw_json(strict_load_json_bytes(Path(lock_path).read_bytes()))
+        with ExitStack() as descriptors:
+            catalog_document = _hold_bounded_document(
+                descriptors,
+                Path(catalog_path),
+                maximum_bytes=MAX_CATALOG_BYTES,
+            )
+            lock_document = _hold_bounded_document(
+                descriptors,
+                Path(lock_path),
+                maximum_bytes=MAX_LOCK_BYTES,
+            )
+            if catalog_document.identity[:2] == lock_document.identity[:2]:
+                raise ValueError("catalog and lock must be distinct files")
+            catalog_bytes = _read_bounded_document_descriptor(
+                catalog_document.descriptor,
+                maximum_bytes=MAX_CATALOG_BYTES,
+            )
+            lock_bytes = _read_bounded_document_descriptor(
+                lock_document.descriptor,
+                maximum_bytes=MAX_LOCK_BYTES,
+            )
+            catalog = thaw_json(strict_load_json_bytes(catalog_bytes))
+            lock = thaw_json(strict_load_json_bytes(lock_bytes))
+            result = _validate_catalog_lock_with_schemas(catalog, lock, schemas)
+            _revalidate_held_document(catalog_document)
+            _revalidate_held_document(lock_document)
+            return result
     except (OSError, TypeError, UnicodeError, ValueError, RecursionError):
         return _document_parse_failure()
-    return _validate_catalog_lock_with_schemas(catalog, lock, schemas)
 
 
 def validate_catalog_lock(
@@ -194,6 +342,36 @@ def validate_catalog_lock(
         catalog,
         lock,
         schemas=_installed_schema_documents(),
+    )
+
+
+def _validate_adapter_contract_document(
+    document: object,
+    *,
+    record_type: str,
+) -> bool:
+    """Admit one adapter envelope through the installed digest-pinned Schemas."""
+
+    if record_type not in {
+        "CapabilityDiscovery",
+        "ObserveRequest",
+        "RuntimeObservation",
+    }:
+        return False
+    if type(document) is not dict or document.get("record_type") != record_type:
+        return False
+    schemas = _ADAPTER_CONTRACT_SCHEMA_DOCUMENTS
+    if schemas is None:
+        return False
+    return _validate_schema(
+        document,
+        schema_directory=SCHEMA_DIRECTORY,
+        root_schema_name="adapter-contract-v1.schema.json",
+        allowed_schema_names={
+            "adapter-contract-v1.schema.json",
+            "catalog-v1.schema.json",
+        },
+        schema_documents=schemas,
     )
 
 
@@ -329,6 +507,9 @@ def _installed_schema_documents() -> dict[str, dict[str, Any]] | None:
     if _CAPTURED_SCHEMA_BYTES is not None:
         return _trusted_schema_documents_from_bytes(_CAPTURED_SCHEMA_BYTES)
     return _trusted_schema_documents(SCHEMA_DIRECTORY)
+
+
+_ADAPTER_CONTRACT_SCHEMA_DOCUMENTS = _installed_schema_documents()
 
 
 def _schema_manifest_failure() -> CatalogLockValidation:

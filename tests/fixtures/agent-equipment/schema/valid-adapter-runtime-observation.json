@@ -39,6 +39,9 @@
           "status": "observed",
           "value": "1.2.3"
         },
+        "immutable_content": {
+          "status": "not_applicable"
+        },
         "native_update_control": "suppressible",
         "native_update_suppression_state": "disabled",
         "manager_drift": {
@@ -59,7 +62,7 @@
         "identity": "captured-state:candidate-001/action-001",
         "digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
       },
-      "state_digest": "sha256:5f1e1002517a1c11e2a97f743123e0a8030e2971bdf621e42fd9421696894335"
+      "state_digest": "sha256:6d56a256dad3604063078b0b4c68152f6015b07d97b10a991f5d0a2edea0d2ae"
     }
   }
 }
