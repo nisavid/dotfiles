@@ -61,7 +61,10 @@ class ReadOnlyAdapter(Protocol):
 def admit_capability_discovery(snapshot: object) -> CapabilityDiscovery | AdapterError:
     """Admit one complete canonical CapabilityDiscovery snapshot."""
 
-    if _plain_snapshot_canonical_bytes(snapshot, MAX_ADAPTER_SNAPSHOT_BYTES) is None:
+    if (
+        type(snapshot) is not dict
+        or _plain_snapshot_canonical_bytes(snapshot, MAX_ADAPTER_SNAPSHOT_BYTES) is None
+    ):
         return _admission_error(
             "CAPABILITY_DISCOVERY_INVALID", _CAPABILITY_INVALID_MESSAGE
         )
@@ -157,7 +160,10 @@ def _admit_bounded_capability_discovery(
 def admit_observe_request(snapshot: object) -> ObserveRequest | AdapterError:
     """Admit one closed, read-only ObserveRequest snapshot."""
 
-    if not _plain_snapshot_within_bound(snapshot, MAX_ADAPTER_SNAPSHOT_BYTES):
+    if type(snapshot) is not dict or not _plain_snapshot_within_bound(
+        snapshot,
+        MAX_ADAPTER_SNAPSHOT_BYTES,
+    ):
         return _admission_error(
             "OBSERVE_REQUEST_INVALID",
             _OBSERVE_REQUEST_INVALID_MESSAGE,
@@ -199,7 +205,10 @@ def admit_observe_request(snapshot: object) -> ObserveRequest | AdapterError:
 def admit_runtime_observation(snapshot: object) -> RuntimeObservation | AdapterError:
     """Admit one closed observation and recompute its normalized-state digest."""
 
-    if _plain_snapshot_canonical_bytes(snapshot, MAX_ADAPTER_SNAPSHOT_BYTES) is None:
+    if (
+        type(snapshot) is not dict
+        or _plain_snapshot_canonical_bytes(snapshot, MAX_ADAPTER_SNAPSHOT_BYTES) is None
+    ):
         return _admission_error(
             "RUNTIME_OBSERVATION_INVALID",
             _OBSERVATION_INVALID_MESSAGE,
@@ -289,6 +298,11 @@ def admit_runtime_inventory(
     aggregate_bytes = 0
     records: list[CapabilityRecord] = []
     for snapshot in capability_snapshots:
+        if type(snapshot) is not dict:
+            return _admission_error(
+                "RUNTIME_INVENTORY_INVALID",
+                _INVENTORY_INVALID_MESSAGE,
+            )
         encoded = _plain_snapshot_canonical_bytes(
             snapshot,
             MAX_ADAPTER_SNAPSHOT_BYTES,
@@ -312,6 +326,11 @@ def admit_runtime_inventory(
         records.extend(discovery.records)
     observations: list[RuntimeObservation] = []
     for snapshot in observation_snapshots:
+        if type(snapshot) is not dict:
+            return _admission_error(
+                "RUNTIME_INVENTORY_INVALID",
+                _INVENTORY_INVALID_MESSAGE,
+            )
         encoded = _plain_snapshot_canonical_bytes(
             snapshot,
             MAX_ADAPTER_SNAPSHOT_BYTES,
