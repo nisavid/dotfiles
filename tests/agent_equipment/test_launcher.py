@@ -40,6 +40,7 @@ MANIFEST_PATHS = (
     *(f"lib/agent-equipment/agent_equipment/{name}" for name in PACKAGE_NAMES),
     *(f"lib/agent-equipment/schemas/{name}" for name in SCHEMA_NAMES),
 )
+SUBPROCESS_TIMEOUT_SECONDS = 30.0
 
 
 class LauncherTests(unittest.TestCase):
@@ -172,7 +173,7 @@ class LauncherTests(unittest.TestCase):
         cwd: Path | None = None,
         environment: dict[str, str] | None = None,
         launcher: Path | None = None,
-        timeout: float | None = None,
+        timeout: float = SUBPROCESS_TIMEOUT_SECONDS,
     ) -> subprocess.CompletedProcess[str]:
         path = os.environ.get("PATH", "")
         if fake_bin is not None:
@@ -329,6 +330,7 @@ class LauncherTests(unittest.TestCase):
             capture_output=True,
             text=True,
             check=False,
+            timeout=SUBPROCESS_TIMEOUT_SECONDS,
         )
 
         self.assertEqual(result.returncode, 1)
@@ -584,6 +586,7 @@ class LauncherTests(unittest.TestCase):
             capture_output=True,
             text=True,
             check=False,
+            timeout=SUBPROCESS_TIMEOUT_SECONDS,
         )
 
         self.assertNotEqual(result.returncode, 0)

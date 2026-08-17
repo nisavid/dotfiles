@@ -36,6 +36,11 @@ _SCHEMA_NAMES = tuple(
     for path in _INSTALLED_IMPLEMENTATION_PATHS
     if path.startswith(_SCHEMA_PREFIX)
 )
+_MAX_LAUNCHER_BYTES = 256 * 1024
+_MAX_PACKAGE_SOURCE_BYTES = 1024 * 1024
+_MAX_SCHEMA_BYTES = 512 * 1024
+_MAX_CAPTURED_IMPLEMENTATION_BYTES = 8 * 1024 * 1024
+_MAX_RUNTIME_EXECUTABLE_BYTES = 256 * 1024 * 1024
 
 
 def _reject_duplicate_members(
@@ -144,19 +149,47 @@ def _entry_identity(metadata: os.stat_result) -> tuple[int, int, int]:
     )
 
 
-def _hash_descriptor(file_descriptor: int, role: str, relative_path: str) -> str:
+def _hash_descriptor(
+    file_descriptor: int,
+    role: str,
+    relative_path: str,
+    *,
+    max_bytes: int,
+) -> tuple[str, int]:
+    if max_bytes < 0:
+        raise ValueError("manifest hash bound is exhausted")
     before = os.fstat(file_descriptor)
     if not stat.S_ISREG(before.st_mode):
         raise ValueError("manifest entries must be regular files")
+    if before.st_size > max_bytes:
+        raise ValueError("manifest entry exceeds its hash bound")
     _before_descriptor_hash(role, relative_path)
     os.lseek(file_descriptor, 0, os.SEEK_SET)
     digest = hashlib.sha256()
-    while block := os.read(file_descriptor, 1024 * 1024):
+    hashed_bytes = 0
+    while block := os.read(
+        file_descriptor,
+        min(1024 * 1024, (max_bytes + 1) - hashed_bytes),
+    ):
+        hashed_bytes += len(block)
+        if hashed_bytes > max_bytes:
+            raise ValueError("manifest entry exceeds its hash bound")
         digest.update(block)
     after = os.fstat(file_descriptor)
     if _stable_file_metadata(before) != _stable_file_metadata(after):
         raise ValueError("manifest entry changed while it was being hashed")
-    return f"sha256:{digest.hexdigest()}"
+    return f"sha256:{digest.hexdigest()}", hashed_bytes
+
+
+def _installed_file_max_bytes(relative: PurePosixPath) -> int:
+    relative_path = relative.as_posix()
+    if relative_path == "bin/agent-equipment":
+        return _MAX_LAUNCHER_BYTES
+    if relative_path.startswith(_PACKAGE_PREFIX):
+        return _MAX_PACKAGE_SOURCE_BYTES
+    if relative_path.startswith(_SCHEMA_PREFIX):
+        return _MAX_SCHEMA_BYTES
+    raise ValueError("installed file path has no capture bound")
 
 
 def _open_descriptor(
@@ -212,11 +245,16 @@ def _require_closed_directory(
     directory_descriptor: int,
     expected_names: tuple[str, ...],
 ) -> None:
+    observed_names: set[str] = set()
     try:
-        actual_names = tuple(sorted(os.listdir(directory_descriptor)))
+        with os.scandir(directory_descriptor) as entries:
+            for entry in entries:
+                if len(observed_names) >= len(expected_names):
+                    raise ValueError("installed directory inventory must be closed")
+                observed_names.add(entry.name)
     except OSError as error:
         raise ValueError("installed directory inventory could not be read") from error
-    if actual_names != tuple(sorted(expected_names)):
+    if observed_names != set(expected_names):
         raise ValueError("installed directory inventory must be closed")
 
 
@@ -243,7 +281,8 @@ def _hold_installed_file(
     root_descriptor: int,
     relative: PurePosixPath,
     held_entries: list[_HeldEntry],
-) -> tuple[InstalledFile, tuple[int, int]]:
+    remaining_bytes: int,
+) -> tuple[InstalledFile, tuple[int, int], int]:
     parent_descriptor = root_descriptor
     for part in relative.parts[:-1]:
         child_descriptor = _open_descriptor(
@@ -287,14 +326,16 @@ def _hold_installed_file(
             stable_metadata=_stable_file_metadata(file_metadata),
         )
     )
-    digest = _hash_descriptor(
+    digest, hashed_bytes = _hash_descriptor(
         file_descriptor,
         "installed",
         relative.as_posix(),
+        max_bytes=min(_installed_file_max_bytes(relative), remaining_bytes),
     )
     return (
         InstalledFile(relative.as_posix(), digest),
         (file_metadata.st_dev, file_metadata.st_ino),
+        hashed_bytes,
     )
 
 
@@ -390,10 +431,11 @@ def _hold_runtime_executable(
     opened_metadata = os.fstat(file_descriptor)
     if _entry_identity(resolved_before) != _entry_identity(opened_metadata):
         raise ValueError("runtime executable changed before hashing")
-    digest = _hash_descriptor(
+    digest, _ = _hash_descriptor(
         file_descriptor,
         "runtime",
         resolved_runtime.as_posix(),
+        max_bytes=_MAX_RUNTIME_EXECUTABLE_BYTES,
     )
     return (
         digest,
@@ -515,17 +557,20 @@ def _build_installed_implementation_manifest(
         )
         installed_files: list[InstalledFile] = []
         installed_inodes: set[tuple[int, int]] = set()
+        captured_size = 0
         for relative in normalized:
-            installed_file, inode = _hold_installed_file(
+            installed_file, inode, captured_bytes = _hold_installed_file(
                 descriptors,
                 root_descriptor,
                 relative,
                 held_entries,
+                _MAX_CAPTURED_IMPLEMENTATION_BYTES - captured_size,
             )
             if inode in installed_inodes:
                 raise ValueError("installed files must not share an inode")
             installed_inodes.add(inode)
             installed_files.append(installed_file)
+            captured_size += captured_bytes
 
         _revalidate_held_entries(
             held_root,

@@ -62,6 +62,10 @@ def diagnostic_codes(
     manifest: object,
     attestation: object | None = None,
     *,
+    expected_candidate_identity: str = CANDIDATE_IDENTITY,
+    expected_execution_domain_identity: str = EXECUTION_BINDING[
+        "execution_domain_identity"
+    ],
     expected_attestation_manifest_digest: str | None = None,
 ) -> set[str]:
     return {
@@ -70,6 +74,8 @@ def diagnostic_codes(
             bundle,
             manifest,
             attestation,
+            expected_candidate_identity=expected_candidate_identity,
+            expected_execution_domain_identity=expected_execution_domain_identity,
             expected_attestation_manifest_digest=(expected_attestation_manifest_digest),
         )
     }
@@ -118,6 +124,10 @@ def validation_diagnostics(
     manifest: object,
     attestation: object | None = None,
     *,
+    expected_candidate_identity: str = CANDIDATE_IDENTITY,
+    expected_execution_domain_identity: str = EXECUTION_BINDING[
+        "execution_domain_identity"
+    ],
     expected_case_manifest_digest: str | None = None,
     expected_attestation_manifest_digest: str | None = None,
 ) -> tuple[object, ...]:
@@ -130,7 +140,7 @@ def validation_diagnostics(
         bundle,
         manifest,
         attestation,
-        expected_candidate_identity=CANDIDATE_IDENTITY,
+        expected_candidate_identity=expected_candidate_identity,
         expected_implementation_manifest_digest=DIGESTS[
             "implementation_manifest_digest"
         ],
@@ -147,15 +157,80 @@ def validation_diagnostics(
         expected_apply_authorization_digest=EXECUTION_BINDING[
             "apply_authorization_digest"
         ],
-        expected_execution_domain_identity=EXECUTION_BINDING[
-            "execution_domain_identity"
-        ],
+        expected_execution_domain_identity=expected_execution_domain_identity,
         expected_execution_nonce=EXECUTION_BINDING["execution_nonce"],
         expected_run_identity=EXECUTION_BINDING["run_identity"],
     )
 
 
 class AcceptanceEvidenceContractTests(unittest.TestCase):
+    def test_acceptance_binding_identities_use_execution_authority_bounds(
+        self,
+    ) -> None:
+        identity_cases = (
+            ("maximum namespace", "a" + "b" * 31 + ":A", True),
+            ("namespace one over", "a" + "b" * 32 + ":A", False),
+            ("maximum payload", "a:A" + "b" * 254, True),
+            ("payload one over", "a:A" + "b" * 255, False),
+        )
+        for field in ("candidate_identity", "captured_state_identity"):
+            for case, identity, accepted in identity_cases:
+                with self.subTest(field=field, case=case):
+                    manifest = valid_expected_case_manifest()
+                    bindings = manifest["bindings"]
+                    assert isinstance(bindings, dict)
+                    bindings[field] = identity
+                    reseal_manifest(manifest)
+                    bundle = valid_evidence_bundle(manifest)
+                    attestation = valid_attestation_manifest(bundle, manifest)
+
+                    codes = diagnostic_codes(
+                        bundle,
+                        manifest,
+                        attestation,
+                        expected_candidate_identity=str(bindings["candidate_identity"]),
+                    )
+
+                    if accepted:
+                        self.assertEqual(codes, set())
+                    else:
+                        self.assertEqual(
+                            codes,
+                            {"EXPECTED_CASE_MANIFEST_SCHEMA_INVALID"},
+                        )
+
+    def test_execution_domain_identity_uses_execution_authority_payload_bound(
+        self,
+    ) -> None:
+        identity_cases = (
+            ("maximum payload", "execution-domain:A" + "b" * 254, True),
+            ("payload one over", "execution-domain:A" + "b" * 255, False),
+        )
+        for case, identity, accepted in identity_cases:
+            with self.subTest(case=case):
+                manifest = valid_expected_case_manifest()
+                bundle = valid_evidence_bundle(manifest)
+                execution_binding = bundle["execution_binding"]
+                assert isinstance(execution_binding, dict)
+                execution_binding["execution_domain_identity"] = identity
+                reseal_bundle(bundle)
+                attestation = valid_attestation_manifest(bundle, manifest)
+
+                codes = diagnostic_codes(
+                    bundle,
+                    manifest,
+                    attestation,
+                    expected_execution_domain_identity=identity,
+                )
+
+                if accepted:
+                    self.assertEqual(codes, set())
+                else:
+                    self.assertEqual(
+                        codes,
+                        {"ACCEPTANCE_EVIDENCE_SCHEMA_INVALID"},
+                    )
+
     def test_release_accepts_only_an_independently_trusted_attestation(self) -> None:
         manifest = valid_expected_case_manifest()
         bundle = valid_evidence_bundle(manifest)

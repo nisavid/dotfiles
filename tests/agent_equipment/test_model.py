@@ -156,6 +156,27 @@ class ImmutableJsonTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             CatalogLockValidation(None, ())
 
+    def test_diagnostic_requires_code_and_message_but_accepts_missing_context(
+        self,
+    ) -> None:
+        for code, message in ((None, "message"), ("CODE", None)):
+            with (
+                self.subTest(code=code, message=message),
+                self.assertRaises(TypeError),
+            ):
+                Diagnostic(code, message)  # type: ignore[arg-type]
+
+        self.assertEqual(
+            Diagnostic("CODE", "message"),
+            Diagnostic(
+                "CODE",
+                "message",
+                equipment_identity=None,
+                harness=None,
+                route_identity=None,
+            ),
+        )
+
     def test_public_model_constructors_reject_mutable_json_members(self) -> None:
         with self.assertRaises(TypeError):
             FrozenJsonObject((("mutable", []),))  # type: ignore[arg-type]
@@ -324,12 +345,7 @@ class ImmutableJsonTest(unittest.TestCase):
                 schema_version="agent-equipment-installed-implementation/v1",
                 runtime_identity="cpython:3.12.8",
                 runtime_executable_digest="sha256:" + "1" * 64,
-                files=(
-                    InstalledFile(
-                        "agent_equipment/model.py",
-                        "sha256:" + "2" * 64,
-                    ),
-                ),
+                files=manifest_files(),
                 digest="sha256:" + "0" * 64,
             )
 

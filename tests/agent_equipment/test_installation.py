@@ -46,6 +46,7 @@ MANIFEST_PATHS = (
     *(f"lib/agent-equipment/agent_equipment/{name}" for name in PACKAGE_NAMES),
     *(f"lib/agent-equipment/schemas/{name}" for name in SCHEMA_NAMES),
 )
+SUBPROCESS_TIMEOUT_SECONDS = 30.0
 
 
 class InstallationTests(unittest.TestCase):
@@ -120,6 +121,7 @@ class InstallationTests(unittest.TestCase):
                 capture_output=True,
                 text=True,
                 check=False,
+                timeout=SUBPROCESS_TIMEOUT_SECONDS,
             )
             self.assertEqual(initialized.returncode, 0, initialized.stderr)
             self.assertNotIn("inconsistent state", initialized.stderr)
@@ -159,6 +161,7 @@ class InstallationTests(unittest.TestCase):
                 capture_output=True,
                 text=True,
                 check=False,
+                timeout=SUBPROCESS_TIMEOUT_SECONDS,
             )
             self.assertEqual(applied.returncode, 0, applied.stderr)
             self.assertNotIn("inconsistent state", applied.stderr)
@@ -179,6 +182,7 @@ class InstallationTests(unittest.TestCase):
                         capture_output=True,
                         text=True,
                         check=True,
+                        timeout=SUBPROCESS_TIMEOUT_SECONDS,
                     ).stdout.strip()
                     self.assertEqual(Path(resolved_target), target)
                     self.assertEqual(target.read_bytes(), source.read_bytes())
@@ -221,6 +225,7 @@ class InstallationTests(unittest.TestCase):
                 capture_output=True,
                 text=True,
                 check=False,
+                timeout=SUBPROCESS_TIMEOUT_SECONDS,
             )
             self.assertEqual(manifest_result.returncode, 0, manifest_result.stderr)
             installed_manifest = json.loads(manifest_result.stdout)
@@ -238,7 +243,9 @@ class InstallationTests(unittest.TestCase):
                 capture_output=True,
                 text=True,
                 check=True,
+                timeout=SUBPROCESS_TIMEOUT_SECONDS,
             ).stdout.splitlines()
+            self.assertIn(".config/agent-equipment/catalog-v1.json", managed)
             for runtime_path in (
                 ".config/agent-equipment/inventory.json",
                 ".local/state/agent-equipment/inventory.json",
