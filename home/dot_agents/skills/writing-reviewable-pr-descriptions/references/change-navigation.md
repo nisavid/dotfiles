@@ -10,9 +10,11 @@ Use this reference only while constructing or revising the first-viewport
 - `STACK` and `DIFF` label shields use `style=for-the-badge` and neutral
   `57606A`; every metric shield uses `style=flat`.
 - Category order is `IMPL`, `TEST`, `DOC`, `GEN`, `OTHER`, then `FILES`.
-- Category line metrics in Stack inventories, Diff summaries, and expanded Diff
-  rows use grammatical count nouns: `1 addition` or `N additions`, and
-  `1 deletion` or `M deletions`. Zero uses the plural form.
+- Write category line metrics in Stack inventories, Diff summaries, and
+  expanded Diff rows with grammatical count nouns: `1 addition` or
+  `N additions`, and `1 deletion` or `M deletions`. Zero uses the plural form.
+  For compatibility with stored bodies, validation also accepts the legacy
+  plural noun when the count is exactly one.
 - Colors are stable: `IMPL 0969DA`, `TEST 6F5F9A`, `DOC 3F7770`,
   `GEN 76652F`, `OTHER 57606A`, and `FILES 5F6B78`.
 - Operation badges `BINARY`, `MOVED`, and `COPIED` use neutral `5F6B78`.
@@ -29,6 +31,10 @@ Use this reference only while constructing or revising the first-viewport
   `title` matching their `alt`. Other badges have no `title`.
 - Encode Shields paths canonically with uppercase percent escapes. Do not use
   alternate-but-equivalent encodings such as a raw `+` or lowercase `%2b`.
+- Escape a branch-valued `BASE` message for the Shields path: double every `-`
+  as `--` and every `_` as `__`, then percent-encode path separators such as
+  `/` as `%2F` with uppercase escapes. Branch `release-1.2` renders as
+  `BASE-release--1.2-5F6B78`.
 - Use real `src`, `height`, `alt`, and `title` attributes. Attributes such as
   `data-src` and `data-title` do not satisfy the contract.
 - Every `<img>` inside either disclosure is a structurally valid Shields image
@@ -62,7 +68,12 @@ Render this only for a stacked PR, immediately before Diff:
 
 - Position is the current PR's one-based index over the complete current stack.
 - `BASE` is the direct Git base. A PR-valued `BASE` always links to that PR;
-  only a branch-valued base such as `main` is a neutral unlinked badge.
+  only a branch-valued base such as `main` is a neutral unlinked badge. A
+  branch-valued base is a conservative canonical branch name: 1 to 255
+  characters drawn from `A-Za-z0-9`, `.`, `_`, `/`, and `-`; it may start with
+  `_` but not with `-`, `.`, or `/`; it may not end with `.` or `/`; it may not
+  be `HEAD` or contain `..` or `//`; and no `/`-separated component may start
+  with `.` or end with `.lock`.
 - Add `DEP` badges immediately after `BASE` only for additional PR dependencies.
   Do not repeat the direct base or any member of the Stack inventory as a
   dependency; ancestry already represented by the direct-base chain is
@@ -166,9 +177,11 @@ exact pushed base/head first; stop rather than publish when it is unavailable:
 - A file row contains only that atomic shield, or one `BINARY`, `MOVED`, or
   `COPIED` operation shield followed by the permitted atomic shield. Do not add
   category, file-count, or navigation shields to a file row.
-- The per-file badge has matching `alt` and `title`, both written with
-  grammatical count nouns: `1 addition` or `N additions`, and `1 deletion` or
-  `M deletions`. Zero uses the plural form.
+- The per-file badge has matching `alt` and `title`. Write both with grammatical
+  count nouns: `1 addition` or `N additions`, and `1 deletion` or
+  `M deletions`. Zero uses the plural form. For compatibility with stored
+  bodies, validation also accepts the legacy plural noun when the count is
+  exactly one.
 - Use `+0` or `−0` when one side is zero. For a binary file with no meaningful
   line counts, use one neutral `BINARY` badge with matching `alt` and `title`.
 - For a move or copy, give the source and target separate code nodes inside one

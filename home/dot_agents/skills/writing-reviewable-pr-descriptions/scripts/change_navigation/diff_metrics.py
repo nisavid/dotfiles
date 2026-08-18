@@ -9,32 +9,36 @@ from html import escape, unescape
 
 from .model import (
     ATOMIC_FILE_BADGE_RE,
+    POSITIVE_COUNT_PATTERN,
     SHIELD_IMAGE_RE,
     alt,
-    line_metric_text,
+    parse_line_metric_counts,
     title,
 )
 
 
 MARKDOWN_OPERATION_FILE_LINK_RE = re.compile(
     r"^  - \[`(?P<source_path>[^`]+)` → `(?P<target_path>[^`]+)`\]"
-    r"\(https://github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+)/pull/(?P<pr>\d+)/files"
+    rf"\(https://github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+)/pull/"
+    rf"(?P<pr>{POSITIVE_COUNT_PATTERN})/files"
     r"#diff-(?P<anchor>[0-9a-f]{64})\) "
 )
 MARKDOWN_FILE_LINK_RE = re.compile(
     r"^  - \[`(?P<path>[^`]+)`\]\(https://github\.com/(?P<owner>[^/]+)/"
-    r"(?P<repo>[^/]+)/pull/(?P<pr>\d+)/files"
+    rf"(?P<repo>[^/]+)/pull/(?P<pr>{POSITIVE_COUNT_PATTERN})/files"
     r"#diff-(?P<anchor>[0-9a-f]{64})\) "
 )
 HTML_OPERATION_FILE_LINK_RE = re.compile(
     r'^  - <a href="https://github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+)/'
-    r'pull/(?P<pr>\d+)/files#diff-(?P<anchor>[0-9a-f]{64})">'
+    rf'pull/(?P<pr>{POSITIVE_COUNT_PATTERN})/files'
+    r'#diff-(?P<anchor>[0-9a-f]{64})">'
     r"<code>(?P<source_path>.+?)</code> → "
     r"<code>(?P<target_path>.+?)</code></a> "
 )
 HTML_FILE_LINK_RE = re.compile(
     r'^  - <a href="https://github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+)/'
-    r'pull/(?P<pr>\d+)/files#diff-(?P<anchor>[0-9a-f]{64})">'
+    rf'pull/(?P<pr>{POSITIVE_COUNT_PATTERN})/files'
+    r'#diff-(?P<anchor>[0-9a-f]{64})">'
     r"<code>(?P<path>.+)</code></a> "
 )
 Identity = tuple[str, int]
@@ -260,10 +264,9 @@ def validate_metric_titles(
             )
             continue
         if atomic_match:
-            expected = line_metric_text(
-                atomic_match.group(1), atomic_match.group(2)
-            )
-            if badge_alt != expected:
+            expected = tuple(int(value) for value in atomic_match.groups())
+            if parse_line_metric_counts(badge_alt) != expected:
                 errors.append(
-                    f"Diff file metric {line_number} accessibility text must match {expected}"
+                    f"Diff file metric {line_number} accessibility text must match "
+                    f"its +{expected[0]} −{expected[1]} visual metrics"
                 )

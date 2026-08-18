@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import unittest
 import hashlib
+import unittest
 
 from test_validate_change_navigation import (
     DIFF,
@@ -30,6 +30,28 @@ def stack_document(summary_badges: list[str], item_lines: list[str]) -> str:
             "</details>",
             "",
         ]
+    )
+
+
+def bottom_stack_with_base(base_badge: str) -> str:
+    first, second = [
+        line for line in STACK.splitlines() if line.startswith("- **[#")
+    ]
+    first_metrics = first.split("<br>", 1)[1]
+    second_metrics = second.split("<br>", 1)[1]
+    return stack_document(
+        [
+            badge("STACK", "STACK-57606A", style="for-the-badge"),
+            badge("STACK POSITION: 1 OF 2", "1%20OF%202-5F6B78"),
+            base_badge,
+            linked_badge(2, "NEXT: #2 — feat: top", "NEXT-%232-5F6B78"),
+        ],
+        [
+            "- **[#1 — feat: base](https://github.com/acme/app/pull/1)** "
+            "**← this PR**<br>" + second_metrics,
+            "- **[#2 — feat: top](https://github.com/acme/app/pull/2)**<br>"
+            + first_metrics,
+        ],
     )
 
 
@@ -113,7 +135,12 @@ class NavigationIntegrityTests(unittest.TestCase):
             'alt="9 additions, 3 deletions" title="9 additions, 3 deletions"',
             'alt="0 additions, 0 deletions" title="0 additions, 0 deletions"',
         )
-        self.assertTrue(any("must match" in error for error in MODULE.validate(broken)))
+        self.assertTrue(
+            any(
+                "must match its +9 −3 visual metrics" in error
+                for error in MODULE.validate(broken)
+            )
+        )
 
     def test_accepts_grammatical_singular_atomic_metric_text(self) -> None:
         for additions, deletions in ((1, 0), (0, 1), (1, 1)):
@@ -131,26 +158,87 @@ class NavigationIntegrityTests(unittest.TestCase):
                     atomic_metric(9, 3),
                     atomic_metric(additions, deletions),
                 )
+                expected_text = (
+                    f"{additions} {addition_word}, "
+                    f"{deletions} {deletion_word}"
+                )
+                self.assertIn(
+                    f'alt="{expected_text}" title="{expected_text}"',
+                    singular,
+                )
                 self.assertEqual(MODULE.validate(singular), [])
 
-    def test_rejects_ungrammatical_singular_atomic_metric_text(self) -> None:
-        broken = DIFF.replace(
-            'alt="9 additions, 3 deletions" title="9 additions, 3 deletions"',
-            'alt="1 additions, 1 deletions" title="1 additions, 1 deletions"',
-        ).replace(
-            "%2B9-%E2%88%923-CF222E",
-            "%2B1-%E2%88%921-CF222E",
-        )
-        self.assertTrue(any("must match" in error for error in MODULE.validate(broken)))
-
-    def test_rejects_ungrammatical_singular_category_metric_text(self) -> None:
-        broken = STACK.replace(
+    def test_accepts_legacy_plural_nouns_for_singular_line_counts(self) -> None:
+        for additions, deletions in ((1, 0), (0, 1), (1, 1)):
+            with self.subTest(additions=additions, deletions=deletions):
+                legacy_text = f"{additions} additions, {deletions} deletions"
+                legacy_atomic = badge(
+                    legacy_text,
+                    f"%2B{additions}-%E2%88%92{deletions}-CF222E",
+                    title=legacy_text,
+                    label_color="1A7F37",
+                )
+                legacy_diff = (
+                    DIFF.replace(
+                        "IMPL: 9 additions, 3 deletions",
+                        f"IMPL: {legacy_text}",
+                    )
+                    .replace(
+                        "IMPL-%2B9%20%E2%88%923",
+                        f"IMPL-%2B{additions}%20%E2%88%92{deletions}",
+                    )
+                    .replace(atomic_metric(9, 3), legacy_atomic)
+                )
+                self.assertEqual(MODULE.validate(legacy_diff), [])
+        legacy_stack = STACK.replace(
             "IMPL: 1 addition, 0 deletions",
             "IMPL: 1 additions, 0 deletions",
         )
-        self.assertTrue(
-            any("ungrammatical" in error for error in MODULE.validate(broken + DIFF))
-        )
+        self.assertEqual(MODULE.validate(legacy_stack + DIFF), [])
+
+    def test_rejects_singular_nouns_for_non_singular_line_counts(self) -> None:
+        for invalid_text, additions, deletions in (
+            ("9 addition, 3 deletions", 9, 3),
+            ("9 additions, 3 deletion", 9, 3),
+            ("0 addition, 3 deletions", 0, 3),
+            ("9 additions, 0 deletion", 9, 0),
+        ):
+            with self.subTest(text=invalid_text):
+                invalid_atomic = badge(
+                    invalid_text,
+                    f"%2B{additions}-%E2%88%92{deletions}-CF222E",
+                    title=invalid_text,
+                    label_color="1A7F37",
+                )
+                broken = (
+                    DIFF.replace(
+                        "IMPL: 9 additions, 3 deletions",
+                        f"IMPL: {invalid_text}",
+                    )
+                    .replace(
+                        "IMPL-%2B9%20%E2%88%923",
+                        f"IMPL-%2B{additions}%20%E2%88%92{deletions}",
+                    )
+                    .replace(atomic_metric(9, 3), invalid_atomic)
+                )
+                errors = MODULE.validate(broken)
+                self.assertTrue(
+                    any(
+                        f"metric badge has ungrammatical accessibility text: "
+                        f"IMPL: {invalid_text}" == error
+                        for error in errors
+                    )
+                )
+                self.assertTrue(
+                    any(
+                        f"metric badge has ungrammatical accessibility text: "
+                        f"{invalid_text}" == error
+                        for error in errors
+                    )
+                )
+                self.assertFalse(
+                    any("needs at least one category group" in error for error in errors)
+                )
 
     def test_rejects_oversized_metric_without_crashing(self) -> None:
         huge = "9" * 5000
@@ -161,6 +249,7 @@ class NavigationIntegrityTests(unittest.TestCase):
         )
         errors = MODULE.validate(broken)
         self.assertTrue(errors)
+        self.assertFalse(any("must not define a title" in error for error in errors))
 
     def test_rejects_oversized_stack_file_count_without_crashing(self) -> None:
         huge = "9" * 5000
@@ -173,6 +262,64 @@ class NavigationIntegrityTests(unittest.TestCase):
         )
         errors = MODULE.validate(broken + DIFF)
         self.assertTrue(errors)
+
+    def test_rejects_oversized_navigation_counts_without_crashing(self) -> None:
+        huge = "9" * 5000
+        cases = (
+            (
+                "stack position",
+                STACK.replace(
+                    "STACK POSITION: 2 OF 2",
+                    f"STACK POSITION: {huge} OF 2",
+                ).replace("2%20OF%202", f"{huge}%20OF%202"),
+                DIFF,
+                "bounded ASCII counts",
+            ),
+            (
+                "stack inventory link",
+                STACK.replace(
+                    "[#1 — feat: base]",
+                    f"[#{huge} — feat: base]",
+                    1,
+                ).replace("/pull/1)", f"/pull/{huge})", 1),
+                DIFF,
+                "unsupported content before its inventory",
+            ),
+            (
+                "Diff file link",
+                DIFF.replace("/pull/2/files", f"/pull/{huge}/files"),
+                "",
+                "verified SHA-256 Files changed anchor",
+            ),
+        )
+        for name, broken, suffix, expected_error in cases:
+            with self.subTest(case=name):
+                errors = MODULE.validate(broken + suffix)
+                self.assertTrue(any(expected_error in error for error in errors))
+
+    def test_rejects_stack_positions_outside_the_complete_stack(self) -> None:
+        for current, total in ((0, 2), (2, 0), (3, 2)):
+            with self.subTest(current=current, total=total):
+                broken = STACK.replace(
+                    "STACK POSITION: 2 OF 2",
+                    f"STACK POSITION: {current} OF {total}",
+                ).replace(
+                    "2%20OF%202",
+                    f"{current}%20OF%20{total}",
+                )
+                errors = MODULE.validate(broken + DIFF)
+                self.assertTrue(
+                    any(
+                        "position must be within the complete stack" in error
+                        for error in errors
+                    )
+                )
+                self.assertFalse(
+                    any("needs a full-stack position badge" in error for error in errors)
+                )
+                self.assertFalse(
+                    any("badges must be ordered" in error for error in errors)
+                )
 
     def test_rejects_mixed_script_metric_digits(self) -> None:
         broken = (
@@ -188,7 +335,43 @@ class NavigationIntegrityTests(unittest.TestCase):
             )
             .replace("%2B9-%E2%88%923-CF222E", "%2B11-%E2%88%923-CF222E")
         )
-        self.assertTrue(MODULE.validate(broken))
+        errors = MODULE.validate(broken)
+        self.assertTrue(
+            any(
+                "unsupported or non-uppercase shield label: "
+                "IMPL: 1١ additions, 3 deletions" in error
+                for error in errors
+            )
+        )
+
+    def test_rejects_mixed_script_navigation_counts(self) -> None:
+        cases = (
+            (
+                "stack position",
+                STACK.replace(
+                    "STACK POSITION: 2 OF 2",
+                    "STACK POSITION: ٢ OF ٢",
+                ).replace("2%20OF%202", "%D9%A2%20OF%20%D9%A2"),
+                DIFF,
+                "bounded ASCII counts",
+            ),
+            (
+                "stack inventory number",
+                STACK.replace("[#1 — feat: base]", "[#١ — feat: base]", 1),
+                DIFF,
+                "unsupported content before its inventory",
+            ),
+            (
+                "Diff file link",
+                DIFF.replace("/pull/2/files", "/pull/٢/files"),
+                "",
+                "verified SHA-256 Files changed anchor",
+            ),
+        )
+        for name, broken, suffix, expected_error in cases:
+            with self.subTest(case=name):
+                errors = MODULE.validate(broken + suffix)
+                self.assertTrue(any(expected_error in error for error in errors))
 
     def test_rejects_conflicting_linked_badge_title(self) -> None:
         broken = (STACK + DIFF).replace(
@@ -663,50 +846,106 @@ class NavigationIntegrityTests(unittest.TestCase):
         ]
         first_metrics = first.split("<br>", 1)[1]
         second_metrics = second.split("<br>", 1)[1]
-        stack = stack_document(
-            [
-                badge("STACK", "STACK-57606A", style="for-the-badge"),
-                badge("STACK POSITION: 1 OF 2", "1%20OF%202-5F6B78"),
-                badge(
-                    "BASE: #99 — feat: external",
-                    "BASE-%2399-5F6B78",
-                    title="#99 — feat: external",
-                ),
-                linked_badge(2, "NEXT: #2 — feat: top", "NEXT-%232-5F6B78"),
-            ],
-            [
-                "- **[#1 — feat: base](https://github.com/acme/app/pull/1)** "
-                "**← this PR**<br>" + second_metrics,
-                "- **[#2 — feat: top](https://github.com/acme/app/pull/2)**<br>"
-                + first_metrics,
-            ],
+        diff = DIFF.replace("/pull/2/files", "/pull/1/files")
+        for destination in (
+            "#99",
+            "#2",
+            "#99—feat",
+            "＃2",
+            "PR 7",
+            "#99 — feat: external",
+            "#١ — feat: external",
+            "＃99 — feat: external",
+            "PR 77 — feat: external",
+        ):
+            with self.subTest(destination=destination):
+                stack = stack_document(
+                    [
+                        badge("STACK", "STACK-57606A", style="for-the-badge"),
+                        badge("STACK POSITION: 1 OF 2", "1%20OF%202-5F6B78"),
+                        badge(
+                            f"BASE: {destination}",
+                            "BASE-%2399-5F6B78",
+                            title=destination if " — " in destination else None,
+                        ),
+                        linked_badge(
+                            2,
+                            "NEXT: #2 — feat: top",
+                            "NEXT-%232-5F6B78",
+                        ),
+                    ],
+                    [
+                        "- **[#1 — feat: base]"
+                        "(https://github.com/acme/app/pull/1)** "
+                        "**← this PR**<br>" + second_metrics,
+                        "- **[#2 — feat: top]"
+                        "(https://github.com/acme/app/pull/2)**<br>"
+                        + first_metrics,
+                    ],
+                )
+                errors = PRODUCTION_VALIDATE(stack + diff, "acme/app", 1)
+                self.assertTrue(
+                    any("PR-valued BASE must link" in error for error in errors)
+                )
+                self.assertFalse(
+                    any("must not define a title" in error for error in errors)
+                )
+
+    def test_accepts_unlinked_branch_base_on_bottom_pr(self) -> None:
+        diff = DIFF.replace("/pull/2/files", "/pull/1/files")
+        for branch, path in (
+            ("main", "main"),
+            ("feature/widget", "feature%2Fwidget"),
+            ("_private", "__private"),
+            ("release-1.2", "release--1.2"),
+        ):
+            with self.subTest(branch=branch):
+                stack = bottom_stack_with_base(
+                    badge(f"BASE: {branch}", f"BASE-{path}-5F6B78")
+                )
+                errors = PRODUCTION_VALIDATE(stack + diff, "acme/app", 1)
+                self.assertEqual(errors, [])
+
+    def test_rejects_raw_slash_in_branch_base_badge_url(self) -> None:
+        stack = bottom_stack_with_base(
+            badge(
+                "BASE: feature/widget",
+                "BASE-feature/widget-5F6B78",
+            )
         )
         diff = DIFF.replace("/pull/2/files", "/pull/1/files")
         errors = PRODUCTION_VALIDATE(stack + diff, "acme/app", 1)
-        self.assertTrue(any("PR-valued BASE must link" in error for error in errors))
-
-    def test_accepts_unlinked_branch_base_on_bottom_pr(self) -> None:
-        first, second = [
-            line for line in STACK.splitlines() if line.startswith("- **[#")
-        ]
-        first_metrics = first.split("<br>", 1)[1]
-        second_metrics = second.split("<br>", 1)[1]
-        stack = stack_document(
-            [
-                badge("STACK", "STACK-57606A", style="for-the-badge"),
-                badge("STACK POSITION: 1 OF 2", "1%20OF%202-5F6B78"),
-                badge("BASE: main", "BASE-main-5F6B78"),
-                linked_badge(2, "NEXT: #2 — feat: top", "NEXT-%232-5F6B78"),
-            ],
-            [
-                "- **[#1 — feat: base](https://github.com/acme/app/pull/1)** "
-                "**← this PR**<br>" + second_metrics,
-                "- **[#2 — feat: top](https://github.com/acme/app/pull/2)**<br>"
-                + first_metrics,
-            ],
+        self.assertTrue(
+            any("canonical percent encoding" in error for error in errors)
         )
+
+    def test_rejects_a_noncanonical_branch_base(self) -> None:
         diff = DIFF.replace("/pull/2/files", "/pull/1/files")
-        self.assertEqual(PRODUCTION_VALIDATE(stack + diff, "acme/app", 1), [])
+        for branch in (
+            "HEAD",
+            "feature//widget",
+            "feature..widget",
+            "trailing/",
+            "trailing.",
+            "-private",
+            ".private",
+            "topic.lock",
+        ):
+            with self.subTest(branch=branch):
+                stack = bottom_stack_with_base(
+                    badge(f"BASE: {branch}", "BASE-invalid-5F6B78")
+                )
+                errors = PRODUCTION_VALIDATE(stack + diff, "acme/app", 1)
+                matching_errors = [
+                    error
+                    for error in errors
+                    if "branch-valued BASE must use a canonical" in error
+                ]
+                self.assertEqual(len(matching_errors), 1)
+                self.assertIn(f"BASE: {branch}", matching_errors[0])
+                self.assertFalse(
+                    any("PR-valued BASE must link" in error for error in errors)
+                )
 
     def test_accepts_stack_move_and_copy_counts_in_alt_and_visual(self) -> None:
         broken = STACK.replace(

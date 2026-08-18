@@ -10,6 +10,7 @@ from typing import Optional
 
 SCRIPT = Path(__file__).parents[1] / "scripts" / "validate_change_navigation.py"
 sys.path.insert(0, str(SCRIPT.parent))
+
 SPEC = importlib.util.spec_from_file_location("validate_change_navigation", SCRIPT)
 assert SPEC and SPEC.loader
 MODULE = importlib.util.module_from_spec(SPEC)
@@ -52,10 +53,14 @@ def linked_badge(pr_number: int, alt: str, path: str) -> str:
     return f'<a href="https://github.com/acme/app/pull/{pr_number}">{image}</a>'
 
 
+def line_metric_text(additions: int, deletions: int) -> str:
+    addition_noun = "addition" if additions == 1 else "additions"
+    deletion_noun = "deletion" if deletions == 1 else "deletions"
+    return f"{additions} {addition_noun}, {deletions} {deletion_noun}"
+
+
 def atomic_metric(additions: int, deletions: int) -> str:
-    addition_word = "addition" if additions == 1 else "additions"
-    deletion_word = "deletion" if deletions == 1 else "deletions"
-    title = f"{additions} {addition_word}, {deletions} {deletion_word}"
+    title = line_metric_text(additions, deletions)
     path = f"%2B{additions}-%E2%88%92{deletions}-CF222E"
     return badge(title, path, title=title, label_color="1A7F37")
 
@@ -153,6 +158,24 @@ class ValidateChangeNavigationTests(unittest.TestCase):
 
     def test_accepts_stack_then_diff(self) -> None:
         self.assertEqual(MODULE.validate(STACK + DIFF), [])
+
+    def test_accepts_legacy_plural_for_a_singular_line_count(self) -> None:
+        legacy_text = "1 additions, 0 deletions"
+        legacy_atomic = badge(
+            legacy_text,
+            "%2B1-%E2%88%920-CF222E",
+            title=legacy_text,
+            label_color="1A7F37",
+        )
+        legacy = (
+            DIFF.replace(
+                "IMPL: 9 additions, 3 deletions",
+                f"IMPL: {legacy_text}",
+            )
+            .replace("IMPL-%2B9%20%E2%88%923", "IMPL-%2B1%20%E2%88%920")
+            .replace(atomic_metric(9, 3), legacy_atomic)
+        )
+        self.assertEqual(MODULE.validate(legacy), [])
 
     def test_rejects_split_file_metrics(self) -> None:
         broken = DIFF.replace(

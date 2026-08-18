@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import re
 
-from .model import LINKED_SHIELD_RE, alt, title
+from .model import LINKED_SHIELD_RE, POSITIVE_COUNT_PATTERN, alt, title
 
 
-PR_URL_RE = re.compile(r"https://github\.com/[^/]+/[^/]+/pull/(\d+)$")
+PR_URL_RE = re.compile(
+    rf"https://github\.com/[^/]+/[^/]+/pull/({POSITIVE_COUNT_PATTERN})$"
+)
 NAVIGATION_PREFIXES = ("BASE: ", "DEP: ", "NEXT: ")
 
 
@@ -33,7 +35,7 @@ def validate_linked_badges(text: str, errors: list[str]) -> None:
         destination_text = badge_alt[len(prefix) :]
         if destination_text != badge_title:
             errors.append(f"linked PR badge #{pr_number} alt/title destinations differ")
-        number_match = re.match(r"#(\d+) — ", destination_text)
+        number_match = re.match(rf"#({POSITIVE_COUNT_PATTERN}) — ", destination_text)
         if not number_match or number_match.group(1) != pr_number:
             errors.append(f"linked PR badge #{pr_number} alt/title must name its PR")
         if " — " not in destination_text:

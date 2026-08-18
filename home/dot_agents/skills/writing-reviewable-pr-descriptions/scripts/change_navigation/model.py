@@ -9,9 +9,16 @@ from html import unescape
 ATTRIBUTE_BOUNDARY = r"(?<!\S)"
 COUNT_PATTERN = r"(?:0|[1-9][0-9]{0,17})"
 POSITIVE_COUNT_PATTERN = r"(?:[1-9][0-9]{0,17})"
-LINE_METRIC_TEXT_PATTERN = (
+NON_SINGULAR_COUNT_PATTERN = rf"(?:(?!1\b){COUNT_PATTERN})"
+LINE_METRIC_COUNT_SHAPE_PATTERN = (
     rf"{COUNT_PATTERN} additions?, {COUNT_PATTERN} deletions?"
 )
+LINE_METRIC_TEXT_PATTERN = (
+    rf"(?:1 additions?|{NON_SINGULAR_COUNT_PATTERN} additions), "
+    rf"(?:1 deletions?|{NON_SINGULAR_COUNT_PATTERN} deletions)"
+)
+LINE_METRIC_SHAPE_PATTERN = r"\S+ additions?, \S+ deletions?"
+BRANCH_BASE_TOKEN_RE = re.compile(r"[A-Za-z0-9._/-]{1,255}")
 IMAGE_RE = re.compile(r"<img\b[^>]*>")
 SHIELD_IMAGE_RE = re.compile(
     rf'<img\b[^>]*{ATTRIBUTE_BOUNDARY}src="https://img\.shields\.io/[^"]+"[^>]*>'
@@ -19,9 +26,6 @@ SHIELD_IMAGE_RE = re.compile(
 ALT_RE = re.compile(rf'{ATTRIBUTE_BOUNDARY}alt="([^"]*)"')
 TITLE_RE = re.compile(rf'{ATTRIBUTE_BOUNDARY}title="([^"]*)"')
 HEIGHT_RE = re.compile(rf'{ATTRIBUTE_BOUNDARY}height="16"')
-LINKED_PR_BADGE_RE = re.compile(
-    r'<a href="https://github\.com/[^/]+/[^/]+/pull/(\d+)"><img\b([^>]*)></a>'
-)
 LINKED_SHIELD_RE = re.compile(
     rf'<a href="([^"]+)">(<img\b[^>]*{ATTRIBUTE_BOUNDARY}'
     r'src="https://img\.shields\.io/[^"]+"[^>]*>)</a>'
@@ -36,37 +40,33 @@ ATOMIC_FILE_BADGE_RE = re.compile(
     r'\?style=flat&labelColor=1A7F37"'
 )
 LINE_METRIC_TEXT_RE = re.compile(LINE_METRIC_TEXT_PATTERN)
+LINE_METRIC_COUNT_SHAPE_RE = re.compile(
+    rf"({COUNT_PATTERN}) additions?, ({COUNT_PATTERN}) deletions?"
+)
+LINE_METRIC_SHAPE_RE = re.compile(LINE_METRIC_SHAPE_PATTERN)
 CATEGORY_RE = re.compile(rf'{ATTRIBUTE_BOUNDARY}alt="(IMPL|TEST|DOC|GEN|OTHER):')
 
 
 def _count_text(value: int | str) -> str:
     text = str(value)
-    if re.fullmatch(r"(?:0|[1-9][0-9]*)", text) is None:
-        raise ValueError("count must be a canonical nonnegative integer")
+    if re.fullmatch(COUNT_PATTERN, text) is None:
+        raise ValueError("count must be a bounded canonical nonnegative integer")
     return text
 
 
-def line_metric_text(additions: int | str, deletions: int | str) -> str:
-    """Return grammatical accessibility text for line-count metrics."""
-    addition_count = _count_text(additions)
-    deletion_count = _count_text(deletions)
-    addition_word = "addition" if addition_count == "1" else "additions"
-    deletion_word = "deletion" if deletion_count == "1" else "deletions"
-    return (
-        f"{addition_count} {addition_word}, "
-        f"{deletion_count} {deletion_word}"
-    )
+def parse_line_metric_counts(value: str) -> tuple[int, int] | None:
+    """Return bounded ASCII counts without enforcing noun agreement."""
+    match = LINE_METRIC_COUNT_SHAPE_RE.fullmatch(value)
+    if match is None:
+        return None
+    return int(match.group(1)), int(match.group(2))
 
 
 def parse_line_metric_text(value: str) -> tuple[int, int] | None:
-    """Return counts only when line-metric text has canonical grammar."""
-    match = LINE_METRIC_TEXT_RE.fullmatch(value)
-    if not match:
+    """Return counts from grammatical or legacy plural-for-one metric text."""
+    if LINE_METRIC_TEXT_RE.fullmatch(value) is None:
         return None
-    additions_text, deletions_text = re.findall(COUNT_PATTERN, value)
-    if value != line_metric_text(additions_text, deletions_text):
-        return None
-    return int(additions_text), int(deletions_text)
+    return parse_line_metric_counts(value)
 
 
 def changed_files_text(count: int | str) -> str:
@@ -74,6 +74,42 @@ def changed_files_text(count: int | str) -> str:
     count_text = _count_text(count)
     noun = "file" if count_text == "1" else "files"
     return f"{count_text} changed {noun}"
+
+
+def branch_base_name(value: str) -> str | None:
+    """Return a conservative canonical ASCII Git branch name."""
+    if not value.startswith("BASE: "):
+        return None
+    name = value.removeprefix("BASE: ")
+    if BRANCH_BASE_TOKEN_RE.fullmatch(name) is None:
+        return None
+    if (
+        name == "HEAD"
+        or name.startswith(("-", ".", "/"))
+        or name.endswith((".", "/"))
+        or ".." in name
+        or "//" in name
+    ):
+        return None
+    components = name.split("/")
+    if any(
+        component.startswith(".") or component.endswith(".lock")
+        for component in components
+    ):
+        return None
+    return name
+
+
+def is_pr_base_shape(value: str) -> bool:
+    """Return whether BASE text presents as a pull-request destination."""
+    if not value.startswith("BASE: "):
+        return False
+    destination = value.removeprefix("BASE: ")
+    return (
+        destination.startswith(("#", "＃"))
+        or " — " in destination
+        or destination.startswith("PR ")
+    )
 
 
 def raw_attribute(tag: str, name: str) -> str:
