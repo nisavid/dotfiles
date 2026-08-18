@@ -156,10 +156,19 @@ class AgentEquipmentJsonSchemaTests(unittest.TestCase):
         invalid_head = deepcopy(catalog)
         invalid_head["distributions"][-1]["source"]["branch"] = "HEAD"
         invalid_native = deepcopy(catalog)
-        invalid_native["distributions"][1]["source"]["channel"] = "latest"
+        native_distribution = next(
+            item
+            for item in invalid_native["distributions"]
+            if item["identity"] == "distribution:chrome-devtools/direct-mcp"
+        )
+        native_distribution["source"]["channel"] = "latest"
 
-        for document in (invalid_git, invalid_head, invalid_native):
-            with self.subTest(source=document["distributions"][-1]["source"]):
+        for label, document in (
+            ("resolved git ref", invalid_git),
+            ("HEAD branch", invalid_head),
+            ("latest native channel", invalid_native),
+        ):
+            with self.subTest(case=label):
                 self.assertFalse(
                     self.validate_agent_equipment_document(
                         document,

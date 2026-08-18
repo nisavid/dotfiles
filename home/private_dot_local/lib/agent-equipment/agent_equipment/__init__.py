@@ -25,7 +25,7 @@ from .canonical import (
     strict_load_json_bytes,
     strict_load_json_path,
 )
-from .discovery import MAX_DISCOVERY_RECORDS
+from .discovery import MAX_DISCOVERY_FIELD_CHARACTERS, MAX_DISCOVERY_RECORDS
 from .inventory import (
     ReadOnlyAdapter,
     admit_observe_request,
@@ -472,6 +472,8 @@ def _run_update(
 def _normalize_cli_targets(arguments: list[str]) -> tuple[str, ...]:
     if len(arguments) > MAX_DISCOVERY_RECORDS:
         raise ValueError("too many equipment targets")
+    if any(len(argument) > MAX_DISCOVERY_FIELD_CHARACTERS for argument in arguments):
+        raise ValueError("equipment target exceeds its field limit")
     if any(_TARGET_PATTERN.fullmatch(argument) is None for argument in arguments):
         raise ValueError("invalid equipment target")
     targets = tuple(sorted(arguments))

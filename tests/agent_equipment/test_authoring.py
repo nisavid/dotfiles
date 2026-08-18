@@ -562,7 +562,7 @@ class UnmanagedAuthoringTests(unittest.TestCase):
         base_catalog = base.catalog.document
         base_lock = base.lock.document
 
-        with patch("agent_equipment.authoring.MAX_DISCOVERY_RECORDS", 1, create=True):
+        with patch("agent_equipment.authoring.MAX_DISCOVERY_RECORDS", 1):
             result = find_unmanaged(base, selection, port)
 
         self.assertIsInstance(result, AuthoringError)
@@ -615,7 +615,6 @@ class UnmanagedAuthoringTests(unittest.TestCase):
         with patch(
             "agent_equipment.authoring.MAX_DISCOVERY_AGGREGATE_BYTES",
             crossing,
-            create=True,
         ):
             result = find_unmanaged(base, selection, port)
 
@@ -1105,13 +1104,13 @@ class AddAuthoringTests(unittest.TestCase):
     def test_add_revalidation_rejects_every_changed_observation_binding(
         self,
     ) -> None:
-        for changed_field in (
-            "present",
-            "provider_evidence",
-            "source_evidence",
-            "restore_evidence",
-            "secret_references",
-            "evidence_references",
+        for changed_field, expected_code in (
+            ("present", "ADD_TARGET_NOT_UNMANAGED"),
+            ("provider_evidence", "ADD_OBSERVATION_CHANGED"),
+            ("source_evidence", "ADD_OBSERVATION_CHANGED"),
+            ("restore_evidence", "ADD_OBSERVATION_CHANGED"),
+            ("secret_references", "ADD_OBSERVATION_CHANGED"),
+            ("evidence_references", "ADD_OBSERVATION_CHANGED"),
         ):
             with self.subTest(changed_field=changed_field):
                 selection = target_selection(self.TARGET)
@@ -1121,23 +1120,39 @@ class AddAuthoringTests(unittest.TestCase):
                 record = second[0]
                 if changed_field == "present":
                     record[changed_field] = False
-                elif changed_field in {
-                    "provider_evidence",
-                    "source_evidence",
-                    "restore_evidence",
-                }:
-                    nested = record[changed_field]
-                    assert isinstance(nested, dict)
-                    nested["changed_binding"] = "review-required"
+                    normalized_state = record["normalized_state"]
+                    assert isinstance(normalized_state, dict)
+                    normalized_state["present"] = False
+                    record["state_digest"] = canonical_json_sha256(normalized_state)
+                elif changed_field == "provider_evidence":
+                    provider_evidence = record[changed_field]
+                    assert isinstance(provider_evidence, dict)
+                    provider_evidence["server_name"] = "context7-alternate"
+                elif changed_field == "source_evidence":
+                    source_evidence = record[changed_field]
+                    assert isinstance(source_evidence, dict)
+                    source_evidence["distribution_identity"] = (
+                        "distribution:context7/alternate"
+                    )
+                elif changed_field == "restore_evidence":
+                    restore_evidence = record[changed_field]
+                    assert isinstance(restore_evidence, dict)
+                    restore_evidence["observation_source"] = (
+                        "alternate reviewed overlay"
+                    )
                 elif changed_field == "secret_references":
                     references = record[changed_field]
                     assert isinstance(references, list)
-                    references.append(
-                        {
-                            "kind": "environment_variable",
-                            "name": "EXAMPLE_TOKEN",
-                        }
-                    )
+                    secret_reference = references[0]
+                    assert isinstance(secret_reference, dict)
+                    secret_reference["name"] = "context7-alternate"
+                    provider_evidence = record["provider_evidence"]
+                    assert isinstance(provider_evidence, dict)
+                    arguments = provider_evidence["arguments"]
+                    assert isinstance(arguments, list)
+                    first_argument = arguments[0]
+                    assert isinstance(first_argument, dict)
+                    first_argument["secret_profile_reference"] = "context7-alternate"
                 elif changed_field == "evidence_references":
                     references = record[changed_field]
                     assert isinstance(references, list)
@@ -1152,6 +1167,8 @@ class AddAuthoringTests(unittest.TestCase):
                 result = propose_add(base, selection, port)
 
                 self.assertIsInstance(result, AuthoringError)
+                assert isinstance(result, AuthoringError)
+                self.assertEqual(result.code, expected_code)
                 self.assertFalse(hasattr(result, "catalog"))
 
     def test_add_requires_one_existing_distribution_with_complete_templates(

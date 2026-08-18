@@ -432,6 +432,7 @@ class SourceResolutionRequestTest(unittest.TestCase):
                 {"kind": "git", "repository": public_git_repository(over_limit)},
                 {"all": True},
                 "distribution:example/equipment",
+                "source-resolution repository must be a bounded string",
             ),
             (
                 {
@@ -441,6 +442,7 @@ class SourceResolutionRequestTest(unittest.TestCase):
                 },
                 {"all": True},
                 "distribution:example/equipment",
+                "source-resolution branch must be a bounded string",
             ),
             (
                 {
@@ -449,6 +451,7 @@ class SourceResolutionRequestTest(unittest.TestCase):
                 },
                 {"equipment": [patterned_value("skill:", over_limit)]},
                 "distribution:example/equipment",
+                "source-resolution equipment identity must be a bounded string",
             ),
             (
                 {
@@ -457,18 +460,18 @@ class SourceResolutionRequestTest(unittest.TestCase):
                 },
                 {"all": True},
                 patterned_value("distribution:", over_limit),
+                "source-resolution distribution identity must be a bounded string",
             ),
         )
-        for source, selection, distribution_identity in cases:
-            with (
-                self.subTest(distribution_identity=distribution_identity),
-                self.assertRaisesRegex(ValueError, "bounded|string|invalid"),
-            ):
-                source_request(
-                    source=source,
-                    selection=selection,
-                    distribution_identity=distribution_identity,
-                )
+        for source, selection, distribution_identity, expected_error in cases:
+            with self.subTest(distribution_identity=distribution_identity):
+                with self.assertRaises(ValueError) as raised:
+                    source_request(
+                        source=source,
+                        selection=selection,
+                        distribution_identity=distribution_identity,
+                    )
+                self.assertEqual(str(raised.exception), expected_error)
 
 
 class SourceResolutionFactAdmissionTest(unittest.TestCase):
@@ -804,52 +807,69 @@ class SourceManifestTest(unittest.TestCase):
 
         over_limit = MAX_SOURCE_FIELD_CHARACTERS + 1
         oversized_manifests = (
-            git_manifest(
-                artifact_suffix="#" + "a" * over_limit,
+            (
+                git_manifest(
+                    artifact_suffix="#" + "a" * over_limit,
+                ),
+                "source-resolution restore artifact ref must be a bounded string",
             ),
-            git_manifest(
-                distribution_identity=patterned_value("distribution:", over_limit),
+            (
+                git_manifest(
+                    distribution_identity=patterned_value("distribution:", over_limit),
+                ),
+                "source-resolution distribution identity must be a bounded string",
             ),
-            source_manifest(
-                distribution_identity="distribution:example/git",
-                source={
-                    "kind": "git",
-                    "repository": "https://example.com/equipment.git",
-                },
-                resolved_source={"kind": "git", "revision": OLD_GIT_REVISION},
-                restore={
-                    "class": "immutable",
-                    "revision": OLD_GIT_REVISION,
-                    "artifact_ref": (
-                        "git+https://example.com/equipment.git@" + OLD_GIT_REVISION
-                    ),
-                    "content_digest": OLD_CONTENT_DIGEST,
-                    "native_update_control": "not_applicable",
-                },
-                available_equipment=(patterned_value("skill:", over_limit),),
-                equipment=(patterned_value("skill:", over_limit),),
+            (
+                source_manifest(
+                    distribution_identity="distribution:example/git",
+                    source={
+                        "kind": "git",
+                        "repository": "https://example.com/equipment.git",
+                    },
+                    resolved_source={"kind": "git", "revision": OLD_GIT_REVISION},
+                    restore={
+                        "class": "immutable",
+                        "revision": OLD_GIT_REVISION,
+                        "artifact_ref": (
+                            "git+https://example.com/equipment.git@" + OLD_GIT_REVISION
+                        ),
+                        "content_digest": OLD_CONTENT_DIGEST,
+                        "native_update_control": "not_applicable",
+                    },
+                    available_equipment=(patterned_value("skill:", over_limit),),
+                    equipment=(patterned_value("skill:", over_limit),),
+                ),
+                (
+                    "source-resolution available equipment identity must be a "
+                    "bounded string"
+                ),
             ),
-            git_manifest(
-                source={
-                    "kind": "git",
-                    "repository": "https://example.com/equipment.git",
-                    "branch": "a" * over_limit,
-                }
+            (
+                git_manifest(
+                    source={
+                        "kind": "git",
+                        "repository": "https://example.com/equipment.git",
+                        "branch": "a" * over_limit,
+                    }
+                ),
+                "source-resolution branch must be a bounded string",
             ),
-            git_manifest(
-                source={
-                    "kind": "git",
-                    "repository": public_git_repository(over_limit),
-                },
-                artifact_suffix="",
+            (
+                git_manifest(
+                    source={
+                        "kind": "git",
+                        "repository": public_git_repository(over_limit),
+                    },
+                    artifact_suffix="",
+                ),
+                "source-resolution repository must be a bounded string",
             ),
         )
-        for document in oversized_manifests:
-            with (
-                self.subTest(source=thaw_json(document["source"])),
-                self.assertRaisesRegex(ValueError, "bounded|string|invalid"),
-            ):
-                admit_source_manifest(document)
+        for document, expected_error in oversized_manifests:
+            with self.subTest(source=thaw_json(document["source"])):
+                with self.assertRaises(ValueError) as raised:
+                    admit_source_manifest(document)
+                self.assertEqual(str(raised.exception), expected_error)
 
 
 class SourceManifestMaterializationTest(unittest.TestCase):
