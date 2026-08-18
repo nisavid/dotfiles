@@ -1279,9 +1279,7 @@ class BlockPrFillTests(unittest.TestCase):
             )
             self.assertFalse(MODULE.blocks(payload("Bash", {"command": text_command})))
             self.assertFalse(MODULE.blocks(payload("Bash", {"command": ready_command})))
-            self.assertFalse(
-                MODULE.blocks(payload("Bash", {"command": preimage_command}))
-            )
+            self.assert_direct_and_nested_allowed(preimage_command)
             for command in (preimage_command, text_command, ready_command):
                 self.assertTrue(
                     MODULE.blocks(payload("functions.write_stdin", {"chars": command}))
@@ -1341,7 +1339,11 @@ class BlockPrFillTests(unittest.TestCase):
                     "--expected-state draft", "--expected-state ready"
                 ),
                 preimage_command.replace("--pr 2", "--pr 0"),
+                preimage_command.replace("--pr 2", "--pr ²"),
                 preimage_command + " --base main",
+                preimage_command + " --expected-state draft",
+                preimage_command + " --title changed",
+                preimage_command + " --body-file " + shlex.quote(body_file.name),
                 text_command + " --unexpected value",
                 ready_command + " --title changed",
                 text_command.replace("python3 ", "python3 -u "),
