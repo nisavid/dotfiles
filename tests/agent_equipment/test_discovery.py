@@ -262,7 +262,7 @@ class EquipmentDiscoveryRequestTests(unittest.TestCase):
         self.assertEqual(adapter.calls, [])
 
     def test_exact_target_grammar_is_canonical_and_aliases_are_rejected(self) -> None:
-        request = EquipmentDiscoveryRequest.create(
+        add_request = EquipmentDiscoveryRequest.create(
             command="add",
             candidate_identity="candidate:sha256:" + "1" * 64,
             implementation_manifest_digest="sha256:" + "2" * 64,
@@ -275,14 +275,14 @@ class EquipmentDiscoveryRequestTests(unittest.TestCase):
             targets=("codex/skill:custom/grilling",),
         )
 
-        self.assertEqual(request.targets, ("codex/skill:custom/grilling",))
-        request_document = thaw_json(request.document)
+        self.assertEqual(add_request.targets, ("codex/skill:custom/grilling",))
+        request_document = thaw_json(add_request.document)
         assert isinstance(request_document, dict)
         target_scope = request_document["target_scope"]
         assert isinstance(target_scope, dict)
-        assert request.targets is not None
-        self.assertEqual(target_scope["targets"], list(request.targets))
-        self.assertTrue(request.request_digest.startswith("sha256:"))
+        assert add_request.targets is not None
+        self.assertEqual(target_scope["targets"], list(add_request.targets))
+        self.assertTrue(add_request.request_digest.startswith("sha256:"))
 
         for suffix in (".", "_", "/", "-"):
             with self.subTest(valid_terminal=suffix):

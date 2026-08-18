@@ -17,7 +17,10 @@ from agent_equipment.authoring import (
     TargetSelection,
     UnmanagedReport,
 )
-from agent_equipment.discovery import MAX_DISCOVERY_RECORDS
+from agent_equipment.discovery import (
+    MAX_DISCOVERY_FIELD_CHARACTERS,
+    MAX_DISCOVERY_RECORDS,
+)
 from agent_equipment.model import (
     _INSTALLED_IMPLEMENTATION_PATHS,
     CatalogLockValidation,
@@ -142,6 +145,50 @@ class AuthoredCommandCliTests(unittest.TestCase):
                 ),
             ):
                 status, stdout, stderr = self._invoke(command, *targets)
+                self.assertEqual(status, 64)
+                self.assertEqual(stdout, "")
+                self.assertEqual(
+                    stderr,
+                    "agent-equipment: invalid command or arguments\n",
+                )
+
+    def test_authored_commands_enforce_the_exact_target_character_boundary(
+        self,
+    ) -> None:
+        prefix = "codex/skill:"
+        exact_target = prefix + "x" * (MAX_DISCOVERY_FIELD_CHARACTERS - len(prefix))
+        oversized_target = exact_target + "x"
+        self.assertEqual(len(exact_target), MAX_DISCOVERY_FIELD_CHARACTERS)
+        self.assertEqual(len(oversized_target), MAX_DISCOVERY_FIELD_CHARACTERS + 1)
+        for command in ("unmanaged", "add"):
+            report = frozen_object({"command": command})
+            with (
+                self.subTest(command=command, boundary="exact"),
+                patch.object(
+                    agent_equipment,
+                    "_run_authored_discovery_command",
+                    return_value=(0, report),
+                ) as operation,
+            ):
+                status, stdout, stderr = self._invoke(command, exact_target)
+                self.assertEqual(status, 0)
+                self.assertEqual(json.loads(stdout), {"command": command})
+                self.assertEqual(stderr, "")
+                operation.assert_called_once_with(
+                    command,
+                    (exact_target,),
+                    unittest.mock.ANY,
+                )
+
+            with (
+                self.subTest(command=command, boundary="over"),
+                patch.object(
+                    agent_equipment,
+                    "_run_authored_discovery_command",
+                    side_effect=AssertionError("runtime must remain unreachable"),
+                ),
+            ):
+                status, stdout, stderr = self._invoke(command, oversized_target)
                 self.assertEqual(status, 64)
                 self.assertEqual(stdout, "")
                 self.assertEqual(
@@ -356,11 +403,26 @@ class AuthoredCommandCliTests(unittest.TestCase):
             "agent-equipment: invalid command or arguments\n",
         )
 
+    def test_authoring_errors_reject_literal_secret_messages(self) -> None:
+        canary = "gh" + "p_" + "A" * 32
+        with self.assertRaisesRegex(
+            ValueError,
+            "^authoring errors must not contain literal secrets$",
+        ):
+            AuthoringError("ADD_AUTHORING_POLICY_REQUIRED", canary)
+
     def test_authored_errors_and_secret_material_fail_closed_without_echo(self) -> None:
         base = validated_pair()
         manifest = installed_manifest()
         validation = CatalogLockValidation(base, ())
         canary = "gh" + "p_" + "A" * 32
+        forged_error = object.__new__(AuthoringError)
+        object.__setattr__(
+            forged_error,
+            "code",
+            "ADD_AUTHORING_POLICY_REQUIRED",
+        )
+        object.__setattr__(forged_error, "message", canary)
         binding = DiscoveryHarnessBinding(
             capability_identity="capability:codex/equipment-discovery",
             capability_digest="sha256:" + "4" * 64,
@@ -375,7 +437,7 @@ class AuthoredCommandCliTests(unittest.TestCase):
         )
         for result, expected_code in (
             (
-                AuthoringError("ADD_AUTHORING_POLICY_REQUIRED", canary),
+                forged_error,
                 "ADD_AUTHORING_POLICY_REQUIRED",
             ),
             (
@@ -394,19 +456,18 @@ class AuthoredCommandCliTests(unittest.TestCase):
                         return_value=(selection, object()),
                     ),
                     patch.object(agent_equipment, "propose_add", return_value=result),
-                    patch.object(
-                        sys,
-                        "argv",
-                        ["agent-equipment", "add", "codex/skill:example/tool"],
-                    ),
-                    patch.object(sys, "stdout", new_callable=io.StringIO) as stdout,
                 ):
-                    status = agent_equipment.main(manifest)
+                    status, stdout, stderr = self._invoke(
+                        "add",
+                        "codex/skill:example/tool",
+                    )
 
                 self.assertEqual(status, 65)
-                self.assertNotIn(canary, stdout.getvalue())
+                self.assertNotIn(canary, stdout)
+                self.assertNotIn(canary, stderr)
+                self.assertEqual(stderr, "")
                 self.assertEqual(
-                    json.loads(stdout.getvalue())["diagnostics"][0]["code"],
+                    json.loads(stdout)["diagnostics"][0]["code"],
                     expected_code,
                 )
 

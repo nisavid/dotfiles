@@ -46,6 +46,8 @@ class AuthoringError:
             raise ValueError("authoring error codes must be stable identifiers")
         if type(self.message) is not str or not self.message:
             raise ValueError("authoring errors require a message")
+        if contains_literal_credential({"message": self.message}):
+            raise ValueError("authoring errors must not contain literal secrets")
 
 
 class DiscoveryPort(Protocol):
