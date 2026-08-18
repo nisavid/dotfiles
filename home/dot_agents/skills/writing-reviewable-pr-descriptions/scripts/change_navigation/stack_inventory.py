@@ -18,7 +18,9 @@ from .types import validate_category_order
 
 
 STACK_ITEM_RE = re.compile(
-    r"^- \*\*\[#(\d+) — (.+)\]\(https://github\.com/([^/]+)/([^/]+)/pull/(\d+)\)\*\*"
+    rf"^- \*\*\[#({POSITIVE_COUNT_PATTERN}) — (.+)\]"
+    rf"\(https://github\.com/([^/]+)/([^/]+)/pull/"
+    rf"({POSITIVE_COUNT_PATTERN})\)\*\*"
     r"( \*\*← this PR\*\*)?<br>(.+)$"
 )
 STACK_FILE_OPERATIONS_RE = re.compile(

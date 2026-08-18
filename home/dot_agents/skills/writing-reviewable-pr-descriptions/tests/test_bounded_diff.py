@@ -20,6 +20,14 @@ BASE_SHA = "a" * 40
 HEAD_SHA = "b" * 40
 
 
+def remainder_badge(remainder: int) -> str:
+    noun = "file" if remainder == 1 else "files"
+    return badge(
+        f"REMAINDER: {remainder} changed {noun}",
+        f"REMAINDER-%2B{remainder}%20MORE-5F6B78",
+    )
+
+
 def bounded_diff_body(total_files: int) -> str:
     shown_files = min(total_files, 100)
     summary = " ".join(
@@ -53,7 +61,6 @@ def bounded_diff_body(total_files: int) -> str:
             f"files#diff-{anchor}) {atomic_metric(1, 0)}"
         )
     remainder = total_files - shown_files
-    remainder_noun = "file" if remainder == 1 else "files"
     return "\n".join(
         [
             "<details>",
@@ -61,7 +68,7 @@ def bounded_diff_body(total_files: int) -> str:
             "",
             f"- {category}",
             *rows,
-            f"- {badge(f'REMAINDER: {remainder} changed {remainder_noun}', f'REMAINDER-%2B{remainder}%20MORE-5F6B78')}",
+            f"- {remainder_badge(remainder)}",
             (
                 f"  - [Complete immutable comparison](https://github.com/"
                 f"{REPOSITORY}/compare/{BASE_SHA}...{HEAD_SHA})"
@@ -93,12 +100,11 @@ def complete_diff_body(total_files: int) -> str:
         " shown implementation", " implementation"
     )
     remainder = total_files - min(total_files, 100)
-    remainder_noun = "file" if remainder == 1 else "files"
     return (
         body.replace(summary, f"<summary>{complete_summary}</summary>")
         .replace(bounded_category, complete_category)
         .replace(
-            f"- {badge(f'REMAINDER: {remainder} changed {remainder_noun}', f'REMAINDER-%2B{remainder}%20MORE-5F6B78')}\n",
+            f"- {remainder_badge(remainder)}\n",
             "",
         )
         .replace(
@@ -301,6 +307,51 @@ class BoundedDiffTests(unittest.TestCase):
             [],
         )
 
+    def test_accepts_legacy_plural_line_counts_in_a_bounded_inventory(self) -> None:
+        legacy_text = "1 additions, 0 deletions"
+        legacy_atomic = badge(
+            legacy_text,
+            "%2B1-%E2%88%920-CF222E",
+            title=legacy_text,
+            label_color="1A7F37",
+        )
+        body = (
+            bounded_diff_body_with_omitted_category()
+            .replace(
+                "DOC: 1 addition, 0 deletions",
+                f"DOC: {legacy_text}",
+            )
+            .replace(atomic_metric(1, 0), legacy_atomic)
+        )
+        self.assertEqual(
+            PRODUCTION_VALIDATE(
+                body,
+                REPOSITORY,
+                PR_NUMBER,
+                BASE_SHA,
+                HEAD_SHA,
+            ),
+            [],
+        )
+
+    def test_rejects_a_singular_remainder_noun_for_a_non_singular_count(
+        self,
+    ) -> None:
+        body = bounded_diff_body(102).replace(
+            "REMAINDER: 2 changed files",
+            "REMAINDER: 2 changed file",
+        )
+        errors = PRODUCTION_VALIDATE(
+            body,
+            REPOSITORY,
+            PR_NUMBER,
+            BASE_SHA,
+            HEAD_SHA,
+        )
+        self.assertTrue(
+            any("must say 2 changed files" in error for error in errors)
+        )
+
     def test_rejects_a_complete_inventory_above_the_100_file_limit(self) -> None:
         self.assertTrue(
             PRODUCTION_VALIDATE(
@@ -456,7 +507,7 @@ class BoundedDiffTests(unittest.TestCase):
             ).replace(
                 "FILES-101-5F6B78", f"FILES-{oversized_count}-5F6B78"
             ),
-            "ungrammatical singular remainder": body.replace(
+            "plural remainder for one": body.replace(
                 "REMAINDER: 1 changed file", "REMAINDER: 1 changed files"
             ),
             "incorrect remainder": body.replace(

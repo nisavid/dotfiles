@@ -6,14 +6,14 @@ import re
 
 from .model import (
     ATTRIBUTE_BOUNDARY,
-    LINE_METRIC_TEXT_PATTERN,
-    parse_line_metric_text,
+    LINE_METRIC_COUNT_SHAPE_PATTERN,
+    parse_line_metric_counts,
 )
 
 
 CATEGORY_METRIC_RE = re.compile(
     rf'{ATTRIBUTE_BOUNDARY}alt="(IMPL|TEST|DOC|GEN|OTHER): '
-    rf'({LINE_METRIC_TEXT_PATTERN})"'
+    rf'({LINE_METRIC_COUNT_SHAPE_PATTERN})"'
 )
 Metric = tuple[int, int]
 
@@ -21,9 +21,9 @@ Metric = tuple[int, int]
 def category_metric_items(text: str) -> list[tuple[str, Metric]]:
     items: list[tuple[str, Metric]] = []
     for category, metric_text in CATEGORY_METRIC_RE.findall(text):
-        metric = parse_line_metric_text(metric_text)
-        if metric is not None:
-            items.append((category, metric))
+        metric = parse_line_metric_counts(metric_text)
+        assert metric is not None
+        items.append((category, metric))
     return items
 
 

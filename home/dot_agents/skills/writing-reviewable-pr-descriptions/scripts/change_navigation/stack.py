@@ -5,7 +5,14 @@ from __future__ import annotations
 import re
 from html import unescape
 
-from .model import LINKED_SHIELD_RE, alt, alt_values
+from .model import (
+    COUNT_PATTERN,
+    LINKED_SHIELD_RE,
+    POSITIVE_COUNT_PATTERN,
+    alt,
+    alt_values,
+    is_pr_base_shape,
+)
 from .parsing import summary
 from .stack_inventory import inventory, validate_inventory
 
@@ -23,9 +30,18 @@ def validate_stack(block: list[str], errors: list[str]) -> None:
         errors.append("Stack summary must use exactly one non-breaking label gap")
     if len(re.findall(r"← this PR", text)) != 1:
         errors.append("Stack expansion must mark exactly one current PR")
-    position_match = re.search(r'alt="STACK POSITION: (\d+) OF (\d+)"', stack_summary)
-    if not position_match:
+    position_shape = re.search(
+        r'alt="(STACK POSITION: \S+ OF \S+)"',
+        stack_summary,
+    )
+    position_match = re.search(
+        rf'alt="STACK POSITION: ({COUNT_PATTERN}) OF ({COUNT_PATTERN})"',
+        stack_summary,
+    )
+    if position_shape is None:
         errors.append("Stack summary needs a full-stack position badge")
+    elif position_match is None:
+        errors.append("Stack position must use bounded ASCII counts")
     if 'alt="BASE:' not in stack_summary:
         errors.append("Stack summary needs a direct BASE badge")
     if (
@@ -35,13 +51,15 @@ def validate_stack(block: list[str], errors: list[str]) -> None:
         errors.append("Stack summary needs NEXT navigation or TOP status")
     if "## Stack" in text:
         errors.append("Stack disclosure must not contain a separate Stack heading")
-    _validate_navigation(block, stack_summary, position_match, errors)
+    position_alt = position_shape.group(1) if position_shape else None
+    _validate_navigation(block, stack_summary, position_alt, position_match, errors)
     validate_inventory(block, position_match, errors)
 
 
 def _validate_navigation(
     block: list[str],
     stack_summary: str,
+    position_alt: str | None,
     position_match: re.Match[str] | None,
     errors: list[str],
 ) -> None:
@@ -54,7 +72,7 @@ def _validate_navigation(
         errors.append("Stack summary needs exactly one BASE badge")
     expected_prefix = badges[:2] == [
         "STACK",
-        position_match.group(0)[5:-1] if position_match else "",
+        position_alt or "",
     ]
     navigation_badges = badges[2:]
     expected_navigation = base_badges + dep_badges + (next_badges or top_badges)
@@ -68,7 +86,7 @@ def _validate_navigation(
     if next_badges and next_badges[0] not in linked_navigation:
         errors.append("NEXT must link to its PR")
     for base_badge in base_badges:
-        if re.match(r"BASE: #\d+", base_badge) and base_badge not in linked_navigation:
+        if is_pr_base_shape(base_badge) and base_badge not in linked_navigation:
             errors.append("a PR-valued BASE must link to its PR")
     for dep_badge in dep_badges:
         if dep_badge not in linked_navigation:
@@ -98,7 +116,9 @@ def _validate_navigation(
         item.number: unescape(item.destination_text) for item in items
     }
     for badge in base_badges + dep_badges + next_badges:
-        destination = re.fullmatch(r"(?:BASE|DEP|NEXT): #(\d+) — (.+)", badge)
+        destination = re.fullmatch(
+            rf"(?:BASE|DEP|NEXT): #({POSITIVE_COUNT_PATTERN}) — (.+)", badge
+        )
         if destination and int(destination.group(1)) in inventory_destinations:
             expected = inventory_destinations[int(destination.group(1))]
             actual = unescape(f"#{destination.group(1)} — {destination.group(2)}")
@@ -131,7 +151,9 @@ def _validate_navigation(
 def _navigation_numbers(badges: list[str]) -> list[int]:
     numbers: list[int] = []
     for badge in badges:
-        match = re.match(r"(?:BASE|DEP|NEXT): #(\d+) — ", badge)
+        match = re.match(
+            rf"(?:BASE|DEP|NEXT): #({POSITIVE_COUNT_PATTERN}) — ", badge
+        )
         if match:
             numbers.append(int(match.group(1)))
     return numbers

@@ -17,11 +17,17 @@ from .diff_metrics import (
     validate_file_line,
 )
 from .metrics import Metric
-from .model import COUNT_PATTERN, POSITIVE_COUNT_PATTERN, changed_files_text
+from .model import (
+    COUNT_PATTERN,
+    LINE_METRIC_COUNT_SHAPE_PATTERN,
+    POSITIVE_COUNT_PATTERN,
+    changed_files_text,
+    parse_line_metric_counts,
+)
 
 GROUP_RE = re.compile(
-    rf'^- <picture><img alt="(IMPL|TEST|DOC|GEN|OTHER): ({COUNT_PATTERN}) additions?, '
-    rf'({COUNT_PATTERN}) deletions?"[^>]*></picture> '
+    rf'^- <picture><img alt="(IMPL|TEST|DOC|GEN|OTHER): '
+    rf'({LINE_METRIC_COUNT_SHAPE_PATTERN})"[^>]*></picture> '
     rf'<picture><img alt="FILES: ({COUNT_PATTERN}) (shown )?'
     r"(implementation|test|documentation|generated|other) "
     r'(file|files)"[^>]*></picture>$'
@@ -254,14 +260,16 @@ def _groups(block: list[str]) -> list[Group]:
     for line_number, line in enumerate(block, start=1):
         group_match = GROUP_RE.fullmatch(line)
         if group_match:
+            metric = parse_line_metric_counts(group_match.group(2))
+            assert metric is not None
             current = Group(
                 category=group_match.group(1),
-                additions=int(group_match.group(2)),
-                deletions=int(group_match.group(3)),
-                expected_files=int(group_match.group(4)),
-                shown_label=bool(group_match.group(5)),
-                descriptor=group_match.group(6),
-                file_noun=group_match.group(7),
+                additions=metric[0],
+                deletions=metric[1],
+                expected_files=int(group_match.group(3)),
+                shown_label=bool(group_match.group(4)),
+                descriptor=group_match.group(5),
+                file_noun=group_match.group(6),
                 line_number=line_number,
             )
             groups.append(current)

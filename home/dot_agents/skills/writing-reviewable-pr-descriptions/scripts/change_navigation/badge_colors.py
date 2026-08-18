@@ -7,10 +7,14 @@ from urllib.parse import quote, unquote, urlsplit
 
 from .model import (
     COUNT_PATTERN,
+    LINE_METRIC_COUNT_SHAPE_PATTERN,
+    LINE_METRIC_COUNT_SHAPE_RE,
     LINE_METRIC_TEXT_PATTERN,
     LINE_METRIC_TEXT_RE,
     POSITIVE_COUNT_PATTERN,
+    branch_base_name,
     changed_files_text,
+    is_pr_base_shape,
     parse_line_metric_text,
 )
 
@@ -29,6 +33,9 @@ EXPECTED_BADGE_COLORS = {
     "MOVED": "5F6B78",
     "COPIED": "5F6B78",
 }
+CATEGORY_METRIC_SHAPE_RE = re.compile(
+    rf"(?:IMPL|TEST|DOC|GEN|OTHER): ({LINE_METRIC_COUNT_SHAPE_PATTERN})"
+)
 
 
 def _decoded_badge_path(source_url: str) -> str:
@@ -41,6 +48,10 @@ def _raw_badge_path(source_url: str) -> str:
     return path.split("/badge/", 1)[1] if "/badge/" in path else ""
 
 
+def _shields_message(value: str) -> str:
+    return value.replace("_", "__").replace("-", "--")
+
+
 def _expected_badge_path(image_alt: str) -> str | None:
     if image_alt in {"STACK", "DIFF"}:
         return f"{image_alt}-57606A"
@@ -50,8 +61,7 @@ def _expected_badge_path(image_alt: str) -> str | None:
     if category:
         label, metric_text = category.groups()
         metric = parse_line_metric_text(metric_text)
-        if metric is None:
-            return None
+        assert metric is not None
         additions, deletions = metric
         return f"{label}-+{additions} −{deletions}-{EXPECTED_BADGE_COLORS[label]}"
     file_operations = re.fullmatch(
@@ -83,13 +93,18 @@ def _expected_badge_path(image_alt: str) -> str | None:
         f"REMAINDER: {changed_files_text(remainder.group(1))}"
     ):
         return f"REMAINDER-+{remainder.group(1)} MORE-5F6B78"
-    navigation = re.fullmatch(r"(BASE|DEP|NEXT): #(\d+) — .+", image_alt)
+    navigation = re.fullmatch(
+        rf"(BASE|DEP|NEXT): #({POSITIVE_COUNT_PATTERN}) — .+", image_alt
+    )
     if navigation:
         return f"{navigation.group(1)}-#{navigation.group(2)}-5F6B78"
-    branch_base = re.fullmatch(r"BASE: (.+)", image_alt)
-    if branch_base:
-        return f"BASE-{branch_base.group(1)}-5F6B78"
-    position = re.fullmatch(r"STACK POSITION: (\d+) OF (\d+)", image_alt)
+    branch_base = branch_base_name(image_alt)
+    if branch_base is not None:
+        return f"BASE-{_shields_message(branch_base)}-5F6B78"
+    position = re.fullmatch(
+        rf"STACK POSITION: ({COUNT_PATTERN}) OF ({COUNT_PATTERN})",
+        image_alt,
+    )
     if position:
         return f"{position.group(1)} OF {position.group(2)}-5F6B78"
     if image_alt == "STACK STATUS: TOP":
@@ -105,14 +120,11 @@ def _expected_badge_path(image_alt: str) -> str | None:
 def validate_color_and_label(
     image_alt: str, source_url: str, errors: list[str]
 ) -> None:
-    expected_path = _expected_badge_path(image_alt)
-    category = re.fullmatch(
-        rf"(?:IMPL|TEST|DOC|GEN|OTHER): ({LINE_METRIC_TEXT_PATTERN})", image_alt
-    )
-    metric_text = category.group(1) if category else image_alt
+    category_metric = CATEGORY_METRIC_SHAPE_RE.fullmatch(image_alt)
+    metric_text = category_metric.group(1) if category_metric else image_alt
     if (
-        LINE_METRIC_TEXT_RE.fullmatch(metric_text)
-        and parse_line_metric_text(metric_text) is None
+        LINE_METRIC_COUNT_SHAPE_RE.fullmatch(metric_text)
+        and LINE_METRIC_TEXT_RE.fullmatch(metric_text) is None
     ):
         errors.append(f"metric badge has ungrammatical accessibility text: {image_alt}")
         return
@@ -126,6 +138,17 @@ def validate_color_and_label(
             f"remainder badge has ungrammatical accessibility text: {image_alt}"
         )
         return
+    if (
+        image_alt.startswith("BASE: ")
+        and branch_base_name(image_alt) is None
+        and not is_pr_base_shape(image_alt)
+    ):
+        errors.append(
+            "branch-valued BASE must use a canonical bounded ASCII Git ref: "
+            f"{image_alt}"
+        )
+        return
+    expected_path = _expected_badge_path(image_alt)
     if expected_path and _decoded_badge_path(source_url) != expected_path:
         errors.append(
             f"{image_alt} visual badge text/color must encode {expected_path}"
