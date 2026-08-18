@@ -1273,7 +1273,7 @@ class BlockPrFillTests(unittest.TestCase):
                 + " --expected-state draft --title changed --body-file "
                 + shlex.quote(body_file.name)
             )
-            ready_command = script + " ready" + common
+            ready_command = script + " ready" + common + " --expected-state draft"
             self.assertFalse(MODULE.blocks(payload("Bash", {"command": text_command})))
             self.assertFalse(MODULE.blocks(payload("Bash", {"command": ready_command})))
             for command in (text_command, ready_command):
@@ -1329,6 +1329,10 @@ class BlockPrFillTests(unittest.TestCase):
                 text_command.replace(f" --expected-body-sha256 {'d' * 64}", ""),
                 text_command.replace(
                     "--expected-state draft", "--expected-state invalid"
+                ),
+                ready_command.replace(" --expected-state draft", ""),
+                ready_command.replace(
+                    "--expected-state draft", "--expected-state ready"
                 ),
                 text_command + " --unexpected value",
                 ready_command + " --title changed",
