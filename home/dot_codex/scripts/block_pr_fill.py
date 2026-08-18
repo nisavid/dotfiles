@@ -248,9 +248,9 @@ REVIEWABLE_PR_STATE = (
 )
 TRUSTED_HELP_ONLY_SCRIPTS = {
     PUBLISHER: "f8c9d9aa85620affbe9985633fa65b1477dba9600ff29ec60c1fc1c84e3cc01e",
-    UPDATER: "0afdef577cdc049bc7201b6277f8b6629b546c08344eac6b25ef85466d3cf347",
+    UPDATER: "d404ff0d3b10946134082d6c8fab9734d42c0561f33eca92abfdbb36a5dd94d8",
     REVIEWABLE_PR_STATE: (
-        "f06c51077e814ff689a995aff75cb08bbe609507b588349e7838f4c8eb901a4c"
+        "7ff1345f5e333e75568844b2fa7d4c53cb60ee4959119f89d301301f82e9627e"
     ),
 }
 IGNORABLE_TRUSTED_DIRECTORY_ENTRIES = {".DS_Store"}
@@ -2024,8 +2024,12 @@ def _updater_invocation_is_invalid(segment: list[str]) -> bool | None:
         "--expected-title-sha256",
         "--expected-body-sha256",
     }
-    text_options = {"--expected-state", "--title", "--body-file"}
-    expected_options = common_options | (text_options if operation == "text" else set())
+    operation_options = (
+        {"--expected-state", "--title", "--body-file"}
+        if operation == "text"
+        else {"--expected-state"}
+    )
+    expected_options = common_options | operation_options
     values = _strict_long_option_values(segment[index + 2 :], expected_options)
     if values is None or values.keys() != expected_options:
         return True
@@ -2054,7 +2058,7 @@ def _updater_invocation_is_invalid(segment: list[str]) -> bool | None:
     if not head_branch or qualified_owner != head_owner:
         return True
     if operation == "ready":
-        return False
+        return values["--expected-state"] != "draft"
     if values["--expected-state"] not in {"draft", "ready"}:
         return True
     if not values["--title"].strip():
