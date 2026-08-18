@@ -1274,9 +1274,15 @@ class BlockPrFillTests(unittest.TestCase):
                 + shlex.quote(body_file.name)
             )
             ready_command = script + " ready" + common + " --expected-state draft"
+            preimage_command = (
+                script + " preimage --repository acme/app --pr 2"
+            )
             self.assertFalse(MODULE.blocks(payload("Bash", {"command": text_command})))
             self.assertFalse(MODULE.blocks(payload("Bash", {"command": ready_command})))
-            for command in (text_command, ready_command):
+            self.assertFalse(
+                MODULE.blocks(payload("Bash", {"command": preimage_command}))
+            )
+            for command in (preimage_command, text_command, ready_command):
                 self.assertTrue(
                     MODULE.blocks(payload("functions.write_stdin", {"chars": command}))
                 )
@@ -1334,6 +1340,8 @@ class BlockPrFillTests(unittest.TestCase):
                 ready_command.replace(
                     "--expected-state draft", "--expected-state ready"
                 ),
+                preimage_command.replace("--pr 2", "--pr 0"),
+                preimage_command + " --base main",
                 text_command + " --unexpected value",
                 ready_command + " --title changed",
                 text_command.replace("python3 ", "python3 -u "),

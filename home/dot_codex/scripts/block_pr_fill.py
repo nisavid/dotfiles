@@ -2011,11 +2011,13 @@ def _updater_invocation_is_invalid(segment: list[str]) -> bool | None:
     if script not in UPDATER_ARGUMENTS or index + 1 >= len(segment):
         return True
     operation = segment[index + 1]
-    if operation not in {"text", "ready"}:
+    if operation not in {"preimage", "text", "ready"}:
         return True
-    common_options = {
+    locator_options = {
         "--repository",
         "--pr",
+    }
+    common_options = locator_options | {
         "--base",
         "--base-oid",
         "--head",
@@ -2024,12 +2026,16 @@ def _updater_invocation_is_invalid(segment: list[str]) -> bool | None:
         "--expected-title-sha256",
         "--expected-body-sha256",
     }
-    operation_options = (
-        {"--expected-state", "--title", "--body-file"}
-        if operation == "text"
-        else {"--expected-state"}
-    )
-    expected_options = common_options | operation_options
+    if operation == "preimage":
+        expected_options = locator_options
+    elif operation == "text":
+        expected_options = common_options | {
+            "--expected-state",
+            "--title",
+            "--body-file",
+        }
+    else:
+        expected_options = common_options | {"--expected-state"}
     values = _strict_long_option_values(segment[index + 2 :], expected_options)
     if values is None or values.keys() != expected_options:
         return True
@@ -2038,6 +2044,8 @@ def _updater_invocation_is_invalid(segment: list[str]) -> bool | None:
         return True
     if not values["--pr"].isdigit() or int(values["--pr"]) <= 0:
         return True
+    if operation == "preimage":
+        return False
     if not values["--base"].strip():
         return True
     if any(
