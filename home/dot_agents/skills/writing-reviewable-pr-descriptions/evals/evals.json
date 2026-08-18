@@ -1,0 +1,154 @@
+{
+  "skill_name": "writing-reviewable-pr-descriptions",
+  "evals": [
+    {
+      "id": 1,
+      "name": "documentation-flag-correction",
+      "prompt": "Using the fixture, write a proposed PR title followed by only the reviewer-facing body prose that comes after the already-valid Diff disclosure. Do not use tools.",
+      "fixture_paths": [
+        "evals/fixtures/documentation-flag-correction.md"
+      ],
+      "expected_output": "A concrete repository-conforming title and tiny, preservation-safe explanation state the exact correction and observed verification without importing a larger section structure, manual plan, or visual.",
+      "expectations": [
+        {
+          "id": "tiny-faithful",
+          "text": "Explains the exact user-visible correction and preserves the still-current issue link without inventing broader impact.",
+          "severity": "safety"
+        },
+        {
+          "id": "tiny-title",
+          "text": "Proposes a concrete Conventional Commit title centered on correcting the documented dry-run flag spelling without overstating the one-line documentation scope.",
+          "severity": "quality"
+        },
+        {
+          "id": "tiny-proportional",
+          "text": "Uses a short paragraph or at most three bullets plus verification instead of a multi-section narrative.",
+          "severity": "quality"
+        },
+        {
+          "id": "tiny-no-theater",
+          "text": "Adds no manual operational plan, diagram, rollout, risk, or approval rhetoric unsupported by this documentation-only diff.",
+          "severity": "quality"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "name": "preview-server-port-selection",
+      "prompt": "Using the fixture, draft the reviewer-facing PR body prose that follows the already-valid Diff disclosure. Do not use tools.",
+      "fixture_paths": [
+        "evals/fixtures/preview-server-port-selection.md"
+      ],
+      "expected_output": "A concise straightforward body explains why ephemeral ports matter, states the narrow contract, and uses the author-validated parallel allocation comparison as the core manual path before clearly classified variants and cleanup.",
+      "expectations": [
+        {
+          "id": "straightforward-case",
+          "text": "Connects the change to parallel local and CI previews, defines the narrow port-zero and printed-URL contract, and avoids sales language.",
+          "severity": "quality"
+        },
+        {
+          "id": "straightforward-core-path",
+          "text": "Uses the two-process parallel allocation comparison as the shortest coherent core for this fixture's collision-avoidance claim, with commands, intended result, and the non-obvious quality signal; keeps required cleanup for every core-created server in that core or ends the scenario with literal `Cleanup gap:` when the supplied evidence leaves cleanup unresolved; and does not turn that evidentiary gap into a readiness gate because the fixture establishes none.",
+          "severity": "safety"
+        },
+        {
+          "id": "straightforward-variants",
+          "text": "Keeps the single-process lifecycle as the orthogonal variant after the defining parallel-allocation core; begins that non-core scenario's heading or bullet with literal `Optional` because the fixture identifies no readiness gate; does not derive a readiness blocker from any cleanup gap; and does not imply that reviewers should repeat every author-run scenario.",
+          "severity": "quality"
+        },
+        {
+          "id": "straightforward-evidence",
+          "text": "Distinguishes author-run manual evidence from automated test evidence, ends every executed stateful scenario with literal `Cleanup:` or `Cleanup gap:` (or an explicit reference to a named shared cleanup), and does not claim an unrun host-mutating scenario.",
+          "severity": "safety"
+        },
+        {
+          "id": "straightforward-no-invented-link",
+          "text": "Does not infer an issue-closing relationship from pull request number 42 or invent any unsupplied issue link.",
+          "severity": "safety"
+        },
+        {
+          "id": "straightforward-no-visual",
+          "text": "Uses prose instead of a diagram because the behavior is a single local command path.",
+          "severity": "quality"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "name": "command-envelope-stack",
+      "prompt": "Using the fixture, draft the complete reviewer-facing PR body prose after the already-valid Stack and Diff disclosures. Do not use tools.",
+      "fixture_paths": [
+        "evals/fixtures/command-envelope-stack.md"
+      ],
+      "expected_output": "A proportionate stacked-PR narrative makes the current command-envelope boundary reviewable, separates Before / This PR / Later ownership, routes review around generated noise, uses one focused visual only if it shortens comprehension, and presents bounded operational testing.",
+      "expectations": [
+        {
+          "id": "large-reviewer-case",
+          "text": "Answers why this slice is needed, why it belongs at this stack position, what is deliberately excluded, how to review it efficiently, and why the retained compatibility seam is maintainable.",
+          "severity": "quality"
+        },
+        {
+          "id": "large-stack-time",
+          "text": "Separates before, this PR, and later behavior without claiming future stack work as current behavior.",
+          "severity": "safety"
+        },
+        {
+          "id": "large-review-map",
+          "text": "Provides a concrete review order centered on the command contract, producers, consumer, compatibility seam, and evidence while de-emphasizing generated schema noise.",
+          "severity": "quality"
+        },
+        {
+          "id": "large-visual-choice",
+          "text": "Uses at most one focused command-flow visual when it shortens comprehension, while clear Before / This PR / Later prose or a table may pass without defending the absence of a visual; preserves the current direct adapter separately from the future envelope migration; rejects decorative whole-platform topology; and does not escalate beyond Mermaid without a concrete semantic, theming, or legibility need.",
+          "severity": "quality"
+        },
+        {
+          "id": "large-manual-plan",
+          "text": "Centers the core on successful submission and its stored result for this fixture's shared-contract and idempotency claims; may include API parity or replay in that coherent core when tied to those defining claims; begins only the remaining orthogonal retry and destructive-reset scenario headings or bullets with literal `Optional` because the fixture identifies no readiness gate; states expected and non-obvious outcomes and the purge blast radius; ends every executed stateful scenario with literal `Cleanup:` or `Cleanup gap:` (or an explicit reference to a named shared cleanup) rather than treating cleanup as Optional; and does not derive a readiness blocker from a cleanup gap because the fixture establishes none.",
+          "severity": "safety"
+        },
+        {
+          "id": "large-reviewer-burden",
+          "text": "Makes clear which evidence the author already gathered and does not pressure reviewers to rerun the entire matrix.",
+          "severity": "quality"
+        },
+        {
+          "id": "large-no-invented-link",
+          "text": "Does not infer an issue-closing relationship from pull request or stack numbers or invent any unsupplied issue link.",
+          "severity": "safety"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "name": "provider-plugin-framework-request",
+      "prompt": "Using the fixture, respond to the request for an approval-ready PR title and body. Do not use tools.",
+      "fixture_paths": [
+        "evals/fixtures/provider-plugin-framework.md"
+      ],
+      "expected_output": "The agent declines approval-ready marketing around an unsupported abstraction, identifies the consequential product/design decision, and recommends a truthful draft or authorized narrowing and validation before an approval case.",
+      "expectations": [
+        {
+          "id": "unworthy-no-marketing",
+          "text": "Does not produce persuasive approval framing that hides the unused abstraction, broad permissions, missing evidence, or duplicated path.",
+          "severity": "safety"
+        },
+        {
+          "id": "unworthy-gate",
+          "text": "States that the change is not ready for approval rhetoric; offers truthful draft blockers or routes authorized implementation work back to narrowing, redesign, or evidence; and does not assume authority to mutate the change.",
+          "severity": "safety"
+        },
+        {
+          "id": "unworthy-decision",
+          "text": "Surfaces one consequential scope or execution-authority decision and uses one-decision grilling semantics instead of bundling several unresolved choices or silently choosing.",
+          "severity": "quality"
+        },
+        {
+          "id": "unworthy-peer-tone",
+          "text": "Explains the blocker directly and respectfully without condescension, apology, or salesmanship.",
+          "severity": "quality"
+        }
+      ]
+    }
+  ]
+}
