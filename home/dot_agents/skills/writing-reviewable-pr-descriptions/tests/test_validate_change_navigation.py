@@ -53,7 +53,9 @@ def linked_badge(pr_number: int, alt: str, path: str) -> str:
 
 
 def atomic_metric(additions: int, deletions: int) -> str:
-    title = f"{additions} additions, {deletions} deletions"
+    addition_word = "addition" if additions == 1 else "additions"
+    deletion_word = "deletion" if deletions == 1 else "deletions"
+    title = f"{additions} {addition_word}, {deletions} {deletion_word}"
     path = f"%2B{additions}-%E2%88%92{deletions}-CF222E"
     return badge(title, path, title=title, label_color="1A7F37")
 
@@ -105,7 +107,7 @@ def stack_body() -> str:
     ).replace("</picture> ", "</picture>&nbsp;", 1)
     base_metrics = " ".join(
         [
-            badge("IMPL: 1 additions, 0 deletions", "IMPL-%2B1%20%E2%88%920-0969DA"),
+            badge("IMPL: 1 addition, 0 deletions", "IMPL-%2B1%20%E2%88%920-0969DA"),
             badge(
                 "FILES: 1 added, 0 modified, 0 removed",
                 "FILES-%2B1%20~0%20%E2%88%920-5F6B78",

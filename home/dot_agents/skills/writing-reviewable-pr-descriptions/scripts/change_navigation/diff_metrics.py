@@ -7,7 +7,13 @@ import re
 from dataclasses import dataclass
 from html import escape, unescape
 
-from .model import ATOMIC_FILE_BADGE_RE, SHIELD_IMAGE_RE, alt, title
+from .model import (
+    ATOMIC_FILE_BADGE_RE,
+    SHIELD_IMAGE_RE,
+    alt,
+    line_metric_text,
+    title,
+)
 
 
 MARKDOWN_OPERATION_FILE_LINK_RE = re.compile(
@@ -254,8 +260,8 @@ def validate_metric_titles(
             )
             continue
         if atomic_match:
-            expected = (
-                f"{atomic_match.group(1)} additions, {atomic_match.group(2)} deletions"
+            expected = line_metric_text(
+                atomic_match.group(1), atomic_match.group(2)
             )
             if badge_alt != expected:
                 errors.append(

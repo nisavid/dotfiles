@@ -39,7 +39,7 @@ def split_category_diff() -> str:
         [
             badge("DIFF", "DIFF-57606A", style="for-the-badge"),
             badge("IMPL: 5 additions, 2 deletions", "IMPL-%2B5%20%E2%88%922-0969DA"),
-            badge("TEST: 4 additions, 1 deletions", "TEST-%2B4%20%E2%88%921-6F5F9A"),
+            badge("TEST: 4 additions, 1 deletion", "TEST-%2B4%20%E2%88%921-6F5F9A"),
             badge("FILES: 1 touched", "FILES-1-5F6B78"),
         ]
     ).replace("</picture> ", "</picture>&nbsp;", 1)
@@ -55,7 +55,7 @@ def split_category_diff() -> str:
             + badge("FILES: 1 implementation file", "FILES-1-5F6B78"),
             f"  - [`src/widget.ts`]({link}) " + atomic_metric(5, 2),
             "- "
-            + badge("TEST: 4 additions, 1 deletions", "TEST-%2B4%20%E2%88%921-6F5F9A")
+            + badge("TEST: 4 additions, 1 deletion", "TEST-%2B4%20%E2%88%921-6F5F9A")
             + " "
             + badge("FILES: 1 test file", "FILES-1-5F6B78"),
             f"  - [`src/widget.ts`]({link}) " + atomic_metric(4, 1),
@@ -114,6 +114,81 @@ class NavigationIntegrityTests(unittest.TestCase):
             'alt="0 additions, 0 deletions" title="0 additions, 0 deletions"',
         )
         self.assertTrue(any("must match" in error for error in MODULE.validate(broken)))
+
+    def test_accepts_grammatical_singular_atomic_metric_text(self) -> None:
+        for additions, deletions in ((1, 0), (0, 1), (1, 1)):
+            with self.subTest(additions=additions, deletions=deletions):
+                addition_word = "addition" if additions == 1 else "additions"
+                deletion_word = "deletion" if deletions == 1 else "deletions"
+                singular = DIFF.replace(
+                    "IMPL: 9 additions, 3 deletions",
+                    f"IMPL: {additions} {addition_word}, "
+                    f"{deletions} {deletion_word}",
+                ).replace(
+                    "IMPL-%2B9%20%E2%88%923",
+                    f"IMPL-%2B{additions}%20%E2%88%92{deletions}",
+                ).replace(
+                    atomic_metric(9, 3),
+                    atomic_metric(additions, deletions),
+                )
+                self.assertEqual(MODULE.validate(singular), [])
+
+    def test_rejects_ungrammatical_singular_atomic_metric_text(self) -> None:
+        broken = DIFF.replace(
+            'alt="9 additions, 3 deletions" title="9 additions, 3 deletions"',
+            'alt="1 additions, 1 deletions" title="1 additions, 1 deletions"',
+        ).replace(
+            "%2B9-%E2%88%923-CF222E",
+            "%2B1-%E2%88%921-CF222E",
+        )
+        self.assertTrue(any("must match" in error for error in MODULE.validate(broken)))
+
+    def test_rejects_ungrammatical_singular_category_metric_text(self) -> None:
+        broken = STACK.replace(
+            "IMPL: 1 addition, 0 deletions",
+            "IMPL: 1 additions, 0 deletions",
+        )
+        self.assertTrue(
+            any("ungrammatical" in error for error in MODULE.validate(broken + DIFF))
+        )
+
+    def test_rejects_oversized_metric_without_crashing(self) -> None:
+        huge = "9" * 5000
+        broken = DIFF.replace(
+            'alt="9 additions, 3 deletions" title="9 additions, 3 deletions"',
+            f'alt="{huge} additions, 3 deletions" '
+            f'title="{huge} additions, 3 deletions"',
+        )
+        errors = MODULE.validate(broken)
+        self.assertTrue(errors)
+
+    def test_rejects_oversized_stack_file_count_without_crashing(self) -> None:
+        huge = "9" * 5000
+        broken = STACK.replace(
+            "FILES: 0 added, 1 modified, 0 removed",
+            f"FILES: 0 added, {huge} modified, 0 removed",
+        ).replace(
+            "FILES-%2B0%20~1%20%E2%88%920-5F6B78",
+            f"FILES-%2B0%20~{huge}%20%E2%88%920-5F6B78",
+        )
+        errors = MODULE.validate(broken + DIFF)
+        self.assertTrue(errors)
+
+    def test_rejects_mixed_script_metric_digits(self) -> None:
+        broken = (
+            DIFF.replace(
+                "IMPL: 9 additions, 3 deletions",
+                "IMPL: 1١ additions, 3 deletions",
+            )
+            .replace("IMPL-%2B9%20%E2%88%923", "IMPL-%2B11%20%E2%88%923")
+            .replace(
+                'alt="9 additions, 3 deletions" title="9 additions, 3 deletions"',
+                'alt="11 additions, 3 deletions" '
+                'title="11 additions, 3 deletions"',
+            )
+            .replace("%2B9-%E2%88%923-CF222E", "%2B11-%E2%88%923-CF222E")
+        )
+        self.assertTrue(MODULE.validate(broken))
 
     def test_rejects_conflicting_linked_badge_title(self) -> None:
         broken = (STACK + DIFF).replace(

@@ -7,6 +7,11 @@ from html import unescape
 
 
 ATTRIBUTE_BOUNDARY = r"(?<!\S)"
+COUNT_PATTERN = r"(?:0|[1-9][0-9]{0,17})"
+POSITIVE_COUNT_PATTERN = r"(?:[1-9][0-9]{0,17})"
+LINE_METRIC_TEXT_PATTERN = (
+    rf"{COUNT_PATTERN} additions?, {COUNT_PATTERN} deletions?"
+)
 IMAGE_RE = re.compile(r"<img\b[^>]*>")
 SHIELD_IMAGE_RE = re.compile(
     rf'<img\b[^>]*{ATTRIBUTE_BOUNDARY}src="https://img\.shields\.io/[^"]+"[^>]*>'
@@ -27,10 +32,48 @@ PICTURE_SHIELD_RE = re.compile(
 )
 ATOMIC_FILE_BADGE_RE = re.compile(
     rf'{ATTRIBUTE_BOUNDARY}src="https://img\.shields\.io/badge/'
-    r"%2B(\d+)-%E2%88%92(\d+)-CF222E"
+    rf"%2B({COUNT_PATTERN})-%E2%88%92({COUNT_PATTERN})-CF222E"
     r'\?style=flat&labelColor=1A7F37"'
 )
+LINE_METRIC_TEXT_RE = re.compile(LINE_METRIC_TEXT_PATTERN)
 CATEGORY_RE = re.compile(rf'{ATTRIBUTE_BOUNDARY}alt="(IMPL|TEST|DOC|GEN|OTHER):')
+
+
+def _count_text(value: int | str) -> str:
+    text = str(value)
+    if re.fullmatch(r"(?:0|[1-9][0-9]*)", text) is None:
+        raise ValueError("count must be a canonical nonnegative integer")
+    return text
+
+
+def line_metric_text(additions: int | str, deletions: int | str) -> str:
+    """Return grammatical accessibility text for line-count metrics."""
+    addition_count = _count_text(additions)
+    deletion_count = _count_text(deletions)
+    addition_word = "addition" if addition_count == "1" else "additions"
+    deletion_word = "deletion" if deletion_count == "1" else "deletions"
+    return (
+        f"{addition_count} {addition_word}, "
+        f"{deletion_count} {deletion_word}"
+    )
+
+
+def parse_line_metric_text(value: str) -> tuple[int, int] | None:
+    """Return counts only when line-metric text has canonical grammar."""
+    match = LINE_METRIC_TEXT_RE.fullmatch(value)
+    if not match:
+        return None
+    additions_text, deletions_text = re.findall(COUNT_PATTERN, value)
+    if value != line_metric_text(additions_text, deletions_text):
+        return None
+    return int(additions_text), int(deletions_text)
+
+
+def changed_files_text(count: int | str) -> str:
+    """Return a grammatical changed-file count."""
+    count_text = _count_text(count)
+    noun = "file" if count_text == "1" else "files"
+    return f"{count_text} changed {noun}"
 
 
 def raw_attribute(tag: str, name: str) -> str:
