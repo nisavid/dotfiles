@@ -10,6 +10,9 @@ Use this reference only while constructing or revising the first-viewport
 - `STACK` and `DIFF` label shields use `style=for-the-badge` and neutral
   `57606A`; every metric shield uses `style=flat`.
 - Category order is `IMPL`, `TEST`, `DOC`, `GEN`, `OTHER`, then `FILES`.
+- Category line metrics in Stack inventories, Diff summaries, and expanded Diff
+  rows use grammatical count nouns: `1 addition` or `N additions`, and
+  `1 deletion` or `M deletions`. Zero uses the plural form.
 - Colors are stable: `IMPL 0969DA`, `TEST 6F5F9A`, `DOC 3F7770`,
   `GEN 76652F`, `OTHER 57606A`, and `FILES 5F6B78`.
 - Operation badges `BINARY`, `MOVED`, and `COPIED` use neutral `5F6B78`.
@@ -142,7 +145,8 @@ exact pushed base/head first; stop rather than publish when it is unavailable:
   ```
 
   The link exposes the complete diff; the 100 displayed rows remain explicitly
-  bounded. Reject missing or incorrect remainders, mutable refs, mismatched
+  bounded. Use `1 changed file` for a remainder of one and `N changed files`
+  otherwise. Reject missing or incorrect remainders, mutable refs, mismatched
   repositories or SHAs, and prose that calls the displayed rows complete.
 - The planner owns the external GitHub API selection and grouping check. The
   body validator verifies the rendered structure and declared immutable
@@ -162,8 +166,9 @@ exact pushed base/head first; stop rather than publish when it is unavailable:
 - A file row contains only that atomic shield, or one `BINARY`, `MOVED`, or
   `COPIED` operation shield followed by the permitted atomic shield. Do not add
   category, file-count, or navigation shields to a file row.
-- The per-file badge has matching `alt` and `title`, both written as words:
-  `N additions, M deletions`.
+- The per-file badge has matching `alt` and `title`, both written with
+  grammatical count nouns: `1 addition` or `N additions`, and `1 deletion` or
+  `M deletions`. Zero uses the plural form.
 - Use `+0` or `−0` when one side is zero. For a binary file with no meaningful
   line counts, use one neutral `BINARY` badge with matching `alt` and `title`.
 - For a move or copy, give the source and target separate code nodes inside one

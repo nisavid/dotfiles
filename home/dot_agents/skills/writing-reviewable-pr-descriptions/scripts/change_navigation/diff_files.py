@@ -17,16 +17,18 @@ from .diff_metrics import (
     validate_file_line,
 )
 from .metrics import Metric
+from .model import COUNT_PATTERN, POSITIVE_COUNT_PATTERN, changed_files_text
 
 GROUP_RE = re.compile(
-    r'^- <picture><img alt="(IMPL|TEST|DOC|GEN|OTHER): (\d+) additions, '
-    r'(\d+) deletions"[^>]*></picture> '
-    r'<picture><img alt="FILES: (\d+) (shown )?'
+    rf'^- <picture><img alt="(IMPL|TEST|DOC|GEN|OTHER): ({COUNT_PATTERN}) additions?, '
+    rf'({COUNT_PATTERN}) deletions?"[^>]*></picture> '
+    rf'<picture><img alt="FILES: ({COUNT_PATTERN}) (shown )?'
     r"(implementation|test|documentation|generated|other) "
     r'(file|files)"[^>]*></picture>$'
 )
 REMAINDER_RE = re.compile(
-    r'^- <picture><img alt="REMAINDER: ([1-9]\d*) changed files"[^>]*>'
+    rf'^- <picture><img alt="REMAINDER: ({POSITIVE_COUNT_PATTERN}) '
+    r'changed (file|files)"[^>]*>'
     r"</picture>$"
 )
 COMPARISON_RE = re.compile(
@@ -321,15 +323,27 @@ def _validate_remainder(
         errors.append(
             "bounded Diff remainder and comparison must be its final two rows"
         )
-    remainder = int(REMAINDER_RE.fullmatch(remainder_lines[0]).group(1))
+    remainder_match = REMAINDER_RE.fullmatch(remainder_lines[0])
+    assert remainder_match is not None
+    remainder = int(remainder_match.group(1))
+    expected_noun = "file" if remainder == 1 else "files"
+    if remainder_match.group(2) != expected_noun:
+        errors.append(
+            f"bounded Diff remainder must say {changed_files_text(remainder)}"
+        )
     expected_remainder = (
         total_files - shown_files
         if total_files is not None and shown_files is not None
         else None
     )
     if remainder != expected_remainder:
+        expected_text = (
+            changed_files_text(expected_remainder)
+            if expected_remainder is not None and expected_remainder >= 0
+            else "a nonnegative changed-file count"
+        )
         errors.append(
-            f"bounded Diff remainder must equal {expected_remainder} changed files"
+            f"bounded Diff remainder must equal {expected_text}"
         )
     comparison = COMPARISON_RE.fullmatch(comparison_lines[0])
     assert comparison is not None

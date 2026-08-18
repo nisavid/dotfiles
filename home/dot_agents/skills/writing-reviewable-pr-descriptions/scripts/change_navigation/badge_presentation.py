@@ -7,19 +7,30 @@ from html import escape, unescape
 from urllib.parse import parse_qs, urlsplit
 
 from .badge_colors import validate_color_and_label
-from .model import SHIELD_IMAGE_RE, alt, attribute_values, raw_attribute, source, title
+from .model import (
+    COUNT_PATTERN,
+    LINE_METRIC_TEXT_PATTERN,
+    LINE_METRIC_TEXT_RE,
+    POSITIVE_COUNT_PATTERN,
+    SHIELD_IMAGE_RE,
+    alt,
+    attribute_values,
+    raw_attribute,
+    source,
+    title,
+)
 
 SUPPORTED_ALT_RE = re.compile(
-    r"^(?:STACK|DIFF|STACK STATUS: TOP|BINARY|MOVED|COPIED|"
+    rf"^(?:STACK|DIFF|STACK STATUS: TOP|BINARY|MOVED|COPIED|"
     r"STACK POSITION: \d+ OF \d+|"
     r"(?:BASE|DEP|NEXT): .+|"
-    r"REMAINDER: [1-9]\d* changed files|"
-    r"(?:IMPL|TEST|DOC|GEN|OTHER): \d+ additions, \d+ deletions|"
-    r"FILES: (?:\d+ touched|"
-    r"\d+ (?:shown )?(?:implementation|test|documentation|generated|other) files?|"
-    r"\d+ added, \d+ modified, \d+ removed"
-    r"(?:, [1-9]\d* moved)?(?:, [1-9]\d* copied)?)|"
-    r"\d+ additions, \d+ deletions)$"
+    rf"REMAINDER: {POSITIVE_COUNT_PATTERN} changed files?|"
+    rf"(?:IMPL|TEST|DOC|GEN|OTHER): {LINE_METRIC_TEXT_PATTERN}|"
+    rf"FILES: (?:{COUNT_PATTERN} touched|"
+    rf"{COUNT_PATTERN} (?:shown )?(?:implementation|test|documentation|generated|other) files?|"
+    rf"{COUNT_PATTERN} added, {COUNT_PATTERN} modified, {COUNT_PATTERN} removed"
+    rf"(?:, {POSITIVE_COUNT_PATTERN} moved)?(?:, {POSITIVE_COUNT_PATTERN} copied)?)|"
+    rf"{LINE_METRIC_TEXT_PATTERN})$"
 )
 
 
@@ -53,7 +64,7 @@ def _validate_attribute_cardinality(image: str, errors: list[str]) -> None:
     titles = attribute_values(image, "title")
     title_required = bool(
         re.fullmatch(r"(?:BASE|DEP|NEXT): #\d+ — .+", image_alt)
-        or re.fullmatch(r"\d+ additions, \d+ deletions", image_alt)
+        or LINE_METRIC_TEXT_RE.fullmatch(image_alt)
         or image_alt in {"BINARY", "MOVED", "COPIED"}
     )
     if title_required and (

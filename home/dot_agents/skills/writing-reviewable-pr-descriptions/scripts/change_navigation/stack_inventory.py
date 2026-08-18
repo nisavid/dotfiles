@@ -8,7 +8,12 @@ from html import escape, unescape
 from typing import Optional
 
 from .metrics import Metric, category_metric_items, category_metric_map
-from .model import SHIELD_IMAGE_RE, alt_values
+from .model import (
+    COUNT_PATTERN,
+    POSITIVE_COUNT_PATTERN,
+    SHIELD_IMAGE_RE,
+    alt_values,
+)
 from .types import validate_category_order
 
 
@@ -17,8 +22,10 @@ STACK_ITEM_RE = re.compile(
     r"( \*\*← this PR\*\*)?<br>(.+)$"
 )
 STACK_FILE_OPERATIONS_RE = re.compile(
-    r"FILES: (\d+) added, (\d+) modified, (\d+) removed"
-    r"(?:, ([1-9]\d*) moved)?(?:, ([1-9]\d*) copied)?"
+    rf"FILES: ({COUNT_PATTERN}) added, ({COUNT_PATTERN}) modified, "
+    rf"({COUNT_PATTERN}) removed"
+    rf"(?:, ({POSITIVE_COUNT_PATTERN}) moved)?"
+    rf"(?:, ({POSITIVE_COUNT_PATTERN}) copied)?"
 )
 MARKDOWN_ESCAPE_RE = re.compile(r"([\\`*_\[\]])")
 MARKDOWN_UNESCAPE_RE = re.compile(r"\\([\\`*_\[\]])")

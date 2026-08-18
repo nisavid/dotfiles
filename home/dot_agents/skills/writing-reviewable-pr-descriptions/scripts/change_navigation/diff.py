@@ -8,6 +8,7 @@ from .diff_files import is_bounded_inventory, validate_diff_file_items
 from .diff_inventory import INVENTORY_LIMIT
 from .diff_metrics import Identity
 from .metrics import category_metric_items, category_metric_map
+from .model import COUNT_PATTERN
 from .parsing import summary
 from .types import validate_category_order
 
@@ -29,7 +30,9 @@ def validate_diff(
         errors.append("Diff summary must use a non-breaking gap after its label")
     if diff_summary.count("&nbsp;") != 1:
         errors.append("Diff summary must use exactly one non-breaking label gap")
-    files_match = re.search(r'alt="FILES: (\d+) touched"', diff_summary)
+    files_match = re.search(
+        rf'alt="FILES: ({COUNT_PATTERN}) touched"', diff_summary
+    )
     if not files_match:
         errors.append("Diff summary needs a touched-files badge")
     bounded = is_bounded_inventory(block)
@@ -58,5 +61,5 @@ def validate_diff(
 
 def touched_file_count(block: list[str]) -> int | None:
     diff_summary = next((line for line in block if "<summary>" in line), "")
-    match = re.search(r'alt="FILES: (\d+) touched"', diff_summary)
+    match = re.search(rf'alt="FILES: ({COUNT_PATTERN}) touched"', diff_summary)
     return int(match.group(1)) if match else None

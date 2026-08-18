@@ -53,6 +53,7 @@ def bounded_diff_body(total_files: int) -> str:
             f"files#diff-{anchor}) {atomic_metric(1, 0)}"
         )
     remainder = total_files - shown_files
+    remainder_noun = "file" if remainder == 1 else "files"
     return "\n".join(
         [
             "<details>",
@@ -60,7 +61,7 @@ def bounded_diff_body(total_files: int) -> str:
             "",
             f"- {category}",
             *rows,
-            f"- {badge(f'REMAINDER: {remainder} changed files', f'REMAINDER-%2B{remainder}%20MORE-5F6B78')}",
+            f"- {badge(f'REMAINDER: {remainder} changed {remainder_noun}', f'REMAINDER-%2B{remainder}%20MORE-5F6B78')}",
             (
                 f"  - [Complete immutable comparison](https://github.com/"
                 f"{REPOSITORY}/compare/{BASE_SHA}...{HEAD_SHA})"
@@ -92,11 +93,12 @@ def complete_diff_body(total_files: int) -> str:
         " shown implementation", " implementation"
     )
     remainder = total_files - min(total_files, 100)
+    remainder_noun = "file" if remainder == 1 else "files"
     return (
         body.replace(summary, f"<summary>{complete_summary}</summary>")
         .replace(bounded_category, complete_category)
         .replace(
-            f"- {badge(f'REMAINDER: {remainder} changed files', f'REMAINDER-%2B{remainder}%20MORE-5F6B78')}\n",
+            f"- {badge(f'REMAINDER: {remainder} changed {remainder_noun}', f'REMAINDER-%2B{remainder}%20MORE-5F6B78')}\n",
             "",
         )
         .replace(
@@ -115,7 +117,7 @@ def bounded_diff_body_with_omitted_category() -> str:
     )
     summary = next(line for line in body.splitlines() if line.startswith("<summary>"))
     files_badge = badge("FILES: 101 touched", "FILES-101-5F6B78")
-    doc_metric = badge("DOC: 1 additions, 0 deletions", "DOC-%2B1%20%E2%88%920-3F7770")
+    doc_metric = badge("DOC: 1 addition, 0 deletions", "DOC-%2B1%20%E2%88%920-3F7770")
     doc_group = " ".join(
         [
             doc_metric,
@@ -443,10 +445,22 @@ class BoundedDiffTests(unittest.TestCase):
                 badge("FILES: 0 shown other files", "FILES-0-5F6B78"),
             ]
         )
+        oversized_count = "9" * 5000
         cases = {
             "missing remainder": body.replace(remainder + "\n", ""),
+            "total below shown rows": body.replace(
+                "FILES: 101 touched", "FILES: 99 touched"
+            ).replace("FILES-101-5F6B78", "FILES-99-5F6B78"),
+            "oversized touched total": body.replace(
+                "FILES: 101 touched", f"FILES: {oversized_count} touched"
+            ).replace(
+                "FILES-101-5F6B78", f"FILES-{oversized_count}-5F6B78"
+            ),
+            "ungrammatical singular remainder": body.replace(
+                "REMAINDER: 1 changed file", "REMAINDER: 1 changed files"
+            ),
             "incorrect remainder": body.replace(
-                "REMAINDER: 1 changed files", "REMAINDER: 2 changed files"
+                "REMAINDER: 1 changed file", "REMAINDER: 2 changed files"
             ).replace("REMAINDER-%2B1%20MORE", "REMAINDER-%2B2%20MORE"),
             "duplicate path": body.replace(first_file, first_file + "\n" + first_file),
             "more than 100 rows": body.replace(
