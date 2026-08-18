@@ -32,6 +32,7 @@ SHELL_PARSE_ONLY_LONG_OPTIONS = {"--noexec", "--no-exec", "--no-execute"}
 HOOK_SUBPROCESS_BUDGET_SECONDS = 10.0
 SUBPROCESS_TIMEOUT_SECONDS = 4.0
 MAX_TRUSTED_BYTECODE_BYTES = 1_048_576
+MAX_PR_NUMBER_DIGITS = 10
 _HOOK_DEADLINE: float | None = None
 PYTHON_NON_PR_MODULE_RUNNERS = {
     "compileall",
@@ -2042,10 +2043,17 @@ def _updater_invocation_is_invalid(segment: list[str]) -> bool | None:
     repository = _normalize_repository(values["--repository"])
     if repository is None:
         return True
+    pr_number_text = values["--pr"]
     if (
-        re.fullmatch(r"[0-9]+", values["--pr"]) is None
-        or int(values["--pr"]) <= 0
+        re.fullmatch(r"[0-9]+", pr_number_text) is None
+        or len(pr_number_text) > MAX_PR_NUMBER_DIGITS
     ):
+        return True
+    try:
+        pr_number = int(pr_number_text)
+    except ValueError:
+        return True
+    if pr_number <= 0:
         return True
     if operation == "preimage":
         return False
@@ -2074,7 +2082,7 @@ def _updater_invocation_is_invalid(segment: list[str]) -> bool | None:
         return True
     if not values["--title"].strip():
         return True
-    identity = (repository, int(values["--pr"]))
+    identity = (repository, pr_number)
     body_path = _literal_absolute_path(values["--body-file"])
     return (
         body_path is None

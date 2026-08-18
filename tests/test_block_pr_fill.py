@@ -1340,6 +1340,7 @@ class BlockPrFillTests(unittest.TestCase):
                 ),
                 preimage_command.replace("--pr 2", "--pr 0"),
                 preimage_command.replace("--pr 2", "--pr ²"),
+                preimage_command.replace("--pr 2", "--pr " + "1" * 5000),
                 preimage_command + " --base main",
                 preimage_command + " --expected-state draft",
                 preimage_command + " --title changed",
