@@ -19,14 +19,34 @@ assert_contains() {
 assert_skill_frontmatter() {
   local file="$1"
   local name="$2"
-  local description
 
   [[ -f "$file" ]] || fail "missing skill: $file"
-  [[ "$(sed -n '1p' "$file")" == '---' ]] || fail "$name frontmatter must start with ---"
-  assert_contains "$file" "name: $name" "$name must declare its exact name"
-  description="$(sed -n '3s/^description: //p' "$file")"
-  [[ "$description" == 'Use when '* ]] || fail "$name description must use third-person 'Use when...' trigger wording"
-  [[ "$(sed -n '4p' "$file")" == '---' ]] || fail "$name frontmatter must end with ---"
+  awk -v expected_name="$name" '
+    NR == 1 {
+      if ($0 != "---") exit 1
+      next
+    }
+    $0 == "---" {
+      closed = 1
+      exit
+    }
+    $0 == "name: " expected_name {
+      named = 1
+    }
+    /^description: Use when / {
+      triggered = 1
+    }
+    /^description: (>|\|)[+-]?$/ {
+      description_block = 1
+      next
+    }
+    description_block && /^  Use when / {
+      triggered = 1
+    }
+    END {
+      if (!closed || !named || !triggered) exit 1
+    }
+  ' "$file" || fail "$name must have closed frontmatter, its exact name, and a 'Use when...' description"
 }
 
 assert_symlink_source() {
@@ -149,12 +169,21 @@ test_git_publication() {
 
 test_pr_publication() {
   local publisher="$repo_dir/home/dot_agents/skills/publishing-reviewable-prs/SKILL.md"
+  local writer="$repo_dir/home/dot_agents/skills/writing-reviewable-pr-descriptions/SKILL.md"
   local graphite="$repo_dir/home/dot_agents/skills/graphite/SKILL.md"
   local atlas="$repo_dir/home/dot_agents/skills/writing-reviewable-pr-descriptions/review-atlas-reference-design.md"
+
+  assert_skill_frontmatter "$publisher" publishing-reviewable-prs
+  assert_skill_frontmatter "$writer" writing-reviewable-pr-descriptions
+  [[ -f "${publisher:h}/evals/evals.json" ]] || fail 'missing PR publisher behavior evals'
+  [[ -f "${publisher:h}/evals/trigger-evals.json" ]] || fail 'missing PR publisher trigger evals'
 
   assert_symlink_source \
     "$repo_dir/home/dot_claude/skills/symlink_publishing-reviewable-prs" \
     '../../.agents/skills/publishing-reviewable-prs'
+  assert_symlink_source \
+    "$repo_dir/home/dot_claude/skills/symlink_writing-reviewable-pr-descriptions" \
+    '../../.agents/skills/writing-reviewable-pr-descriptions'
   assert_symlink_source \
     "$repo_dir/home/dot_claude/skills/symlink_graphite" \
     '../../.agents/skills/graphite'
@@ -164,33 +193,39 @@ test_pr_publication() {
   assert_contains "$graphite" "Preserve an existing ready PR's" 'Graphite publication must preserve existing ready state'
   assert_contains "$graphite" 'state unless the task explicitly changes it' 'Graphite ready-state changes must require task authority'
   assert_contains "$graphite" 'guarded `ready` helper' 'Graphite readiness must use the guarded publisher'
-  assert_contains "$publisher" 'validates the current body, then reruns the exact identity, title/body digest, and draft-state preflight immediately before the mutation' 'Ready publication must bind validation to an immediate exact preflight'
-  assert_contains "$atlas" '## Contents' 'Atlas reference must have a linked table of contents'
-  assert_contains "$atlas" 'expected title and title digest' 'Atlas publication must bind expected titles'
-  assert_contains "$atlas" 'Final verification re-reads every title and body' 'Atlas final verification must verify titles and bodies'
+  assert_contains "$atlas" '## Publication boundary' 'Atlas reference must define its publication boundary'
+  assert_contains "$atlas" 'credentials, signed links, or authentication material' 'Atlas publication must exclude credentials and authentication material'
+  assert_contains "$atlas" 'published assets contain no credentials or unnecessary source content' 'Atlas validation must enforce publication safety'
 
   python3 "$repo_dir/tests/test_publish_reviewable_pr.py"
   python3 "$repo_dir/tests/test_modify_private_config.py"
 }
 
-typeset -a dry_targets
+typeset -a projection_targets
 
 case "${1:-all}" in
   context7)
     test_context7
-    dry_targets=("$HOME/.claude/skills/context7-mcp")
+    projection_targets=(
+      "$HOME/.agents/skills/context7-mcp"
+      "$HOME/.claude/skills/context7-mcp"
+    )
     ;;
   git-publication)
     test_git_publication
-    dry_targets=(
+    projection_targets=(
       "$HOME/.agents/skills/checkpointing-and-publishing-git-work"
       "$HOME/.claude/skills/checkpointing-and-publishing-git-work"
     )
     ;;
   pr-publication)
     test_pr_publication
-    dry_targets=(
+    projection_targets=(
+      "$HOME/.agents/skills/graphite"
+      "$HOME/.agents/skills/publishing-reviewable-prs"
+      "$HOME/.agents/skills/writing-reviewable-pr-descriptions"
       "$HOME/.claude/skills/publishing-reviewable-prs"
+      "$HOME/.claude/skills/writing-reviewable-pr-descriptions"
       "$HOME/.claude/skills/graphite"
     )
     ;;
@@ -198,11 +233,16 @@ case "${1:-all}" in
     test_context7
     test_git_publication
     test_pr_publication
-    dry_targets=(
+    projection_targets=(
+      "$HOME/.agents/skills/context7-mcp"
       "$HOME/.claude/skills/context7-mcp"
       "$HOME/.agents/skills/checkpointing-and-publishing-git-work"
       "$HOME/.claude/skills/checkpointing-and-publishing-git-work"
+      "$HOME/.agents/skills/graphite"
+      "$HOME/.agents/skills/publishing-reviewable-prs"
+      "$HOME/.agents/skills/writing-reviewable-pr-descriptions"
       "$HOME/.claude/skills/publishing-reviewable-prs"
+      "$HOME/.claude/skills/writing-reviewable-pr-descriptions"
       "$HOME/.claude/skills/graphite"
     )
     ;;
@@ -219,7 +259,7 @@ mkdir -p -- "$isolated_source/dot_agents/skills" "$isolated_source/dot_claude/sk
 
 for skill in \
   checkpointing-and-publishing-git-work context7-mcp graphite \
-  publishing-reviewable-prs; do
+  publishing-reviewable-prs writing-reviewable-pr-descriptions; do
   cp -R -- \
     "$repo_dir/home/dot_agents/skills/$skill" \
     "$isolated_source/dot_agents/skills/$skill"
@@ -227,16 +267,37 @@ done
 
 for link in \
   checkpointing-and-publishing-git-work context7-mcp graphite \
-  publishing-reviewable-prs; do
+  publishing-reviewable-prs writing-reviewable-pr-descriptions; do
   cp -- \
     "$repo_dir/home/dot_claude/skills/symlink_$link" \
     "$isolated_source/dot_claude/skills/symlink_$link"
 done
 
 typeset -a isolated_targets
-for target in $dry_targets; do
+for target in $projection_targets; do
   isolated_targets+=("$isolated_home/${target#$HOME/}")
 done
 
-chezmoi --source "$isolated_source" --destination "$isolated_home" \
-  apply --dry-run --verbose $isolated_targets
+mkdir -p -- "$tmpdir/xdg-config" "$tmpdir/xdg-state" "$tmpdir/xdg-cache"
+HOME="$isolated_home" \
+  XDG_CONFIG_HOME="$tmpdir/xdg-config" \
+  XDG_STATE_HOME="$tmpdir/xdg-state" \
+  XDG_CACHE_HOME="$tmpdir/xdg-cache" \
+  chezmoi --source "$isolated_source" --destination "$isolated_home" \
+    apply --parent-dirs $isolated_targets
+
+for target in $isolated_targets; do
+  [[ -e "$target" || -L "$target" ]] || fail "isolated projection did not create $target"
+done
+
+for skill in \
+  checkpointing-and-publishing-git-work context7-mcp graphite \
+  publishing-reviewable-prs writing-reviewable-pr-descriptions; do
+  canonical="$isolated_home/.agents/skills/$skill"
+  link="$isolated_home/.claude/skills/$skill"
+  if [[ -e "$canonical" || -e "$link" || -L "$link" ]]; then
+    [[ -d "$canonical" ]] || fail "$canonical is not a projected skill directory"
+    [[ -L "$link" ]] || fail "$link is not a projected symlink"
+    [[ "${link:A}" == "${canonical:A}" ]] || fail "$link does not resolve to $canonical"
+  fi
+done

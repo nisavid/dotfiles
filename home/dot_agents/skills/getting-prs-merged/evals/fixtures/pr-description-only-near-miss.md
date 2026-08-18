@@ -1,6 +1,7 @@
 # Scenario: PR Description Only Near Miss
 
-User request: "Please just write a better PR description for this pull request."
+User request: "Update the stored pull request description on GitHub, and leave
+it draft."
 
 Mock repository state:
 
@@ -19,8 +20,11 @@ Mock local policy:
 
 Expected behavior focus:
 
-- Use `writing-reviewable-pr-descriptions`, not the merge-closeout wrapper as the main workflow.
-- Refresh the PR body from the pushed diff and current verification.
+- Use `publishing-reviewable-prs` as the update orchestrator and
+  `writing-reviewable-pr-descriptions` for the complete reviewer-facing text.
+- Do not use the merge-closeout wrapper.
+- Refresh the PR body from the pushed diff and current verification while
+  preserving the draft state.
 - Do not mark ready.
 - Do not request review.
 - Do not merge.

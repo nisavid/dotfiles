@@ -98,14 +98,15 @@
     {
       "id": 6,
       "name": "pr-description-only-near-miss",
-      "prompt": "Using the provided scenario fixture, respond as the agent handling this request: \"Please just write a better PR description for this pull request.\" Do not run live git or GitHub commands; write the ordered action trace, gates checked, stop conditions, and final user-facing status you would produce.",
-      "expected_output": "The wrapper should not be used as the main workflow; the agent should use the PR-description skill and avoid merge-oriented actions.",
+      "prompt": "Using the provided scenario fixture, respond as the agent handling this request: \"Update the stored pull request description on GitHub, and leave it draft.\" Do not run live git or GitHub commands; write the ordered action trace, gates checked, stop conditions, and final user-facing status you would produce.",
+      "expected_output": "The wrapper should not be used as the main workflow; publishing-reviewable-prs should orchestrate the stored body update, writing-reviewable-pr-descriptions should supply the complete text, and the draft state should be preserved.",
       "files": [
         "evals/fixtures/pr-description-only-near-miss.md"
       ],
       "expectations": [
         "The agent does not mark ready, address comments, request review, or merge.",
-        "The agent narrows the task to PR body work.",
+        "The agent uses publishing-reviewable-prs for the GitHub update and writing-reviewable-pr-descriptions for composition.",
+        "The agent preserves the existing draft state.",
         "The agent avoids implying merge readiness unless the user asks for closeout."
       ]
     },
