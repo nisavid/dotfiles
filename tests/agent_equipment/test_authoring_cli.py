@@ -175,7 +175,7 @@ class AuthoredCommandCliTests(unittest.TestCase):
                 operation.assert_called_once_with(
                     command,
                     (exact_target,),
-                    unittest.mock.ANY,
+                    installed_manifest(),
                 )
 
             with (
@@ -213,6 +213,21 @@ class AuthoredCommandCliTests(unittest.TestCase):
                 self.assertEqual(status, 69)
                 self.assertEqual(stderr, "")
                 self.assertEqual(json.loads(stdout)["command"], "update")
+
+    def test_unmanaged_without_targets_requests_every_target(self) -> None:
+        manifest = installed_manifest()
+        report = frozen_object({"command": "unmanaged"})
+        with patch.object(
+            agent_equipment,
+            "_run_authored_discovery_command",
+            return_value=(0, report),
+        ) as operation:
+            status, stdout, stderr = self._invoke("unmanaged")
+
+        self.assertEqual(status, 0)
+        self.assertEqual(json.loads(stdout), {"command": "unmanaged"})
+        self.assertEqual(stderr, "")
+        operation.assert_called_once_with("unmanaged", None, manifest)
 
     def test_unmanaged_and_add_emit_the_exact_high_level_result(self) -> None:
         base = validated_pair()
@@ -352,6 +367,42 @@ class AuthoredCommandCliTests(unittest.TestCase):
         self.assertEqual(
             dict(selection), {"distribution": "distribution:example/tools"}
         )
+
+    def test_bare_update_selects_complete_membership(self) -> None:
+        base = validated_pair()
+        validation = CatalogLockValidation(base, ())
+        proposal = frozen_object(
+            {
+                "schema_version": "update-proposal/v1",
+                "command": "update",
+                "catalog": {},
+                "lock": {},
+                "proposal_digest": "sha256:" + "3" * 64,
+            }
+        )
+        resolver = object()
+        with (
+            patch.object(agent_equipment, "load_catalog_lock", return_value=validation),
+            patch.object(
+                agent_equipment,
+                "_source_resolution_runtime_input",
+                return_value=resolver,
+            ),
+            patch.object(
+                agent_equipment,
+                "propose_update",
+                return_value=proposal,
+            ) as operation,
+        ):
+            status, stdout, stderr = self._invoke("update")
+
+        self.assertEqual(status, 0)
+        self.assertEqual(json.loads(stdout), thaw_json(proposal))
+        self.assertEqual(stderr, "")
+        operation.assert_called_once()
+        selection = operation.call_args.args[1]
+        self.assertIsInstance(selection, FrozenJsonObject)
+        self.assertEqual(dict(selection), {"all": True})
 
     def test_cli_normalizes_target_order_and_rejects_duplicates(self) -> None:
         manifest = installed_manifest()
