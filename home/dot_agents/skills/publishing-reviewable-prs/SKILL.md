@@ -23,12 +23,13 @@ overwritten.
 1. Resolve the exact repository, PR, qualified head and owner, intended base,
    pushed base/head OIDs, and existing PR, if any.
 2. Confirm the remote head contains exactly the commits the PR should describe.
-3. Read repository instructions and templates. For an existing PR, capture the
-   live title/body immediately before mutation and retain that preimage locally.
+3. Read repository instructions and templates.
 4. Use `writing-reviewable-pr-descriptions` to prepare the complete title/body
    from the exact pushed diff and resolved stack.
-5. Use the owned create or existing-PR helper below. Stop on preflight drift,
-   unexpected final state, or ambiguity; never retry or roll back automatically.
+5. For an existing PR, capture the helper's `preimage` JSON now. Immediately use
+   the owned create or existing-PR helper below. Record an ambiguous-success
+   warning without retrying. Stop on preflight drift, an unexpected final state,
+   or any other ambiguity; never retry or roll back automatically.
 6. Re-read and report repository, base/head names and OIDs, head owner, title,
    body, and draft/ready state.
 7. Inspect live collapsed and expanded GitHub rendering whenever structured
@@ -57,16 +58,25 @@ leaves the PR as a draft so live rendering can be inspected before review begins
 
 ## Update Existing PR Text
 
-Capture SHA-256 digests of the exact live title and body immediately before the
-call. Use `draft` or `ready` for the observed preimage state:
+Capture the exact stored preimage immediately before the call:
+
+```bash
+preimage_json="$(python3 "$HOME/.agents/skills/publishing-reviewable-prs/scripts/update_reviewable_pr.py" preimage \
+  --repository OWNER/REPO --pr PR_NUMBER)"
+```
+
+The output contains `expected_title_sha256`, `expected_body_sha256`, and
+`expected_state`. Pass those values back without trimming, normalizing, or
+rehashing them:
 
 ```bash
 python3 "$HOME/.agents/skills/publishing-reviewable-prs/scripts/update_reviewable_pr.py" text \
   --repository OWNER/REPO --pr PR_NUMBER \
   --base BASE --base-oid EXPECTED_BASE_OID \
   --head OWNER:BRANCH --head-owner OWNER --head-oid EXPECTED_HEAD_OID \
-  --expected-title-sha256 EXPECTED_TITLE_SHA256 \
-  --expected-body-sha256 EXPECTED_BODY_SHA256 --expected-state draft \
+  --expected-title-sha256 "$(jq -r '.expected_title_sha256' <<<"$preimage_json")" \
+  --expected-body-sha256 "$(jq -r '.expected_body_sha256' <<<"$preimage_json")" \
+  --expected-state "$(jq -r '.expected_state' <<<"$preimage_json")" \
   --title "CONVENTIONAL TITLE" --body-file /absolute/path/to/pr-body.md
 ```
 
@@ -79,35 +89,48 @@ constructing the desired canonical body.
 ## Mark Existing Draft Ready
 
 After all readiness gates and required live-render inspection pass, refresh
-the exact preimage and run:
+`preimage_json` with the `preimage` command above and run:
 
 ```bash
 python3 "$HOME/.agents/skills/publishing-reviewable-prs/scripts/update_reviewable_pr.py" ready \
   --repository OWNER/REPO --pr PR_NUMBER \
   --base BASE --base-oid EXPECTED_BASE_OID \
   --head OWNER:BRANCH --head-owner OWNER --head-oid EXPECTED_HEAD_OID \
-  --expected-title-sha256 EXPECTED_TITLE_SHA256 \
-  --expected-body-sha256 EXPECTED_BODY_SHA256
+  --expected-title-sha256 "$(jq -r '.expected_title_sha256' <<<"$preimage_json")" \
+  --expected-body-sha256 "$(jq -r '.expected_body_sha256' <<<"$preimage_json")" \
+  --expected-state "$(jq -r '.expected_state' <<<"$preimage_json")"
 ```
 
-A command error followed by the exact intended final state is ambiguous
-success. Any other unexpected final state is an operator-inspection gate.
 The helper validates the current body, then reruns the exact identity, title/body digest, and draft-state preflight immediately before the mutation.
 Validation therefore cannot authorize readiness after intervening body drift.
+
+## Mutation Outcomes
+
+For both text and ready mutations, a command error followed by the exact intended
+final state is ambiguous success. The helper emits a `WARNING` on stderr, returns
+the verified stored state, and exits successfully. Record that warning and do
+not retry or roll back. Any other unexpected final state is an
+operator-inspection gate.
 
 ## Hard Rules
 
 - Never use raw PR create, title/body edit, or ready commands or connectors.
 - `--head` must use `OWNER:BRANCH`, and its owner must exactly match
   `--head-owner`.
-- Resolve expected OIDs and preimage digests from live pushed/stored state
-  immediately before publication. Do not infer them.
+- Resolve expected OIDs from live pushed state. Resolve title/body/state preimage
+  values through the helper immediately before publication. Do not infer or
+  compute either separately.
+- On identity or OID drift, stop. Never refresh the expected OIDs and retry.
 - Graphite transport text is the only other temporary-body exception. Replace
   it immediately through the existing-PR helper before handoff or review.
 - Body files and templates must be existing absolute literal paths. Do not pass
   variables, `~`, relative paths, process substitution, stdin, or inline
   multiline bodies as paths/content.
 - Never describe unpushed changes or discard still-current custom content.
+- A successful `git push` does not prove `gh` can access the repository; Git and
+  `gh` may use different credentials. On `Could not resolve to a Repository`,
+  verify the active `gh` account and repository access before treating it as an
+  outage.
 - Stop when base, stack membership, preservation, or authority cannot be
   established safely.
 
