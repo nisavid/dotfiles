@@ -6,7 +6,7 @@
         "ids": [
           "chrome-devtools-mcp@claude-plugins-official"
         ],
-        "ownership_intent": "propose_catalog_adoption",
+        "ownership_intent": "propose_catalog_addition",
         "runtime_retirement_intent": "none"
       },
       {
@@ -62,7 +62,7 @@
           "superpowers@claude-plugins-official"
         ],
         "ownership_intent": "none_pending_identity_and_provider_decision",
-        "runtime_retirement_intent": "none_without_explicit_adoption"
+        "runtime_retirement_intent": "none_without_explicit_catalog_addition"
       },
       {
         "classification": "stale_unverifiable_observation",
@@ -85,7 +85,7 @@
       }
     ],
     "count": 47,
-    "ownership_and_retirement_rule": "only proposed-managed IDs may be adopted; no other plugin may be mutated or retired without later explicit adoption",
+    "ownership_and_retirement_rule": "only proposed-managed IDs may be added to the catalog; no other plugin may be mutated or retired without a later explicit catalog addition",
     "provenance": "claude_native_plugin_manager",
     "states": [
       {
@@ -589,19 +589,19 @@
       "classification": "duplicate_overlap_candidate",
       "name": "hyperframes-creative",
       "ownership_intent": "none_pending_identity_and_provider_decision",
-      "runtime_retirement_intent": "none_without_explicit_adoption"
+      "runtime_retirement_intent": "none_without_explicit_catalog_addition"
     },
     {
       "classification": "duplicate_overlap_candidate",
       "name": "hyperframes-keyframes",
       "ownership_intent": "none_pending_identity_and_provider_decision",
-      "runtime_retirement_intent": "none_without_explicit_adoption"
+      "runtime_retirement_intent": "none_without_explicit_catalog_addition"
     },
     {
       "classification": "duplicate_overlap_candidate",
       "name": "impeccable",
       "ownership_intent": "none_pending_identity_and_provider_decision",
-      "runtime_retirement_intent": "none_without_explicit_adoption"
+      "runtime_retirement_intent": "none_without_explicit_catalog_addition"
     }
   ],
   "codex_plugins": {
@@ -611,7 +611,7 @@
         "ids": [
           "github@openai-curated"
         ],
-        "ownership_intent": "propose_catalog_adoption",
+        "ownership_intent": "propose_catalog_addition",
         "runtime_retirement_intent": "none"
       },
       {
@@ -654,7 +654,7 @@
           "superpowers@openai-curated"
         ],
         "ownership_intent": "none_pending_identity_and_provider_decision",
-        "runtime_retirement_intent": "none_without_explicit_adoption"
+        "runtime_retirement_intent": "none_without_explicit_catalog_addition"
       },
       {
         "classification": "stale_unverifiable_observation",
@@ -696,7 +696,7 @@
     ],
     "configured_only_count": 30,
     "count": 59,
-    "ownership_and_retirement_rule": "configured-only entries remain stale observations; only proposed-managed IDs may be adopted",
+    "ownership_and_retirement_rule": "configured-only entries remain stale observations; only proposed-managed IDs may be added to the catalog",
     "provenance": "codex_user_config_plus_native_plugin_manager",
     "reported_installed_count": 29,
     "states": [
@@ -1440,7 +1440,7 @@
       "enabled": true,
       "harness": "claude",
       "name": "chrome-devtools",
-      "ownership_intent": "propose_catalog_adoption_for_retirement",
+      "ownership_intent": "propose_catalog_addition_for_retirement",
       "provenance_evidence": "claude_stable_user_mcp_config",
       "runtime_retirement_intent": "remove_after_claude_plugin_verification",
       "transport_kind": "stdio"
@@ -1450,7 +1450,7 @@
       "enabled": true,
       "harness": "claude",
       "name": "context7",
-      "ownership_intent": "propose_catalog_adoption",
+      "ownership_intent": "propose_catalog_addition",
       "provenance_evidence": "claude_stable_user_mcp_config",
       "runtime_retirement_intent": "none",
       "transport_kind": "stdio"
@@ -1460,7 +1460,7 @@
       "enabled": true,
       "harness": "claude",
       "name": "firecrawl",
-      "ownership_intent": "propose_catalog_adoption",
+      "ownership_intent": "propose_catalog_addition",
       "provenance_evidence": "claude_stable_user_mcp_config",
       "runtime_retirement_intent": "none",
       "transport_kind": "stdio"
@@ -1470,7 +1470,7 @@
       "enabled": true,
       "harness": "claude",
       "name": "github",
-      "ownership_intent": "propose_catalog_adoption",
+      "ownership_intent": "propose_catalog_addition",
       "provenance_evidence": "claude_stable_user_mcp_config",
       "runtime_retirement_intent": "none",
       "transport_kind": "stdio"
@@ -1480,7 +1480,7 @@
       "enabled": true,
       "harness": "claude",
       "name": "greptile",
-      "ownership_intent": "propose_catalog_adoption",
+      "ownership_intent": "propose_catalog_addition",
       "provenance_evidence": "claude_stable_user_mcp_config",
       "runtime_retirement_intent": "none",
       "transport_kind": "stdio"
@@ -1490,7 +1490,7 @@
       "enabled": true,
       "harness": "codex",
       "name": "chrome-devtools",
-      "ownership_intent": "propose_catalog_adoption",
+      "ownership_intent": "propose_catalog_addition",
       "provenance_evidence": "codex_stable_user_mcp_config",
       "runtime_retirement_intent": "none",
       "transport_kind": "stdio"
@@ -1502,7 +1502,7 @@
       "name": "computer-use",
       "ownership_intent": "none_pending_provider_decision",
       "provenance_evidence": "codex_stable_user_mcp_config",
-      "runtime_retirement_intent": "none_without_explicit_adoption",
+      "runtime_retirement_intent": "none_without_explicit_catalog_addition",
       "transport_kind": "stdio"
     },
     {
@@ -1510,7 +1510,7 @@
       "enabled": true,
       "harness": "codex",
       "name": "context7",
-      "ownership_intent": "propose_catalog_adoption",
+      "ownership_intent": "propose_catalog_addition",
       "provenance_evidence": "codex_stable_user_mcp_config",
       "runtime_retirement_intent": "none",
       "transport_kind": "stdio"
@@ -1530,7 +1530,7 @@
       "enabled": true,
       "harness": "codex",
       "name": "firecrawl",
-      "ownership_intent": "propose_catalog_adoption",
+      "ownership_intent": "propose_catalog_addition",
       "provenance_evidence": "codex_stable_user_mcp_config",
       "runtime_retirement_intent": "none",
       "transport_kind": "stdio"
@@ -1540,7 +1540,7 @@
       "enabled": true,
       "harness": "codex",
       "name": "github",
-      "ownership_intent": "propose_catalog_adoption_for_retirement",
+      "ownership_intent": "propose_catalog_addition_for_retirement",
       "provenance_evidence": "codex_stable_user_mcp_config",
       "runtime_retirement_intent": "remove_after_codex_plugin_component_verification",
       "transport_kind": "stdio"
@@ -1570,7 +1570,7 @@
       "enabled": true,
       "harness": "cursor",
       "name": "chrome-devtools",
-      "ownership_intent": "propose_catalog_adoption",
+      "ownership_intent": "propose_catalog_addition",
       "provenance_evidence": "cursor_stable_user_mcp_config",
       "runtime_retirement_intent": "none",
       "transport_kind": "stdio"
@@ -1580,7 +1580,7 @@
       "enabled": true,
       "harness": "cursor",
       "name": "context7",
-      "ownership_intent": "propose_catalog_adoption",
+      "ownership_intent": "propose_catalog_addition",
       "provenance_evidence": "cursor_stable_user_mcp_config",
       "runtime_retirement_intent": "none",
       "transport_kind": "http"
@@ -1600,7 +1600,7 @@
       "enabled": true,
       "harness": "cursor",
       "name": "firecrawl",
-      "ownership_intent": "propose_catalog_adoption",
+      "ownership_intent": "propose_catalog_addition",
       "provenance_evidence": "cursor_stable_user_mcp_config",
       "runtime_retirement_intent": "none",
       "transport_kind": "http"
@@ -1611,7 +1611,7 @@
       "classification": "proposed_managed_equipment_slice",
       "harness": "claude",
       "name": "chrome-devtools",
-      "ownership_intent": "propose_catalog_adoption",
+      "ownership_intent": "propose_catalog_addition",
       "plugin_enabled": true,
       "plugin_id": "chrome-devtools-mcp@claude-plugins-official",
       "runtime_retirement_intent": "none"
@@ -1668,7 +1668,7 @@
       "ownership_intent": "none_pending_provider_decision",
       "plugin_enabled": false,
       "plugin_id": "context7@claude-plugins-official",
-      "runtime_retirement_intent": "none_without_explicit_adoption"
+      "runtime_retirement_intent": "none_without_explicit_catalog_addition"
     },
     {
       "classification": "explicitly_retained_unmanaged_runtime_observation",
@@ -1686,7 +1686,7 @@
       "ownership_intent": "none_pending_provider_decision",
       "plugin_enabled": false,
       "plugin_id": "greptile@claude-plugins-official",
-      "runtime_retirement_intent": "none_without_explicit_adoption"
+      "runtime_retirement_intent": "none_without_explicit_catalog_addition"
     },
     {
       "classification": "explicitly_retained_unmanaged_runtime_observation",
@@ -1776,13 +1776,13 @@
       "ownership_intent": "none_pending_provider_decision",
       "plugin_enabled": true,
       "plugin_id": "computer-use@openai-bundled",
-      "runtime_retirement_intent": "none_without_explicit_adoption"
+      "runtime_retirement_intent": "none_without_explicit_catalog_addition"
     },
     {
       "classification": "proposed_managed_equipment_slice",
       "harness": "codex",
       "name": "github",
-      "ownership_intent": "propose_catalog_adoption",
+      "ownership_intent": "propose_catalog_addition",
       "plugin_enabled": true,
       "plugin_id": "github@openai-curated",
       "runtime_retirement_intent": "none"
@@ -6402,7 +6402,7 @@
   "retained_unmanaged_exceptions": [
     {
       "id": "outside-proposed-slice",
-      "policy": "verify and report only; no adoption, mutation, or deletion"
+      "policy": "verify and report only; no catalog addition, mutation, or deletion"
     },
     {
       "id": "configured-only-codex-plugins",
@@ -6463,8 +6463,8 @@
           "wizard",
           "writing-for-agents"
         ],
-        "ownership_intent": "propose_catalog_adoption",
-        "runtime_retirement_intent": "only the 21 observed Claude projections, after adoption and plugin verification"
+        "ownership_intent": "propose_catalog_addition",
+        "runtime_retirement_intent": "only the 21 observed Claude projections, after catalog addition and plugin verification"
       },
       {
         "classification": "duplicate_overlap_candidate",
@@ -6504,7 +6504,7 @@
           "writing-skills"
         ],
         "ownership_intent": "none_pending_identity_and_provider_decision",
-        "runtime_retirement_intent": "none_without_explicit_adoption"
+        "runtime_retirement_intent": "none_without_explicit_catalog_addition"
       },
       {
         "classification": "explicitly_retained_unmanaged_runtime_observation",

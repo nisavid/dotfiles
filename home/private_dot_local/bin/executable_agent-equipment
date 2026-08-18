@@ -20,11 +20,15 @@ from typing import override
 _PACKAGE_NAMES = (
     "__init__.py",
     "_json_schema.py",
+    "authoring.py",
     "canonical.py",
+    "discovery.py",
     "inventory.py",
     "model.py",
     "resolver.py",
     "secrets.py",
+    "source_resolution.py",
+    "updater.py",
     "validator.py",
 )
 _SCHEMA_NAMES = (

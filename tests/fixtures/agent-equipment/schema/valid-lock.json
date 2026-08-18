@@ -1,13 +1,22 @@
 {
   "schema_version": "lock/v1",
-  "catalog_digest": "sha256:953380fe85c59c1ea773ffbc4a04135415ffbaae7f7f25c33877a982ecab64d6",
+  "catalog_digest": "sha256:48aacb622f5f251e39f334159c2be518e3e747696014a57f2a0d70c54d5cd2d0",
   "distributions": [
     {
-      "identity": "distribution:example/bundle",
+      "schema_version": "source-manifest/v1",
+      "distribution_identity": "distribution:example/bundle",
       "source": {
         "kind": "git",
-        "repository": "https://example.invalid/bundle.git",
-        "ref": "0123456789abcdef0123456789abcdef01234567"
+        "repository": "https://example.invalid/bundle.git"
+      },
+      "resolved_source": {
+        "kind": "git",
+        "revision": "0123456789abcdef0123456789abcdef01234567"
+      },
+      "available_equipment": ["skill:example/grilling"],
+      "membership_evidence": {
+        "kind": "authoritative_source_listing",
+        "evidence_digest": "sha256:d3bd5efae932b7e429c941b651de094f5ed976df73dd5d6caed151754d3a0c2b"
       },
       "equipment": ["skill:example/grilling"],
       "restore": {
@@ -16,15 +25,29 @@
         "artifact_ref": "git+https://example.invalid/bundle.git@0123456789abcdef0123456789abcdef01234567",
         "content_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
         "native_update_control": "not_applicable"
-      }
+      },
+      "source_manifest_digest": "sha256:f2104eaf426fb1b502c15bbf38c98aee4bc45a673a1aaa0db32bec92d3944672"
     },
     {
-      "identity": "distribution:example/native-plugin",
+      "schema_version": "source-manifest/v1",
+      "distribution_identity": "distribution:example/native-plugin",
       "source": {
         "kind": "native_manager",
         "manager": "claude",
         "package": "example-matt@official",
         "channel": "stable"
+      },
+      "resolved_source": {
+        "kind": "native_manager",
+        "version": {
+          "kind": "semantic_version",
+          "value": "1.2.3"
+        }
+      },
+      "available_equipment": ["plugin:example/matt"],
+      "membership_evidence": {
+        "kind": "authoritative_source_listing",
+        "evidence_digest": "sha256:161611da871e924d7a13783d797fa9707272526c05e03eeaa62c3ddd1c1ad258"
       },
       "equipment": ["plugin:example/matt"],
       "restore": {
@@ -33,9 +56,11 @@
         "reviewed_baseline": "1.2.3",
         "observation_source": "claude plugin list",
         "native_update_control": "unsuppressible"
-      }
+      },
+      "source_manifest_digest": "sha256:4cbe7aac126ed4c4166ac40af274a832c3c9982261c1899b31fec47fc3adcc38"
     }
   ],
+  "source_manifest_history": [],
   "coverage": [
     {
       "equipment_identity": "plugin:example/matt",

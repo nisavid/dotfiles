@@ -27,25 +27,62 @@
   },
   "$defs": {
     "nonEmptyString": {"type": "string", "minLength": 1},
+    "sourceBoundedString": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?![\\s\\S]{4097})[\\s\\S]+$"
+    },
+    "nonLatestChannel": {
+      "type": "string",
+      "pattern": "^(?!latest$)[a-z0-9][a-z0-9._/-]{0,127}$"
+    },
+    "nativeManagerPackage": {
+      "type": "string",
+      "pattern": "^(?![\\s\\S]{256})(?:@[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._-]{0,127}|[a-z0-9][a-z0-9._-]{0,127}(?:@[a-z0-9][a-z0-9._-]{0,127})?)$"
+    },
+    "npxPackage": {
+      "type": "string",
+      "pattern": "^(?![\\s\\S]{256})(?:@[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._-]{0,127}|[a-z0-9][a-z0-9._-]{0,127})$"
+    },
+    "semanticVersion": {
+      "type": "string",
+      "pattern": "^(?=.{1,255}$)(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
+    },
+    "nativeRevision": {
+      "type": "string",
+      "pattern": "^(?=[0-9a-f]{8}$)(?=.*[0-9])[0-9a-f]{8}$"
+    },
+    "observationSource": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9 .,/_+-]{0,254}$"
+    },
     "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
     "gitCommit": {
       "type": "string",
       "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
     },
+    "gitBranch": {
+      "type": "string",
+      "pattern": "^(?![\\s\\S]{4097})(?!HEAD$)(?!-)(?!\\.)(?!.*(?:/\\.|//|\\.\\.|@\\{|\\\\))(?!.*\\.lock(?:/|$))(?!.*[./]$)[A-Za-z0-9._/-]+$"
+    },
     "publicGitRepository": {
       "type": "string",
-      "pattern": "^https://[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*(?::[0-9]{1,5})?(?:/(?!\\.{1,2}(?:/|$))[A-Za-z0-9._~-]+)+/?$"
+      "pattern": "^(?![\\s\\S]{4097})https://[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*(?::(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/(?!\\.{1,2}(?:/|$))[A-Za-z0-9._~-]+)*/(?!\\.{1,2}(?:/|$))[A-Za-z0-9_~-][A-Za-z0-9._~-]*\\.git$"
+    },
+    "staticCredentialFreeHttpsUrl": {
+      "type": "string",
+      "pattern": "^(?![\\s\\S]{256})https://[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*(?::(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/(?!(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Aa][Pp][Ii](?:[-_]?[Kk][Ee][Yy])|[Aa][Cc][Cc][Ee][Ss][Ss](?:[-_]?[Tt][Oo][Kk][Ee][Nn])|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Cc][Ll][Ii][Ee][Nn][Tt](?:[-_]?[Ss][Ee][Cc][Rr][Ee][Tt])|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll])(?:[-_.=:].*)?(?:/|$))(?!\\.{1,2}(?:/|$))[A-Za-z0-9._~-]+)*/?$"
     },
     "immutableArtifactRef": {
       "type": "string",
-      "pattern": "^git\\+https://[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*(?::[0-9]{1,5})?(?:/(?!\\.{1,2}(?:/|$))[A-Za-z0-9._~-]+)+/?@(?:[0-9a-f]{40}|[0-9a-f]{64})(?:#(?!\\.{1,2}(?:/|,|$))[A-Za-z0-9._~-]+(?:/(?!\\.{1,2}(?:/|,|$))[A-Za-z0-9._~-]+)*(?:,(?!\\.{1,2}(?:/|,|$))[A-Za-z0-9._~-]+(?:/(?!\\.{1,2}(?:/|,|$))[A-Za-z0-9._~-]+)*)*)?$"
+      "pattern": "^(?![\\s\\S]{4097})git\\+https://[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*(?::[0-9]{1,5})?(?:/(?!\\.{1,2}(?:/|$))[A-Za-z0-9._~-]+)+/?@(?:[0-9a-f]{40}|[0-9a-f]{64})(?:#(?!\\.{1,2}(?:/|,|$))[A-Za-z0-9._~-]+(?:/(?!\\.{1,2}(?:/|,|$))[A-Za-z0-9._~-]+)*(?:,(?!\\.{1,2}(?:/|,|$))[A-Za-z0-9._~-]+(?:/(?!\\.{1,2}(?:/|,|$))[A-Za-z0-9._~-]+)*)*)?$"
     },
     "harness": {"enum": ["claude", "codex", "cursor"]},
     "equipmentIdentity": {
       "type": "string",
-      "pattern": "^(skill|plugin|mcp|hook|other):[a-z0-9][a-z0-9._/-]*$"
+      "pattern": "^(?![\\s\\S]{4097})(skill|plugin|mcp|hook|other):[a-z0-9][a-z0-9._/-]*$"
     },
-    "distributionIdentity": {"type": "string", "pattern": "^distribution:[a-z0-9][a-z0-9._/-]*$"},
+    "distributionIdentity": {"type": "string", "pattern": "^(?![\\s\\S]{4097})distribution:[a-z0-9][a-z0-9._/-]*$"},
     "routeIdentity": {"type": "string", "pattern": "^route:[a-z0-9][a-z0-9._/-]*$"},
     "templateIdentity": {"type": "string", "pattern": "^template:[a-z0-9][a-z0-9._/-]*$"},
     "retirementIdentity": {"type": "string", "pattern": "^retirement:[a-z0-9][a-z0-9._/-]*$"},
@@ -53,12 +90,34 @@
       "oneOf": [
         {
           "type": "object",
-          "required": ["kind", "repository", "ref"],
+          "required": ["kind", "repository"],
           "additionalProperties": false,
           "properties": {
             "kind": {"const": "git"},
             "repository": {"$ref": "#/$defs/publicGitRepository"},
-            "ref": {"$ref": "#/$defs/gitCommit"}
+            "branch": {"$ref": "#/$defs/gitBranch"}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "manager", "package"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {"const": "native_manager"},
+            "manager": {"enum": ["claude", "codex", "cursor"]},
+            "package": {"$ref": "#/$defs/nativeManagerPackage"},
+            "channel": {"$ref": "#/$defs/nonLatestChannel"}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "manager", "package"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {"const": "native_manager"},
+            "manager": {"const": "npx"},
+            "package": {"$ref": "#/$defs/npxPackage"},
+            "channel": {"$ref": "#/$defs/nonLatestChannel"}
           }
         },
         {
@@ -67,12 +126,96 @@
           "additionalProperties": false,
           "properties": {
             "kind": {"const": "native_manager"},
-            "manager": {"$ref": "#/$defs/nonEmptyString"},
-            "package": {"$ref": "#/$defs/nonEmptyString"},
-            "channel": {"$ref": "#/$defs/nonEmptyString"}
+            "manager": {"const": "http"},
+            "package": {"$ref": "#/$defs/staticCredentialFreeHttpsUrl"},
+            "channel": {"const": "static"}
           }
         }
       ]
+    },
+    "resolvedSource": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "revision"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {"const": "git"},
+            "revision": {"$ref": "#/$defs/gitCommit"}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "version"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {"const": "native_manager"},
+            "version": {"$ref": "#/$defs/resolvedVersion"}
+          }
+        }
+      ]
+    },
+    "resolvedVersion": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "value"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {"const": "semantic_version"},
+            "value": {"$ref": "#/$defs/semanticVersion"}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "value"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {"const": "revision"},
+            "value": {"$ref": "#/$defs/nativeRevision"}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {"const": "static_source"}
+          }
+        }
+      ]
+    },
+    "equipmentIdentityList": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16384,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/equipmentIdentity"}
+    },
+    "membershipEvidence": {
+      "type": "object",
+      "required": ["kind", "evidence_digest"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {"const": "authoritative_source_listing"},
+        "evidence_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "sourceManifest": {
+      "type": "object",
+      "required": ["schema_version", "distribution_identity", "source", "resolved_source", "available_equipment", "membership_evidence", "equipment", "restore", "source_manifest_digest"],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {"const": "source-manifest/v1"},
+        "distribution_identity": {"$ref": "#/$defs/distributionIdentity"},
+        "source": {"$ref": "#/$defs/source"},
+        "resolved_source": {"$ref": "#/$defs/resolvedSource"},
+        "available_equipment": {"$ref": "#/$defs/equipmentIdentityList"},
+        "membership_evidence": {"$ref": "#/$defs/membershipEvidence"},
+        "equipment": {"$ref": "#/$defs/equipmentIdentityList"},
+        "restore": {"$ref": "#/$defs/restore"},
+        "source_manifest_digest": {"$ref": "#/$defs/digest"}
+      }
     },
     "selection": {
       "oneOf": [
@@ -325,7 +468,7 @@
     },
     "retirement": {
       "type": "object",
-      "required": ["identity", "equipment_identity", "harness", "route", "surface", "desired_state"],
+      "required": ["identity", "equipment_identity", "harness", "route", "surface", "desired_state", "source_manifest_digest"],
       "additionalProperties": false,
       "properties": {
         "identity": {"$ref": "#/$defs/retirementIdentity"},
@@ -333,7 +476,8 @@
         "harness": {"$ref": "#/$defs/harness"},
         "route": {"$ref": "#/$defs/route"},
         "surface": {"$ref": "#/$defs/retirementSurface"},
-        "desired_state": {"enum": ["absent", "disabled"]}
+        "desired_state": {"enum": ["absent", "disabled"]},
+        "source_manifest_digest": {"$ref": "#/$defs/digest"}
       }
     },
     "retirementSurface": {
@@ -403,9 +547,9 @@
           "additionalProperties": false,
           "properties": {
             "class": {"const": "native_rolling"},
-            "channel": {"$ref": "#/$defs/nonEmptyString"},
-            "reviewed_baseline": {"$ref": "#/$defs/nonEmptyString"},
-            "observation_source": {"$ref": "#/$defs/nonEmptyString"},
+            "channel": {"$ref": "#/$defs/sourceBoundedString"},
+            "reviewed_baseline": {"$ref": "#/$defs/sourceBoundedString"},
+            "observation_source": {"$ref": "#/$defs/observationSource"},
             "native_update_control": {"enum": ["unknown", "suppressible", "unsuppressible"]}
           }
         }

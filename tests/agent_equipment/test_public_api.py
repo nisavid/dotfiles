@@ -15,24 +15,35 @@ import agent_equipment
 PUBLIC_NAMES = (
     "CapabilityDiscovery",
     "Catalog",
+    "CatalogAdditionProposal",
     "CatalogLockValidation",
     "CoverageRecord",
     "Diagnostic",
+    "DiscoveryHarnessBinding",
+    "DiscoverySelection",
     "FrozenJsonObject",
     "InstalledFile",
     "InstalledImplementationManifest",
     "Resolution",
     "ResolvedLock",
     "RuntimeInventory",
+    "SourceManifest",
+    "SourceResolution",
+    "SourceResolutionRequest",
+    "TargetSelection",
+    "UnmanagedReport",
     "ValidatedCatalogLock",
     "ValidatedPlan",
     "build_installed_implementation_manifest",
     "byte_sha256",
     "canonical_json_bytes",
     "canonical_json_sha256",
+    "find_unmanaged",
     "freeze_json",
     "load_catalog_lock",
     "main",
+    "propose_add",
+    "propose_update",
     "resolve",
     "strict_load_json_bytes",
     "strict_load_json_path",
@@ -42,7 +53,7 @@ PUBLIC_NAMES = (
 
 
 class PublicApiTests(unittest.TestCase):
-    def test_package_exports_only_the_step_2_production_api(self) -> None:
+    def test_package_exports_only_the_step_3_production_api(self) -> None:
         self.assertEqual(agent_equipment.__all__, PUBLIC_NAMES)
         for name in PUBLIC_NAMES:
             with self.subTest(public_name=name):
@@ -77,6 +88,18 @@ class PublicApiTests(unittest.TestCase):
         self.assertEqual(
             tuple(inspect.signature(agent_equipment.resolve).parameters),
             ("command", "catalog", "lock", "inventory", "capabilities"),
+        )
+        self.assertEqual(
+            tuple(inspect.signature(agent_equipment.find_unmanaged).parameters),
+            ("base", "selection", "discovery"),
+        )
+        self.assertEqual(
+            tuple(inspect.signature(agent_equipment.propose_add).parameters),
+            ("base", "selection", "discovery"),
+        )
+        self.assertEqual(
+            tuple(inspect.signature(agent_equipment.propose_update).parameters),
+            ("base", "selection", "source_resolver"),
         )
 
     def test_main_requires_the_prebound_installed_manifest(self) -> None:

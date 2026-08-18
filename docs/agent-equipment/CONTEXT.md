@@ -101,6 +101,43 @@ templates into exact equipment identities and complete harness coverage
 records.
 _Avoid_: Native manager lock, cache
 
+**Source tracking policy**:
+The authored rule that chooses what `update` follows. A Git source follows its
+current default branch unless the catalog names one branch. A native-manager
+source follows `latest` unless the catalog names one channel. It never stands
+in for an exact resolved revision or version.
+_Avoid_: Lock entry, resolved source, restore evidence
+
+**Source resolution**:
+The update-time, read-only act of resolving one authored tracking policy to an
+exact revision or typed version, optional immutable content digest, and complete
+authoritative equipment listing. The source resolver returns only those closed
+facts; it cannot author source policy, restore policy, selected membership, or a
+Source Manifest. Source resolution is not runtime equipment observation and
+does not install the result.
+_Avoid_: Status observation, apply, package installation
+
+**Source resolution facts**:
+The closed, request-bound public facts returned by a source resolver: exact
+revision or typed version, immutable content digest when applicable, and the
+complete authoritative equipment listing. The controller combines them with
+reviewed policy from the validated base; unrestricted prose is never a source
+resolution fact.
+_Avoid_: Source Manifest, restore policy, resolver-authored metadata
+
+**Source Manifest**:
+One controller-constructed, canonical, digest-bound resolved distribution
+record containing its reviewed source tracking policy, exact resolved source,
+complete available equipment, controller-derived membership-evidence digest,
+selected equipment, and reviewed restore policy combined with resolved facts.
+_Avoid_: Authored catalog, runtime inventory, package-manager lock
+
+**Historical Source Manifest**:
+An unchanged prior Source Manifest retained in the resolved lock because a
+retirement still binds its exact provider and restore evidence. History
+contains every such non-current manifest and no unreferenced manifest.
+_Avoid_: Current source resolution, orphan history
+
 **Runtime observation**:
 A secret-free factual statement of equipment state reported through a
 supported file, CLI, or harness surface. It never claims ownership or proposes
@@ -115,11 +152,12 @@ _Avoid_: Unknown runtime state, manually managed provider
 **Unmanaged observation record**:
 A canonical, secret-free runtime observation record emitted for unmanaged
 equipment. It is factual evidence, not a catalog proposal or ownership claim.
-_Avoid_: Proposed catalog addition, desired state
+_Avoid_: Catalog addition proposal, desired state
 
-**Proposed catalog addition**:
-One atomic, reviewable authored-catalog change that adds positively observed
-unmanaged equipment without changing runtime state.
+**Catalog addition proposal**:
+One atomic, reviewable pair containing the complete proposed authored catalog
+and resolved lock after adding positively observed unmanaged equipment. It does
+not change runtime state.
 _Avoid_: Unmanaged observation record, runtime mutation
 
 **Immutable-content observation**:

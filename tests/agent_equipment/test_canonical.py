@@ -25,11 +25,15 @@ MANIFEST_PATHS = (
     "bin/agent-equipment",
     "lib/agent-equipment/agent_equipment/__init__.py",
     "lib/agent-equipment/agent_equipment/_json_schema.py",
+    "lib/agent-equipment/agent_equipment/authoring.py",
     "lib/agent-equipment/agent_equipment/canonical.py",
+    "lib/agent-equipment/agent_equipment/discovery.py",
     "lib/agent-equipment/agent_equipment/inventory.py",
     "lib/agent-equipment/agent_equipment/model.py",
     "lib/agent-equipment/agent_equipment/resolver.py",
     "lib/agent-equipment/agent_equipment/secrets.py",
+    "lib/agent-equipment/agent_equipment/source_resolution.py",
+    "lib/agent-equipment/agent_equipment/updater.py",
     "lib/agent-equipment/agent_equipment/validator.py",
     ACCEPTANCE_EVIDENCE_SCHEMA_PATH,
     "lib/agent-equipment/schemas/adapter-contract-v1.schema.json",
@@ -129,13 +133,13 @@ class CanonicalJsonTest(unittest.TestCase):
             canonical_json_sha256(
                 strict_load_json_path(documents / "initial-catalog.proposed.json")
             ),
-            "sha256:72c06dd6869c4cd10bcfe8cff3f9a2b269fd21eab0917974f34d70671af696bd",
+            "sha256:b580775ec1ea54029d8eda747dd98e49824de952ba326d344c6186e56cfee05d",
         )
         self.assertEqual(
             canonical_json_sha256(
                 strict_load_json_path(documents / "initial-lock.proposed.json")
             ),
-            "sha256:a0bd41ba4206b1a49fc1e0704b9d78a2003176b6d7882340a39d54fbc269cc34",
+            "sha256:1f493d7f74f249e65242fa45f340a23cf2ff8a26949b524ef269d78b76851a0a",
         )
 
     def test_public_manifest_builder_accepts_no_caller_trust_inputs(self) -> None:

@@ -5,10 +5,14 @@ import json
 import sys
 import time
 import unittest
+from copy import deepcopy
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 ROOT = Path(__file__).resolve().parent.parent
+AGENT_EQUIPMENT_DOCUMENTS = ROOT / "docs/agent-equipment"
+MAX_SOURCE_FIELD_CHARACTERS = 4096
+MAX_SOURCE_MANIFEST_EQUIPMENT = 16_384
 SPEC = importlib.util.spec_from_file_location(
     "agent_equipment_json_schema",
     ROOT / "scripts/agent_equipment_json_schema.py",
@@ -19,7 +23,35 @@ sys.modules[SPEC.name] = SCHEMA
 SPEC.loader.exec_module(SCHEMA)
 
 
+def patterned_value(prefix: str, length: int) -> str:
+    if length < len(prefix):
+        raise ValueError("fixture length is shorter than its prefix")
+    return prefix + "a" * (length - len(prefix))
+
+
+def public_git_repository(length: int) -> str:
+    prefix = "https://example.invalid/"
+    suffix = ".git"
+    if length < len(prefix) + len(suffix) + 1:
+        raise ValueError("fixture repository length is too short")
+    return prefix + "a" * (length - len(prefix) - len(suffix)) + suffix
+
+
 class AgentEquipmentJsonSchemaTests(unittest.TestCase):
+    def validate_agent_equipment_document(
+        self,
+        document: object,
+        root_schema_name: str,
+    ) -> bool:
+        return SCHEMA.validate_document(
+            document,
+            schema_directory=AGENT_EQUIPMENT_DOCUMENTS,
+            root_schema_name=root_schema_name,
+            allowed_schema_names=frozenset(
+                {"catalog-v1.schema.json", "lock-v1.schema.json"}
+            ),
+        )
+
     def validate(
         self,
         document: object,
@@ -60,6 +92,23 @@ class AgentEquipmentJsonSchemaTests(unittest.TestCase):
                 allowed_schema_names=(allowed or frozenset(schemas)),
             )
 
+    def validate_catalog_definition(self, definition: str, document: object) -> bool:
+        catalog_schema = json.loads(
+            (AGENT_EQUIPMENT_DOCUMENTS / "catalog-v1.schema.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        return self.validate(
+            document,
+            {
+                "root.json": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "$ref": f"catalog-v1.schema.json#/$defs/{definition}",
+                },
+                "catalog-v1.schema.json": catalog_schema,
+            },
+        )
+
     def test_validates_one_document_through_a_temporary_root_schema(self) -> None:
         schema = {
             "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -71,6 +120,479 @@ class AgentEquipmentJsonSchemaTests(unittest.TestCase):
 
         self.assertTrue(self.validate({"name": "Ada"}, {"root.json": schema}))
         self.assertFalse(self.validate({"name": 3}, {"root.json": schema}))
+
+    def test_checked_in_catalog_and_lock_match_the_source_manifest_contract(
+        self,
+    ) -> None:
+        catalog = json.loads(
+            (AGENT_EQUIPMENT_DOCUMENTS / "initial-catalog.proposed.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        lock = json.loads(
+            (AGENT_EQUIPMENT_DOCUMENTS / "initial-lock.proposed.json").read_text(
+                encoding="utf-8"
+            )
+        )
+
+        self.assertTrue(
+            self.validate_agent_equipment_document(
+                catalog,
+                "catalog-v1.schema.json",
+            )
+        )
+        self.assertTrue(
+            self.validate_agent_equipment_document(lock, "lock-v1.schema.json")
+        )
+
+    def test_catalog_tracking_policy_rejects_resolved_source_literals(self) -> None:
+        catalog = json.loads(
+            (AGENT_EQUIPMENT_DOCUMENTS / "initial-catalog.proposed.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        invalid_git = deepcopy(catalog)
+        invalid_git["distributions"][-1]["source"]["ref"] = "a" * 40
+        invalid_head = deepcopy(catalog)
+        invalid_head["distributions"][-1]["source"]["branch"] = "HEAD"
+        invalid_native = deepcopy(catalog)
+        invalid_native["distributions"][1]["source"]["channel"] = "latest"
+
+        for document in (invalid_git, invalid_head, invalid_native):
+            with self.subTest(source=document["distributions"][-1]["source"]):
+                self.assertFalse(
+                    self.validate_agent_equipment_document(
+                        document,
+                        "catalog-v1.schema.json",
+                    )
+                )
+
+    def test_npx_package_cannot_embed_the_separate_channel_selector(self) -> None:
+        valid_sources = (
+            {
+                "kind": "native_manager",
+                "manager": "npx",
+                "package": "tool",
+            },
+            {
+                "kind": "native_manager",
+                "manager": "npx",
+                "package": "@example/tool",
+            },
+            {
+                "kind": "native_manager",
+                "manager": "claude",
+                "package": "tool@reviewed-registry",
+            },
+            {
+                "kind": "native_manager",
+                "manager": "codex",
+                "package": "tool@reviewed-registry",
+            },
+            {
+                "kind": "native_manager",
+                "manager": "cursor",
+                "package": "tool@reviewed-registry",
+            },
+        )
+        for source in valid_sources:
+            with self.subTest(source=source):
+                self.assertTrue(self.validate_catalog_definition("source", source))
+
+        for package in ("tool@beta", "tool@1.2.3"):
+            with self.subTest(package=package):
+                self.assertFalse(
+                    self.validate_catalog_definition(
+                        "source",
+                        {
+                            "kind": "native_manager",
+                            "manager": "npx",
+                            "package": package,
+                        },
+                    )
+                )
+
+    def test_source_policy_schema_admits_only_closed_manager_specific_forms(
+        self,
+    ) -> None:
+        accepted = (
+            {"kind": "git", "repository": "https://example.invalid/tool.git"},
+            {
+                "kind": "git",
+                "repository": "https://example.invalid/tool.git",
+                "branch": "release/v1",
+            },
+            {
+                "kind": "native_manager",
+                "manager": "npx",
+                "package": "tool",
+            },
+            {
+                "kind": "native_manager",
+                "manager": "npx",
+                "package": "@scope/tool",
+            },
+            {
+                "kind": "native_manager",
+                "manager": "claude",
+                "package": "tool@official",
+                "channel": "stable",
+            },
+            {
+                "kind": "native_manager",
+                "manager": "codex",
+                "package": "github@openai-curated",
+                "channel": "openai-curated",
+            },
+            {
+                "kind": "native_manager",
+                "manager": "cursor",
+                "package": "tool@official",
+                "channel": "stable",
+            },
+            {
+                "kind": "native_manager",
+                "manager": "http",
+                "package": "https://mcp.example.invalid/v1",
+                "channel": "static",
+            },
+        )
+        rejected = (
+            {"kind": "git", "repository": "https://example.invalid/tool"},
+            {
+                "kind": "native_manager",
+                "manager": "pip",
+                "package": "letters",
+            },
+            {
+                "kind": "native_manager",
+                "manager": "npx",
+                "package": "https://example.invalid/tool",
+            },
+            {
+                "kind": "native_manager",
+                "manager": "npx",
+                "package": "tool",
+                "channel": "latest",
+            },
+            {
+                "kind": "native_manager",
+                "manager": "http",
+                "package": "https://user:" + "secret@" + "mcp.example.invalid/v1",
+                "channel": "static",
+            },
+            {
+                "kind": "native_manager",
+                "manager": "http",
+                "package": "https://mcp.example.invalid/TO" + "KEN-value",
+                "channel": "static",
+            },
+            {
+                "kind": "native_manager",
+                "manager": "http",
+                "package": "https://mcp.example.invalid/v1?to" + "ken=value",
+                "channel": "static",
+            },
+            {
+                "kind": "native_manager",
+                "manager": "http",
+                "package": "https://mcp.example.invalid/v1",
+                "channel": "stable",
+            },
+        )
+
+        for source in accepted:
+            with self.subTest(admitted=source):
+                self.assertTrue(self.validate_catalog_definition("source", source))
+        for source in rejected:
+            with self.subTest(rejected=source):
+                self.assertFalse(self.validate_catalog_definition("source", source))
+
+    def test_resolved_source_schema_contains_only_fact_specific_tagged_versions(
+        self,
+    ) -> None:
+        accepted = (
+            {"kind": "git", "revision": "0" * 40},
+            {
+                "kind": "native_manager",
+                "version": {"kind": "semantic_version", "value": "1.2.3"},
+            },
+            {
+                "kind": "native_manager",
+                "version": {
+                    "kind": "semantic_version",
+                    "value": "1.2.3-rc.1+build.7",
+                },
+            },
+            {
+                "kind": "native_manager",
+                "version": {
+                    "kind": "semantic_version",
+                    "value": "1.2.3+" + "A" * 249,
+                },
+            },
+            {
+                "kind": "native_manager",
+                "version": {"kind": "revision", "value": "11c74d6b"},
+            },
+            {
+                "kind": "native_manager",
+                "version": {"kind": "static_source"},
+            },
+        )
+        rejected = (
+            {
+                "kind": "git",
+                "repository": "https://example.invalid/tool.git",
+                "revision": "0" * 40,
+            },
+            {
+                "kind": "native_manager",
+                "manager": "npx",
+                "version": {"kind": "semantic_version", "value": "1.2.3"},
+            },
+            {
+                "kind": "native_manager",
+                "version": {"kind": "semantic_version", "value": "01.2.3"},
+            },
+            {
+                "kind": "native_manager",
+                "version": {
+                    "kind": "semantic_version",
+                    "value": "1.2.3+" + "A" * 250,
+                },
+            },
+            {
+                "kind": "native_manager",
+                "version": {"kind": "revision", "value": "deadbeef"},
+            },
+            {
+                "kind": "native_manager",
+                "version": {"kind": "revision", "value": "11c74d6"},
+            },
+            {
+                "kind": "native_manager",
+                "version": {"kind": "static_source", "value": "static"},
+            },
+        )
+
+        for resolved in accepted:
+            with self.subTest(admitted=resolved):
+                self.assertTrue(
+                    self.validate_catalog_definition("resolvedSource", resolved)
+                )
+        for resolved in rejected:
+            with self.subTest(rejected=resolved):
+                self.assertFalse(
+                    self.validate_catalog_definition("resolvedSource", resolved)
+                )
+
+    def test_native_restore_schema_rejects_unreviewable_observation_text(self) -> None:
+        lock = json.loads(
+            (AGENT_EQUIPMENT_DOCUMENTS / "initial-lock.proposed.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        for observation_source in (
+            "V7p!opaque.private.value!9Qx",
+            "a" * 256,
+            "line one\nline two",
+        ):
+            with self.subTest(observation_source=observation_source):
+                invalid = deepcopy(lock)
+                invalid["distributions"][0]["restore"]["observation_source"] = (
+                    observation_source
+                )
+                self.assertFalse(
+                    self.validate_agent_equipment_document(
+                        invalid,
+                        "lock-v1.schema.json",
+                    )
+                )
+
+    def test_source_manifest_schema_enforces_complete_string_bounds(self) -> None:
+        lock = json.loads(
+            (AGENT_EQUIPMENT_DOCUMENTS / "initial-lock.proposed.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        baseline = next(
+            item for item in lock["distributions"] if item["source"]["kind"] == "git"
+        )
+        repository = baseline["source"]["repository"]
+        revision = baseline["resolved_source"]["revision"]
+        artifact_prefix = f"git+{repository}@{revision}#"
+
+        maximum = deepcopy(baseline)
+        maximum["distribution_identity"] = patterned_value(
+            "distribution:",
+            MAX_SOURCE_FIELD_CHARACTERS,
+        )
+        maximum_equipment = patterned_value(
+            "skill:",
+            MAX_SOURCE_FIELD_CHARACTERS,
+        )
+        maximum["available_equipment"] = [maximum_equipment]
+        maximum["equipment"] = [maximum_equipment]
+        maximum["source"]["branch"] = "a" * MAX_SOURCE_FIELD_CHARACTERS
+        maximum["restore"]["artifact_ref"] = artifact_prefix + "a" * (
+            MAX_SOURCE_FIELD_CHARACTERS - len(artifact_prefix)
+        )
+        self.assertTrue(self.validate_catalog_definition("sourceManifest", maximum))
+
+        over_limit = MAX_SOURCE_FIELD_CHARACTERS + 1
+        for label in (
+            "artifact_ref",
+            "distribution_identity",
+            "equipment_identity",
+            "branch",
+            "repository",
+        ):
+            invalid = deepcopy(baseline)
+            if label == "artifact_ref":
+                invalid["restore"]["artifact_ref"] = artifact_prefix + "a" * over_limit
+            elif label == "distribution_identity":
+                invalid["distribution_identity"] = patterned_value(
+                    "distribution:",
+                    over_limit,
+                )
+            elif label == "equipment_identity":
+                identity = patterned_value("skill:", over_limit)
+                invalid["available_equipment"] = [identity]
+                invalid["equipment"] = [identity]
+            elif label == "branch":
+                invalid["source"]["branch"] = "a" * over_limit
+            else:
+                oversized_repository = public_git_repository(over_limit)
+                invalid["source"]["repository"] = oversized_repository
+                invalid["restore"]["artifact_ref"] = (
+                    f"git+{oversized_repository}@{revision}"
+                )
+            with self.subTest(field=label):
+                self.assertFalse(
+                    self.validate_catalog_definition("sourceManifest", invalid)
+                )
+
+        maximum_package = "a" * 126 + "@" + "b" * 128
+        over_limit_package = "a" * 127 + "@" + "b" * 128
+        self.assertTrue(
+            self.validate_catalog_definition(
+                "source",
+                {
+                    "kind": "native_manager",
+                    "manager": "claude",
+                    "package": maximum_package,
+                },
+            )
+        )
+        self.assertFalse(
+            self.validate_catalog_definition(
+                "source",
+                {
+                    "kind": "native_manager",
+                    "manager": "claude",
+                    "package": over_limit_package,
+                },
+            )
+        )
+
+        native_restore = {
+            "class": "native_rolling",
+            "channel": "stable",
+            "reviewed_baseline": "1.2.3",
+            "observation_source": "reviewed plugin list",
+            "native_update_control": "suppressible",
+        }
+        for field in ("channel", "reviewed_baseline"):
+            with self.subTest(restore_field=field):
+                self.assertFalse(
+                    self.validate_catalog_definition(
+                        "restore",
+                        native_restore | {field: "a" * over_limit},
+                    )
+                )
+
+    def test_source_manifest_schema_enforces_equipment_item_ceiling(self) -> None:
+        identities = [
+            f"other:source-limit/{index:05d}"
+            for index in range(MAX_SOURCE_MANIFEST_EQUIPMENT + 1)
+        ]
+
+        self.assertTrue(
+            self.validate_catalog_definition(
+                "equipmentIdentityList",
+                identities[:MAX_SOURCE_MANIFEST_EQUIPMENT],
+            )
+        )
+        self.assertFalse(
+            self.validate_catalog_definition("equipmentIdentityList", identities)
+        )
+
+        catalog_schema = json.loads(
+            (AGENT_EQUIPMENT_DOCUMENTS / "catalog-v1.schema.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        source_manifest_properties = catalog_schema["$defs"]["sourceManifest"][
+            "properties"
+        ]
+        for field in ("available_equipment", "equipment"):
+            with self.subTest(field=field):
+                self.assertEqual(
+                    source_manifest_properties[field],
+                    {"$ref": "#/$defs/equipmentIdentityList"},
+                )
+
+    def test_source_manifest_completeness_history_and_digest_fields_are_required(
+        self,
+    ) -> None:
+        lock = json.loads(
+            (AGENT_EQUIPMENT_DOCUMENTS / "initial-lock.proposed.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        mutations: list[tuple[str, dict[str, object]]] = []
+        for field in (
+            "resolved_source",
+            "available_equipment",
+            "membership_evidence",
+            "source_manifest_digest",
+        ):
+            document = deepcopy(lock)
+            document["distributions"][0].pop(field)
+            mutations.append((field, document))
+        missing_history = deepcopy(lock)
+        missing_history.pop("source_manifest_history")
+        mutations.append(("source_manifest_history", missing_history))
+        malformed_history = deepcopy(lock)
+        malformed_history["source_manifest_history"] = [
+            {"source_manifest_digest": "sha256:" + "0" * 64}
+        ]
+        mutations.append(("closed source_manifest_history", malformed_history))
+
+        for label, document in mutations:
+            with self.subTest(field=label):
+                self.assertFalse(
+                    self.validate_agent_equipment_document(
+                        document,
+                        "lock-v1.schema.json",
+                    )
+                )
+
+    def test_catalog_retirements_require_a_source_manifest_digest(self) -> None:
+        catalog = json.loads(
+            (AGENT_EQUIPMENT_DOCUMENTS / "initial-catalog.proposed.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        catalog["retirements"][0].pop("source_manifest_digest")
+
+        self.assertFalse(
+            self.validate_agent_equipment_document(
+                catalog,
+                "catalog-v1.schema.json",
+            )
+        )
 
     def test_rejects_malformed_or_nonlocal_schema_inputs(self) -> None:
         malformed_files = (

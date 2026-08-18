@@ -1,5 +1,5 @@
 {
-  "catalog_digest": "sha256:72c06dd6869c4cd10bcfe8cff3f9a2b269fd21eab0917974f34d70671af696bd",
+  "catalog_digest": "sha256:b580775ec1ea54029d8eda747dd98e49824de952ba326d344c6186e56cfee05d",
   "coverage": [
     {
       "equipment_identity": "mcp:chrome-devtools/server",
@@ -7353,6 +7353,17 @@
   ],
   "distributions": [
     {
+      "available_equipment": [
+        "mcp:chrome-devtools/server",
+        "plugin:chrome-devtools/claude",
+        "skill:chrome-devtools/a11y-debugging",
+        "skill:chrome-devtools/chrome-devtools",
+        "skill:chrome-devtools/chrome-devtools-cli",
+        "skill:chrome-devtools/debug-optimize-lcp",
+        "skill:chrome-devtools/memory-leak-debugging",
+        "skill:chrome-devtools/troubleshooting"
+      ],
+      "distribution_identity": "distribution:chrome-devtools/claude-plugin",
       "equipment": [
         "mcp:chrome-devtools/server",
         "plugin:chrome-devtools/claude",
@@ -7363,12 +7374,16 @@
         "skill:chrome-devtools/memory-leak-debugging",
         "skill:chrome-devtools/troubleshooting"
       ],
-      "identity": "distribution:chrome-devtools/claude-plugin",
-      "source": {
-        "channel": "stable",
+      "membership_evidence": {
+        "evidence_digest": "sha256:92e11b3c467bb52da75357c11769ba4c0ab9b2bead5395927ee44de0e152c129",
+        "kind": "authoritative_source_listing"
+      },
+      "resolved_source": {
         "kind": "native_manager",
-        "manager": "claude",
-        "package": "chrome-devtools-mcp@claude-plugins-official"
+        "version": {
+          "kind": "semantic_version",
+          "value": "1.7.0"
+        }
       },
       "restore": {
         "channel": "stable",
@@ -7376,18 +7391,34 @@
         "native_update_control": "suppressible",
         "observation_source": "claude marketplace auto-update documentation, plugin list, and cached manifest",
         "reviewed_baseline": "1.7.0"
-      }
+      },
+      "schema_version": "source-manifest/v1",
+      "source": {
+        "channel": "stable",
+        "kind": "native_manager",
+        "manager": "claude",
+        "package": "chrome-devtools-mcp@claude-plugins-official"
+      },
+      "source_manifest_digest": "sha256:efab4b5a743dba39abccc2ff56ef670f7e5e4f2656be46a644108fe8db0ac762"
     },
     {
+      "available_equipment": [
+        "mcp:chrome-devtools/server"
+      ],
+      "distribution_identity": "distribution:chrome-devtools/direct-mcp",
       "equipment": [
         "mcp:chrome-devtools/server"
       ],
-      "identity": "distribution:chrome-devtools/direct-mcp",
-      "source": {
-        "channel": "1.7.0",
+      "membership_evidence": {
+        "evidence_digest": "sha256:0b0e58f8fc823e9508ecab5c2e34ecfeba73c9d9fb2371d67171359cfe48d527",
+        "kind": "authoritative_source_listing"
+      },
+      "resolved_source": {
         "kind": "native_manager",
-        "manager": "npx",
-        "package": "chrome-devtools-mcp"
+        "version": {
+          "kind": "semantic_version",
+          "value": "1.7.0"
+        }
       },
       "restore": {
         "channel": "npm:1.7.0",
@@ -7395,18 +7426,33 @@
         "native_update_control": "suppressible",
         "observation_source": "reviewed npm selector",
         "reviewed_baseline": "chrome-devtools-mcp@1.7.0"
-      }
+      },
+      "schema_version": "source-manifest/v1",
+      "source": {
+        "kind": "native_manager",
+        "manager": "npx",
+        "package": "chrome-devtools-mcp"
+      },
+      "source_manifest_digest": "sha256:4e2629cc87c8df6b24dc57ea48f23ea5a7ba6d5c8f1b619bafd099545d61b341"
     },
     {
+      "available_equipment": [
+        "mcp:context7/server"
+      ],
+      "distribution_identity": "distribution:context7/direct-mcp",
       "equipment": [
         "mcp:context7/server"
       ],
-      "identity": "distribution:context7/direct-mcp",
-      "source": {
-        "channel": "3.2.4",
+      "membership_evidence": {
+        "evidence_digest": "sha256:913c1b2c9890efde41abc1ceec67e18da1c03605416effcfd4d028f1e531ada5",
+        "kind": "authoritative_source_listing"
+      },
+      "resolved_source": {
         "kind": "native_manager",
-        "manager": "npx",
-        "package": "@upstash/context7-mcp"
+        "version": {
+          "kind": "semantic_version",
+          "value": "3.2.4"
+        }
       },
       "restore": {
         "channel": "npm:3.2.4",
@@ -7414,18 +7460,33 @@
         "native_update_control": "suppressible",
         "observation_source": "managed MCP overlay",
         "reviewed_baseline": "@upstash/context7-mcp@3.2.4"
-      }
+      },
+      "schema_version": "source-manifest/v1",
+      "source": {
+        "kind": "native_manager",
+        "manager": "npx",
+        "package": "@upstash/context7-mcp"
+      },
+      "source_manifest_digest": "sha256:afe8dcc0d9343e3dd28d5b472a381f295bae78a5feaf27e5ae57dc32d85a5013"
     },
     {
+      "available_equipment": [
+        "mcp:firecrawl/server"
+      ],
+      "distribution_identity": "distribution:firecrawl/direct-mcp",
       "equipment": [
         "mcp:firecrawl/server"
       ],
-      "identity": "distribution:firecrawl/direct-mcp",
-      "source": {
-        "channel": "3.22.3",
+      "membership_evidence": {
+        "evidence_digest": "sha256:f8bcbbedc5d6668ea1820e493614a839ff6014dd93f0cab6b51f11f5c3c35463",
+        "kind": "authoritative_source_listing"
+      },
+      "resolved_source": {
         "kind": "native_manager",
-        "manager": "npx",
-        "package": "firecrawl-mcp"
+        "version": {
+          "kind": "semantic_version",
+          "value": "3.22.3"
+        }
       },
       "restore": {
         "channel": "npm:3.22.3",
@@ -7433,9 +7494,26 @@
         "native_update_control": "suppressible",
         "observation_source": "managed MCP overlay",
         "reviewed_baseline": "firecrawl-mcp@3.22.3"
-      }
+      },
+      "schema_version": "source-manifest/v1",
+      "source": {
+        "kind": "native_manager",
+        "manager": "npx",
+        "package": "firecrawl-mcp"
+      },
+      "source_manifest_digest": "sha256:52e267b6c60c12370f17d7a0d8060082faefba23b2716aad507ea7f3111a18c6"
     },
     {
+      "available_equipment": [
+        "mcp:github/server",
+        "other:github/codex-app",
+        "plugin:github/codex",
+        "skill:github/gh-address-comments",
+        "skill:github/gh-fix-ci",
+        "skill:github/github",
+        "skill:github/yeet"
+      ],
+      "distribution_identity": "distribution:github/codex-plugin",
       "equipment": [
         "mcp:github/server",
         "other:github/codex-app",
@@ -7445,12 +7523,16 @@
         "skill:github/github",
         "skill:github/yeet"
       ],
-      "identity": "distribution:github/codex-plugin",
-      "source": {
-        "channel": "openai-curated",
+      "membership_evidence": {
+        "evidence_digest": "sha256:4056dc132a8286fa2156adf25269d0888759f3015dbbb4ac63ca7f2409bd9732",
+        "kind": "authoritative_source_listing"
+      },
+      "resolved_source": {
         "kind": "native_manager",
-        "manager": "codex",
-        "package": "github@openai-curated"
+        "version": {
+          "kind": "revision",
+          "value": "11c74d6b"
+        }
       },
       "restore": {
         "channel": "openai-curated",
@@ -7458,18 +7540,34 @@
         "native_update_control": "unknown",
         "observation_source": "codex plugin list",
         "reviewed_baseline": "11c74d6b"
-      }
+      },
+      "schema_version": "source-manifest/v1",
+      "source": {
+        "channel": "openai-curated",
+        "kind": "native_manager",
+        "manager": "codex",
+        "package": "github@openai-curated"
+      },
+      "source_manifest_digest": "sha256:a5ebbe31c185e88103f54d61e1e2a85b6b9c994f88e361e369a8e5700b9b76dd"
     },
     {
+      "available_equipment": [
+        "mcp:github/server"
+      ],
+      "distribution_identity": "distribution:github/direct-mcp",
       "equipment": [
         "mcp:github/server"
       ],
-      "identity": "distribution:github/direct-mcp",
-      "source": {
-        "channel": "0.1.38",
+      "membership_evidence": {
+        "evidence_digest": "sha256:77e9f72933d66b4e105795eab27e55edcca8bce4d1c0d2776aba2c3f72fd994b",
+        "kind": "authoritative_source_listing"
+      },
+      "resolved_source": {
         "kind": "native_manager",
-        "manager": "npx",
-        "package": "mcp-remote"
+        "version": {
+          "kind": "semantic_version",
+          "value": "0.1.38"
+        }
       },
       "restore": {
         "channel": "npm:0.1.38",
@@ -7477,18 +7575,33 @@
         "native_update_control": "suppressible",
         "observation_source": "managed MCP overlay",
         "reviewed_baseline": "mcp-remote@0.1.38"
-      }
+      },
+      "schema_version": "source-manifest/v1",
+      "source": {
+        "kind": "native_manager",
+        "manager": "npx",
+        "package": "mcp-remote"
+      },
+      "source_manifest_digest": "sha256:5983939d104650b03e23721ca630d9afa6e29fafbec75e58602802562755bfd0"
     },
     {
+      "available_equipment": [
+        "mcp:greptile/server"
+      ],
+      "distribution_identity": "distribution:greptile/direct-mcp",
       "equipment": [
         "mcp:greptile/server"
       ],
-      "identity": "distribution:greptile/direct-mcp",
-      "source": {
-        "channel": "0.1.38",
+      "membership_evidence": {
+        "evidence_digest": "sha256:c6b5dfda07d155b034e2ef36cfd697c436fb57aefc1ac09f3c76d3e1a159bd73",
+        "kind": "authoritative_source_listing"
+      },
+      "resolved_source": {
         "kind": "native_manager",
-        "manager": "npx",
-        "package": "mcp-remote"
+        "version": {
+          "kind": "semantic_version",
+          "value": "0.1.38"
+        }
       },
       "restore": {
         "channel": "npm:0.1.38",
@@ -7496,9 +7609,45 @@
         "native_update_control": "suppressible",
         "observation_source": "managed MCP overlay",
         "reviewed_baseline": "mcp-remote@0.1.38"
-      }
+      },
+      "schema_version": "source-manifest/v1",
+      "source": {
+        "kind": "native_manager",
+        "manager": "npx",
+        "package": "mcp-remote"
+      },
+      "source_manifest_digest": "sha256:1620a998d5e7a565229707ccf4af48f21f4087d094a3162f9f6fceb8bd267e8f"
     },
     {
+      "available_equipment": [
+        "plugin:mattpocock/claude",
+        "skill:mattpocock/ask-matt",
+        "skill:mattpocock/code-review",
+        "skill:mattpocock/codebase-design",
+        "skill:mattpocock/diagnosing-bugs",
+        "skill:mattpocock/domain-modeling",
+        "skill:mattpocock/grill-me",
+        "skill:mattpocock/grill-with-docs",
+        "skill:mattpocock/grilling",
+        "skill:mattpocock/handoff",
+        "skill:mattpocock/implement",
+        "skill:mattpocock/improve-codebase-architecture",
+        "skill:mattpocock/prototype",
+        "skill:mattpocock/research",
+        "skill:mattpocock/resolving-merge-conflicts",
+        "skill:mattpocock/setup-matt-pocock-skills",
+        "skill:mattpocock/tdd",
+        "skill:mattpocock/teach",
+        "skill:mattpocock/to-questionnaire",
+        "skill:mattpocock/to-spec",
+        "skill:mattpocock/to-tickets",
+        "skill:mattpocock/triage",
+        "skill:mattpocock/wait-what",
+        "skill:mattpocock/wayfinder",
+        "skill:mattpocock/wizard",
+        "skill:mattpocock/writing-for-agents"
+      ],
+      "distribution_identity": "distribution:mattpocock/claude-plugin",
       "equipment": [
         "plugin:mattpocock/claude",
         "skill:mattpocock/ask-matt",
@@ -7527,12 +7676,16 @@
         "skill:mattpocock/wizard",
         "skill:mattpocock/writing-for-agents"
       ],
-      "identity": "distribution:mattpocock/claude-plugin",
-      "source": {
-        "channel": "stable",
+      "membership_evidence": {
+        "evidence_digest": "sha256:8d066fef2f5f772ceb410c0eec7c3910a83b454adaad16a3b6eabc8f61242db5",
+        "kind": "authoritative_source_listing"
+      },
+      "resolved_source": {
         "kind": "native_manager",
-        "manager": "claude",
-        "package": "mattpocock-skills@claude-plugins-official"
+        "version": {
+          "kind": "semantic_version",
+          "value": "1.2.3"
+        }
       },
       "restore": {
         "channel": "stable",
@@ -7540,9 +7693,45 @@
         "native_update_control": "suppressible",
         "observation_source": "Claude official marketplace, auto-update documentation, and upstream plugin manifest",
         "reviewed_baseline": "1.2.3"
-      }
+      },
+      "schema_version": "source-manifest/v1",
+      "source": {
+        "channel": "stable",
+        "kind": "native_manager",
+        "manager": "claude",
+        "package": "mattpocock-skills@claude-plugins-official"
+      },
+      "source_manifest_digest": "sha256:bd605a84accb8053561e56381f1a432e937a5c76ede91613b399de5435207598"
     },
     {
+      "available_equipment": [
+        "skill:mattpocock/ask-matt",
+        "skill:mattpocock/code-review",
+        "skill:mattpocock/codebase-design",
+        "skill:mattpocock/diagnosing-bugs",
+        "skill:mattpocock/domain-modeling",
+        "skill:mattpocock/grill-me",
+        "skill:mattpocock/grill-with-docs",
+        "skill:mattpocock/grilling",
+        "skill:mattpocock/handoff",
+        "skill:mattpocock/implement",
+        "skill:mattpocock/improve-codebase-architecture",
+        "skill:mattpocock/prototype",
+        "skill:mattpocock/research",
+        "skill:mattpocock/resolving-merge-conflicts",
+        "skill:mattpocock/setup-matt-pocock-skills",
+        "skill:mattpocock/tdd",
+        "skill:mattpocock/teach",
+        "skill:mattpocock/to-questionnaire",
+        "skill:mattpocock/to-spec",
+        "skill:mattpocock/to-tickets",
+        "skill:mattpocock/triage",
+        "skill:mattpocock/wait-what",
+        "skill:mattpocock/wayfinder",
+        "skill:mattpocock/wizard",
+        "skill:mattpocock/writing-for-agents"
+      ],
+      "distribution_identity": "distribution:mattpocock/standalone",
       "equipment": [
         "skill:mattpocock/ask-matt",
         "skill:mattpocock/code-review",
@@ -7570,11 +7759,13 @@
         "skill:mattpocock/wizard",
         "skill:mattpocock/writing-for-agents"
       ],
-      "identity": "distribution:mattpocock/standalone",
-      "source": {
+      "membership_evidence": {
+        "evidence_digest": "sha256:3cb813019d661f1ce7d68a7f7212487c86e5bf407546e157f353f83a74d70839",
+        "kind": "authoritative_source_listing"
+      },
+      "resolved_source": {
         "kind": "git",
-        "ref": "84fdeffd12f2ee307994d1eb6feb48173b6e0502",
-        "repository": "https://github.com/mattpocock/skills.git"
+        "revision": "84fdeffd12f2ee307994d1eb6feb48173b6e0502"
       },
       "restore": {
         "artifact_ref": "git+https://github.com/mattpocock/skills.git@84fdeffd12f2ee307994d1eb6feb48173b6e0502#skills/engineering,skills/productivity",
@@ -7582,7 +7773,13 @@
         "content_digest": "sha256:1b3a5b293a2d0e04748c64f6c86af0ed104a7619de68f7e2cdadc6b42b9a0d41",
         "native_update_control": "not_applicable",
         "revision": "84fdeffd12f2ee307994d1eb6feb48173b6e0502"
-      }
+      },
+      "schema_version": "source-manifest/v1",
+      "source": {
+        "kind": "git",
+        "repository": "https://github.com/mattpocock/skills.git"
+      },
+      "source_manifest_digest": "sha256:53a48705d31bf140f8636058b7cd032bc8b6350ccb1f300ed310051d306ad328"
     }
   ],
   "retirements": [
@@ -7654,6 +7851,7 @@
         },
         "secret_references": []
       },
+      "source_manifest_digest": "sha256:4e2629cc87c8df6b24dc57ea48f23ea5a7ba6d5c8f1b619bafd099545d61b341",
       "surface": {
         "kind": "direct_mcp",
         "server_name": "chrome-devtools"
@@ -7715,6 +7913,7 @@
         },
         "secret_references": []
       },
+      "source_manifest_digest": "sha256:53a48705d31bf140f8636058b7cd032bc8b6350ccb1f300ed310051d306ad328",
       "surface": {
         "kind": "claude_skill_projection",
         "skill_name": "ask-matt"
@@ -7776,6 +7975,7 @@
         },
         "secret_references": []
       },
+      "source_manifest_digest": "sha256:53a48705d31bf140f8636058b7cd032bc8b6350ccb1f300ed310051d306ad328",
       "surface": {
         "kind": "claude_skill_projection",
         "skill_name": "code-review"
@@ -7837,6 +8037,7 @@
         },
         "secret_references": []
       },
+      "source_manifest_digest": "sha256:53a48705d31bf140f8636058b7cd032bc8b6350ccb1f300ed310051d306ad328",
       "surface": {
         "kind": "claude_skill_projection",
         "skill_name": "codebase-design"
@@ -7898,6 +8099,7 @@
         },
         "secret_references": []
       },
+      "source_manifest_digest": "sha256:53a48705d31bf140f8636058b7cd032bc8b6350ccb1f300ed310051d306ad328",
       "surface": {
         "kind": "claude_skill_projection",
         "skill_name": "diagnosing-bugs"
@@ -7959,6 +8161,7 @@
         },
         "secret_references": []
       },
+      "source_manifest_digest": "sha256:53a48705d31bf140f8636058b7cd032bc8b6350ccb1f300ed310051d306ad328",
       "surface": {
         "kind": "claude_skill_projection",
         "skill_name": "domain-modeling"
@@ -8020,6 +8223,7 @@
         },
         "secret_references": []
       },
+      "source_manifest_digest": "sha256:53a48705d31bf140f8636058b7cd032bc8b6350ccb1f300ed310051d306ad328",
       "surface": {
         "kind": "claude_skill_projection",
         "skill_name": "grill-me"
@@ -8081,6 +8285,7 @@
         },
         "secret_references": []
       },
+      "source_manifest_digest": "sha256:53a48705d31bf140f8636058b7cd032bc8b6350ccb1f300ed310051d306ad328",
       "surface": {
         "kind": "claude_skill_projection",
         "skill_name": "grill-with-docs"
@@ -8142,6 +8347,7 @@
         },
         "secret_references": []
       },
+      "source_manifest_digest": "sha256:53a48705d31bf140f8636058b7cd032bc8b6350ccb1f300ed310051d306ad328",
       "surface": {
         "kind": "claude_skill_projection",
         "skill_name": "grilling"
@@ -8203,6 +8409,7 @@
         },
         "secret_references": []
       },
+      "source_manifest_digest": "sha256:53a48705d31bf140f8636058b7cd032bc8b6350ccb1f300ed310051d306ad328",
       "surface": {
         "kind": "claude_skill_projection",
         "skill_name": "handoff"
@@ -8264,6 +8471,7 @@
         },
         "secret_references": []
       },
+      "source_manifest_digest": "sha256:53a48705d31bf140f8636058b7cd032bc8b6350ccb1f300ed310051d306ad328",
       "surface": {
         "kind": "claude_skill_projection",
         "skill_name": "implement"
@@ -8325,6 +8533,7 @@
         },
         "secret_references": []
       },
+      "source_manifest_digest": "sha256:53a48705d31bf140f8636058b7cd032bc8b6350ccb1f300ed310051d306ad328",
       "surface": {
         "kind": "claude_skill_projection",
         "skill_name": "improve-codebase-architecture"
@@ -8386,6 +8595,7 @@
         },
         "secret_references": []
       },
+      "source_manifest_digest": "sha256:53a48705d31bf140f8636058b7cd032bc8b6350ccb1f300ed310051d306ad328",
       "surface": {
         "kind": "claude_skill_projection",
         "skill_name": "prototype"
@@ -8447,6 +8657,7 @@
         },
         "secret_references": []
       },
+      "source_manifest_digest": "sha256:53a48705d31bf140f8636058b7cd032bc8b6350ccb1f300ed310051d306ad328",
       "surface": {
         "kind": "claude_skill_projection",
         "skill_name": "research"
@@ -8508,6 +8719,7 @@
         },
         "secret_references": []
       },
+      "source_manifest_digest": "sha256:53a48705d31bf140f8636058b7cd032bc8b6350ccb1f300ed310051d306ad328",
       "surface": {
         "kind": "claude_skill_projection",
         "skill_name": "resolving-merge-conflicts"
@@ -8569,6 +8781,7 @@
         },
         "secret_references": []
       },
+      "source_manifest_digest": "sha256:53a48705d31bf140f8636058b7cd032bc8b6350ccb1f300ed310051d306ad328",
       "surface": {
         "kind": "claude_skill_projection",
         "skill_name": "setup-matt-pocock-skills"
@@ -8630,6 +8843,7 @@
         },
         "secret_references": []
       },
+      "source_manifest_digest": "sha256:53a48705d31bf140f8636058b7cd032bc8b6350ccb1f300ed310051d306ad328",
       "surface": {
         "kind": "claude_skill_projection",
         "skill_name": "tdd"
@@ -8691,6 +8905,7 @@
         },
         "secret_references": []
       },
+      "source_manifest_digest": "sha256:53a48705d31bf140f8636058b7cd032bc8b6350ccb1f300ed310051d306ad328",
       "surface": {
         "kind": "claude_skill_projection",
         "skill_name": "teach"
@@ -8752,6 +8967,7 @@
         },
         "secret_references": []
       },
+      "source_manifest_digest": "sha256:53a48705d31bf140f8636058b7cd032bc8b6350ccb1f300ed310051d306ad328",
       "surface": {
         "kind": "claude_skill_projection",
         "skill_name": "to-spec"
@@ -8813,6 +9029,7 @@
         },
         "secret_references": []
       },
+      "source_manifest_digest": "sha256:53a48705d31bf140f8636058b7cd032bc8b6350ccb1f300ed310051d306ad328",
       "surface": {
         "kind": "claude_skill_projection",
         "skill_name": "to-tickets"
@@ -8874,6 +9091,7 @@
         },
         "secret_references": []
       },
+      "source_manifest_digest": "sha256:53a48705d31bf140f8636058b7cd032bc8b6350ccb1f300ed310051d306ad328",
       "surface": {
         "kind": "claude_skill_projection",
         "skill_name": "triage"
@@ -8935,6 +9153,7 @@
         },
         "secret_references": []
       },
+      "source_manifest_digest": "sha256:53a48705d31bf140f8636058b7cd032bc8b6350ccb1f300ed310051d306ad328",
       "surface": {
         "kind": "claude_skill_projection",
         "skill_name": "wayfinder"
@@ -9036,11 +9255,13 @@
           }
         ]
       },
+      "source_manifest_digest": "sha256:5983939d104650b03e23721ca630d9afa6e29fafbec75e58602802562755bfd0",
       "surface": {
         "kind": "direct_mcp",
         "server_name": "github"
       }
     }
   ],
-  "schema_version": "lock/v1"
+  "schema_version": "lock/v1",
+  "source_manifest_history": []
 }

@@ -2,9 +2,21 @@
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
+from .authoring import (
+    AuthoringError,
+    CatalogAdditionProposal,
+    DiscoveryHarnessBinding,
+    DiscoveryPort,
+    DiscoverySelection,
+    TargetSelection,
+    UnmanagedReport,
+    find_unmanaged,
+    propose_add,
+)
 from .canonical import (
     build_installed_implementation_manifest,
     byte_sha256,
@@ -13,6 +25,7 @@ from .canonical import (
     strict_load_json_bytes,
     strict_load_json_path,
 )
+from .discovery import MAX_DISCOVERY_RECORDS
 from .inventory import (
     ReadOnlyAdapter,
     admit_observe_request,
@@ -39,33 +52,57 @@ from .model import (
 )
 from .resolver import resolve
 from .secrets import contains_literal_credential
+from .source_resolution import (
+    SourceManifest,
+    SourceResolution,
+    SourceResolutionRequest,
+    SourceResolver,
+)
+from .updater import propose_update
 from .validator import load_catalog_lock, validate_catalog_lock
 
-_STATUS_CONFIG_DIRECTORY = "agent-equipment"
-_STATUS_CATALOG_NAME = "catalog-v1.json"
-_STATUS_LOCK_NAME = "lock-v1.json"
+_CONFIG_DIRECTORY = "agent-equipment"
+_CATALOG_NAME = "catalog-v1.json"
+_LOCK_NAME = "lock-v1.json"
+_TARGET_PATTERN = re.compile(
+    r"(?:claude|codex|cursor)/"
+    r"(?:skill|plugin|mcp|hook|other):"
+    r"[a-z0-9][a-z0-9._/-]*"
+)
+_DISTRIBUTION_PATTERN = re.compile(r"distribution:[a-z0-9][a-z0-9._/-]*")
 
 __all__ = (
     "CapabilityDiscovery",
     "Catalog",
+    "CatalogAdditionProposal",
     "CatalogLockValidation",
     "CoverageRecord",
     "Diagnostic",
+    "DiscoveryHarnessBinding",
+    "DiscoverySelection",
     "FrozenJsonObject",
     "InstalledFile",
     "InstalledImplementationManifest",
     "Resolution",
     "ResolvedLock",
     "RuntimeInventory",
+    "SourceManifest",
+    "SourceResolution",
+    "SourceResolutionRequest",
+    "TargetSelection",
+    "UnmanagedReport",
     "ValidatedCatalogLock",
     "ValidatedPlan",
     "build_installed_implementation_manifest",
     "byte_sha256",
     "canonical_json_bytes",
     "canonical_json_sha256",
+    "find_unmanaged",
     "freeze_json",
     "load_catalog_lock",
     "main",
+    "propose_add",
+    "propose_update",
     "resolve",
     "strict_load_json_bytes",
     "strict_load_json_path",
@@ -92,9 +129,9 @@ def _status_runtime_inputs(
     return (), ()
 
 
-def _installed_status_paths() -> tuple[Path, Path]:
-    status_root = Path.home() / ".config" / _STATUS_CONFIG_DIRECTORY
-    return status_root / _STATUS_CATALOG_NAME, status_root / _STATUS_LOCK_NAME
+def _installed_authored_paths() -> tuple[Path, Path]:
+    authored_root = Path.home() / ".config" / _CONFIG_DIRECTORY
+    return authored_root / _CATALOG_NAME, authored_root / _LOCK_NAME
 
 
 def _status_requests_are_authorized(
@@ -208,7 +245,7 @@ def _run_status(
     """Load reviewed inputs and run the closed read-only status pipeline."""
 
     try:
-        catalog_path, lock_path = _installed_status_paths()
+        catalog_path, lock_path = _installed_authored_paths()
         validation = load_catalog_lock(catalog_path, lock_path)
         validated = validation.model
         if validated is None:
@@ -258,6 +295,191 @@ def _run_status(
         return _status_report(installed_implementation_manifest)
 
 
+def _authoring_runtime_inputs(
+    command: str,
+    validated: ValidatedCatalogLock,
+    installed_implementation_manifest: InstalledImplementationManifest,
+    targets: tuple[str, ...] | None,
+) -> tuple[DiscoverySelection | TargetSelection, DiscoveryPort]:
+    """Return the closed private discovery registry for authored commands."""
+
+    if command not in {"unmanaged", "add"}:
+        raise ValueError("authored discovery command is unsupported")
+    if type(validated) is not ValidatedCatalogLock:
+        raise TypeError("authored discovery requires a validated catalog and lock")
+    if type(installed_implementation_manifest) is not InstalledImplementationManifest:
+        raise TypeError("authored discovery requires an installed manifest")
+    if targets is not None and type(targets) is not tuple:
+        raise TypeError("authored discovery targets must be immutable")
+    raise RuntimeError("authored discovery adapters are unavailable")
+
+
+def _source_resolution_runtime_input(
+    validated: ValidatedCatalogLock,
+    installed_implementation_manifest: InstalledImplementationManifest,
+) -> SourceResolver:
+    """Return the closed private source resolver for update."""
+
+    if type(validated) is not ValidatedCatalogLock:
+        raise TypeError("update requires a validated catalog and lock")
+    if type(installed_implementation_manifest) is not InstalledImplementationManifest:
+        raise TypeError("update requires an installed manifest")
+    raise RuntimeError("source resolution is unavailable")
+
+
+def _command_error_report(
+    command: str,
+    installed_implementation_manifest: InstalledImplementationManifest,
+    *,
+    code: str,
+    message: str,
+) -> FrozenJsonObject:
+    document = freeze_json(
+        {
+            "command": command,
+            "diagnostics": [{"code": code, "message": message}],
+            "implementation_manifest_digest": installed_implementation_manifest.digest,
+            "status": "error",
+        }
+    )
+    if not isinstance(document, FrozenJsonObject):
+        raise TypeError("command error report must be an immutable object")
+    return document
+
+
+def _runtime_unavailable_report(
+    command: str,
+    installed_implementation_manifest: InstalledImplementationManifest,
+) -> tuple[int, FrozenJsonObject]:
+    return 69, _command_error_report(
+        command,
+        installed_implementation_manifest,
+        code=f"{command.upper()}_RUNTIME_UNAVAILABLE",
+        message=f"{command.capitalize()} runtime inputs are unavailable.",
+    )
+
+
+def _authored_result(
+    command: str,
+    installed_implementation_manifest: InstalledImplementationManifest,
+    result: UnmanagedReport
+    | CatalogAdditionProposal
+    | AuthoringError
+    | FrozenJsonObject,
+) -> tuple[int, FrozenJsonObject]:
+    if isinstance(result, AuthoringError):
+        return 65, _command_error_report(
+            command,
+            installed_implementation_manifest,
+            code=result.code,
+            message="The authored-state command failed.",
+        )
+    document = (
+        result.document
+        if isinstance(
+            result,
+            (UnmanagedReport, CatalogAdditionProposal),
+        )
+        else result
+    )
+    if not isinstance(document, FrozenJsonObject):
+        return _runtime_unavailable_report(
+            command,
+            installed_implementation_manifest,
+        )
+    if contains_literal_credential(document):
+        return 65, _command_error_report(
+            command,
+            installed_implementation_manifest,
+            code="AUTHORED_RESULT_SECRET_MATERIAL",
+            message="Authored command output contains literal secret material.",
+        )
+    return 0, document
+
+
+def _run_authored_discovery_command(
+    command: str,
+    targets: tuple[str, ...] | None,
+    installed_implementation_manifest: InstalledImplementationManifest,
+) -> tuple[int, FrozenJsonObject]:
+    try:
+        catalog_path, lock_path = _installed_authored_paths()
+        validation = load_catalog_lock(catalog_path, lock_path)
+        base = validation.model
+        if base is None:
+            return _runtime_unavailable_report(
+                command,
+                installed_implementation_manifest,
+            )
+        selection, discovery = _authoring_runtime_inputs(
+            command,
+            base,
+            installed_implementation_manifest,
+            targets,
+        )
+        if command == "unmanaged":
+            if type(selection) is not DiscoverySelection:
+                return _runtime_unavailable_report(
+                    command,
+                    installed_implementation_manifest,
+                )
+            result = find_unmanaged(base, selection, discovery)
+        else:
+            if type(selection) is not TargetSelection:
+                return _runtime_unavailable_report(
+                    command,
+                    installed_implementation_manifest,
+                )
+            result = propose_add(base, selection, discovery)
+        return _authored_result(command, installed_implementation_manifest, result)
+    except (Exception, SystemExit):  # noqa: BLE001 - untrusted read boundaries
+        return _runtime_unavailable_report(
+            command,
+            installed_implementation_manifest,
+        )
+
+
+def _run_update(
+    selection: FrozenJsonObject,
+    installed_implementation_manifest: InstalledImplementationManifest,
+) -> tuple[int, FrozenJsonObject]:
+    try:
+        catalog_path, lock_path = _installed_authored_paths()
+        validation = load_catalog_lock(catalog_path, lock_path)
+        base = validation.model
+        if base is None:
+            return _runtime_unavailable_report(
+                "update",
+                installed_implementation_manifest,
+            )
+        source_resolver = _source_resolution_runtime_input(
+            base,
+            installed_implementation_manifest,
+        )
+        proposal = propose_update(base, selection, source_resolver)
+        return _authored_result(
+            "update",
+            installed_implementation_manifest,
+            proposal,
+        )
+    except (Exception, SystemExit):  # noqa: BLE001 - untrusted source boundary
+        return _runtime_unavailable_report(
+            "update",
+            installed_implementation_manifest,
+        )
+
+
+def _normalize_cli_targets(arguments: list[str]) -> tuple[str, ...]:
+    if len(arguments) > MAX_DISCOVERY_RECORDS:
+        raise ValueError("too many equipment targets")
+    if any(_TARGET_PATTERN.fullmatch(argument) is None for argument in arguments):
+        raise ValueError("invalid equipment target")
+    targets = tuple(sorted(arguments))
+    if len(targets) != len(set(targets)):
+        raise ValueError("equipment targets must be unique")
+    return targets
+
+
 def main(
     installed_implementation_manifest: InstalledImplementationManifest,
 ) -> int:
@@ -268,12 +490,55 @@ def main(
             "installed_implementation_manifest must be an "
             "InstalledImplementationManifest"
         )
-    if sys.argv[1:] == ["status"]:
+    arguments = sys.argv[1:]
+    if arguments == ["status"]:
         status, report = _run_status(installed_implementation_manifest)
         print(canonical_json_bytes(report).decode("utf-8"))
         return status
-    print(
-        "agent-equipment: only the read-only status command is available",
-        file=sys.stderr,
-    )
-    return 64
+    try:
+        if arguments and arguments[0] == "unmanaged":
+            targets = _normalize_cli_targets(arguments[1:])
+            status, report = _run_authored_discovery_command(
+                "unmanaged",
+                targets or None,
+                installed_implementation_manifest,
+            )
+        elif arguments and arguments[0] == "add" and len(arguments) > 1:
+            targets = _normalize_cli_targets(arguments[1:])
+            status, report = _run_authored_discovery_command(
+                "add",
+                targets,
+                installed_implementation_manifest,
+            )
+        elif arguments == ["update"]:
+            selection = freeze_json({"all": True})
+            if not isinstance(selection, FrozenJsonObject):
+                raise TypeError("update selection must be an object")
+            status, report = _run_update(
+                selection,
+                installed_implementation_manifest,
+            )
+        elif (
+            len(arguments) == 2
+            and arguments[0] == "update"
+            and _DISTRIBUTION_PATTERN.fullmatch(arguments[1]) is not None
+        ):
+            selection = freeze_json({"distribution": arguments[1]})
+            if not isinstance(selection, FrozenJsonObject):
+                raise TypeError("update selection must be an object")
+            status, report = _run_update(
+                selection,
+                installed_implementation_manifest,
+            )
+        elif arguments == ["apply"]:
+            status, report = _runtime_unavailable_report(
+                "apply",
+                installed_implementation_manifest,
+            )
+        else:
+            raise ValueError("invalid command or arguments")
+    except (TypeError, ValueError):
+        print("agent-equipment: invalid command or arguments", file=sys.stderr)
+        return 64
+    print(canonical_json_bytes(report).decode("utf-8"))
+    return status

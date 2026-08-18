@@ -28,17 +28,28 @@ deferred.
 
 ## V1 foundation freeze
 
-At this handoff boundary, no production adapter or execution-authority v1
-record has been emitted or accepted. The required immutable-content correction
-therefore remains eligible for the atomic pre-release exception.
+At this handoff boundary, no deployed production consumer has accepted a
+`catalog/v1`, `lock/v1`, or `source-manifest/v1` record. No production adapter
+or execution-authority v1 record has been emitted or accepted either.
 
-Before any production producer emits or production consumer accepts a v1
-adapter or execution-authority record, a contract correction may keep the v1
-major only when normative prose, authoritative and installed Schemas, digest
-pins, validators, and all fixtures change atomically. The first emitted or
-accepted production record permanently freezes that major. Every later field,
-enum, canonicalization, or semantic change requires the new major prescribed by
-`ARCHITECTURE.md`; a partial current-major rollout is never permitted.
+The catalog-and-lock foundation correction atomically replaces the pre-release
+resolved source selector with a source tracking policy, replaces each lock
+distribution row with a complete Source Manifest, and adds exact Source
+Manifest history for retirement bindings. It may keep the current majors only
+because normative prose, authoritative and installed Schemas, digest pins,
+validators, checked-in catalog and lock data, and all fixtures change together.
+The earlier checked-in production-source placement is not evidence that a
+deployed consumer accepted the pre-release shape.
+
+This exception claims no compatibility with a deployed consumer. Evidence of
+any such consumer cancels the exception and requires new majors plus the
+migration evidence prescribed by `ARCHITECTURE.md`.
+Merge of this atomic correction permanently freezes `catalog/v1`, `lock/v1`,
+and `source-manifest/v1`; every later field, enum, canonicalization, default, or
+semantic change requires a new major and an explicit migration. The adapter and
+execution-authority formats retain their separate pre-release exception only
+until their first production record is emitted or accepted. A partial current-
+major rollout is never permitted.
 
 ## Authoritative artifacts
 
@@ -54,7 +65,7 @@ enum, canonicalization, or semantic change requires the new major prescribed by
 | `docs/agent-equipment/acceptance-evidence-v1.schema.json` | Closed expected-case, candidate evidence, and post-run attestation contract |
 | `docs/agent-equipment/execution-authority-v1.schema.json` | Ten closed records with the same normalized immutable-content state: apply authorization, capture-observation-authority set, prepared-action-authority set, checkpoint-store snapshot, checkpoint set, compensation authorization and transition claim, run terminal, release archive manifest, and release receipt |
 | `docs/agent-equipment/initial-catalog.proposed.json` | Schema-valid initial desired-state proposal; no live authority |
-| `docs/agent-equipment/initial-lock.proposed.json` | Generated 132-record lock bound to the proposed catalog digest |
+| `docs/agent-equipment/initial-lock.proposed.json` | Generated lock with nine current Source Manifests, empty Source Manifest history, 132 coverage records, and 23 retirements, bound to the proposed catalog digest |
 | `docs/agent-equipment/INVENTORY.md` and `initial-inventory.json` | Dated, secret-free read-only observation and initial classification |
 | `docs/agent-equipment/PROTOTYPE_FINDINGS.md` | Disposable-prototype evidence and resulting design constraints |
 | `docs/agent-equipment/MIGRATION.md` | Separately authorized migration and rollback contract |
@@ -119,10 +130,14 @@ home/private_dot_local/lib/agent-equipment/agent_equipment/_json_schema.py
 home/private_dot_local/lib/agent-equipment/agent_equipment/validator.py
 home/private_dot_local/lib/agent-equipment/agent_equipment/resolver.py
 home/private_dot_local/lib/agent-equipment/agent_equipment/inventory.py
+home/private_dot_local/lib/agent-equipment/agent_equipment/secrets.py
+home/private_dot_local/lib/agent-equipment/agent_equipment/discovery.py
+home/private_dot_local/lib/agent-equipment/agent_equipment/authoring.py
+home/private_dot_local/lib/agent-equipment/agent_equipment/source_resolution.py
+home/private_dot_local/lib/agent-equipment/agent_equipment/updater.py
 home/private_dot_local/lib/agent-equipment/agent_equipment/checkpoint.py
 home/private_dot_local/lib/agent-equipment/agent_equipment/authorization.py
 home/private_dot_local/lib/agent-equipment/agent_equipment/executor.py
-home/private_dot_local/lib/agent-equipment/agent_equipment/secrets.py
 home/private_dot_local/lib/agent-equipment/agent_equipment/evidence.py
 home/private_dot_local/lib/agent-equipment/agent_equipment/adapters/base.py
 home/private_dot_local/lib/agent-equipment/agent_equipment/adapters/standalone_skills.py
@@ -197,7 +212,9 @@ The installed CLI reads the catalog and lock from
 `~/.config/agent-equipment/`. Checkpoints live under
 `~/.local/state/agent-equipment/checkpoints/`; neither checkpoints nor
 observed inventory are chezmoi-managed. The checked-in lock is regenerated only
-by `agent-equipment update` and reviewed like source. The chezmoi `run_onchange`
+through a reviewed Git change. `agent-equipment add` and
+`agent-equipment update` emit complete validated catalog-and-lock pairs; neither
+edits the installed or checked-in files. The chezmoi `run_onchange`
 script invokes only `agent-equipment status`; it accepts no authorization input
 and cannot invoke apply, open the authorization ledger, or create an action
 checkpoint. Its template input includes a canonical manifest
@@ -216,6 +233,40 @@ shell. Parse their documented JSON or stable file inputs and fail closed when a
 required capability is unavailable.
 
 ## Public seams
+
+The authored-state commands have four side-effect-free production seams:
+
+```python
+find_unmanaged(base, selection, discovery) -> UnmanagedReport | AuthoringError
+propose_add(base, selection, discovery) -> CatalogAdditionProposal | AuthoringError
+SourceResolver.resolve(request) -> FrozenJsonObject
+propose_update(base, selection, source_resolver) -> FrozenJsonObject
+```
+
+The discovery and source-resolution ports are read-only. Their returned records
+are re-admitted, bounded, digest-checked, and scanned for literal secret
+material before proposal construction.
+
+The source-resolution port returns `source-resolution-facts/v1`, never a Source
+Manifest. Its response is closed to an exact revision or manager-typed version,
+an immutable content digest when applicable, and the complete authoritative
+equipment listing. The controller copies reviewed source and restore policy from
+the validated base, derives selected membership and membership evidence,
+constructs resolved-source and restore records, and seals the Source Manifest.
+Reject every resolver-supplied policy or prose field, unknown manager/version
+class, and extra response field.
+
+In the stored Source Manifest, Git resolved source contains only `kind` and the
+exact revision. Native resolved source contains only `kind` and a closed typed
+version: semantic version, reviewed-registry revision, or static-source marker.
+The adjacent reviewed source policy remains the single home for repository,
+branch, manager, package, and channel.
+
+Structural admission removes unrestricted resolver fields; it does not prove
+that a malicious producer did not encode data inside a valid equipment identity
+or version. The production registry must use reviewed adapters for public source
+metadata only, deny secret-store inputs, and bind source-specific provenance.
+Fail closed when the source is not public or that provenance is unavailable.
 
 The resolver has one side-effect-free entry point:
 
@@ -550,24 +601,70 @@ Later steps do not begin until the named evidence passes.
 
 ### 3. Implement authored proposal commands
 
+- Accept exactly `status`, `unmanaged`, `add`, `update`, and `apply` as v1
+  command names. Step 3 grammar is `status`; `unmanaged` with zero or more
+  exact `<harness>/<equipment-identity>` targets; `add` with one or more such
+  targets; `update` with no selector or one exact distribution identity; and
+  reserved, fail-closed `apply`. Reject every legacy alias.
 - `unmanaged` reads runtime state and the authored catalog without changing
   either. It emits canonical secret-free observation records only for equipment
   positively observed on the machine and absent from the catalog. Exclude every
   cataloged operator-owned route.
 - Treat each runtime observation as fact, never as a proposal or ownership
   claim.
+- Validate raw adapter provider, source, restore, secret-reference, and
+  evidence-reference objects at the discovery port, then replace all five with
+  canonical digests in the emitted observation. Never emit adapter-authored
+  policy, prose, command arguments, or reference strings. Rebind every digest
+  needed for authoring to one exact trusted catalog-and-lock object and copy
+  only that object into the proposal.
+- Keep only the typed target and equipment identity as adapter-authored strings
+  because they are the fact being reported. Admit production discovery adapters
+  only through the reviewed sandboxed registry, give them no secret values, and
+  keep the acceptance row partial until that deployment evidence exists.
 - `add` always performs a fresh targeted unmanaged observation during its own
   invocation; a prior `unmanaged` invocation is neither required nor consumed.
   Revalidate the observed state and every binding before emitting one atomic
-  proposed catalog addition. If state or bindings change, fail with no partial
-  proposal.
+  catalog addition proposal containing the complete proposed catalog and
+  resolved lock. If state or bindings change, fail with no partial proposal.
+  Each selected target must bind to exactly one unambiguous reviewed
+  distribution whose authoritative Source Manifest lists that target's
+  equipment identity and whose complete compatible coverage templates match
+  the exact provider, source, restore, and secret-reference evidence.
+  Compatible targets in one atomic proposal may bind to different
+  distributions. Return `ADD_AUTHORING_POLICY_REQUIRED` rather than inventing
+  ownership, routes, restore evidence, or automation policy. Batch every
+  selected target into one all-or-nothing proposal.
 - `update` follows the configured source tracking policy and resolves immutable
   revisions and reviewed native-rolling baselines into one atomic proposed
   catalog-and-resolved-lock update. It installs nothing; the catalog and
   digest-bound lock advance together or neither does.
+- Treat omitted Git branch as current default-branch tracking and omitted
+  native channel as `latest` tracking; an explicit field is an exact reviewed
+  override. Each selected distribution resolves to one closed fact record; the
+  controller constructs the complete digest-bound Source Manifest from those
+  facts and the validated base's reviewed policy. Source-wide `all` expands to
+  the complete authoritative membership. Preserve observation source,
+  native-update policy, and immutable artifact subpaths exactly. For `npx`,
+  require one bare scoped or unscoped package name with no tag/version suffix,
+  keep tracking in the separate channel field, derive `npm:<resolved-semver>`
+  and `<package>@<resolved-semver>` restore evidence, and rewrite exactly one
+  matching selector in the exact `npx` invocation. When that invocation is
+  secret-wrapped, require exactly one reviewed `secret-exec -- npx` boundary.
+  Regenerate derived coverage, validate the full pair, retain all and only
+  retirement-referenced historical manifests, and never rewrite a retirement's
+  historical binding.
 - None opens a runtime checkpoint store or invokes a mutating adapter method.
+- Enforce the exact v1 Step 3 resource limits in `ARCHITECTURE.md`. Apply port
+  input limits before semantic policy or credential scanning; apply catalog and
+  lock proposal limits before full-pair validation; apply the complete-proposal
+  limit before re-observation or emission. Keep discovery, source-resolution,
+  proposal, and update-expansion limits as one versioned command contract rather
+  than implementation-local tuning values. The discovery target-or-record
+  ceiling and aggregate-byte ceiling span every harness report in the complete
+  `unmanaged` or `add` pass.
 - Evidence: `CMD-02` through `CMD-04` with byte-identical runtime snapshots and
-  catalog snapshots for `unmanaged`.
+  authored-state snapshots for every successful and failed proposal command.
 
 ### 4. Implement checkpointing before any production adapter mutation
 

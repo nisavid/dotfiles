@@ -6,8 +6,7 @@
       "identity": "distribution:example/bundle",
       "source": {
         "kind": "git",
-        "repository": "https://example.invalid/bundle.git",
-        "ref": "0123456789abcdef0123456789abcdef01234567"
+        "repository": "https://example.invalid/bundle.git"
       },
       "selection": {"all": true},
       "coverage_templates": {
