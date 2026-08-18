@@ -1,0 +1,74 @@
+[
+  {
+    "query": "Draft a better pull request title and body here in chat. Do not change GitHub.",
+    "should_trigger": false
+  },
+  {
+    "query": "Update pull request #84's title and body on GitHub, and leave its draft state unchanged.",
+    "should_trigger": true
+  },
+  {
+    "query": "Create a draft pull request for this pushed branch with a complete reviewer-facing title and body.",
+    "should_trigger": true
+  },
+  {
+    "query": "The stored title and body are already current. Mark pull request #84 ready for review without rewriting them.",
+    "should_trigger": true
+  },
+  {
+    "query": "Inspect pull request #84's title and body and report whether they are stale. Do not change anything.",
+    "should_trigger": false
+  },
+  {
+    "query": "Add a comment to pull request #84 without changing its title, body, or draft state.",
+    "should_trigger": false
+  },
+  {
+    "query": "Run the pull request checks and tell me what is still pending. Make no changes.",
+    "should_trigger": false
+  },
+  {
+    "query": "Merge pull request #84 without changing its title, body, or draft state.",
+    "should_trigger": false
+  },
+  {
+    "query": "Replace only pull request #84's stored body on GitHub. Preserve its title and draft state.",
+    "should_trigger": true
+  },
+  {
+    "query": "Rename pull request #84 on GitHub. Preserve its body and draft state.",
+    "should_trigger": true
+  },
+  {
+    "query": "Submit this pushed stack with Graphite and create or update its draft pull requests.",
+    "should_trigger": true
+  },
+  {
+    "query": "Explain how pull request drafts work. Do not access GitHub or change anything.",
+    "should_trigger": false
+  },
+  {
+    "query": "Edit pull request #84 to add the release-candidate label. Do not change its title, body, or draft state.",
+    "should_trigger": false
+  },
+  {
+    "query": "Change pull request #84's base branch to release/next. Leave its title, body, and draft state alone.",
+    "should_trigger": false
+  },
+  {
+    "query": "Sync my fork from upstream, then refresh the stored title and body of the resulting pull request on GitHub.",
+    "should_trigger": true
+  },
+  {
+    "query": "Publish the fixup commits and update the existing pull request body on GitHub without changing readiness.",
+    "should_trigger": true
+  },
+  {
+    "query": "Yeet this pushed branch by creating its draft pull request with the complete reviewer-facing text.",
+    "should_trigger": true
+  },
+  {
+    "query": "Ship the commits to the remote branch, but do not create or change any pull request text or state.",
+    "should_trigger": false
+  }
+]

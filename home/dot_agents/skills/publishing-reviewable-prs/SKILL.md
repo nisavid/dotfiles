@@ -1,16 +1,29 @@
 ---
 name: publishing-reviewable-prs
-description: Use when creating or changing a GitHub PR, including drafts, title/body or draft/ready-state edits, `gh pr create/edit/ready`, Graphite submission, fork-sync or fixup PRs, and requests to yeet, ship, publish, or prepare a PR. Do not use for read-only inspection, comments, checks, threads, or merge-only work with unchanged PR text and state.
+description: >-
+  Use when and only when performing a live GitHub pull-request mutation through
+  the owned guarded helpers: create a draft, store reviewer-facing text, or
+  transition an existing draft to ready. Also use as the mutation stage of
+  Graphite submission, fork sync, fixup publication, or explicit ship, publish,
+  and yeet work only when the requested result includes one of those live PR
+  mutations. Never use for generating or improving PR text in chat when GitHub
+  must remain unchanged, or for read-only inspection, comments, checks,
+  threads, labels, base changes, branch-only shipping, or merge-only work with
+  unchanged PR text and readiness.
 ---
 
 # Publishing Reviewable PRs
 
 ## Contract
 
-This skill owns PR creation plus title/body and ready-state publication.
+This skill is the external-mutation orchestrator for PR creation, title/body
+publication, and draft-to-ready transitions.
 `checkpointing-and-publishing-git-work` owns task-only commits and pushes;
 Graphite may own stack metadata; `writing-reviewable-pr-descriptions` owns the
-complete title and body.
+complete title and body. It is a required composition sub-skill whenever this
+skill creates or changes PR text. For requested PR-text mutations, both skill
+descriptions intentionally match: this skill orchestrates and the writer
+composes because loading one skill does not load the other transitively.
 
 GitHub exposes no conditional title/body/readiness mutation. These helpers use
 guarded best effort: exact preflight, one mutation, and a final re-read. They
@@ -18,18 +31,32 @@ detect observed drift but cannot eliminate the final read/write race. Never
 claim atomicity, automatic rollback, or that a concurrent edit cannot be
 overwritten.
 
+## Routing
+
+- For a chat-only title/body draft, use
+  `writing-reviewable-pr-descriptions` alone and stop before GitHub mutation.
+- For PR creation or an actual title/body change, use this skill as the
+  orchestrator and load `writing-reviewable-pr-descriptions` for composition.
+- For a draft-to-ready-only transition, use this skill alone. If the stored body
+  needs revision, stop unless the request also authorizes a text change.
+- For read-only inspection, comments, checks, threads, or merge-only work with
+  unchanged text and state, use neither skill.
+
 ## Workflow
 
 1. Resolve the exact repository, PR, qualified head and owner, intended base,
    pushed base/head OIDs, and existing PR, if any.
 2. Confirm the remote head contains exactly the commits the PR should describe.
 3. Read repository instructions and templates.
-4. Use `writing-reviewable-pr-descriptions` to prepare the complete title/body
-   from the exact pushed diff and resolved stack.
-5. For an existing PR, capture the helper's `preimage` JSON now. Immediately use
-   the owned create or existing-PR helper below. Record an ambiguous-success
-   warning without retrying. Stop on preflight drift, an unexpected final state,
-   or any other ambiguity; never retry or roll back automatically.
+4. For creation or a text update, use `writing-reviewable-pr-descriptions` to
+   prepare the complete title/body from the exact pushed diff and resolved
+   stack. For a draft-to-ready-only transition, validate the exact stored body
+   and skip composition; do not prepare or publish replacement text.
+5. For an existing PR, capture the helper's `preimage` JSON immediately before
+   the owned text or ready operation. For creation, invoke the owned creator
+   after the body is complete. Record an ambiguous-success warning without
+   retrying. Stop on preflight drift, an unexpected final state, or any other
+   ambiguity; never retry or roll back automatically.
 6. Re-read and report repository, base/head names and OIDs, head owner, title,
    body, and draft/ready state.
 7. Inspect live collapsed and expanded GitHub rendering whenever structured

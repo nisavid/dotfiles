@@ -1,0 +1,95 @@
+{
+  "skill_name": "publishing-reviewable-prs",
+  "evals": [
+    {
+      "id": 0,
+      "name": "existing-pr-text-update",
+      "prompt": "Using the provided scenario fixture, respond as the agent handling this request: \"Update pull request #84's title and body on GitHub, and leave its draft state unchanged.\" Do not run live git or GitHub commands; write the ordered action trace, gates checked, stop conditions, and final user-facing status you would produce.",
+      "expected_output": "The publisher orchestrates the authorized stored-text update, uses the writer for complete reviewer-facing text, binds the exact live preimage immediately before one mutation, preserves the existing ready state, and verifies the stored result without retrying ambiguity.",
+      "files": [
+        "evals/fixtures/existing-pr-text-update.md"
+      ],
+      "expectations": [
+        "The response uses publishing-reviewable-prs as the mutation orchestrator and writing-reviewable-pr-descriptions for composition.",
+        "The response binds the exact pushed base and head identity and the current title, body, and ready state before mutation.",
+        "The response performs at most one guarded text mutation and preserves the existing ready state.",
+        "The response re-reads the stored result and never retries or rolls back automatically after ambiguity."
+      ]
+    },
+    {
+      "id": 1,
+      "name": "new-draft-pr",
+      "prompt": "Using the provided scenario fixture, respond as the agent handling this request: \"Create a draft pull request for this pushed branch with a complete reviewer-facing title and body.\" Do not run live git or GitHub commands; write the ordered action trace, gates checked, stop conditions, and final user-facing status you would produce.",
+      "expected_output": "The publisher verifies the unique repository, base, and pushed head, uses the writer for complete text, creates one canonical draft through the owned helper, verifies stored identity and text, and leaves readiness unchanged for render inspection.",
+      "files": [
+        "evals/fixtures/new-draft-pr.md"
+      ],
+      "expectations": [
+        "The response stops if the repository, intended base, head owner, pushed head, or existing-PR match is ambiguous.",
+        "The response uses writing-reviewable-pr-descriptions for title and body composition.",
+        "The response creates through the publisher's guarded creator and leaves the new pull request draft.",
+        "The response verifies final stored identity and text and requires live rendering inspection for the structured body."
+      ]
+    },
+    {
+      "id": 2,
+      "name": "ready-state-only",
+      "prompt": "Using the provided scenario fixture, respond as the agent handling this request: \"The stored title and body are already current. Mark pull request #84 ready for review without rewriting them.\" Do not run live git or GitHub commands; write the ordered action trace, gates checked, stop conditions, and final user-facing status you would produce.",
+      "expected_output": "The publisher validates the current stored body and readiness authority, captures an immediate exact preimage, performs one guarded ready-state mutation without invoking composition or rewriting text, and verifies the final state.",
+      "files": [
+        "evals/fixtures/ready-state-only.md"
+      ],
+      "expectations": [
+        "The response uses publishing-reviewable-prs without invoking writing-reviewable-pr-descriptions.",
+        "The response validates the exact stored body and every readiness gate before state mutation.",
+        "The response does not rewrite the title or body.",
+        "The response performs at most one guarded ready operation and re-reads final state."
+      ]
+    },
+    {
+      "id": 3,
+      "name": "chat-only-draft-near-miss",
+      "prompt": "Using the provided scenario fixture, respond as the agent handling this request: \"Draft a better pull request title and body here in chat. Do not change GitHub.\" Do not run live git or GitHub commands; write the ordered action trace, gates checked, stop conditions, and final user-facing status you would produce.",
+      "expected_output": "The request routes to writing-reviewable-pr-descriptions alone, returns a complete chat proposal, and stops before preimage capture or any GitHub mutation.",
+      "files": [
+        "evals/fixtures/chat-only-draft-near-miss.md"
+      ],
+      "expectations": [
+        "The response does not use publishing-reviewable-prs as the active workflow.",
+        "The response uses writing-reviewable-pr-descriptions for a complete title and body proposal.",
+        "The response performs no preimage capture, creation, edit, or ready-state action.",
+        "The response clearly stops at the chat-only proposal."
+      ]
+    },
+    {
+      "id": 4,
+      "name": "read-only-inspection-near-miss",
+      "prompt": "Using the provided scenario fixture, respond as the agent handling this request: \"Inspect pull request #84's title and body and report whether they are stale. Do not change anything.\" Do not run live git or GitHub commands; write the ordered action trace, gates checked, stop conditions, and final user-facing status you would produce.",
+      "expected_output": "The request remains read-only and uses neither the writer nor publisher as an active workflow; it reports evidence without preparing or storing replacement text.",
+      "files": [
+        "evals/fixtures/read-only-inspection-near-miss.md"
+      ],
+      "expectations": [
+        "The response uses neither publishing-reviewable-prs nor writing-reviewable-pr-descriptions as an active workflow.",
+        "The response performs read-only identity, diff, and stored-text inspection only.",
+        "The response does not prepare replacement text or capture a mutation preimage.",
+        "The response reports staleness evidence without changing GitHub state."
+      ]
+    },
+    {
+      "id": 5,
+      "name": "body-only-preservation",
+      "prompt": "Using the provided scenario fixture, respond as the agent handling this request: \"Update only pull request #84's stored body on GitHub. Preserve its title, custom operations note, and draft state.\" Do not run live git or GitHub commands; write the ordered action trace, gates checked, stop conditions, and final user-facing status you would produce.",
+      "expected_output": "The publisher treats the exact current title and custom body content as preservation input, uses the writer to add only the authorized verification update, performs one guarded body publication while keeping the PR draft, and verifies the stored result.",
+      "files": [
+        "evals/fixtures/body-only-preservation.md"
+      ],
+      "expectations": [
+        "The response keeps the exact stored title and does not broaden body-only authority into a title change.",
+        "The response preserves the still-current custom operations note while adding the missing verification evidence.",
+        "The response uses publishing-reviewable-prs as orchestrator and writing-reviewable-pr-descriptions for complete canonical body composition.",
+        "The response captures an immediate exact preimage, publishes at most once, preserves draft state, and verifies the final stored title and body."
+      ]
+    }
+  ]
+}

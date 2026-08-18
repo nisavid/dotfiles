@@ -21,7 +21,9 @@ Use this only when the operator explicitly wants the PR ready for review. Otherw
 ## Precedence
 
 - Use this over `publishing-reviewable-prs`, `tightening-code-for-review`, and `writing-reviewable-pr-descriptions` when the requested outcome is a review-ready PR.
-- Use `publishing-reviewable-prs` alone for draft PR creation or title/body publication that should remain draft.
+- Use `publishing-reviewable-prs` as the top-level orchestrator for draft PR
+  creation or title/body publication that should remain draft; it uses
+  `writing-reviewable-pr-descriptions` for composition.
 - Use `tightening-code-for-review` alone for report-only or reviewability-only passes.
 - Use `writing-reviewable-pr-descriptions` alone only for chat-only drafting.
   Use `publishing-reviewable-prs` for every actual title or body change.

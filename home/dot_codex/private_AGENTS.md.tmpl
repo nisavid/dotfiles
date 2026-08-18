@@ -10,10 +10,12 @@ Treat commits and pushes as normal completion steps for task-owned changes.
 
 For every Git-backed task, use `checkpointing-and-publishing-git-work` at task start, at every clean checkpoint, and before a stopping-point response.
 
-For every pull-request creation, title edit, body edit, or draft/ready-state
-change, use
-`publishing-reviewable-prs`. It must use
-`writing-reviewable-pr-descriptions` for reviewer-facing text.
+For every pull-request creation, title edit, body edit, or draft-to-ready
+transition, use `publishing-reviewable-prs`. For creation or a text edit, it
+must use `writing-reviewable-pr-descriptions` for the complete reviewer-facing
+text. For a draft-to-ready-only transition, use the publisher alone.
+Use `writing-reviewable-pr-descriptions` alone only for a chat-only draft that
+must not change GitHub.
 Never use `gh pr create --fill`, `--fill-first`, or `--fill-verbose`.
 
 Stage and commit only task-owned work. A path is local-only and non-blocking only when explicitly classified by the operator, active task, or applicable repository policy. Explicit instructions to keep work uncommitted or local override default commit and publication.

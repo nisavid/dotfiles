@@ -34,9 +34,11 @@ When you first push a task branch, create a draft PR in the same workflow turn
 unless the operator explicitly says not to create a PR. Do not leave pushed
 work branches PR-less as handoff state.
 
-Use `publishing-reviewable-prs` for that creation and for every later title/body
-or draft/ready-state mutation. It must construct the complete body through
-`writing-reviewable-pr-descriptions`; generated `--fill` text is prohibited.
+Use `publishing-reviewable-prs` for that creation, every later title/body
+mutation, and any draft-to-ready transition. For creation or a text mutation,
+it must construct the complete body through
+`writing-reviewable-pr-descriptions`; for a draft-to-ready-only transition, use
+the publisher alone. Generated `--fill` text is prohibited.
 
 Mark the PR ready through the publisher's guarded `ready` operation only after
 local readiness gates pass, the PR body records the verification evidence, and
