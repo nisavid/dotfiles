@@ -15,7 +15,7 @@ authored catalog or resolved lock. Its desired-state inputs are resolved in the
 schema-valid [`initial-catalog.proposed.json`](initial-catalog.proposed.json)
 and catalog-digest-bound
 [`initial-lock.proposed.json`](initial-lock.proposed.json). Those files are a
-review proposal, not live adoption or migration authorization.
+review proposal, not accepted authored state or migration authorization.
 `initial-inventory.json` references those canonical proposal artifacts and does
 not redeclare their coverage templates, provider routes, operation matrices, or
 lock decisions. It retains only dated observation evidence and unresolved
@@ -45,9 +45,9 @@ Provenance is observable for 87 skills through the global `skills` lock. The
 repository also names 32 canonical skills, with `graphite` appearing in both
 sets. Four live skills have neither source: `applying-diataxis`, `impeccable`,
 `publishing-private-sites`, and `working-in-private-worktrees`; they remain
-retained observations rather than inferred adoptions. The three canonical
-Hindsight symlinks additionally identify the Hindsight control plane as their
-active-release source.
+retained observations rather than inferred catalog additions. The three
+canonical Hindsight symlinks additionally identify the Hindsight control plane
+as their active-release source.
 
 ## Normalized plugin components
 
@@ -106,9 +106,10 @@ monitors, or executables. That makes the proposed provider split complete:
 - Claude prefers the official `mattpocock-skills` plugin as one inseparable
   25-skill activation group.
 - Codex and Cursor use the individually selected canonical standalone skills.
-- A later migration may adopt and remove only the 21 positively identified
-  Claude symlinks after the plugin is installed and its complete activation
-  group is verified. The 25 canonical targets stay untouched.
+- A later migration may remove only the 21 positively identified Claude
+  symlinks after their catalog addition is accepted, the plugin is installed,
+  and its complete activation group is verified. The 25 canonical targets stay
+  untouched.
 
 The official Claude route is `native_rolling`: the install command selects a
 marketplace channel, not an old exact artifact. The proposed standalone route
@@ -121,10 +122,11 @@ an arbitrary commit through its native `--branch` selector, and
 
 ## First MCP slice
 
-These are the provider choices in the proposed catalog, not production
-adoption. Each selected route has complete ownership, provenance, restore,
-component-control, operation, and compensation data. No supplementary route is
-selected, so the desired slice contains no accepted overlap exception.
+These are the provider choices in the proposed catalog, not accepted
+production catalog state. Each selected route has complete ownership,
+provenance, restore, component-control, operation, and compensation data. No
+supplementary route is selected, so the desired slice contains no accepted
+overlap exception.
 Native-rolling plugin removal remains `operator_action`: without an
 independently retained exact artifact, an automated uninstall could not restore
 the captured pre-state if the manager channel advanced.
@@ -142,19 +144,19 @@ route to the pinned, `secret-exec`-wrapped stdio provider used by the other
 harnesses. This keeps credential injection process-scoped under the proposal's
 existing secret-profile contract instead of defining an HTTP authentication
 header contract. It is proposed desired state only; it does not change the
-observed live Cursor state before an authorized adoption.
+observed live Cursor state before an authorized `apply`.
 
 Every already-observed direct MCP selected by this proposal is classified for
-catalog adoption in the inventory. This includes the existing Codex Context7
+catalog addition in the inventory. This includes the existing Codex Context7
 route; `explicitly_retained_unmanaged_runtime_observation` is reserved for
 observed routes outside the selected proposal.
 
-The current duplicate candidates are preserved until their winning routes are
-adopted. The proposed retirement set owns only the observed direct Claude
-Chrome DevTools route, the observed direct Codex GitHub route, and the 21 Matt
-Claude projections. Disabled Claude Context7, GitHub, and Greptile plugins
-remain unmanaged observations. None of those unmanaged observations is a
-deletion instruction.
+The current duplicate candidates are preserved until their selected provider
+routes are active. The proposed retirement set owns only the observed direct
+Claude Chrome DevTools route, the observed direct Codex GitHub route, and the
+21 Matt Claude projections. Disabled Claude Context7, GitHub, and Greptile
+plugins remain unmanaged observations. None of those unmanaged observations is
+a deletion instruction.
 
 ## Selective-component limits
 
@@ -184,12 +186,12 @@ deletion instruction.
 - The disabled direct Codex `computer-use` MCP and the enabled
   MCP-plus-one-skill plugin are both duplicate/overlap candidates. There is no
   complete provider decision in the first slice, so the direct route has no
-  adoption or retirement authority and `computer-use-provider-map` stays
+  catalog-addition or retirement authority and `computer-use-provider-map` stays
   pending. The proposed catalog is intentionally not expanded for it.
 
 ## Classification policy
 
-`proposed_managed_equipment_slice` means that a later catalog may adopt the
+`proposed_managed_equipment_slice` means that a later catalog may add the
 observation after review. `duplicate_overlap_candidate` records evidence but
 does not choose a winner or authorize removal. `stale_unverifiable_observation`
 is used for unknown-version Claude plugins and Codex config entries not

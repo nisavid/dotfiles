@@ -36,11 +36,15 @@ PACKAGE_SOURCE_ROOT = SOURCE / "private_dot_local/lib/agent-equipment/agent_equi
 PACKAGE_NAMES = (
     "__init__.py",
     "_json_schema.py",
+    "authoring.py",
     "canonical.py",
+    "discovery.py",
     "inventory.py",
     "model.py",
     "resolver.py",
     "secrets.py",
+    "source_resolution.py",
+    "updater.py",
     "validator.py",
 )
 MANIFEST_PATHS = (

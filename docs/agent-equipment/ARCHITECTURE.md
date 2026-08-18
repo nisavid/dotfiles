@@ -52,6 +52,29 @@ supplied by several distributions; no authored equipment row owns exactly one
 distribution. A source-wide `all` selection expands to exact lock membership,
 while an explicit selection must equal its resolved membership.
 
+Each catalog distribution contains a source tracking policy. A Git source
+tracks its current default branch when `branch` is omitted and one exact safe
+branch when it is present. A native-manager source tracks `latest` when
+`channel` is omitted and one exact non-`latest` channel when it is present.
+The lock contains one current `source-manifest/v1` for each distribution. Its
+`available_equipment` is the complete authoritative source listing, and its
+membership-evidence digest binds the canonical
+`{"available_equipment":[...]}` object. `equipment` equals that complete list
+for an `all` selection or the exact explicit catalog selection. Resolved source
+and restore evidence must match the tracking policy, and
+`source_manifest_digest` binds the complete manifest excluding that digest.
+
+The stored resolved-source projection is fact-only. Git stores `kind` and the
+exact revision. Native managers store `kind` plus one closed typed version:
+semantic version, reviewed-registry revision, or static-source marker. Manager,
+package, channel, repository, and branch remain only in the adjacent reviewed
+source tracking policy; they are never repeated as resolver-authored strings.
+
+The lock's `source_manifest_history` contains all and only non-current Source
+Manifests still referenced by retirements. A source update may advance a
+current manifest, but it never rewrites a retirement's manifest digest,
+provider, or restore evidence.
+
 There is no field-by-field inheritance. Expansion uses this precedence:
 
 1. An exact equipment-and-harness coverage record.
@@ -64,6 +87,12 @@ template must declare the target harness. Each selected source-wide identity
 must resolve at step 3 or an earlier exact record. An exact record or template
 replaces the lower-precedence record as a whole; null, recursive, and partial
 merges are invalid.
+
+Every authored provider route, referenced or not, must be structurally valid
+and source/provider/restore coherent with its distribution's current Source
+Manifest. Expansion alone determines which routes are active; an unreferenced
+template is dormant policy, not permission to retain stale or incoherent
+source evidence.
 
 The lock uses `lock-v1.schema.json`. Canonical hashing serializes UTF-8 JSON
 with sorted object keys and no insignificant whitespace. Checked-in JSON may be
@@ -356,9 +385,38 @@ resolve(command, catalog, lock, inventory, capabilities) -> resolution
 ```
 
 `resolution` contains diagnostics, the expanded coverage matrix, the operation
-matrix, generated overlays or authored proposals for the selected command, and
-a mutation plan only for apply. Adapters do not select providers or rewrite
-coverage outcomes.
+matrix, generated overlays, and a mutation plan only for apply. The resolver
+accepts `status` and `apply`; it does not produce authored-state proposals.
+Adapters do not select providers or rewrite coverage outcomes.
+
+The authored-state commands use separate side-effect-free seams:
+
+```text
+find_unmanaged(base, selection, discovery) -> UnmanagedReport | AuthoringError
+propose_add(base, selection, discovery) -> CatalogAdditionProposal | AuthoringError
+SourceResolver.resolve(request) -> source-resolution-facts/v1
+propose_update(base, selection, source_resolver) -> update-proposal/v1
+```
+
+The source-resolution port returns facts, never a Source Manifest. Its closed
+response contains only the request binding, an exact Git revision and content
+digest or manager-typed native version, the complete authoritative equipment
+listing, and its envelope digest. It cannot return source or restore policy,
+unrestricted prose, selected membership, membership evidence, branch, channel,
+manager, package, or a presealed Source Manifest. The controller copies reviewed
+source and restore policy from the validated base, derives selection and
+membership evidence, constructs resolved source and restore records, and seals
+the Source Manifest. Unknown manager/version classes and every extra response
+field fail closed.
+
+Shape validation does not prove that a malicious producer did not encode data
+inside a syntactically valid equipment identity or version. The production
+registry therefore admits only reviewed source resolvers for public source
+metadata, denies them secret-store inputs, and requires source-specific
+provenance for the returned facts. Structural admission proves that the port has
+no unrestricted field; the installed adapter and sandbox prove that its typed
+facts came from the named public source. Missing provenance or a non-public
+source fails closed.
 
 Resolution phases are fixed:
 
@@ -395,7 +453,7 @@ Resolution phases are fixed:
    requires the reviewed `install` operation, and unknown evidence is fatal
    before planning. An immutable retirement is eligible for removal only when
    its observed tuple exactly equals the reviewed losing-route tuple.
-10. Derive the selected command's report, proposal, or candidate action set.
+10. Derive the selected status report or apply candidate action set.
 11. Derive the complete action-dependency graph, including every required
     verification prerequisite and provider-switch dependency.
 12. Reject a graph with a missing dependency, orphan action, cycle, or
@@ -575,14 +633,49 @@ operations rather than additional operation kinds.
 
 ## Command boundaries
 
-| Command | Runtime reads | Network | Authored writes | Runtime writes |
+| Command | Runtime reads | Network | Reviewable output | State mutation |
 | --- | --- | --- | --- | --- |
-| `status` | Yes | No by default | None | None |
-| `unmanaged` | Yes | No by default | None | None |
-| `add` | Yes, including a fresh targeted unmanaged observation and revalidation | No by default | One atomic proposed catalog addition | None |
-| `update` | Yes | As allowed by the configured source tracking policy | One atomic proposed catalog and resolved-lock update | None |
-| `apply` | Yes | Allowed only for locked restore | Checkpoint and authorization ledgers only | Automated operations on reconciler-owned routes, after exact external authorization |
-| `compensate` | Yes | No by default | Checkpoint and authorization ledgers only | Guarded restoration for one original run, after exact compensation authorization |
+| `status` | Yes | No by default | Status resolution | None |
+| `unmanaged` | Yes | No by default | Canonical factual observation records | None |
+| `add` | Yes, including fresh targeted observation and revalidation | No by default | One complete catalog-and-lock addition proposal | None |
+| `update` | No equipment-runtime reads; authored state and tracked-source metadata only | As allowed by the configured source tracking policy | One complete catalog-and-lock update proposal | None |
+| `apply` | Yes | Allowed only for locked restore | Execution report | Checkpoint and authorization ledgers plus authorized reconciler-owned runtime routes |
+
+The Step 3 CLI accepts exactly:
+
+```text
+agent-equipment status
+agent-equipment unmanaged [<harness>/<equipment-identity> ...]
+agent-equipment add <harness>/<equipment-identity> [...]
+agent-equipment update [<distribution-identity>]
+agent-equipment apply
+```
+
+Targets are unique typed equipment identities under `claude`, `codex`, or
+`cursor`. `update` selects every distribution when no identity is supplied or
+one exact `distribution:...` identity otherwise. No legacy alias is accepted.
+At Step 3, the exact `apply` name is reserved and fails unavailable; Step 4
+owns its closed authorization grammar. `compensate` remains a future executor
+seam and is not a current v1 CLI command.
+
+### Step 3 resource limits
+
+These ceilings are part of the v1 command contract. Port admission rejects its
+input limits before semantic policy or credential scanning can amplify the
+input. Proposal construction checks catalog and lock ceilings before full-pair
+validation and checks the complete proposal before re-observation or emission.
+Changing a ceiling after the v1 freeze requires the same versioning treatment
+as another accepted-input semantic change.
+
+| Boundary | Exact ceiling |
+| --- | --- |
+| Discovery registry and controller-wide result cardinality | 64 discovery adapters per harness request; 4,096 exact targets or emitted records across all harness reports in one `unmanaged` or `add` pass |
+| Discovery structured fields | 64 secret or evidence references, 64 provider arguments, and 4,096 characters per field |
+| Discovery serialization and structure | 1 MiB per adapter capability or response; controller-wide 8 MiB aggregate across all harness reports in one `unmanaged` or `add` pass; depth 64 and 100,000 JSON nodes |
+| Source-resolution request | 256 KiB per source-resolution request |
+| Source-resolution response and manifest | 4 MiB per source-resolution response or Source Manifest; 16,384 available-equipment identities; 4,096 characters per field; depth 64 and 100,000 JSON nodes |
+| `add` and `update` proposal artifacts | For each command: 4 MiB catalog, 16 MiB lock, and 32 MiB complete proposal |
+| `update` expansion | 4,096 distributions, 65,536 equipment identities, and 196,608 coverage records |
 
 `unmanaged` reads both runtime state and the authored catalog. It emits
 canonical secret-free observation records only for equipment positively
@@ -593,16 +686,43 @@ proposal.
 
 `add` does not consume or require a record from an earlier `unmanaged`
 invocation. During the same invocation it performs a fresh targeted unmanaged
-observation, derives one proposed catalog addition, then revalidates the
+observation, derives one catalog addition proposal, then revalidates the
 observed state and every binding before emitting that proposal. If the runtime
 state or any binding changes, it fails without a partial proposal. It never
-changes runtime state.
+changes runtime state. Every selected target is observed twice. Each selected
+target must bind to exactly one unambiguous reviewed distribution whose
+authoritative Source Manifest lists that target's equipment identity and whose
+complete compatible templates match the observed provider, source, restore,
+and secret-reference evidence. Compatible targets in one atomic proposal may
+bind to different distributions. A multi-target proposal succeeds as one unit
+or not at all.
+Missing, ambiguous, or conflicting policy returns
+`ADD_AUTHORING_POLICY_REQUIRED`; the command never invents ownership, routes,
+restore evidence, or automation policy.
 
 `update` follows the configured source tracking policy. It advances resolved
 route evidence and the digest-bound lock together for immutable revisions or
 reviewed native-rolling baselines, emits exactly one atomic proposed catalog
-and resolved-lock update, and installs nothing. Apply never advances either
+and resolved-lock update, and installs nothing. Omitted Git branches follow the
+resolved default branch; omitted native channels follow resolved `latest`.
+Update selects all distributions or one exact distribution, expands an `all`
+selection from the complete authoritative source-resolution facts, constructs
+the Source Manifest from those facts plus the validated base's reviewed policy,
+regenerates derived coverage, validates the complete pair, and preserves every
+retirement-bound historical manifest without retaining orphans. The resolver
+cannot alter observation source, update-control policy, immutable artifact
+subpaths, or any other reviewed restore policy. Apply never advances either
 authored artifact.
+
+For an `npx` distribution, reviewed `source.package` is one bare npm package
+name, scoped or unscoped, with no tag or version suffix. Tracking policy lives
+only in the separate channel field; omission means `latest`. Resolution derives
+`restore.channel` as `npm:<resolved-semver>` and `restore.reviewed_baseline` as
+`<package>@<resolved-semver>`. Update rewrites exactly one matching selector in
+the exact `npx` invocation. When that invocation is secret-wrapped, require
+exactly one reviewed `secret-exec -- npx` boundary. A tagged package, duplicate
+selector, or missing or duplicate boundary on a secret-wrapped invocation is
+invalid authored state.
 
 Chezmoi's `run_onchange` integration invokes `status` only. It can report a
 candidate plan but cannot accept an authorization path or digest, open the
@@ -614,12 +734,27 @@ the authorization record itself. A later public `compensate` invocation has the
 same closed-input rule for exact `CompensationAuthorization` bytes and
 `trusted_compensation_authorization_digest`. It cannot reuse `ApplyAuthorization`.
 
-An unmanaged observation record identity is the canonical digest of its
-surface, observed-state digest, catalog digest, and inventory digest.
+An unmanaged observation record identity is the canonical digest of its exact
+target, observed-state digest, catalog digest, and discovery digest.
 `unmanaged` emits that canonical, secret-free record shape, and the targeted
 observation inside `add` uses the same factual shape internally. The `add`
 proposal is separate authored output and is emitted only after fresh
 revalidation succeeds.
+
+Raw adapter-authored provider, source, restore, secret-reference, and evidence-
+reference objects are structurally validated at the discovery port but are
+never emitted. The observation replaces each object with its canonical SHA-256
+digest. `add` requires the source digest to identify one exact current Source
+Manifest and requires the provider, restore, and secret-reference digests to
+match the corresponding trusted catalog-and-lock route. It copies only those
+trusted authored objects into a proposal. A missing, ambiguous, or unequal
+binding fails closed.
+
+The target and equipment identity remain because they are the subject being
+reported. Structural admission cannot prove that a malicious adapter did not
+encode data inside an otherwise valid identity. The production discovery
+registry therefore admits only reviewed, sandboxed adapters that receive no
+secret values; a result without that deployment evidence remains incomplete.
 
 ## Adapter interface
 
@@ -964,8 +1099,9 @@ observed pre-state digests when observation succeeded, any observed post-state
 digest, and secret-free evidence. A pre-state mismatch is
 `concurrent_change` with `mutation_state: not_started`. A native failure after
 invocation is `native_failure` or `partial_change` with
-`mutation_state: possibly_changed` or `unknown`; the executor stops and audits
-before retry or compensation. An adapter must never return `ok` after a
+`mutation_state: possibly_changed` or `unknown`; the executor stops and obtains
+a fresh status observation before retry or compensation. An adapter must never
+return `ok` after a
 compare-before-mutate mismatch.
 
 `action_identity` is the idempotency key. Repeating an observation is safe;
@@ -1174,7 +1310,7 @@ new external authorization and nonce. The executor otherwise refuses an
 unvalidated or digest-mismatched plan. It does not promise global atomicity. For
 every action it:
 
-1. Audits and captures the exact pre-state.
+1. Freshly observes and captures the exact pre-state.
 2. Derives the expected post-state and compensation from adapter capabilities.
 3. Atomically persists and fsyncs a `prepared` checkpoint before mutation.
 4. Compares current state with the captured pre-state.
@@ -1194,9 +1330,9 @@ afterward. A mismatch preserves the external change, durably advances that
 action to terminal `compensation_blocked`, marks the run `needs_operator`, and
 stops. Recovery never reports success while any action is blocked.
 
-A surviving `prepared` checkpoint is audited before retry. Expected post-state
-can prove this run's effect only when its durable invocation intent is
-`started`:
+A surviving `prepared` checkpoint is freshly observed and classified before
+retry. Expected post-state can prove this run's effect only when its durable
+invocation intent is `started`:
 
 - observed pre-state: the mutation did not take effect and may be retried after
   persisting a new invocation intent;
@@ -1289,10 +1425,10 @@ apply.
 
 ## Schema evolution
 
-Catalog, lock, captured-state, plan-action-set, capture-observation-authority-set,
-prepared-action-authority-set, apply-authorization, compensation-authorization,
-compensation-transition-claim, checkpoint-store-snapshot, checkpoint-set,
-run-terminal, evidence,
+Catalog, lock, Source Manifest, captured-state, plan-action-set,
+capture-observation-authority-set, prepared-action-authority-set,
+apply-authorization, compensation-authorization, compensation-transition-claim,
+checkpoint-store-snapshot, checkpoint-set, run-terminal, evidence,
 attestation, release-archive-manifest, and release-receipt formats use
 independent explicit major versions. Adding an
 optional field with unchanged meaning may remain in
@@ -1305,6 +1441,19 @@ for one of these formats, a current-major correction is permitted only as the
 same atomic prose, Schema, installed-copy, digest-pin, validator, and fixture
 update defined for adapter contracts above. The first emitted or accepted
 production record irreversibly freezes that format major.
+
+The catalog-and-lock foundation correction is the one scoped current-major
+exception at this boundary. No deployed production consumer has accepted a
+`catalog/v1`, `lock/v1`, or `source-manifest/v1` record. The correction
+atomically replaces the pre-release resolved source selector with a source
+tracking policy, replaces lock distribution rows with complete Source
+Manifests, and adds exact Source Manifest history for retirement bindings. The
+earlier checked-in production-source placement is not evidence of deployed
+acceptance. This exception claims no compatibility with a deployed consumer.
+Evidence of one requires new majors and migration evidence instead.
+Merge of this atomic correction permanently freezes `catalog/v1`, `lock/v1`,
+and `source-manifest/v1`; later changes follow the ordinary version and
+migration rules below.
 
 An update implementation must provide a pure, deterministic migration from the
 immediately previous version, emit a reviewable semantic diff, bind a newly

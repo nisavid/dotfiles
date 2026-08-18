@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import ast
 import copy
 import hashlib
 import importlib.util
 import json
+import re
 import sys
 import unittest
 from collections.abc import Callable
@@ -62,6 +64,28 @@ def canonical_digest(value: object) -> str:
 
 def byte_digest(payload: bytes) -> str:
     return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+def integer_constant_assignments(path: Path) -> dict[str, int]:
+    """Read simple integer limit assignments without importing candidate code."""
+
+    def evaluate(node: ast.expr) -> int:
+        if isinstance(node, ast.Constant) and type(node.value) is int:
+            return node.value
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mult):
+            return evaluate(node.left) * evaluate(node.right)
+        raise ValueError("limit assignment must contain only integer multiplication")
+
+    result: dict[str, int] = {}
+    for statement in ast.parse(path.read_text(encoding="utf-8")).body:
+        if (
+            isinstance(statement, ast.Assign)
+            and len(statement.targets) == 1
+            and isinstance(statement.targets[0], ast.Name)
+            and statement.targets[0].id.startswith("MAX_")
+        ):
+            result[statement.targets[0].id] = evaluate(statement.value)
+    return result
 
 
 def valid_apply_authorization(
@@ -5147,7 +5171,7 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
         }
         self.assertIn("ARCHIVED_DOCUMENT_BYTES_MISMATCH", codes)
 
-    def test_source_shape_keeps_audit_candidate_and_release_authority_separate(
+    def test_source_shape_keeps_status_candidate_and_release_authority_separate(
         self,
     ) -> None:
         handoff = (ROOT / "docs/agent-equipment/IMPLEMENTATION_HANDOFF.md").read_text()
@@ -5165,6 +5189,340 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
             "/usr/local/libexec/agent-equipment-release/v1/agent-equipment-release",
             handoff,
         )
+
+    def test_migration_uses_only_current_public_command_vocabulary(self) -> None:
+        migration = (ROOT / "docs/agent-equipment/MIGRATION.md").read_text()
+        rejected_legacy_sentence = (
+            "The retired `audit`, `import`, and `adopt` aliases remain rejected."
+        )
+
+        self.assertIn(rejected_legacy_sentence, migration)
+        current_contract = migration.replace(rejected_legacy_sentence, "")
+        for legacy_term in (
+            "audit",
+            "audited",
+            "audits",
+            "import",
+            "imported",
+            "adopt",
+            "adopted",
+            "adoption",
+        ):
+            with self.subTest(legacy_term=legacy_term):
+                self.assertIsNone(
+                    re.search(rf"\b{legacy_term}\b", current_contract, re.IGNORECASE)
+                )
+        for command in ("status", "unmanaged", "add", "update", "apply"):
+            with self.subTest(command=command):
+                self.assertIn(f"`{command}`", migration)
+        self.assertIn(
+            "At Step 3, the exact `apply` command is reserved and fails unavailable.",
+            migration,
+        )
+        self.assertRegex(
+            migration,
+            r"Chezmoi's\s+`run_onchange` integration invokes\s+`status` only",
+        )
+
+    def test_current_contract_uses_observation_and_catalog_addition_vocabulary(
+        self,
+    ) -> None:
+        architecture = (ROOT / "docs/agent-equipment/ARCHITECTURE.md").read_text(
+            encoding="utf-8"
+        )
+        acceptance = (ROOT / "docs/agent-equipment/ACCEPTANCE.md").read_text(
+            encoding="utf-8"
+        )
+
+        for legacy_term in (
+            "audit",
+            "audited",
+            "audits",
+            "adopt",
+            "adopted",
+            "adoption",
+        ):
+            with self.subTest(legacy_term=legacy_term):
+                self.assertIsNone(
+                    re.search(rf"\b{legacy_term}\b", architecture, re.IGNORECASE)
+                )
+        self.assertIn("preserved as reviewed state", acceptance)
+
+    def test_add_policy_uniqueness_is_scoped_to_each_target(self) -> None:
+        architecture = (ROOT / "docs/agent-equipment/ARCHITECTURE.md").read_text(
+            encoding="utf-8"
+        )
+        acceptance = (ROOT / "docs/agent-equipment/ACCEPTANCE.md").read_text(
+            encoding="utf-8"
+        )
+        handoff = (ROOT / "docs/agent-equipment/IMPLEMENTATION_HANDOFF.md").read_text(
+            encoding="utf-8"
+        )
+        normalized_architecture = " ".join(architecture.split())
+        normalized_acceptance = " ".join(acceptance.split())
+        normalized_handoff = " ".join(handoff.split())
+
+        for contract in (
+            normalized_architecture,
+            normalized_acceptance,
+            normalized_handoff,
+        ):
+            with self.subTest(contract=contract[:80]):
+                self.assertIn(
+                    "Each selected target must bind to exactly one unambiguous "
+                    "reviewed distribution",
+                    contract,
+                )
+                self.assertIn(
+                    "whose authoritative Source Manifest lists that target's "
+                    "equipment identity",
+                    contract,
+                )
+                self.assertIn(
+                    "Compatible targets in one atomic proposal may bind to "
+                    "different distributions",
+                    contract,
+                )
+        self.assertNotIn(
+            "Only one unambiguous reviewed distribution",
+            normalized_acceptance,
+        )
+
+    def test_step3_resource_bounds_are_frozen_in_contract(self) -> None:
+        architecture = (ROOT / "docs/agent-equipment/ARCHITECTURE.md").read_text(
+            encoding="utf-8"
+        )
+        handoff = (ROOT / "docs/agent-equipment/IMPLEMENTATION_HANDOFF.md").read_text(
+            encoding="utf-8"
+        )
+        acceptance = (ROOT / "docs/agent-equipment/ACCEPTANCE.md").read_text(
+            encoding="utf-8"
+        )
+        package = ROOT / "home/private_dot_local/lib/agent-equipment/agent_equipment"
+        expected_by_module = {
+            "discovery.py": {
+                "MAX_DISCOVERY_RESPONSE_BYTES": 1024 * 1024,
+                "MAX_DISCOVERY_RECORDS": 4096,
+                "MAX_DISCOVERY_AGGREGATE_BYTES": 8 * 1024 * 1024,
+                "MAX_DISCOVERY_DEPTH": 64,
+                "MAX_DISCOVERY_NODES": 100_000,
+                "MAX_DISCOVERY_ADAPTERS": 64,
+                "MAX_DISCOVERY_FIELD_CHARACTERS": 4096,
+                "MAX_DISCOVERY_REFERENCES": 64,
+                "MAX_DISCOVERY_PROVIDER_ARGUMENTS": 64,
+            },
+            "source_resolution.py": {
+                "MAX_SOURCE_RESOLUTION_REQUEST_BYTES": 256 * 1024,
+                "MAX_SOURCE_RESOLUTION_BYTES": 4 * 1024 * 1024,
+                "MAX_SOURCE_RESOLUTION_DEPTH": 64,
+                "MAX_SOURCE_RESOLUTION_NODES": 100_000,
+                "MAX_SOURCE_FIELD_CHARACTERS": 4096,
+                "MAX_AVAILABLE_EQUIPMENT": 16_384,
+            },
+            "authoring.py": {
+                "MAX_ADD_CATALOG_BYTES": 4 * 1024 * 1024,
+                "MAX_ADD_LOCK_BYTES": 16 * 1024 * 1024,
+                "MAX_ADD_PROPOSAL_BYTES": 32 * 1024 * 1024,
+            },
+            "updater.py": {
+                "MAX_UPDATE_DISTRIBUTIONS": 4096,
+                "MAX_UPDATE_EQUIPMENT_IDENTITIES": 65_536,
+                "MAX_UPDATE_COVERAGE_RECORDS": 196_608,
+                "MAX_UPDATE_CATALOG_BYTES": 4 * 1024 * 1024,
+                "MAX_UPDATE_LOCK_BYTES": 16 * 1024 * 1024,
+                "MAX_UPDATE_PROPOSAL_BYTES": 32 * 1024 * 1024,
+            },
+        }
+        for module, expected in expected_by_module.items():
+            with self.subTest(module=module):
+                actual = integer_constant_assignments(package / module)
+                self.assertEqual(
+                    {name: actual[name] for name in expected},
+                    expected,
+                )
+
+        self.assertIn("### Step 3 resource limits", architecture)
+        for required_text in (
+            "4,096 exact targets or emitted records across all harness reports",
+            "64 discovery adapters per harness request",
+            "1 MiB per adapter capability or response",
+            "controller-wide 8 MiB aggregate across all harness reports",
+            "depth 64 and 100,000 JSON nodes",
+            "256 KiB per source-resolution request",
+            "4 MiB per source-resolution response or Source Manifest",
+            "16,384 available-equipment identities",
+            "4 MiB catalog, 16 MiB lock, and 32 MiB complete proposal",
+            "4,096 distributions, 65,536 equipment identities, and 196,608 coverage records",
+        ):
+            with self.subTest(required_text=required_text):
+                self.assertIn(required_text, architecture)
+        self.assertIn("Step 3 resource limits", handoff)
+        self.assertIn(
+            "test_step3_resource_bounds_are_frozen_in_contract",
+            acceptance,
+        )
+
+    def test_npx_update_contract_accepts_direct_and_closes_wrapped_invocations(
+        self,
+    ) -> None:
+        architecture = (ROOT / "docs/agent-equipment/ARCHITECTURE.md").read_text(
+            encoding="utf-8"
+        )
+        handoff = (ROOT / "docs/agent-equipment/IMPLEMENTATION_HANDOFF.md").read_text(
+            encoding="utf-8"
+        )
+        for contract in (architecture, handoff):
+            normalized_contract = " ".join(contract.split())
+            self.assertIn(
+                "exactly one matching selector in the exact `npx` invocation",
+                normalized_contract,
+            )
+            self.assertIn(
+                "When that invocation is secret-wrapped, require exactly one "
+                "reviewed `secret-exec -- npx` boundary",
+                normalized_contract,
+            )
+            self.assertNotIn(
+                "selector behind exactly one reviewed `secret-exec -- npx` boundary",
+                normalized_contract,
+            )
+
+        catalog = json.loads(
+            (ROOT / "docs/agent-equipment/initial-catalog.proposed.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        npx_distributions = {
+            distribution["identity"]
+            for distribution in catalog["distributions"]
+            if distribution["source"].get("manager") == "npx"
+        }
+
+        routes: list[dict[str, object]] = []
+
+        def collect_routes(value: object) -> None:
+            if isinstance(value, dict):
+                if (
+                    isinstance(value.get("distribution"), str)
+                    and value["distribution"] in npx_distributions
+                    and isinstance(value.get("provider"), dict)
+                ):
+                    routes.append(value)
+                for child in value.values():
+                    collect_routes(child)
+            elif isinstance(value, list):
+                for child in value:
+                    collect_routes(child)
+
+        collect_routes(catalog)
+
+        def provider_command(route: dict[str, object]) -> object:
+            provider = route.get("provider")
+            return provider.get("command") if isinstance(provider, dict) else None
+
+        direct = [route for route in routes if provider_command(route) == "npx"]
+        wrapped = [
+            route for route in routes if provider_command(route) == "secret-exec"
+        ]
+        self.assertTrue(direct)
+        self.assertTrue(wrapped)
+        for route in wrapped:
+            provider = route["provider"]
+            assert isinstance(provider, dict)
+            arguments = provider.get("arguments")
+            assert isinstance(arguments, list)
+            boundaries = [
+                index
+                for index in range(len(arguments) - 1)
+                if arguments[index] == {"literal": "--"}
+                and arguments[index + 1] == {"literal": "npx"}
+            ]
+            self.assertEqual(len(boundaries), 1)
+
+    def test_every_authored_route_binds_the_current_source_manifest(self) -> None:
+        architecture = (ROOT / "docs/agent-equipment/ARCHITECTURE.md").read_text(
+            encoding="utf-8"
+        )
+        acceptance = (ROOT / "docs/agent-equipment/ACCEPTANCE.md").read_text(
+            encoding="utf-8"
+        )
+        normalized = " ".join(architecture.split()).lower()
+
+        self.assertIn(
+            "every authored provider route, referenced or not, must be structurally valid",
+            normalized,
+        )
+        self.assertIn(
+            "expansion alone determines which routes are active",
+            normalized,
+        )
+        current_evidence = acceptance.split("## Current executable design evidence", 1)[
+            1
+        ]
+        catalog_seven_row = next(
+            line
+            for line in current_evidence.splitlines()
+            if line.startswith("| `CAT-07` |")
+        )
+        for expected_test in (
+            "test_unreferenced_template_still_binds_current_source_manifest",
+            "test_unreferenced_template_is_fully_structurally_validated",
+            "test_retirement_binds_exact_history_and_rejects_missing_or_orphan_history",
+        ):
+            with self.subTest(expected_test=expected_test):
+                self.assertIn(expected_test, catalog_seven_row)
+
+        catalog_thirteen_row = next(
+            line
+            for line in current_evidence.splitlines()
+            if line.startswith("| `CAT-13`, `CAT-14` |")
+        )
+        for expected_test in (
+            "test_source_manifest_semantics_reject_invalid_resolution_evidence",
+            "test_checked_in_source_manifests_are_complete_and_digest_bound",
+        ):
+            with self.subTest(expected_test=expected_test):
+                self.assertIn(expected_test, catalog_thirteen_row)
+
+    def test_v1_foundation_exception_is_scoped_and_freezes_after_merge(self) -> None:
+        architecture = (ROOT / "docs/agent-equipment/ARCHITECTURE.md").read_text()
+        handoff = (ROOT / "docs/agent-equipment/IMPLEMENTATION_HANDOFF.md").read_text()
+
+        for document in (architecture, handoff):
+            with self.subTest(document=document[:40]):
+                lower_document = document.lower()
+                self.assertIn("`catalog/v1`", document)
+                self.assertIn("`lock/v1`", document)
+                self.assertIn("`source-manifest/v1`", document)
+                self.assertIn(
+                    "no deployed production consumer has accepted",
+                    lower_document,
+                )
+                self.assertIn(
+                    "claims no compatibility with a deployed consumer",
+                    document,
+                )
+                self.assertIn(
+                    "Merge of this atomic correction permanently freezes",
+                    document,
+                )
+        self.assertIn("Source Manifest history", architecture)
+        self.assertIn("source tracking policy", architecture)
+
+    def test_source_resolution_returns_facts_and_controller_seals_manifest(
+        self,
+    ) -> None:
+        architecture = (ROOT / "docs/agent-equipment/ARCHITECTURE.md").read_text()
+        handoff = (ROOT / "docs/agent-equipment/IMPLEMENTATION_HANDOFF.md").read_text()
+
+        for document in (architecture, handoff):
+            with self.subTest(document=document[:40]):
+                normalized = " ".join(document.split())
+                self.assertIn("source-resolution-facts/v1", normalized)
+                self.assertIn("never a Source Manifest", normalized)
+                self.assertIn("controller", normalized.lower())
+                self.assertIn("reviewed source and restore policy", normalized)
+                self.assertIn("extra response field", normalized)
 
     def test_runtime_gate_and_external_authority_precede_every_mutation(self) -> None:
         architecture = (ROOT / "docs/agent-equipment/ARCHITECTURE.md").read_text()

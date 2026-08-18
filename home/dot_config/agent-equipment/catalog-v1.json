@@ -1434,7 +1434,6 @@
         ]
       },
       "source": {
-        "channel": "1.7.0",
         "kind": "native_manager",
         "manager": "npx",
         "package": "chrome-devtools-mcp"
@@ -1449,7 +1448,6 @@
         ]
       },
       "source": {
-        "channel": "3.2.4",
         "kind": "native_manager",
         "manager": "npx",
         "package": "@upstash/context7-mcp"
@@ -1464,7 +1462,6 @@
         ]
       },
       "source": {
-        "channel": "3.22.3",
         "kind": "native_manager",
         "manager": "npx",
         "package": "firecrawl-mcp"
@@ -1500,7 +1497,6 @@
         ]
       },
       "source": {
-        "channel": "0.1.38",
         "kind": "native_manager",
         "manager": "npx",
         "package": "mcp-remote"
@@ -1515,7 +1511,6 @@
         ]
       },
       "source": {
-        "channel": "0.1.38",
         "kind": "native_manager",
         "manager": "npx",
         "package": "mcp-remote"
@@ -1595,7 +1590,6 @@
       },
       "source": {
         "kind": "git",
-        "ref": "84fdeffd12f2ee307994d1eb6feb48173b6e0502",
         "repository": "https://github.com/mattpocock/skills.git"
       }
     }
@@ -2331,6 +2325,7 @@
         },
         "secret_references": []
       },
+      "source_manifest_digest": "sha256:4e2629cc87c8df6b24dc57ea48f23ea5a7ba6d5c8f1b619bafd099545d61b341",
       "surface": {
         "kind": "direct_mcp",
         "server_name": "chrome-devtools"
@@ -2392,6 +2387,7 @@
         },
         "secret_references": []
       },
+      "source_manifest_digest": "sha256:53a48705d31bf140f8636058b7cd032bc8b6350ccb1f300ed310051d306ad328",
       "surface": {
         "kind": "claude_skill_projection",
         "skill_name": "ask-matt"
@@ -2453,6 +2449,7 @@
         },
         "secret_references": []
       },
+      "source_manifest_digest": "sha256:53a48705d31bf140f8636058b7cd032bc8b6350ccb1f300ed310051d306ad328",
       "surface": {
         "kind": "claude_skill_projection",
         "skill_name": "code-review"
@@ -2514,6 +2511,7 @@
         },
         "secret_references": []
       },
+      "source_manifest_digest": "sha256:53a48705d31bf140f8636058b7cd032bc8b6350ccb1f300ed310051d306ad328",
       "surface": {
         "kind": "claude_skill_projection",
         "skill_name": "codebase-design"
@@ -2575,6 +2573,7 @@
         },
         "secret_references": []
       },
+      "source_manifest_digest": "sha256:53a48705d31bf140f8636058b7cd032bc8b6350ccb1f300ed310051d306ad328",
       "surface": {
         "kind": "claude_skill_projection",
         "skill_name": "diagnosing-bugs"
@@ -2636,6 +2635,7 @@
         },
         "secret_references": []
       },
+      "source_manifest_digest": "sha256:53a48705d31bf140f8636058b7cd032bc8b6350ccb1f300ed310051d306ad328",
       "surface": {
         "kind": "claude_skill_projection",
         "skill_name": "domain-modeling"
@@ -2697,6 +2697,7 @@
         },
         "secret_references": []
       },
+      "source_manifest_digest": "sha256:53a48705d31bf140f8636058b7cd032bc8b6350ccb1f300ed310051d306ad328",
       "surface": {
         "kind": "claude_skill_projection",
         "skill_name": "grill-me"
@@ -2758,6 +2759,7 @@
         },
         "secret_references": []
       },
+      "source_manifest_digest": "sha256:53a48705d31bf140f8636058b7cd032bc8b6350ccb1f300ed310051d306ad328",
       "surface": {
         "kind": "claude_skill_projection",
         "skill_name": "grill-with-docs"
@@ -2819,6 +2821,7 @@
         },
         "secret_references": []
       },
+      "source_manifest_digest": "sha256:53a48705d31bf140f8636058b7cd032bc8b6350ccb1f300ed310051d306ad328",
       "surface": {
         "kind": "claude_skill_projection",
         "skill_name": "grilling"
@@ -2880,6 +2883,7 @@
         },
         "secret_references": []
       },
+      "source_manifest_digest": "sha256:53a48705d31bf140f8636058b7cd032bc8b6350ccb1f300ed310051d306ad328",
       "surface": {
         "kind": "claude_skill_projection",
         "skill_name": "handoff"
@@ -2941,6 +2945,7 @@
         },
         "secret_references": []
       },
+      "source_manifest_digest": "sha256:53a48705d31bf140f8636058b7cd032bc8b6350ccb1f300ed310051d306ad328",
       "surface": {
         "kind": "claude_skill_projection",
         "skill_name": "implement"
@@ -3002,6 +3007,7 @@
         },
         "secret_references": []
       },
+      "source_manifest_digest": "sha256:53a48705d31bf140f8636058b7cd032bc8b6350ccb1f300ed310051d306ad328",
       "surface": {
         "kind": "claude_skill_projection",
         "skill_name": "improve-codebase-architecture"
@@ -3063,6 +3069,7 @@
         },
         "secret_references": []
       },
+      "source_manifest_digest": "sha256:53a48705d31bf140f8636058b7cd032bc8b6350ccb1f300ed310051d306ad328",
       "surface": {
         "kind": "claude_skill_projection",
         "skill_name": "prototype"
@@ -3124,6 +3131,7 @@
         },
         "secret_references": []
       },
+      "source_manifest_digest": "sha256:53a48705d31bf140f8636058b7cd032bc8b6350ccb1f300ed310051d306ad328",
       "surface": {
         "kind": "claude_skill_projection",
         "skill_name": "research"
@@ -3185,6 +3193,7 @@
         },
         "secret_references": []
       },
+      "source_manifest_digest": "sha256:53a48705d31bf140f8636058b7cd032bc8b6350ccb1f300ed310051d306ad328",
       "surface": {
         "kind": "claude_skill_projection",
         "skill_name": "resolving-merge-conflicts"
@@ -3246,6 +3255,7 @@
         },
         "secret_references": []
       },
+      "source_manifest_digest": "sha256:53a48705d31bf140f8636058b7cd032bc8b6350ccb1f300ed310051d306ad328",
       "surface": {
         "kind": "claude_skill_projection",
         "skill_name": "setup-matt-pocock-skills"
@@ -3307,6 +3317,7 @@
         },
         "secret_references": []
       },
+      "source_manifest_digest": "sha256:53a48705d31bf140f8636058b7cd032bc8b6350ccb1f300ed310051d306ad328",
       "surface": {
         "kind": "claude_skill_projection",
         "skill_name": "tdd"
@@ -3368,6 +3379,7 @@
         },
         "secret_references": []
       },
+      "source_manifest_digest": "sha256:53a48705d31bf140f8636058b7cd032bc8b6350ccb1f300ed310051d306ad328",
       "surface": {
         "kind": "claude_skill_projection",
         "skill_name": "teach"
@@ -3429,6 +3441,7 @@
         },
         "secret_references": []
       },
+      "source_manifest_digest": "sha256:53a48705d31bf140f8636058b7cd032bc8b6350ccb1f300ed310051d306ad328",
       "surface": {
         "kind": "claude_skill_projection",
         "skill_name": "to-spec"
@@ -3490,6 +3503,7 @@
         },
         "secret_references": []
       },
+      "source_manifest_digest": "sha256:53a48705d31bf140f8636058b7cd032bc8b6350ccb1f300ed310051d306ad328",
       "surface": {
         "kind": "claude_skill_projection",
         "skill_name": "to-tickets"
@@ -3551,6 +3565,7 @@
         },
         "secret_references": []
       },
+      "source_manifest_digest": "sha256:53a48705d31bf140f8636058b7cd032bc8b6350ccb1f300ed310051d306ad328",
       "surface": {
         "kind": "claude_skill_projection",
         "skill_name": "triage"
@@ -3612,6 +3627,7 @@
         },
         "secret_references": []
       },
+      "source_manifest_digest": "sha256:53a48705d31bf140f8636058b7cd032bc8b6350ccb1f300ed310051d306ad328",
       "surface": {
         "kind": "claude_skill_projection",
         "skill_name": "wayfinder"
@@ -3713,6 +3729,7 @@
           }
         ]
       },
+      "source_manifest_digest": "sha256:5983939d104650b03e23721ca630d9afa6e29fafbec75e58602802562755bfd0",
       "surface": {
         "kind": "direct_mcp",
         "server_name": "github"

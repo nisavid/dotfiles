@@ -21,11 +21,15 @@ SCHEMA_SOURCE_ROOT = ROOT / "home/private_dot_local/lib/agent-equipment/schemas"
 PACKAGE_NAMES = (
     "__init__.py",
     "_json_schema.py",
+    "authoring.py",
     "canonical.py",
+    "discovery.py",
     "inventory.py",
     "model.py",
     "resolver.py",
     "secrets.py",
+    "source_resolution.py",
+    "updater.py",
     "validator.py",
 )
 SCHEMA_NAMES = (
@@ -756,7 +760,7 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(result.returncode, 64, result.stderr)
         self.assertEqual(
             result.stderr,
-            "agent-equipment: only the read-only status command is available\n",
+            "agent-equipment: invalid command or arguments\n",
         )
         for marker in (pythonpath_marker, cwd_marker, sitecustomize_marker):
             with self.subTest(poison_marker=marker.name):

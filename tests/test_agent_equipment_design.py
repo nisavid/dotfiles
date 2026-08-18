@@ -66,10 +66,17 @@ def manual_route(catalog: dict[str, object]) -> dict[str, object]:
     return catalog["equipment"][0]["coverage"]["claude"]["record"]["provider_selection"]["routes"][0]
 
 
-def valid_retirement(catalog: dict[str, object]) -> dict[str, object]:
+def valid_retirement(
+    catalog: dict[str, object], lock: dict[str, object]
+) -> dict[str, object]:
     route = deepcopy(managed_route(catalog))
     route["identity"] = "route:example/legacy-claude-projection"
     route["activation_group"] = "activation:example/legacy-claude-projection"
+    source_manifest_digest = next(
+        manifest["source_manifest_digest"]
+        for manifest in lock["distributions"]
+        if manifest["distribution_identity"] == route["distribution"]
+    )
     return {
         "identity": "retirement:example/legacy-grilling-projection",
         "equipment_identity": "skill:example/grilling",
@@ -80,6 +87,7 @@ def valid_retirement(catalog: dict[str, object]) -> dict[str, object]:
             "skill_name": "grilling",
         },
         "desired_state": "absent",
+        "source_manifest_digest": source_manifest_digest,
     }
 
 
@@ -100,6 +108,44 @@ def locked_managed_route(lock: dict[str, object]) -> dict[str, object]:
     return locked_record(lock)["provider_selection"]["routes"][0]
 
 
+def locked_distribution(
+    lock: dict[str, object],
+    identity: str = "distribution:example/bundle",
+) -> dict[str, object]:
+    return next(
+        item
+        for item in lock["distributions"]
+        if item["distribution_identity"] == identity
+    )
+
+
+def refresh_source_manifest(manifest: dict[str, object]) -> None:
+    available = sorted(set(manifest["available_equipment"]))
+    selected = sorted(set(manifest["equipment"]))
+    manifest["available_equipment"] = available
+    manifest["equipment"] = selected
+    manifest["membership_evidence"] = {
+        "kind": "authoritative_source_listing",
+        "evidence_digest": DESIGN.canonical_json_sha256(
+            {"available_equipment": available}
+        ),
+    }
+    payload = deepcopy(manifest)
+    payload.pop("source_manifest_digest")
+    manifest["source_manifest_digest"] = DESIGN.canonical_json_sha256(payload)
+
+
+def append_locked_equipment(
+    lock: dict[str, object],
+    equipment_identity: str,
+    distribution_identity: str = "distribution:example/bundle",
+) -> None:
+    manifest = locked_distribution(lock, distribution_identity)
+    manifest["available_equipment"].append(equipment_identity)
+    manifest["equipment"].append(equipment_identity)
+    refresh_source_manifest(manifest)
+
+
 def bind_managed_distribution_to_direct_mcp(
     catalog: dict[str, object],
     lock: dict[str, object],
@@ -111,7 +157,6 @@ def bind_managed_distribution_to_direct_mcp(
         "kind": "native_manager",
         "manager": "npx",
         "package": package,
-        "channel": channel,
     }
     restore = {
         "class": "native_rolling",
@@ -121,8 +166,14 @@ def bind_managed_distribution_to_direct_mcp(
         "native_update_control": "suppressible",
     }
     catalog["distributions"][0]["source"] = deepcopy(source)
-    lock["distributions"][0]["source"] = deepcopy(source)
-    lock["distributions"][0]["restore"] = deepcopy(restore)
+    manifest = locked_distribution(lock)
+    manifest["source"] = deepcopy(source)
+    manifest["resolved_source"] = {
+        "kind": "native_manager",
+        "version": {"kind": "semantic_version", "value": channel},
+    }
+    manifest["restore"] = deepcopy(restore)
+    refresh_source_manifest(manifest)
     managed_route(catalog)["restore"] = deepcopy(restore)
     locked_managed_route(lock)["restore"] = deepcopy(restore)
 
@@ -144,8 +195,14 @@ def bind_managed_distribution_to_static_https(
         "native_update_control": "unsuppressible",
     }
     catalog["distributions"][0]["source"] = deepcopy(source)
-    lock["distributions"][0]["source"] = deepcopy(source)
-    lock["distributions"][0]["restore"] = deepcopy(restore)
+    manifest = locked_distribution(lock)
+    manifest["source"] = deepcopy(source)
+    manifest["resolved_source"] = {
+        "kind": "native_manager",
+        "version": {"kind": "static_source"},
+    }
+    manifest["restore"] = deepcopy(restore)
+    refresh_source_manifest(manifest)
     managed_route(catalog)["restore"] = deepcopy(restore)
     locked_managed_route(lock)["restore"] = deepcopy(restore)
 
@@ -205,7 +262,9 @@ class AgentEquipmentDesignTest(unittest.TestCase):
             {"canonical_proposal", "pending_decisions", "reviewed_inputs", "status"},
         )
 
-    def test_selected_observed_direct_mcps_are_classified_for_adoption(self) -> None:
+    def test_selected_observed_direct_mcps_are_classified_for_catalog_addition(
+        self,
+    ) -> None:
         inventory = json.loads(
             (ROOT / "docs/agent-equipment/initial-inventory.json").read_text(
                 encoding="utf-8"
@@ -246,10 +305,23 @@ class AgentEquipmentDesignTest(unittest.TestCase):
                 self.assertIn(
                     observation["ownership_intent"],
                     {
-                        "propose_catalog_adoption",
-                        "propose_catalog_adoption_for_retirement",
+                        "propose_catalog_addition",
+                        "propose_catalog_addition_for_retirement",
                     },
                 )
+
+    def test_current_inventory_uses_catalog_addition_vocabulary(self) -> None:
+        inventory = (ROOT / "docs/agent-equipment/INVENTORY.md").read_text(
+            encoding="utf-8"
+        )
+        inventory_data = (
+            ROOT / "docs/agent-equipment/initial-inventory.json"
+        ).read_text(encoding="utf-8")
+
+        for legacy_term in ("adopt", "adopted", "adoption", "adoptions"):
+            with self.subTest(legacy_term=legacy_term):
+                self.assertNotIn(legacy_term, inventory.lower())
+                self.assertNotIn(legacy_term, inventory_data.lower())
 
     def test_initial_inventory_counts_and_classifications_are_complete(self) -> None:
         inventory = json.loads(
@@ -409,7 +481,7 @@ class AgentEquipmentDesignTest(unittest.TestCase):
         self.assertEqual(computer_use["classification"], "duplicate_overlap_candidate")
         self.assertEqual(
             computer_use["runtime_retirement_intent"],
-            "none_without_explicit_adoption",
+            "none_without_explicit_catalog_addition",
         )
 
     def test_proposed_initial_catalog_and_lock_are_complete_and_valid(self) -> None:
@@ -598,6 +670,122 @@ class AgentEquipmentDesignTest(unittest.TestCase):
             },
         )
 
+    def test_catalog_sources_declare_tracking_policy_not_resolved_artifacts(
+        self,
+    ) -> None:
+        catalog_schema = json.loads(
+            (ROOT / "docs/agent-equipment/catalog-v1.schema.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        sources = catalog_schema["$defs"]["source"]["oneOf"]
+        git_source = next(
+            source
+            for source in sources
+            if source["properties"]["kind"]["const"] == "git"
+        )
+        self.assertEqual(git_source["required"], ["kind", "repository"])
+        self.assertEqual(
+            set(git_source["properties"]),
+            {"kind", "repository", "branch"},
+        )
+
+        native_source = next(
+            source
+            for source in sources
+            if source["properties"].get("manager", {}).get("enum")
+        )
+        self.assertEqual(
+            native_source["required"],
+            ["kind", "manager", "package"],
+        )
+        self.assertEqual(
+            set(native_source["properties"]),
+            {"kind", "manager", "package", "channel"},
+        )
+        self.assertNotEqual(
+            native_source["properties"]["channel"],
+            {"$ref": "#/$defs/nonEmptyString"},
+        )
+        npx_source = next(
+            source
+            for source in sources
+            if source["properties"].get("manager", {}).get("const") == "npx"
+        )
+        self.assertEqual(npx_source["required"], ["kind", "manager", "package"])
+        self.assertEqual(
+            npx_source["properties"]["package"],
+            {"$ref": "#/$defs/npxPackage"},
+        )
+        http_source = next(
+            source
+            for source in sources
+            if source["properties"].get("manager", {}).get("const") == "http"
+        )
+        self.assertEqual(http_source["required"], ["kind", "manager", "package", "channel"])
+        self.assertEqual(http_source["properties"]["channel"], {"const": "static"})
+
+    def test_lock_embeds_closed_complete_digest_bound_source_manifests(self) -> None:
+        catalog_schema = json.loads(
+            (ROOT / "docs/agent-equipment/catalog-v1.schema.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        lock_schema = json.loads(
+            (ROOT / "docs/agent-equipment/lock-v1.schema.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        expected_fields = {
+            "schema_version",
+            "distribution_identity",
+            "source",
+            "resolved_source",
+            "available_equipment",
+            "membership_evidence",
+            "equipment",
+            "restore",
+            "source_manifest_digest",
+        }
+
+        source_manifest = catalog_schema["$defs"]["sourceManifest"]
+        self.assertFalse(source_manifest["additionalProperties"])
+        self.assertEqual(set(source_manifest["required"]), expected_fields)
+        self.assertEqual(set(source_manifest["properties"]), expected_fields)
+        self.assertEqual(
+            catalog_schema["$defs"]["membershipEvidence"]["required"],
+            ["kind", "evidence_digest"],
+        )
+        self.assertEqual(
+            lock_schema["properties"]["distributions"]["items"],
+            {"$ref": "catalog-v1.schema.json#/$defs/sourceManifest"},
+        )
+        self.assertNotIn("source_manifest_history", catalog_schema["properties"])
+        self.assertIn("source_manifest_history", lock_schema["required"])
+        self.assertEqual(
+            lock_schema["properties"]["source_manifest_history"]["items"],
+            {"$ref": "catalog-v1.schema.json#/$defs/sourceManifest"},
+        )
+        self.assertIn(
+            "source_manifest_digest",
+            catalog_schema["$defs"]["retirement"]["required"],
+        )
+        resolved_source = catalog_schema["$defs"]["resolvedSource"]["oneOf"]
+        git_resolved = next(
+            item
+            for item in resolved_source
+            if item["properties"]["kind"].get("const") == "git"
+        )
+        native_resolved = next(
+            item
+            for item in resolved_source
+            if item["properties"]["kind"].get("const") == "native_manager"
+        )
+        self.assertEqual(git_resolved["required"], ["kind", "revision"])
+        self.assertEqual(set(git_resolved["properties"]), {"kind", "revision"})
+        self.assertEqual(native_resolved["required"], ["kind", "version"])
+        self.assertEqual(set(native_resolved["properties"]), {"kind", "version"})
+
     def test_canonical_digest_is_utf8_compact_and_key_sorted(self) -> None:
         self.assertEqual(
             DESIGN.canonical_json_sha256({"b": 1, "a": "é"}),
@@ -608,6 +796,59 @@ class AgentEquipmentDesignTest(unittest.TestCase):
         for value in (float("nan"), float("inf"), float("-inf")):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 DESIGN.canonical_json_sha256({"value": value})
+
+    def test_checked_in_source_manifests_are_complete_and_digest_bound(self) -> None:
+        catalog = json.loads(
+            (ROOT / "docs/agent-equipment/initial-catalog.proposed.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        lock = json.loads(
+            (ROOT / "docs/agent-equipment/initial-lock.proposed.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        catalog_distributions = {
+            item["identity"]: item for item in catalog["distributions"]
+        }
+        current_manifest_digests: set[str] = set()
+
+        self.assertEqual(lock["source_manifest_history"], [])
+        self.assertEqual(
+            lock["catalog_digest"],
+            DESIGN.canonical_json_sha256(catalog),
+        )
+        for manifest in lock["distributions"]:
+            with self.subTest(distribution=manifest["distribution_identity"]):
+                available = manifest["available_equipment"]
+                selected = manifest["equipment"]
+                self.assertEqual(available, sorted(set(available)))
+                self.assertEqual(selected, sorted(set(selected)))
+                self.assertLessEqual(set(selected), set(available))
+                self.assertEqual(
+                    manifest["source"],
+                    catalog_distributions[manifest["distribution_identity"]]["source"],
+                )
+                self.assertEqual(
+                    manifest["membership_evidence"],
+                    {
+                        "kind": "authoritative_source_listing",
+                        "evidence_digest": DESIGN.canonical_json_sha256(
+                            {"available_equipment": available}
+                        ),
+                    },
+                )
+                digest = manifest["source_manifest_digest"]
+                payload = deepcopy(manifest)
+                payload.pop("source_manifest_digest")
+                self.assertEqual(digest, DESIGN.canonical_json_sha256(payload))
+                current_manifest_digests.add(digest)
+
+        for retirement in catalog["retirements"]:
+            self.assertIn(
+                retirement["source_manifest_digest"],
+                current_manifest_digests,
+            )
 
     def test_public_loader_validates_fixture_pair(self) -> None:
         result = DESIGN.load_and_validate(
@@ -1084,7 +1325,7 @@ class AgentEquipmentDesignTest(unittest.TestCase):
                 catalog["equipment"].append(
                     {"identity": identity, "kind": kind, "coverage": {}}
                 )
-                lock["distributions"][0]["equipment"].append(identity)
+                append_locked_equipment(lock, identity)
                 for template in catalog["coverage_templates"]:
                     lock["coverage"].append(
                         {
@@ -1110,7 +1351,7 @@ class AgentEquipmentDesignTest(unittest.TestCase):
                         "coverage": {},
                     }
                 )
-                lock["distributions"][0]["equipment"].append(identity)
+                append_locked_equipment(lock, identity)
                 for template in catalog["coverage_templates"]:
                     lock["coverage"].append(
                         {
@@ -1132,7 +1373,7 @@ class AgentEquipmentDesignTest(unittest.TestCase):
     def test_shared_activation_group_produces_one_action_per_route_operation(self) -> None:
         catalog, lock = valid_pair()
         second_identity = "skill:example/research"
-        lock["distributions"][0]["equipment"].append(second_identity)
+        append_locked_equipment(lock, second_identity)
         for harness, record in (
             ("claude", deepcopy(catalog["coverage_templates"][0]["record"])),
             ("codex", deepcopy(catalog["coverage_templates"][1]["record"])),
@@ -1174,7 +1415,7 @@ class AgentEquipmentDesignTest(unittest.TestCase):
                 "coverage": {"claude": {"record": second_record}},
             }
         )
-        lock["distributions"][0]["equipment"].append(second_identity)
+        append_locked_equipment(lock, second_identity)
         for harness, record in (
             ("claude", deepcopy(second_record)),
             ("codex", deepcopy(catalog["coverage_templates"][1]["record"])),
@@ -1257,7 +1498,9 @@ class AgentEquipmentDesignTest(unittest.TestCase):
 
     def test_route_distribution_must_include_current_equipment(self) -> None:
         catalog, lock = valid_pair()
-        native_restore = deepcopy(lock["distributions"][1]["restore"])
+        native_restore = deepcopy(
+            locked_distribution(lock, "distribution:example/native-plugin")["restore"]
+        )
         route = managed_route(catalog)
         route["distribution"] = "distribution:example/native-plugin"
         route["restore"] = native_restore
@@ -1455,7 +1698,7 @@ class AgentEquipmentDesignTest(unittest.TestCase):
 
         managed_route(catalog)["provider"]["arguments"][-1][
             "secret_reference"
-        ] = "UNDECLARED_SECRET"  # noqa: S105
+        ] = "UNDECLARED_SECRET"
         locked_managed_route(lock)["provider"] = deepcopy(
             managed_route(catalog)["provider"]
         )
@@ -1543,7 +1786,7 @@ class AgentEquipmentDesignTest(unittest.TestCase):
 
     def test_literal_secret_material_fails_closed_without_echoing_it(self) -> None:
         catalog, lock = valid_pair()
-        secret_canary = (  # noqa: S105
+        secret_canary = (
             "Author" + "ization:" + " Bear" + "er secret-canary-value"
         )
         provider = {
@@ -1635,7 +1878,7 @@ class AgentEquipmentDesignTest(unittest.TestCase):
         for flag in ("--api-key", "--token", "Authorization", "X-Api-Key"):
             with self.subTest(flag=flag):
                 catalog, lock = valid_pair()
-                literal_secret = "supersecretvalue"  # noqa: S105
+                literal_secret = "supersecretvalue"
                 provider = {
                     "kind": "direct_mcp",
                     "server_name": "context7",
@@ -1861,7 +2104,7 @@ class AgentEquipmentDesignTest(unittest.TestCase):
                 unsafe_ref = base_ref + suffix
                 managed_route(catalog)["restore"]["artifact_ref"] = unsafe_ref
                 locked_managed_route(lock)["restore"]["artifact_ref"] = unsafe_ref
-                lock["distributions"][0]["restore"]["artifact_ref"] = unsafe_ref
+                locked_distribution(lock)["restore"]["artifact_ref"] = unsafe_ref
                 lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
 
                 result = DESIGN.validate_design(catalog, lock)
@@ -1872,8 +2115,9 @@ class AgentEquipmentDesignTest(unittest.TestCase):
                 )
                 self.assertIsNone(result.mutation_plan)
 
-    def test_git_distribution_source_rejects_unsafe_revisions(self) -> None:
-        for unsafe_ref in (
+    def test_git_distribution_source_rejects_unsafe_branches(self) -> None:
+        for unsafe_branch in (
+            "HEAD",
             "refs//heads/main",
             "../other",
             "--option",
@@ -1882,9 +2126,9 @@ class AgentEquipmentDesignTest(unittest.TestCase):
             "release.lock",
             "refs/heads/name.lock",
         ):
-            with self.subTest(unsafe_ref=unsafe_ref):
+            with self.subTest(unsafe_branch=unsafe_branch):
                 catalog, lock = valid_pair()
-                catalog["distributions"][0]["source"]["ref"] = unsafe_ref
+                catalog["distributions"][0]["source"]["branch"] = unsafe_branch
                 lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
 
                 result = DESIGN.validate_design(catalog, lock)
@@ -1919,12 +2163,12 @@ class AgentEquipmentDesignTest(unittest.TestCase):
                     catalog["distributions"][0]["source"] = {
                         "kind": "git",
                         "repository": "",
-                        "ref": "",
+                        "branch": "",
                     }
                 elif mutation == "distribution_identity":
                     catalog["distributions"][0]["identity"] = "not-namespaced"
                 elif mutation == "equipment_identity":
-                    lock["distributions"][0]["equipment"][0] = "not-namespaced"
+                    locked_distribution(lock)["equipment"][0] = "not-namespaced"
                 else:
                     managed_route(catalog)["activation_group"] = "not-namespaced"
                 lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
@@ -1937,7 +2181,7 @@ class AgentEquipmentDesignTest(unittest.TestCase):
     def test_lock_distribution_source_is_an_exact_catalog_binding(self) -> None:
         for field, value in (
             ("repository", "https://other.example.invalid/bundle.git"),
-            ("ref", "f" * 40),
+            ("branch", "release"),
         ):
             with self.subTest(field=field):
                 catalog, lock = valid_pair()
@@ -1955,12 +2199,17 @@ class AgentEquipmentDesignTest(unittest.TestCase):
     def test_immutable_distribution_restore_matches_bound_git_source(self) -> None:
         for field, value in (
             ("repository", "https://other.example.invalid/bundle.git"),
-            ("ref", "f" * 40),
+            ("revision", "3" * 40),
         ):
             with self.subTest(field=field):
                 catalog, lock = valid_pair()
-                catalog["distributions"][0]["source"][field] = value
-                lock["distributions"][0]["source"][field] = value
+                manifest = locked_distribution(lock)
+                if field == "repository":
+                    catalog["distributions"][0]["source"][field] = value
+                    manifest["source"][field] = value
+                else:
+                    manifest["resolved_source"][field] = value
+                refresh_source_manifest(manifest)
                 lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
 
                 result = DESIGN.validate_design(catalog, lock)
@@ -2000,7 +2249,7 @@ class AgentEquipmentDesignTest(unittest.TestCase):
                     catalog["distributions"][0]["source"]["package"] = (
                         "unrelated-package"
                     )
-                    lock["distributions"][0]["source"] = deepcopy(
+                    locked_distribution(lock)["source"] = deepcopy(
                         catalog["distributions"][0]["source"]
                     )
                 else:
@@ -2087,7 +2336,7 @@ class AgentEquipmentDesignTest(unittest.TestCase):
 
     def test_catalog_owned_retirement_plans_only_its_exact_surface_operation(self) -> None:
         catalog, lock = valid_pair()
-        retirement = valid_retirement(catalog)
+        retirement = valid_retirement(catalog, lock)
         catalog["retirements"].append(retirement)
         lock["retirements"].append(deepcopy(retirement))
         lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
@@ -2111,8 +2360,8 @@ class AgentEquipmentDesignTest(unittest.TestCase):
         mutations = (
             ("duplicate_selector", "DUPLICATE_RETIREMENT_SURFACE"),
             ("active_route", "RETIREMENT_ROUTE_ACTIVE"),
-            ("unknown_equipment", "RETIREMENT_REFERENCE_INVALID"),
-            ("unknown_distribution", "RETIREMENT_REFERENCE_INVALID"),
+            ("unknown_equipment", "RETIREMENT_SOURCE_MANIFEST_INVALID"),
+            ("unknown_distribution", "RETIREMENT_SOURCE_MANIFEST_INVALID"),
             ("invalid_state", "RETIREMENT_SURFACE_INVALID"),
             ("operator_owned", "RETIREMENT_OWNER_INVALID"),
             ("missing_compensation", "CATALOG_SCHEMA_INVALID"),
@@ -2120,7 +2369,7 @@ class AgentEquipmentDesignTest(unittest.TestCase):
         for mutation, expected in mutations:
             with self.subTest(mutation=mutation):
                 catalog, lock = valid_pair()
-                retirement = valid_retirement(catalog)
+                retirement = valid_retirement(catalog, lock)
                 catalog["retirements"].append(retirement)
                 if mutation == "duplicate_selector":
                     duplicate = deepcopy(retirement)
@@ -2205,6 +2454,9 @@ class AgentEquipmentDesignTest(unittest.TestCase):
                 "plugin_id": "unrelated-victim@official",
             },
             "desired_state": "disabled",
+            "source_manifest_digest": locked_distribution(
+                lock, route["distribution"]
+            )["source_manifest_digest"],
         }
         catalog["retirements"].append(retirement)
         lock["retirements"].append(deepcopy(retirement))
@@ -2242,6 +2494,9 @@ class AgentEquipmentDesignTest(unittest.TestCase):
                 "plugin_id": "unrelated-victim@official",
             },
             "desired_state": "disabled",
+            "source_manifest_digest": locked_distribution(
+                lock, route["distribution"]
+            )["source_manifest_digest"],
         }
         catalog["retirements"].append(retirement)
         lock["retirements"].append(deepcopy(retirement))
@@ -2266,6 +2521,9 @@ class AgentEquipmentDesignTest(unittest.TestCase):
                 "plugin_id": "example-matt@official",
             },
             "desired_state": "disabled",
+            "source_manifest_digest": locked_distribution(
+                lock, manual_route(catalog)["distribution"]
+            )["source_manifest_digest"],
         }
         retirement["route"]["identity"] = "route:example/legacy-native-plugin"
         retirement["route"]["activation_group"] = (
@@ -2291,7 +2549,7 @@ class AgentEquipmentDesignTest(unittest.TestCase):
 
     def test_retirement_lock_must_match_catalog_exactly(self) -> None:
         catalog, lock = valid_pair()
-        retirement = valid_retirement(catalog)
+        retirement = valid_retirement(catalog, lock)
         catalog["retirements"].append(retirement)
         lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
 
@@ -2333,7 +2591,7 @@ class AgentEquipmentDesignTest(unittest.TestCase):
         )
         final_equipment["coverage"] = {"claude": {"record": final_record}}
         catalog["equipment"].append(final_equipment)
-        lock["distributions"][0]["equipment"].append(final_equipment["identity"])
+        append_locked_equipment(lock, final_equipment["identity"])
         lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
 
         result = DESIGN.validate_design(catalog, lock)
@@ -2387,7 +2645,7 @@ class AgentEquipmentDesignTest(unittest.TestCase):
                 "coverage": {"claude": {"record": second_record}},
             }
         )
-        lock["distributions"][0]["equipment"].append(second_identity)
+        append_locked_equipment(lock, second_identity)
         for harness, record in (
             ("claude", deepcopy(second_record)),
             ("codex", deepcopy(catalog["coverage_templates"][1]["record"])),
@@ -2647,7 +2905,7 @@ class AgentEquipmentDesignTest(unittest.TestCase):
                 restore_records = (
                     managed_route(catalog)["restore"],
                     locked_managed_route(lock)["restore"],
-                    lock["distributions"][0]["restore"],
+                    locked_distribution(lock)["restore"],
                 )
                 if mutation == "tag_revision":
                     for restore in restore_records:
@@ -2680,13 +2938,13 @@ class AgentEquipmentDesignTest(unittest.TestCase):
         for restore in (
             managed_route(catalog)["restore"],
             locked_managed_route(lock)["restore"],
-            lock["distributions"][0]["restore"],
+            locked_distribution(lock)["restore"],
         ):
             restore["revision"] = next_commit
             restore["artifact_ref"] = next_artifact_ref
             restore["content_digest"] = next_digest
-        catalog["distributions"][0]["source"]["ref"] = next_commit
-        lock["distributions"][0]["source"]["ref"] = next_commit
+        locked_distribution(lock)["resolved_source"]["revision"] = next_commit
+        refresh_source_manifest(locked_distribution(lock))
         lock["catalog_digest"] = DESIGN.canonical_json_sha256(catalog)
 
         result = DESIGN.validate_design(catalog, lock)
@@ -2741,7 +2999,15 @@ class AgentEquipmentDesignTest(unittest.TestCase):
                             "scope": "user",
                         }
                         catalog["distributions"][0]["source"] = deepcopy(source)
-                        lock["distributions"][0]["source"] = deepcopy(source)
+                        manifest = locked_distribution(lock)
+                        manifest["source"] = deepcopy(source)
+                        manifest["resolved_source"] = {
+                            "kind": "native_manager",
+                            "version": {
+                                "kind": "semantic_version",
+                                "value": "1.2.3",
+                            },
+                        }
                         route["provider"] = deepcopy(provider)
                         locked_route["provider"] = deepcopy(provider)
                         route["provenance"] = {
@@ -2760,7 +3026,9 @@ class AgentEquipmentDesignTest(unittest.TestCase):
                         restore = deepcopy(route["restore"])
                     route["restore"] = deepcopy(restore)
                     locked_route["restore"] = deepcopy(restore)
-                    lock["distributions"][0]["restore"] = deepcopy(restore)
+                    manifest = locked_distribution(lock)
+                    manifest["restore"] = deepcopy(restore)
+                    refresh_source_manifest(manifest)
                     route["operations"]["suppress_native_update"] = {
                         "disposition": disposition,
                         **(

@@ -106,10 +106,14 @@ Complete all of these before the executor opens an action checkpoint:
     domain. A previously claimed or unpersistable nonce, or a claim in another
     ledger domain, stops before the first action checkpoint.
 
-Planning, inventory, import, update, and adopt remain runtime-read-only. Only an
-authorized `apply` may execute this runbook. Authorization for one plan does not
-carry to a recomputed plan. Chezmoi's `run_onchange` integration invokes audit
-only and has no authorization or mutation input.
+The current public command vocabulary is `status`, `unmanaged`, `add`, `update`,
+and `apply`. `status`, `unmanaged`, `add`, and `update` are nonmutating.
+At Step 3, the exact `apply` command is reserved and fails unavailable.
+The retired `audit`, `import`, and `adopt` aliases remain rejected.
+Only a later, separately authorized `apply` may execute this runbook, and
+authority for one plan does not carry to a recomputed plan. Chezmoi's
+`run_onchange` integration invokes `status` only and has no authorization or
+mutation input.
 
 ## Captured state
 
@@ -620,7 +624,8 @@ exception that names the complete active route set and rationale.
 
 Operator-owned selections produce instructions and evidence, not automated
 mutations. A required operator action leaves the automated migration incomplete
-until it is performed under separate authority and a fresh audit confirms it.
+until it is performed under separate authority and a fresh `status` observation
+confirms it.
 
 Completion: every equipment identity has exactly one canonical harness coverage
 record and every active provider route has its declared operation disposition;
@@ -628,7 +633,7 @@ the effective route set matches the plan with no inferred duplicate.
 
 ### 8. Verify and complete the run
 
-Audit from supported runtime surfaces and verify all of these together:
+Run `status` against supported runtime surfaces and verify all of these together:
 
 - the catalog and lock bindings still match the authorized plan;
 - the blanket projector cannot recreate excluded links;
@@ -645,8 +650,8 @@ Audit from supported runtime surfaces and verify all of these together:
   secret value.
 
 Only after the whole verification passes may the executor durably mark the run
-`succeeded`. A second audit of the same catalog, lock, and live state must
-produce an empty mutation plan.
+`succeeded`. A second `status` invocation against the same catalog, lock, and
+live state must produce an empty mutation plan.
 
 The evidence writer then seals the exact migration and live child receipts into
 the candidate bundle and derives the aggregates. The candidate-independent
@@ -670,7 +675,7 @@ the complete run evidence; it never edits a checkpoint or fabricates rollback
 authority.
 
 Completion: the success marker is durable and fsynced, the apply lease is
-released, steady-state audit is a no-op, and the exact apply authorization,
+released, steady-state `status` is a no-op, and the exact apply authorization,
 plan-action set, captured-state manifest, capture-observation-authority set,
 prepared-action-authority set, checkpoint-store snapshot, checkpoint-set
 manifest, run-terminal record, expected-case manifest, evidence bundle,
@@ -698,17 +703,18 @@ The action state machine is:
 
 ```text
 prepared --forward verified--> completed
-prepared --explicit rollback after audit--> compensating
+prepared --explicit rollback after fresh status observation--> compensating
 completed --rollback--> compensating
 compensating --restore verified--> compensated
 prepared | completed | compensating --ambiguity or drift--> compensation_blocked
 ```
 
-The direct `prepared` to `compensating` transition requires an audit of the
-prepared action and a fresh, closed `CompensationAuthorization`. That record
-uses Schema version `agent-equipment-compensation-authorization/v1`, identity
-prefix `compensation-authorization:sha256:`, `command: compensate`, issuer and
-validity window, a fresh `compensation_nonce`, and exact bindings to the original
+The direct `prepared` to `compensating` transition requires a fresh status
+observation of the prepared action and a closed `CompensationAuthorization`.
+That record uses Schema version
+`agent-equipment-compensation-authorization/v1`, identity prefix
+`compensation-authorization:sha256:`, `command: compensate`, issuer and validity
+window, a fresh `compensation_nonce`, and exact bindings to the original
 apply identity/digest, execution-domain identity, execution nonce, run,
 checkpoint-set digest, and plan-action-set digest. Its canonical complete digest
 is supplied independently. Under the exclusive lease, enumerate all and only
@@ -788,7 +794,7 @@ rollback from being labeled recovered. Only a separately authorized operator
 disposition can supersede it; the existing checkpoint remains historical
 evidence.
 
-Recover a surviving `prepared` checkpoint by audit:
+Recover a surviving `prepared` checkpoint through a fresh status observation:
 
 - observed pre-state means the action did not take effect and can be retried
   only through a newly persisted invocation intent;
@@ -821,8 +827,8 @@ nonce claim above. It cannot start a forward action or authorize another run.
 
 Rollback processes completed actions in reverse topological order. The ordinal
 is the sealed result of the validated dependency graph, not an independently
-sorted execution rule. An ambiguous prepared or compensating action is audited
-and classified before rollback continues.
+sorted execution rule. An ambiguous prepared or compensating action receives a
+fresh status observation and classification before rollback continues.
 
 - **Install the catalog-driven projector.** No-op when the exact implementation
   digest and control state are already present. Compensation restores captured
@@ -873,8 +879,8 @@ or replace them.
 
 The acceptance matrix must exercise these boundaries against disposable homes
 and deterministic fake adapters. Every case proves processing stops, checkpoint
-state is durable, retry is audit-first, external changes survive, and eventual
-forward completion or compensation is idempotent.
+state is durable, retry begins with a fresh status observation, external changes
+survive, and eventual forward completion or compensation is idempotent.
 
 - **Full-plan rejection:** Inject an invalid final action, stale lock, missing
   compensation, or operator-owned automated mutation. Reject before the first
@@ -887,16 +893,17 @@ forward completion or compensation is idempotent.
 - **Compare-before-mutate:** Inject an external change on every surface in
   separate cases. Preserve it, skip the adapter, and stop forward processing.
 - **Adapter before mutation:** Fail the call before mutation. Leave the
-  checkpoint prepared; audit observes pre-state.
+  checkpoint prepared; a fresh status observation reports pre-state.
 - **Adapter ambiguous failure:** Return failure after a partial or complete
-  mutation. Audit classifies pre-state, expected post-state, or other drift
-  before retry.
+  mutation. A fresh status observation classifies pre-state, expected post-state,
+  or other drift before retry.
 - **After mutation:** Stop before verification. Recovery avoids blind replay;
   expected post-state becomes completed without a second mutation.
 - **Verification failure:** Reverse-compensate earlier completed actions and an
-  audited completed current action.
-- **Completed persistence:** Fail its write or fsync. Audit the surviving
-  prepared state and record expected post-state completed without replay.
+  observed-and-classified completed current action.
+- **Completed persistence:** Fail its write or fsync. Observe the surviving
+  prepared state through `status` and record expected post-state completed
+  without replay.
 - **After projector replacement:** Restore every captured surface and restore
   the projector last.
 - **After each individual Claude-link removal:** Restore that link and every
@@ -916,10 +923,11 @@ forward completion or compensation is idempotent.
   projector, each link, plugin installation, enablement, every MCP selection,
   and every plugin selection. Preserve it and stop compensation durably.
 - **Compensation ambiguous failure:** Fail before, during, and after restoration.
-  Audit classifies captured pre-state, expected post-state, or other drift
-  before retry.
-- **Compensated persistence:** Fail its write or fsync. Audit recognizes
-  restored pre-state and records compensation without destructive replay.
+  A fresh status observation classifies captured pre-state, expected post-state,
+  or other drift before retry.
+- **Compensated persistence:** Fail its write or fsync. A fresh status observation
+  recognizes restored pre-state and records compensation without destructive
+  replay.
 
 Run the mutation-boundary cases once for every planned action, not once per
 adapter kind. Include resolved and broken Claude symlinks, regular-file and
@@ -943,9 +951,9 @@ output for seeded secret values.
    `trusted_execution_domain_identity`, and its ledger claim in that domain to
    name this exact run and nonce. A mismatch requires a new read-only
    investigation, not checkpoint editing.
-3. Audit every `prepared` and `compensating` checkpoint from supported surfaces.
-   Record whether each surface equals captured pre-state, the action's expected
-   post-state, or neither.
+3. Obtain a fresh status observation for every `prepared` and `compensating`
+   checkpoint from supported surfaces. Record whether each surface equals
+   captured pre-state, the action's expected post-state, or neither.
 4. Resume forward only when the exact authorized plan remains valid, every
    ambiguous action is classified, all next-action compare guards pass, and the
    authorization remains within its expiry. After expiry, create no new action
@@ -962,10 +970,11 @@ output for seeded secret values.
    and checkpoint. Obtain an explicit decision to retain the external change
    in a new plan or have its owner restore the expected migration state before
    compensation resumes.
-6. At a native compensation failure, audit before retry. If a plugin absent at
-   capture now differs from the installation written by this run, do not
-   uninstall it. If a plugin existed at capture, never uninstall it; restore
-   only enablement or selections that still pass their guards.
+6. At a native compensation failure, obtain a fresh status observation before
+   retry. If a plugin absent at capture now differs from the installation written
+   by this run, do not uninstall it. If a plugin existed at capture, never
+   uninstall it; restore only enablement or selections that still pass their
+   guards.
 7. After compensation, verify every mutable surface equals captured state and
    every canonical Agent Skills entry remains unchanged. Mark the run
    `compensated` only when all restorations are durable. Otherwise mark it
@@ -991,7 +1000,7 @@ After success:
 - the reviewed official Matt plugin route is installed and enabled;
 - MCPs, plugins, component controls, and standalone suppressions match complete
   provider selections without undocumented duplication; and
-- a repeated audit proposes no mutation.
+- a repeated `status` invocation proposes no mutation.
 
 After compensation, every mutable surface equals captured state and the legacy
 projector is restored only after its projections. A concurrent-change stop is

@@ -12,7 +12,7 @@ from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any
+from typing import Any, TypeGuard
 from urllib.parse import urlsplit
 
 from ._json_schema import (
@@ -20,6 +20,9 @@ from ._json_schema import (
 )
 from ._json_schema import (
     validate_schema_documents as _validate_schema_documents,
+)
+from .canonical import (
+    canonical_json_bytes as _canonical_json_bytes,
 )
 from .canonical import (
     canonical_json_sha256 as _canonical_json_sha256,
@@ -39,6 +42,7 @@ from .model import (
     thaw_json,
 )
 from .secrets import contains_literal_credential
+from .source_resolution import MAX_AVAILABLE_EQUIPMENT, MAX_SOURCE_RESOLUTION_BYTES
 
 __all__ = ("load_catalog_lock", "validate_catalog_lock")
 
@@ -66,15 +70,33 @@ SCHEMA_DIRECTORY = Path(__file__).resolve().parent.parent / "schemas"
 MAX_SCHEMA_BYTES = 1024 * 1024
 MAX_CATALOG_BYTES = 4 * 1024 * 1024
 MAX_LOCK_BYTES = 16 * 1024 * 1024
+MAX_SOURCE_FIELD_CHARACTERS = 4096
+MAX_SOURCE_PACKAGE_CHARACTERS = 255
 _DOCUMENT_READ_CHUNK_BYTES = 1024 * 1024
+_NATIVE_MANAGER_PACKAGE_PATTERN = re.compile(
+    r"(?:@[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._-]{0,127}|"
+    r"[a-z0-9][a-z0-9._-]{0,127}(?:@[a-z0-9][a-z0-9._-]{0,127})?)"
+)
+_NPX_PACKAGE_PATTERN = re.compile(
+    r"(?:@[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._-]{0,127}|"
+    r"[a-z0-9][a-z0-9._-]{0,127})"
+)
+_NATIVE_CHANNEL_PATTERN = re.compile(r"[a-z0-9][a-z0-9._/-]{0,127}")
+_SEMANTIC_VERSION_PATTERN = re.compile(
+    r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
+    r"(?:-(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)"
+    r"(?:\.(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?"
+    r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
+)
+_OBSERVATION_SOURCE_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9 .,/_+-]{0,254}")
 EXPECTED_SCHEMA_SHA256 = MappingProxyType(
     {
         "acceptance-evidence-v1.schema.json": "5264aad08075c115cb3633f3d0f9a46b8a0a2027758b931c4334a2f234e660d5",
         "adapter-contract-v1.schema.json": "b7ea9ca7c9c2c9c114a1090c4df1f2b3241616e2ae915558d2ca286c945b68d5",
         "captured-state-v1.schema.json": "d0c30850f03366dd612208d12ee35b2462d84e5e6901e3ca7d0a6b0ed3bdf693",
-        "catalog-v1.schema.json": "a8e2942347501dd2ba16aebc5762e0a234f55847bd95b75a805fad867ac41a02",
+        "catalog-v1.schema.json": "d0582e3343d9960ffcadbdf4afe694b9bdd6f37bdab5d381d77b91e29be8c3b6",
         "execution-authority-v1.schema.json": "30c61c9fdbbc52679bf1f18bf80cf99d7429d7efc07a8b6ccf80dde7ee4d5b48",
-        "lock-v1.schema.json": "f16c7e89523257b469a291984e4ad18491373942cd8605a62469a08bec9f98d7",
+        "lock-v1.schema.json": "482b55f05c6d0622961f2526095975d946d651b9bf398c06e33fd04f8e5d4714",
         "plan-action-set-v1.schema.json": "fcfede41027b76c96c20161fcecfd8fb9a8d38fa0675f3d749a094055ba0e12e",
     }
 )
@@ -163,6 +185,14 @@ def canonical_json_sha256(document: JsonObject) -> str:
     """Return the digest of UTF-8 RFC-style canonical JSON for *document*."""
 
     return _canonical_json_sha256(document)
+
+
+def _source_string_is_bounded(value: Any) -> TypeGuard[str]:
+    return (
+        isinstance(value, str)
+        and bool(value)
+        and len(value) <= MAX_SOURCE_FIELD_CHARACTERS
+    )
 
 
 def _document_identity(metadata: os.stat_result) -> tuple[int, int, int]:
@@ -812,6 +842,7 @@ def _validate_design(
                 )
             )
     coverage: list[_CoverageEntry] = []
+    active_authored_record_ids: set[int] = set()
     equipment_items = (
         catalog.get("equipment", [])
         if isinstance(catalog.get("equipment"), list)
@@ -860,11 +891,13 @@ def _validate_design(
         for item in lock_distributions:
             if (
                 isinstance(item, dict)
-                and isinstance(item.get("identity"), str)
+                and isinstance(item.get("distribution_identity"), str)
                 and isinstance(item.get("equipment"), list)
                 and all(isinstance(identity, str) for identity in item["equipment"])
             ):
-                resolved_membership[item["identity"]] = tuple(item["equipment"])
+                resolved_membership[item["distribution_identity"]] = tuple(
+                    item["equipment"]
+                )
     selected_identities = sorted(
         {
             identity
@@ -976,6 +1009,7 @@ def _validate_design(
                     )
                 )
                 continue
+            active_authored_record_ids.add(id(record))
             if not _coverage_record_is_structurally_valid(
                 record,
                 diagnostics,
@@ -985,10 +1019,19 @@ def _validate_design(
                 continue
             coverage.append(_CoverageEntry(equipment_identity, harness, record))
 
+    for equipment_identity, harness, record in _authored_catalog_records(catalog):
+        if id(record) in active_authored_record_ids or harness is None:
+            continue
+        _coverage_record_is_structurally_valid(
+            record,
+            diagnostics,
+            equipment_identity,
+            harness,
+        )
+
     retirement_operations = _validate_retirements(
         catalog,
         lock,
-        resolved_membership,
         coverage,
         diagnostics,
     )
@@ -1143,7 +1186,7 @@ def _construct_mutation_plan(
 def _coverage_record_is_structurally_valid(
     record: Any,
     diagnostics: list[Diagnostic],
-    equipment_identity: str,
+    equipment_identity: str | None,
     harness: str,
 ) -> bool:
     if not isinstance(record, dict) or set(record) != {"outcome", "provider_selection"}:
@@ -1399,7 +1442,7 @@ def _literal_secret_diagnostics(
 def _route_is_valid(
     route: JsonObject,
     diagnostics: list[Diagnostic],
-    equipment_identity: str,
+    equipment_identity: str | None,
     harness: str,
 ) -> bool:
     route_identity = route.get("identity")
@@ -1702,7 +1745,7 @@ def _restore_is_valid(restore: Any) -> bool:
         return (
             isinstance(restore["revision"], str)
             and _git_commit_oid_is_valid(restore["revision"])
-            and isinstance(restore["artifact_ref"], str)
+            and _source_string_is_bounded(restore["artifact_ref"])
             and _immutable_artifact_ref_is_valid(restore["artifact_ref"])
             and _immutable_artifact_ref_revision(restore["artifact_ref"])
             == restore["revision"]
@@ -1719,14 +1762,18 @@ def _restore_is_valid(restore: Any) -> bool:
             "native_update_control",
         }:
             return False
-        return all(
-            isinstance(restore[field], str) and bool(restore[field].strip())
-            for field in ("channel", "reviewed_baseline", "observation_source")
-        ) and restore["native_update_control"] in {
-            "unknown",
-            "suppressible",
-            "unsuppressible",
-        }
+        return (
+            _source_string_is_bounded(restore["channel"])
+            and bool(restore["channel"].strip())
+            and _source_string_is_bounded(restore["reviewed_baseline"])
+            and bool(restore["reviewed_baseline"].strip())
+            and isinstance(restore["observation_source"], str)
+            and bool(
+                _OBSERVATION_SOURCE_PATTERN.fullmatch(restore["observation_source"])
+            )
+            and restore["native_update_control"]
+            in {"unknown", "suppressible", "unsuppressible"}
+        )
     return False
 
 
@@ -1768,28 +1815,12 @@ def _catalog_distribution_is_valid(distribution: Any) -> bool:
     }:
         return False
     identity = distribution.get("identity")
-    if not isinstance(identity, str) or not re.fullmatch(
+    if not _source_string_is_bounded(identity) or not re.fullmatch(
         r"distribution:[a-z0-9][a-z0-9._/-]*", identity
     ):
         return False
     source = distribution.get("source")
-    if not isinstance(source, dict):
-        return False
-    if source.get("kind") == "git":
-        source_valid = (
-            set(source) == {"kind", "repository", "ref"}
-            and isinstance(source.get("repository"), str)
-            and _public_git_repository_is_valid(source["repository"])
-            and isinstance(source.get("ref"), str)
-            and _git_commit_oid_is_valid(source["ref"])
-        )
-    elif source.get("kind") == "native_manager":
-        source_valid = set(source) == {"kind", "manager", "package", "channel"} and all(
-            isinstance(source.get(field), str) and bool(source[field].strip())
-            for field in ("manager", "package", "channel")
-        )
-    else:
-        source_valid = False
+    source_valid = _catalog_source_is_valid(source)
     selection = distribution.get("selection")
     selection_valid = isinstance(selection, dict) and (
         (set(selection) == {"all"} and selection.get("all") is True)
@@ -1799,7 +1830,7 @@ def _catalog_distribution_is_valid(distribution: Any) -> bool:
             and bool(selection["equipment"])
             and len(selection["equipment"]) == len(set(selection["equipment"]))
             and all(
-                isinstance(item, str)
+                _source_string_is_bounded(item)
                 and bool(
                     re.fullmatch(
                         r"(skill|plugin|mcp|hook|other):[a-z0-9][a-z0-9._/-]*",
@@ -1823,7 +1854,70 @@ def _catalog_distribution_is_valid(distribution: Any) -> bool:
     return source_valid and selection_valid and templates_valid
 
 
+def _catalog_source_is_valid(source: Any) -> bool:
+    if not isinstance(source, dict):
+        return False
+    if source.get("kind") == "git":
+        if set(source) not in (
+            {"kind", "repository"},
+            {"branch", "kind", "repository"},
+        ):
+            return False
+        repository = source.get("repository")
+        return (
+            _source_string_is_bounded(repository)
+            and _public_git_repository_is_valid(repository)
+            and (
+                "branch" not in source
+                or isinstance(source.get("branch"), str)
+                and _git_branch_is_valid(source["branch"])
+            )
+        )
+    if source.get("kind") != "native_manager" or set(source) not in (
+        {"kind", "manager", "package"},
+        {"channel", "kind", "manager", "package"},
+    ):
+        return False
+    manager = source.get("manager")
+    package = source.get("package")
+    if manager == "http":
+        return (
+            set(source) == {"channel", "kind", "manager", "package"}
+            and isinstance(package, str)
+            and len(package) <= MAX_SOURCE_PACKAGE_CHARACTERS
+            and _static_credential_free_https_url_is_valid(package)
+            and source.get("channel") == "static"
+        )
+    if (
+        manager not in {"claude", "codex", "cursor", "npx"}
+        or not isinstance(package, str)
+        or len(package) > MAX_SOURCE_PACKAGE_CHARACTERS
+        or not (
+            _NPX_PACKAGE_PATTERN.fullmatch(package)
+            if manager == "npx"
+            else _NATIVE_MANAGER_PACKAGE_PATTERN.fullmatch(package)
+        )
+    ):
+        return False
+    return "channel" not in source or (
+        isinstance(source.get("channel"), str)
+        and bool(_NATIVE_CHANNEL_PATTERN.fullmatch(source["channel"]))
+        and source["channel"] != "latest"
+    )
+
+
+def _git_branch_is_valid(value: str) -> bool:
+    return len(value) <= MAX_SOURCE_FIELD_CHARACTERS and bool(
+        re.fullmatch(
+            r"(?!HEAD$)(?!-)(?!\.)(?!.*(?:/\.|//|\.\.|@\{|\\))(?!.*\.lock(?:/|$))(?!.*[./]$)[A-Za-z0-9._/-]+",
+            value,
+        )
+    )
+
+
 def _public_git_repository_is_valid(value: str) -> bool:
+    if len(value) > MAX_SOURCE_FIELD_CHARACTERS:
+        return False
     if not _static_credential_free_https_url_is_valid(value):
         return False
     parsed = urlsplit(value)
@@ -1832,6 +1926,197 @@ def _public_git_repository_is_valid(value: str) -> bool:
 
 def _git_commit_oid_is_valid(value: str) -> bool:
     return bool(re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", value))
+
+
+def _resolved_source_matches_policy(source: Any, resolved: Any) -> bool:
+    if not _catalog_source_is_valid(source) or not isinstance(resolved, dict):
+        return False
+    if source.get("kind") == "git":
+        return (
+            set(resolved) == {"kind", "revision"}
+            and resolved.get("kind") == "git"
+            and isinstance(resolved.get("revision"), str)
+            and _git_commit_oid_is_valid(resolved["revision"])
+        )
+    return (
+        set(resolved) == {"kind", "version"}
+        and resolved.get("kind") == "native_manager"
+        and _resolved_version_is_valid_for_manager(
+            source.get("manager"), resolved.get("version")
+        )
+    )
+
+
+def _resolved_version_is_valid_for_manager(manager: Any, version: Any) -> bool:
+    if not isinstance(version, dict):
+        return False
+    if manager in {"claude", "cursor", "npx"}:
+        value = version.get("value")
+        return (
+            set(version) == {"kind", "value"}
+            and version.get("kind") == "semantic_version"
+            and isinstance(value, str)
+            and len(value) <= 255
+            and bool(_SEMANTIC_VERSION_PATTERN.fullmatch(value))
+        )
+    if manager == "codex":
+        value = version.get("value")
+        return (
+            set(version) == {"kind", "value"}
+            and version.get("kind") == "revision"
+            and isinstance(value, str)
+            and bool(re.fullmatch(r"[0-9a-f]{8}", value))
+            and any(character.isdigit() for character in value)
+        )
+    return manager == "http" and version == {"kind": "static_source"}
+
+
+def _resolved_version_value(version: Any) -> str | None:
+    if not isinstance(version, dict):
+        return None
+    value = version.get("value")
+    return value if isinstance(value, str) else None
+
+
+def _source_manifest_digest_is_valid(manifest: Any) -> bool:
+    if not isinstance(manifest, dict):
+        return False
+    digest = manifest.get("source_manifest_digest")
+    if not isinstance(digest, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+        return False
+    payload = dict(manifest)
+    payload.pop("source_manifest_digest", None)
+    return digest == canonical_json_sha256(payload)
+
+
+def _source_manifest_is_valid(manifest: Any) -> bool:
+    if not isinstance(manifest, dict):
+        return False
+    try:
+        if len(_canonical_json_bytes(manifest)) > MAX_SOURCE_RESOLUTION_BYTES:
+            return False
+    except (TypeError, UnicodeError, ValueError, RecursionError):
+        return False
+    if set(manifest) != {
+        "available_equipment",
+        "distribution_identity",
+        "equipment",
+        "membership_evidence",
+        "resolved_source",
+        "restore",
+        "schema_version",
+        "source",
+        "source_manifest_digest",
+    }:
+        return False
+    identity = manifest.get("distribution_identity")
+    if (
+        manifest.get("schema_version") != "source-manifest/v1"
+        or not _source_string_is_bounded(identity)
+        or not re.fullmatch(r"distribution:[a-z0-9][a-z0-9._/-]*", identity)
+        or not _resolved_source_matches_policy(
+            manifest.get("source"), manifest.get("resolved_source")
+        )
+        or not _restore_is_valid(manifest.get("restore"))
+        or not _resolved_source_matches_restore(
+            manifest.get("source"),
+            manifest.get("resolved_source"),
+            manifest.get("restore"),
+        )
+        or not _source_manifest_digest_is_valid(manifest)
+    ):
+        return False
+    available = manifest.get("available_equipment")
+    selected = manifest.get("equipment")
+    if (
+        not isinstance(available, list)
+        or not isinstance(selected, list)
+        or not _source_manifest_equipment_is_valid(available)
+        or not _source_manifest_equipment_is_valid(selected)
+        or not set(selected).issubset(available)
+    ):
+        return False
+    evidence = manifest.get("membership_evidence")
+    return (
+        isinstance(evidence, dict)
+        and set(evidence) == {"evidence_digest", "kind"}
+        and evidence.get("kind") == "authoritative_source_listing"
+        and evidence.get("evidence_digest")
+        == canonical_json_sha256({"available_equipment": available})
+    )
+
+
+def _source_manifest_equipment_is_valid(value: Any) -> bool:
+    return (
+        isinstance(value, list)
+        and bool(value)
+        and len(value) <= MAX_AVAILABLE_EQUIPMENT
+        and value == sorted(set(value))
+        and all(
+            _source_string_is_bounded(identity)
+            and bool(
+                re.fullmatch(
+                    r"(skill|plugin|mcp|hook|other):[a-z0-9][a-z0-9._/-]*",
+                    identity,
+                )
+            )
+            for identity in value
+        )
+    )
+
+
+def _resolved_source_matches_restore(
+    source: Any,
+    resolved: Any,
+    restore: Any,
+) -> bool:
+    if (
+        not _catalog_source_is_valid(source)
+        or not isinstance(resolved, dict)
+        or not isinstance(restore, dict)
+    ):
+        return False
+    if resolved.get("kind") == "git":
+        if source.get("kind") != "git" or restore.get("class") != "immutable":
+            return False
+        repository = source.get("repository")
+        revision = resolved.get("revision")
+        expected = f"git+{repository}@{revision}"
+        artifact_ref = restore.get("artifact_ref")
+        return (
+            restore.get("revision") == revision
+            and isinstance(artifact_ref, str)
+            and (artifact_ref == expected or artifact_ref.startswith(f"{expected}#"))
+        )
+    if (
+        resolved.get("kind") != "native_manager"
+        or restore.get("class") != "native_rolling"
+    ):
+        return False
+    manager = source.get("manager")
+    package = source.get("package")
+    channel = source.get("channel", "latest")
+    version = resolved.get("version")
+    if not _resolved_version_is_valid_for_manager(manager, version):
+        return False
+    version_value = _resolved_version_value(version)
+    if manager == "npx":
+        return (
+            version_value is not None
+            and restore.get("channel") == f"npm:{version_value}"
+            and restore.get("reviewed_baseline") == f"{package}@{version_value}"
+        )
+    if manager == "http":
+        return (
+            channel == "static"
+            and restore.get("channel") == "static"
+            and restore.get("reviewed_baseline") == package
+        )
+    return (
+        version_value is not None
+        and restore.get("channel") == channel
+        and restore.get("reviewed_baseline") == version_value
+    )
 
 
 def _artifact_subpath_is_valid(value: str) -> bool:
@@ -1845,7 +2130,7 @@ def _artifact_subpath_is_valid(value: str) -> bool:
 
 
 def _immutable_artifact_ref_is_valid(value: str) -> bool:
-    if not value.startswith("git+"):
+    if len(value) > MAX_SOURCE_FIELD_CHARACTERS or not value.startswith("git+"):
         return False
     repository_and_selector = value[4:]
     if "@" not in repository_and_selector:
@@ -2049,7 +2334,6 @@ def _secret_reference_is_valid(reference: Any) -> bool:
 def _validate_retirements(
     catalog: JsonObject,
     lock: JsonObject,
-    resolved_membership: Mapping[str, tuple[str, ...]],
     coverage: list[_CoverageEntry],
     diagnostics: list[Diagnostic],
 ) -> list[_GroupedOperation]:
@@ -2063,11 +2347,6 @@ def _validate_retirements(
         )
         return []
 
-    selected_identities = {
-        identity
-        for identities in resolved_membership.values()
-        for identity in identities
-    }
     active_route_ids = {
         route.get("identity")
         for entry in coverage
@@ -2078,17 +2357,14 @@ def _validate_retirements(
     seen_retirement_ids: set[str] = set()
     seen_surfaces: set[tuple[str, ...]] = set()
     grouped: list[_GroupedOperation] = []
-    distribution_sources = {
-        distribution.get("identity"): distribution.get("source")
-        for distribution in catalog.get("distributions", [])
-        if isinstance(distribution, dict)
-        and isinstance(distribution.get("identity"), str)
-    }
-    distribution_restores = {
-        distribution.get("identity"): distribution.get("restore")
-        for distribution in lock.get("distributions", [])
-        if isinstance(distribution, dict)
-        and isinstance(distribution.get("identity"), str)
+    manifests_by_digest = {
+        manifest.get("source_manifest_digest"): manifest
+        for field in ("distributions", "source_manifest_history")
+        for manifest in (
+            lock.get(field, []) if isinstance(lock.get(field), list) else []
+        )
+        if isinstance(manifest, dict)
+        and isinstance(manifest.get("source_manifest_digest"), str)
     }
 
     for retirement in retirements:
@@ -2099,6 +2375,7 @@ def _validate_retirements(
             "route",
             "surface",
             "desired_state",
+            "source_manifest_digest",
         }:
             diagnostics.append(
                 Diagnostic(
@@ -2140,7 +2417,10 @@ def _validate_retirements(
 
         if (
             not isinstance(equipment_identity, str)
-            or equipment_identity not in selected_identities
+            or not re.fullmatch(
+                r"(skill|plugin|mcp|hook|other):[a-z0-9][a-z0-9._/-]*",
+                equipment_identity,
+            )
             or harness not in {"claude", "codex", "cursor"}
             or not isinstance(route, dict)
         ):
@@ -2163,50 +2443,54 @@ def _validate_retirements(
 
         route_valid = _route_is_valid(route, diagnostics, equipment_identity, harness)
         distribution_identity = route.get("distribution")
+        source_manifest_digest = retirement.get("source_manifest_digest")
+        source_manifest = (
+            manifests_by_digest.get(source_manifest_digest)
+            if isinstance(source_manifest_digest, str)
+            else None
+        )
+        manifest_membership = (
+            source_manifest.get("equipment")
+            if isinstance(source_manifest, dict)
+            else None
+        )
         if (
             not isinstance(distribution_identity, str)
-            or distribution_identity not in resolved_membership
-            or equipment_identity
-            not in resolved_membership.get(distribution_identity, ())
+            or not isinstance(source_manifest, dict)
+            or source_manifest.get("distribution_identity") != distribution_identity
+            or not isinstance(manifest_membership, list)
+            or equipment_identity not in manifest_membership
         ):
             diagnostics.append(
                 Diagnostic(
-                    "RETIREMENT_REFERENCE_INVALID",
-                    "The losing route distribution supplies the retired equipment identity in the resolved lock.",
+                    "RETIREMENT_SOURCE_MANIFEST_INVALID",
+                    "A retirement binds an exact current or historical Source Manifest that supplied its losing route and equipment.",
                     equipment_identity=equipment_identity,
                     harness=harness,
                     route_identity=route_identity,
                 )
             )
             route_valid = False
-        distribution_source = (
-            distribution_sources.get(distribution_identity)
-            if isinstance(distribution_identity, str)
-            else None
-        )
-        if not _distribution_source_matches_provider(
-            distribution_source, route.get("provider")
+        if not _source_manifest_matches_provider(
+            source_manifest, route.get("provider")
         ):
             diagnostics.append(
                 Diagnostic(
                     "RETIREMENT_DISTRIBUTION_SOURCE_PROVIDER_MISMATCH",
-                    "The losing provider invokes the exact package, channel, manager, or immutable source bound by its distribution.",
+                    "The losing provider invokes the exact package, version, manager, or immutable source bound by its Source Manifest.",
                     equipment_identity=equipment_identity,
                     harness=harness,
                     route_identity=route_identity,
                 )
             )
             route_valid = False
-        distribution_restore = (
-            distribution_restores.get(distribution_identity)
-            if isinstance(distribution_identity, str)
-            else None
-        )
-        if route.get("restore") != distribution_restore:
+        if not isinstance(source_manifest, dict) or route.get(
+            "restore"
+        ) != source_manifest.get("restore"):
             diagnostics.append(
                 Diagnostic(
                     "RETIREMENT_DISTRIBUTION_RESTORE_MISMATCH",
-                    "The losing route restore evidence is the exact restore resolved for its distribution.",
+                    "The losing route restore evidence is the exact restore retained by its Source Manifest.",
                     equipment_identity=equipment_identity,
                     harness=harness,
                     route_identity=route_identity,
@@ -2476,6 +2760,7 @@ def _validate_lock(
         "schema_version",
         "catalog_digest",
         "distributions",
+        "source_manifest_history",
         "coverage",
         "retirements",
     }:
@@ -2591,122 +2876,200 @@ def _validate_lock(
             )
 
     lock_distributions = lock.get("distributions")
-    if not isinstance(lock_distributions, list):
+    source_manifest_history = lock.get("source_manifest_history")
+    if not isinstance(lock_distributions, list) or not isinstance(
+        source_manifest_history, list
+    ):
         diagnostics.append(
             Diagnostic(
                 "LOCK_SHAPE_INVALID",
-                "Lock distributions are a list of restore records.",
+                "Lock current and historical source manifests are lists.",
             )
         )
         return
-    distribution_records: dict[str, JsonObject] = {}
-    distribution_sources: dict[str, JsonObject] = {}
-    distribution_memberships: dict[str, tuple[str, ...]] = {}
-    for item in lock_distributions:
-        if (
-            not isinstance(item, dict)
-            or set(item) != {"identity", "source", "equipment", "restore"}
-            or not isinstance(item.get("identity"), str)
-            or not isinstance(item.get("equipment"), list)
-            or not item.get("equipment")
-            or not all(isinstance(identity, str) for identity in item["equipment"])
-            or len(item["equipment"]) != len(set(item["equipment"]))
-            or not _restore_is_valid(item.get("restore"))
-            or item["identity"] in distribution_records
-        ):
-            diagnostics.append(
-                Diagnostic(
-                    "LOCK_DISTRIBUTION_INVALID",
-                    "Each selected distribution has one complete immutable or native-rolling restore record.",
+    current_by_identity: dict[str, JsonObject] = {}
+    manifests_by_digest: dict[str, JsonObject] = {}
+    current_digests: set[str] = set()
+    history_digests: set[str] = set()
+    for role, manifests in (
+        ("current", lock_distributions),
+        ("history", source_manifest_history),
+    ):
+        for item in manifests:
+            if isinstance(item, dict) and not _resolved_source_matches_restore(
+                item.get("source"),
+                item.get("resolved_source"),
+                item.get("restore"),
+            ):
+                diagnostics.append(
+                    Diagnostic(
+                        "DISTRIBUTION_SOURCE_RESTORE_MISMATCH",
+                        "Source Manifest restore evidence is an exact consequence of its resolved source.",
+                    )
                 )
-            )
-            continue
-        distribution_records[item["identity"]] = item["restore"]
-        distribution_sources[item["identity"]] = item["source"]
-        distribution_memberships[item["identity"]] = tuple(item["equipment"])
-    catalog_distribution_ids = {
-        item.get("identity")
+            if not _source_manifest_is_valid(item):
+                diagnostics.append(
+                    Diagnostic(
+                        (
+                            "LOCK_DISTRIBUTION_INVALID"
+                            if role == "current"
+                            else "SOURCE_MANIFEST_HISTORY_INVALID"
+                        ),
+                        (
+                            "Each current lock distribution is one complete canonical Source Manifest."
+                            if role == "current"
+                            else "Each historical lock entry is one complete canonical Source Manifest."
+                        ),
+                    )
+                )
+                continue
+            assert isinstance(item, dict)
+            identity = item["distribution_identity"]
+            digest = item["source_manifest_digest"]
+            assert isinstance(identity, str)
+            assert isinstance(digest, str)
+            if digest in manifests_by_digest:
+                diagnostics.append(
+                    Diagnostic(
+                        "SOURCE_MANIFEST_HISTORY_INVALID",
+                        "Current and historical Source Manifest digests are globally unique.",
+                    )
+                )
+                continue
+            manifests_by_digest[digest] = item
+            if role == "current":
+                if identity in current_by_identity:
+                    diagnostics.append(
+                        Diagnostic(
+                            "LOCK_DISTRIBUTION_INVALID",
+                            "The lock resolves each current catalog distribution exactly once.",
+                        )
+                    )
+                    continue
+                current_by_identity[identity] = item
+                current_digests.add(digest)
+            else:
+                history_digests.add(digest)
+
+    catalog_distributions = {
+        item.get("identity"): item
         for item in (
             catalog.get("distributions", [])
             if isinstance(catalog.get("distributions"), list)
             else []
         )
-        if isinstance(item, dict)
+        if isinstance(item, dict) and isinstance(item.get("identity"), str)
     }
-    if set(distribution_records) != catalog_distribution_ids:
+    if set(current_by_identity) != set(catalog_distributions):
         diagnostics.append(
             Diagnostic(
                 "LOCK_DISTRIBUTION_INVALID",
-                "The lock resolves every selected catalog distribution exactly once.",
+                "The lock resolves every current catalog distribution exactly once.",
             )
         )
-    for distribution in (
-        catalog.get("distributions", [])
-        if isinstance(catalog.get("distributions"), list)
-        else []
-    ):
-        if not isinstance(distribution, dict) or not isinstance(
-            distribution.get("identity"), str
-        ):
+    for identity, distribution in catalog_distributions.items():
+        manifest = current_by_identity.get(identity)
+        if manifest is None:
             continue
         selection = distribution.get("selection")
-        membership = distribution_memberships.get(distribution["identity"], ())
-        if distribution_sources.get(distribution["identity"]) != distribution.get(
-            "source"
-        ):
+        membership = manifest.get("equipment")
+        available = manifest.get("available_equipment")
+        if manifest.get("source") != distribution.get("source"):
             diagnostics.append(
                 Diagnostic(
                     "LOCK_DISTRIBUTION_SOURCE_MISMATCH",
-                    "The lock binds every distribution to the exact authored source selector.",
-                )
-            )
-        source = distribution.get("source")
-        restore = distribution_records.get(distribution["identity"])
-        if not _distribution_source_matches_restore(source, restore):
-            diagnostics.append(
-                Diagnostic(
-                    "DISTRIBUTION_SOURCE_RESTORE_MISMATCH",
-                    "The resolved restore channel and artifact are exact consequences of the bound distribution source.",
+                    "The current Source Manifest binds the exact authored source tracking policy.",
                 )
             )
         selection_valid = isinstance(selection, dict) and (
-            (set(selection) == {"all"} and selection.get("all") is True)
+            (
+                set(selection) == {"all"}
+                and selection.get("all") is True
+                and membership == available
+            )
             or (
                 set(selection) == {"equipment"}
                 and isinstance(selection.get("equipment"), list)
                 and selection["equipment"]
                 and len(selection["equipment"]) == len(set(selection["equipment"]))
-                and set(selection["equipment"]) == set(membership)
+                and selection["equipment"] == membership
             )
         )
         if not selection_valid:
             diagnostics.append(
                 Diagnostic(
                     "DISTRIBUTION_SELECTION_INVALID",
-                    "Resolved distribution membership must satisfy exact all-or-explicit catalog selection.",
+                    "Current Source Manifest membership exactly satisfies complete all-or-explicit catalog selection.",
                 )
             )
+
+    for equipment_identity, harness, record in _authored_catalog_records(catalog):
+        selection = record.get("provider_selection")
+        if not isinstance(selection, dict):
+            continue
+        for route in selection.get("routes", []):
+            if not isinstance(route, dict):
+                continue
+            distribution_identity = route.get("distribution")
+            manifest = (
+                current_by_identity.get(distribution_identity)
+                if isinstance(distribution_identity, str)
+                else None
+            )
+            if not _source_manifest_matches_provider(manifest, route.get("provider")):
+                diagnostics.append(
+                    Diagnostic(
+                        "DISTRIBUTION_SOURCE_PROVIDER_MISMATCH",
+                        "Every authored provider invokes the exact package, version, manager, or immutable source bound by its current Source Manifest.",
+                        equipment_identity=equipment_identity,
+                        harness=harness,
+                        route_identity=route.get("identity"),
+                    )
+                )
+            if manifest is None or manifest.get("restore") != route.get("restore"):
+                diagnostics.append(
+                    Diagnostic(
+                        "LOCK_DISTRIBUTION_INVALID",
+                        "Every authored route restore record matches its current Source Manifest.",
+                        equipment_identity=equipment_identity,
+                        harness=harness,
+                        route_identity=route.get("identity"),
+                    )
+                )
+
+    retirement_digests = {
+        item.get("source_manifest_digest")
+        for item in (
+            catalog.get("retirements", [])
+            if isinstance(catalog.get("retirements"), list)
+            else []
+        )
+        if isinstance(item, dict)
+        and isinstance(item.get("source_manifest_digest"), str)
+    }
+    if (
+        retirement_digests - set(manifests_by_digest)
+        or history_digests != retirement_digests - current_digests
+    ):
+        diagnostics.append(
+            Diagnostic(
+                "SOURCE_MANIFEST_HISTORY_INVALID",
+                "History contains exactly the non-current Source Manifests still referenced by retirements.",
+            )
+        )
+
     for entry in coverage:
         selection = entry.record.get("provider_selection")
         if not isinstance(selection, dict):
             continue
         for route in selection.get("routes", []):
-            route_membership = distribution_memberships.get(
-                route.get("distribution"), ()
+            manifest = current_by_identity.get(route.get("distribution"))
+            manifest_equipment = (
+                manifest.get("equipment") if manifest is not None else None
             )
-            route_source = distribution_sources.get(route.get("distribution"))
-            if not _distribution_source_matches_provider(
-                route_source, route.get("provider")
-            ):
-                diagnostics.append(
-                    Diagnostic(
-                        "DISTRIBUTION_SOURCE_PROVIDER_MISMATCH",
-                        "The selected provider invokes the exact package, channel, manager, or immutable source bound by its distribution.",
-                        equipment_identity=entry.equipment_identity,
-                        harness=entry.harness,
-                        route_identity=route.get("identity"),
-                    )
-                )
+            route_membership = (
+                manifest_equipment if isinstance(manifest_equipment, list) else ()
+            )
             if entry.equipment_identity not in route_membership:
                 diagnostics.append(
                     Diagnostic(
@@ -2752,59 +3115,70 @@ def _validate_lock(
                                 route_identity=route.get("identity"),
                             )
                         )
-            if distribution_records.get(route.get("distribution")) != route.get(
-                "restore"
-            ):
-                diagnostics.append(
-                    Diagnostic(
-                        "LOCK_DISTRIBUTION_INVALID",
-                        "Active route restore evidence matches its resolved distribution.",
-                        equipment_identity=entry.equipment_identity,
-                        harness=entry.harness,
-                        route_identity=route.get("identity"),
+
+
+def _authored_catalog_records(
+    catalog: JsonObject,
+) -> tuple[tuple[str | None, str | None, JsonObject], ...]:
+    records: list[tuple[str | None, str | None, JsonObject]] = []
+    templates = catalog.get("coverage_templates")
+    if isinstance(templates, list):
+        for template in templates:
+            if not isinstance(template, dict):
+                continue
+            record = template.get("record")
+            harness = template.get("harness")
+            if isinstance(record, dict):
+                records.append(
+                    (
+                        None,
+                        harness if isinstance(harness, str) else None,
+                        record,
                     )
                 )
+    equipment_entries = catalog.get("equipment")
+    if isinstance(equipment_entries, list):
+        for equipment in equipment_entries:
+            if not isinstance(equipment, dict):
+                continue
+            equipment_identity = equipment.get("identity")
+            coverage = equipment.get("coverage")
+            if not isinstance(coverage, dict):
+                continue
+            for harness, entry in coverage.items():
+                if not isinstance(entry, dict) or set(entry) != {"record"}:
+                    continue
+                record = entry.get("record")
+                if isinstance(record, dict):
+                    records.append(
+                        (
+                            (
+                                equipment_identity
+                                if isinstance(equipment_identity, str)
+                                else None
+                            ),
+                            harness,
+                            record,
+                        )
+                    )
+    return tuple(records)
 
 
-def _distribution_source_matches_restore(source: Any, restore: Any) -> bool:
-    if not isinstance(source, dict) or not isinstance(restore, dict):
+def _source_manifest_matches_provider(manifest: Any, provider: Any) -> bool:
+    if not isinstance(manifest, dict) or not isinstance(provider, dict):
         return False
-    if source.get("kind") == "git":
-        if restore.get("class") != "immutable":
-            return False
-        expected = f"git+{source.get('repository')}@{source.get('ref')}"
-        artifact_ref = restore.get("artifact_ref")
-        return (
-            restore.get("revision") == source.get("ref")
-            and isinstance(artifact_ref, str)
-            and (artifact_ref == expected or artifact_ref.startswith(f"{expected}#"))
-        )
-    if (
-        source.get("kind") != "native_manager"
-        or restore.get("class") != "native_rolling"
-    ):
+    resolved = manifest.get("resolved_source")
+    source = manifest.get("source")
+    if not isinstance(resolved, dict) or not isinstance(source, dict):
         return False
-    manager = source.get("manager")
-    package = source.get("package")
-    channel = source.get("channel")
-    if manager == "npx":
-        return (
-            restore.get("channel") == f"npm:{channel}"
-            and restore.get("reviewed_baseline") == f"{package}@{channel}"
-        )
-    return restore.get("channel") == channel
-
-
-def _distribution_source_matches_provider(source: Any, provider: Any) -> bool:
-    if not isinstance(source, dict) or not isinstance(provider, dict):
-        return False
-    if source.get("kind") == "git":
+    if resolved.get("kind") == "git":
         return provider.get("kind") == "standalone_skill"
-    if source.get("kind") != "native_manager":
+    if resolved.get("kind") != "native_manager":
         return False
     manager = source.get("manager")
     package = source.get("package")
-    channel = source.get("channel")
+    channel = source.get("channel", "latest")
+    version = resolved.get("version")
     if provider.get("kind") == "native_plugin":
         return (
             provider.get("manager") == manager and provider.get("plugin_id") == package
@@ -2817,30 +3191,34 @@ def _distribution_source_matches_provider(source: Any, provider: Any) -> bool:
             and provider.get("url") == package
             and channel == "static"
         )
-    expected_selector = f"{package}@{channel}"
+    if not _resolved_version_is_valid_for_manager(manager, version):
+        return False
+    version_value = _resolved_version_value(version)
+    if version_value is None:
+        return False
+    expected_selector = f"{package}@{version_value}"
     arguments = provider.get("arguments")
     if not isinstance(arguments, list):
         return False
     command = provider.get("command")
     invocation_arguments = arguments
     if command == "secret-exec":
-        wrapper_boundary = next(
-            (
-                index
-                for index in range(len(arguments) - 1)
-                if arguments[index] == {"literal": "--"}
-                and arguments[index + 1] == {"literal": "npx"}
-            ),
-            None,
-        )
-        if wrapper_boundary is None:
+        wrapper_boundaries = [
+            index
+            for index in range(len(arguments) - 1)
+            if arguments[index] == {"literal": "--"}
+            and arguments[index + 1] == {"literal": "npx"}
+        ]
+        if len(wrapper_boundaries) != 1:
             return False
+        wrapper_boundary = wrapper_boundaries[0]
         invocation_arguments = arguments[wrapper_boundary + 2 :]
     elif command != "npx":
         return False
-    return any(
+    matches = sum(
         isinstance(argument, dict)
         and set(argument) == {"literal"}
         and argument.get("literal") == expected_selector
         for argument in invocation_arguments
     )
+    return matches == 1

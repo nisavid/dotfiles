@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -18,14 +19,66 @@ if str(PACKAGE_ROOT) not in sys.path:
     sys.path.insert(0, str(PACKAGE_ROOT))
 
 from agent_equipment import validator
-from agent_equipment.canonical import canonical_json_sha256
+from agent_equipment.canonical import canonical_json_bytes, canonical_json_sha256
 from agent_equipment.model import CatalogLockValidation, thaw_json
+from agent_equipment.source_resolution import (
+    MAX_AVAILABLE_EQUIPMENT,
+    MAX_SOURCE_FIELD_CHARACTERS,
+    MAX_SOURCE_RESOLUTION_BYTES,
+)
 from agent_equipment.validator import load_catalog_lock, validate_catalog_lock
 
 DOCUMENTS = ROOT / "docs/agent-equipment"
 CATALOG = DOCUMENTS / "initial-catalog.proposed.json"
 LOCK = DOCUMENTS / "initial-lock.proposed.json"
 FIXTURES = ROOT / "tests/fixtures/agent-equipment/schema"
+
+
+def patterned_value(prefix: str, length: int) -> str:
+    if length < len(prefix):
+        raise ValueError("fixture length is shorter than its prefix")
+    return prefix + "a" * (length - len(prefix))
+
+
+def public_git_repository(length: int) -> str:
+    prefix = "https://example.invalid/"
+    suffix = ".git"
+    if length < len(prefix) + len(suffix) + 1:
+        raise ValueError("fixture repository length is too short")
+    return prefix + "a" * (length - len(prefix) - len(suffix)) + suffix
+
+
+def source_manifest(
+    lock: dict[str, object],
+    distribution_identity: str,
+) -> dict[str, object]:
+    return next(
+        item
+        for item in lock["distributions"]
+        if item["distribution_identity"] == distribution_identity
+    )
+
+
+def reseal_source_manifest(manifest: dict[str, object]) -> None:
+    available = sorted(set(manifest["available_equipment"]))
+    selected = sorted(set(manifest["equipment"]))
+    manifest["available_equipment"] = available
+    manifest["equipment"] = selected
+    manifest["membership_evidence"] = {
+        "kind": "authoritative_source_listing",
+        "evidence_digest": canonical_json_sha256({"available_equipment": available}),
+    }
+    payload = deepcopy(manifest)
+    payload.pop("source_manifest_digest")
+    manifest["source_manifest_digest"] = canonical_json_sha256(payload)
+
+
+def retirement_manifest_digest(
+    lock: dict[str, object],
+    route: dict[str, object],
+) -> str:
+    manifest = source_manifest(lock, route["distribution"])
+    return manifest["source_manifest_digest"]
 
 
 class CatalogLockValidatorTests(unittest.TestCase):
@@ -84,11 +137,11 @@ class CatalogLockValidatorTests(unittest.TestCase):
         assert result.model is not None
         self.assertEqual(
             result.model.catalog.digest,
-            "sha256:72c06dd6869c4cd10bcfe8cff3f9a2b269fd21eab0917974f34d70671af696bd",
+            "sha256:b580775ec1ea54029d8eda747dd98e49824de952ba326d344c6186e56cfee05d",
         )
         self.assertEqual(
             result.model.lock.digest,
-            "sha256:a0bd41ba4206b1a49fc1e0704b9d78a2003176b6d7882340a39d54fbc269cc34",
+            "sha256:1f493d7f74f249e65242fa45f340a23cf2ff8a26949b524ef269d78b76851a0a",
         )
         self.assertEqual(len(result.model.coverage), 132)
         self.assertEqual(
@@ -109,6 +162,687 @@ class CatalogLockValidatorTests(unittest.TestCase):
             thaw_json(result.model.catalog.document)["schema_version"],
             "catalog/v1",
         )
+
+    def test_git_branch_admission_matches_the_installed_schema(self) -> None:
+        schema = json.loads(
+            (validator.SCHEMA_DIRECTORY / "catalog-v1.schema.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        branch_pattern = schema["$defs"]["gitBranch"]["pattern"]
+
+        for branch, expected in (
+            ("main", True),
+            ("release/v1.2.3", True),
+            ("feature/source-manifests", True),
+            ("HEAD", False),
+            ("refs//heads/main", False),
+            ("../other", False),
+            ("--option", False),
+            ("feature..branch", False),
+            ("release.", False),
+            ("release.lock", False),
+            ("refs/heads/name.lock", False),
+            ("feature/.hidden", False),
+            ("feature\\escape", False),
+            ("a" * MAX_SOURCE_FIELD_CHARACTERS, True),
+            ("a" * (MAX_SOURCE_FIELD_CHARACTERS + 1), False),
+        ):
+            with self.subTest(branch=branch):
+                schema_accepts = re.search(branch_pattern, branch) is not None
+                self.assertEqual(schema_accepts, expected)
+                self.assertEqual(
+                    validator._git_branch_is_valid(branch),
+                    expected,
+                )
+
+    def test_native_package_admission_is_manager_specific(self) -> None:
+        maximum_package = "a" * 126 + "@" + "b" * 128
+        over_limit_package = "a" * 127 + "@" + "b" * 128
+        cases = (
+            (
+                {
+                    "kind": "native_manager",
+                    "manager": "npx",
+                    "package": "tool",
+                },
+                True,
+            ),
+            (
+                {
+                    "kind": "native_manager",
+                    "manager": "npx",
+                    "package": "@example/tool",
+                },
+                True,
+            ),
+            (
+                {
+                    "kind": "native_manager",
+                    "manager": "npx",
+                    "package": "tool@beta",
+                },
+                False,
+            ),
+            (
+                {
+                    "kind": "native_manager",
+                    "manager": "claude",
+                    "package": "tool@reviewed-registry",
+                },
+                True,
+            ),
+            (
+                {
+                    "kind": "native_manager",
+                    "manager": "codex",
+                    "package": "tool@reviewed-registry",
+                },
+                True,
+            ),
+            (
+                {
+                    "kind": "native_manager",
+                    "manager": "cursor",
+                    "package": "tool@reviewed-registry",
+                },
+                True,
+            ),
+            (
+                {
+                    "kind": "native_manager",
+                    "manager": "claude",
+                    "package": maximum_package,
+                },
+                True,
+            ),
+            (
+                {
+                    "kind": "native_manager",
+                    "manager": "claude",
+                    "package": over_limit_package,
+                },
+                False,
+            ),
+        )
+        for source, expected in cases:
+            with self.subTest(source=source):
+                self.assertEqual(validator._catalog_source_is_valid(source), expected)
+
+    def test_source_manifest_semantics_reject_invalid_resolution_evidence(
+        self,
+    ) -> None:
+        cases: list[tuple[str, dict[str, object], dict[str, object], str]] = []
+
+        catalog, lock = self.fixture_pair()
+        source_manifest(lock, "distribution:example/bundle")[
+            "source_manifest_digest"
+        ] = "sha256:" + "0" * 64
+        cases.append(
+            ("stale manifest digest", catalog, lock, "LOCK_DISTRIBUTION_INVALID")
+        )
+
+        catalog, lock = self.fixture_pair()
+        manifest = source_manifest(lock, "distribution:example/bundle")
+        manifest["membership_evidence"]["evidence_digest"] = "sha256:" + "0" * 64
+        payload = deepcopy(manifest)
+        payload.pop("source_manifest_digest")
+        manifest["source_manifest_digest"] = canonical_json_sha256(payload)
+        cases.append(
+            (
+                "stale membership evidence",
+                catalog,
+                lock,
+                "LOCK_DISTRIBUTION_INVALID",
+            )
+        )
+
+        catalog, lock = self.fixture_pair()
+        manifest = source_manifest(lock, "distribution:example/bundle")
+        manifest["available_equipment"].append("skill:example/new")
+        reseal_source_manifest(manifest)
+        cases.append(
+            (
+                "incomplete source-wide selection",
+                catalog,
+                lock,
+                "DISTRIBUTION_SELECTION_INVALID",
+            )
+        )
+
+        catalog, lock = self.fixture_pair()
+        manifest = source_manifest(lock, "distribution:example/bundle")
+        manifest["equipment"].append("skill:example/not-available")
+        reseal_source_manifest(manifest)
+        cases.append(
+            (
+                "selected equipment absent from authoritative membership",
+                catalog,
+                lock,
+                "LOCK_DISTRIBUTION_INVALID",
+            )
+        )
+
+        catalog, lock = self.fixture_pair()
+        manifest = source_manifest(lock, "distribution:example/native-plugin")
+        manifest["resolved_source"]["version"] = {
+            "kind": "revision",
+            "value": "11c74d6b",
+        }
+        reseal_source_manifest(manifest)
+        cases.append(
+            (
+                "resolved version kind differs from manager policy",
+                catalog,
+                lock,
+                "LOCK_DISTRIBUTION_INVALID",
+            )
+        )
+
+        for label, invalid_catalog, invalid_lock, expected_code in cases:
+            with self.subTest(case=label):
+                first = validate_catalog_lock(invalid_catalog, invalid_lock)
+                second = validate_catalog_lock(invalid_catalog, invalid_lock)
+                codes = {diagnostic.code for diagnostic in first.diagnostics}
+
+                self.assertEqual(first, second)
+                self.assertIsNone(first.model)
+                self.assertIn(expected_code, codes)
+                self.assertNotIn("CATALOG_SCHEMA_INVALID", codes)
+                self.assertNotIn("LOCK_SCHEMA_INVALID", codes)
+
+    def test_source_manifest_semantics_enforce_complete_string_bounds(self) -> None:
+        _, lock = self.fixture_pair()
+        baseline = source_manifest(lock, "distribution:example/bundle")
+        source = baseline["source"]
+        resolved_source = baseline["resolved_source"]
+        restore = baseline["restore"]
+        assert isinstance(source, dict)
+        assert isinstance(resolved_source, dict)
+        assert isinstance(restore, dict)
+        repository = source["repository"]
+        revision = resolved_source["revision"]
+        assert isinstance(repository, str)
+        assert isinstance(revision, str)
+        artifact_prefix = f"git+{repository}@{revision}#"
+
+        maximum = deepcopy(baseline)
+        maximum["distribution_identity"] = patterned_value(
+            "distribution:",
+            MAX_SOURCE_FIELD_CHARACTERS,
+        )
+        maximum_equipment = patterned_value(
+            "skill:",
+            MAX_SOURCE_FIELD_CHARACTERS,
+        )
+        maximum["available_equipment"] = [maximum_equipment]
+        maximum["equipment"] = [maximum_equipment]
+        maximum["restore"]["artifact_ref"] = artifact_prefix + "a" * (
+            MAX_SOURCE_FIELD_CHARACTERS - len(artifact_prefix)
+        )
+        reseal_source_manifest(maximum)
+        self.assertTrue(validator._source_manifest_is_valid(maximum))
+
+        over_limit = MAX_SOURCE_FIELD_CHARACTERS + 1
+        for label in (
+            "artifact_ref",
+            "distribution_identity",
+            "equipment_identity",
+            "branch",
+            "repository",
+        ):
+            invalid = deepcopy(baseline)
+            invalid_source = invalid["source"]
+            invalid_restore = invalid["restore"]
+            assert isinstance(invalid_source, dict)
+            assert isinstance(invalid_restore, dict)
+            if label == "artifact_ref":
+                invalid_restore["artifact_ref"] = artifact_prefix + "a" * over_limit
+            elif label == "distribution_identity":
+                invalid["distribution_identity"] = patterned_value(
+                    "distribution:",
+                    over_limit,
+                )
+            elif label == "equipment_identity":
+                identity = patterned_value("skill:", over_limit)
+                invalid["available_equipment"] = [identity]
+                invalid["equipment"] = [identity]
+            elif label == "branch":
+                invalid_source["branch"] = "a" * over_limit
+            else:
+                oversized_repository = public_git_repository(over_limit)
+                invalid_source["repository"] = oversized_repository
+                invalid_restore["artifact_ref"] = (
+                    f"git+{oversized_repository}@{revision}"
+                )
+            reseal_source_manifest(invalid)
+            with self.subTest(field=label):
+                self.assertFalse(validator._source_manifest_is_valid(invalid))
+
+        native_restore = {
+            "class": "native_rolling",
+            "channel": "stable",
+            "reviewed_baseline": "1.2.3",
+            "observation_source": "reviewed plugin list",
+            "native_update_control": "suppressible",
+        }
+        for field in ("channel", "reviewed_baseline"):
+            with self.subTest(field=field):
+                self.assertFalse(
+                    validator._restore_is_valid(
+                        native_restore | {field: "a" * over_limit}
+                    )
+                )
+
+    def test_source_manifest_semantics_enforce_equipment_item_ceiling(self) -> None:
+        identities = [
+            f"other:source-limit/{index:05d}"
+            for index in range(MAX_AVAILABLE_EQUIPMENT + 1)
+        ]
+
+        self.assertTrue(
+            validator._source_manifest_equipment_is_valid(
+                identities[:MAX_AVAILABLE_EQUIPMENT]
+            )
+        )
+        self.assertFalse(validator._source_manifest_equipment_is_valid(identities))
+
+    def test_persisted_source_manifest_enforces_canonical_byte_ceiling(self) -> None:
+        catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
+        lock = json.loads(LOCK.read_text(encoding="utf-8"))
+        distribution = next(
+            item
+            for item in catalog["distributions"]
+            if "equipment" in item["selection"]
+        )
+        manifest = source_manifest(lock, distribution["identity"])
+        long_identities = [
+            patterned_value("other:a", MAX_SOURCE_FIELD_CHARACTERS - 5) + f"{index:05d}"
+            for index in range(1025)
+        ]
+        manifest["available_equipment"] = [
+            *manifest["equipment"],
+            *long_identities,
+        ]
+        reseal_source_manifest(manifest)
+        self.assertGreater(
+            len(canonical_json_bytes(manifest)),
+            MAX_SOURCE_RESOLUTION_BYTES,
+        )
+
+        result = validate_catalog_lock(catalog, lock)
+
+        self.assertIsNone(result.model)
+        self.assertIn(
+            "LOCK_DISTRIBUTION_INVALID",
+            {diagnostic.code for diagnostic in result.diagnostics},
+        )
+
+    def test_source_resolution_semantics_tie_policy_fact_and_restore(self) -> None:
+        valid_cases = (
+            (
+                {"kind": "native_manager", "manager": "npx", "package": "tool"},
+                {
+                    "kind": "native_manager",
+                    "version": {"kind": "semantic_version", "value": "1.2.3"},
+                },
+                {
+                    "class": "native_rolling",
+                    "channel": "npm:1.2.3",
+                    "reviewed_baseline": "tool@1.2.3",
+                    "observation_source": "reviewed npm selector",
+                    "native_update_control": "suppressible",
+                },
+            ),
+            (
+                {
+                    "kind": "native_manager",
+                    "manager": "codex",
+                    "package": "github@openai-curated",
+                    "channel": "openai-curated",
+                },
+                {
+                    "kind": "native_manager",
+                    "version": {"kind": "revision", "value": "11c74d6b"},
+                },
+                {
+                    "class": "native_rolling",
+                    "channel": "openai-curated",
+                    "reviewed_baseline": "11c74d6b",
+                    "observation_source": "codex plugin list",
+                    "native_update_control": "unknown",
+                },
+            ),
+            (
+                {
+                    "kind": "native_manager",
+                    "manager": "cursor",
+                    "package": "tool@official",
+                    "channel": "stable",
+                },
+                {
+                    "kind": "native_manager",
+                    "version": {"kind": "semantic_version", "value": "2.0.0-rc.1"},
+                },
+                {
+                    "class": "native_rolling",
+                    "channel": "stable",
+                    "reviewed_baseline": "2.0.0-rc.1",
+                    "observation_source": "cursor plugin list",
+                    "native_update_control": "unknown",
+                },
+            ),
+            (
+                {
+                    "kind": "native_manager",
+                    "manager": "http",
+                    "package": "https://mcp.example.invalid/v1",
+                    "channel": "static",
+                },
+                {
+                    "kind": "native_manager",
+                    "version": {"kind": "static_source"},
+                },
+                {
+                    "class": "native_rolling",
+                    "channel": "static",
+                    "reviewed_baseline": "https://mcp.example.invalid/v1",
+                    "observation_source": "reviewed static endpoint",
+                    "native_update_control": "unsuppressible",
+                },
+            ),
+        )
+        for source, resolved, restore in valid_cases:
+            with self.subTest(valid=(source, resolved)):
+                self.assertTrue(validator._catalog_source_is_valid(source))
+                self.assertTrue(
+                    validator._resolved_source_matches_policy(source, resolved)
+                )
+                self.assertTrue(
+                    validator._resolved_source_matches_restore(
+                        source,
+                        resolved,
+                        restore,
+                    )
+                )
+
+        codex_source, _, codex_restore = valid_cases[1]
+        invalid_cases = (
+            (
+                codex_source,
+                {
+                    "kind": "native_manager",
+                    "version": {"kind": "revision", "value": "deadbeef"},
+                },
+                codex_restore,
+            ),
+            (
+                codex_source,
+                {
+                    "kind": "native_manager",
+                    "version": {"kind": "semantic_version", "value": "1.2.3"},
+                },
+                codex_restore,
+            ),
+            (
+                valid_cases[0][0],
+                valid_cases[0][1],
+                valid_cases[0][2] | {"reviewed_baseline": "unrelated-package@1.2.3"},
+            ),
+            (
+                valid_cases[3][0],
+                valid_cases[3][1],
+                valid_cases[3][2]
+                | {"reviewed_baseline": "https://other.example.invalid/v1"},
+            ),
+        )
+        for source, resolved, restore in invalid_cases:
+            with self.subTest(invalid=(source, resolved, restore)):
+                self.assertFalse(
+                    validator._resolved_source_matches_policy(source, resolved)
+                    and validator._resolved_source_matches_restore(
+                        source,
+                        resolved,
+                        restore,
+                    )
+                )
+
+    def test_native_restore_observation_source_is_bounded_public_prose(self) -> None:
+        restore = {
+            "class": "native_rolling",
+            "channel": "stable",
+            "reviewed_baseline": "1.2.3",
+            "observation_source": "reviewed plugin list, cached manifest",
+            "native_update_control": "suppressible",
+        }
+        self.assertTrue(validator._restore_is_valid(restore))
+        for observation_source in (
+            "V7p!opaque.private.value!9Qx",
+            "a" * 256,
+            "line one\nline two",
+        ):
+            with self.subTest(observation_source=observation_source):
+                self.assertFalse(
+                    validator._restore_is_valid(
+                        restore | {"observation_source": observation_source}
+                    )
+                )
+
+    def test_semantic_version_length_bound_matches_source_admission(self) -> None:
+        source = {
+            "kind": "native_manager",
+            "manager": "npx",
+            "package": "tool",
+        }
+        maximum = "1.2.3+" + "A" * 249
+        over_limit = "1.2.3+" + "A" * 250
+
+        self.assertTrue(
+            validator._resolved_source_matches_policy(
+                source,
+                {
+                    "kind": "native_manager",
+                    "version": {"kind": "semantic_version", "value": maximum},
+                },
+            )
+        )
+        self.assertFalse(
+            validator._resolved_source_matches_policy(
+                source,
+                {
+                    "kind": "native_manager",
+                    "version": {"kind": "semantic_version", "value": over_limit},
+                },
+            )
+        )
+
+    def test_npx_source_manifest_requires_one_exact_invocation_selector(self) -> None:
+        catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
+        lock = json.loads(LOCK.read_text(encoding="utf-8"))
+        manifest = next(
+            item
+            for item in lock["distributions"]
+            if item["source"].get("manager") == "npx"
+        )
+        expected_selector = manifest["restore"]["reviewed_baseline"]
+
+        def duplicate_selectors(value: object) -> int:
+            duplicated = 0
+            if isinstance(value, dict):
+                arguments = value.get("arguments")
+                if value.get("kind") == "direct_mcp" and isinstance(arguments, list):
+                    matches = [
+                        argument
+                        for argument in arguments
+                        if argument == {"literal": expected_selector}
+                    ]
+                    if matches:
+                        arguments.append(deepcopy(matches[0]))
+                        duplicated += 1
+                for child in value.values():
+                    duplicated += duplicate_selectors(child)
+            elif isinstance(value, list):
+                for child in value:
+                    duplicated += duplicate_selectors(child)
+            return duplicated
+
+        self.assertGreater(duplicate_selectors(catalog), 0)
+        self.assertGreater(duplicate_selectors(lock), 0)
+        self.bind_catalog_digest(catalog, lock)
+
+        result = validate_catalog_lock(catalog, lock)
+
+        self.assertIsNone(result.model)
+        self.assertIn(
+            "DISTRIBUTION_SOURCE_PROVIDER_MISMATCH",
+            {diagnostic.code for diagnostic in result.diagnostics},
+        )
+
+    def test_unreferenced_template_still_binds_current_source_manifest(self) -> None:
+        catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
+        lock = json.loads(LOCK.read_text(encoding="utf-8"))
+        template = next(
+            item
+            for item in catalog["coverage_templates"]
+            if any(
+                route.get("provider", {}).get("command") == "npx"
+                for route in item["record"]["provider_selection"]["routes"]
+            )
+        )
+        unused = deepcopy(template)
+        unused["identity"] = "template:unused/review"
+        route = unused["record"]["provider_selection"]["routes"][0]
+        route["identity"] = "route:unused/review"
+        route["activation_group"] = "activation:unused/review"
+        unused["record"]["provider_selection"]["preferred_route"] = route["identity"]
+        route["restore"]["channel"] = "npm:9.9.9"
+        route["restore"]["reviewed_baseline"] = "unrelated-package@9.9.9"
+        catalog["coverage_templates"].append(unused)
+        self.bind_catalog_digest(catalog, lock)
+
+        result = validate_catalog_lock(catalog, lock)
+
+        self.assertIsNone(result.model)
+        self.assertTrue(
+            {
+                "DISTRIBUTION_SOURCE_PROVIDER_MISMATCH",
+                "LOCK_DISTRIBUTION_INVALID",
+            }
+            & {diagnostic.code for diagnostic in result.diagnostics}
+        )
+
+    def test_unreferenced_template_is_fully_structurally_validated(self) -> None:
+        catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
+        lock = json.loads(LOCK.read_text(encoding="utf-8"))
+        template = next(
+            item
+            for item in catalog["coverage_templates"]
+            if item["record"]["outcome"] == "managed_provider"
+            and any(
+                operation["disposition"] == "automated"
+                for route in item["record"]["provider_selection"]["routes"]
+                for operation in route["operations"].values()
+            )
+        )
+        unused = deepcopy(template)
+        unused["identity"] = "template:unused/structurally-invalid"
+        route = unused["record"]["provider_selection"]["routes"][0]
+        route["identity"] = "route:unused/structurally-invalid"
+        route["activation_group"] = "activation:unused/structurally-invalid"
+        route["control_owner"] = "operator_owned"
+        unused["record"]["provider_selection"]["preferred_route"] = route["identity"]
+        catalog["coverage_templates"].append(unused)
+        self.bind_catalog_digest(catalog, lock)
+
+        result = validate_catalog_lock(catalog, lock)
+
+        self.assertIsNone(result.model)
+        self.assertIn(
+            "OPERATOR_AUTOMATION_INVALID",
+            {diagnostic.code for diagnostic in result.diagnostics},
+        )
+
+    def test_retirement_binds_exact_history_and_rejects_missing_or_orphan_history(
+        self,
+    ) -> None:
+        catalog, lock = self.fixture_pair()
+        old_manifest = deepcopy(source_manifest(lock, "distribution:example/bundle"))
+        retirement_route = deepcopy(
+            catalog["coverage_templates"][0]["record"]["provider_selection"]["routes"][
+                0
+            ]
+        )
+        retirement_route["identity"] = "route:example/legacy-claude-projection"
+        retirement_route["activation_group"] = (
+            "activation:example/legacy-claude-projection"
+        )
+        retirement = {
+            "identity": "retirement:example/legacy-grilling-projection",
+            "equipment_identity": "skill:example/grilling",
+            "harness": "claude",
+            "route": retirement_route,
+            "surface": {
+                "kind": "claude_skill_projection",
+                "skill_name": "grilling",
+            },
+            "desired_state": "absent",
+            "source_manifest_digest": old_manifest["source_manifest_digest"],
+        }
+        catalog["retirements"].append(retirement)
+        lock["retirements"].append(deepcopy(retirement))
+        lock["source_manifest_history"] = [old_manifest]
+
+        current_manifest = source_manifest(lock, "distribution:example/bundle")
+        revision = "89abcdef0123456789abcdef0123456789abcdef"
+        current_manifest["resolved_source"]["revision"] = revision
+        current_manifest["restore"] = {
+            "class": "immutable",
+            "revision": revision,
+            "artifact_ref": ("git+https://example.invalid/bundle.git@" + revision),
+            "content_digest": "sha256:" + "2" * 64,
+            "native_update_control": "not_applicable",
+        }
+        reseal_source_manifest(current_manifest)
+        active_record = catalog["coverage_templates"][0]["record"]
+        active_record["provider_selection"]["routes"][0]["restore"] = deepcopy(
+            current_manifest["restore"]
+        )
+        next(
+            item
+            for item in lock["coverage"]
+            if item["equipment_identity"] == "skill:example/grilling"
+            and item["harness"] == "claude"
+        )["record"] = deepcopy(active_record)
+        self.bind_catalog_digest(catalog, lock)
+
+        valid = validate_catalog_lock(catalog, lock)
+        self.assertEqual(valid.diagnostics, ())
+        self.assertIsNotNone(valid.model)
+
+        missing = deepcopy(lock)
+        missing["source_manifest_history"] = []
+        missing_codes = {
+            diagnostic.code
+            for diagnostic in validate_catalog_lock(catalog, missing).diagnostics
+        }
+        self.assertIn("RETIREMENT_SOURCE_MANIFEST_INVALID", missing_codes)
+        self.assertIn("SOURCE_MANIFEST_HISTORY_INVALID", missing_codes)
+
+        orphan = deepcopy(old_manifest)
+        orphan_revision = "fedcba9876543210fedcba9876543210fedcba98"
+        orphan["resolved_source"]["revision"] = orphan_revision
+        orphan["restore"]["revision"] = orphan_revision
+        orphan["restore"]["artifact_ref"] = (
+            "git+https://example.invalid/bundle.git@" + orphan_revision
+        )
+        reseal_source_manifest(orphan)
+        extra = deepcopy(lock)
+        extra["source_manifest_history"].append(orphan)
+        extra_codes = {
+            diagnostic.code
+            for diagnostic in validate_catalog_lock(catalog, extra).diagnostics
+        }
+        self.assertIn("SOURCE_MANIFEST_HISTORY_INVALID", extra_codes)
 
     def test_file_loading_rejects_ambiguous_and_non_json_documents(self) -> None:
         lock_bytes = LOCK.read_bytes()
@@ -628,6 +1362,9 @@ class CatalogLockValidatorTests(unittest.TestCase):
                 "skill_name": "grilling",
             },
             "desired_state": "absent",
+            "source_manifest_digest": retirement_manifest_digest(
+                lock, retirement_route
+            ),
         }
         catalog["retirements"].append(retirement)
         lock["retirements"].append(deepcopy(retirement))
@@ -705,7 +1442,10 @@ class CatalogLockValidatorTests(unittest.TestCase):
         catalog["distributions"][1]["coverage_templates"]["claude"] = (
             "template:bundle-claude"
         )
-        lock["distributions"][1]["equipment"].append("skill:example/grilling")
+        ambiguous_manifest = lock["distributions"][1]
+        ambiguous_manifest["available_equipment"].append("skill:example/grilling")
+        ambiguous_manifest["equipment"].append("skill:example/grilling")
+        reseal_source_manifest(ambiguous_manifest)
         lock["coverage"] = [
             item
             for item in lock["coverage"]
@@ -870,6 +1610,9 @@ class CatalogLockValidatorTests(unittest.TestCase):
                 "skill_name": "grilling",
             },
             "desired_state": "absent",
+            "source_manifest_digest": retirement_manifest_digest(
+                retirement_lock, retirement_route
+            ),
         }
 
         catalog = deepcopy(retirement_catalog)
@@ -907,7 +1650,10 @@ class CatalogLockValidatorTests(unittest.TestCase):
         )
 
         catalog, lock = self.fixture_pair()
-        lock["distributions"][1]["equipment"].append("skill:example/grilling")
+        mismatched_manifest = lock["distributions"][1]
+        mismatched_manifest["available_equipment"].append("skill:example/grilling")
+        mismatched_manifest["equipment"].append("skill:example/grilling")
+        reseal_source_manifest(mismatched_manifest)
         self.bind_catalog_digest(catalog, lock)
         cases.append(
             (
@@ -921,7 +1667,8 @@ class CatalogLockValidatorTests(unittest.TestCase):
 
         catalog, lock = self.fixture_pair()
         extra_distribution = deepcopy(lock["distributions"][0])
-        extra_distribution["identity"] = "distribution:example/unbound"
+        extra_distribution["distribution_identity"] = "distribution:example/unbound"
+        reseal_source_manifest(extra_distribution)
         lock["distributions"].append(extra_distribution)
         self.bind_catalog_digest(catalog, lock)
         cases.append(

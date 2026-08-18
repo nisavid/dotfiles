@@ -903,7 +903,7 @@ class StatusCliTests(unittest.TestCase):
                 self.assertEqual(stdout.getvalue(), "")
                 self.assertEqual(
                     stderr.getvalue(),
-                    "agent-equipment: only the read-only status command is available\n",
+                    "agent-equipment: invalid command or arguments\n",
                 )
                 self.assertNotIn(canary, stderr.getvalue())
 
