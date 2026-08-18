@@ -17,10 +17,6 @@ from agent_equipment.authoring import (
     TargetSelection,
     UnmanagedReport,
 )
-from agent_equipment.discovery import (
-    MAX_DISCOVERY_FIELD_CHARACTERS,
-    MAX_DISCOVERY_RECORDS,
-)
 from agent_equipment.model import (
     _INSTALLED_IMPLEMENTATION_PATHS,
     CatalogLockValidation,
@@ -36,6 +32,8 @@ from agent_equipment.validator import load_catalog_lock
 
 ROOT = Path(__file__).resolve().parents[2]
 DOCUMENTS = ROOT / "docs/agent-equipment"
+V1_DISCOVERY_RECORD_LIMIT = 4_096
+V1_DISCOVERY_FIELD_CHARACTER_LIMIT = 4_096
 
 
 def frozen_object(document: object) -> FrozenJsonObject:
@@ -133,7 +131,7 @@ class AuthoredCommandCliTests(unittest.TestCase):
     ) -> None:
         targets = tuple(
             f"codex/skill:example/{index:04d}"
-            for index in range(MAX_DISCOVERY_RECORDS + 1)
+            for index in range(V1_DISCOVERY_RECORD_LIMIT + 1)
         )
         for command in ("unmanaged", "add"):
             with (
@@ -156,10 +154,10 @@ class AuthoredCommandCliTests(unittest.TestCase):
         self,
     ) -> None:
         prefix = "codex/skill:"
-        exact_target = prefix + "x" * (MAX_DISCOVERY_FIELD_CHARACTERS - len(prefix))
+        exact_target = prefix + "x" * (V1_DISCOVERY_FIELD_CHARACTER_LIMIT - len(prefix))
         oversized_target = exact_target + "x"
-        self.assertEqual(len(exact_target), MAX_DISCOVERY_FIELD_CHARACTERS)
-        self.assertEqual(len(oversized_target), MAX_DISCOVERY_FIELD_CHARACTERS + 1)
+        self.assertEqual(len(exact_target), V1_DISCOVERY_FIELD_CHARACTER_LIMIT)
+        self.assertEqual(len(oversized_target), V1_DISCOVERY_FIELD_CHARACTER_LIMIT + 1)
         for command in ("unmanaged", "add"):
             report = frozen_object({"command": command})
             with (
