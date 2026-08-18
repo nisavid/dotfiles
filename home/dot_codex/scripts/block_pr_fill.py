@@ -2042,7 +2042,10 @@ def _updater_invocation_is_invalid(segment: list[str]) -> bool | None:
     repository = _normalize_repository(values["--repository"])
     if repository is None:
         return True
-    if not values["--pr"].isdigit() or int(values["--pr"]) <= 0:
+    if (
+        re.fullmatch(r"[0-9]+", values["--pr"]) is None
+        or int(values["--pr"]) <= 0
+    ):
         return True
     if operation == "preimage":
         return False
