@@ -123,6 +123,13 @@ def open_prs(repository: str, base: str, head: str) -> list[dict[str, Any]]:
     return value
 
 
+def validate_pr_locator(repository: str, pr_number: int | None) -> None:
+    if REPOSITORY_RE.fullmatch(repository) is None:
+        raise PublicationError("repository must use OWNER/REPO")
+    if pr_number is not None and pr_number <= 0:
+        raise PublicationError("PR number must be positive")
+
+
 def validate_identity_inputs(
     *,
     repository: str,
@@ -133,10 +140,7 @@ def validate_identity_inputs(
     head_oid: str,
     head_owner: str,
 ) -> None:
-    if REPOSITORY_RE.fullmatch(repository) is None:
-        raise PublicationError("repository must use OWNER/REPO")
-    if pr_number is not None and pr_number <= 0:
-        raise PublicationError("PR number must be positive")
+    validate_pr_locator(repository, pr_number)
     if not base.strip():
         raise PublicationError("base must be non-empty")
     if ":" not in head or not all(part.strip() for part in head.split(":", 1)):
