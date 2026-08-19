@@ -80,6 +80,9 @@ done
 
 required=(
   'operator owns the checklist and the active task authorizes changing the issue, pull request, or comment'
+  'write “the reviewed commit,” “the published revision,” or “verification tied to commit `<SHA>`”'
+  'instead of stock phrases such as “exact head” or “exact-head evidence.”'
+  'Use “exact head” or similar precision only when it materially distinguishes the current revision from a stale review or enforces an immutable review or merge gate.'
   'Use `context7-mcp`'
   'Send only the minimum public query needed'
   'Use internal documentation only through a local, internal-only fallback.'
