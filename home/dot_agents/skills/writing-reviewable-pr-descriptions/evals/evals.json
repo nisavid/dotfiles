@@ -5,7 +5,7 @@
       "id": 1,
       "name": "documentation-flag-correction",
       "prompt": "Using the fixture, write a proposed PR title followed by only the reviewer-facing body prose that comes after the already-valid Diff disclosure. Do not use tools.",
-      "fixture_paths": [
+      "files": [
         "evals/fixtures/documentation-flag-correction.md"
       ],
       "expected_output": "A concrete repository-conforming title and tiny, preservation-safe explanation state the exact correction and observed verification without importing a larger section structure, manual plan, or visual.",
@@ -36,7 +36,7 @@
       "id": 2,
       "name": "preview-server-port-selection",
       "prompt": "Using the fixture, draft the reviewer-facing PR body prose that follows the already-valid Diff disclosure. Do not use tools.",
-      "fixture_paths": [
+      "files": [
         "evals/fixtures/preview-server-port-selection.md"
       ],
       "expected_output": "A concise straightforward body explains why ephemeral ports matter, states the narrow contract, and uses the author-validated parallel allocation comparison as the core manual path before clearly classified variants and cleanup.",
@@ -77,7 +77,7 @@
       "id": 3,
       "name": "command-envelope-stack",
       "prompt": "Using the fixture, draft the complete reviewer-facing PR body prose after the already-valid Stack and Diff disclosures. Do not use tools.",
-      "fixture_paths": [
+      "files": [
         "evals/fixtures/command-envelope-stack.md"
       ],
       "expected_output": "A proportionate stacked-PR narrative makes the current command-envelope boundary reviewable, separates Before / This PR / Later ownership, routes review around generated noise, uses one focused visual only if it shortens comprehension, and presents bounded operational testing.",
@@ -104,7 +104,7 @@
         },
         {
           "id": "large-manual-plan",
-          "text": "Centers the core on successful submission and its stored result for this fixture's shared-contract and idempotency claims; may include API parity or replay in that coherent core when tied to those defining claims; begins only the remaining orthogonal retry and destructive-reset scenario headings or bullets with literal `Optional` because the fixture identifies no readiness gate; states expected and non-obvious outcomes and the purge blast radius; ends every executed stateful scenario with literal `Cleanup:` or `Cleanup gap:` (or an explicit reference to a named shared cleanup) rather than treating cleanup as Optional; and does not derive a readiness blocker from a cleanup gap because the fixture establishes none.",
+          "text": "Centers the core on successful submission, API parity, replay, and the stored result because all four establish this fixture's shared-contract and idempotency claims; begins only the remaining orthogonal retry and destructive-reset scenario headings or bullets with literal `Optional` because the fixture identifies no readiness gate; states expected and non-obvious outcomes and the purge blast radius; ends every executed stateful scenario with literal `Cleanup:` or `Cleanup gap:` (or an explicit reference to a named shared cleanup) rather than treating cleanup as Optional; and does not derive a readiness blocker from a cleanup gap because the fixture establishes none.",
           "severity": "safety"
         },
         {
@@ -123,7 +123,7 @@
       "id": 4,
       "name": "provider-plugin-framework-request",
       "prompt": "Using the fixture, respond to the request for an approval-ready PR title and body. Do not use tools.",
-      "fixture_paths": [
+      "files": [
         "evals/fixtures/provider-plugin-framework.md"
       ],
       "expected_output": "The agent declines approval-ready marketing around an unsupported abstraction, identifies the consequential product/design decision, and recommends a truthful draft or authorized narrowing and validation before an approval case.",
