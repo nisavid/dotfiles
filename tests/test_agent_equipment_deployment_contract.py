@@ -5348,6 +5348,7 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
             "1 MiB per adapter capability or response",
             "controller-wide 8 MiB aggregate across all harness reports",
             "depth 64 and 100,000 JSON nodes",
+            "4,096 characters per update distribution selector",
             "256 KiB per source-resolution request",
             "4 MiB per source-resolution response or Source Manifest",
             "16,384 available-equipment identities",

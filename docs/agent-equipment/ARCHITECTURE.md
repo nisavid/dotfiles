@@ -672,6 +672,7 @@ as another accepted-input semantic change.
 | Discovery registry and controller-wide result cardinality | 64 discovery adapters per harness request; 4,096 exact targets or emitted records across all harness reports in one `unmanaged` or `add` pass |
 | Discovery structured fields | 64 secret or evidence references, 64 provider arguments, and 4,096 characters per field |
 | Discovery serialization and structure | 1 MiB per adapter capability or response; controller-wide 8 MiB aggregate across all harness reports in one `unmanaged` or `add` pass; depth 64 and 100,000 JSON nodes |
+| CLI `update` selection | 4,096 characters per update distribution selector, rejected before runtime loading |
 | Source-resolution request | 256 KiB per source-resolution request |
 | Source-resolution response and manifest | 4 MiB per source-resolution response or Source Manifest; 16,384 available-equipment identities; 4,096 characters per field; depth 64 and 100,000 JSON nodes |
 | `add` and `update` proposal artifacts | For each command: 4 MiB catalog, 16 MiB lock, and 32 MiB complete proposal |
