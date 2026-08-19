@@ -3,8 +3,11 @@ name: writing-reviewable-pr-descriptions
 description: >-
   Use when creating or changing a GitHub PR title/body, including draft,
   stacked or Graphite, publish/ship/yeet, summary, media, diagram/atlas,
-  access-note, caveat, or preservation-sensitive work. Do not use for read-only
-  inspection, comments, checks, threads, or merge-only work with unchanged text.
+  access-note, caveat, or preservation-sensitive work, and when drafting or
+  revising PR title/body text in chat while GitHub must remain unchanged. Do
+  not use for draft-to-ready-only transitions with unchanged text, read-only
+  inspection, comments, checks, threads, or merge-only work with unchanged
+  text.
 ---
 
 # Writing Reviewable PR Descriptions
@@ -16,6 +19,19 @@ and remaining work.
 
 `publishing-reviewable-prs` owns GitHub actuation. This skill owns the complete
 title and body supplied to it. Generated `--fill` text is never a substitute.
+
+## Routing
+
+- For a chat-only title/body draft, use this skill alone: deliver the complete
+  proposal in chat and stop before preimage capture or any GitHub mutation.
+- For PR creation or an actual title/body change, `publishing-reviewable-prs`
+  orchestrates the mutation and uses this skill for composition. Both skill
+  descriptions intentionally match that work because loading one skill does
+  not load the other transitively.
+- For a draft-to-ready-only transition with unchanged text, use
+  `publishing-reviewable-prs` alone.
+- For read-only inspection, comments, checks, threads, or merge-only work with
+  unchanged text and state, use neither skill.
 
 ## Workflow
 
@@ -43,10 +59,13 @@ title and body supplied to it. Generated `--fill` text is never a substitute.
      /absolute/path/to/pr-body.md
    ```
 
-8. Compare the proposal with the live baseline for unintended loss, then pass
-   the complete title/body to `publishing-reviewable-prs`.
-9. Re-read the stored title/body. Inspect the live collapsed and expanded
-   rendering when HTML, badges, disclosures, tables, images, or media changed.
+8. Compare the proposal with the live baseline for unintended loss. For a
+   chat-only draft, deliver the complete title/body in chat and stop before
+   preimage capture or any GitHub mutation. Otherwise pass the complete
+   title/body to `publishing-reviewable-prs`.
+9. After publication, re-read the stored title/body. Inspect the live collapsed
+   and expanded rendering when HTML, badges, disclosures, tables, images, or
+   media changed.
 
 Verify local `HEAD` equals the PR head before using local data. Recompute after
 a push, restack, base change, force-push, split, merge, reorder, or linked title

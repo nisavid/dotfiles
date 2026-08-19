@@ -177,6 +177,8 @@ test_pr_publication() {
   assert_skill_frontmatter "$writer" writing-reviewable-pr-descriptions
   [[ -f "${publisher:h}/evals/evals.json" ]] || fail 'missing PR publisher behavior evals'
   [[ -f "${publisher:h}/evals/trigger-evals.json" ]] || fail 'missing PR publisher trigger evals'
+  [[ -f "${writer:h}/evals/evals.json" ]] || fail 'missing PR writer behavior evals'
+  [[ -f "${writer:h}/evals/trigger-evals.json" ]] || fail 'missing PR writer trigger evals'
 
   assert_symlink_source \
     "$repo_dir/home/dot_claude/skills/symlink_publishing-reviewable-prs" \
