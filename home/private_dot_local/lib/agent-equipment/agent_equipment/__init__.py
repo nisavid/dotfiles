@@ -418,14 +418,22 @@ def _run_authored_discovery_command(
             targets,
         )
         if command == "unmanaged":
-            if type(selection) is not DiscoverySelection:
+            if (
+                type(selection) is not DiscoverySelection
+                or selection.implementation_manifest_digest
+                != installed_implementation_manifest.digest
+            ):
                 return _runtime_unavailable_report(
                     command,
                     installed_implementation_manifest,
                 )
             result = find_unmanaged(base, selection, discovery)
         else:
-            if type(selection) is not TargetSelection:
+            if (
+                type(selection) is not TargetSelection
+                or selection.implementation_manifest_digest
+                != installed_implementation_manifest.digest
+            ):
                 return _runtime_unavailable_report(
                     command,
                     installed_implementation_manifest,

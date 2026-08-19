@@ -323,6 +323,79 @@ class AuthoredCommandCliTests(unittest.TestCase):
                 )
                 operation.assert_called_once_with(base, selection, port)
 
+    def test_authored_discovery_rejects_foreign_implementation_selection(
+        self,
+    ) -> None:
+        base = validated_pair()
+        manifest = installed_manifest()
+        validation = CatalogLockValidation(base, ())
+        target = "codex/skill:example/tool"
+        binding = DiscoveryHarnessBinding(
+            capability_identity="capability:codex/equipment-discovery",
+            capability_digest="sha256:" + "4" * 64,
+            manager_version_evidence_digest="sha256:" + "5" * 64,
+            harness="codex",
+        )
+        for command, selection, function_name in (
+            (
+                "unmanaged",
+                DiscoverySelection(
+                    candidate_identity="candidate:sha256:" + "6" * 64,
+                    implementation_manifest_digest="sha256:" + "7" * 64,
+                    bindings=(binding,),
+                    targets=(target,),
+                ),
+                "find_unmanaged",
+            ),
+            (
+                "add",
+                TargetSelection(
+                    candidate_identity="candidate:sha256:" + "6" * 64,
+                    implementation_manifest_digest="sha256:" + "7" * 64,
+                    bindings=(binding,),
+                    targets=(target,),
+                ),
+                "propose_add",
+            ),
+        ):
+            with (
+                self.subTest(command=command),
+                patch.object(
+                    agent_equipment, "load_catalog_lock", return_value=validation
+                ),
+                patch.object(
+                    agent_equipment,
+                    "_authoring_runtime_inputs",
+                    return_value=(selection, object()),
+                ),
+                patch.object(
+                    agent_equipment,
+                    function_name,
+                    side_effect=AssertionError("foreign selection must not execute"),
+                ) as operation,
+            ):
+                status, stdout, stderr = self._invoke(command, target)
+
+            self.assertEqual(status, 69)
+            self.assertEqual(stderr, "")
+            self.assertEqual(
+                json.loads(stdout),
+                {
+                    "command": command,
+                    "diagnostics": [
+                        {
+                            "code": f"{command.upper()}_RUNTIME_UNAVAILABLE",
+                            "message": (
+                                f"{command.capitalize()} runtime inputs are unavailable."
+                            ),
+                        }
+                    ],
+                    "implementation_manifest_digest": manifest.digest,
+                    "status": "error",
+                },
+            )
+            operation.assert_not_called()
+
     def test_update_emits_one_atomic_proposal(self) -> None:
         base = validated_pair()
         manifest = installed_manifest()
