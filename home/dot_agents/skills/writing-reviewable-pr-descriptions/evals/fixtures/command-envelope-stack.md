@@ -3,8 +3,8 @@
 Repository: `example/control-plane`
 
 Pull request: `#202`, draft, second of four. Exact pushed stack and per-PR
-base/head SHAs are already resolved. The required collapsed Stack and Diff
-disclosures are valid and must remain first.
+base/head SHAs are already resolved. The required Stack and Diff disclosures are
+already collapsed, valid, and must remain first.
 
 Stack contract:
 
