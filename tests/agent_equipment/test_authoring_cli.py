@@ -34,6 +34,7 @@ ROOT = Path(__file__).resolve().parents[2]
 DOCUMENTS = ROOT / "docs/agent-equipment"
 V1_DISCOVERY_RECORD_LIMIT = 4_096
 V1_DISCOVERY_FIELD_CHARACTER_LIMIT = 4_096
+V1_SOURCE_FIELD_CHARACTER_LIMIT = 4_096
 
 
 def frozen_object(document: object) -> FrozenJsonObject:
@@ -193,6 +194,45 @@ class AuthoredCommandCliTests(unittest.TestCase):
                     stderr,
                     "agent-equipment: invalid command or arguments\n",
                 )
+
+    def test_update_enforces_the_exact_selector_character_boundary(self) -> None:
+        prefix = "distribution:"
+        exact_selector = prefix + "x" * (V1_SOURCE_FIELD_CHARACTER_LIMIT - len(prefix))
+        oversized_selector = exact_selector + "x"
+        self.assertEqual(len(exact_selector), V1_SOURCE_FIELD_CHARACTER_LIMIT)
+        self.assertEqual(len(oversized_selector), V1_SOURCE_FIELD_CHARACTER_LIMIT + 1)
+        report = frozen_object({"command": "update"})
+
+        with patch.object(
+            agent_equipment,
+            "_run_update",
+            return_value=(0, report),
+        ) as operation:
+            status, stdout, stderr = self._invoke("update", exact_selector)
+
+        self.assertEqual(status, 0)
+        self.assertEqual(json.loads(stdout), {"command": "update"})
+        self.assertEqual(stderr, "")
+        operation.assert_called_once()
+        selection = operation.call_args.args[0]
+        self.assertIsInstance(selection, FrozenJsonObject)
+        self.assertEqual(dict(selection), {"distribution": exact_selector})
+        self.assertEqual(operation.call_args.args[1], installed_manifest())
+
+        with patch.object(
+            agent_equipment,
+            "_run_update",
+            return_value=(0, report),
+        ) as operation:
+            status, stdout, stderr = self._invoke("update", oversized_selector)
+
+        self.assertEqual(status, 64)
+        self.assertEqual(stdout, "")
+        self.assertEqual(
+            stderr,
+            "agent-equipment: invalid command or arguments\n",
+        )
+        operation.assert_not_called()
 
     def test_cli_accepts_every_catalog_identity_terminal_character(self) -> None:
         for suffix in (".", "_", "/", "-"):

@@ -53,6 +53,7 @@ from .model import (
 from .resolver import resolve
 from .secrets import contains_literal_credential
 from .source_resolution import (
+    MAX_SOURCE_FIELD_CHARACTERS,
     SourceManifest,
     SourceResolution,
     SourceResolutionRequest,
@@ -531,6 +532,7 @@ def main(
         elif (
             len(arguments) == 2
             and arguments[0] == "update"
+            and len(arguments[1]) <= MAX_SOURCE_FIELD_CHARACTERS
             and _DISTRIBUTION_PATTERN.fullmatch(arguments[1]) is not None
         ):
             selection = freeze_json({"distribution": arguments[1]})
