@@ -1,13 +1,12 @@
 # Separate the control plane from the data plane
 
-Type: grilling
-Status: resolved
+Status: accepted
 
-## Question
+## Context
 
 How should the operator and consumer execution surfaces be divided?
 
-## Answer
+## Decision
 
 Make `secretctl` the single operator control plane. Keep `secret-exec` as the
 small credential-bearing data plane. Absorb migration and session helpers

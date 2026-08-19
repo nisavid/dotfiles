@@ -1,13 +1,12 @@
 # Split desired state across three stores
 
-Type: grilling
-Status: resolved
+Status: accepted
 
-## Question
+## Context
 
 Where should canonical secret-injection state live?
 
-## Answer
+## Decision
 
 Proton Pass owns injected values and agent grants. Within `secretctl`-managed
 desired state, each native OS credential store owns only that host agent's

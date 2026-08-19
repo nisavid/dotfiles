@@ -1,9 +1,12 @@
 # Native host credential and readiness lifecycle
 
-Research date: 2026-07-29. macOS command behavior was checked against the
+Snapshot date: 2026-07-29. macOS command behavior was checked against the
 installed macOS 26.5.2 `security(1)`, `launchd.plist(5)`, `launchctl(1)`, and
-`osascript(1)` help/man pages. Linux and Proton behavior uses the current
-upstream specifications, manuals, and source.
+`osascript(1)` help/man pages. Linux and Proton behavior used the upstream
+specifications, manuals, and source current on that date.
+
+Refresh the cited platform and provider behavior before implementation when
+those contracts may have changed.
 
 ## Result
 

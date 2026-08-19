@@ -1,13 +1,12 @@
 # Split Proton administration between the web app and CLI
 
-Type: grilling
-Status: resolved
+Status: accepted
 
-## Question
+## Context
 
 Which surface owns host-agent creation, grants, and revocation?
 
-## Answer
+## Decision
 
 Use the Proton Pass web app for privileged agent creation and grant decisions.
 Use `secretctl` for secure host enrollment, readiness, verification, expiry

@@ -1,14 +1,13 @@
 # Trust the logged-in OS user
 
-Type: grilling
-Status: resolved
+Status: accepted
 
-## Question
+## Context
 
 Is a malicious process running as the logged-in OS user inside the isolation
 threat model?
 
-## Answer
+## Decision
 
 No. Treat the OS account and provider session as trusted. Enforce declared
 bindings as fail-closed misuse protection, while claiming containment only

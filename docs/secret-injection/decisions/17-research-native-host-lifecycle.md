@@ -1,15 +1,14 @@
 # Determine native host lifecycle constraints
 
-Type: research
-Status: resolved
+Status: accepted
 
-## Question
+## Research question
 
 What current macOS and Linux native credential-store, startup, notification,
 and non-interactive access contracts support secure bootstrap storage,
 startup-plus-lazy readiness, and conspicuous failure?
 
-## Answer
+## Finding
 
 Both platforms require compiled credential adapters for the strict unattended
 read path: their native command-line tools emit retrieved secrets on stdout.

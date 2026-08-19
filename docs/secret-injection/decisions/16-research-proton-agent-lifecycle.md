@@ -1,15 +1,14 @@
 # Determine the Proton agent lifecycle
 
-Type: research
-Status: resolved
+Status: accepted
 
-## Question
+## Research question
 
 What exact current Proton Pass agent, PAT, grant, audit-reason, session,
 expiration, renewal, and revocation contracts constrain enrollment, unattended
 recovery, and one-command rotation?
 
-## Answer
+## Finding
 
 An agent is an audited PAT and cannot administer or renew itself. Renewal
 preserves grants but invalidates the old token immediately, so reliable host
@@ -24,7 +23,8 @@ Until that behavior is proven, a persisted session associated with a known
 renewal, expiry, deletion, or grant-revocation event is unproven and must be
 refused. Recovery uses the app-assisted, full-user control plane to provision a
 replacement agent, reproduce its grants, and enroll and verify its provider
-session before consumer launches resume. Issue 26 must test all four events,
-old-session rejection, and successful replacement.
+session before consumer launches resume. The acceptance matrix in
+[GitHub Issue #95](https://github.com/nisavid/dotfiles/issues/95) must test all
+four events, old-session rejection, and successful replacement.
 
 See [the Proton agent/PAT lifecycle report](../research/proton-agent-lifecycle.md).

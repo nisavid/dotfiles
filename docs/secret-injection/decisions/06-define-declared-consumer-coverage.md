@@ -1,13 +1,12 @@
 # Define declared consumer coverage
 
-Type: grilling
-Status: resolved
+Status: accepted
 
-## Question
+## Context
 
 What does coverage of terminal and application launches guarantee?
 
-## Answer
+## Decision
 
 Verified PATH shims cover name-based launches. Explicit application
 configuration binds integrations that do not rely on PATH. Absolute binary

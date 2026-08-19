@@ -62,3 +62,14 @@ _Avoid_: Admin scripts, helper commands
 The consumer-facing path that resolves a credential profile and injects it
 into one process.
 _Avoid_: Secret control plane, environment loader
+
+## Planning and evidence
+
+- [Wayfinder](./WAYFINDER.md) records accepted decisions, the current frontier,
+  and the sequenced planning handoff.
+- [Proton agent and PAT lifecycle](./research/proton-agent-lifecycle.md) records
+  the provider constraints behind enrollment and rotation.
+- [Native host credential and readiness lifecycle](./research/native-host-lifecycle.md)
+  records the macOS and Linux platform constraints.
+- [GitHub Issues #87–#96](https://github.com/nisavid/dotfiles/issues?q=is%3Aissue+label%3Asecret-injection)
+  own the remaining open work.

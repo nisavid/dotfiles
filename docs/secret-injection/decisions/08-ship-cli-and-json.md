@@ -1,13 +1,12 @@
 # Ship a CLI with human and JSON output
 
-Type: grilling
-Status: resolved
+Status: accepted
 
-## Question
+## Context
 
 What interface should the first complete secret control plane provide?
 
-## Answer
+## Decision
 
 Ship a CLI with concise human output and stable JSON for inventory, status,
 diagnosis, enrollment, rotation, binding, and addition workflows. Use secure

@@ -7,7 +7,7 @@ specification, and sequenced implementation handoff for reliable macOS and
 Linux process-scoped credential injection using one Proton Pass host agent per
 managed host. The map ends before implementation; execution then resumes from
 the sequenced handoff produced by
-[issue 27](./issues/27-produce-the-implementation-handoff.md).
+[GitHub Issue #96](https://github.com/nisavid/dotfiles/issues/96).
 
 ## Notes
 
@@ -71,6 +71,29 @@ the sequenced handoff produced by
   provider and the Proton session layer set `PROTON_PASS_LINUX_KEYRING=dbus`;
   both are required for Linux reboot persistence.
 
+## Open work
+
+- [#87: Classify the current system](https://github.com/nisavid/dotfiles/issues/87) —
+  current planning frontier.
+- [#88: Prototype `secretctl` workflows](https://github.com/nisavid/dotfiles/issues/88) —
+  depends on #87 and the accepted lifecycle research.
+- [#89: Choose the implementation substrate](https://github.com/nisavid/dotfiles/issues/89) —
+  depends on #87, #88, and the native-host lifecycle research.
+- [#90: Define reconciliation and recovery](https://github.com/nisavid/dotfiles/issues/90) —
+  depends on #88, #89, and the accepted lifecycle research.
+- [#91: Define startup readiness](https://github.com/nisavid/dotfiles/issues/91) —
+  depends on #89, #90, and the native-host lifecycle research.
+- [#92: Define host enrollment and rotation](https://github.com/nisavid/dotfiles/issues/92) —
+  depends on #88–#90 and the accepted lifecycle research.
+- [#93: Define the injection catalog](https://github.com/nisavid/dotfiles/issues/93) —
+  depends on #87–#90.
+- [#94: Review the security architecture](https://github.com/nisavid/dotfiles/issues/94) —
+  depends on #91–#93.
+- [#95: Specify the acceptance matrix](https://github.com/nisavid/dotfiles/issues/95) —
+  depends on #87 and #91–#94.
+- [#96: Produce the implementation handoff](https://github.com/nisavid/dotfiles/issues/96) —
+  depends on #95 and completes the planning map.
+
 ## Not yet specified
 
 - Exact command names, output contracts, and interaction design within
@@ -90,20 +113,20 @@ the sequenced handoff produced by
 - Hard isolation from malicious processes running as the logged-in OS user.
 - A generic secret-provider plugin framework.
 
-[decision-01]: ./issues/01-bound-the-destination.md
-[decision-02]: ./issues/02-map-agents-to-hosts.md
-[decision-03]: ./issues/03-recover-sessions-at-startup-and-on-demand.md
-[decision-04]: ./issues/04-separate-control-and-data-planes.md
-[decision-05]: ./issues/05-split-state-across-three-stores.md
-[decision-06]: ./issues/06-define-declared-consumer-coverage.md
-[decision-07]: ./issues/07-fail-closed-and-notify.md
-[decision-08]: ./issues/08-ship-cli-and-json.md
-[decision-09]: ./issues/09-plan-before-applying.md
-[decision-10]: ./issues/10-warn-before-agent-rotation.md
-[decision-11]: ./issues/11-support-macos-and-linux.md
-[decision-12]: ./issues/12-resolve-bootstrap-in-session-layer.md
-[decision-13]: ./issues/13-trust-the-os-user.md
-[decision-14]: ./issues/14-use-generic-secret-rotation.md
-[decision-15]: ./issues/15-split-proton-administration.md
-[decision-16]: ./issues/16-research-proton-agent-lifecycle.md
-[decision-17]: ./issues/17-research-native-host-lifecycle.md
+[decision-01]: ./decisions/01-bound-the-destination.md
+[decision-02]: ./decisions/02-map-agents-to-hosts.md
+[decision-03]: ./decisions/03-recover-sessions-at-startup-and-on-demand.md
+[decision-04]: ./decisions/04-separate-control-and-data-planes.md
+[decision-05]: ./decisions/05-split-state-across-three-stores.md
+[decision-06]: ./decisions/06-define-declared-consumer-coverage.md
+[decision-07]: ./decisions/07-fail-closed-and-notify.md
+[decision-08]: ./decisions/08-ship-cli-and-json.md
+[decision-09]: ./decisions/09-plan-before-applying.md
+[decision-10]: ./decisions/10-warn-before-agent-rotation.md
+[decision-11]: ./decisions/11-support-macos-and-linux.md
+[decision-12]: ./decisions/12-resolve-bootstrap-in-session-layer.md
+[decision-13]: ./decisions/13-trust-the-os-user.md
+[decision-14]: ./decisions/14-use-generic-secret-rotation.md
+[decision-15]: ./decisions/15-split-proton-administration.md
+[decision-16]: ./decisions/16-research-proton-agent-lifecycle.md
+[decision-17]: ./decisions/17-research-native-host-lifecycle.md

@@ -1,9 +1,12 @@
 # Proton Pass agent and PAT lifecycle
 
-Research date: 2026-07-29. The installed and current upstream release is
+Snapshot date: 2026-07-29. The installed and current upstream release was
 [Proton Pass CLI 2.2.3](https://github.com/protonpass/pass-cli/releases/tag/2.2.3).
-The findings below use the live official CLI documentation, Proton's current
-first-party support material, and the tagged 2.2.3 source.
+The findings below use the official CLI documentation, Proton's first-party
+support material, and the tagged 2.2.3 source.
+
+Refresh the cited release and behavior before implementation when upstream
+contracts may have changed.
 
 ## Result
 

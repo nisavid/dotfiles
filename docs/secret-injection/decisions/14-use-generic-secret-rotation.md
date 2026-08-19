@@ -1,13 +1,12 @@
 # Use a generic injected-secret rotation workflow
 
-Type: grilling
-Status: resolved
+Status: accepted
 
-## Question
+## Context
 
 How far should `secretctl` automate rotation of injected credentials?
 
-## Answer
+## Decision
 
 Use a provider-neutral staged workflow: issue the replacement externally,
 ingest it securely into Proton Pass, validate every affected host and consumer,

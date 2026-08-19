@@ -1,13 +1,12 @@
 # Support macOS and Linux now
 
-Type: grilling
-Status: resolved
+Status: accepted
 
-## Question
+## Context
 
 Which host platforms must the first implementation support?
 
-## Answer
+## Decision
 
 Support and validate macOS and Linux now. Treat Windows as a later platform
 expansion.

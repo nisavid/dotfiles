@@ -1,13 +1,12 @@
 # Map Proton agents to managed hosts
 
-Type: grilling
-Status: resolved
+Status: accepted
 
-## Question
+## Context
 
 How should Proton Pass agent identities map to machines and consumers?
 
-## Answer
+## Decision
 
 Use one viewer-only host agent per managed host in steady state, scoped to the
 injection vault. Rotation may overlap one replacement agent, for a maximum of

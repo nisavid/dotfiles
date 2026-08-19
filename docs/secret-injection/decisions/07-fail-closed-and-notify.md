@@ -1,13 +1,12 @@
 # Fail closed and notify on provider failure
 
-Type: grilling
-Status: resolved
+Status: accepted
 
-## Question
+## Context
 
 What happens when provider readiness fails before or during a managed launch?
 
-## Answer
+## Decision
 
 Keep consumer bindings configured, fail the credential-dependent launch with
 one actionable error, and emit a best-effort host-native startup notification.

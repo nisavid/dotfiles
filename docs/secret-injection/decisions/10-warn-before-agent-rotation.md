@@ -1,13 +1,12 @@
 # Warn before host-agent rotation
 
-Type: grilling
-Status: resolved
+Status: accepted
 
-## Question
+## Context
 
 How should host-agent bootstrap tokens rotate before mandatory expiration?
 
-## Answer
+## Decision
 
 Monitor expiry and notify at defined thresholds. Rotate through one explicit,
 verified `secretctl` command, retaining the old token until the replacement

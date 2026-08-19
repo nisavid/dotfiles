@@ -1,13 +1,12 @@
 # Resolve bootstrap tokens in the session layer
 
-Type: grilling
-Status: resolved
+Status: accepted
 
-## Question
+## Context
 
 Where should the host-agent PAT be resolved from the native credential store?
 
-## Answer
+## Decision
 
 Resolve it inside an internal session layer used by `secretctl` and lazy
 recovery. Do not represent the bootstrap token as a consumer profile or expose

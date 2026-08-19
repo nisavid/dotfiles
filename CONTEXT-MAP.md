@@ -15,6 +15,10 @@
 
 - **Hindsight → managed dotfiles**: `nisavid/agents` supplies reusable code;
   this repository supplies an encrypted consumer binding.
+- **Process-Scoped Secret Injection → GitHub Issues**:
+  [#87–#96](https://github.com/nisavid/dotfiles/issues?q=is%3Aissue+label%3Asecret-injection)
+  track the remaining planning work; accepted decisions, lifecycle research,
+  and the Wayfinder live under `docs/secret-injection/`.
 - **Global Agent Equipment → managed dotfiles**: the equipment catalog selects
   provider routes; chezmoi deploys their portable source and narrow overlays.
 - **Global Agent Equipment → GitHub Issues**: [#44–#61](https://github.com/nisavid/dotfiles/issues?q=is%3Aissue+label%3Aagent-equipment)
