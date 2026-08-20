@@ -19,6 +19,8 @@ enum {
   STATUS_PREFIX_LENGTH = 3,
   MAX_PENDING_LENGTH = 32,
   DEADLINE_PENDING_YIELDS = 64,
+  DELAYED_TAIL_MINIMUM_YIELDS = 16,
+  DELAYED_TAIL_NANOSECONDS = 160000000,
   DEADLINE_SHIFT_SECONDS = 3600,
   IDENTITY_EXIT_WAIT_NANOSECONDS = 1000000,
   IDENTITY_GATE_WAIT_ATTEMPTS = 10000,
@@ -36,6 +38,10 @@ static int status_prefix_descriptor = -1;
 static size_t status_prefix_length;
 static bool deadline_marker_recorded;
 static bool deadline_tail_recorded;
+static bool delayed_tail_marker_recorded;
+static bool delayed_tail_yields_marker_recorded;
+static size_t delayed_tail_forced_yields;
+static struct timespec delayed_tail_deadline;
 static bool zpty_child_process;
 static bool identity_race_consumed;
 static bool post_active_loss_triggered;
@@ -114,6 +120,51 @@ static bool is_pty_master(int descriptor) {
 
 static bool deadline_expiration_requested(void) {
   return getenv("ZPTY_STATUS_FRAGMENT_EXPIRE_DEADLINE") != NULL;
+}
+
+static bool delayed_tail_requested(void) {
+  return getenv("ZPTY_STATUS_FRAGMENT_DELAY_TAIL") != NULL;
+}
+
+static void arm_delayed_tail(void) {
+  if (syscall(SYS_clock_gettime, CLOCK_MONOTONIC, &delayed_tail_deadline) != 0) {
+    _exit(AUDIT_WRITE_FAILURE_EXIT);
+  }
+  delayed_tail_deadline.tv_nsec += DELAYED_TAIL_NANOSECONDS;
+  if (delayed_tail_deadline.tv_nsec >= 1000000000) {
+    ++delayed_tail_deadline.tv_sec;
+    delayed_tail_deadline.tv_nsec -= 1000000000;
+  }
+  record_marker("ZPTY_STATUS_FRAGMENT_DELAY_AUDIT_LOG", "delay-armed\n");
+}
+
+static bool delayed_tail_is_pending(void) {
+  struct timespec now;
+
+  if (!delayed_tail_requested()) {
+    return false;
+  }
+  if (syscall(SYS_clock_gettime, CLOCK_MONOTONIC, &now) != 0) {
+    _exit(AUDIT_WRITE_FAILURE_EXIT);
+  }
+  return now.tv_sec < delayed_tail_deadline.tv_sec ||
+         (now.tv_sec == delayed_tail_deadline.tv_sec &&
+          now.tv_nsec < delayed_tail_deadline.tv_nsec);
+}
+
+static bool delayed_tail_needs_forced_yield(void) {
+  if (!delayed_tail_requested() ||
+      delayed_tail_forced_yields >= DELAYED_TAIL_MINIMUM_YIELDS) {
+    return false;
+  }
+  ++delayed_tail_forced_yields;
+  if (delayed_tail_forced_yields == DELAYED_TAIL_MINIMUM_YIELDS &&
+      !delayed_tail_yields_marker_recorded) {
+    delayed_tail_yields_marker_recorded = true;
+    record_marker("ZPTY_STATUS_FRAGMENT_DELAY_AUDIT_LOG",
+                  "forced-yields-complete\n");
+  }
+  return true;
 }
 
 static bool initial_identity_loss_requested(void) {
@@ -233,6 +284,25 @@ ssize_t write(int descriptor, const void *buffer, size_t count) {
   return result;
 }
 
+int close(int descriptor) {
+  static int (*real_close)(int);
+
+  if (real_close == NULL) {
+    real_close = (int (*)(int))dlsym(RTLD_NEXT, "close");
+    if (real_close == NULL) {
+      errno = ENOSYS;
+      return -1;
+    }
+  }
+  if (descriptor == fragmented_descriptor) {
+    fragmented_descriptor = -1;
+    pending_offset = 0;
+    pending_length = 0;
+    pending_yields_remaining = 0;
+  }
+  return real_close(descriptor);
+}
+
 static void record_expired_deadline(void) {
   if (!deadline_marker_recorded) {
     deadline_marker_recorded = true;
@@ -260,6 +330,14 @@ static ssize_t deliver_pending_status(int descriptor, void *buffer,
     --pending_yields_remaining;
     errno = EAGAIN;
     return -1;
+  }
+  if (delayed_tail_needs_forced_yield() || delayed_tail_is_pending()) {
+    errno = EAGAIN;
+    return -1;
+  }
+  if (delayed_tail_requested() && !delayed_tail_marker_recorded) {
+    delayed_tail_marker_recorded = true;
+    record_marker("ZPTY_STATUS_FRAGMENT_DELAY_AUDIT_LOG", "delayed-tail\n");
   }
   if (deadline_expiration_requested() && !deadline_tail_recorded) {
     deadline_tail_recorded = true;
@@ -340,6 +418,9 @@ ssize_t read(int descriptor, void *buffer, size_t count) {
       if (deadline_expiration_requested()) {
         record_marker("ZPTY_STATUS_FRAGMENT_DEADLINE_AUDIT_LOG",
                       "deadline-armed\n");
+      }
+      if (delayed_tail_requested()) {
+        arm_delayed_tail();
       }
       status_was_fragmented = true;
 

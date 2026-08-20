@@ -37,6 +37,7 @@ kill_audit_library=
 kill_audit_log=$test_dir/negative-pgid-kill-audit.log
 status_fragment_library=
 status_fragment_log=$test_dir/zpty-status-fragment.log
+status_fragment_delay_log=$test_dir/zpty-status-fragment-delay.log
 status_fragment_deadline_log=$test_dir/zpty-status-fragment-deadline.log
 identity_loss_log=$test_dir/zpty-identity-loss.log
 if [[ $OSTYPE == linux* ]]; then
@@ -176,6 +177,8 @@ fi
 EOF
 cat > "$fast_local_bin/pass-cli" <<'EOF'
 #!/bin/zsh -f
+[[ -z ${PROVIDER_COMPLETION_MARKER:-} ]] ||
+  print -r -- provider-completed >>"$PROVIDER_COMPLETION_MARKER"
 if [[ -n ${FD_AUDIT_TARGET:-} ]]; then
   integer matching_fds=0
   for descriptor in /proc/$$/fd/<->(N); do
@@ -302,10 +305,15 @@ if [[ -n $status_fragment_library ]]; then
   [[ $(<"$identity_loss_log") == post-active-identity-loss ]] || fail 'post-active secret identity fixture must prove controller loss'
   [[ ! -s $kill_audit_log ]] || fail 'post-active secret identity loss must not signal an absent process group'
 
-  rm -f -- "$status_fragment_log"
+  provider_completion_marker=$test_dir/fragmented-secret-provider-completed
+  rm -f -- "$status_fragment_log" "$status_fragment_delay_log" \
+    "$provider_completion_marker"
   set +e
   LD_PRELOAD=$status_fragment_library \
     ZPTY_STATUS_FRAGMENT_AUDIT_LOG=$status_fragment_log \
+    ZPTY_STATUS_FRAGMENT_DELAY_TAIL=1 \
+    ZPTY_STATUS_FRAGMENT_DELAY_AUDIT_LOG=$status_fragment_delay_log \
+    PROVIDER_COMPLETION_MARKER=$provider_completion_marker \
     HOME=$fast_home XDG_CONFIG_HOME=$fast_home/.config \
     PATH=$fast_target_bin:/usr/bin:/bin \
     /usr/bin/setsid "$fast_local_bin/secret-exec" \
@@ -317,6 +325,11 @@ if [[ -n $status_fragment_library ]]; then
     fail "secret-exec must accept a fragmented successful child-status record: status=$fragmented_secret_exec_status error=$(<"$test_dir/fragmented-secret-exec.err")"
   [[ $(<"$status_fragment_log") == fragmented-status ]] ||
     fail 'the secret-exec PTY fixture must prove that it fragmented a record'
+  [[ $(<"$provider_completion_marker") == provider-completed ]] ||
+    fail 'the fragmented secret-exec fixture must prove one provider completion'
+  [[ $(<"$status_fragment_delay_log") == \
+    $'delay-armed\nforced-yields-complete\ndelayed-tail' ]] ||
+    fail 'the secret-exec PTY fixture must prove the forced-yield and 160 ms status-tail delay'
 
   rm -f -- "$status_fragment_log" "$status_fragment_deadline_log"
   set +e
