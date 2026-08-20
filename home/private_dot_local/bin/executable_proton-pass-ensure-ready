@@ -459,7 +459,7 @@ main() {
   exec {lock_create_fd}>>"$lock_file" ||
     fail_readiness unsafe-lock 'cannot open the readiness lock'
   local -A opened_lock published_lock
-  zstat -H opened_lock -- "/dev/fd/$lock_create_fd" ||
+  zstat -H opened_lock -f "$lock_create_fd" ||
     fail_readiness unsafe-lock 'cannot inspect the opened readiness lock'
   zstat -H published_lock -- "$lock_file" ||
     fail_readiness unsafe-lock 'cannot inspect the published readiness lock'
@@ -468,8 +468,8 @@ main() {
     fail_readiness unsafe-lock 'readiness lock changed while opening'
   (( opened_lock[uid] == EUID )) ||
     fail_readiness unsafe-lock 'readiness lock must be owned by the current user'
-  /bin/chmod -- 600 "/dev/fd/$lock_create_fd" ||
-    fail_readiness unsafe-lock 'cannot secure the readiness lock'
+  (( (opened_lock[mode] & 8#7777) == 8#600 )) ||
+    fail_readiness unsafe-lock 'readiness lock must have mode 0600'
   exec {lock_create_fd}>&-
 
   integer lock_fd
@@ -480,7 +480,7 @@ main() {
     zsystem flock -u lock_fd
     fail_readiness unsafe-lock 'readiness lock must not be a symbolic link'
   }
-  zstat -H opened_lock -- "/dev/fd/$lock_fd" || {
+  zstat -H opened_lock -f "$lock_fd" || {
     zsystem flock -u lock_fd
     fail_readiness unsafe-lock 'cannot inspect the locked readiness file'
   }
@@ -496,6 +496,10 @@ main() {
   (( opened_lock[uid] == EUID )) || {
     zsystem flock -u lock_fd
     fail_readiness unsafe-lock 'readiness lock must be owned by the current user'
+  }
+  (( (opened_lock[mode] & 8#7777) == 8#600 )) || {
+    zsystem flock -u lock_fd
+    fail_readiness unsafe-lock 'readiness lock must have mode 0600'
   }
 
   if session_ready "$backend"; then
