@@ -246,13 +246,11 @@ wait_bounded_child() {
 
   # Nonblocking zpty reads may split a line; accumulate one bounded record.
   local status_record= status_chunk=
-  integer status_started=0 status_idle_polls=10 status_max_length=32
+  integer status_max_length=32
   while [[ $status_record != *$'\n'* ]]; do
     status_chunk=
     if zpty -r -t "$child_name" status_chunk 2>/dev/null &&
       [[ -n $status_chunk ]]; then
-      status_started=1
-      status_idle_polls=10
       if (( ${#status_record} + ${#status_chunk} > status_max_length )); then
         status_record=invalid
         break
@@ -263,15 +261,6 @@ wait_bounded_child() {
     if ! kill -0 -- -$child_pgid 2>/dev/null; then
       status_record=invalid
       break
-    fi
-    if (( status_started )); then
-      if (( EPOCHREALTIME >= deadline )); then
-        terminate_active_child
-        return 124
-      fi
-      (( --status_idle_polls > 0 )) || break
-      zselect -t 1 2>/dev/null || true
-      continue
     fi
     if (( EPOCHREALTIME >= deadline )); then
       terminate_active_child

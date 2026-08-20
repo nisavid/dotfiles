@@ -28,6 +28,8 @@ kill_audit_library=
 kill_audit_log=$test_dir/negative-pgid-kill-audit.log
 status_fragment_library=
 status_fragment_log=$test_dir/zpty-status-fragment.log
+status_fragment_delay_log=$test_dir/zpty-status-fragment-delay.log
+status_fragment_deadline_log=$test_dir/zpty-status-fragment-deadline.log
 identity_loss_log=$test_dir/zpty-identity-loss.log
 if [[ $OSTYPE == linux* ]]; then
   [[ -x /usr/bin/cc ]] || fail 'the Linux cleanup-identity test requires /usr/bin/cc'
@@ -71,7 +73,11 @@ done
 fast_backend_home=$test_dir/fast-backend-home
 fast_backend_state=$test_dir/fast-backend-state
 mkdir -p -- "$fast_backend_home/.local/bin" "$fast_backend_state"
-cp -- "$fast_exit" "$fast_backend_home/.local/bin/pass-cli"
+cat >"$fast_backend_home/.local/bin/pass-cli" <<'EOF'
+#!/bin/zsh -f
+[[ -z ${PROVIDER_COMPLETION_MARKER:-} ]] ||
+  print -r -- provider-completed >>"$PROVIDER_COMPLETION_MARKER"
+EOF
 chmod 700 "$fast_backend_home/.local/bin/pass-cli"
 if [[ -n $status_fragment_library ]]; then
   typeset identity_loss_output identity_listing identity_controller
@@ -135,10 +141,15 @@ if [[ -n $status_fragment_library ]]; then
   [[ $(<"$identity_loss_log") == post-active-identity-loss ]] || fail 'post-active identity fixture must prove controller loss'
   [[ ! -s $kill_audit_log ]] || fail 'post-active readiness identity loss must not signal an absent process group'
 
-  rm -f -- "$status_fragment_log"
+  provider_completion_marker=$test_dir/fragmented-ready-provider-completed
+  rm -f -- "$status_fragment_log" "$status_fragment_delay_log" \
+    "$provider_completion_marker"
   set +e
   LD_PRELOAD=$status_fragment_library \
     ZPTY_STATUS_FRAGMENT_AUDIT_LOG=$status_fragment_log \
+    ZPTY_STATUS_FRAGMENT_DELAY_TAIL=1 \
+    ZPTY_STATUS_FRAGMENT_DELAY_AUDIT_LOG=$status_fragment_delay_log \
+    PROVIDER_COMPLETION_MARKER=$provider_completion_marker \
     HOME=$fast_backend_home XDG_STATE_HOME=$fast_backend_state \
     "$ensure_ready" >/dev/null 2>"$test_dir/fragmented-ready.err"
   fragmented_ready_status=$?
@@ -147,6 +158,29 @@ if [[ -n $status_fragment_library ]]; then
     fail "readiness must accept a fragmented successful child-status record: status=$fragmented_ready_status error=$(<"$test_dir/fragmented-ready.err")"
   [[ $(<"$status_fragment_log") == fragmented-status ]] ||
     fail 'the PTY status-read fixture must prove that it fragmented a record'
+  [[ $(<"$provider_completion_marker") == provider-completed ]] ||
+    fail 'the fragmented readiness fixture must prove one provider completion'
+  [[ $(<"$status_fragment_delay_log") == \
+    $'delay-armed\nforced-yields-complete\ndelayed-tail' ]] ||
+    fail 'the readiness PTY fixture must prove the forced-yield and 160 ms status-tail delay'
+
+  rm -f -- "$status_fragment_log" "$status_fragment_deadline_log"
+  set +e
+  LD_PRELOAD=$status_fragment_library \
+    ZPTY_STATUS_FRAGMENT_AUDIT_LOG=$status_fragment_log \
+    ZPTY_STATUS_FRAGMENT_EXPIRE_DEADLINE=1 \
+    ZPTY_STATUS_FRAGMENT_DEADLINE_AUDIT_LOG=$status_fragment_deadline_log \
+    HOME=$fast_backend_home XDG_STATE_HOME=$fast_backend_state \
+    "$ensure_ready" >/dev/null 2>"$test_dir/deadline-ready.err"
+  deadline_ready_status=$?
+  set -e
+  (( deadline_ready_status == 0 )) ||
+    fail "readiness must recover after rejecting a post-deadline status tail: status=$deadline_ready_status error=$(<"$test_dir/deadline-ready.err")"
+  [[ $(<"$status_fragment_log") == fragmented-status ]] ||
+    fail 'the readiness deadline fixture must prove status fragmentation'
+  [[ $(<"$status_fragment_deadline_log") == \
+    $'deadline-armed\ndeadline-expired' ]] ||
+    fail 'readiness must not read a fragmented status tail after its deadline'
 
   rm -f -- "$status_fragment_log" "$kill_audit_log"
   zmodload zsh/zselect || fail 'the signal fixture requires zsh/zselect'

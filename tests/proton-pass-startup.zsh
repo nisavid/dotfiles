@@ -111,7 +111,11 @@ done
 fast_child_bin=$test_dir/fast-child-bin
 mkdir -p -- "$fast_child_bin"
 cp -- "$startup_source" "$fast_child_bin/proton-pass-startup"
-cp -- "$fast_exit" "$fast_child_bin/proton-pass-ensure-ready"
+cat >"$fast_child_bin/proton-pass-ensure-ready" <<'EOF'
+#!/bin/zsh -f
+[[ -z ${PROVIDER_COMPLETION_MARKER:-} ]] ||
+  print -r -- provider-completed >>"$PROVIDER_COMPLETION_MARKER"
+EOF
 chmod +x -- \
   "$fast_child_bin/proton-pass-startup" \
   "$fast_child_bin/proton-pass-ensure-ready"
@@ -125,6 +129,8 @@ negative_pgid_audit_library=
 positive_pid_audit_log=$test_dir/positive-pid-kill-audit.log
 status_fragment_library=
 status_fragment_log=$test_dir/zpty-status-fragment.log
+status_fragment_delay_log=$test_dir/zpty-status-fragment-delay.log
+status_fragment_deadline_log=$test_dir/zpty-status-fragment-deadline.log
 identity_loss_log=$test_dir/zpty-identity-loss.log
 if [[ $OSTYPE == linux* ]]; then
   [[ -x /usr/bin/cc ]] ||
@@ -215,10 +221,15 @@ if [[ $OSTYPE == linux* ]]; then
   [[ $(<"$identity_loss_log") == post-active-identity-loss ]] || fail 'post-active startup identity fixture must prove controller loss'
   [[ ! -s $negative_pgid_audit_log ]] || fail 'post-active startup identity loss must not signal an absent process group'
 
-  rm -f -- "$status_fragment_log" "$negative_pgid_audit_log"
+  provider_completion_marker=$test_dir/fragmented-startup-provider-completed
+  rm -f -- "$status_fragment_log" "$status_fragment_delay_log" \
+    "$provider_completion_marker" "$negative_pgid_audit_log"
   set +e
   LD_PRELOAD=$status_fragment_library \
     ZPTY_STATUS_FRAGMENT_AUDIT_LOG=$status_fragment_log \
+    ZPTY_STATUS_FRAGMENT_DELAY_TAIL=1 \
+    ZPTY_STATUS_FRAGMENT_DELAY_AUDIT_LOG=$status_fragment_delay_log \
+    PROVIDER_COMPLETION_MARKER=$provider_completion_marker \
     "$fast_child_bin/proton-pass-startup" \
       >/dev/null 2>"$test_dir/fragmented-startup.err"
   fragmented_startup_status=$?
@@ -227,6 +238,29 @@ if [[ $OSTYPE == linux* ]]; then
     fail "startup must accept a fragmented successful child-status record: status=$fragmented_startup_status error=$(<"$test_dir/fragmented-startup.err")"
   [[ $(<"$status_fragment_log") == fragmented-status ]] ||
     fail 'the startup PTY fixture must prove that it fragmented a record'
+  [[ $(<"$provider_completion_marker") == provider-completed ]] ||
+    fail 'the fragmented startup fixture must prove one provider completion'
+  [[ $(<"$status_fragment_delay_log") == \
+    $'delay-armed\nforced-yields-complete\ndelayed-tail' ]] ||
+    fail 'the startup PTY fixture must prove the forced-yield and 160 ms status-tail delay'
+
+  rm -f -- "$status_fragment_log" "$status_fragment_deadline_log"
+  set +e
+  LD_PRELOAD=$status_fragment_library \
+    ZPTY_STATUS_FRAGMENT_AUDIT_LOG=$status_fragment_log \
+    ZPTY_STATUS_FRAGMENT_EXPIRE_DEADLINE=1 \
+    ZPTY_STATUS_FRAGMENT_DEADLINE_AUDIT_LOG=$status_fragment_deadline_log \
+    "$fast_child_bin/proton-pass-startup" \
+      >/dev/null 2>"$test_dir/deadline-startup.err"
+  deadline_startup_status=$?
+  set -e
+  (( deadline_startup_status == 0 )) ||
+    fail "startup must recover after rejecting a post-deadline status tail: status=$deadline_startup_status error=$(<"$test_dir/deadline-startup.err")"
+  [[ $(<"$status_fragment_log") == fragmented-status ]] ||
+    fail 'the startup deadline fixture must prove status fragmentation'
+  [[ $(<"$status_fragment_deadline_log") == \
+    $'deadline-armed\ndeadline-expired' ]] ||
+    fail 'startup must not read a fragmented status tail after its deadline'
 
   rm -f -- "$status_fragment_log" "$negative_pgid_audit_log"
   zmodload zsh/zselect || fail 'the startup signal fixture requires zsh/zselect'
