@@ -696,11 +696,11 @@ run_waiter_stage_mapping() {
   [[ ! -e $controller_pid_file ]] || value_free_artifacts+=("$controller_pid_file")
   [[ ! -e $provider_start ]] || value_free_artifacts+=("$provider_start")
   [[ ! -e $provider_completion ]] || value_free_artifacts+=("$provider_completion")
-  ! rg -F "$fixture_token" "${value_free_artifacts[@]}" >/dev/null ||
+  ! /usr/bin/grep -F "$fixture_token" "${value_free_artifacts[@]}" >/dev/null ||
     fail "the $mode waiter-stage fixture must not expose the bootstrap value"
-  ! rg -F 'account-metadata-canary' "${value_free_artifacts[@]}" >/dev/null ||
+  ! /usr/bin/grep -F 'account-metadata-canary' "${value_free_artifacts[@]}" >/dev/null ||
     fail "the $mode waiter-stage fixture must not expose provider output"
-  ! rg -F 'waiter-stage-canary' "${value_free_artifacts[@]}" >/dev/null ||
+  ! /usr/bin/grep -F 'waiter-stage-canary' "${value_free_artifacts[@]}" >/dev/null ||
     fail "the $mode waiter-stage fixture must not expose inherited diagnostic input"
 }
 
@@ -825,7 +825,7 @@ zsh "$ensure_ready"
   fail 'readiness locking must not invoke an external flock executable'
 [[ -e $FAKE_PASS_REMOTE_SESSION ]] ||
   fail 'ensure-ready must establish a remotely authenticated provider session'
-[[ $(rg -c '^login$' "$FAKE_PASS_LOG") == 1 ]] ||
+[[ $(/usr/bin/grep -Fxc login "$FAKE_PASS_LOG") == 1 ]] ||
   fail 'ensure-ready must perform one argument-free login when repair is needed'
 [[ $(<"$FAKE_SECRET_TOOL_LOG") ==
   'proton-bootstrap' ]] ||
@@ -871,7 +871,7 @@ rm -f -- "$FAKE_PASS_REMOTE_SESSION"
 zsh "$ensure_ready"
 [[ -e $FAKE_PASS_REMOTE_SESSION ]] ||
   fail 'a stale local session marker must not satisfy remote readiness'
-[[ $(rg -c '^login$' "$FAKE_PASS_LOG") == 1 ]] ||
+[[ $(/usr/bin/grep -Fxc login "$FAKE_PASS_LOG") == 1 ]] ||
   fail 'a stale local session marker must trigger one repair login'
 
 rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION"
@@ -897,7 +897,7 @@ for readiness_pid in $readiness_pids; do
   fi
 done
 rm -f -- "$FAKE_PASS_LOGIN_DELAY"
-login_count=$(rg -c '^login$' "$FAKE_PASS_LOG")
+login_count=$(/usr/bin/grep -Fxc login "$FAKE_PASS_LOG")
 (( login_count == 1 )) ||
   fail 'concurrent ensure-ready invocations must perform exactly one login'
 
@@ -913,7 +913,7 @@ set -e
 [[ $locked_output ==
   'proton-pass-ensure-ready: the native bootstrap item is unavailable or locked' ]] ||
   fail 'a locked native store must report one value-free error'
-! rg -q '^login$' "$FAKE_PASS_LOG" ||
+! /usr/bin/grep -Fqx login "$FAKE_PASS_LOG" ||
   fail 'a locked native store must not attempt provider login'
 grep -Fqx 'state=unavailable' "$status_file" ||
   fail 'a locked native store must record unavailable status'
@@ -994,7 +994,7 @@ set -e
   fail 'an invalid bootstrap value must report one value-free error'
 grep -Fqx 'reason=invalid-bootstrap-value' "$status_file" ||
   fail 'an invalid bootstrap value must record its value-free reason'
-! rg -q '^login$' "$FAKE_PASS_LOG" ||
+! /usr/bin/grep -Fqx login "$FAKE_PASS_LOG" ||
   fail 'an invalid bootstrap value must not attempt provider login'
 rm -f -- "$FAKE_NATIVE_STORE_BAD_VALUE"
 
@@ -1138,7 +1138,7 @@ test_process_fixture_untrack_pid $lock_holder_pid
   fail 'a lock timeout must report one value-free error'
 grep -Fqx 'reason=lock-timeout' "$status_file" ||
   fail 'a lock timeout must record its value-free reason'
-! rg -q '^login$' "$FAKE_PASS_LOG" ||
+! /usr/bin/grep -Fqx login "$FAKE_PASS_LOG" ||
   fail 'a lock timeout must not attempt provider login'
 
 rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION"
@@ -1155,7 +1155,7 @@ set -e
   fail 'an unsafe readiness-lock mode must report one value-free error'
 grep -Fqx 'reason=unsafe-lock' "$status_file" ||
   fail 'an unsafe readiness-lock mode must record its value-free reason'
-! rg -q '^login$' "$FAKE_PASS_LOG" ||
+! /usr/bin/grep -Fqx login "$FAKE_PASS_LOG" ||
   fail 'an unsafe readiness-lock mode must not attempt provider login'
 
 rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION"
@@ -1207,7 +1207,7 @@ export "$proton_bootstrap_field=$fixture_token"
 unset "$proton_bootstrap_field"
 [[ -e $FAKE_PASS_REMOTE_SESSION ]] ||
   fail 'the legacy session helper must delegate to ensure-ready'
-[[ $(rg -c '^login$' "$FAKE_PASS_LOG") == 1 ]] ||
+[[ $(/usr/bin/grep -Fxc login "$FAKE_PASS_LOG") == 1 ]] ||
   fail 'the legacy session helper must use the serialized login path'
 [[ -s $FAKE_SECRET_TOOL_LOG ]] ||
   fail 'the legacy session helper must re-read the native bootstrap item'
@@ -1273,18 +1273,18 @@ trace_output=$(FAKE_UNAME_SYSTEM=Linux zsh -x "$ensure_ready" 2>&1)
 grep -Fqx 'waiter-stage=unrecorded' "$status_file" ||
   fail 'a repair after waiter-stage failures must reset diagnostic state'
 
-! print -r -- "$locked_output" | rg -F "$fixture_token" >/dev/null ||
+! print -r -- "$locked_output" | /usr/bin/grep -F "$fixture_token" >/dev/null ||
   fail 'readiness errors must not contain the bootstrap token'
-! print -r -- "$trace_output" | rg -F "$fixture_token" >/dev/null ||
+! print -r -- "$trace_output" | /usr/bin/grep -F "$fixture_token" >/dev/null ||
   fail 'readiness must disable xtrace before resolving the bootstrap token'
-! rg -F "$fixture_token" "$FAKE_PASS_LOG" "$FAKE_SECRET_TOOL_LOG" \
+! /usr/bin/grep -F "$fixture_token" "$FAKE_PASS_LOG" "$FAKE_SECRET_TOOL_LOG" \
   "$status_file" >/dev/null ||
   fail 'readiness logs and status must not contain the bootstrap token'
-! rg -F "$fixture_token" "$repo_root/home" "$repo_root/tests" >/dev/null ||
+! /usr/bin/grep -FR "$fixture_token" "$repo_root/home" "$repo_root/tests" >/dev/null ||
   fail 'the synthetic bootstrap token must not appear in managed source or tests'
-! rg -F 'account-metadata-canary' "$test_dir"/*.log "$status_file" >/dev/null ||
+! /usr/bin/grep -F 'account-metadata-canary' "$test_dir"/*.log "$status_file" >/dev/null ||
   fail 'readiness must suppress provider account metadata'
-! rg -F 'waiter-stage-canary' "$test_dir"/*.log "$status_file" >/dev/null ||
+! /usr/bin/grep -F 'waiter-stage-canary' "$test_dir"/*.log "$status_file" >/dev/null ||
   fail 'readiness must not persist an inherited waiter-stage canary'
 
 symlink_state_home=$test_dir/symlink-state-home
