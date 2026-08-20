@@ -180,6 +180,37 @@
           "severity": "quality"
         }
       ]
+    },
+    {
+      "id": 6,
+      "name": "config-loader-precedence",
+      "prompt": "Using the fixture, draft the reviewer-facing PR body prose that follows the already-valid Diff disclosure. Do not use tools.",
+      "files": [
+        "evals/fixtures/config-loader-precedence.md"
+      ],
+      "expected_output": "Reviewer-facing prose that states the precedence change, the operator problem it solves, and the observed evidence, with every paragraph and list item on one source line and any intended intra-item break written as an explicit <br>.",
+      "expectations": [
+        {
+          "id": "source-line-shape",
+          "text": "Places each paragraph and each list item on a single source line of unrestricted length rather than wrapping prose to a column budget, even though the fixture it reads is wrapped.",
+          "severity": "safety"
+        },
+        {
+          "id": "source-break-encoding",
+          "text": "Writes any intended line break inside a paragraph or list item as an explicit <br> rather than a bare newline or trailing spaces.",
+          "severity": "safety"
+        },
+        {
+          "id": "precedence-behavior",
+          "text": "States the new resolution order and that the project file no longer overrides an environment variable, without inventing precedence sources absent from the fixture.",
+          "severity": "quality"
+        },
+        {
+          "id": "precedence-evidence",
+          "text": "Reports the observed override, project-file, and default outcomes as evidence and keeps the operator migration note as separately tracked remaining work.",
+          "severity": "quality"
+        }
+      ]
     }
   ]
 }
