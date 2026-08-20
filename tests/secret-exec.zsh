@@ -10,6 +10,29 @@ fail() {
   return 1
 }
 
+classify_login_outcome() {
+  emulate -L zsh
+
+  local outcome_file=$1
+  local aggregate=unrecorded outcome=
+  if [[ -s $outcome_file ]]; then
+    while IFS= read -r outcome || [[ -n $outcome ]]; do
+      case $outcome in
+        completed)
+          aggregate=completed
+          ;;
+        argv-failed|bootstrap-failed)
+          [[ $aggregate == completed ]] || aggregate=$outcome
+          ;;
+        started)
+          [[ $aggregate == unrecorded ]] && aggregate=started
+          ;;
+      esac
+    done < "$outcome_file"
+  fi
+  print -r -- "$aggregate"
+}
+
 process_fixture_helper=$repo_root/tests/helpers/process-fixture.zsh
 [[ -r $process_fixture_helper ]] ||
   fail 'the shared process-fixture helper is required'
@@ -652,6 +675,12 @@ export FAKE_SECRET_LOOKUP_HANG=$test_dir/secret-lookup-hang
 export FAKE_RESOLUTION_CHILD_PID=$test_dir/resolution-child.pid
 export HOSTILE_UNAME_MARKER=$test_dir/hostile-uname-ran
 export ORDINARY_SETTING=preserved
+login_outcome_precedence_probe=$test_dir/provider-login-outcome-precedence.log
+print -r -- completed > "$login_outcome_precedence_probe"
+print -r -- started >> "$login_outcome_precedence_probe"
+[[ $(classify_login_outcome "$login_outcome_precedence_probe") == completed ]] ||
+  fail 'a later login start must not mask an earlier completed login'
+rm -f -- "$login_outcome_precedence_probe"
 export "$context7_field=inherited-context7-canary"
 export "$firecrawl_field=inherited-firecrawl-canary"
 export "$aws_access_field=INHERITEDACCESS"
@@ -915,16 +944,9 @@ for consumer_pid in $consumer_pids; do
         esac
       done < "$status_file"
     fi
-    concurrent_login_outcome=unrecorded
-    if [[ -s $FAKE_PASS_LOGIN_OUTCOME_LOG ]]; then
-      while IFS= read -r login_outcome || [[ -n $login_outcome ]]; do
-        case $login_outcome in
-          started|argv-failed|bootstrap-failed|completed)
-            concurrent_login_outcome=$login_outcome
-            ;;
-        esac
-      done < "$FAKE_PASS_LOGIN_OUTCOME_LOG"
-    fi
+    concurrent_login_outcome=$(
+      classify_login_outcome "$FAKE_PASS_LOGIN_OUTCOME_LOG"
+    )
     fail "concurrent pass-backed consumer launch failed: profile=$concurrent_profile stderr=$concurrent_error_marker readiness=$concurrent_readiness_reason login=$concurrent_login_outcome"
   fi
 done
