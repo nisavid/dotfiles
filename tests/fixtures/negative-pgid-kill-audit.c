@@ -40,6 +40,12 @@ static void remember_absent_group(pid_t target) {
   absent_groups[absent_group_count++] = target;
 }
 
+void negative_pgid_kill_audit_remember_absent(pid_t target) {
+  if (target < -1) {
+    remember_absent_group(target);
+  }
+}
+
 static bool process_was_absent(pid_t target) {
   size_t index;
 
@@ -126,8 +132,9 @@ static void observe_result(pid_t target, int signal_number, int result,
     remember_absent_group(target);
     return;
   }
-  if ((signal_number == SIGTERM || signal_number == SIGKILL) &&
-      group_was_absent(target)) {
+  if ((signal_number == SIGHUP || signal_number == SIGTERM ||
+       signal_number == SIGKILL) &&
+      (group_was_absent(target) || (result == -1 && saved_errno == ESRCH))) {
     record_stale_signal("NEGATIVE_PGID_KILL_AUDIT_LOG", "negative-pgid",
                         target, signal_number);
   }

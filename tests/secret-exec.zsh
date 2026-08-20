@@ -35,12 +35,55 @@ trap 'exit 143' TERM
 test_process_fixture_run_signal_probe_mode
 kill_audit_library=
 kill_audit_log=$test_dir/negative-pgid-kill-audit.log
+status_fragment_library=
+status_fragment_log=$test_dir/zpty-status-fragment.log
+status_fragment_deadline_log=$test_dir/zpty-status-fragment-deadline.log
+identity_loss_log=$test_dir/zpty-identity-loss.log
 if [[ $OSTYPE == linux* ]]; then
   [[ -x /usr/bin/cc ]] || fail 'the Linux cleanup-identity test requires /usr/bin/cc'
+  [[ -x /usr/bin/setsid ]] ||
+    fail 'the Linux fragmented-signal test requires /usr/bin/setsid'
   kill_audit_library=$test_dir/negative-pgid-kill-audit.so
   /usr/bin/cc -shared -fPIC -O2 -Wall -Wextra -Werror \
     -o "$kill_audit_library" \
     "$repo_root/tests/fixtures/negative-pgid-kill-audit.c" -ldl
+  status_fragment_library=$test_dir/zpty-status-fragment.so
+  /usr/bin/cc -shared -fPIC -O2 -Wall -Wextra -Werror \
+    -o "$status_fragment_library" \
+    "$repo_root/tests/fixtures/zpty-status-fragment.c" -ldl
+
+  zmodload zsh/zselect || fail 'the setsid identity probe requires zsh/zselect'
+  /usr/bin/setsid /bin/sleep 10 &
+  setsid_probe_pid=$!
+  test_process_fixture_track_pid $setsid_probe_pid
+  integer setsid_probe_polls=100
+  typeset setsid_probe_listing=
+  typeset -a setsid_probe_fields
+  while (( setsid_probe_polls-- > 0 )); do
+    setsid_probe_listing=$(
+      /bin/ps -o pid=,pgid=,sid= -p $setsid_probe_pid 2>/dev/null
+    ) || true
+    setsid_probe_fields=( ${=setsid_probe_listing} )
+    if (( ${#setsid_probe_fields} == 3 &&
+      setsid_probe_fields[1] == setsid_probe_pid &&
+      setsid_probe_fields[2] == setsid_probe_pid &&
+      setsid_probe_fields[3] == setsid_probe_pid )); then
+      break
+    fi
+    zselect -t 1 2>/dev/null || true
+  done
+  if (( ${#setsid_probe_fields} != 3 ||
+    setsid_probe_fields[1] != setsid_probe_pid ||
+    setsid_probe_fields[2] != setsid_probe_pid ||
+    setsid_probe_fields[3] != setsid_probe_pid )); then
+    kill -TERM $setsid_probe_pid 2>/dev/null || true
+    wait $setsid_probe_pid 2>/dev/null || true
+    test_process_fixture_untrack_pid $setsid_probe_pid
+    fail 'background setsid must preserve its PID as the session leader'
+  fi
+  kill -TERM -- -$setsid_probe_pid 2>/dev/null || true
+  wait $setsid_probe_pid 2>/dev/null || true
+  test_process_fixture_untrack_pid $setsid_probe_pid
 fi
 
 test_process_fixture_assert_signal_cleanup \
@@ -119,16 +162,48 @@ mkdir -p -- "$fast_profile_dir" "$fast_local_bin" "$fast_target_bin"
 chmod 700 "$fast_home/.config/secret-exec" "$fast_profile_dir"
 cp -- "$launcher_source" "$fast_local_bin/secret-exec"
 cp -- "$fast_exit" "$fast_local_bin/proton-pass-ensure-ready"
+cat > "$fast_local_bin/readiness-fd-audit" <<'EOF'
+#!/bin/zsh -f
+if [[ -n ${FD_AUDIT_TARGET:-} ]]; then
+  integer matching_fds=0
+  for descriptor in /proc/$$/fd/<->(N); do
+    [[ $(/usr/bin/readlink -- $descriptor) == $FD_AUDIT_TARGET ]] &&
+      (( ++matching_fds ))
+  done
+  print -r -- "readiness:$matching_fds" >>$FD_AUDIT_LOG
+  (( matching_fds == 0 )) || exit 96
+fi
+EOF
 cat > "$fast_local_bin/pass-cli" <<'EOF'
 #!/bin/zsh -f
+if [[ -n ${FD_AUDIT_TARGET:-} ]]; then
+  integer matching_fds=0
+  for descriptor in /proc/$$/fd/<->(N); do
+    [[ $(/usr/bin/readlink -- $descriptor) == $FD_AUDIT_TARGET ]] &&
+      (( ++matching_fds ))
+  done
+  print -r -- "provider:$matching_fds" >>$FD_AUDIT_LOG
+  # stderr and the bounded wrapper's diagnostics descriptor are intentional.
+  (( matching_fds == 2 )) || exit 97
+fi
 print -r -- 'fast-provider-canary'
 EOF
 cat > "$fast_target_bin/check-fast-provider" <<'EOF'
 #!/bin/zsh -f
+if [[ -n ${FD_AUDIT_TARGET:-} ]]; then
+  integer matching_fds=0
+  for descriptor in /proc/$$/fd/<->(N); do
+    [[ $(/usr/bin/readlink -- $descriptor) == $FD_AUDIT_TARGET ]] &&
+      (( ++matching_fds ))
+  done
+  print -r -- "consumer:$matching_fds" >>$FD_AUDIT_LOG
+  (( matching_fds == 1 )) || exit 98
+fi
 [[ ${FAST_PROVIDER_VALUE:-} == fast-provider-canary ]]
 EOF
 chmod 700 \
   "$fast_local_bin/secret-exec" \
+  "$fast_local_bin/readiness-fd-audit" \
   "$fast_local_bin/proton-pass-ensure-ready" \
   "$fast_local_bin/pass-cli" \
   "$fast_target_bin/check-fast-provider"
@@ -136,6 +211,176 @@ print -r -- \
   'FAST_PROVIDER_VALUE=pass://cli-secrets/fast-provider/password' > \
   "$fast_profile_dir/fast-provider.env"
 chmod 600 "$fast_profile_dir/fast-provider.env"
+fd_audit_target=$test_dir/escape-fd-audit.err
+fd_audit_log=$test_dir/escape-fd-audit.log
+typeset -a fd_audit_environment=(
+  HOME=$fast_home
+  XDG_CONFIG_HOME=$fast_home/.config
+  PATH=$fast_target_bin:/usr/bin:/bin
+)
+integer fd_audit_enabled=0
+if [[ $OSTYPE == linux* && -d /proc/$$/fd ]]; then
+  fd_audit_enabled=1
+  cp -- "$fast_local_bin/readiness-fd-audit" \
+    "$fast_local_bin/proton-pass-ensure-ready"
+  fd_audit_environment+=(
+    FD_AUDIT_TARGET=$fd_audit_target
+    FD_AUDIT_LOG=$fd_audit_log
+  )
+fi
+set +e
+/usr/bin/env "${fd_audit_environment[@]}" \
+  "$fast_local_bin/secret-exec" fast-provider -- check-fast-provider \
+  2>"$fd_audit_target"
+fd_audit_status=$?
+set -e
+(( fd_audit_status == 0 )) ||
+  fail "provider and final consumer scenario must succeed: status=$fd_audit_status error=$(<"$fd_audit_target")"
+if (( fd_audit_enabled )); then
+  [[ $(<"$fd_audit_log") == $'readiness:0\nprovider:2\nconsumer:1' ]] ||
+    fail 'provider and final consumer must not inherit the escape diagnostic descriptor'
+  cp -- "$fast_exit" "$fast_local_bin/proton-pass-ensure-ready"
+fi
+if [[ -n $status_fragment_library ]]; then
+  typeset identity_loss_output identity_listing identity_controller
+  integer identity_loss_status
+  identity_loss_gate=$test_dir/zpty-initial-identity-loss.gate
+  identity_loss_output_file=$test_dir/zpty-initial-identity-loss.out
+  rm -f -- "$identity_loss_log" "$identity_loss_gate" "$identity_loss_output_file" "$kill_audit_log"
+  /usr/bin/env LD_PRELOAD="$status_fragment_library:$kill_audit_library" \
+    ZPTY_IDENTITY_LOSS_AUDIT_LOG=$identity_loss_log ZPTY_INITIAL_IDENTITY_LOSS_GATE=$identity_loss_gate \
+    NEGATIVE_PGID_KILL_AUDIT_LOG=$kill_audit_log HOME=$fast_home \
+    XDG_CONFIG_HOME=$fast_home/.config PATH=$fast_target_bin:/usr/bin:/bin \
+    ZPTY_INITIAL_IDENTITY_LOSS=1 "$fast_local_bin/secret-exec" \
+    fast-provider -- check-fast-provider >"$identity_loss_output_file" 2>&1 &
+  identity_wrapper_pid=$!
+  test_process_fixture_track_pid $identity_wrapper_pid
+  integer identity_marker_polls=100
+  while (( identity_marker_polls-- > 0 )) && [[ ! -s $identity_loss_log ]]; do zselect -t 1 2>/dev/null || true; done
+  [[ -s $identity_loss_log ]] || fail 'initial secret identity fixture must publish its controller'
+  identity_loss_record=$(<"$identity_loss_log")
+  typeset -a identity_lines=( "${(@f)identity_loss_record}" )
+  identity_controller=${identity_lines[1]#controller:}
+  [[ $identity_controller == <-> && $identity_controller -gt 1 ]] || fail 'initial secret identity fixture must publish a numeric controller'
+  identity_listing=$(/bin/ps -o pid=,ppid=,pgid=,sid= -p $identity_controller)
+  typeset -a identity_fields=( ${=identity_listing} )
+  identity_ancestor=${identity_fields[2]}
+  integer identity_ancestor_hops=8
+  while (( identity_ancestor_hops-- > 0 )) &&
+    [[ $identity_ancestor != $identity_wrapper_pid ]]; do
+    identity_ancestor=$(/bin/ps -o ppid= -p $identity_ancestor)
+    identity_ancestor=${identity_ancestor//[[:space:]]/}
+    [[ $identity_ancestor == <-> && $identity_ancestor -gt 1 ]] || break
+  done
+  (( ${#identity_fields} == 4 && identity_fields[1] == identity_controller &&
+    identity_ancestor == identity_wrapper_pid && identity_fields[3] == identity_controller &&
+    identity_fields[4] == identity_controller )) || fail 'initial secret controller must belong to the wrapper lineage and lead its session'
+  kill -KILL -- -$identity_controller
+  : >"$identity_loss_gate"
+  set +e
+  wait $identity_wrapper_pid
+  identity_loss_status=$?
+  set -e
+  test_process_fixture_untrack_pid $identity_wrapper_pid
+  ! kill -0 -- -$identity_controller 2>/dev/null || fail 'initial secret controller group must become absent'
+  identity_loss_output=$(<"$identity_loss_output_file")
+  (( identity_loss_status == 1 )) || fail 'initial identity loss must fail secret resolution closed'
+  [[ $identity_loss_output == $'secret-exec: cannot identify credential-resolution process group\nsecret-exec: failed to resolve FAST_PROVIDER_VALUE' ]] || fail 'initial identity loss must preserve its fixed resolution diagnostics'
+  [[ $(<"$identity_loss_log") == $'controller:'$identity_controller$'\ninitial-identity-loss' ]] || fail 'initial secret identity fixture must prove pre-publication controller loss'
+  [[ ! -s $kill_audit_log ]] || fail 'initial secret identity loss must not signal an absent process group'
+
+  rm -f -- "$identity_loss_log" "$kill_audit_log"
+  set +e
+  identity_loss_output=$(/usr/bin/env LD_PRELOAD="$status_fragment_library:$kill_audit_library" \
+    ZPTY_IDENTITY_LOSS_AUDIT_LOG=$identity_loss_log NEGATIVE_PGID_KILL_AUDIT_LOG=$kill_audit_log \
+    HOME=$fast_home XDG_CONFIG_HOME=$fast_home/.config PATH=$fast_target_bin:/usr/bin:/bin \
+    ZPTY_POST_ACTIVE_IDENTITY_LOSS=1 "$fast_local_bin/secret-exec" fast-provider -- check-fast-provider 2>&1)
+  identity_loss_status=$?
+  set -e
+  (( identity_loss_status == 1 )) || fail 'post-active identity loss must fail secret resolution closed'
+  [[ $identity_loss_output == $'secret-exec: bounded credential resolution became unmanageable\nsecret-exec: failed to resolve FAST_PROVIDER_VALUE' ]] || fail 'post-active identity loss must preserve its fixed resolution diagnostics'
+  [[ $(<"$identity_loss_log") == post-active-identity-loss ]] || fail 'post-active secret identity fixture must prove controller loss'
+  [[ ! -s $kill_audit_log ]] || fail 'post-active secret identity loss must not signal an absent process group'
+
+  rm -f -- "$status_fragment_log"
+  set +e
+  LD_PRELOAD=$status_fragment_library \
+    ZPTY_STATUS_FRAGMENT_AUDIT_LOG=$status_fragment_log \
+    HOME=$fast_home XDG_CONFIG_HOME=$fast_home/.config \
+    PATH=$fast_target_bin:/usr/bin:/bin \
+    /usr/bin/setsid "$fast_local_bin/secret-exec" \
+      fast-provider -- check-fast-provider \
+      >/dev/null 2>"$test_dir/fragmented-secret-exec.err"
+  fragmented_secret_exec_status=$?
+  set -e
+  (( fragmented_secret_exec_status == 0 )) ||
+    fail "secret-exec must accept a fragmented successful child-status record: status=$fragmented_secret_exec_status error=$(<"$test_dir/fragmented-secret-exec.err")"
+  [[ $(<"$status_fragment_log") == fragmented-status ]] ||
+    fail 'the secret-exec PTY fixture must prove that it fragmented a record'
+
+  rm -f -- "$status_fragment_log" "$status_fragment_deadline_log"
+  set +e
+  deadline_output=$(
+    LD_PRELOAD=$status_fragment_library \
+      ZPTY_STATUS_FRAGMENT_AUDIT_LOG=$status_fragment_log \
+      ZPTY_STATUS_FRAGMENT_EXPIRE_DEADLINE=1 \
+      ZPTY_STATUS_FRAGMENT_DEADLINE_AUDIT_LOG=$status_fragment_deadline_log \
+      HOME=$fast_home XDG_CONFIG_HOME=$fast_home/.config \
+      PATH=$fast_target_bin:/usr/bin:/bin \
+      "$fast_local_bin/secret-exec" fast-provider -- check-fast-provider 2>&1
+  )
+  deadline_status=$?
+  set -e
+  (( deadline_status == 1 )) ||
+    fail "a fragmented tail must not extend credential resolution beyond its deadline: status=$deadline_status audit=$(<"$status_fragment_deadline_log")"
+  [[ $deadline_output == \
+    'secret-exec: timed out resolving FAST_PROVIDER_VALUE' ]] ||
+    fail 'an expired fragmented status must preserve the value-free timeout error'
+  [[ $(<"$status_fragment_log") == fragmented-status ]] ||
+    fail 'the deadline fixture must prove that it fragmented a status record'
+  [[ $(<"$status_fragment_deadline_log") == \
+    $'deadline-armed\ndeadline-expired' ]] ||
+    fail 'the fragmented status tail must not be read after the operation deadline'
+
+  rm -f -- "$status_fragment_log" "$kill_audit_log"
+  zmodload zsh/zselect || fail 'the secret-exec signal fixture requires zsh/zselect'
+  set +e
+  LD_PRELOAD="$status_fragment_library:$kill_audit_library" \
+    ZPTY_STATUS_FRAGMENT_AUDIT_LOG=$status_fragment_log \
+    ZPTY_STATUS_FRAGMENT_PAUSE=1 \
+    NEGATIVE_PGID_KILL_AUDIT_LOG=$kill_audit_log \
+    HOME=$fast_home XDG_CONFIG_HOME=$fast_home/.config \
+    PATH=$fast_target_bin:/usr/bin:/bin \
+    /usr/bin/setsid "$fast_local_bin/secret-exec" \
+      fast-provider -- check-fast-provider \
+      >"$test_dir/fragment-signal.out" \
+      2>"$test_dir/fragment-signal.err" &
+  fragmented_secret_exec_pid=$!
+  test_process_fixture_track_pid $fragmented_secret_exec_pid
+  integer fragment_marker_polls=100
+  while (( fragment_marker_polls-- > 0 )) && [[ ! -s $status_fragment_log ]]; do
+    zselect -t 1 2>/dev/null || true
+  done
+  if [[ ! -s $status_fragment_log ]]; then
+    kill -KILL -- -$fragmented_secret_exec_pid 2>/dev/null || true
+    wait $fragmented_secret_exec_pid 2>/dev/null || true
+    test_process_fixture_untrack_pid $fragmented_secret_exec_pid
+    set -e
+    fail 'secret-exec must reach the fragmented post-exit status window'
+  fi
+  kill -TERM -- -$fragmented_secret_exec_pid 2>/dev/null || true
+  wait $fragmented_secret_exec_pid
+  fragmented_signal_status=$?
+  test_process_fixture_untrack_pid $fragmented_secret_exec_pid
+  set -e
+  (( fragmented_signal_status == 143 )) ||
+    fail 'TERM during secret-exec status parsing must retain status 143'
+  [[ $(<"$status_fragment_log") == fragmented-status ]] ||
+    fail 'the secret-exec signal fixture must prove that it fragmented a record'
+  [[ ! -s $kill_audit_log ]] ||
+    fail 'secret-exec status parsing must not signal an absent process group'
+fi
+
 integer fast_provider_run
 for (( fast_provider_run = 1; fast_provider_run <= 32; ++fast_provider_run )); do
   HOME=$fast_home XDG_CONFIG_HOME=$fast_home/.config \

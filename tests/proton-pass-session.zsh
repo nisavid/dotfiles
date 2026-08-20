@@ -26,12 +26,19 @@ trap 'exit 143' TERM
 test_process_fixture_run_signal_probe_mode
 kill_audit_library=
 kill_audit_log=$test_dir/negative-pgid-kill-audit.log
+status_fragment_library=
+status_fragment_log=$test_dir/zpty-status-fragment.log
+identity_loss_log=$test_dir/zpty-identity-loss.log
 if [[ $OSTYPE == linux* ]]; then
   [[ -x /usr/bin/cc ]] || fail 'the Linux cleanup-identity test requires /usr/bin/cc'
   kill_audit_library=$test_dir/negative-pgid-kill-audit.so
   /usr/bin/cc -shared -fPIC -O2 -Wall -Wextra -Werror \
     -o "$kill_audit_library" \
     "$repo_root/tests/fixtures/negative-pgid-kill-audit.c" -ldl
+  status_fragment_library=$test_dir/zpty-status-fragment.so
+  /usr/bin/cc -shared -fPIC -O2 -Wall -Wextra -Werror \
+    -o "$status_fragment_library" \
+    "$repo_root/tests/fixtures/zpty-status-fragment.c" -ldl
 fi
 
 test_process_fixture_assert_signal_cleanup \
@@ -66,6 +73,117 @@ fast_backend_state=$test_dir/fast-backend-state
 mkdir -p -- "$fast_backend_home/.local/bin" "$fast_backend_state"
 cp -- "$fast_exit" "$fast_backend_home/.local/bin/pass-cli"
 chmod 700 "$fast_backend_home/.local/bin/pass-cli"
+if [[ -n $status_fragment_library ]]; then
+  typeset identity_loss_output identity_listing identity_controller
+  integer identity_loss_status
+  identity_loss_gate=$test_dir/zpty-initial-identity-loss.gate
+  identity_loss_output_file=$test_dir/zpty-initial-identity-loss.out
+  rm -f -- "$identity_loss_log" "$identity_loss_gate" "$identity_loss_output_file" "$kill_audit_log"
+  /usr/bin/env \
+    LD_PRELOAD="$status_fragment_library:$kill_audit_library" \
+    ZPTY_IDENTITY_LOSS_AUDIT_LOG=$identity_loss_log \
+    ZPTY_INITIAL_IDENTITY_LOSS_GATE=$identity_loss_gate \
+    NEGATIVE_PGID_KILL_AUDIT_LOG=$kill_audit_log \
+    HOME=$fast_backend_home XDG_STATE_HOME=$fast_backend_state \
+    ZPTY_INITIAL_IDENTITY_LOSS=1 \
+    "$ensure_ready" >"$identity_loss_output_file" 2>&1 &
+  identity_wrapper_pid=$!
+  test_process_fixture_track_pid $identity_wrapper_pid
+  integer identity_marker_polls=100
+  while (( identity_marker_polls-- > 0 )) && [[ ! -s $identity_loss_log ]]; do
+    zselect -t 1 2>/dev/null || true
+  done
+  [[ -s $identity_loss_log ]] || fail 'initial readiness identity fixture must publish its controller'
+  identity_loss_record=$(<"$identity_loss_log")
+  typeset -a identity_lines=( "${(@f)identity_loss_record}" )
+  identity_controller=${identity_lines[1]#controller:}
+  [[ $identity_controller == <-> && $identity_controller -gt 1 ]] ||
+    fail 'initial readiness identity fixture must publish a numeric controller'
+  identity_listing=$(/bin/ps -o pid=,ppid=,pgid=,sid= -p $identity_controller)
+  typeset -a identity_fields=( ${=identity_listing} )
+  (( ${#identity_fields} == 4 && identity_fields[1] == identity_controller &&
+    identity_fields[2] == identity_wrapper_pid && identity_fields[3] == identity_controller &&
+    identity_fields[4] == identity_controller )) ||
+    fail 'initial readiness controller must be the wrapper child and its session leader'
+  kill -KILL -- -$identity_controller
+  : >"$identity_loss_gate"
+  set +e
+  wait $identity_wrapper_pid
+  identity_loss_status=$?
+  set -e
+  test_process_fixture_untrack_pid $identity_wrapper_pid
+  ! kill -0 -- -$identity_controller 2>/dev/null || fail 'initial readiness controller group must become absent'
+  identity_loss_output=$(<"$identity_loss_output_file")
+  (( identity_loss_status == 1 )) || fail 'initial identity loss must fail readiness closed'
+  [[ $identity_loss_output == 'proton-pass-ensure-ready: cannot identify bounded credential process group' ]] ||
+    fail 'initial identity loss must preserve its fixed readiness diagnostic'
+  [[ $(<"$identity_loss_log") == $'controller:'$identity_controller$'\ninitial-identity-loss' ]] ||
+    fail 'initial readiness identity fixture must prove pre-publication controller loss'
+  [[ ! -s $kill_audit_log ]] || fail 'initial readiness identity loss must not signal an absent process group'
+
+  rm -f -- "$identity_loss_log" "$kill_audit_log"
+  set +e
+  identity_loss_output=$(/usr/bin/env LD_PRELOAD="$status_fragment_library:$kill_audit_library" \
+    ZPTY_IDENTITY_LOSS_AUDIT_LOG=$identity_loss_log NEGATIVE_PGID_KILL_AUDIT_LOG=$kill_audit_log \
+    HOME=$fast_backend_home XDG_STATE_HOME=$fast_backend_state ZPTY_POST_ACTIVE_IDENTITY_LOSS=1 \
+    "$ensure_ready" 2>&1)
+  identity_loss_status=$?
+  set -e
+  (( identity_loss_status == 1 )) || fail 'post-active identity loss must fail readiness closed'
+  [[ $identity_loss_output == 'proton-pass-ensure-ready: bounded credential child became unmanageable' ]] ||
+    fail 'post-active identity loss must produce one fixed readiness diagnostic'
+  [[ $(<"$identity_loss_log") == post-active-identity-loss ]] || fail 'post-active identity fixture must prove controller loss'
+  [[ ! -s $kill_audit_log ]] || fail 'post-active readiness identity loss must not signal an absent process group'
+
+  rm -f -- "$status_fragment_log"
+  set +e
+  LD_PRELOAD=$status_fragment_library \
+    ZPTY_STATUS_FRAGMENT_AUDIT_LOG=$status_fragment_log \
+    HOME=$fast_backend_home XDG_STATE_HOME=$fast_backend_state \
+    "$ensure_ready" >/dev/null 2>"$test_dir/fragmented-ready.err"
+  fragmented_ready_status=$?
+  set -e
+  (( fragmented_ready_status == 0 )) ||
+    fail "readiness must accept a fragmented successful child-status record: status=$fragmented_ready_status error=$(<"$test_dir/fragmented-ready.err")"
+  [[ $(<"$status_fragment_log") == fragmented-status ]] ||
+    fail 'the PTY status-read fixture must prove that it fragmented a record'
+
+  rm -f -- "$status_fragment_log" "$kill_audit_log"
+  zmodload zsh/zselect || fail 'the signal fixture requires zsh/zselect'
+  set +e
+  LD_PRELOAD="$status_fragment_library:$kill_audit_library" \
+    ZPTY_STATUS_FRAGMENT_AUDIT_LOG=$status_fragment_log \
+    ZPTY_STATUS_FRAGMENT_PAUSE=1 \
+    NEGATIVE_PGID_KILL_AUDIT_LOG=$kill_audit_log \
+    HOME=$fast_backend_home XDG_STATE_HOME=$fast_backend_state \
+    "$ensure_ready" >"$test_dir/fragment-signal.out" \
+      2>"$test_dir/fragment-signal.err" &
+  fragmented_readiness_pid=$!
+  test_process_fixture_track_pid $fragmented_readiness_pid
+  integer fragment_marker_polls=100
+  while (( fragment_marker_polls-- > 0 )) && [[ ! -s $status_fragment_log ]]; do
+    zselect -t 1 2>/dev/null || true
+  done
+  if [[ ! -s $status_fragment_log ]]; then
+    kill -KILL $fragmented_readiness_pid 2>/dev/null || true
+    wait $fragmented_readiness_pid 2>/dev/null || true
+    test_process_fixture_untrack_pid $fragmented_readiness_pid
+    set -e
+    fail 'readiness must reach the fragmented post-exit status window'
+  fi
+  kill -TERM $fragmented_readiness_pid 2>/dev/null || true
+  wait $fragmented_readiness_pid
+  fragmented_signal_status=$?
+  test_process_fixture_untrack_pid $fragmented_readiness_pid
+  set -e
+  (( fragmented_signal_status == 143 )) ||
+    fail 'TERM during fragmented post-exit status parsing must retain status 143'
+  [[ $(<"$status_fragment_log") == fragmented-status ]] ||
+    fail 'the signal fixture must prove that it reached a fragmented status record'
+  [[ ! -s $kill_audit_log ]] ||
+    fail 'post-exit status parsing must not signal an absent process group'
+fi
+
 integer fast_backend_run
 for (( fast_backend_run = 1; fast_backend_run <= 32; ++fast_backend_run )); do
   HOME=$fast_backend_home XDG_STATE_HOME=$fast_backend_state \

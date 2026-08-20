@@ -123,6 +123,9 @@ done
 
 negative_pgid_audit_library=
 positive_pid_audit_log=$test_dir/positive-pid-kill-audit.log
+status_fragment_library=
+status_fragment_log=$test_dir/zpty-status-fragment.log
+identity_loss_log=$test_dir/zpty-identity-loss.log
 if [[ $OSTYPE == linux* ]]; then
   [[ -x /usr/bin/cc ]] ||
     fail 'Linux requires /usr/bin/cc for process-group identity tracing'
@@ -132,6 +135,10 @@ if [[ $OSTYPE == linux* ]]; then
   negative_pgid_audit_library=$test_dir/negative-pgid-kill-audit.so
   /usr/bin/cc -shared -fPIC -O2 -Wall -Wextra -Werror \
     -o "$negative_pgid_audit_library" "$negative_pgid_audit_source" -ldl
+  status_fragment_library=$test_dir/zpty-status-fragment.so
+  /usr/bin/cc -shared -fPIC -O2 -Wall -Wextra -Werror \
+    -o "$status_fragment_library" \
+    "$repo_root/tests/fixtures/zpty-status-fragment.c" -ldl
   negative_pgid_audit_log=$test_dir/negative-pgid-kill-audit.log
   : >"$negative_pgid_audit_log"
   NEGATIVE_PGID_KILL_AUDIT_LOG=$negative_pgid_audit_log \
@@ -154,6 +161,107 @@ if [[ $OSTYPE == linux* ]]; then
   [[ -s $positive_pid_audit_log ]] ||
     fail 'the positive-PID syscall audit must detect a reused identity signal'
   : >"$positive_pid_audit_log"
+
+  typeset identity_loss_output identity_listing identity_controller
+  integer identity_loss_status
+  identity_loss_gate=$test_dir/zpty-initial-identity-loss.gate
+  identity_loss_output_file=$test_dir/zpty-initial-identity-loss.out
+  rm -f -- "$identity_loss_log" "$identity_loss_gate" "$identity_loss_output_file" "$negative_pgid_audit_log"
+  /usr/bin/env LD_PRELOAD="$status_fragment_library:$negative_pgid_audit_library" \
+    ZPTY_IDENTITY_LOSS_AUDIT_LOG=$identity_loss_log \
+    ZPTY_INITIAL_IDENTITY_LOSS_GATE=$identity_loss_gate \
+    NEGATIVE_PGID_KILL_AUDIT_LOG=$negative_pgid_audit_log \
+    ZPTY_INITIAL_IDENTITY_LOSS=1 "$fast_child_bin/proton-pass-startup" \
+    >"$identity_loss_output_file" 2>&1 &
+  identity_wrapper_pid=$!
+  test_process_fixture_track_pid $identity_wrapper_pid
+  integer identity_marker_polls=100
+  while (( identity_marker_polls-- > 0 )) && [[ ! -s $identity_loss_log ]]; do
+    zselect -t 1 2>/dev/null || true
+  done
+  [[ -s $identity_loss_log ]] || fail 'initial startup identity fixture must publish its controller'
+  identity_loss_record=$(<"$identity_loss_log")
+  typeset -a identity_lines=( "${(@f)identity_loss_record}" )
+  identity_controller=${identity_lines[1]#controller:}
+  [[ $identity_controller == <-> && $identity_controller -gt 1 ]] || fail 'initial startup identity fixture must publish a numeric controller'
+  identity_listing=$(/bin/ps -o pid=,ppid=,pgid=,sid= -p $identity_controller)
+  typeset -a identity_fields=( ${=identity_listing} )
+  (( ${#identity_fields} == 4 && identity_fields[1] == identity_controller &&
+    identity_fields[2] == identity_wrapper_pid && identity_fields[3] == identity_controller &&
+    identity_fields[4] == identity_controller )) || fail 'initial startup controller must be the wrapper child and its session leader'
+  kill -KILL -- -$identity_controller
+  : >"$identity_loss_gate"
+  set +e
+  wait $identity_wrapper_pid
+  identity_loss_status=$?
+  set -e
+  test_process_fixture_untrack_pid $identity_wrapper_pid
+  ! kill -0 -- -$identity_controller 2>/dev/null || fail 'initial startup controller group must become absent'
+  identity_loss_output=$(<"$identity_loss_output_file")
+  (( identity_loss_status == 1 )) || fail 'initial identity loss must fail startup closed'
+  [[ $identity_loss_output == 'proton-pass-startup: cannot identify bounded startup process group' ]] || fail 'initial identity loss must preserve its fixed startup diagnostic'
+  [[ $(<"$identity_loss_log") == $'controller:'$identity_controller$'\ninitial-identity-loss' ]] || fail 'initial startup identity fixture must prove pre-publication controller loss'
+  [[ ! -s $negative_pgid_audit_log ]] || fail 'initial startup identity loss must not signal an absent process group'
+
+  rm -f -- "$identity_loss_log" "$negative_pgid_audit_log"
+  set +e
+  identity_loss_output=$(/usr/bin/env LD_PRELOAD="$status_fragment_library:$negative_pgid_audit_library" \
+    ZPTY_IDENTITY_LOSS_AUDIT_LOG=$identity_loss_log NEGATIVE_PGID_KILL_AUDIT_LOG=$negative_pgid_audit_log \
+    ZPTY_POST_ACTIVE_IDENTITY_LOSS=1 "$fast_child_bin/proton-pass-startup" 2>&1)
+  identity_loss_status=$?
+  set -e
+  (( identity_loss_status == 1 )) || fail 'post-active identity loss must fail startup closed'
+  [[ $identity_loss_output == 'proton-pass-startup: bounded startup child became unmanageable' ]] || fail 'post-active identity loss must produce one fixed startup diagnostic'
+  [[ $(<"$identity_loss_log") == post-active-identity-loss ]] || fail 'post-active startup identity fixture must prove controller loss'
+  [[ ! -s $negative_pgid_audit_log ]] || fail 'post-active startup identity loss must not signal an absent process group'
+
+  rm -f -- "$status_fragment_log" "$negative_pgid_audit_log"
+  set +e
+  LD_PRELOAD=$status_fragment_library \
+    ZPTY_STATUS_FRAGMENT_AUDIT_LOG=$status_fragment_log \
+    "$fast_child_bin/proton-pass-startup" \
+      >/dev/null 2>"$test_dir/fragmented-startup.err"
+  fragmented_startup_status=$?
+  set -e
+  (( fragmented_startup_status == 0 )) ||
+    fail "startup must accept a fragmented successful child-status record: status=$fragmented_startup_status error=$(<"$test_dir/fragmented-startup.err")"
+  [[ $(<"$status_fragment_log") == fragmented-status ]] ||
+    fail 'the startup PTY fixture must prove that it fragmented a record'
+
+  rm -f -- "$status_fragment_log" "$negative_pgid_audit_log"
+  zmodload zsh/zselect || fail 'the startup signal fixture requires zsh/zselect'
+  set +e
+  LD_PRELOAD="$status_fragment_library:$negative_pgid_audit_library" \
+    ZPTY_STATUS_FRAGMENT_AUDIT_LOG=$status_fragment_log \
+    ZPTY_STATUS_FRAGMENT_PAUSE=1 \
+    NEGATIVE_PGID_KILL_AUDIT_LOG=$negative_pgid_audit_log \
+    "$fast_child_bin/proton-pass-startup" \
+      >"$test_dir/fragment-signal.out" \
+      2>"$test_dir/fragment-signal.err" &
+  fragmented_startup_pid=$!
+  test_process_fixture_track_pid $fragmented_startup_pid
+  integer fragment_marker_polls=100
+  while (( fragment_marker_polls-- > 0 )) && [[ ! -s $status_fragment_log ]]; do
+    zselect -t 1 2>/dev/null || true
+  done
+  if [[ ! -s $status_fragment_log ]]; then
+    kill -KILL $fragmented_startup_pid 2>/dev/null || true
+    wait $fragmented_startup_pid 2>/dev/null || true
+    test_process_fixture_untrack_pid $fragmented_startup_pid
+    set -e
+    fail 'startup must reach the fragmented post-exit status window'
+  fi
+  kill -TERM $fragmented_startup_pid 2>/dev/null || true
+  wait $fragmented_startup_pid
+  fragmented_signal_status=$?
+  test_process_fixture_untrack_pid $fragmented_startup_pid
+  set -e
+  (( fragmented_signal_status == 143 )) ||
+    fail 'TERM during startup status parsing must retain status 143'
+  [[ $(<"$status_fragment_log") == fragmented-status ]] ||
+    fail 'the startup signal fixture must prove that it fragmented a record'
+  [[ ! -s $negative_pgid_audit_log ]] ||
+    fail 'startup status parsing must not signal an absent process group'
 fi
 
 run_pid_list_consumption_probe() {
