@@ -418,7 +418,7 @@ case $1 in
     [[ -z ${PROVIDER_PID_FILE:-} ]] || print -r -- $$ > "$PROVIDER_PID_FILE"
     [[ -z ${PROVIDER_START_MARKER:-} ]] ||
       print -r -- provider-started >> "$PROVIDER_START_MARKER"
-    [[ -z ${PROVIDER_COMPLETION_DELAY:-} ]] || /usr/bin/sleep 0.2
+    [[ -z ${PROVIDER_COMPLETION_DELAY:-} ]] || /bin/sleep 0.2
     if [[ -e $FAKE_PASS_LOGIN_DESCENDANT ]]; then
       spawn_resistant_descendant
       : > "$FAKE_PASS_LOCAL_SESSION"
@@ -426,7 +426,7 @@ case $1 in
       exit 0
     fi
     [[ ! -e $FAKE_PASS_LOGIN_HANG ]] || hang_forever
-    [[ ! -e $FAKE_PASS_LOGIN_DELAY ]] || /usr/bin/sleep 0.2
+    [[ ! -e $FAKE_PASS_LOGIN_DELAY ]] || /bin/sleep 0.2
     [[ ! -e $FAKE_PASS_LOGIN_EXIT_124 ]] || exit 124
     [[ ! -e $FAKE_PASS_LOGIN_FAIL ]] || exit 71
     : > "$FAKE_PASS_LOCAL_SESSION"
