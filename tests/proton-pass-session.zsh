@@ -889,6 +889,23 @@ grep -Fqx 'reason=lock-timeout' "$status_file" ||
 
 rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION"
 : > "$FAKE_PASS_LOG"
+chmod 0644 "$lock_file"
+set +e
+unsafe_mode_output=$(zsh "$ensure_ready" 2>&1)
+unsafe_mode_status=$?
+set -e
+(( unsafe_mode_status != 0 )) ||
+  fail 'a broadly readable readiness lock must fail readiness'
+[[ $unsafe_mode_output ==
+  'proton-pass-ensure-ready: readiness lock must have mode 0600' ]] ||
+  fail 'an unsafe readiness-lock mode must report one value-free error'
+grep -Fqx 'reason=unsafe-lock' "$status_file" ||
+  fail 'an unsafe readiness-lock mode must record its value-free reason'
+! rg -q '^login$' "$FAKE_PASS_LOG" ||
+  fail 'an unsafe readiness-lock mode must not attempt provider login'
+
+rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION"
+: > "$FAKE_PASS_LOG"
 lock_trap=$test_dir/lock-trap
 print -r -- 'unchanged' > "$lock_trap"
 rm -f -- "$lock_file"
