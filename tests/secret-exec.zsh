@@ -772,7 +772,44 @@ done
 rm -f -- "$FAKE_PASS_SESSION"
 : > "$FAKE_PASS_SESSION_LOG"
 : > "$FAKE_SECRET_TOOL_LOG"
+status_file=$XDG_STATE_HOME/secret-exec/proton-pass-readiness.status
+set +e
 output=$(zsh "$launcher" context7 -- check-context 'argument with spaces')
+lazy_repair_status=$?
+set -e
+if (( lazy_repair_status != 0 )); then
+  repair_stage=lock
+  repair_reason=unrecorded
+  if [[ -s $FAKE_SECRET_TOOL_LOG &&
+    $(<"$FAKE_SECRET_TOOL_LOG") == proton-bootstrap ]]; then
+    repair_stage=native-store
+  fi
+  if [[ -s $FAKE_PASS_DIAGNOSTIC_LOG ]]; then
+    case $(<"$FAKE_PASS_DIAGNOSTIC_LOG") in
+      login:*) repair_stage=login ;;
+      info:ready) repair_stage=verify ;;
+    esac
+  fi
+  if [[ -r $status_file ]]; then
+    while IFS= read -r readiness_status_line || [[ -n $readiness_status_line ]]; do
+      case $readiness_status_line in
+        reason=unsafe-lock|reason=lock-timeout|reason=native-store-timeout|\
+        reason=native-store-unavailable|reason=invalid-bootstrap-value|\
+        reason=login-timeout|reason=login-failed|reason=verify-timeout|\
+        reason=verify-failed)
+          repair_reason=${readiness_status_line#reason=}
+          ;;
+      esac
+    done < "$status_file"
+  fi
+  case $repair_reason in
+    unsafe-lock|lock-timeout) repair_stage=lock ;;
+    native-store-*|invalid-bootstrap-value) repair_stage=native-store ;;
+    login-*) repair_stage=login ;;
+    verify-*) repair_stage=verify ;;
+  esac
+  fail "lazy provider repair failed: status=$lazy_repair_status stage=$repair_stage reason=$repair_reason"
+fi
 [[ $output == target-ok ]] ||
   fail 'the first pass-backed consumer after session loss must recover and run'
 [[ $(rg -c '^login$' "$FAKE_PASS_SESSION_LOG") == 1 ]] ||
@@ -794,7 +831,6 @@ set -e
 [[ $locked_output ==
   'secret-exec: the Proton Pass provider session is unavailable; unlock the native credential store and retry' ]] ||
   fail 'a locked native store must produce one fixed actionable consumer error'
-status_file=$XDG_STATE_HOME/secret-exec/proton-pass-readiness.status
 grep -Fqx 'state=unavailable' "$status_file" ||
   fail 'a locked native store must leave value-free unavailable status'
 grep -Fqx 'reason=native-store-unavailable' "$status_file" ||
