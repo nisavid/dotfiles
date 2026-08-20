@@ -176,11 +176,25 @@ gui_source_inventory=$(
 )
 expected_gui_source_inventory=$(
   printf '%s\n' \
+    'private_Library/private_LaunchAgents/io.nisavid.secret-exec-provider-ready.plist.tmpl' \
     'private_Library/private_LaunchAgents/io.nisavid.zsh-gui-path.plist.tmpl' \
     'private_dot_local/libexec/nisavid/executable_zsh-gui-path.tmpl'
 )
 [[ $gui_source_inventory == $expected_gui_source_inventory ]] ||
   fail 'Darwin-only GUI source inventory changed without updating the Linux gate'
+
+provider_linux_source_inventory=$(
+  find "$repo_root/home/dot_config/systemd" -type f -print |
+    sed "s#^$repo_root/home/##" |
+    LC_ALL=C sort
+)
+expected_provider_linux_source_inventory=$(
+  printf '%s\n' \
+    'dot_config/systemd/user/plasma-workspace.target.wants/symlink_proton-pass-ensure-ready.service' \
+    'dot_config/systemd/user/proton-pass-ensure-ready.service'
+)
+[[ $provider_linux_source_inventory == $expected_provider_linux_source_inventory ]] ||
+  fail 'Linux provider-readiness source inventory changed without updating the non-Linux gate'
 
 fixture_source=$test_root/source
 fixture_home=$test_root/home

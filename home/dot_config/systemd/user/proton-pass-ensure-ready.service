@@ -1,0 +1,16 @@
+[Unit]
+Description=Ensure the Proton Pass provider session is ready
+Requisite=plasma-workspace.target graphical-session.target
+PartOf=plasma-workspace.target graphical-session.target
+After=plasma-workspace.target graphical-session.target plasma-kwallet-pam.service
+Before=xdg-desktop-autostart.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/proton-pass-startup
+TimeoutStartSec=70s
+UMask=0077
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=plasma-workspace.target
