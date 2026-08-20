@@ -98,7 +98,7 @@ done
 fixture_bin=$test_dir/bin
 mkdir -p -- "$fixture_bin"
 cp -- "$startup_source" "$fixture_bin/proton-pass-startup"
-chmod +x -- "$fixture_bin/proton-pass-startup"
+chmod -- +x "$fixture_bin/proton-pass-startup"
 
 fast_exit=
 for fast_exit_candidate in /usr/bin/true /bin/true; do
@@ -120,7 +120,7 @@ set -euo pipefail
 [[ -z ${PROVIDER_COMPLETION_MARKER:-} ]] ||
   print -r -- provider-completed >>"$PROVIDER_COMPLETION_MARKER"
 EOF
-chmod +x -- \
+chmod -- +x \
   "$fast_child_bin/proton-pass-startup" \
   "$fast_child_bin/proton-pass-ensure-ready"
 integer fast_child_run
@@ -518,7 +518,7 @@ case $FAKE_STARTUP_SCENARIO in
     ;;
 esac
 EOF
-chmod +x -- "$fixture_bin/proton-pass-ensure-ready"
+chmod -- +x "$fixture_bin/proton-pass-ensure-ready"
 
 hostile_bin=$test_dir/hostile-bin
 hostile_zdotdir=$test_dir/hostile-zdotdir
@@ -535,7 +535,7 @@ set -eu
 : >"$FAKE_STARTUP_PATH_SLEEP_REACHED"
 exit 0
 EOF
-chmod +x -- "$hostile_bin/zsh" "$hostile_bin/sleep"
+chmod -- +x "$hostile_bin/zsh" "$hostile_bin/sleep"
 cat >"$hostile_zdotdir/.zshenv" <<'EOF'
 : >"$FAKE_STARTUP_ZDOTDIR_REACHED"
 EOF
