@@ -410,7 +410,7 @@ case $1 in
   login)
     (( $# == 1 )) || exit 65
     [[ ${${(P)bootstrap_field}:-} == $fixture_token ]] || exit 66
-    if [[ ${FAKE_UNAME_SYSTEM:-Linux} == Darwin ]]; then
+    if [[ $OSTYPE == darwin* ]]; then
       [[ -z ${PROTON_PASS_LINUX_KEYRING:-} ]] || exit 67
     else
       [[ ${PROTON_PASS_LINUX_KEYRING:-} == dbus ]] || exit 67
