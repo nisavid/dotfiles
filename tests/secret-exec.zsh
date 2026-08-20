@@ -812,7 +812,7 @@ if (( lazy_repair_status != 0 )); then
 fi
 [[ $output == target-ok ]] ||
   fail 'the first pass-backed consumer after session loss must recover and run'
-[[ $(rg -c '^login$' "$FAKE_PASS_SESSION_LOG") == 1 ]] ||
+[[ $(grep -Fxc login "$FAKE_PASS_SESSION_LOG") == 1 ]] ||
   fail 'lazy consumer recovery must perform one argument-free login'
 grep -Fqx 'proton-bootstrap' "$FAKE_SECRET_TOOL_LOG" ||
   fail 'lazy recovery must use the fixed native bootstrap item'
@@ -857,9 +857,9 @@ for consumer_pid in $consumer_pids; do
   fi
 done
 rm -f -- "$FAKE_PASS_LOGIN_DELAY"
-[[ $(rg -c '^login$' "$FAKE_PASS_SESSION_LOG") == 1 ]] ||
+[[ $(grep -Fxc login "$FAKE_PASS_SESSION_LOG") == 1 ]] ||
   fail 'concurrent pass-backed consumers must perform one serialized repair login'
-! rg -F 'account-metadata-canary' "$test_dir"/*.out "$test_dir"/*.err >/dev/null ||
+! grep -F 'account-metadata-canary' "$test_dir"/*.out "$test_dir"/*.err >/dev/null ||
   fail 'consumer recovery must suppress provider account metadata'
 
 cat > "$profile_dir/member-local.env" <<'EOF'
