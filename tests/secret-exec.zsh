@@ -840,12 +840,14 @@ rm -f -- "$FAKE_NATIVE_STORE_LOCKED"
 : > "$FAKE_PASS_SESSION_LOG"
 : > "$FAKE_PASS_LOGIN_DELAY"
 typeset -a consumer_pids
+typeset -A consumer_profiles
 for profile in context7 firecrawl github greptile aws; do
   zsh "$launcher" "$profile" -- check-selected "$profile" \
     >"$test_dir/concurrent-$profile.out" \
     2>"$test_dir/concurrent-$profile.err" &
   consumer_pid=$!
   consumer_pids+=($consumer_pid)
+  consumer_profiles[$consumer_pid]=$profile
   test_process_fixture_track_pid $consumer_pid
 done
 for consumer_pid in $consumer_pids; do
@@ -853,7 +855,43 @@ for consumer_pid in $consumer_pids; do
     test_process_fixture_untrack_pid $consumer_pid
   else
     test_process_fixture_untrack_pid $consumer_pid
-    fail 'concurrent pass-backed consumer launch failed'
+    concurrent_profile=${consumer_profiles[$consumer_pid]:-unknown}
+    case $concurrent_profile in
+      context7|firecrawl|github|greptile|aws) ;;
+      *) concurrent_profile=unknown ;;
+    esac
+    concurrent_error_file=$test_dir/concurrent-$concurrent_profile.err
+    concurrent_error_marker=empty
+    if [[ -s $concurrent_error_file ]]; then
+      concurrent_error_marker=unexpected
+      case $(<"$concurrent_error_file") in
+        'secret-exec: the Proton Pass provider session is unavailable; unlock the native credential store and retry')
+          concurrent_error_marker=provider-unavailable
+          ;;
+        'secret-exec: timed out resolving CONTEXT7_API_KEY'|\
+        'secret-exec: timed out resolving FIRECRAWL_API_KEY'|\
+        'secret-exec: timed out resolving GITHUB_PERSONAL_ACCESS_TOKEN'|\
+        'secret-exec: timed out resolving GREPTILE_API_KEY'|\
+        'secret-exec: timed out resolving AWS_ACCESS_KEY_ID'|\
+        'secret-exec: timed out resolving AWS_SECRET_ACCESS_KEY')
+          concurrent_error_marker=resolution-timeout
+          ;;
+      esac
+    fi
+    concurrent_readiness_reason=unrecorded
+    if [[ -r $status_file ]]; then
+      while IFS= read -r readiness_status_line || [[ -n $readiness_status_line ]]; do
+        case $readiness_status_line in
+          reason=unsafe-lock|reason=lock-timeout|reason=native-store-timeout|\
+          reason=native-store-unavailable|reason=invalid-bootstrap-value|\
+          reason=login-timeout|reason=login-failed|reason=verify-timeout|\
+          reason=verify-failed)
+            concurrent_readiness_reason=${readiness_status_line#reason=}
+            ;;
+        esac
+      done < "$status_file"
+    fi
+    fail "concurrent pass-backed consumer launch failed: profile=$concurrent_profile stderr=$concurrent_error_marker readiness=$concurrent_readiness_reason"
   fi
 done
 rm -f -- "$FAKE_PASS_LOGIN_DELAY"
