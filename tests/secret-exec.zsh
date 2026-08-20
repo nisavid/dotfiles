@@ -470,12 +470,20 @@ case $1 in
     ;;
   login)
     record_stage 'login:start'
-    (( $# == 1 )) || fail_stage login-argv 66
-    [[ ${${(P)bootstrap_field}:-} == $fixture_token ]] || fail_stage login-bootstrap 67
+    print -r -- started >> "$FAKE_PASS_LOGIN_OUTCOME_LOG"
+    if (( $# != 1 )); then
+      print -r -- argv-failed >> "$FAKE_PASS_LOGIN_OUTCOME_LOG"
+      fail_stage login-argv 66
+    fi
+    if [[ ${${(P)bootstrap_field}:-} != $fixture_token ]]; then
+      print -r -- bootstrap-failed >> "$FAKE_PASS_LOGIN_OUTCOME_LOG"
+      fail_stage login-bootstrap 67
+    fi
     print -r -- login >> "$FAKE_PASS_SESSION_LOG"
     [[ ! -e $FAKE_PASS_LOGIN_DELAY ]] || /usr/bin/sleep 0.2
     : > "$FAKE_PASS_SESSION"
     record_stage 'login:ready'
+    print -r -- completed >> "$FAKE_PASS_LOGIN_OUTCOME_LOG"
     ;;
   item)
     record_stage 'item:start'
@@ -635,6 +643,7 @@ export FAKE_PASS_LOG=$test_dir/pass-requests.log
 export FAKE_PASS_SESSION=$test_dir/provider-session
 export FAKE_PASS_SESSION_LOG=$test_dir/provider-session.log
 export FAKE_PASS_DIAGNOSTIC_LOG=$test_dir/provider-diagnostics.log
+export FAKE_PASS_LOGIN_OUTCOME_LOG=$test_dir/provider-login-outcomes.log
 export FAKE_PASS_LOGIN_DELAY=$test_dir/provider-login-delay
 export FAKE_SECRET_TOOL_LOG=$test_dir/secret-tool-requests.log
 export FAKE_NATIVE_STORE_LOCKED=$test_dir/native-store-locked
@@ -784,6 +793,7 @@ done
 
 rm -f -- "$FAKE_PASS_SESSION"
 : > "$FAKE_PASS_SESSION_LOG"
+: > "$FAKE_PASS_LOGIN_OUTCOME_LOG"
 : > "$FAKE_SECRET_TOOL_LOG"
 status_file=$XDG_STATE_HOME/secret-exec/proton-pass-readiness.status
 set +e
@@ -851,6 +861,7 @@ grep -Fqx 'reason=native-store-unavailable' "$status_file" ||
 rm -f -- "$FAKE_NATIVE_STORE_LOCKED"
 
 : > "$FAKE_PASS_SESSION_LOG"
+: > "$FAKE_PASS_LOGIN_OUTCOME_LOG"
 : > "$FAKE_PASS_LOGIN_DELAY"
 typeset -a consumer_pids
 typeset -A consumer_profiles
@@ -904,7 +915,17 @@ for consumer_pid in $consumer_pids; do
         esac
       done < "$status_file"
     fi
-    fail "concurrent pass-backed consumer launch failed: profile=$concurrent_profile stderr=$concurrent_error_marker readiness=$concurrent_readiness_reason"
+    concurrent_login_outcome=unrecorded
+    if [[ -s $FAKE_PASS_LOGIN_OUTCOME_LOG ]]; then
+      while IFS= read -r login_outcome || [[ -n $login_outcome ]]; do
+        case $login_outcome in
+          started|argv-failed|bootstrap-failed|completed)
+            concurrent_login_outcome=$login_outcome
+            ;;
+        esac
+      done < "$FAKE_PASS_LOGIN_OUTCOME_LOG"
+    fi
+    fail "concurrent pass-backed consumer launch failed: profile=$concurrent_profile stderr=$concurrent_error_marker readiness=$concurrent_readiness_reason login=$concurrent_login_outcome"
   fi
 done
 rm -f -- "$FAKE_PASS_LOGIN_DELAY"
