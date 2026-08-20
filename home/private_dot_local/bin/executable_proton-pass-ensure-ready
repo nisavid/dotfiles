@@ -361,7 +361,7 @@ prepare_state_directory() {
   zstat -H metadata -- "$state_dir" || die 'cannot inspect the state directory'
   (( metadata[uid] == EUID )) ||
     die 'state directory must be owned by the current user'
-  /bin/chmod 700 -- "$state_dir" || die 'cannot secure the state directory'
+  /bin/chmod -- 700 "$state_dir" || die 'cannot secure the state directory'
 }
 
 write_status() {
@@ -384,7 +384,7 @@ write_status() {
       /bin/rm -f -- "$temporary"
       die 'cannot write the readiness status'
     }
-  /bin/chmod 600 -- "$temporary" || {
+  /bin/chmod -- 600 "$temporary" || {
     /bin/rm -f -- "$temporary"
     die 'cannot secure the readiness status'
   }
@@ -468,7 +468,7 @@ main() {
     fail_readiness unsafe-lock 'readiness lock changed while opening'
   (( opened_lock[uid] == EUID )) ||
     fail_readiness unsafe-lock 'readiness lock must be owned by the current user'
-  /bin/chmod 600 -- "/dev/fd/$lock_create_fd" ||
+  /bin/chmod -- 600 "/dev/fd/$lock_create_fd" ||
     fail_readiness unsafe-lock 'cannot secure the readiness lock'
   exec {lock_create_fd}>&-
 
