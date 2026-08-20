@@ -18,6 +18,8 @@ readonly PROTON_PASS_SCRIPT_DIR=${0:A:h}
 typeset -g PROTON_PASS_ACTIVE_CHILD_NAME=
 typeset -gi PROTON_PASS_ACTIVE_CHILD_PGID=0
 typeset -gi PROTON_PASS_CHILD_SEQUENCE=0
+unset PROTON_PASS_LAST_WAITER_STAGE 2>/dev/null || true
+typeset -g PROTON_PASS_LAST_WAITER_STAGE=unrecorded
 integer PROTON_PASS_ESCAPE_DIAGNOSTIC_FD
 exec {PROTON_PASS_ESCAPE_DIAGNOSTIC_FD}>&2 || exit 1
 
@@ -237,6 +239,7 @@ IFS= read -r child_finish || kill -KILL 0'
 wait_bounded_child() {
   emulate -L zsh
 
+  typeset -g PROTON_PASS_LAST_WAITER_STAGE=unrecorded
   local timeout_seconds=$1
   local child_name=$PROTON_PASS_ACTIVE_CHILD_NAME
   integer child_pgid=$PROTON_PASS_ACTIVE_CHILD_PGID
@@ -252,6 +255,7 @@ wait_bounded_child() {
     if zpty -r -t "$child_name" status_chunk 2>/dev/null &&
       [[ -n $status_chunk ]]; then
       if (( ${#status_record} + ${#status_chunk} > status_max_length )); then
+        typeset -g PROTON_PASS_LAST_WAITER_STAGE=record
         status_record=invalid
         break
       fi
@@ -259,8 +263,13 @@ wait_bounded_child() {
       continue
     fi
     if ! kill -0 -- -$child_pgid 2>/dev/null; then
-      if ! active_child_identity_matches "$child_name" $child_pgid ||
-        ! kill -0 -- -$child_pgid 2>/dev/null; then
+      if ! active_child_identity_matches "$child_name" $child_pgid; then
+        typeset -g PROTON_PASS_LAST_WAITER_STAGE=identity
+        status_record=invalid
+        break
+      fi
+      if ! kill -0 -- -$child_pgid 2>/dev/null; then
+        typeset -g PROTON_PASS_LAST_WAITER_STAGE=liveness-retry
         status_record=invalid
         break
       fi
@@ -273,19 +282,25 @@ wait_bounded_child() {
   done
   [[ $status_record == status:<->$'\r\n' ||
     $status_record == status:<->$'\n' ]] || {
+      [[ $PROTON_PASS_LAST_WAITER_STAGE != unrecorded ]] ||
+        typeset -g PROTON_PASS_LAST_WAITER_STAGE=record
       terminate_active_child
       return 125
     }
   status_record=${status_record%$'\n'}
   status_record=${status_record%$'\r'}
   [[ $status_record == status:<-> ]] || {
-    terminate_active_child
-    return 125
-  }
+      typeset -g PROTON_PASS_LAST_WAITER_STAGE=record
+      terminate_active_child
+      return 125
+    }
   integer child_status=${status_record#status:}
+  (( child_status == 0 )) ||
+    typeset -g PROTON_PASS_LAST_WAITER_STAGE=child-status
   if ! active_child_identity_matches "$child_name" $child_pgid ||
     ! kill -0 -- -$child_pgid 2>/dev/null ||
     ! zpty -d "$child_name" 2>/dev/null; then
+    typeset -g PROTON_PASS_LAST_WAITER_STAGE=retirement
     typeset -g PROTON_PASS_ACTIVE_CHILD_NAME=
     typeset -gi PROTON_PASS_ACTIVE_CHILD_PGID=0
     escape_unmanageable_child 'bounded credential child became unmanageable'
@@ -296,7 +311,10 @@ wait_bounded_child() {
   while (( finish_polls-- > 0 )) && kill -0 -- -$child_pgid 2>/dev/null; do
     zselect -t 1 2>/dev/null || true
   done
-  kill -0 -- -$child_pgid 2>/dev/null && return 125
+  if kill -0 -- -$child_pgid 2>/dev/null; then
+    typeset -g PROTON_PASS_LAST_WAITER_STAGE=retirement
+    return 125
+  fi
   return $child_status
 }
 
@@ -362,6 +380,11 @@ write_status() {
 
   local state=$1
   local reason=$2
+  local waiter_stage=$3
+  case $waiter_stage in
+    record|identity|liveness-retry|child-status|retirement|unrecorded) ;;
+    *) waiter_stage=unrecorded ;;
+  esac
   local state_dir=${XDG_STATE_HOME:-$HOME/.local/state}/secret-exec
   prepare_state_directory "$state_dir"
 
@@ -372,6 +395,7 @@ write_status() {
   print -rl -- \
     "state=$state" \
     "reason=$reason" \
+    "waiter-stage=$waiter_stage" \
     "updated_at=$EPOCHSECONDS" > "$temporary" || {
       /bin/rm -f -- "$temporary"
       die 'cannot write the readiness status'
@@ -391,7 +415,8 @@ fail_readiness() {
 
   local reason=$1
   local message=$2
-  write_status unavailable "$reason"
+  local waiter_stage=$3
+  write_status unavailable "$reason" "$waiter_stage"
   die "$message"
 }
 
@@ -427,75 +452,75 @@ main() {
     "$HOME/.local/bin/pass-cli" \
     /opt/homebrew/bin/pass-cli)
   if session_ready "$backend"; then
-    write_status ready existing-session
+    write_status ready existing-session unrecorded
     return 0
   fi
 
   local state_dir=${XDG_STATE_HOME:-$HOME/.local/state}/secret-exec
   prepare_state_directory "$state_dir"
   zmodload zsh/system ||
-    fail_readiness unsafe-lock 'zsh/system is required for readiness locking'
+    fail_readiness unsafe-lock 'zsh/system is required for readiness locking' unrecorded
   local lock_file=$state_dir/proton-pass-readiness.lock
   [[ ! -L $lock_file ]] ||
-    fail_readiness unsafe-lock 'readiness lock must not be a symbolic link'
+    fail_readiness unsafe-lock 'readiness lock must not be a symbolic link' unrecorded
   if [[ -e $lock_file ]]; then
     [[ -f $lock_file ]] ||
-      fail_readiness unsafe-lock 'readiness lock must be a regular file'
+      fail_readiness unsafe-lock 'readiness lock must be a regular file' unrecorded
     local -A existing_lock
     zstat -H existing_lock -- "$lock_file" ||
-      fail_readiness unsafe-lock 'cannot inspect the readiness lock'
+      fail_readiness unsafe-lock 'cannot inspect the readiness lock' unrecorded
     (( existing_lock[uid] == EUID )) ||
-      fail_readiness unsafe-lock 'readiness lock must be owned by the current user'
+      fail_readiness unsafe-lock 'readiness lock must be owned by the current user' unrecorded
   fi
   integer lock_create_fd
   exec {lock_create_fd}>>"$lock_file" ||
-    fail_readiness unsafe-lock 'cannot open the readiness lock'
+    fail_readiness unsafe-lock 'cannot open the readiness lock' unrecorded
   local -A opened_lock published_lock
   zstat -H opened_lock -f "$lock_create_fd" ||
-    fail_readiness unsafe-lock 'cannot inspect the opened readiness lock'
+    fail_readiness unsafe-lock 'cannot inspect the opened readiness lock' unrecorded
   zstat -H published_lock -- "$lock_file" ||
-    fail_readiness unsafe-lock 'cannot inspect the published readiness lock'
+    fail_readiness unsafe-lock 'cannot inspect the published readiness lock' unrecorded
   (( opened_lock[device] == published_lock[device] &&
     opened_lock[inode] == published_lock[inode] )) ||
-    fail_readiness unsafe-lock 'readiness lock changed while opening'
+    fail_readiness unsafe-lock 'readiness lock changed while opening' unrecorded
   (( opened_lock[uid] == EUID )) ||
-    fail_readiness unsafe-lock 'readiness lock must be owned by the current user'
+    fail_readiness unsafe-lock 'readiness lock must be owned by the current user' unrecorded
   (( (opened_lock[mode] & 8#7777) == 8#600 )) ||
-    fail_readiness unsafe-lock 'readiness lock must have mode 0600'
+    fail_readiness unsafe-lock 'readiness lock must have mode 0600' unrecorded
   exec {lock_create_fd}>&-
 
   integer lock_fd
   zsystem flock -t "$PROTON_PASS_LOCK_TIMEOUT_SECONDS" -i 0.05 \
     -f lock_fd "$lock_file" ||
-    fail_readiness lock-timeout 'timed out waiting for provider-session repair'
+    fail_readiness lock-timeout 'timed out waiting for provider-session repair' unrecorded
   [[ ! -L $lock_file ]] || {
     zsystem flock -u lock_fd
-    fail_readiness unsafe-lock 'readiness lock must not be a symbolic link'
+    fail_readiness unsafe-lock 'readiness lock must not be a symbolic link' unrecorded
   }
   zstat -H opened_lock -f "$lock_fd" || {
     zsystem flock -u lock_fd
-    fail_readiness unsafe-lock 'cannot inspect the locked readiness file'
+    fail_readiness unsafe-lock 'cannot inspect the locked readiness file' unrecorded
   }
   zstat -H published_lock -- "$lock_file" || {
     zsystem flock -u lock_fd
-    fail_readiness unsafe-lock 'cannot inspect the published readiness lock'
+    fail_readiness unsafe-lock 'cannot inspect the published readiness lock' unrecorded
   }
   (( opened_lock[device] == published_lock[device] &&
     opened_lock[inode] == published_lock[inode] )) || {
     zsystem flock -u lock_fd
-    fail_readiness unsafe-lock 'readiness lock changed while locking'
+    fail_readiness unsafe-lock 'readiness lock changed while locking' unrecorded
   }
   (( opened_lock[uid] == EUID )) || {
     zsystem flock -u lock_fd
-    fail_readiness unsafe-lock 'readiness lock must be owned by the current user'
+    fail_readiness unsafe-lock 'readiness lock must be owned by the current user' unrecorded
   }
   (( (opened_lock[mode] & 8#7777) == 8#600 )) || {
     zsystem flock -u lock_fd
-    fail_readiness unsafe-lock 'readiness lock must have mode 0600'
+    fail_readiness unsafe-lock 'readiness lock must have mode 0600' unrecorded
   }
 
   if session_ready "$backend"; then
-    write_status ready concurrent-repair
+    write_status ready concurrent-repair unrecorded
     return 0
   fi
 
@@ -511,36 +536,39 @@ main() {
     integer store_status=$?
     (( store_status == 124 )) &&
       fail_readiness native-store-timeout \
-        'the native bootstrap item lookup timed out'
+        'the native bootstrap item lookup timed out' unrecorded
     fail_readiness native-store-unavailable \
-      'the native bootstrap item is unavailable or locked'
+      'the native bootstrap item is unavailable or locked' unrecorded
   fi
   [[ -n $bootstrap_token && $bootstrap_token != *$'\n'* && $bootstrap_token != *$'\r'* ]] ||
     fail_readiness invalid-bootstrap-value \
-      'the native bootstrap item must contain one non-empty line'
+      'the native bootstrap item must contain one non-empty line' unrecorded
 
   local PROTON_PASS_CHILD_ENVIRONMENT_VALUE=$bootstrap_token
   unset bootstrap_token
   start_bounded_child "$PROTON_PASS_BOOTSTRAP_FIELD" \
     discard -- "$backend" login
   unset PROTON_PASS_CHILD_ENVIRONMENT_VALUE
-  if wait_bounded_child "$PROTON_PASS_LOGIN_TIMEOUT_SECONDS"; then
-    :
-  else
-    integer login_status=$?
-    (( login_status == 124 )) &&
-      fail_readiness login-timeout 'provider-session repair timed out'
-    fail_readiness login-failed 'provider-session repair failed'
+  integer login_status=0
+  wait_bounded_child "$PROTON_PASS_LOGIN_TIMEOUT_SECONDS" || login_status=$?
+  local login_waiter_stage=$PROTON_PASS_LAST_WAITER_STAGE
+  if (( login_status != 0 )); then
+    if (( login_status == 124 )) && [[ $login_waiter_stage != child-status ]]; then
+      fail_readiness login-timeout 'provider-session repair timed out' \
+        "$login_waiter_stage"
+    fi
+    fail_readiness login-failed 'provider-session repair failed' \
+      "$login_waiter_stage"
   fi
   if session_ready "$backend"; then
     :
   else
     integer verify_status=$?
     (( verify_status == 124 )) &&
-      fail_readiness verify-timeout 'repaired provider-session verification timed out'
-    fail_readiness verify-failed 'the repaired provider session did not verify'
+      fail_readiness verify-timeout 'repaired provider-session verification timed out' unrecorded
+    fail_readiness verify-failed 'the repaired provider session did not verify' unrecorded
   fi
-  write_status ready repaired
+  write_status ready repaired unrecorded
 }
 
 main "$@"
