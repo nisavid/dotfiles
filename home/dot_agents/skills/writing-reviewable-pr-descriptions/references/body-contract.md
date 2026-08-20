@@ -159,12 +159,13 @@ changes.
 ## Source Shape
 
 GitHub renders a pull request body as a comment field, not as a repository file:
-every source newline becomes a visible line break. Each paragraph, list item,
-table cell, and blockquote line is therefore one source line, however long it
-runs, and every intended break is an explicit `<br>`.
+a source newline in prose becomes a visible line break. Each paragraph, list
+item, table row, and blockquote line is therefore one source line, however long
+it runs, and every intended break is an explicit `<br>`.
 
-Fenced code, raw HTML blocks, and Mermaid keep their own line structure. A blank
-line separates block elements as usual.
+Fenced code, raw HTML blocks, and Mermaid keep their own line structure, because
+their newlines are not reader-visible breaks. A blank line separates block
+elements as usual.
 
 This file, the fixtures under `evals/`, and the diffs you read are repository
 files wrapped to the `.editorconfig` column budget. Their shape is correct for

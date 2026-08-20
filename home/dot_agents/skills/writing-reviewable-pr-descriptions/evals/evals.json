@@ -196,11 +196,6 @@
           "severity": "safety"
         },
         {
-          "id": "source-break-encoding",
-          "text": "Writes any intended line break inside a paragraph or list item as an explicit <br> rather than a bare newline or trailing spaces.",
-          "severity": "safety"
-        },
-        {
           "id": "precedence-behavior",
           "text": "States the new resolution order and that the project file no longer overrides an environment variable, without inventing precedence sources absent from the fixture.",
           "severity": "quality"

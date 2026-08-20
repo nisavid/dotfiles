@@ -20,11 +20,12 @@ and remaining work.
 `publishing-reviewable-prs` owns GitHub actuation. This skill owns the complete
 title and body supplied to it. Generated `--fill` text is never a substitute.
 
-GitHub renders a body as a comment field, where every source newline becomes a
-visible line break. Write each paragraph, list item, table cell, and blockquote
-line as one source line, however long it runs, and write an intended break as
-`<br>`. The `.editorconfig` column budget governs repository files, including
-this skill and the fixtures and diffs you read; a body is not one of them.
+GitHub renders a body as a comment field, where a source newline in prose
+becomes a visible line break. Write each paragraph, list item, table row, and
+blockquote line as one source line, however long it runs, and write an intended
+break as `<br>`. The `.editorconfig` column budget governs repository files,
+including this skill and the fixtures and diffs you read; a body is not one of
+them.
 
 ## Routing
 

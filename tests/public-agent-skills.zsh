@@ -199,7 +199,7 @@ test_pr_publication() {
   assert_contains "$atlas" 'credentials, signed links, or authentication material' 'Atlas publication must exclude credentials and authentication material'
   assert_contains "$atlas" 'published assets contain no credentials or unnecessary source content' 'Atlas validation must enforce publication safety'
 
-  assert_contains "$writer" 'every source newline becomes a' 'PR writer must state that a comment field renders every newline'
+  assert_contains "$writer" 'a source newline in prose' 'PR writer must state that a comment field renders a prose newline as a break'
   assert_contains "$writer" 'one source line, however long it runs' 'PR writer must require one source line per block element'
   assert_contains "$writer" '.editorconfig' 'PR writer must name the repository column budget it must not follow'
   assert_contains "${writer:h}/references/body-contract.md" 'every intended break is an explicit `<br>`' 'PR body contract must require explicit break encoding'
