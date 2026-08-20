@@ -189,32 +189,49 @@ fixture_token+='fixture-token'
 fixture_token+='::fixture-key'
 bootstrap_field=PROTON_PASS_PERSONAL_ACCESS
 bootstrap_field+=_TOKEN
+record_stage() {
+  print -r -- "$1" > "$FAKE_PASS_DIAGNOSTIC_LOG"
+}
+fail_stage() {
+  record_stage "${1}:exit=${2}"
+  exit "$2"
+}
 case $1 in
   info)
-    (( $# == 1 )) || exit 64
-    [[ ${PROTON_PASS_NO_UPDATE_CHECK:-} == 1 ]] || exit 65
-    [[ -z ${${(P)bootstrap_field}:-} ]] || exit 72
+    record_stage 'info:start'
+    (( $# == 1 )) || fail_stage info-argv 64
+    [[ ${PROTON_PASS_NO_UPDATE_CHECK:-} == 1 ]] || fail_stage info-update-check 65
+    [[ -z ${${(P)bootstrap_field}:-} ]] || fail_stage info-bootstrap-scrub 72
     print -r -- info >> "$FAKE_PASS_SESSION_LOG"
     print -r -- 'account-metadata-canary'
-    [[ -e $FAKE_PASS_SESSION ]]
+    if [[ -e $FAKE_PASS_SESSION ]]; then
+      record_stage 'info:ready'
+    else
+      fail_stage info-session 1
+    fi
     ;;
   login)
-    (( $# == 1 )) || exit 66
-    [[ ${${(P)bootstrap_field}:-} == $fixture_token ]] || exit 67
+    record_stage 'login:start'
+    (( $# == 1 )) || fail_stage login-argv 66
+    [[ ${${(P)bootstrap_field}:-} == $fixture_token ]] || fail_stage login-bootstrap 67
     print -r -- login >> "$FAKE_PASS_SESSION_LOG"
     [[ ! -e $FAKE_PASS_LOGIN_DELAY ]] || /usr/bin/sleep 0.2
     : > "$FAKE_PASS_SESSION"
+    record_stage 'login:ready'
     ;;
   item)
-    [[ $2 == view && $3 == --output && $4 == human && $# == 5 ]] || exit 68
-    [[ -e $FAKE_PASS_SESSION ]] || exit 69
-    [[ -z ${${(P)bootstrap_field}:-} ]] || exit 72
-    [[ ${PROTON_PASS_AGENT_REASON:-} == 'secret-exec credential resolution' ]] || exit 73
-    [[ ${PROTON_PASS_NO_UPDATE_CHECK:-} == 1 ]] || exit 74
+    record_stage 'item:start'
+    [[ $2 == view && $3 == --output && $4 == human && $# == 5 ]] || fail_stage item-argv 68
+    [[ -e $FAKE_PASS_SESSION ]] || fail_stage item-session 69
+    [[ -z ${${(P)bootstrap_field}:-} ]] || fail_stage item-bootstrap-scrub 72
+    [[ ${PROTON_PASS_AGENT_REASON:-} == 'secret-exec credential resolution' ]] || fail_stage item-reason 73
+    [[ ${PROTON_PASS_NO_UPDATE_CHECK:-} == 1 ]] || fail_stage item-update-check 74
     case $(/usr/bin/uname -s) in
-      Linux) [[ ${PROTON_PASS_LINUX_KEYRING:-} == dbus ]] || exit 75 ;;
-      Darwin) [[ -z ${PROTON_PASS_LINUX_KEYRING:-} ]] || exit 75 ;;
+      Linux) [[ ${PROTON_PASS_LINUX_KEYRING:-} == dbus ]] || fail_stage item-keyring 75 ;;
+      Darwin) [[ -z ${PROTON_PASS_LINUX_KEYRING:-} ]] || fail_stage item-keyring 75 ;;
+      *) fail_stage item-platform 76 ;;
     esac
+    record_stage 'item:ready'
     print -r -- "$5" >> "$FAKE_PASS_LOG"
     if [[ -e $FAKE_PASS_ITEM_DESCENDANT ]]; then
       print -r -- 'context7-canary'
@@ -244,7 +261,7 @@ case $1 in
     esac
     ;;
   *)
-    exit 71
+    fail_stage command 71
     ;;
 esac
 EOF
@@ -359,6 +376,7 @@ export PATH=$fake_bin:/usr/bin:/bin
 export FAKE_PASS_LOG=$test_dir/pass-requests.log
 export FAKE_PASS_SESSION=$test_dir/provider-session
 export FAKE_PASS_SESSION_LOG=$test_dir/provider-session.log
+export FAKE_PASS_DIAGNOSTIC_LOG=$test_dir/provider-diagnostics.log
 export FAKE_PASS_LOGIN_DELAY=$test_dir/provider-login-delay
 export FAKE_SECRET_TOOL_LOG=$test_dir/secret-tool-requests.log
 export FAKE_NATIVE_STORE_LOCKED=$test_dir/native-store-locked
@@ -387,8 +405,30 @@ set +e
 output=$(zsh "$launcher" context7 -- check-context 'argument with spaces' 2>&1)
 launcher_status=$?
 set -e
-(( launcher_status == 0 )) ||
-  fail 'the launcher must not invoke a PATH-selected platform probe'
+if (( launcher_status != 0 )); then
+  launcher_output_marker=unexpected
+  case $output in
+    '') launcher_output_marker=empty ;;
+    *'provider session is unavailable'*) launcher_output_marker=provider-unavailable ;;
+    *'failed to resolve '*) launcher_output_marker=resolution-failed ;;
+    *'timed out resolving '*) launcher_output_marker=resolution-timeout ;;
+  esac
+  provider_diagnostic=none
+  if [[ -s $FAKE_PASS_DIAGNOSTIC_LOG ]]; then
+    provider_diagnostic=$(<"$FAKE_PASS_DIAGNOSTIC_LOG")
+    case $provider_diagnostic in
+      info:start|info:ready|info-argv:exit=64|info-update-check:exit=65|\
+      info-bootstrap-scrub:exit=72|info-session:exit=1|login:start|login:ready|\
+      login-argv:exit=66|login-bootstrap:exit=67|item:start|item:ready|\
+      item-argv:exit=68|item-session:exit=69|item-bootstrap-scrub:exit=72|\
+      item-reason:exit=73|item-update-check:exit=74|item-keyring:exit=75|\
+      item-platform:exit=76|command:exit=71)
+        ;;
+      *) provider_diagnostic=invalid ;;
+    esac
+  fi
+  fail "launcher failed before the PATH-selected platform probe check: status=$launcher_status output=$launcher_output_marker provider=$provider_diagnostic"
+fi
 [[ ! -e $HOSTILE_UNAME_MARKER ]] ||
   fail 'the launcher must ignore a PATH-selected platform probe'
 [[ $output == target-ok ]] || fail 'selected profile must reach the target with argv preserved'
