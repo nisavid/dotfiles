@@ -62,6 +62,7 @@ status_fragment_library=
 status_fragment_log=$test_dir/zpty-status-fragment.log
 status_fragment_delay_log=$test_dir/zpty-status-fragment-delay.log
 status_fragment_deadline_log=$test_dir/zpty-status-fragment-deadline.log
+transient_liveness_log=$test_dir/zpty-transient-liveness.log
 identity_loss_log=$test_dir/zpty-identity-loss.log
 if [[ $OSTYPE == linux* ]]; then
   [[ -x /usr/bin/cc ]] || fail 'the Linux cleanup-identity test requires /usr/bin/cc'
@@ -200,8 +201,10 @@ fi
 EOF
 cat > "$fast_local_bin/pass-cli" <<'EOF'
 #!/bin/zsh -f
-[[ -z ${PROVIDER_COMPLETION_MARKER:-} ]] ||
-  print -r -- provider-completed >>"$PROVIDER_COMPLETION_MARKER"
+set -euo pipefail
+[[ -z ${PROVIDER_START_MARKER:-} ]] ||
+  print -r -- provider-started >>"$PROVIDER_START_MARKER"
+[[ -z ${PROVIDER_COMPLETION_DELAY:-} ]] || /bin/sleep 0.2
 if [[ -n ${FD_AUDIT_TARGET:-} ]]; then
   integer matching_fds=0
   for descriptor in /proc/$$/fd/<->(N); do
@@ -213,6 +216,8 @@ if [[ -n ${FD_AUDIT_TARGET:-} ]]; then
   (( matching_fds == 2 )) || exit 97
 fi
 print -r -- 'fast-provider-canary'
+[[ -z ${PROVIDER_COMPLETION_MARKER:-} ]] ||
+  print -r -- provider-completed >>"$PROVIDER_COMPLETION_MARKER"
 EOF
 cat > "$fast_target_bin/check-fast-provider" <<'EOF'
 #!/bin/zsh -f
@@ -327,6 +332,36 @@ if [[ -n $status_fragment_library ]]; then
   [[ $identity_loss_output == $'secret-exec: bounded credential resolution became unmanageable\nsecret-exec: failed to resolve FAST_PROVIDER_VALUE' ]] || fail 'post-active identity loss must preserve its fixed resolution diagnostics'
   [[ $(<"$identity_loss_log") == post-active-identity-loss ]] || fail 'post-active secret identity fixture must prove controller loss'
   [[ ! -s $kill_audit_log ]] || fail 'post-active secret identity loss must not signal an absent process group'
+
+  provider_start_marker=$test_dir/transient-secret-provider-started
+  provider_completion_marker=$test_dir/transient-secret-provider-completed
+  rm -f -- "$transient_liveness_log" "$provider_start_marker" \
+    "$provider_completion_marker" "$kill_audit_log"
+  set +e
+  LD_PRELOAD="$status_fragment_library:$kill_audit_library" \
+    ZPTY_TRANSIENT_LIVENESS_PROBE=1 \
+    ZPTY_TRANSIENT_LIVENESS_AUDIT_LOG=$transient_liveness_log \
+    NEGATIVE_PGID_KILL_AUDIT_LOG=$kill_audit_log \
+    PROVIDER_START_MARKER=$provider_start_marker \
+    PROVIDER_COMPLETION_MARKER=$provider_completion_marker \
+    PROVIDER_COMPLETION_DELAY=1 \
+    HOME=$fast_home XDG_CONFIG_HOME=$fast_home/.config \
+    PATH=$fast_target_bin:/usr/bin:/bin \
+    /usr/bin/setsid "$fast_local_bin/secret-exec" \
+      fast-provider -- check-fast-provider \
+      >/dev/null 2>"$test_dir/transient-secret-exec.err"
+  transient_secret_exec_status=$?
+  set -e
+  (( transient_secret_exec_status == 0 )) ||
+    fail "secret-exec must retry one transient live-group probe: status=$transient_secret_exec_status error=$(<"$test_dir/transient-secret-exec.err")"
+  [[ $(<"$transient_liveness_log") == \
+    $'start-gate\nlive-before-esrch\ninjected-esrch\nrecovered-live' ]] ||
+    fail 'the secret-exec liveness fixture must prove one live ESRCH and recovery'
+  [[ $(<"$provider_start_marker") == provider-started &&
+    $(<"$provider_completion_marker") == provider-completed ]] ||
+    fail 'secret-exec must complete exactly one provider after the transient probe'
+  [[ ! -s $kill_audit_log ]] ||
+    fail 'secret-exec transient-probe recovery must not signal a stale group'
 
   provider_completion_marker=$test_dir/fragmented-secret-provider-completed
   rm -f -- "$status_fragment_log" "$status_fragment_delay_log" \

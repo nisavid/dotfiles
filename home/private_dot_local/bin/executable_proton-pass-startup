@@ -205,8 +205,11 @@ wait_bounded_child() {
       continue
     fi
     if ! kill -0 -- -$child_pgid 2>/dev/null; then
-      status_record=invalid
-      break
+      if ! active_child_identity_matches "$child_name" $child_pgid ||
+        ! kill -0 -- -$child_pgid 2>/dev/null; then
+        status_record=invalid
+        break
+      fi
     fi
     if (( EPOCHREALTIME >= deadline )); then
       terminate_active_child
