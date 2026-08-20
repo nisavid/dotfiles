@@ -103,6 +103,47 @@ set -e
   fail 'direct launcher execution with hostile ZDOTDIR must preserve the usage failure'
 [[ ! -e $hostile_zdotdir_marker ]] || fail 'direct launcher execution must ignore ZDOTDIR'
 
+fast_exit=
+for fast_exit_candidate in /usr/bin/true /bin/true; do
+  if [[ -x $fast_exit_candidate ]]; then
+    fast_exit=$fast_exit_candidate
+    break
+  fi
+done
+[[ -n $fast_exit ]] || fail 'a fixed true executable is required'
+fast_home=$test_dir/fast-home
+fast_profile_dir=$fast_home/.config/secret-exec/profiles
+fast_local_bin=$fast_home/.local/bin
+fast_target_bin=$test_dir/fast-target-bin
+mkdir -p -- "$fast_profile_dir" "$fast_local_bin" "$fast_target_bin"
+chmod 700 "$fast_home/.config/secret-exec" "$fast_profile_dir"
+cp -- "$launcher_source" "$fast_local_bin/secret-exec"
+cp -- "$fast_exit" "$fast_local_bin/proton-pass-ensure-ready"
+cat > "$fast_local_bin/pass-cli" <<'EOF'
+#!/bin/zsh -f
+print -r -- 'fast-provider-canary'
+EOF
+cat > "$fast_target_bin/check-fast-provider" <<'EOF'
+#!/bin/zsh -f
+[[ ${FAST_PROVIDER_VALUE:-} == fast-provider-canary ]]
+EOF
+chmod 700 \
+  "$fast_local_bin/secret-exec" \
+  "$fast_local_bin/proton-pass-ensure-ready" \
+  "$fast_local_bin/pass-cli" \
+  "$fast_target_bin/check-fast-provider"
+print -r -- \
+  'FAST_PROVIDER_VALUE=pass://cli-secrets/fast-provider/password' > \
+  "$fast_profile_dir/fast-provider.env"
+chmod 600 "$fast_profile_dir/fast-provider.env"
+integer fast_provider_run
+for (( fast_provider_run = 1; fast_provider_run <= 32; ++fast_provider_run )); do
+  HOME=$fast_home XDG_CONFIG_HOME=$fast_home/.config \
+    PATH=$fast_target_bin:/usr/bin:/bin \
+    "$fast_local_bin/secret-exec" fast-provider -- check-fast-provider ||
+    fail 'the launcher must accept an immediately successful provider child'
+done
+
 context7_field=CONTEXT7
 context7_field+=_API_KEY
 firecrawl_field=FIRECRAWL

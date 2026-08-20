@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_root=${0:A:h:h}
 test_dir=$(mktemp -d "${TMPDIR:-/tmp}/proton-pass-startup-bindings.XXXXXX")
+test_dir=${test_dir:A}
 trap 'rm -rf -- "$test_dir"' EXIT HUP INT TERM
 
 fail() {

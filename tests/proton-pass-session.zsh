@@ -53,6 +53,26 @@ cp "$native_store_adapter_source" "$production_native_store_adapter"
 chmod +x "$ensure_ready" "$session_compatibility" \
   "$production_native_store_adapter"
 
+fast_exit=
+for fast_exit_candidate in /usr/bin/true /bin/true; do
+  if [[ -x $fast_exit_candidate ]]; then
+    fast_exit=$fast_exit_candidate
+    break
+  fi
+done
+[[ -n $fast_exit ]] || fail 'a fixed true executable is required'
+fast_backend_home=$test_dir/fast-backend-home
+fast_backend_state=$test_dir/fast-backend-state
+mkdir -p -- "$fast_backend_home/.local/bin" "$fast_backend_state"
+cp -- "$fast_exit" "$fast_backend_home/.local/bin/pass-cli"
+chmod 700 "$fast_backend_home/.local/bin/pass-cli"
+integer fast_backend_run
+for (( fast_backend_run = 1; fast_backend_run <= 32; ++fast_backend_run )); do
+  HOME=$fast_backend_home XDG_STATE_HOME=$fast_backend_state \
+    "$ensure_ready" >/dev/null 2>&1 ||
+    fail 'readiness must accept an immediately successful provider backend'
+done
+
 hostile_shell_dir=$test_dir/hostile-shell
 hostile_zdotdir=$test_dir/hostile-zdotdir
 hostile_shell_marker=$test_dir/hostile-shell-ran
