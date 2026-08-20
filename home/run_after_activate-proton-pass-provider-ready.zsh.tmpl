@@ -1,0 +1,86 @@
+{{- if eq .chezmoi.os "linux" -}}
+#!/usr/bin/zsh -f
+
+main() {
+  emulate -L zsh
+  setopt err_return no_unset pipe_fail
+
+  if [[ ! -x /usr/bin/systemctl ]]; then
+    print -ru2 -- 'Proton Pass readiness: systemctl is unavailable'
+    return 1
+  fi
+
+  /usr/bin/systemctl --user daemon-reload
+  if ! /usr/bin/systemctl --user is-active --quiet plasma-workspace.target; then
+    print -ru2 -- \
+      'Proton Pass readiness: Plasma is inactive; activation will resume at the next Plasma graphical session'
+    return 0
+  fi
+  if ! /usr/bin/systemctl --user is-active --quiet graphical-session.target; then
+    print -ru2 -- \
+      'Proton Pass readiness: the graphical session is inactive; activation will resume at the next Plasma graphical session'
+    return 0
+  fi
+
+  /usr/bin/systemctl --user start proton-pass-ensure-ready.service
+}
+
+main "$@"
+{{- else if eq .chezmoi.os "darwin" -}}
+#!/bin/zsh -f
+
+main() {
+  emulate -L zsh
+  setopt err_return no_unset pipe_fail
+
+  local label=io.nisavid.secret-exec-provider-ready
+  readonly label
+  local domain=gui/$EUID
+  readonly domain
+  local service=$domain/$label
+  readonly service
+  local plist={{ joinPath .chezmoi.homeDir "Library/LaunchAgents/io.nisavid.secret-exec-provider-ready.plist" | quote }}
+  readonly plist
+  local startup={{ joinPath .chezmoi.homeDir ".local/bin/proton-pass-startup" | quote }}
+  readonly startup
+  local manager_name manager_uid
+
+  if [[ ! -x /bin/launchctl ]]; then
+    print -ru2 -- 'Proton Pass readiness: launchctl is unavailable'
+    return 1
+  fi
+  if ! manager_name=$(/bin/launchctl managername 2>/dev/null); then
+    print -ru2 -- \
+      'Proton Pass readiness: no launchd session is available; registration will occur at the next GUI login'
+    return 0
+  fi
+  if [[ $manager_name != Aqua ]]; then
+    print -ru2 -- \
+      "Proton Pass readiness: launchd session is ${(q-)manager_name}, not Aqua; registration will occur at the next GUI login"
+    return 0
+  fi
+  if ! manager_uid=$(/bin/launchctl manageruid 2>/dev/null); then
+    print -ru2 -- 'Proton Pass readiness: cannot identify the launchd session user'
+    return 1
+  fi
+  if [[ $manager_uid != $EUID ]]; then
+    print -ru2 -- \
+      "Proton Pass readiness: refusing session uid ${(q-)manager_uid}; expected $EUID"
+    return 1
+  fi
+  if [[ ! -r $plist || ! -x $startup ]]; then
+    print -ru2 -- 'Proton Pass readiness: managed LaunchAgent files are incomplete'
+    return 1
+  fi
+
+  if ! /bin/launchctl print "$service" >/dev/null 2>&1; then
+    /bin/launchctl bootstrap "$domain" "$plist"
+    /bin/launchctl print "$service" >/dev/null
+  fi
+}
+
+main "$@"
+{{- else -}}
+#!/bin/sh
+exit 0
+{{- end -}}

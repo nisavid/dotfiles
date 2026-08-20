@@ -1,0 +1,434 @@
+#!/bin/zsh -f
+
+[[ -o xtrace ]] && unsetopt xtrace
+PROTON_PASS_BOOTSTRAP_FIELD=PROTON_PASS_PERSONAL_ACCESS
+PROTON_PASS_BOOTSTRAP_FIELD+=_TOKEN
+readonly PROTON_PASS_BOOTSTRAP_FIELD
+unset "$PROTON_PASS_BOOTSTRAP_FIELD" 2>/dev/null || true
+set -euo pipefail
+umask 077
+
+readonly PROTON_PASS_INFO_TIMEOUT_SECONDS=3
+readonly PROTON_PASS_LOCK_TIMEOUT_SECONDS=5
+readonly PROTON_PASS_NATIVE_STORE_TIMEOUT_SECONDS=3
+readonly PROTON_PASS_LOGIN_TIMEOUT_SECONDS=8
+readonly PROTON_PASS_POLL_CENTISECONDS=1
+readonly PROTON_PASS_TERMINATION_GRACE_CENTISECONDS=10
+readonly PROTON_PASS_SCRIPT_DIR=${0:A:h}
+typeset -g PROTON_PASS_ACTIVE_CHILD_NAME=
+typeset -gi PROTON_PASS_ACTIVE_CHILD_PGID=0
+typeset -gi PROTON_PASS_CHILD_SEQUENCE=0
+
+die() {
+  print -u2 -r -- "proton-pass-ensure-ready: $1"
+  exit 1
+}
+
+active_child_identity_matches() {
+  emulate -L zsh
+
+  local child_name=$1
+  integer expected_pgid=$2
+  local listing child_listing
+  listing=$(zpty 2>/dev/null) || return 1
+  child_listing=${(M)${(f)listing}:#\(*\) ${child_name}:*}
+  local child_state=${${child_listing#\(}%%\)*}
+  # The managed name becomes "finished" if its controller exits first.
+  [[ -n $child_listing &&
+    ( $child_state == finished ||
+      ( $child_state == <-> && $child_state -eq expected_pgid ) ) ]]
+}
+
+terminate_active_child() {
+  emulate -L zsh
+
+  local child_name=${PROTON_PASS_ACTIVE_CHILD_NAME:-}
+  integer child_pgid=${PROTON_PASS_ACTIVE_CHILD_PGID:-0}
+  [[ -n $child_name && $child_pgid -gt 1 ]] || return 0
+
+  zmodload zsh/zselect 2>/dev/null || true
+  integer term_polls=$(( PROTON_PASS_TERMINATION_GRACE_CENTISECONDS / 2 ))
+  integer kill_polls=$(( PROTON_PASS_TERMINATION_GRACE_CENTISECONDS - term_polls ))
+  if active_child_identity_matches "$child_name" $child_pgid &&
+    kill -0 -- -$child_pgid 2>/dev/null; then
+    kill -TERM -- -$child_pgid 2>/dev/null || true
+    while (( term_polls-- > 0 )) && kill -0 -- -$child_pgid 2>/dev/null; do
+      zselect -t 1 2>/dev/null || true
+    done
+    if active_child_identity_matches "$child_name" $child_pgid &&
+      kill -0 -- -$child_pgid 2>/dev/null; then
+      kill -KILL -- -$child_pgid 2>/dev/null || true
+    fi
+  fi
+
+  while (( kill_polls-- > 0 )) && kill -0 -- -$child_pgid 2>/dev/null; do
+    zselect -t 1 2>/dev/null || true
+  done
+
+  local discarded
+  while zpty -r -t "$child_name" discarded 2>/dev/null; do
+    :
+  done
+  typeset -g PROTON_PASS_ACTIVE_CHILD_NAME=
+  typeset -gi PROTON_PASS_ACTIVE_CHILD_PGID=0
+  zpty -d "$child_name" 2>/dev/null || true
+}
+
+start_bounded_child() {
+  emulate -L zsh
+
+  local environment_name=$1
+  local environment_value=$2
+  local output_mode=$3
+  shift 3
+  [[ $1 == -- ]] || die 'invalid bounded-child request'
+  shift
+  (( $# )) || die 'empty bounded-child request'
+  if [[ -n $environment_name &&
+    ! $environment_name =~ '^[A-Za-z_][A-Za-z0-9_]*$' ]]; then
+    die 'invalid bounded-child environment name'
+  fi
+
+  zmodload zsh/system || die 'zsh/system is required'
+  zmodload zsh/zpty || die 'zsh/zpty is required'
+  local -a PROTON_PASS_CHILD_ARGV=("$@")
+  local PROTON_PASS_CHILD_ENVIRONMENT_NAME=$environment_name
+  local PROTON_PASS_CHILD_ENVIRONMENT_VALUE=$environment_value
+  integer PROTON_PASS_CHILD_STDOUT_FD PROTON_PASS_CHILD_STDERR_FD
+  case $output_mode in
+    inherit)
+      exec {PROTON_PASS_CHILD_STDOUT_FD}>&1 || die 'cannot duplicate bounded-child output'
+      exec {PROTON_PASS_CHILD_STDERR_FD}>&2 || {
+        exec {PROTON_PASS_CHILD_STDOUT_FD}>&-
+        die 'cannot duplicate bounded-child diagnostics'
+      }
+      ;;
+    discard)
+      exec {PROTON_PASS_CHILD_STDOUT_FD}>/dev/null || die 'cannot discard bounded-child output'
+      exec {PROTON_PASS_CHILD_STDERR_FD}>/dev/null || {
+        exec {PROTON_PASS_CHILD_STDOUT_FD}>&-
+        die 'cannot discard bounded-child diagnostics'
+      }
+      ;;
+    *)
+      die 'invalid bounded-child output mode'
+      ;;
+  esac
+
+  (( ++PROTON_PASS_CHILD_SEQUENCE ))
+  local child_name="proton-pass-${sysparams[pid]}-$PROTON_PASS_CHILD_SEQUENCE"
+  # zpty supplies a portable session/PGID; provider bytes bypass its PTY.
+  local child_wrapper='
+integer child_status
+if [[ -n $PROTON_PASS_CHILD_ENVIRONMENT_NAME ]]; then
+  (
+    typeset -gx "$PROTON_PASS_CHILD_ENVIRONMENT_NAME=$PROTON_PASS_CHILD_ENVIRONMENT_VALUE"
+    unset PROTON_PASS_CHILD_ENVIRONMENT_VALUE
+    exec "${PROTON_PASS_CHILD_ARGV[@]}" \
+      >&$PROTON_PASS_CHILD_STDOUT_FD 2>&$PROTON_PASS_CHILD_STDERR_FD
+  ) &
+  integer credential_child_pid=$!
+  unset PROTON_PASS_CHILD_ENVIRONMENT_VALUE
+  wait $credential_child_pid
+  child_status=$?
+else
+  "${PROTON_PASS_CHILD_ARGV[@]}" \
+    >&$PROTON_PASS_CHILD_STDOUT_FD 2>&$PROTON_PASS_CHILD_STDERR_FD
+  child_status=$?
+fi
+print -r -- "status:$child_status"
+exit "$child_status"'
+
+  integer start_status=0
+  zpty -b "$child_name" "$child_wrapper" || start_status=$?
+  exec {PROTON_PASS_CHILD_STDOUT_FD}>&-
+  exec {PROTON_PASS_CHILD_STDERR_FD}>&-
+  (( start_status == 0 )) || die 'cannot start bounded credential child'
+
+  local listing child_listing
+  listing=$(zpty)
+  child_listing=${(M)${(f)listing}:#\(*\) ${child_name}:*}
+  local child_pgid_text=${${child_listing#\(}%%\)*}
+  if [[ -z $child_listing || $child_pgid_text != <-> ||
+    $child_pgid_text -le 1 ]]; then
+    zpty -d "$child_name" 2>/dev/null || true
+    die 'cannot identify bounded credential process group'
+  fi
+  integer child_pgid=$child_pgid_text
+  typeset -g PROTON_PASS_ACTIVE_CHILD_NAME=$child_name
+  typeset -gi PROTON_PASS_ACTIVE_CHILD_PGID=$child_pgid
+}
+
+wait_bounded_child() {
+  emulate -L zsh
+
+  local timeout_seconds=$1
+  local child_name=$PROTON_PASS_ACTIVE_CHILD_NAME
+  integer child_pgid=$PROTON_PASS_ACTIVE_CHILD_PGID
+  zmodload zsh/datetime || die 'zsh/datetime is required'
+  zmodload zsh/zselect || die 'zsh/zselect is required'
+  local -F deadline=$(( EPOCHREALTIME + timeout_seconds ))
+
+  while kill -0 -- -$child_pgid 2>/dev/null; do
+    if (( EPOCHREALTIME >= deadline )); then
+      terminate_active_child
+      return 124
+    fi
+    zselect -t "$PROTON_PASS_POLL_CENTISECONDS" 2>/dev/null || true
+  done
+
+  local status_record=
+  integer status_polls=10
+  while (( status_polls-- > 0 )); do
+    zpty -r -t "$child_name" status_record 2>/dev/null || true
+    status_record=${status_record//$'\r'/}
+    status_record=${status_record//$'\n'/}
+    [[ $status_record == status:<-> ]] && break
+    zselect -t 1 2>/dev/null || true
+  done
+  local discarded
+  while zpty -r -t "$child_name" discarded 2>/dev/null; do
+    :
+  done
+  typeset -g PROTON_PASS_ACTIVE_CHILD_NAME=
+  typeset -gi PROTON_PASS_ACTIVE_CHILD_PGID=0
+  zpty -d "$child_name" 2>/dev/null || true
+  [[ $status_record == status:<-> ]] || return 125
+  integer child_status=${status_record#status:}
+  return $child_status
+}
+
+run_bounded() {
+  emulate -L zsh
+
+  local timeout_seconds=$1
+  shift
+  start_bounded_child '' '' inherit -- "$@"
+  wait_bounded_child "$timeout_seconds"
+}
+
+trap terminate_active_child EXIT
+trap 'terminate_active_child; exit 129' HUP
+trap 'terminate_active_child; exit 130' INT
+trap 'terminate_active_child; exit 143' TERM
+
+resolve_trusted_command() {
+  emulate -L zsh
+
+  local name=$1
+  shift
+
+  zmodload zsh/stat || die 'zsh/stat is required'
+  local candidate
+  for candidate in "$@"; do
+    [[ $candidate == /* ]] || continue
+    [[ -f $candidate && ! -L $candidate && -x $candidate ]] || continue
+    local -A metadata
+    zstat -H metadata -- "$candidate" || continue
+    (( metadata[uid] == 0 || metadata[uid] == EUID )) || continue
+    (( (metadata[mode] & 8#022) == 0 )) || continue
+    print -r -- "$candidate"
+    return 0
+  done
+  die "a trusted $name is required"
+}
+
+prepare_state_directory() {
+  emulate -L zsh
+
+  local state_dir=$1
+  [[ ! -L $state_dir ]] || die 'state directory must not be a symbolic link'
+  /bin/mkdir -p -- "$state_dir" || die 'cannot create the state directory'
+  [[ -d $state_dir && ! -L $state_dir ]] ||
+    die 'state directory must be a real directory'
+
+  zmodload zsh/stat || die 'zsh/stat is required'
+  local -A metadata
+  zstat -H metadata -- "$state_dir" || die 'cannot inspect the state directory'
+  (( metadata[uid] == EUID )) ||
+    die 'state directory must be owned by the current user'
+  /bin/chmod 700 -- "$state_dir" || die 'cannot secure the state directory'
+}
+
+write_status() {
+  emulate -L zsh
+  setopt local_options no_unset
+
+  local state=$1
+  local reason=$2
+  local state_dir=${XDG_STATE_HOME:-$HOME/.local/state}/secret-exec
+  prepare_state_directory "$state_dir"
+
+  zmodload zsh/datetime || die 'zsh/datetime is required'
+  local temporary
+  temporary=$(/usr/bin/mktemp "$state_dir/.proton-pass-readiness.XXXXXX") ||
+    die 'cannot create the readiness status'
+  print -rl -- \
+    "state=$state" \
+    "reason=$reason" \
+    "updated_at=$EPOCHSECONDS" > "$temporary" || {
+      /bin/rm -f -- "$temporary"
+      die 'cannot write the readiness status'
+    }
+  /bin/chmod 600 -- "$temporary" || {
+    /bin/rm -f -- "$temporary"
+    die 'cannot secure the readiness status'
+  }
+  /bin/mv -f -- "$temporary" "$state_dir/proton-pass-readiness.status" || {
+    /bin/rm -f -- "$temporary"
+    die 'cannot publish the readiness status'
+  }
+}
+
+fail_readiness() {
+  emulate -L zsh
+
+  local reason=$1
+  local message=$2
+  write_status unavailable "$reason"
+  die "$message"
+}
+
+session_ready() {
+  emulate -L zsh
+
+  local backend=$1
+  local -x PROTON_PASS_NO_UPDATE_CHECK=1
+  run_bounded "$PROTON_PASS_INFO_TIMEOUT_SECONDS" \
+    "$backend" info >/dev/null 2>&1
+}
+
+main() {
+  emulate -L zsh
+  setopt local_options err_return no_unset pipe_fail
+
+  (( $# == 0 )) || die 'this operation takes no arguments'
+  local platform_id=$OSTYPE
+  case $platform_id in
+    linux*)
+      export PROTON_PASS_LINUX_KEYRING=dbus
+      ;;
+    darwin*)
+      unset PROTON_PASS_LINUX_KEYRING 2>/dev/null || true
+      ;;
+    *)
+      die 'only macOS and Linux are supported'
+      ;;
+  esac
+
+  local backend
+  backend=$(resolve_trusted_command pass-cli \
+    "$HOME/.local/bin/pass-cli" \
+    /opt/homebrew/bin/pass-cli)
+  if session_ready "$backend"; then
+    write_status ready existing-session
+    return 0
+  fi
+
+  local state_dir=${XDG_STATE_HOME:-$HOME/.local/state}/secret-exec
+  prepare_state_directory "$state_dir"
+  zmodload zsh/system ||
+    fail_readiness unsafe-lock 'zsh/system is required for readiness locking'
+  local lock_file=$state_dir/proton-pass-readiness.lock
+  [[ ! -L $lock_file ]] ||
+    fail_readiness unsafe-lock 'readiness lock must not be a symbolic link'
+  if [[ -e $lock_file ]]; then
+    [[ -f $lock_file ]] ||
+      fail_readiness unsafe-lock 'readiness lock must be a regular file'
+    local -A existing_lock
+    zstat -H existing_lock -- "$lock_file" ||
+      fail_readiness unsafe-lock 'cannot inspect the readiness lock'
+    (( existing_lock[uid] == EUID )) ||
+      fail_readiness unsafe-lock 'readiness lock must be owned by the current user'
+  fi
+  integer lock_create_fd
+  exec {lock_create_fd}>>"$lock_file" ||
+    fail_readiness unsafe-lock 'cannot open the readiness lock'
+  local -A opened_lock published_lock
+  zstat -H opened_lock -- "/dev/fd/$lock_create_fd" ||
+    fail_readiness unsafe-lock 'cannot inspect the opened readiness lock'
+  zstat -H published_lock -- "$lock_file" ||
+    fail_readiness unsafe-lock 'cannot inspect the published readiness lock'
+  (( opened_lock[device] == published_lock[device] &&
+    opened_lock[inode] == published_lock[inode] )) ||
+    fail_readiness unsafe-lock 'readiness lock changed while opening'
+  (( opened_lock[uid] == EUID )) ||
+    fail_readiness unsafe-lock 'readiness lock must be owned by the current user'
+  /bin/chmod 600 -- "/dev/fd/$lock_create_fd" ||
+    fail_readiness unsafe-lock 'cannot secure the readiness lock'
+  exec {lock_create_fd}>&-
+
+  integer lock_fd
+  zsystem flock -t "$PROTON_PASS_LOCK_TIMEOUT_SECONDS" -i 0.05 \
+    -f lock_fd "$lock_file" ||
+    fail_readiness lock-timeout 'timed out waiting for provider-session repair'
+  [[ ! -L $lock_file ]] || {
+    zsystem flock -u lock_fd
+    fail_readiness unsafe-lock 'readiness lock must not be a symbolic link'
+  }
+  zstat -H opened_lock -- "/dev/fd/$lock_fd" || {
+    zsystem flock -u lock_fd
+    fail_readiness unsafe-lock 'cannot inspect the locked readiness file'
+  }
+  zstat -H published_lock -- "$lock_file" || {
+    zsystem flock -u lock_fd
+    fail_readiness unsafe-lock 'cannot inspect the published readiness lock'
+  }
+  (( opened_lock[device] == published_lock[device] &&
+    opened_lock[inode] == published_lock[inode] )) || {
+    zsystem flock -u lock_fd
+    fail_readiness unsafe-lock 'readiness lock changed while locking'
+  }
+  (( opened_lock[uid] == EUID )) || {
+    zsystem flock -u lock_fd
+    fail_readiness unsafe-lock 'readiness lock must be owned by the current user'
+  }
+
+  if session_ready "$backend"; then
+    write_status ready concurrent-repair
+    return 0
+  fi
+
+  local native_store_adapter
+  native_store_adapter=$(resolve_trusted_command 'native-store adapter' \
+    "$PROTON_PASS_SCRIPT_DIR/secret-exec-native-store")
+  local bootstrap_token
+  if bootstrap_token=$(run_bounded \
+    "$PROTON_PASS_NATIVE_STORE_TIMEOUT_SECONDS" \
+    "$native_store_adapter" proton-bootstrap 2>/dev/null); then
+    :
+  else
+    integer store_status=$?
+    (( store_status == 124 )) &&
+      fail_readiness native-store-timeout \
+        'the native bootstrap item lookup timed out'
+    fail_readiness native-store-unavailable \
+      'the native bootstrap item is unavailable or locked'
+  fi
+  [[ -n $bootstrap_token && $bootstrap_token != *$'\n'* && $bootstrap_token != *$'\r'* ]] ||
+    fail_readiness invalid-bootstrap-value \
+      'the native bootstrap item must contain one non-empty line'
+
+  start_bounded_child "$PROTON_PASS_BOOTSTRAP_FIELD" "$bootstrap_token" \
+    discard -- "$backend" login
+  unset bootstrap_token
+  if wait_bounded_child "$PROTON_PASS_LOGIN_TIMEOUT_SECONDS"; then
+    :
+  else
+    integer login_status=$?
+    (( login_status == 124 )) &&
+      fail_readiness login-timeout 'provider-session repair timed out'
+    fail_readiness login-failed 'provider-session repair failed'
+  fi
+  if session_ready "$backend"; then
+    :
+  else
+    integer verify_status=$?
+    (( verify_status == 124 )) &&
+      fail_readiness verify-timeout 'repaired provider-session verification timed out'
+    fail_readiness verify-failed 'the repaired provider session did not verify'
+  fi
+  write_status ready repaired
+}
+
+main "$@"

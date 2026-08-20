@@ -1,6 +1,10 @@
-#!/usr/bin/env zsh
+#!/bin/zsh -f
 
 [[ -o xtrace ]] && unsetopt xtrace
+PROTON_PASS_BOOTSTRAP_FIELD=PROTON_PASS_PERSONAL_ACCESS
+PROTON_PASS_BOOTSTRAP_FIELD+=_TOKEN
+readonly PROTON_PASS_BOOTSTRAP_FIELD
+unset "$PROTON_PASS_BOOTSTRAP_FIELD" 2>/dev/null || true
 set -euo pipefail
 
 die() {
@@ -8,17 +12,12 @@ die() {
   exit 1
 }
 
-backend=$(command -v pass-cli 2>/dev/null || true)
-[[ -n $backend && -x $backend ]] || die 'pass-cli is required'
-
-export PROTON_PASS_LINUX_KEYRING=dbus
-if "$backend" test >/dev/null 2>&1; then
-  exit 0
-fi
-
-[[ -n ${PROTON_PASS_PERSONAL_ACCESS_TOKEN:-} ]] ||
-  die 'a personal access token is required to establish the session'
-
-"$backend" login >/dev/null || die 'login failed'
-unset PROTON_PASS_PERSONAL_ACCESS_TOKEN
-"$backend" test >/dev/null 2>&1 || die 'the authenticated session did not verify'
+script_dir=${0:A:h}
+for candidate in \
+  "$script_dir/proton-pass-ensure-ready" \
+  "$script_dir/executable_proton-pass-ensure-ready"; do
+  if [[ -f $candidate && ! -L $candidate && -x $candidate ]]; then
+    exec "$candidate" "$@"
+  fi
+done
+die 'proton-pass-ensure-ready is required'

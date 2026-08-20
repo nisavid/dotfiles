@@ -21,3 +21,9 @@
 Library
 .local/libexec
 {{ end }}
+
+{{ if ne .chezmoi.os "linux" }}
+# The provider selector and readiness unit are Linux session integrations.
+.config/environment.d/98-proton-pass.conf
+.config/systemd
+{{ end }}

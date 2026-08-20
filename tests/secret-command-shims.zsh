@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_root=${0:A:h:h}
 launcher_source=$repo_root/home/private_dot_local/bin/executable_secret-exec
+readiness_source=$repo_root/home/private_dot_local/bin/executable_proton-pass-ensure-ready
 dispatcher_source=$repo_root/home/private_dot_local/lib/secret-exec/executable_secret-exec-command
 
 fail() {
@@ -26,8 +27,10 @@ mkdir -p -- "$shim_dir" "$real_bin" "$backend_bin" "$runtime_bin" \
 chmod 700 "$config_dir" "$profile_dir"
 
 cp "$launcher_source" "$fixture_home/.local/bin/secret-exec"
+cp "$readiness_source" "$fixture_home/.local/bin/proton-pass-ensure-ready"
 cp "$dispatcher_source" "$fixture_home/.local/lib/secret-exec/secret-exec-command"
 chmod +x "$fixture_home/.local/bin/secret-exec" \
+  "$fixture_home/.local/bin/proton-pass-ensure-ready" \
   "$fixture_home/.local/lib/secret-exec/secret-exec-command"
 ln -s ../secret-exec-command "$shim_dir/tool-a"
 ln -s ../secret-exec-command "$shim_dir/tool-b"
@@ -42,15 +45,33 @@ MEMBER_TOKEN=pass://fixture-store/member/token
 EOF
 chmod 600 "$config_dir/commands.env" "$profile_dir/member.env"
 
-cat > "$backend_bin/pass-cli" <<'EOF'
+cat > "$fixture_home/.local/bin/pass-cli" <<'EOF'
 #!/usr/bin/env zsh
 set -euo pipefail
 
-[[ $1 == item && $2 == view && $3 == --output && $4 == human && $# == 5 ]] || exit 64
-[[ $5 == pass://fixture-store/member/token ]] || exit 65
-print -r -- 'member-canary'
+print -r -- "$1" >> "$FAKE_PASS_LOG"
+case $1 in
+  info)
+    (( $# == 1 )) || exit 64
+    [[ ${PROTON_PASS_NO_UPDATE_CHECK:-} == 1 ]] || exit 65
+    ;;
+  item)
+    [[ $2 == view && $3 == --output && $4 == human && $# == 5 ]] || exit 66
+    [[ $5 == pass://fixture-store/member/token ]] || exit 67
+    [[ ${PROTON_PASS_AGENT_REASON:-} == 'secret-exec credential resolution' ]] || exit 68
+    [[ ${PROTON_PASS_NO_UPDATE_CHECK:-} == 1 ]] || exit 69
+    case $(/usr/bin/uname -s) in
+      Linux) [[ ${PROTON_PASS_LINUX_KEYRING:-} == dbus ]] || exit 71 ;;
+      Darwin) [[ -z ${PROTON_PASS_LINUX_KEYRING:-} ]] || exit 71 ;;
+    esac
+    print -r -- 'member-canary'
+    ;;
+  *)
+    exit 72
+    ;;
+esac
 EOF
-chmod +x "$backend_bin/pass-cli"
+chmod +x "$fixture_home/.local/bin/pass-cli"
 
 for command_name in tool-a tool-b; do
   cat > "$real_bin/$command_name" <<'EOF'
@@ -91,12 +112,16 @@ ln -s "$zsh_path" "$runtime_bin/zsh"
 
 export HOME=$fixture_home
 export XDG_CONFIG_HOME=$fixture_home/.config
+export XDG_STATE_HOME=$test_dir/state
 export PATH=$shim_dir:$real_bin:$backend_bin:/usr/bin:/bin
+export FAKE_PASS_LOG=$test_dir/pass.log
 export MEMBER_TOKEN=inherited-member
 export UNRELATED_SECRET=inherited-unrelated
 
 output=$(tool-a 'argument with spaces')
 [[ $output == tool-a-ok ]] || fail 'the first shim must launch the real executable'
+[[ $(<"$FAKE_PASS_LOG") == $'info\nitem' ]] ||
+  fail 'a pass-backed shim must validate readiness before resolving its value'
 
 output=$(tool-b 'argument with spaces')
 [[ $output == tool-b-ok ]] || fail 'the second shim must launch the real executable'

@@ -1,6 +1,6 @@
 name: Platform portability
 
-# Zsh GUI path deployment is verified by zsh-deployment-portability.yml.
+# User-session deployment contracts are also verified by zsh-deployment-portability.yml.
 on:
   pull_request:
   push:
@@ -156,6 +156,8 @@ jobs:
             tests/private-skill-transaction.zsh \
             tests/privacy-scan.zsh \
             tests/proton-pass-session.zsh \
+            tests/proton-pass-startup-bindings.zsh \
+            tests/proton-pass-startup.zsh \
             tests/secret-command-shims.zsh \
             tests/secret-exec-migrate.zsh \
             tests/secret-exec.zsh \
@@ -178,6 +180,8 @@ jobs:
           zsh -f tests/secret-command-shims.zsh
           zsh -f tests/secret-exec-migrate.zsh
           zsh -f tests/secret-injection-bindings.zsh
+          zsh -f tests/proton-pass-startup-bindings.zsh
+          zsh -f tests/proton-pass-startup.zsh
           zsh -f tests/proton-pass-session.zsh
           GLOBAL_AGENTS_POLICY_PUBLIC_ONLY=1 \
             zsh -f tests/global-agents-policy.zsh

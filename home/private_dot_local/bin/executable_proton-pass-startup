@@ -1,0 +1,241 @@
+#!/bin/zsh -f
+
+[[ -o xtrace ]] && unsetopt xtrace
+typeset bootstrap_field=PROTON_PASS_PERSONAL_ACCESS
+bootstrap_field+=_TOKEN
+unset "$bootstrap_field"
+unset bootstrap_field
+set -euo pipefail
+umask 077
+
+readonly PROTON_PASS_STARTUP_SCRIPT_DIR=${0:A:h}
+readonly PROTON_PASS_STARTUP_ATTEMPTS=2
+readonly PROTON_PASS_READINESS_TIMEOUT_SECONDS=25.85
+readonly PROTON_PASS_RETRY_BACKOFF_CENTISECONDS=500
+readonly PROTON_PASS_NOTIFICATION_TIMEOUT_SECONDS=2
+readonly PROTON_PASS_CHILD_POLL_CENTISECONDS=5
+readonly PROTON_PASS_CHILD_TERMINATION_GRACE_CENTISECONDS=10
+typeset -g PROTON_PASS_ACTIVE_CHILD_NAME=
+typeset -gi PROTON_PASS_ACTIVE_CHILD_PGID=0
+typeset -gi PROTON_PASS_CHILD_SEQUENCE=0
+
+die() {
+  print -u2 -r -- "proton-pass-startup: $1"
+  exit 1
+}
+
+active_child_identity_matches() {
+  emulate -L zsh
+
+  local child_name=$1
+  integer expected_pgid=$2
+  local listing child_listing
+  listing=$(zpty 2>/dev/null) || return 1
+  child_listing=${(M)${(f)listing}:#\(*\) ${child_name}:*}
+  local child_state=${${child_listing#\(}%%\)*}
+  [[ -n $child_listing &&
+    ( $child_state == finished ||
+      ( $child_state == <-> && $child_state -eq expected_pgid ) ) ]]
+}
+
+terminate_active_child() {
+  emulate -L zsh
+
+  local child_name=${PROTON_PASS_ACTIVE_CHILD_NAME:-}
+  integer child_pgid=${PROTON_PASS_ACTIVE_CHILD_PGID:-0}
+  [[ -n $child_name && $child_pgid -gt 1 ]] || return 0
+
+  zmodload zsh/zselect 2>/dev/null || true
+  integer term_polls=$(( PROTON_PASS_CHILD_TERMINATION_GRACE_CENTISECONDS / 2 ))
+  integer kill_polls=$(( PROTON_PASS_CHILD_TERMINATION_GRACE_CENTISECONDS - term_polls ))
+  if active_child_identity_matches "$child_name" $child_pgid &&
+    kill -0 -- -$child_pgid 2>/dev/null; then
+    kill -TERM -- -$child_pgid 2>/dev/null || true
+    while (( term_polls-- > 0 )) && kill -0 -- -$child_pgid 2>/dev/null; do
+      zselect -t 1 2>/dev/null || true
+    done
+    if active_child_identity_matches "$child_name" $child_pgid &&
+      kill -0 -- -$child_pgid 2>/dev/null; then
+      kill -KILL -- -$child_pgid 2>/dev/null || true
+    fi
+  fi
+
+  while (( kill_polls-- > 0 )) && kill -0 -- -$child_pgid 2>/dev/null; do
+    zselect -t 1 2>/dev/null || true
+  done
+
+  local discarded
+  while zpty -r -t "$child_name" discarded 2>/dev/null; do
+    :
+  done
+  typeset -g PROTON_PASS_ACTIVE_CHILD_NAME=
+  typeset -gi PROTON_PASS_ACTIVE_CHILD_PGID=0
+  zpty -d "$child_name" 2>/dev/null || true
+}
+
+start_bounded_child() {
+  emulate -L zsh
+
+  (( $# )) || die 'empty bounded-child request'
+  zmodload zsh/system || die 'zsh/system is required'
+  zmodload zsh/zpty || die 'zsh/zpty is required'
+  local -a PROTON_PASS_CHILD_ARGV=("$@")
+  integer PROTON_PASS_CHILD_STDOUT_FD PROTON_PASS_CHILD_STDERR_FD
+  exec {PROTON_PASS_CHILD_STDOUT_FD}>&1 || die 'cannot duplicate bounded-child output'
+  exec {PROTON_PASS_CHILD_STDERR_FD}>&2 || {
+    exec {PROTON_PASS_CHILD_STDOUT_FD}>&-
+    die 'cannot duplicate bounded-child diagnostics'
+  }
+
+  (( ++PROTON_PASS_CHILD_SEQUENCE ))
+  local child_name="proton-pass-startup-${sysparams[pid]}-$PROTON_PASS_CHILD_SEQUENCE"
+  local child_wrapper='
+integer child_status
+"${PROTON_PASS_CHILD_ARGV[@]}" \
+  >&$PROTON_PASS_CHILD_STDOUT_FD 2>&$PROTON_PASS_CHILD_STDERR_FD
+child_status=$?
+print -r -- "status:$child_status"
+exit "$child_status"'
+
+  integer start_status=0
+  zpty -b "$child_name" "$child_wrapper" || start_status=$?
+  exec {PROTON_PASS_CHILD_STDOUT_FD}>&-
+  exec {PROTON_PASS_CHILD_STDERR_FD}>&-
+  (( start_status == 0 )) || die 'cannot start bounded startup child'
+
+  local listing child_listing
+  listing=$(zpty)
+  child_listing=${(M)${(f)listing}:#\(*\) ${child_name}:*}
+  local child_pgid_text=${${child_listing#\(}%%\)*}
+  if [[ -z $child_listing || $child_pgid_text != <-> ||
+    $child_pgid_text -le 1 ]]; then
+    zpty -d "$child_name" 2>/dev/null || true
+    die 'cannot identify bounded startup process group'
+  fi
+  integer child_pgid=$child_pgid_text
+  typeset -g PROTON_PASS_ACTIVE_CHILD_NAME=$child_name
+  typeset -gi PROTON_PASS_ACTIVE_CHILD_PGID=$child_pgid
+}
+
+wait_bounded_child() {
+  emulate -L zsh
+
+  local timeout_seconds=$1
+  local child_name=$PROTON_PASS_ACTIVE_CHILD_NAME
+  integer child_pgid=$PROTON_PASS_ACTIVE_CHILD_PGID
+  zmodload zsh/datetime || die 'zsh/datetime is required'
+  zmodload zsh/zselect || die 'zsh/zselect is required'
+  local -F deadline=$(( EPOCHREALTIME + timeout_seconds ))
+
+  while kill -0 -- -$child_pgid 2>/dev/null; do
+    if (( EPOCHREALTIME >= deadline )); then
+      terminate_active_child
+      return 124
+    fi
+    zselect -t "$PROTON_PASS_CHILD_POLL_CENTISECONDS" 2>/dev/null || true
+  done
+
+  local status_record=
+  integer status_polls=10
+  while (( status_polls-- > 0 )); do
+    zpty -r -t "$child_name" status_record 2>/dev/null || true
+    status_record=${status_record//$'\r'/}
+    status_record=${status_record//$'\n'/}
+    [[ $status_record == status:<-> ]] && break
+    zselect -t 1 2>/dev/null || true
+  done
+  local discarded
+  while zpty -r -t "$child_name" discarded 2>/dev/null; do
+    :
+  done
+  typeset -g PROTON_PASS_ACTIVE_CHILD_NAME=
+  typeset -gi PROTON_PASS_ACTIVE_CHILD_PGID=0
+  zpty -d "$child_name" 2>/dev/null || true
+  [[ $status_record == status:<-> ]] || return 125
+  integer child_status=${status_record#status:}
+  return $child_status
+}
+
+run_bounded_child() {
+  emulate -L zsh
+
+  local timeout_seconds=$1
+  shift
+  start_bounded_child "$@"
+  wait_bounded_child "$timeout_seconds"
+}
+
+wait_retry_backoff() {
+  emulate -L zsh
+
+  zmodload zsh/zselect || die 'zsh/zselect is required'
+  zselect -t "$PROTON_PASS_RETRY_BACKOFF_CENTISECONDS" 2>/dev/null || true
+}
+
+trap terminate_active_child EXIT
+trap 'terminate_active_child; exit 129' HUP
+trap 'terminate_active_child; exit 130' INT
+trap 'terminate_active_child; exit 143' TERM
+
+resolve_readiness_adapter() {
+  emulate -L zsh
+
+  local candidate
+  for candidate in \
+    "$PROTON_PASS_STARTUP_SCRIPT_DIR/proton-pass-ensure-ready" \
+    "$PROTON_PASS_STARTUP_SCRIPT_DIR/executable_proton-pass-ensure-ready"; do
+    if [[ -f $candidate && ! -L $candidate && -x $candidate ]]; then
+      print -r -- "$candidate"
+      return 0
+    fi
+  done
+  die 'proton-pass-ensure-ready is required'
+}
+
+notify_unavailable() {
+  emulate -L zsh
+
+  case $OSTYPE in
+    linux*)
+      local notify_send=/usr/bin/notify-send
+      [[ -x $notify_send ]] || return 0
+      run_bounded_child "$PROTON_PASS_NOTIFICATION_TIMEOUT_SECONDS" \
+        "$notify_send" \
+        --app-name='Secret-backed tools' \
+        'Credential provider unavailable' \
+        'Unlock the native credential store. Secret-backed tools will retry when used.' \
+        >/dev/null 2>&1 || true
+      ;;
+    darwin*)
+      local osascript=/usr/bin/osascript
+      [[ -x $osascript ]] || return 0
+      run_bounded_child "$PROTON_PASS_NOTIFICATION_TIMEOUT_SECONDS" \
+        "$osascript" -e \
+        'display notification "Unlock the login keychain. Secret-backed tools will retry when used." with title "Credential provider unavailable"' \
+        >/dev/null 2>&1 || true
+      ;;
+  esac
+}
+
+main() {
+  emulate -L zsh
+  setopt local_options err_return no_unset pipe_fail
+
+  (( $# == 0 )) || die 'this operation takes no arguments'
+
+  local readiness_adapter
+  readiness_adapter=$(resolve_readiness_adapter)
+  integer attempt
+  for (( attempt = 1; attempt <= PROTON_PASS_STARTUP_ATTEMPTS; ++attempt )); do
+    (( attempt == 1 )) || wait_retry_backoff
+    if run_bounded_child "$PROTON_PASS_READINESS_TIMEOUT_SECONDS" \
+      "$readiness_adapter" >/dev/null 2>&1; then
+      return 0
+    fi
+  done
+
+  notify_unavailable
+  die 'credential provider remains unavailable; unlock the native credential store and retry'
+}
+
+main "$@"
