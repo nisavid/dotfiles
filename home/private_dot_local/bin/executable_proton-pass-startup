@@ -18,10 +18,19 @@ readonly PROTON_PASS_CHILD_TERMINATION_GRACE_CENTISECONDS=10
 typeset -g PROTON_PASS_ACTIVE_CHILD_NAME=
 typeset -gi PROTON_PASS_ACTIVE_CHILD_PGID=0
 typeset -gi PROTON_PASS_CHILD_SEQUENCE=0
+integer PROTON_PASS_ESCAPE_DIAGNOSTIC_FD
+exec {PROTON_PASS_ESCAPE_DIAGNOSTIC_FD}>&2 || exit 1
 
 die() {
   print -u2 -r -- "proton-pass-startup: $1"
   exit 1
+}
+
+escape_unmanageable_child() {
+  print -u$PROTON_PASS_ESCAPE_DIAGNOSTIC_FD -r -- "proton-pass-startup: $1"
+  exec {PROTON_PASS_ESCAPE_DIAGNOSTIC_FD}>&- 2>/dev/null ||
+    exec /usr/bin/false
+  exec /usr/bin/false
 }
 
 active_child_identity_matches() {
@@ -33,9 +42,8 @@ active_child_identity_matches() {
   listing=$(zpty 2>/dev/null) || return 1
   child_listing=${(M)${(f)listing}:#\(*\) ${child_name}:*}
   local child_state=${${child_listing#\(}%%\)*}
-  [[ -n $child_listing &&
-    ( $child_state == finished ||
-      ( $child_state == <-> && $child_state -eq expected_pgid ) ) ]]
+  [[ -n $child_listing && $child_state == <-> &&
+    $child_state -eq expected_pgid ]]
 }
 
 terminate_active_child() {
@@ -48,29 +56,25 @@ terminate_active_child() {
   zmodload zsh/zselect 2>/dev/null || true
   integer term_polls=$(( PROTON_PASS_CHILD_TERMINATION_GRACE_CENTISECONDS / 2 ))
   integer kill_polls=$(( PROTON_PASS_CHILD_TERMINATION_GRACE_CENTISECONDS - term_polls ))
-  if active_child_identity_matches "$child_name" $child_pgid &&
-    kill -0 -- -$child_pgid 2>/dev/null; then
-    kill -TERM -- -$child_pgid 2>/dev/null || true
-    while (( term_polls-- > 0 )) && kill -0 -- -$child_pgid 2>/dev/null; do
-      zselect -t 1 2>/dev/null || true
-    done
-    if active_child_identity_matches "$child_name" $child_pgid &&
-      kill -0 -- -$child_pgid 2>/dev/null; then
-      kill -KILL -- -$child_pgid 2>/dev/null || true
-    fi
-  fi
+  active_child_identity_matches "$child_name" $child_pgid &&
+    kill -0 -- -$child_pgid 2>/dev/null ||
+    escape_unmanageable_child 'bounded startup child became unmanageable'
+  kill -TERM -- -$child_pgid 2>/dev/null || true
+  while (( term_polls-- > 0 )) && kill -0 -- -$child_pgid 2>/dev/null; do
+    zselect -t 1 2>/dev/null || true
+  done
+  active_child_identity_matches "$child_name" $child_pgid &&
+    kill -0 -- -$child_pgid 2>/dev/null ||
+    escape_unmanageable_child 'bounded startup child became unmanageable'
+  zpty -d "$child_name" 2>/dev/null ||
+    escape_unmanageable_child 'bounded startup child became unmanageable'
 
   while (( kill_polls-- > 0 )) && kill -0 -- -$child_pgid 2>/dev/null; do
     zselect -t 1 2>/dev/null || true
   done
 
-  local discarded
-  while zpty -r -t "$child_name" discarded 2>/dev/null; do
-    :
-  done
   typeset -g PROTON_PASS_ACTIVE_CHILD_NAME=
   typeset -gi PROTON_PASS_ACTIVE_CHILD_PGID=0
-  zpty -d "$child_name" 2>/dev/null || true
 }
 
 start_bounded_child() {
@@ -90,31 +94,82 @@ start_bounded_child() {
   (( ++PROTON_PASS_CHILD_SEQUENCE ))
   local child_name="proton-pass-startup-${sysparams[pid]}-$PROTON_PASS_CHILD_SEQUENCE"
   local child_wrapper='
+integer child_diagnostic_status=0
+exec {PROTON_PASS_ESCAPE_DIAGNOSTIC_FD}>&- || child_diagnostic_status=125
+trap '\''kill -KILL 0'\'' HUP
+trap '\'''\'' TERM
+unsetopt monitor
 typeset child_start=
-IFS= read -r child_start || exit 126
-[[ $child_start == start ]] || exit 126
+IFS= read -r child_start
+integer child_start_status=$?
+[[ $child_start == start ]] || child_start_status=126
 unset child_start
 integer child_status
-"${PROTON_PASS_CHILD_ARGV[@]}" \
-  >&$PROTON_PASS_CHILD_STDOUT_FD 2>&$PROTON_PASS_CHILD_STDERR_FD
-child_status=$?
+if (( child_diagnostic_status != 0 )); then
+  child_status=$child_diagnostic_status
+elif (( child_start_status != 0 )); then
+  child_status=126
+else
+  (
+    trap - HUP TERM
+    exec "${PROTON_PASS_CHILD_ARGV[@]}" \
+      >&$PROTON_PASS_CHILD_STDOUT_FD 2>&$PROTON_PASS_CHILD_STDERR_FD
+  ) &
+  integer credential_child_pid=$!
+  wait $credential_child_pid
+  child_status=$?
+fi
+zmodload zsh/zselect || child_status=125
+integer group_quiescent=0
+while (( ! group_quiescent )); do
+  typeset group_listing=
+  group_listing=$(trap - HUP TERM; exec /usr/bin/env -i LC_ALL=C /bin/ps -eo pid=,pgid=) || {
+    child_status=125
+    break
+  }
+  integer controller_seen=0 group_members=0 listing_valid=1
+  typeset group_line=
+  typeset -a group_fields
+  for group_line in ${(f)group_listing}; do
+    group_fields=( ${=group_line} )
+    if (( ${#group_fields} != 2 )) ||
+      [[ $group_fields[1] != <-> || $group_fields[2] != <-> ]]; then
+      listing_valid=0
+      break
+    fi
+    if (( group_fields[2] == sysparams[pid] )); then
+      (( ++group_members ))
+      (( group_fields[1] == sysparams[pid] )) && controller_seen=1
+    fi
+  done
+  if (( ! listing_valid || ! controller_seen || group_members < 2 )); then
+    child_status=125
+    break
+  fi
+  (( group_members == 2 )) && group_quiescent=1
+  (( group_quiescent )) || zselect -t 1 2>/dev/null || true
+done
 print -r -- "status:$child_status"
-exit "$child_status"'
+typeset child_finish=
+IFS= read -r child_finish || kill -KILL 0'
 
   integer start_status=0
   zpty -b "$child_name" "$child_wrapper" || start_status=$?
   exec {PROTON_PASS_CHILD_STDOUT_FD}>&-
   exec {PROTON_PASS_CHILD_STDERR_FD}>&-
-  (( start_status == 0 )) || die 'cannot start bounded startup child'
+  (( start_status == 0 )) ||
+    escape_unmanageable_child 'cannot identify bounded startup process group'
 
   local listing child_listing
-  listing=$(zpty)
+  listing=$(zpty 2>/dev/null) ||
+    escape_unmanageable_child 'cannot identify bounded startup process group'
   child_listing=${(M)${(f)listing}:#\(*\) ${child_name}:*}
   local child_pgid_text=${${child_listing#\(}%%\)*}
   if [[ -z $child_listing || $child_pgid_text != <-> ||
-    $child_pgid_text -le 1 ]]; then
-    zpty -d "$child_name" 2>/dev/null || true
-    die 'cannot identify bounded startup process group'
+    $child_pgid_text -le 1 ]] ||
+    ! kill -0 -- -$child_pgid_text 2>/dev/null ||
+    ! kill -0 -- -$child_pgid_text 2>/dev/null; then
+    escape_unmanageable_child 'cannot identify bounded startup process group'
   fi
   integer child_pgid=$child_pgid_text
   typeset -g PROTON_PASS_ACTIVE_CHILD_NAME=$child_name
@@ -135,32 +190,67 @@ wait_bounded_child() {
   zmodload zsh/zselect || die 'zsh/zselect is required'
   local -F deadline=$(( EPOCHREALTIME + timeout_seconds ))
 
-  while kill -0 -- -$child_pgid 2>/dev/null; do
+  # Nonblocking zpty reads may split a line; accumulate one bounded record.
+  local status_record= status_chunk=
+  integer status_started=0 status_idle_polls=10 status_max_length=32
+  while [[ $status_record != *$'\n'* ]]; do
+    status_chunk=
+    if zpty -r -t "$child_name" status_chunk 2>/dev/null &&
+      [[ -n $status_chunk ]]; then
+      status_started=1
+      status_idle_polls=10
+      if (( ${#status_record} + ${#status_chunk} > status_max_length )); then
+        status_record=invalid
+        break
+      fi
+      status_record+=$status_chunk
+      continue
+    fi
+    if ! kill -0 -- -$child_pgid 2>/dev/null; then
+      status_record=invalid
+      break
+    fi
+    if (( status_started )); then
+      if (( EPOCHREALTIME >= deadline )); then
+        terminate_active_child
+        return 124
+      fi
+      (( --status_idle_polls > 0 )) || break
+      zselect -t 1 2>/dev/null || true
+      continue
+    fi
     if (( EPOCHREALTIME >= deadline )); then
       terminate_active_child
       return 124
     fi
     zselect -t "$PROTON_PASS_CHILD_POLL_CENTISECONDS" 2>/dev/null || true
   done
-
-  local status_record=
-  integer status_polls=10
-  while (( status_polls-- > 0 )); do
-    zpty -r -t "$child_name" status_record 2>/dev/null || true
-    status_record=${status_record//$'\r'/}
-    status_record=${status_record//$'\n'/}
-    [[ $status_record == status:<-> ]] && break
-    zselect -t 1 2>/dev/null || true
-  done
-  local discarded
-  while zpty -r -t "$child_name" discarded 2>/dev/null; do
-    :
-  done
+  [[ $status_record == status:<->$'\r\n' ||
+    $status_record == status:<->$'\n' ]] || {
+      terminate_active_child
+      return 125
+    }
+  status_record=${status_record%$'\n'}
+  status_record=${status_record%$'\r'}
+  [[ $status_record == status:<-> ]] || {
+    terminate_active_child
+    return 125
+  }
+  integer child_status=${status_record#status:}
+  if ! active_child_identity_matches "$child_name" $child_pgid ||
+    ! kill -0 -- -$child_pgid 2>/dev/null ||
+    ! zpty -d "$child_name" 2>/dev/null; then
+    typeset -g PROTON_PASS_ACTIVE_CHILD_NAME=
+    typeset -gi PROTON_PASS_ACTIVE_CHILD_PGID=0
+    escape_unmanageable_child 'bounded startup child became unmanageable'
+  fi
   typeset -g PROTON_PASS_ACTIVE_CHILD_NAME=
   typeset -gi PROTON_PASS_ACTIVE_CHILD_PGID=0
-  zpty -d "$child_name" 2>/dev/null || true
-  [[ $status_record == status:<-> ]] || return 125
-  integer child_status=${status_record#status:}
+  integer finish_polls=$PROTON_PASS_CHILD_TERMINATION_GRACE_CENTISECONDS
+  while (( finish_polls-- > 0 )) && kill -0 -- -$child_pgid 2>/dev/null; do
+    zselect -t 1 2>/dev/null || true
+  done
+  kill -0 -- -$child_pgid 2>/dev/null && return 125
   return $child_status
 }
 
