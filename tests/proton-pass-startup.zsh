@@ -100,6 +100,27 @@ mkdir -p -- "$fixture_bin"
 cp -- "$startup_source" "$fixture_bin/proton-pass-startup"
 chmod +x -- "$fixture_bin/proton-pass-startup"
 
+fast_exit=
+for fast_exit_candidate in /usr/bin/true /bin/true; do
+  if [[ -x $fast_exit_candidate ]]; then
+    fast_exit=$fast_exit_candidate
+    break
+  fi
+done
+[[ -n $fast_exit ]] || fail 'a fixed true executable is required'
+fast_child_bin=$test_dir/fast-child-bin
+mkdir -p -- "$fast_child_bin"
+cp -- "$startup_source" "$fast_child_bin/proton-pass-startup"
+cp -- "$fast_exit" "$fast_child_bin/proton-pass-ensure-ready"
+chmod +x -- \
+  "$fast_child_bin/proton-pass-startup" \
+  "$fast_child_bin/proton-pass-ensure-ready"
+integer fast_child_run
+for (( fast_child_run = 1; fast_child_run <= 32; ++fast_child_run )); do
+  "$fast_child_bin/proton-pass-startup" >/dev/null 2>&1 ||
+    fail 'startup must accept an immediately ready provider child'
+done
+
 negative_pgid_audit_library=
 positive_pid_audit_log=$test_dir/positive-pid-kill-audit.log
 if [[ $OSTYPE == linux* ]]; then

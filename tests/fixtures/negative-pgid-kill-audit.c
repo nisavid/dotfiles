@@ -10,7 +10,11 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-enum { MAX_ABSENT_IDENTITIES = 64 };
+enum {
+  MAX_ABSENT_IDENTITIES = 64,
+  MAX_RECORD_WRITE_ATTEMPTS = 256,
+  AUDIT_WRITE_FAILURE_EXIT = 125
+};
 
 static pid_t absent_groups[MAX_ABSENT_IDENTITIES];
 static size_t absent_group_count;
@@ -55,6 +59,27 @@ static void remember_absent_process(pid_t target) {
   absent_processes[absent_process_count++] = target;
 }
 
+static bool write_complete_record(int descriptor, const char *record,
+                                  size_t length) {
+  size_t attempt;
+  size_t offset = 0;
+
+  for (attempt = 0;
+       offset < length && attempt < MAX_RECORD_WRITE_ATTEMPTS; ++attempt) {
+    ssize_t written = write(descriptor, record + offset, length - offset);
+
+    if (written > 0) {
+      offset += (size_t)written;
+      continue;
+    }
+    if (written < 0 && errno == EINTR) {
+      continue;
+    }
+    return false;
+  }
+  return offset == length;
+}
+
 static void record_stale_signal(const char *environment_name,
                                 const char *identity_kind, pid_t target,
                                 int signal_number) {
@@ -75,9 +100,13 @@ static void record_stale_signal(const char *environment_name,
                     "stale-%s-signal target=%ld signal=%d\n", identity_kind,
                     (long)target, signal_number);
   if (length > 0 && (size_t)length < sizeof(record)) {
-    (void)write(descriptor, record, (size_t)length);
+    if (!write_complete_record(descriptor, record, (size_t)length)) {
+      _exit(AUDIT_WRITE_FAILURE_EXIT);
+    }
   }
-  (void)close(descriptor);
+  if (close(descriptor) != 0) {
+    _exit(AUDIT_WRITE_FAILURE_EXIT);
+  }
 }
 
 static void observe_result(pid_t target, int signal_number, int result,

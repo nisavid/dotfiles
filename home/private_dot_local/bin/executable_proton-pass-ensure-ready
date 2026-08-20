@@ -119,6 +119,10 @@ start_bounded_child() {
   local child_name="proton-pass-${sysparams[pid]}-$PROTON_PASS_CHILD_SEQUENCE"
   # zpty supplies a portable session/PGID; provider bytes bypass its PTY.
   local child_wrapper='
+typeset child_start=
+IFS= read -r child_start || exit 126
+[[ $child_start == start ]] || exit 126
+unset child_start
 integer child_status
 if [[ -n $PROTON_PASS_CHILD_ENVIRONMENT_NAME ]]; then
   (
@@ -157,6 +161,10 @@ exit "$child_status"'
   integer child_pgid=$child_pgid_text
   typeset -g PROTON_PASS_ACTIVE_CHILD_NAME=$child_name
   typeset -gi PROTON_PASS_ACTIVE_CHILD_PGID=$child_pgid
+  if ! zpty -w "$child_name" start; then
+    terminate_active_child
+    die 'cannot release bounded credential child'
+  fi
 }
 
 wait_bounded_child() {

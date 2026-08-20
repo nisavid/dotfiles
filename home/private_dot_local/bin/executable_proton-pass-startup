@@ -90,6 +90,10 @@ start_bounded_child() {
   (( ++PROTON_PASS_CHILD_SEQUENCE ))
   local child_name="proton-pass-startup-${sysparams[pid]}-$PROTON_PASS_CHILD_SEQUENCE"
   local child_wrapper='
+typeset child_start=
+IFS= read -r child_start || exit 126
+[[ $child_start == start ]] || exit 126
+unset child_start
 integer child_status
 "${PROTON_PASS_CHILD_ARGV[@]}" \
   >&$PROTON_PASS_CHILD_STDOUT_FD 2>&$PROTON_PASS_CHILD_STDERR_FD
@@ -115,6 +119,10 @@ exit "$child_status"'
   integer child_pgid=$child_pgid_text
   typeset -g PROTON_PASS_ACTIVE_CHILD_NAME=$child_name
   typeset -gi PROTON_PASS_ACTIVE_CHILD_PGID=$child_pgid
+  if ! zpty -w "$child_name" start; then
+    terminate_active_child
+    die 'cannot release bounded startup child'
+  fi
 }
 
 wait_bounded_child() {
