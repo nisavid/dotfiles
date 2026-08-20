@@ -59,6 +59,11 @@ title and body supplied to it. Generated `--fill` text is never a substitute.
      /absolute/path/to/pr-body.md
    ```
 
+   A chat-only draft with no existing PR has no PR number for this
+   identity-bound validation. Build its disclosure links with a placeholder PR
+   number, deliver the draft explicitly unvalidated, and state that validation
+   binds when publication assigns the number.
+
 8. Compare the proposal with the live baseline for unintended loss. For a
    chat-only draft, deliver the complete title/body in chat and stop before
    preimage capture or any GitHub mutation. Otherwise pass the complete

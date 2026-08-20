@@ -8,10 +8,10 @@ Treat written plans as revisable hypotheses. Compare them with live truth and cu
 
 Treat commits and pushes as normal completion steps for task-owned changes.
 
-For every Git-backed task, use `checkpointing-and-publishing-git-work` at task start, at every clean checkpoint, and before a stopping-point response.
+For Git-backed tasks, use `checkpointing-and-publishing-git-work` at task start, at every clean checkpoint, and before a stopping-point response.
 
 Route PR creation, text edits, and draft-to-ready transitions through
-`publishing-reviewable-prs`, composing text with
+`publishing-reviewable-prs`; only text composition uses
 `writing-reviewable-pr-descriptions`, which handles chat-only drafts alone.
 Never use `gh pr create --fill`, `--fill-first`, or `--fill-verbose`.
 
