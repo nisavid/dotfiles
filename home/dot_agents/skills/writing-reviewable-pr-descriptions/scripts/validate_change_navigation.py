@@ -8,6 +8,7 @@ import re
 import sys
 from pathlib import Path
 
+from body_source import validate_source_breaks
 from change_navigation.badges import validate_badges
 from change_navigation.diff import touched_file_count, validate_diff
 from change_navigation.diff_files import (
@@ -53,6 +54,7 @@ def validate(
             errors.append(
                 f"expected {label} SHA must be 40 or 64 lowercase hexadecimal characters"
             )
+    validate_source_breaks(body, errors)
     expected_identity = (expected_repository, expected_pr)
     expected_comparison = (
         (expected_base_sha, expected_head_sha)
@@ -193,7 +195,7 @@ def main() -> int:
         for error in errors:
             print(f"ERROR: {error}", file=sys.stderr)
         return 1
-    print("Change navigation is valid")
+    print("PR body is valid")
     return 0
 
 

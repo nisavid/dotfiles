@@ -156,6 +156,20 @@ When a step cannot or should not run, mark it unrun and say why; never present a
 proposed command as observed evidence. Keep checklist state accurate as evidence
 changes.
 
+## Source Shape
+
+GitHub renders a pull request body as a comment field, not as a repository file:
+every source newline becomes a visible line break. Each paragraph, list item,
+table cell, and blockquote line is therefore one source line, however long it
+runs, and every intended break is an explicit `<br>`.
+
+Fenced code, raw HTML blocks, and Mermaid keep their own line structure. A blank
+line separates block elements as usual.
+
+This file, the fixtures under `evals/`, and the diffs you read are repository
+files wrapped to the `.editorconfig` column budget. Their shape is correct for
+them and is not a model for the body.
+
 ## Preservation
 
 The live body is not disposable source. Carry forward still-current custom or
@@ -215,4 +229,6 @@ in `SKILL.md` only after static views fail this test.
   transition, and later members; current paths plus later work are incomplete.
 - Links must be useful; required disclosures must validate; stacked navigation
   must be complete and mark one current PR.
+- Every block element occupies one source line, and every intended line break is
+  an explicit `<br>`.
 - GitHub must store and render the intended title/body before completion.
