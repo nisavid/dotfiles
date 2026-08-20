@@ -113,6 +113,10 @@ mkdir -p -- "$fast_child_bin"
 cp -- "$startup_source" "$fast_child_bin/proton-pass-startup"
 cat >"$fast_child_bin/proton-pass-ensure-ready" <<'EOF'
 #!/bin/zsh -f
+set -euo pipefail
+[[ -z ${PROVIDER_START_MARKER:-} ]] ||
+  print -r -- provider-started >>"$PROVIDER_START_MARKER"
+[[ -z ${PROVIDER_COMPLETION_DELAY:-} ]] || /bin/sleep 0.2
 [[ -z ${PROVIDER_COMPLETION_MARKER:-} ]] ||
   print -r -- provider-completed >>"$PROVIDER_COMPLETION_MARKER"
 EOF
@@ -131,6 +135,7 @@ status_fragment_library=
 status_fragment_log=$test_dir/zpty-status-fragment.log
 status_fragment_delay_log=$test_dir/zpty-status-fragment-delay.log
 status_fragment_deadline_log=$test_dir/zpty-status-fragment-deadline.log
+transient_liveness_log=$test_dir/zpty-transient-liveness.log
 identity_loss_log=$test_dir/zpty-identity-loss.log
 if [[ $OSTYPE == linux* ]]; then
   [[ -x /usr/bin/cc ]] ||
@@ -220,6 +225,33 @@ if [[ $OSTYPE == linux* ]]; then
   [[ $identity_loss_output == 'proton-pass-startup: bounded startup child became unmanageable' ]] || fail 'post-active identity loss must produce one fixed startup diagnostic'
   [[ $(<"$identity_loss_log") == post-active-identity-loss ]] || fail 'post-active startup identity fixture must prove controller loss'
   [[ ! -s $negative_pgid_audit_log ]] || fail 'post-active startup identity loss must not signal an absent process group'
+
+  provider_start_marker=$test_dir/transient-startup-provider-started
+  provider_completion_marker=$test_dir/transient-startup-provider-completed
+  rm -f -- "$transient_liveness_log" "$provider_start_marker" \
+    "$provider_completion_marker" "$negative_pgid_audit_log"
+  set +e
+  LD_PRELOAD="$status_fragment_library:$negative_pgid_audit_library" \
+    ZPTY_TRANSIENT_LIVENESS_PROBE=1 \
+    ZPTY_TRANSIENT_LIVENESS_AUDIT_LOG=$transient_liveness_log \
+    NEGATIVE_PGID_KILL_AUDIT_LOG=$negative_pgid_audit_log \
+    PROVIDER_START_MARKER=$provider_start_marker \
+    PROVIDER_COMPLETION_MARKER=$provider_completion_marker \
+    PROVIDER_COMPLETION_DELAY=1 \
+    "$fast_child_bin/proton-pass-startup" \
+      >/dev/null 2>"$test_dir/transient-startup.err"
+  transient_startup_status=$?
+  set -e
+  (( transient_startup_status == 0 )) ||
+    fail "startup must retry one transient live-group probe: status=$transient_startup_status error=$(<"$test_dir/transient-startup.err")"
+  [[ $(<"$transient_liveness_log") == \
+    $'start-gate\nlive-before-esrch\ninjected-esrch\nrecovered-live' ]] ||
+    fail 'the startup liveness fixture must prove one live ESRCH and recovery'
+  [[ $(<"$provider_start_marker") == provider-started &&
+    $(<"$provider_completion_marker") == provider-completed ]] ||
+    fail 'startup must complete exactly one provider after the transient probe'
+  [[ ! -s $negative_pgid_audit_log ]] ||
+    fail 'startup transient-probe recovery must not signal a stale group'
 
   provider_completion_marker=$test_dir/fragmented-startup-provider-completed
   rm -f -- "$status_fragment_log" "$status_fragment_delay_log" \

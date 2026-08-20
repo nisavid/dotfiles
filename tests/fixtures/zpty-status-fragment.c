@@ -45,6 +45,9 @@ static struct timespec delayed_tail_deadline;
 static bool zpty_child_process;
 static bool identity_race_consumed;
 static bool post_active_loss_triggered;
+static bool liveness_probe_armed;
+static bool liveness_probe_injected;
+static bool liveness_probe_recovered;
 static pid_t managed_zpty_pid = -1;
 static pid_t fixture_owner_pid = -1;
 
@@ -206,9 +209,23 @@ static bool post_active_identity_loss_requested(void) {
   return getenv("ZPTY_POST_ACTIVE_IDENTITY_LOSS") != NULL;
 }
 
+static bool transient_liveness_probe_requested(void) {
+  return getenv("ZPTY_TRANSIENT_LIVENESS_PROBE") != NULL;
+}
+
+static bool provider_start_recorded(void) {
+  const char *path = getenv("PROVIDER_START_MARKER");
+
+  return path != NULL && *path != '\0' && access(path, F_OK) == 0;
+}
+
 static bool identity_loss_requested(void) {
   return initial_identity_loss_requested() ||
          post_active_identity_loss_requested();
+}
+
+static bool managed_zpty_fixture_requested(void) {
+  return identity_loss_requested() || transient_liveness_probe_requested();
 }
 
 static bool caller_is_zpty_module(void *address) {
@@ -232,7 +249,7 @@ pid_t fork(void) {
     }
   }
   owner_fork = getpid() == fixture_owner_pid;
-  zpty_fork = owner_fork && identity_loss_requested() &&
+  zpty_fork = owner_fork && managed_zpty_fixture_requested() &&
               !identity_race_consumed &&
               caller_is_zpty_module(__builtin_return_address(0));
   result = real_fork();
@@ -273,6 +290,13 @@ ssize_t write(int descriptor, const void *buffer, size_t count) {
     }
   }
   result = real_write(descriptor, buffer, count);
+  if (result == (ssize_t)count && transient_liveness_probe_requested() &&
+      getpid() == fixture_owner_pid && managed_zpty_pid > 1 &&
+      !liveness_probe_armed && is_pty_master(descriptor) && count >= 5 &&
+      memcmp(buffer, "start", 5) == 0) {
+    liveness_probe_armed = true;
+    record_marker("ZPTY_TRANSIENT_LIVENESS_AUDIT_LOG", "start-gate\n");
+  }
   if (result > 0 && post_active_identity_loss_requested() &&
       !post_active_loss_triggered && managed_zpty_pid > 1 &&
       is_pty_master(descriptor)) {
@@ -281,6 +305,47 @@ ssize_t write(int descriptor, const void *buffer, size_t count) {
     record_marker("ZPTY_IDENTITY_LOSS_AUDIT_LOG",
                   "post-active-identity-loss\n");
   }
+  return result;
+}
+
+int kill(pid_t target, int signal_number) {
+  static int (*real_kill)(pid_t, int);
+  int result;
+  int saved_errno;
+
+  if (real_kill == NULL) {
+    real_kill = (int (*)(pid_t, int))dlsym(RTLD_NEXT, "kill");
+    if (real_kill == NULL) {
+      errno = ENOSYS;
+      return -1;
+    }
+  }
+  if (!transient_liveness_probe_requested() ||
+      getpid() != fixture_owner_pid || !liveness_probe_armed ||
+      target != -managed_zpty_pid || signal_number != 0 ||
+      caller_is_zpty_module(__builtin_return_address(0)) ||
+      !provider_start_recorded()) {
+    return real_kill(target, signal_number);
+  }
+  if (!liveness_probe_injected) {
+    if (syscall(SYS_kill, target, 0) != 0) {
+      _exit(AUDIT_WRITE_FAILURE_EXIT);
+    }
+    liveness_probe_injected = true;
+    record_marker("ZPTY_TRANSIENT_LIVENESS_AUDIT_LOG",
+                  "live-before-esrch\n");
+    record_marker("ZPTY_TRANSIENT_LIVENESS_AUDIT_LOG",
+                  "injected-esrch\n");
+    errno = ESRCH;
+    return -1;
+  }
+  result = real_kill(target, signal_number);
+  saved_errno = errno;
+  if (!liveness_probe_recovered && result == 0) {
+    liveness_probe_recovered = true;
+    record_marker("ZPTY_TRANSIENT_LIVENESS_AUDIT_LOG", "recovered-live\n");
+  }
+  errno = saved_errno;
   return result;
 }
 
