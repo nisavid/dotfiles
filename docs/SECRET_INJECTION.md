@@ -17,8 +17,9 @@ credential names must be unique and syntactically valid.
 Each assignment uses one of these locators:
 
 - `pass://...` resolves a single field through the Proton Pass CLI.
-- `secret-service://` resolves an exact attribute tuple through the operating
-  system's Secret Service API.
+- `secret-service://` resolves an exact attribute tuple through Secret Service
+  on Linux. General profile lookup is not supported on macOS; Keychain is used
+  only for the fixed Proton bootstrap item.
 - `!ENV` removes an inherited variable without resolving a replacement.
 
 The launcher rejects malformed profiles, loose permissions, unsupported
