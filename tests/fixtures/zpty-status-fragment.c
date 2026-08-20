@@ -48,8 +48,15 @@ static bool post_active_loss_triggered;
 static bool liveness_probe_armed;
 static bool liveness_probe_injected;
 static bool liveness_probe_recovered;
+static size_t waiter_probe_injections;
+static bool waiter_cleanup_live_recorded;
+static bool waiter_retirement_blocked;
 static pid_t managed_zpty_pid = -1;
 static pid_t fixture_owner_pid = -1;
+static bool waiter_stage_targeted;
+static int waiter_record_descriptor = -1;
+static size_t waiter_record_prefix_length;
+static bool waiter_record_corrupted;
 
 __attribute__((constructor)) static void initialize_fixture_owner(void) {
   const char *owner_text = getenv("ZPTY_IDENTITY_LOSS_OWNER_PID");
@@ -113,6 +120,41 @@ static void record_marker(const char *environment_name, const char *record) {
       close(descriptor) != 0) {
     _exit(AUDIT_WRITE_FAILURE_EXIT);
   }
+}
+
+static bool consume_once_gate(const char *environment_name) {
+  const char *path = getenv(environment_name);
+  int descriptor;
+
+  if (path == NULL || *path == '\0') {
+    _exit(AUDIT_WRITE_FAILURE_EXIT);
+  }
+  descriptor = open(path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW,
+                    0600);
+  if (descriptor >= 0) {
+    if (close(descriptor) != 0) {
+      _exit(AUDIT_WRITE_FAILURE_EXIT);
+    }
+    return true;
+  }
+  if (errno == EEXIST) {
+    return false;
+  }
+  _exit(AUDIT_WRITE_FAILURE_EXIT);
+}
+
+static void *find_managed_listing(const void *buffer, size_t count) {
+  char needle[64];
+  int length;
+
+  if (managed_zpty_pid <= 1) {
+    return NULL;
+  }
+  length = snprintf(needle, sizeof(needle), "(%ld)", (long)managed_zpty_pid);
+  if (length <= 0 || (size_t)length >= sizeof(needle)) {
+    _exit(AUDIT_WRITE_FAILURE_EXIT);
+  }
+  return memmem(buffer, count, needle, (size_t)length);
 }
 
 static bool is_pty_master(int descriptor) {
@@ -205,6 +247,36 @@ static void record_initial_controller(pid_t controller) {
   record_marker("ZPTY_IDENTITY_LOSS_AUDIT_LOG", record);
 }
 
+static void record_waiter_controller(pid_t controller) {
+  char record[64];
+  int length = snprintf(record, sizeof(record), "%ld\n", (long)controller);
+
+  if (length <= 0 || (size_t)length >= sizeof(record)) {
+    _exit(AUDIT_WRITE_FAILURE_EXIT);
+  }
+  record_marker("ZPTY_WAITER_STAGE_CONTROLLER_PID_FILE", record);
+}
+
+static void wait_for_retirement_release(void) {
+  const char *gate_path = getenv("ZPTY_WAITER_STAGE_RETIREMENT_RELEASE");
+  const struct timespec interval = {0, IDENTITY_EXIT_WAIT_NANOSECONDS};
+  size_t attempt;
+
+  if (gate_path == NULL || *gate_path == '\0') {
+    _exit(AUDIT_WRITE_FAILURE_EXIT);
+  }
+  for (attempt = 0; attempt < IDENTITY_GATE_WAIT_ATTEMPTS; ++attempt) {
+    if (access(gate_path, F_OK) == 0) {
+      return;
+    }
+    if (errno != ENOENT) {
+      _exit(AUDIT_WRITE_FAILURE_EXIT);
+    }
+    nanosleep(&interval, NULL);
+  }
+  _exit(AUDIT_WRITE_FAILURE_EXIT);
+}
+
 static bool post_active_identity_loss_requested(void) {
   return getenv("ZPTY_POST_ACTIVE_IDENTITY_LOSS") != NULL;
 }
@@ -213,8 +285,26 @@ static bool transient_liveness_probe_requested(void) {
   return getenv("ZPTY_TRANSIENT_LIVENESS_PROBE") != NULL;
 }
 
+static bool waiter_stage_mode_is(const char *expected) {
+  const char *mode = getenv("ZPTY_WAITER_STAGE_MODE");
+
+  return mode != NULL && strcmp(mode, expected) == 0;
+}
+
+static bool waiter_stage_fixture_requested(void) {
+  return waiter_stage_mode_is("record") || waiter_stage_mode_is("identity") ||
+         waiter_stage_mode_is("liveness-retry") ||
+         waiter_stage_mode_is("retirement");
+}
+
 static bool provider_start_recorded(void) {
   const char *path = getenv("PROVIDER_START_MARKER");
+
+  return path != NULL && *path != '\0' && access(path, F_OK) == 0;
+}
+
+static bool provider_completion_recorded(void) {
+  const char *path = getenv("PROVIDER_COMPLETION_MARKER");
 
   return path != NULL && *path != '\0' && access(path, F_OK) == 0;
 }
@@ -225,7 +315,8 @@ static bool identity_loss_requested(void) {
 }
 
 static bool managed_zpty_fixture_requested(void) {
-  return identity_loss_requested() || transient_liveness_probe_requested();
+  return identity_loss_requested() || transient_liveness_probe_requested() ||
+         waiter_stage_fixture_requested();
 }
 
 static bool caller_is_zpty_module(void *address) {
@@ -238,6 +329,7 @@ static bool caller_is_zpty_module(void *address) {
 pid_t fork(void) {
   static pid_t (*real_fork)(void);
   bool owner_fork;
+  bool zpty_fork_call;
   bool zpty_fork;
   pid_t result;
 
@@ -249,9 +341,10 @@ pid_t fork(void) {
     }
   }
   owner_fork = getpid() == fixture_owner_pid;
-  zpty_fork = owner_fork && managed_zpty_fixture_requested() &&
-              !identity_race_consumed &&
-              caller_is_zpty_module(__builtin_return_address(0));
+  zpty_fork_call =
+      owner_fork && caller_is_zpty_module(__builtin_return_address(0));
+  zpty_fork = zpty_fork_call && managed_zpty_fixture_requested() &&
+              (waiter_stage_fixture_requested() || !identity_race_consumed);
   result = real_fork();
   if (result == 0) {
     if (zpty_fork) {
@@ -267,6 +360,9 @@ pid_t fork(void) {
   if (result > 0 && zpty_fork) {
     identity_race_consumed = true;
     managed_zpty_pid = result;
+    if (waiter_stage_fixture_requested()) {
+      waiter_stage_targeted = true;
+    }
     if (initial_identity_loss_requested()) {
       record_initial_controller(result);
       wait_for_initial_identity_loss_gate();
@@ -290,12 +386,17 @@ ssize_t write(int descriptor, const void *buffer, size_t count) {
     }
   }
   result = real_write(descriptor, buffer, count);
-  if (result == (ssize_t)count && transient_liveness_probe_requested() &&
-      getpid() == fixture_owner_pid && managed_zpty_pid > 1 &&
-      !liveness_probe_armed && is_pty_master(descriptor) && count >= 5 &&
+  if (result == (ssize_t)count && getpid() == fixture_owner_pid &&
+      managed_zpty_pid > 1 && is_pty_master(descriptor) && count >= 5 &&
       memcmp(buffer, "start", 5) == 0) {
-    liveness_probe_armed = true;
-    record_marker("ZPTY_TRANSIENT_LIVENESS_AUDIT_LOG", "start-gate\n");
+    if (transient_liveness_probe_requested() && !liveness_probe_armed) {
+      liveness_probe_armed = true;
+      record_marker("ZPTY_TRANSIENT_LIVENESS_AUDIT_LOG", "start-gate\n");
+    }
+    if (waiter_stage_mode_is("identity") ||
+        waiter_stage_mode_is("liveness-retry")) {
+      liveness_probe_armed = true;
+    }
   }
   if (result > 0 && post_active_identity_loss_requested() &&
       !post_active_loss_triggered && managed_zpty_pid > 1 &&
@@ -319,6 +420,67 @@ int kill(pid_t target, int signal_number) {
       errno = ENOSYS;
       return -1;
     }
+  }
+  if (waiter_stage_mode_is("retirement") && zpty_child_process &&
+      target == 0 && signal_number == SIGKILL &&
+      provider_completion_recorded() && !waiter_retirement_blocked) {
+    waiter_retirement_blocked = true;
+    record_marker("ZPTY_WAITER_STAGE_AUDIT_LOG",
+                  "login-controller-targeted\n");
+    record_waiter_controller(getpid());
+    record_marker("ZPTY_WAITER_STAGE_AUDIT_LOG",
+                  "controller-release-blocked\n");
+    wait_for_retirement_release();
+    record_marker("ZPTY_WAITER_STAGE_AUDIT_LOG", "controller-released\n");
+    return real_kill(target, signal_number);
+  }
+  if ((waiter_stage_mode_is("identity") ||
+       waiter_stage_mode_is("liveness-retry")) &&
+      getpid() == fixture_owner_pid && waiter_stage_targeted &&
+      liveness_probe_armed && target == -managed_zpty_pid &&
+      signal_number == 0 &&
+      !caller_is_zpty_module(__builtin_return_address(0)) &&
+      provider_start_recorded()) {
+    size_t injection_limit = waiter_stage_mode_is("identity") ? 1 : 2;
+
+    if (waiter_probe_injections < injection_limit) {
+      if (syscall(SYS_kill, target, 0) != 0) {
+        _exit(AUDIT_WRITE_FAILURE_EXIT);
+      }
+      if (waiter_probe_injections == 0) {
+        record_waiter_controller(managed_zpty_pid);
+        record_marker("ZPTY_WAITER_STAGE_AUDIT_LOG",
+                      "login-controller-targeted\n");
+        record_marker("ZPTY_WAITER_STAGE_AUDIT_LOG", "start-gate\n");
+      }
+      ++waiter_probe_injections;
+      if (waiter_stage_mode_is("identity")) {
+        record_marker("ZPTY_WAITER_STAGE_AUDIT_LOG",
+                      "live-before-esrch\n");
+        record_marker("ZPTY_WAITER_STAGE_AUDIT_LOG", "injected-esrch\n");
+      } else if (waiter_probe_injections == 1) {
+        record_marker("ZPTY_WAITER_STAGE_AUDIT_LOG",
+                      "live-before-esrch-1\n");
+        record_marker("ZPTY_WAITER_STAGE_AUDIT_LOG",
+                      "injected-esrch-1\n");
+      } else {
+        record_marker("ZPTY_WAITER_STAGE_AUDIT_LOG",
+                      "live-before-esrch-2\n");
+        record_marker("ZPTY_WAITER_STAGE_AUDIT_LOG",
+                      "injected-esrch-2\n");
+      }
+      liveness_probe_injected = true;
+      errno = ESRCH;
+      return -1;
+    }
+    result = real_kill(target, signal_number);
+    saved_errno = errno;
+    if (!waiter_cleanup_live_recorded && result == 0) {
+      waiter_cleanup_live_recorded = true;
+      record_marker("ZPTY_WAITER_STAGE_AUDIT_LOG", "cleanup-live\n");
+    }
+    errno = saved_errno;
+    return result;
   }
   if (!transient_liveness_probe_requested() ||
       getpid() != fixture_owner_pid || !liveness_probe_armed ||
@@ -364,6 +526,10 @@ int close(int descriptor) {
     pending_offset = 0;
     pending_length = 0;
     pending_yields_remaining = 0;
+  }
+  if (descriptor == waiter_record_descriptor) {
+    waiter_record_descriptor = -1;
+    waiter_record_prefix_length = 0;
   }
   return real_close(descriptor);
 }
@@ -427,6 +593,7 @@ static ssize_t deliver_pending_status(int descriptor, void *buffer,
 
 ssize_t read(int descriptor, void *buffer, size_t count) {
   static const char status_prefix[] = "sta";
+  static const char waiter_record_prefix[] = "status:";
   static ssize_t (*real_read)(int, void *, size_t);
   size_t index;
   ssize_t pending_result;
@@ -446,6 +613,45 @@ ssize_t read(int descriptor, void *buffer, size_t count) {
   }
 
   result = real_read(descriptor, buffer, count);
+  char *managed_listing =
+      result > 0 ? find_managed_listing(buffer, (size_t)result) : NULL;
+  if (managed_listing != NULL && waiter_stage_targeted &&
+      waiter_stage_mode_is("identity") && liveness_probe_injected &&
+      provider_start_recorded() &&
+      consume_once_gate("ZPTY_WAITER_STAGE_IDENTITY_GATE")) {
+    char *listing = managed_listing;
+
+    listing[0] = '[';
+    record_marker("ZPTY_WAITER_STAGE_AUDIT_LOG",
+                  "identity-listing-invalidated\n");
+    return result;
+  }
+  if (result > 0 && waiter_stage_targeted && waiter_stage_mode_is("record") &&
+      !waiter_record_corrupted && provider_completion_recorded() &&
+      is_pty_master(descriptor)) {
+    if (waiter_record_descriptor != descriptor) {
+      waiter_record_descriptor = descriptor;
+      waiter_record_prefix_length = 0;
+    }
+    for (index = 0; index < (size_t)result; ++index) {
+      if (((char *)buffer)[index] !=
+          waiter_record_prefix[waiter_record_prefix_length]) {
+        waiter_record_prefix_length =
+            ((char *)buffer)[index] == waiter_record_prefix[0] ? 1 : 0;
+        continue;
+      }
+      ++waiter_record_prefix_length;
+      if (waiter_record_prefix_length == sizeof(waiter_record_prefix) - 1) {
+        ((char *)buffer)[index] = 'x';
+        waiter_record_corrupted = true;
+        record_waiter_controller(managed_zpty_pid);
+        record_marker("ZPTY_WAITER_STAGE_AUDIT_LOG",
+                      "login-controller-targeted\n");
+        record_marker("ZPTY_WAITER_STAGE_AUDIT_LOG", "record-corrupted\n");
+        return result;
+      }
+    }
+  }
   if (result <= 0 || status_was_fragmented || !is_pty_master(descriptor)) {
     return result;
   }

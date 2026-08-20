@@ -33,6 +33,35 @@ classify_login_outcome() {
   print -r -- "$aggregate"
 }
 
+classify_latest_readiness_status() {
+  emulate -L zsh
+
+  local readiness_file=$1
+  local readiness_reason=unrecorded
+  local waiter_stage=unrecorded
+  local readiness_status_line
+  if [[ -r $readiness_file ]]; then
+    while IFS= read -r readiness_status_line || [[ -n $readiness_status_line ]]; do
+      case $readiness_status_line in
+        reason=existing-session|reason=concurrent-repair|reason=repaired|\
+        reason=unsafe-lock|reason=lock-timeout|reason=native-store-timeout|\
+        reason=native-store-unavailable|reason=invalid-bootstrap-value|\
+        reason=login-timeout|reason=login-failed|reason=verify-timeout|\
+        reason=verify-failed)
+          readiness_reason=${readiness_status_line#reason=}
+          ;;
+        waiter-stage=record|waiter-stage=identity|\
+        waiter-stage=liveness-retry|waiter-stage=child-status|\
+        waiter-stage=retirement|waiter-stage=unrecorded)
+          waiter_stage=${readiness_status_line#waiter-stage=}
+          ;;
+      esac
+    done < "$readiness_file"
+  fi
+  print -r -- "$readiness_reason"
+  print -r -- "$waiter_stage"
+}
+
 process_fixture_helper=$repo_root/tests/helpers/process-fixture.zsh
 [[ -r $process_fixture_helper ]] ||
   fail 'the shared process-fixture helper is required'
@@ -55,6 +84,18 @@ trap test_process_fixture_cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+latest_readiness_probe=$test_dir/latest-shared-readiness.status
+for latest_ready_reason in existing-session concurrent-repair repaired; do
+  print -rl -- state=ready "reason=$latest_ready_reason" \
+    waiter-stage=unrecorded updated_at=0 > "$latest_readiness_probe"
+  typeset -a latest_readiness_classification=(
+    "${(@f)$(classify_latest_readiness_status "$latest_readiness_probe")}"
+  )
+  [[ ${latest_readiness_classification[1]:-} == $latest_ready_reason &&
+    ${latest_readiness_classification[2]:-} == unrecorded ]] ||
+    fail "the latest shared ready status must preserve $latest_ready_reason"
+done
+rm -f -- "$latest_readiness_probe"
 test_process_fixture_run_signal_probe_mode
 kill_audit_library=
 kill_audit_log=$test_dir/negative-pgid-kill-audit.log
@@ -966,23 +1007,15 @@ for consumer_pid in $consumer_pids; do
           ;;
       esac
     fi
-    concurrent_readiness_reason=unrecorded
-    if [[ -r $status_file ]]; then
-      while IFS= read -r readiness_status_line || [[ -n $readiness_status_line ]]; do
-        case $readiness_status_line in
-          reason=unsafe-lock|reason=lock-timeout|reason=native-store-timeout|\
-          reason=native-store-unavailable|reason=invalid-bootstrap-value|\
-          reason=login-timeout|reason=login-failed|reason=verify-timeout|\
-          reason=verify-failed)
-            concurrent_readiness_reason=${readiness_status_line#reason=}
-            ;;
-        esac
-      done < "$status_file"
-    fi
+    typeset -a concurrent_readiness_classification=(
+      "${(@f)$(classify_latest_readiness_status "$status_file")}"
+    )
+    concurrent_readiness_reason=${concurrent_readiness_classification[1]:-unrecorded}
+    concurrent_waiter_stage=${concurrent_readiness_classification[2]:-unrecorded}
     concurrent_login_outcome=$(
       classify_login_outcome "$FAKE_PASS_LOGIN_OUTCOME_LOG"
     )
-    fail "concurrent pass-backed consumer launch failed: profile=$concurrent_profile stderr=$concurrent_error_marker readiness=$concurrent_readiness_reason login=$concurrent_login_outcome"
+    fail "concurrent pass-backed consumer launch failed: profile=$concurrent_profile stderr=$concurrent_error_marker latest-readiness=$concurrent_readiness_reason login=$concurrent_login_outcome latest-waiter-stage=$concurrent_waiter_stage"
   fi
 done
 rm -f -- "$FAKE_PASS_LOGIN_DELAY"

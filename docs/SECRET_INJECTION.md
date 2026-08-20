@@ -133,8 +133,14 @@ notification, and leaves lazy consumer recovery enabled.
 Readiness publishes an atomic mode-`0600` status file beneath
 `$XDG_STATE_HOME/secret-exec`, defaulting to
 `~/.local/state/secret-exec/proton-pass-readiness.status`. It contains only
-`state`, an enumerated `reason`, and an update timestamp. It never contains
-provider output, account metadata, locators, or credential values.
+`state`, an enumerated `reason`, an enumerated `waiter-stage`, and an update
+timestamp. `waiter-stage` is `record`, `identity`, `liveness-retry`,
+`child-status`, `retirement`, or `unrecorded`; `child-status` means the bounded
+controller reported a nonzero status and does not imply a natural provider
+exit. The atomic `reason`/`waiter-stage` tuple is last-writer-wins shared
+readiness state; it identifies the latest recorded outcome and is not correlated
+to an individual concurrent consumer attempt. The file never contains provider
+output, account metadata, locators, or credential values.
 
 If the native store is locked or unavailable, unlock it through the operating
 system and retry the consumer. The lazy path will attempt recovery again; no

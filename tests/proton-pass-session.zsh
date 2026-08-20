@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_root=${0:A:h:h}
-ensure_ready_source=$repo_root/home/private_dot_local/bin/executable_proton-pass-ensure-ready
+ensure_ready_source=${PROTON_PASS_ENSURE_READY_SOURCE:-$repo_root/home/private_dot_local/bin/executable_proton-pass-ensure-ready}
 session_compatibility_source=$repo_root/home/private_dot_local/bin/executable_proton-pass-session
 native_store_adapter_source=$repo_root/home/private_dot_local/bin/executable_secret-exec-native-store
 proton_bootstrap_field=PROTON_PASS_PERSONAL_ACCESS
@@ -359,6 +359,7 @@ cat > "$fixture_local_bin/pass-cli" <<'EOF'
 #!/usr/bin/env zsh
 set -euo pipefail
 
+(( ! ${+PROTON_PASS_LAST_WAITER_STAGE} )) || exit 72
 print -r -- "$*" >> "$FAKE_PASS_LOG"
 fixture_token=pst_
 fixture_token+='fixture-token'
@@ -414,6 +415,10 @@ case $1 in
     else
       [[ ${PROTON_PASS_LINUX_KEYRING:-} == dbus ]] || exit 67
     fi
+    [[ -z ${PROVIDER_PID_FILE:-} ]] || print -r -- $$ > "$PROVIDER_PID_FILE"
+    [[ -z ${PROVIDER_START_MARKER:-} ]] ||
+      print -r -- provider-started >> "$PROVIDER_START_MARKER"
+    [[ -z ${PROVIDER_COMPLETION_DELAY:-} ]] || /usr/bin/sleep 0.2
     if [[ -e $FAKE_PASS_LOGIN_DESCENDANT ]]; then
       spawn_resistant_descendant
       : > "$FAKE_PASS_LOCAL_SESSION"
@@ -422,9 +427,12 @@ case $1 in
     fi
     [[ ! -e $FAKE_PASS_LOGIN_HANG ]] || hang_forever
     [[ ! -e $FAKE_PASS_LOGIN_DELAY ]] || /usr/bin/sleep 0.2
+    [[ ! -e $FAKE_PASS_LOGIN_EXIT_124 ]] || exit 124
     [[ ! -e $FAKE_PASS_LOGIN_FAIL ]] || exit 71
     : > "$FAKE_PASS_LOCAL_SESSION"
     [[ -e $FAKE_PASS_SKIP_REMOTE_SESSION ]] || : > "$FAKE_PASS_REMOTE_SESSION"
+    [[ -z ${PROVIDER_COMPLETION_MARKER:-} ]] ||
+      print -r -- provider-completed >> "$PROVIDER_COMPLETION_MARKER"
     ;;
   *)
     exit 68
@@ -536,6 +544,7 @@ export XDG_STATE_HOME=$state_home
 export FAKE_PASS_LOG=$test_dir/pass.log
 export FAKE_PASS_LOGIN_DELAY=$test_dir/login-delay
 export FAKE_PASS_LOGIN_FAIL=$test_dir/login-fail
+export FAKE_PASS_LOGIN_EXIT_124=$test_dir/login-exit-124
 export FAKE_PASS_LOGIN_HANG=$test_dir/login-hang
 export FAKE_PASS_LOGIN_DESCENDANT=$test_dir/login-descendant
 export FAKE_PASS_LOCAL_SESSION=$test_dir/local-session
@@ -557,7 +566,143 @@ export FAKE_UNAME_MARKER=$test_dir/uname-ran
 export FAKE_UNAME_CHILD_PID=$test_dir/uname-child.pid
 export FAKE_UTILITY_TRACE=$test_dir/trace-ambient-utilities
 export FAKE_UTILITY_MARKER_DIR=$test_dir/ambient-utility-markers
+if [[ ${PROTON_PASS_WAITER_STAGE_RED_PROOF:-0} == 1 ]]; then
+  unset PROTON_PASS_LAST_WAITER_STAGE 2>/dev/null || true
+else
+  export PROTON_PASS_LAST_WAITER_STAGE=waiter-stage-canary
+fi
 /bin/mkdir -p -- "$FAKE_UTILITY_MARKER_DIR"
+fixture_token=pst_
+fixture_token+='fixture-token'
+fixture_token+='::fixture-key'
+
+run_waiter_stage_mapping() {
+  emulate -L zsh
+  setopt local_options err_return no_unset pipe_fail
+
+  local mode=$1
+  local expected_audit=$2
+  local completion_expectation=$3
+  local completion_delay=$4
+  local audit_log=$test_dir/waiter-$mode.audit
+  local identity_gate=$test_dir/waiter-$mode.identity-gate
+  local retirement_release=$test_dir/waiter-$mode.retirement-release
+  local controller_pid_file=$test_dir/waiter-$mode.controller-pid
+  local provider_start=$test_dir/waiter-$mode.provider-start
+  local provider_pid_file=$test_dir/waiter-$mode.provider-pid
+  local provider_completion=$test_dir/waiter-$mode.provider-completion
+  local output_file=$test_dir/waiter-$mode.output
+  integer waiter_status
+  local waiter_output
+  local -a value_free_artifacts
+
+  rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION" \
+    "$audit_log" "$identity_gate" "$provider_start" "$provider_pid_file" \
+    "$provider_completion" "$retirement_release" "$controller_pid_file" \
+    "$output_file" "$kill_audit_log"
+  : > "$FAKE_PASS_LOG"
+  : > "$FAKE_SECRET_TOOL_LOG"
+  test_process_fixture_track_pid_file "$provider_pid_file"
+  test_process_fixture_track_pid_file "$controller_pid_file"
+  if /usr/bin/env \
+    LD_PRELOAD="$status_fragment_library:$kill_audit_library" \
+    ZPTY_WAITER_STAGE_MODE=$mode \
+    ZPTY_WAITER_STAGE_AUDIT_LOG=$audit_log \
+    ZPTY_WAITER_STAGE_IDENTITY_GATE=$identity_gate \
+    ZPTY_WAITER_STAGE_RETIREMENT_RELEASE=$retirement_release \
+    ZPTY_WAITER_STAGE_CONTROLLER_PID_FILE=$controller_pid_file \
+    NEGATIVE_PGID_KILL_AUDIT_LOG=$kill_audit_log \
+    PROVIDER_START_MARKER=$provider_start \
+    PROVIDER_PID_FILE=$provider_pid_file \
+    PROVIDER_COMPLETION_MARKER=$provider_completion \
+    PROVIDER_COMPLETION_DELAY=$completion_delay \
+    HOME=$fixture_home XDG_STATE_HOME=$state_home \
+    "$ensure_ready" >"$output_file" 2>&1; then
+    waiter_status=0
+  else
+    waiter_status=$?
+  fi
+
+  [[ -s $controller_pid_file ]] ||
+    fail "the $mode waiter-stage fixture must publish its controller PID"
+  local controller_pid=$(<"$controller_pid_file")
+  [[ $controller_pid == <-> && $controller_pid -gt 1 ]] ||
+    fail "the $mode waiter-stage fixture must publish a numeric controller PID"
+  test_process_fixture_track_pid $controller_pid
+  if [[ $mode == retirement ]]; then
+    : > "$retirement_release"
+  fi
+  test_process_fixture_wait_for_pid_exit $controller_pid 100 ||
+    fail "the $mode waiter-stage fixture must leave no controller process"
+  integer controller_group_polls=100
+  while (( controller_group_polls-- > 0 )) &&
+    kill -0 -- -$controller_pid 2>/dev/null; do
+    zselect -t 1 2>/dev/null || true
+  done
+  ! kill -0 -- -$controller_pid 2>/dev/null ||
+    fail "the $mode waiter-stage fixture must leave no controller process group"
+  test_process_fixture_untrack_pid $controller_pid
+  test_process_fixture_untrack_pid_file "$controller_pid_file"
+
+  [[ -s $provider_pid_file ]] ||
+    fail "the $mode waiter-stage fixture must publish its provider PID"
+  local provider_pid=$(<"$provider_pid_file")
+  [[ $provider_pid == <-> && $provider_pid -gt 1 ]] ||
+    fail "the $mode waiter-stage fixture must publish a numeric provider PID"
+  test_process_fixture_wait_for_pid_exit $provider_pid 100 ||
+    fail "the $mode waiter-stage fixture must leave no provider process"
+  test_process_fixture_untrack_pid_file "$provider_pid_file"
+
+  (( waiter_status == 1 )) ||
+    fail "the $mode waiter-stage fixture must fail readiness with status 1"
+  waiter_output=$(<"$output_file")
+  [[ $waiter_output ==
+    'proton-pass-ensure-ready: provider-session repair failed' ]] ||
+    fail "the $mode waiter-stage fixture must preserve the fixed readiness diagnostic"
+  [[ $(<"$audit_log") == $expected_audit ]] ||
+    fail "the $mode waiter-stage fixture must prove its exact trigger"
+  [[ $(<"$provider_start") == provider-started ]] ||
+    fail "the $mode waiter-stage fixture must prove provider execution"
+  [[ $(<"$FAKE_PASS_LOG") == $'info\ninfo\nlogin' ]] ||
+    fail "the $mode waiter-stage fixture must target the direct login waiter"
+  case $completion_expectation in
+    completed)
+      [[ $(<"$provider_completion") == provider-completed ]] ||
+        fail "the $mode waiter-stage fixture must prove provider completion"
+      ;;
+    interrupted)
+      [[ ! -e $provider_completion ]] ||
+        fail "the $mode waiter-stage fixture must interrupt the provider before completion"
+      ;;
+    *) fail 'invalid waiter-stage completion expectation' ;;
+  esac
+  grep -Fqx 'state=unavailable' "$status_file" ||
+    fail "the $mode waiter-stage failure must record unavailable status"
+  grep -Fqx 'reason=login-failed' "$status_file" ||
+    fail "the $mode waiter-stage failure must keep login-failed stable"
+  grep -Fqx "waiter-stage=$mode" "$status_file" ||
+    fail "the $mode waiter-stage failure must record its exact stage"
+  [[ ! -s $kill_audit_log ]] ||
+    fail "the $mode waiter-stage fixture must not signal a stale process group"
+
+  value_free_artifacts=(
+    "$output_file"
+    "$audit_log"
+    "$status_file"
+    "$FAKE_PASS_LOG"
+    "$FAKE_SECRET_TOOL_LOG"
+    "$provider_pid_file"
+  )
+  [[ ! -e $controller_pid_file ]] || value_free_artifacts+=("$controller_pid_file")
+  [[ ! -e $provider_start ]] || value_free_artifacts+=("$provider_start")
+  [[ ! -e $provider_completion ]] || value_free_artifacts+=("$provider_completion")
+  ! rg -F "$fixture_token" "${value_free_artifacts[@]}" >/dev/null ||
+    fail "the $mode waiter-stage fixture must not expose the bootstrap value"
+  ! rg -F 'account-metadata-canary' "${value_free_artifacts[@]}" >/dev/null ||
+    fail "the $mode waiter-stage fixture must not expose provider output"
+  ! rg -F 'waiter-stage-canary' "${value_free_artifacts[@]}" >/dev/null ||
+    fail "the $mode waiter-stage fixture must not expose inherited diagnostic input"
+}
 
 rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION" \
   "$FAKE_UNAME_MARKER" "$FAKE_UNAME_CHILD_PID"
@@ -686,8 +831,29 @@ zsh "$ensure_ready"
   'proton-bootstrap' ]] ||
   fail 'ensure-ready must resolve the fixed native bootstrap item'
 status_file=$state_home/secret-exec/proton-pass-readiness.status
+if [[ -n $status_fragment_library ]]; then
+  run_waiter_stage_mapping record \
+    $'login-controller-targeted\nrecord-corrupted' completed ''
+  run_waiter_stage_mapping identity \
+    $'login-controller-targeted\nstart-gate\nlive-before-esrch\ninjected-esrch\nidentity-listing-invalidated\ncleanup-live' \
+    interrupted 1
+  run_waiter_stage_mapping liveness-retry \
+    $'login-controller-targeted\nstart-gate\nlive-before-esrch-1\ninjected-esrch-1\nlive-before-esrch-2\ninjected-esrch-2\ncleanup-live' \
+    interrupted 1
+  run_waiter_stage_mapping retirement \
+    $'login-controller-targeted\ncontroller-release-blocked\ncontroller-released' \
+    completed ''
+  rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION"
+  : > "$FAKE_PASS_LOG"
+  : > "$FAKE_SECRET_TOOL_LOG"
+  zsh "$ensure_ready"
+fi
 grep -Fqx 'state=ready' "$status_file" || fail 'a repaired session must record ready status'
 grep -Fqx 'reason=repaired' "$status_file" || fail 'a repaired session must record its value-free reason'
+grep -Fqx 'waiter-stage=unrecorded' "$status_file" ||
+  fail 'a successful repair must record an unrecorded waiter stage'
+[[ $(grep -Ec '^waiter-stage=(record|identity|liveness-retry|child-status|retirement|unrecorded)$' "$status_file") == 1 ]] ||
+  fail 'readiness status must contain one allowlisted waiter stage'
 
 : > "$FAKE_PASS_LOG"
 : > "$FAKE_SECRET_TOOL_LOG"
@@ -845,7 +1011,27 @@ set -e
   fail 'a failed provider login must report one value-free error'
 grep -Fqx 'reason=login-failed' "$status_file" ||
   fail 'a failed provider login must record its value-free reason'
+grep -Fqx 'waiter-stage=child-status' "$status_file" ||
+  fail 'a reported nonzero login status must record child-status'
 rm -f -- "$FAKE_PASS_LOGIN_FAIL"
+
+rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION"
+: > "$FAKE_PASS_LOG"
+: > "$FAKE_PASS_LOGIN_EXIT_124"
+set +e
+login_124_output=$(zsh "$ensure_ready" 2>&1)
+login_124_status=$?
+set -e
+(( login_124_status != 0 )) ||
+  fail 'a provider-reported status 124 must fail readiness'
+[[ $login_124_output ==
+  'proton-pass-ensure-ready: provider-session repair failed' ]] ||
+  fail 'provider-reported status 124 must not be classified as a waiter timeout'
+grep -Fqx 'reason=login-failed' "$status_file" ||
+  fail 'provider-reported status 124 must preserve login-failed'
+grep -Fqx 'waiter-stage=child-status' "$status_file" ||
+  fail 'provider-reported status 124 must record child-status'
+rm -f -- "$FAKE_PASS_LOGIN_EXIT_124"
 
 rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION" \
   "$FAKE_DESCENDANT_PID" "$FAKE_DESCENDANT_TOKEN_MARKER"
@@ -876,6 +1062,8 @@ rm -f -- "$FAKE_PASS_LOGIN_DESCENDANT"
   fail 'a provider-login timeout must report one value-free error'
 grep -Fqx 'reason=login-timeout' "$status_file" ||
   fail 'a provider-login timeout must record its value-free reason'
+grep -Fqx 'waiter-stage=unrecorded' "$status_file" ||
+  fail 'a true waiter timeout must not be classified as child-status'
 [[ -e $FAKE_DESCENDANT_TOKEN_MARKER ]] ||
   fail 'the login descendant fixture must inherit the bootstrap field before cleanup'
 (( ! login_descendant_survived )) ||
@@ -994,9 +1182,6 @@ rm -f -- "$lock_file"
 rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION"
 : > "$FAKE_PASS_LOG"
 : > "$FAKE_SECRET_TOOL_LOG"
-fixture_token=pst_
-fixture_token+='fixture-token'
-fixture_token+='::fixture-key'
 mv "$ensure_ready" "$test_dir/proton-pass-ensure-ready.real"
 cat > "$ensure_ready" <<'EOF'
 #!/usr/bin/env zsh
@@ -1085,6 +1270,8 @@ rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION"
 trace_output=$(FAKE_UNAME_SYSTEM=Linux zsh -x "$ensure_ready" 2>&1)
 [[ -e $FAKE_PASS_REMOTE_SESSION ]] ||
   fail 'readiness under an inherited xtrace request must still repair the session'
+grep -Fqx 'waiter-stage=unrecorded' "$status_file" ||
+  fail 'a repair after waiter-stage failures must reset diagnostic state'
 
 ! print -r -- "$locked_output" | rg -F "$fixture_token" >/dev/null ||
   fail 'readiness errors must not contain the bootstrap token'
@@ -1097,6 +1284,8 @@ trace_output=$(FAKE_UNAME_SYSTEM=Linux zsh -x "$ensure_ready" 2>&1)
   fail 'the synthetic bootstrap token must not appear in managed source or tests'
 ! rg -F 'account-metadata-canary' "$test_dir"/*.log "$status_file" >/dev/null ||
   fail 'readiness must suppress provider account metadata'
+! rg -F 'waiter-stage-canary' "$test_dir"/*.log "$status_file" >/dev/null ||
+  fail 'readiness must not persist an inherited waiter-stage canary'
 
 symlink_state_home=$test_dir/symlink-state-home
 symlink_state_target=$test_dir/symlink-state-target
