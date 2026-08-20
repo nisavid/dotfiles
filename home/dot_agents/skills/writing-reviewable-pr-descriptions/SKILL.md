@@ -60,9 +60,12 @@ title and body supplied to it. Generated `--fill` text is never a substitute.
    ```
 
    A chat-only draft with no existing PR has no PR number for this
-   identity-bound validation. Build its disclosure links with a placeholder PR
-   number, deliver the draft explicitly unvalidated, and state that validation
-   binds when publication assigns the number.
+   identity-bound validation. Build its disclosure links with the publisher's
+   literal PR-number placeholder token, never an invented number that renders
+   a live-looking URL. Deliver the draft explicitly unvalidated with those
+   links marked inert, and require publication to substitute the assigned
+   number and rerun this validation before treating the stored body as
+   reviewer-ready.
 
 8. Compare the proposal with the live baseline for unintended loss. For a
    chat-only draft, deliver the complete title/body in chat and stop before
