@@ -579,7 +579,7 @@ case $1 in
       fail_stage login-bootstrap 67
     fi
     print -r -- login >> "$FAKE_PASS_SESSION_LOG"
-    [[ ! -e $FAKE_PASS_LOGIN_DELAY ]] || /usr/bin/sleep 0.2
+    [[ ! -e $FAKE_PASS_LOGIN_DELAY ]] || /bin/sleep 0.2
     : > "$FAKE_PASS_SESSION"
     record_stage 'login:ready'
     print -r -- completed >> "$FAKE_PASS_LOGIN_OUTCOME_LOG"
