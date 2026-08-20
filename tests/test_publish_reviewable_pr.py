@@ -392,8 +392,13 @@ class UpdateReviewablePrTests(ReviewablePrFixture):
                 body_path=desired_path,
             )
         self.assertEqual(result, after)
-        validate.assert_called_once()
-        self.assertEqual(validate.call_args.args[0], desired)
+        validate.assert_called_once_with(
+            desired,
+            self.repository,
+            self.pr_number,
+            self.base_oid,
+            self.head_oid,
+        )
 
     def test_text_update_publishes_validated_snapshot(self) -> None:
         desired_path = self.desired_body_path()
