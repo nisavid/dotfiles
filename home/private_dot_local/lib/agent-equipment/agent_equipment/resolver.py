@@ -714,16 +714,31 @@ def _desired_component_states(group: _RouteLike) -> tuple[FrozenJsonObject, ...]
     return tuple(sorted(typed_controls, key=control_order_key))
 
 
+def _configuration_digest(group: _RouteLike) -> str:
+    return canonical_json_sha256(
+        {
+            "provider": group.route.get("provider"),
+            "component_controls": group.route.get("component_controls"),
+        }
+    )
+
+
 def _desired_configuration(group: _RouteLike) -> FrozenJsonObject:
     configuration = freeze_json(
         {
+            "status": "desired",
+            "digest": _configuration_digest(group),
+        }
+    )
+    assert isinstance(configuration, FrozenJsonObject)
+    return configuration
+
+
+def _observed_configuration(group: _RouteLike) -> FrozenJsonObject:
+    configuration = freeze_json(
+        {
             "status": "observed",
-            "digest": canonical_json_sha256(
-                {
-                    "provider": group.route.get("provider"),
-                    "component_controls": group.route.get("component_controls"),
-                }
-            ),
+            "digest": _configuration_digest(group),
         }
     )
     assert isinstance(configuration, FrozenJsonObject)
@@ -751,10 +766,13 @@ def _desired_state(operation: str, group: _RouteLike) -> FrozenJsonObject:
     if operation == "install":
         payload: object = {"route_presence": "present"}
     elif operation == "configure":
-        payload = {
-            "configuration": _desired_configuration(group),
-            "component_states": _desired_component_states(group),
+        configure_payload: dict[str, object] = {
+            "configuration": _desired_configuration(group)
         }
+        component_states = _desired_component_states(group)
+        if component_states:
+            configure_payload["component_states"] = component_states
+        payload = configure_payload
     elif operation == "enable":
         payload = {"enablement": "enabled"}
     elif operation == "disable":
@@ -815,7 +833,7 @@ def _active_state_target(
             "observation_source": restore.get("observation_source"),
         }
     if _effective_disposition(matrix, "configure") != "unavailable":
-        target["configuration"] = _desired_configuration(group)
+        target["configuration"] = _observed_configuration(group)
     if _effective_disposition(matrix, "enable") != "unavailable":
         target["enablement"] = "enabled"
     frozen = freeze_json(target)
@@ -873,12 +891,10 @@ def _action_operations(
     enablement = normalized.get("enablement")
     immutable_content = normalized.get("immutable_content")
     immutable_target = _immutable_content_target(group)
-    desired_configuration = _desired_state("configure", group)
-    configuration_matches = normalized.get(
-        "configuration"
-    ) == desired_configuration.get("configuration") and normalized.get(
-        "component_states"
-    ) == desired_configuration.get("component_states")
+    configuration_matches = (
+        normalized.get("configuration") == _observed_configuration(group)
+        and normalized.get("component_states") == _desired_component_states(group)
+    )
     if presence in {"partial", "unknown"}:
         return (), (
             Diagnostic(

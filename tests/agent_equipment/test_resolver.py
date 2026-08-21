@@ -4,7 +4,7 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 
-from agent_equipment.canonical import canonical_json_sha256
+from agent_equipment.canonical import canonical_json_bytes, canonical_json_sha256
 from agent_equipment.inventory import (
     admit_capability_discovery,
     admit_runtime_inventory,
@@ -17,13 +17,20 @@ from agent_equipment.model import (
     FrozenJsonObject,
     RuntimeInventory,
     RuntimeObservation,
+    ValidatedPlan,
     _runtime_inventory_digest,
     freeze_json,
     thaw_json,
 )
+from agent_equipment.plan_action_set import (
+    AdmittedPlanActionSet,
+    PlanActionSetTrust,
+    admit_plan_action_set,
+)
 from agent_equipment.resolver import (
     _action_operations,
     _active_route_groups,
+    _active_state_target,
     _component_control_diagnostics,
     _matching_capability,
     _observation_binding_diagnostics,
@@ -32,6 +39,11 @@ from agent_equipment.resolver import (
     resolve,
 )
 from agent_equipment.validator import load_catalog_lock
+from scripts.agent_equipment_captured_state import (
+    plan_action_digest,
+    plan_action_identity,
+    plan_action_set_digest,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 CATALOG_PATH = ROOT / "home/dot_config/agent-equipment/catalog-v1.json"
@@ -482,6 +494,161 @@ def with_normalized_state(
         inventory.lock_digest,
     )
     return replace(inventory, observations=observation_tuple, digest=digest)
+
+
+def converged_inventory_with_configuration_drift(
+    validated,
+    route_identity: str,
+) -> tuple[RuntimeInventory, CapabilityDiscovery]:
+    """Build admitted observations whose only mutation is one configuration drift."""
+
+    inventory, capabilities = runtime_inventory(validated)
+    for group in _active_route_groups(validated):
+        selected = _matching_capability(group, capabilities.records)
+        assert selected is not None
+        matrix, diagnostics = _operation_matrix(group, selected)
+        assert not diagnostics
+        observation = next(
+            item
+            for item in inventory.observations
+            if item.harness == group.harness
+            and item.route_identity == group.route_identity
+        )
+        document = thaw_json(observation.document)
+        assert isinstance(document, dict)
+        normalized = document["result"]["normalized_state"]
+        assert isinstance(normalized, dict)
+        normalized.update(thaw_json(_active_state_target(group, matrix)))
+        inventory = with_normalized_state(
+            inventory, group.route_identity, normalized
+        )
+    for group in _retirement_route_groups(validated):
+        observation = next(
+            item
+            for item in inventory.observations
+            if item.harness == group.harness
+            and item.route_identity == group.route_identity
+        )
+        document = thaw_json(observation.document)
+        assert isinstance(document, dict)
+        normalized = document["result"]["normalized_state"]
+        assert isinstance(normalized, dict)
+        normalized.update(
+            {"route_presence": "absent", "enablement": "not_applicable"}
+        )
+        restore = group.route.get("restore")
+        assert isinstance(restore, FrozenJsonObject)
+        if restore.get("class") == "native_rolling":
+            normalized.update(
+                {
+                    "immutable_content": {"status": "not_applicable"},
+                    "observed_version": {"status": "route_absent"},
+                }
+            )
+        else:
+            normalized["immutable_content"] = {"status": "route_absent"}
+        inventory = with_normalized_state(
+            inventory, group.route_identity, normalized
+        )
+    observation = next(
+        item for item in inventory.observations if item.route_identity == route_identity
+    )
+    document = thaw_json(observation.document)
+    assert isinstance(document, dict)
+    normalized = document["result"]["normalized_state"]
+    assert isinstance(normalized, dict)
+    normalized["configuration"] = {"status": "unknown"}
+    return with_normalized_state(inventory, route_identity, normalized), capabilities
+
+
+def plan_action_set_for_direct_mcp_configure(plan: ValidatedPlan) -> dict[str, object]:
+    """Supply the strict action projection for one actual resolver mutation."""
+
+    mutations = tuple(node for node in plan.nodes if node.kind == "mutation")
+    assert len(mutations) == 1
+    node = mutations[0]
+    payload = thaw_json(node.definition)
+    assert isinstance(payload, dict)
+    route_record = payload.pop("route_record", None)
+    assert isinstance(route_record, dict)
+    provider = route_record.get("provider")
+    assert isinstance(provider, dict) and provider.get("kind") == "direct_mcp"
+    surface_scope = payload.get("surface_scope")
+    equipment = payload.get("equipment_identities")
+    assert isinstance(surface_scope, list) and len(surface_scope) == 1
+    assert isinstance(equipment, list) and len(equipment) == 1
+    target_payload = {
+        "write_surface_identity": surface_scope[0],
+        "surface_kind": "mcp_selection",
+        "equipment_identity": equipment[0],
+        "locator": {
+            "owner": payload["harness"],
+            "source": "config",
+            "key_path": ["mcp_servers", provider["server_name"]],
+        },
+    }
+    target = {
+        "target_identity": "target:" + canonical_json_sha256(target_payload),
+        **target_payload,
+    }
+    payload.update(
+        {
+            "action_identity": node.identity,
+            "ordinal": node.ordinal,
+            "plan_digest": plan.digest,
+            "provider": provider,
+            "write_targets": [target],
+            "expected_post_state_digest": "sha256:" + "9" * 64,
+            "preconditions": {
+                "candidate_identity": payload["candidate_identity"],
+                "implementation_manifest_digest": payload[
+                    "implementation_manifest_digest"
+                ],
+                "catalog_digest": payload["catalog_digest"],
+                "lock_digest": payload["lock_digest"],
+                "plan_digest": plan.digest,
+                "route_digest": payload["route_digest"],
+                "capability_digest": payload["capability_digest"],
+                "manager_version_evidence_digest": payload[
+                    "manager_version_evidence_digest"
+                ],
+                "adapter_identity": payload["adapter_identity"],
+                "adapter_version": payload["adapter_version"],
+                "control_owner": route_record["control_owner"],
+                "activation_group": payload["activation_group"],
+                "surface_scope": surface_scope,
+                "prepared_checkpoint_required": True,
+                "compare_before_mutate": True,
+            },
+            "verification_dependencies": [],
+            "compensation": {
+                "kind": "restore_captured_pre_state",
+                "captured_state_version": "agent-equipment-captured-state/v1",
+            },
+        }
+    )
+    assert plan_action_identity(payload) == node.identity
+    evidence = {
+        "action_payload": payload,
+        "action_digest": plan_action_digest(payload),
+    }
+    actions = [evidence]
+    document = {
+        "schema_version": "agent-equipment-plan-action-set/v1",
+        "candidate_identity": payload["candidate_identity"],
+        "implementation_manifest_digest": payload[
+            "implementation_manifest_digest"
+        ],
+        "plan_digest": plan.digest,
+        "actions": actions,
+    }
+    document["action_set_digest"] = plan_action_set_digest(
+        str(payload["candidate_identity"]),
+        str(payload["implementation_manifest_digest"]),
+        plan.digest,
+        actions,
+    )
+    return document
 
 
 class ResolverMatrixTest(unittest.TestCase):
@@ -2460,6 +2627,97 @@ class ResolverMatrixTest(unittest.TestCase):
         )
         self.assertIsNone(resolution.candidate_plan)
         self.assertIsNone(resolution.mutation_plan)
+
+    def test_real_control_free_configure_plan_crosses_action_set_admission(
+        self,
+    ) -> None:
+        inventory, capabilities = converged_inventory_with_configuration_drift(
+            self.validated, "route:codex/direct-context7"
+        )
+        resolution = resolve(
+            "status",
+            self.validated.catalog,
+            self.validated.lock,
+            inventory,
+            capabilities,
+        )
+
+        self.assertEqual(resolution.diagnostics, ())
+        plan = resolution.candidate_plan
+        self.assertIsNotNone(plan)
+        assert plan is not None
+        document = plan_action_set_for_direct_mcp_configure(plan)
+        action = document["actions"][0]["action_payload"]
+        self.assertEqual(
+            action["desired_state"],
+            {
+                "configuration": {
+                    "status": "desired",
+                    "digest": canonical_json_sha256(
+                        {
+                            "provider": action["provider"],
+                            "component_controls": [],
+                        }
+                    ),
+                }
+            },
+        )
+        expected_digest = document["action_set_digest"]
+        assert isinstance(expected_digest, str)
+
+        admitted = admit_plan_action_set(
+            canonical_json_bytes(document),
+            PlanActionSetTrust(
+                validated_plan=plan,
+                expected_action_set_digest=expected_digest,
+            ),
+        )
+
+        self.assertIsInstance(admitted, AdmittedPlanActionSet)
+
+    def test_real_controlled_configure_plan_projects_exact_desired_controls(
+        self,
+    ) -> None:
+        inventory, capabilities = converged_inventory_with_configuration_drift(
+            self.validated, "route:codex/github-plugin"
+        )
+        resolution = resolve(
+            "status",
+            self.validated.catalog,
+            self.validated.lock,
+            inventory,
+            capabilities,
+        )
+
+        self.assertEqual(resolution.diagnostics, ())
+        plan = resolution.candidate_plan
+        self.assertIsNotNone(plan)
+        assert plan is not None
+        mutation = next(node for node in plan.nodes if node.kind == "mutation")
+        self.assertEqual(mutation.definition.get("operation"), "configure")
+        desired_state = thaw_json(mutation.definition.get("desired_state"))
+        route_record = mutation.definition.get("route_record")
+        assert isinstance(route_record, FrozenJsonObject)
+        self.assertEqual(
+            desired_state,
+            {
+                "configuration": {
+                    "status": "desired",
+                    "digest": canonical_json_sha256(
+                        {
+                            "provider": route_record.get("provider"),
+                            "component_controls": route_record.get(
+                                "component_controls"
+                            ),
+                        }
+                    ),
+                },
+                "component_states": sorted(
+                    thaw_json(route_record.get("component_controls")),
+                    key=lambda control: control["equipment_identity"],
+                ),
+            },
+        )
 
 
 if __name__ == "__main__":
