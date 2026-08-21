@@ -566,6 +566,10 @@ main() {
     fail_readiness invalid-bootstrap-value \
       'the native bootstrap item must contain one non-empty line' unrecorded
 
+  # pass-cli refuses login while unusable local authentication state remains.
+  run_bounded "$PROTON_PASS_INFO_TIMEOUT_SECONDS" discard -- \
+    "$backend" logout || true
+
   local PROTON_PASS_CHILD_ENVIRONMENT_VALUE=$bootstrap_token
   unset bootstrap_token
   start_bounded_child "$PROTON_PASS_BOOTSTRAP_FIELD" \

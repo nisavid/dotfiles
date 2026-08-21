@@ -473,6 +473,8 @@ case $1 in
     else
       [[ ${PROTON_PASS_LINUX_KEYRING:-} == dbus ]] || exit 67
     fi
+    [[ ! -e $FAKE_PASS_REQUIRE_LOGOUT || ! -e $FAKE_PASS_LOCAL_SESSION ]] ||
+      exit 73
     [[ -z ${PROVIDER_PID_FILE:-} ]] || print -r -- $$ > "$PROVIDER_PID_FILE"
     [[ -z ${PROVIDER_START_MARKER:-} ]] ||
       print -r -- provider-started >> "$PROVIDER_START_MARKER"
@@ -492,6 +494,11 @@ case $1 in
     [[ -e $FAKE_PASS_SKIP_REMOTE_SESSION ]] || : > "$FAKE_PASS_REMOTE_SESSION"
     [[ -z ${PROVIDER_COMPLETION_MARKER:-} ]] ||
       print -r -- provider-completed >> "$PROVIDER_COMPLETION_MARKER"
+    ;;
+  logout)
+    (( $# == 1 )) || exit 74
+    [[ -z ${${(P)bootstrap_field}:-} ]] || exit 75
+    /bin/rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION"
     ;;
   *)
     exit 68
@@ -603,6 +610,7 @@ export XDG_STATE_HOME=$state_home
 export FAKE_PASS_LOG=$test_dir/pass.log
 export FAKE_PASS_LOGIN_DELAY=$test_dir/login-delay
 export FAKE_PASS_LOGIN_FAIL=$test_dir/login-fail
+export FAKE_PASS_REQUIRE_LOGOUT=$test_dir/require-logout
 export FAKE_PASS_LOGIN_EXIT_124=$test_dir/login-exit-124
 export FAKE_PASS_LOGIN_HANG=$test_dir/login-hang
 export FAKE_PASS_LOGIN_DESCENDANT=$test_dir/login-descendant
@@ -722,7 +730,7 @@ run_waiter_stage_mapping() {
     fail "the $mode waiter-stage fixture must prove its exact trigger"
   [[ $(<"$provider_start") == provider-started ]] ||
     fail "the $mode waiter-stage fixture must prove provider execution"
-  [[ $(<"$FAKE_PASS_LOG") == $'info\ninfo\nlogin' ]] ||
+  [[ $(<"$FAKE_PASS_LOG") == $'info\ninfo\nlogout\nlogin' ]] ||
     fail "the $mode waiter-stage fixture must target the direct login waiter"
   case $completion_expectation in
     completed)
@@ -925,6 +933,7 @@ grep -Fqx 'reason=existing-session' "$status_file" ||
   fail 'an existing session must record its value-free reason'
 
 rm -f -- "$FAKE_PASS_REMOTE_SESSION"
+: > "$FAKE_PASS_REQUIRE_LOGOUT"
 : > "$FAKE_PASS_LOG"
 : > "$FAKE_SECRET_TOOL_LOG"
 zsh "$ensure_ready"
@@ -932,6 +941,9 @@ zsh "$ensure_ready"
   fail 'a stale local session marker must not satisfy remote readiness'
 [[ $(/usr/bin/grep -Fxc login "$FAKE_PASS_LOG") == 1 ]] ||
   fail 'a stale local session marker must trigger one repair login'
+[[ $(<"$FAKE_PASS_LOG") == $'info\ninfo\nlogout\nlogin\ninfo' ]] ||
+  fail 'a stale local session must be logged out before repair login'
+rm -f -- "$FAKE_PASS_REQUIRE_LOGOUT"
 
 rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION"
 : > "$FAKE_PASS_LOG"
