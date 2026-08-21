@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -19,6 +20,52 @@ def shipped_eval_paths() -> list[Path]:
 
 
 class PrepareBehaviorEvalsTests(unittest.TestCase):
+    def test_rejects_a_fifo_fixture_without_blocking(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            skill_dir = root / "skill"
+            fixtures_dir = skill_dir / "evals" / "fixtures"
+            fixtures_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text("candidate skill", encoding="utf-8")
+            os.mkfifo(fixtures_dir / "blocked-input")
+            (skill_dir / "evals" / "evals.json").write_text(
+                json.dumps(
+                    {
+                        "skill_name": "fifo-fixture",
+                        "evals": [
+                            {
+                                "id": 1,
+                                "name": "reject fifo",
+                                "prompt": "Run the isolated evaluation.",
+                                "fixture_paths": ["evals/fixtures/blocked-input"],
+                                "expected_output": "No prompt is generated.",
+                                "expectations": [],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            workspace = root / "workspace"
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(PREPARER),
+                    "--skill-dir",
+                    str(skill_dir),
+                    "--workspace",
+                    str(workspace),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=2,
+            )
+
+            self.assertNotEqual(result.returncode, 0, result.stdout or result.stderr)
+            self.assertFalse(workspace.exists())
+
     def test_rejects_a_dangling_workspace_symlink(self) -> None:
         skill_dir = shipped_eval_paths()[0].parents[1]
 

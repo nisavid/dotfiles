@@ -34,14 +34,16 @@ def read_scoped_text(skill_dir: Path, relative_path: str) -> str:
 
     directory_fds: list[int] = []
     source_fd: int | None = None
-    flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW
+    nofollow_flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW
+    directory_flags = nofollow_flags | os.O_DIRECTORY
+    source_flags = nofollow_flags | os.O_NONBLOCK
     try:
-        directory_fds.append(os.open(skill_root, flags | os.O_DIRECTORY))
+        directory_fds.append(os.open(skill_root, directory_flags))
         for part in path.parts[:-1]:
             directory_fds.append(
-                os.open(part, flags | os.O_DIRECTORY, dir_fd=directory_fds[-1])
+                os.open(part, directory_flags, dir_fd=directory_fds[-1])
             )
-        source_fd = os.open(path.parts[-1], flags, dir_fd=directory_fds[-1])
+        source_fd = os.open(path.parts[-1], source_flags, dir_fd=directory_fds[-1])
         if not stat.S_ISREG(os.fstat(source_fd).st_mode):
             raise ValueError(
                 f"source path must be a regular file within the skill directory: {relative_path}"
