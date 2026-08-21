@@ -92,11 +92,12 @@ For each `eval-*` directory:
 
 1. Spawn one subagent with `with_skill/run-1/subagent_prompt.md`.
 2. Spawn one baseline subagent with `without_skill/run-1/subagent_prompt.md`.
-3. Capture each subagent's final response and write it to that run's `outputs/response.md`.
-4. Grade each run against `eval_metadata.json` assertions and save `grading.json`
+3. Allow no tool use for either subagent.
+4. Capture each subagent's final response and write it to that run's `outputs/response.md`.
+5. Grade each run against `eval_metadata.json` assertions and save `grading.json`
    in the run directory using skill-creator's required fields:
    `expectations[].text`, `expectations[].passed`, and `expectations[].evidence`.
-5. Run:
+6. Run:
 
 ```bash
 cd <skill-creator-skill-dir>
