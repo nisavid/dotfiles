@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import re
 
-
 DETAILS_OPEN_RE = re.compile(r"<details(?:\s[^>]*)?>", re.IGNORECASE)
 DETAILS_CLOSE_RE = re.compile(r"</details>", re.IGNORECASE)
 
@@ -16,15 +15,44 @@ def first_nonempty_line(lines: list[str]) -> int:
     return -1
 
 
-def extract_leading_details(lines: list[str]) -> list[list[str]]:
-    blocks: list[list[str]] = []
+def leading_details_spans(lines: list[str]) -> list[tuple[int, int]]:
+    """Return the open and close line index of each leading details block."""
+    spans: list[tuple[int, int]] = []
     index = first_nonempty_line(lines)
     while _starts_details(lines, index):
-        block, index = _extract_one_details(lines, index)
-        if not block:
+        end = _details_end(lines, index)
+        if end is None:
             break
-        blocks.append(block)
-    return blocks
+        spans.append((index, end))
+        index = _next_nonempty(lines, end + 1)
+    return spans
+
+
+def extract_leading_details(lines: list[str]) -> list[list[str]]:
+    return [lines[start : end + 1] for start, end in leading_details_spans(lines)]
+
+
+def validate_details_separation(lines: list[str], errors: list[str]) -> None:
+    """Require a blank line between a leading disclosure and following Markdown.
+
+    GitHub continues a raw HTML block to the next blank line, so a heading,
+    list, table row, or paragraph on the line after `</details>` is swallowed
+    into the disclosure's HTML and never parsed as Markdown. Raw HTML may follow
+    immediately, because it remains valid HTML inside the same block; adjacent
+    Stack and Diff disclosures rely on that.
+    """
+    for _, end in leading_details_spans(lines):
+        following = end + 1
+        if following >= len(lines):
+            continue
+        text = lines[following].strip()
+        if not text or text.startswith("<"):
+            continue
+        errors.append(
+            f"line {following + 1} must be blank or raw HTML: a disclosure continues"
+            " its raw HTML block to the next blank line, so this Markdown would be"
+            " swallowed instead of rendered"
+        )
 
 
 def extract_details(lines: list[str]) -> list[list[str]]:
@@ -63,6 +91,17 @@ def _starts_details(lines: list[str], index: int) -> bool:
     return 0 <= index < len(lines) and bool(
         DETAILS_OPEN_RE.fullmatch(lines[index].strip())
     )
+
+
+def _details_end(lines: list[str], start: int) -> int | None:
+    depth = 0
+    for index in range(start, len(lines)):
+        stripped = lines[index].strip()
+        depth += bool(DETAILS_OPEN_RE.fullmatch(stripped))
+        depth -= bool(DETAILS_CLOSE_RE.fullmatch(stripped))
+        if depth == 0:
+            return index
+    return None
 
 
 def _extract_one_details(

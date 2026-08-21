@@ -21,6 +21,7 @@ from change_navigation.parsing import (
     extract_details,
     extract_leading_details,
     first_nonempty_line,
+    validate_details_separation,
 )
 from change_navigation.stack import validate_stack
 from change_navigation.stack_inventory import (
@@ -55,6 +56,7 @@ def validate(
                 f"expected {label} SHA must be 40 or 64 lowercase hexadecimal characters"
             )
     validate_source_breaks(body, errors)
+    validate_details_separation(body.splitlines(), errors)
     expected_identity = (expected_repository, expected_pr)
     expected_comparison = (
         (expected_base_sha, expected_head_sha)

@@ -46,6 +46,11 @@ Use this reference only while constructing or revising the first-viewport
 - Render exactly one Stack disclosure when stacked and exactly one Diff
   disclosure in every body. They form the leading `[STACK, DIFF]` or `[DIFF]`
   prefix; unrelated disclosures may follow, but must not interrupt that prefix.
+- Separate a disclosure from following Markdown with a blank line. GitHub
+  continues a raw HTML block to the next blank line, so a heading, list, table
+  row, or paragraph on the line after `</details>` is swallowed into the
+  disclosure's HTML and never parsed as Markdown. Raw HTML may follow
+  immediately, which is how adjacent Stack and Diff disclosures render.
 
 ## Stack Disclosure
 
