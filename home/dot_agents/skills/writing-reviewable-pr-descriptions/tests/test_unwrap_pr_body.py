@@ -141,6 +141,16 @@ class InvariantTests(unittest.TestCase):
         )
 
 
+class SetextPreservationTests(unittest.TestCase):
+    """Repair must never flatten a heading into paragraph text."""
+
+    def test_a_setext_heading_survives_unwrapping(self) -> None:
+        for underline in ("=", "===", "-", "---"):
+            with self.subTest(underline=underline):
+                body = f"A heading\n{underline}\n\nProse.\n"
+                self.assertEqual(body, unwrap_pr_body.unwrap(body))
+
+
 class CommandLineTests(unittest.TestCase):
     def test_the_command_writes_the_unwrapped_body_in_place(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -161,7 +171,6 @@ class CommandLineTests(unittest.TestCase):
             self.assertEqual(
                 "First line and its continuation.\n", path.read_text(encoding="utf-8")
             )
-
 
     def test_check_reports_offenses_without_rewriting_the_file(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

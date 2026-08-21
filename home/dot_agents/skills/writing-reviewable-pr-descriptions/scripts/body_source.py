@@ -19,7 +19,8 @@ BLOCK_START = re.compile(
         | \#{1,6}[ \t]         # ATX heading
         | \|                   # table row
         | ```|~~~              # fenced code
-        | (?:-{3,}|\*{3,}|_{3,})\s*$   # thematic break
+        | (?:-+|=+)\s*$        # setext underline of any length
+        | (?:\*{3,}|_{3,})\s*$  # thematic break
         | \[[^\]]+\]:          # link or footnote reference definition
     )""",
     re.VERBOSE,
@@ -28,7 +29,8 @@ BLOCK_END = re.compile(
     r"""^(?:
           \#{1,6}[ \t]                   # ATX heading, a single-line block
         | \|                             # table row
-        | (?:-{3,}|\*{3,}|_{3,}|={3,})\s*$  # thematic break or setext underline
+        | (?:-+|=+)\s*$                  # setext underline of any length
+        | (?:\*{3,}|_{3,})\s*$            # thematic break
     )""",
     re.VERBOSE,
 )
