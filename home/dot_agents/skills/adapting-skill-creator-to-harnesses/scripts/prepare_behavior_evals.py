@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
+import stat
 from pathlib import Path
 
 
@@ -27,19 +29,36 @@ def load_evals(skill_dir: Path) -> dict:
 def read_scoped_text(skill_dir: Path, relative_path: str) -> str:
     skill_root = skill_dir.resolve(strict=True)
     path = Path(relative_path)
-    if path.is_absolute() or ".." in path.parts:
+    if path.is_absolute() or not path.parts or ".." in path.parts:
         raise ValueError(f"source path must stay within the skill directory: {relative_path}")
 
-    candidate = skill_root
-    for part in path.parts:
-        candidate /= part
-        if candidate.is_symlink():
-            raise ValueError(f"source path must not contain symlinks: {relative_path}")
-
-    resolved = candidate.resolve(strict=True)
-    if not resolved.is_relative_to(skill_root) or not resolved.is_file():
-        raise ValueError(f"source path must be a regular file within the skill directory: {relative_path}")
-    return resolved.read_text(encoding="utf-8")
+    directory_fds: list[int] = []
+    source_fd: int | None = None
+    flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW
+    try:
+        directory_fds.append(os.open(skill_root, flags | os.O_DIRECTORY))
+        for part in path.parts[:-1]:
+            directory_fds.append(
+                os.open(part, flags | os.O_DIRECTORY, dir_fd=directory_fds[-1])
+            )
+        source_fd = os.open(path.parts[-1], flags, dir_fd=directory_fds[-1])
+        if not stat.S_ISREG(os.fstat(source_fd).st_mode):
+            raise ValueError(
+                f"source path must be a regular file within the skill directory: {relative_path}"
+            )
+        source = os.fdopen(source_fd, encoding="utf-8")
+        source_fd = None
+        with source:
+            return source.read()
+    except OSError as error:
+        raise ValueError(
+            f"source path must be a regular file within the skill directory: {relative_path}"
+        ) from error
+    finally:
+        if source_fd is not None:
+            os.close(source_fd)
+        for directory_fd in reversed(directory_fds):
+            os.close(directory_fd)
 
 
 def prompt_variants(
@@ -135,15 +154,18 @@ def main() -> int:
         parser.error("--runs must be greater than zero")
 
     skill_dir = args.skill_dir.resolve()
-    workspace = args.workspace.resolve()
-    if workspace.exists():
+    workspace = args.workspace.absolute()
+    if workspace.exists() or workspace.is_symlink():
         parser.error("--workspace must not already exist")
     data = load_evals(skill_dir)
     prepared_evals = [
         (eval_item, prompt_variants(skill_dir=skill_dir, eval_item=eval_item))
         for eval_item in data["evals"]
     ]
-    workspace.mkdir(parents=True)
+    try:
+        workspace.mkdir(parents=True)
+    except FileExistsError:
+        parser.error("--workspace must not already exist")
 
     for eval_item, prompts in prepared_evals:
         write_eval(workspace, eval_item, args.runs, prompts)
