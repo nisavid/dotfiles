@@ -565,6 +565,7 @@ case $1 in
     if [[ -e $FAKE_PASS_SESSION ]]; then
       record_stage 'info:ready'
     else
+      print -u2 -r -- 'Error: This operation requires an authenticated client'
       fail_stage info-session 1
     fi
     ;;
