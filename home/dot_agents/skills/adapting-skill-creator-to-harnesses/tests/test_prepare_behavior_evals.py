@@ -19,6 +19,52 @@ def shipped_eval_paths() -> list[Path]:
 
 
 class PrepareBehaviorEvalsTests(unittest.TestCase):
+    def test_rejects_reusing_an_existing_workspace(self) -> None:
+        skill_dir = shipped_eval_paths()[0].parents[1]
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            workspace = Path(tempdir) / "workspace"
+            first = subprocess.run(
+                [
+                    sys.executable,
+                    str(PREPARER),
+                    "--skill-dir",
+                    str(skill_dir),
+                    "--workspace",
+                    str(workspace),
+                    "--runs",
+                    "3",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(first.returncode, 0, first.stdout or first.stderr)
+            original_instructions = (workspace / "RUN_INSTRUCTIONS.md").read_text(encoding="utf-8")
+
+            second = subprocess.run(
+                [
+                    sys.executable,
+                    str(PREPARER),
+                    "--skill-dir",
+                    str(skill_dir),
+                    "--workspace",
+                    str(workspace),
+                    "--runs",
+                    "1",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertNotEqual(second.returncode, 0, second.stdout or second.stderr)
+            self.assertEqual(
+                (workspace / "RUN_INSTRUCTIONS.md").read_text(encoding="utf-8"),
+                original_instructions,
+            )
+            self.assertTrue(list(workspace.glob("eval-*/with_skill/run-3")))
+
     def test_rejects_nonpositive_run_counts_before_creating_workspace(self) -> None:
         skill_dir = shipped_eval_paths()[0].parents[1]
 
