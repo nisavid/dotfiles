@@ -136,12 +136,14 @@ def main() -> int:
 
     skill_dir = args.skill_dir.resolve()
     workspace = args.workspace.resolve()
+    if workspace.exists():
+        parser.error("--workspace must not already exist")
     data = load_evals(skill_dir)
     prepared_evals = [
         (eval_item, prompt_variants(skill_dir=skill_dir, eval_item=eval_item))
         for eval_item in data["evals"]
     ]
-    workspace.mkdir(parents=True, exist_ok=True)
+    workspace.mkdir(parents=True)
 
     for eval_item, prompts in prepared_evals:
         write_eval(workspace, eval_item, args.runs, prompts)
