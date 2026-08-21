@@ -173,7 +173,7 @@ class ApplyAuthorizationTest(unittest.TestCase):
 
         self.assertIsInstance(result, ClaimedApplyAuthorization)
         assert isinstance(result, ClaimedApplyAuthorization)
-        self.assertEqual(result.authorization, freeze_json(document))
+        self.assertEqual(result.authorization_record, freeze_json(document))
         self.assertEqual(result.authorization_digest, authorization_digest)
         self.assertEqual(len(ledger.claims), 1)
         self.assertEqual(result.claim_identity, ledger.claims[0].claim_identity)

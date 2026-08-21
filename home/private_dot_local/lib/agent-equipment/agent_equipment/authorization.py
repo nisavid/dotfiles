@@ -297,7 +297,7 @@ class FileAuthorizationLedger:
 class ClaimedApplyAuthorization:
     """One validated authorization whose nonce is durably consumed."""
 
-    authorization: FrozenJsonObject
+    authorization_record: FrozenJsonObject
     ledger_claim: AuthorizationLedgerClaim
 
     @property
@@ -407,7 +407,7 @@ def _authorize_apply_start(
         claim_status = AuthorizationLedgerClaimStatus.DURABILITY_UNCERTAIN
     if claim_status is AuthorizationLedgerClaimStatus.DURABLE:
         return ClaimedApplyAuthorization(
-            authorization=authorization,
+            authorization_record=authorization,
             ledger_claim=claim,
         )
     return _ledger_rejection(claim_status)
