@@ -29,6 +29,43 @@ trap test_process_fixture_cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+cleanup_diagnostic=$test_dir/cleanup-diagnostic
+: > "$cleanup_diagnostic"
+set +e
+/bin/zsh -f -c '
+  source_text=$(<"$1")
+  source_text=${source_text%$'"'"'\nmain "$@"'"'"'}
+  eval "$source_text"
+  trap - EXIT HUP INT TERM
+  PROTON_PASS_DIAGNOSTIC_FILE=$2
+  terminate_active_child() { exit 93 }
+  cleanup_readiness_process
+' -- "$ensure_ready_source" "$cleanup_diagnostic"
+cleanup_diagnostic_status=$?
+set -e
+(( cleanup_diagnostic_status == 93 )) ||
+  fail 'the cleanup-order fixture must stop inside child teardown'
+[[ ! -e $cleanup_diagnostic ]] ||
+  fail 'readiness cleanup must remove captured diagnostics before child teardown'
+
+escape_diagnostic=$test_dir/escape-diagnostic
+: > "$escape_diagnostic"
+set +e
+/bin/zsh -f -c '
+  source_text=$(<"$1")
+  source_text=${source_text%$'"'"'\nmain "$@"'"'"'}
+  eval "$source_text"
+  trap - EXIT HUP INT TERM
+  PROTON_PASS_DIAGNOSTIC_FILE=$2
+  escape_unmanageable_child fixture
+' -- "$ensure_ready_source" "$escape_diagnostic" >/dev/null 2>&1
+escape_diagnostic_status=$?
+set -e
+(( escape_diagnostic_status == 1 )) ||
+  fail 'the escape-order fixture must use its non-returning failure path'
+[[ ! -e $escape_diagnostic ]] ||
+  fail 'every non-returning child escape must remove captured diagnostics first'
+
 survivor_probe_root=$test_dir/survivor-probe
 survivor_probe_error=$test_dir/survivor-probe.err
 mkdir -p -- "$survivor_probe_root"

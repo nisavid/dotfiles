@@ -39,6 +39,7 @@ die() {
 }
 
 escape_unmanageable_child() {
+  remove_diagnostic_file || true
   print -u$PROTON_PASS_ESCAPE_DIAGNOSTIC_FD -r -- "proton-pass-ensure-ready: $1"
   exec {PROTON_PASS_ESCAPE_DIAGNOSTIC_FD}>&- 2>/dev/null ||
     exec /usr/bin/false
@@ -98,8 +99,8 @@ remove_diagnostic_file() {
 }
 
 cleanup_readiness_process() {
+  remove_diagnostic_file || true
   terminate_active_child
-  remove_diagnostic_file
 }
 
 start_bounded_child() {
