@@ -82,6 +82,7 @@ class PrepareBehaviorEvalsTests(unittest.TestCase):
                         instructions,
                     )
                     self.assertIn("Allow no tool use for either subagent.", instructions)
+                    self.assertIn("`run-1` through `run-3`", instructions)
                     self.assertNotIn("Ask each subagent to save", instructions)
 
     def test_rejects_fixture_paths_outside_the_skill_directory(self) -> None:
