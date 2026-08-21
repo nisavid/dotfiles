@@ -16,9 +16,18 @@ readonly PROTON_PASS_LOGIN_TIMEOUT_SECONDS=8
 readonly PROTON_PASS_POLL_CENTISECONDS=1
 readonly PROTON_PASS_TERMINATION_GRACE_CENTISECONDS=10
 readonly PROTON_PASS_SCRIPT_DIR=${0:A:h}
+PROTON_PASS_ABSENT_DIAGNOSTIC='Error: This operation requires an authenticated client'
+PROTON_PASS_INVALIDATED_DIAGNOSTIC='Your session has been invalidated and you have '
+PROTON_PASS_INVALIDATED_DIAGNOSTIC+='been logged out automatically.'
+PROTON_PASS_INVALIDATED_DIAGNOSTIC+=$'\n'
+PROTON_PASS_INVALIDATED_DIAGNOSTIC+='Please log in again with: pass login'
+readonly PROTON_PASS_ABSENT_DIAGNOSTIC PROTON_PASS_INVALIDATED_DIAGNOSTIC
 typeset -g PROTON_PASS_ACTIVE_CHILD_NAME=
 typeset -gi PROTON_PASS_ACTIVE_CHILD_PGID=0
 typeset -gi PROTON_PASS_CHILD_SEQUENCE=0
+typeset -g PROTON_PASS_DIAGNOSTIC_FILE=
+typeset -g PROTON_PASS_SESSION_STATE=unknown
+typeset -g PROTON_PASS_SESSION_WAITER_STAGE=unrecorded
 unset PROTON_PASS_LAST_WAITER_STAGE 2>/dev/null || true
 typeset -g PROTON_PASS_LAST_WAITER_STAGE=unrecorded
 integer PROTON_PASS_ESCAPE_DIAGNOSTIC_FD
@@ -80,6 +89,19 @@ terminate_active_child() {
   typeset -gi PROTON_PASS_ACTIVE_CHILD_PGID=0
 }
 
+remove_diagnostic_file() {
+  emulate -L zsh
+
+  local diagnostic_file=${PROTON_PASS_DIAGNOSTIC_FILE:-}
+  typeset -g PROTON_PASS_DIAGNOSTIC_FILE=
+  [[ -z $diagnostic_file ]] || /bin/rm -f -- "$diagnostic_file"
+}
+
+cleanup_readiness_process() {
+  terminate_active_child
+  remove_diagnostic_file
+}
+
 start_bounded_child() {
   emulate -L zsh
 
@@ -123,6 +145,16 @@ start_bounded_child() {
       exec {PROTON_PASS_CHILD_STDERR_FD}>/dev/null || {
         exec {PROTON_PASS_CHILD_STDOUT_FD}>&-
         die 'cannot discard bounded-child diagnostics'
+      }
+      ;;
+    capture-diagnostics)
+      [[ -n ${PROTON_PASS_DIAGNOSTIC_FILE:-} ]] ||
+        die 'missing bounded-child diagnostic file'
+      exec {PROTON_PASS_CHILD_STDOUT_FD}>/dev/null ||
+        die 'cannot discard bounded-child output'
+      exec {PROTON_PASS_CHILD_STDERR_FD}>"$PROTON_PASS_DIAGNOSTIC_FILE" || {
+        exec {PROTON_PASS_CHILD_STDOUT_FD}>&-
+        die 'cannot capture bounded-child diagnostics'
       }
       ;;
     *)
@@ -332,10 +364,10 @@ run_bounded() {
   wait_bounded_child "$timeout_seconds"
 }
 
-trap terminate_active_child EXIT
-trap 'terminate_active_child; exit 129' HUP
-trap 'terminate_active_child; exit 130' INT
-trap 'terminate_active_child; exit 143' TERM
+trap cleanup_readiness_process EXIT
+trap 'cleanup_readiness_process; exit 129' HUP
+trap 'cleanup_readiness_process; exit 130' INT
+trap 'cleanup_readiness_process; exit 143' TERM
 
 resolve_trusted_command() {
   emulate -L zsh
@@ -428,6 +460,63 @@ session_ready() {
   local -x PROTON_PASS_NO_UPDATE_CHECK=1
   run_bounded "$PROTON_PASS_INFO_TIMEOUT_SECONDS" discard -- \
     "$backend" info
+}
+
+classify_session_state() {
+  emulate -L zsh
+  setopt local_options no_unset pipe_fail
+
+  local backend=$1
+  local state_dir=$2
+  typeset -g PROTON_PASS_SESSION_STATE=unknown
+  typeset -g PROTON_PASS_SESSION_WAITER_STAGE=unrecorded
+  typeset -g PROTON_PASS_DIAGNOSTIC_FILE=
+  PROTON_PASS_DIAGNOSTIC_FILE=$(
+    /usr/bin/mktemp "$state_dir/.proton-pass-session-probe.XXXXXX"
+  ) || die 'cannot create the private provider diagnostic file'
+  /bin/chmod -- 600 "$PROTON_PASS_DIAGNOSTIC_FILE" || {
+    remove_diagnostic_file
+    die 'cannot secure the private provider diagnostic file'
+  }
+
+  local -x PROTON_PASS_NO_UPDATE_CHECK=1
+  integer probe_status=0
+  run_bounded "$PROTON_PASS_INFO_TIMEOUT_SECONDS" capture-diagnostics -- \
+    "$backend" info || probe_status=$?
+  local waiter_stage=$PROTON_PASS_LAST_WAITER_STAGE
+  typeset -g PROTON_PASS_SESSION_WAITER_STAGE=$waiter_stage
+  if (( probe_status == 0 )); then
+    remove_diagnostic_file
+    typeset -g PROTON_PASS_SESSION_STATE=ready
+    return 0
+  fi
+  if (( probe_status == 124 )) && [[ $waiter_stage != child-status ]]; then
+    remove_diagnostic_file
+    typeset -g PROTON_PASS_SESSION_STATE=timeout
+    return 0
+  fi
+
+  zmodload zsh/stat || die 'zsh/stat is required'
+  local -A diagnostic_metadata
+  zstat -H diagnostic_metadata -- "$PROTON_PASS_DIAGNOSTIC_FILE" || {
+    remove_diagnostic_file
+    die 'cannot inspect the private provider diagnostic file'
+  }
+  if (( diagnostic_metadata[size] > 4096 )); then
+    remove_diagnostic_file
+    return 0
+  fi
+  local diagnostic=$(<"$PROTON_PASS_DIAGNOSTIC_FILE")
+  remove_diagnostic_file
+  [[ $waiter_stage == child-status ]] || return 0
+  case $diagnostic in
+    "$PROTON_PASS_ABSENT_DIAGNOSTIC")
+      typeset -g PROTON_PASS_SESSION_STATE=absent
+      ;;
+    "$PROTON_PASS_INVALIDATED_DIAGNOSTIC")
+      typeset -g PROTON_PASS_SESSION_STATE=invalidated
+      ;;
+  esac
 }
 
 main() {
@@ -536,7 +625,10 @@ main() {
     fail_readiness unsafe-lock 'readiness lock must have mode 0600' unrecorded
   }
 
-  if session_ready "$backend"; then
+  classify_session_state "$backend" "$state_dir"
+  local session_state=$PROTON_PASS_SESSION_STATE
+  local session_waiter_stage=$PROTON_PASS_SESSION_WAITER_STAGE
+  if [[ $session_state == ready ]]; then
     write_status ready concurrent-repair unrecorded
     return 0
   fi
@@ -545,6 +637,19 @@ main() {
     fail_readiness concurrent-repair-failed \
       'the concurrent provider-session repair did not establish readiness' unrecorded
   fi
+  case $session_state in
+    absent|invalidated) ;;
+    timeout)
+      zsystem flock -u lock_fd
+      fail_readiness session-probe-timeout \
+        'provider-session readiness check timed out' "$session_waiter_stage"
+      ;;
+    *)
+      zsystem flock -u lock_fd
+      fail_readiness session-state-unknown \
+        'provider-session readiness could not be classified' "$session_waiter_stage"
+      ;;
+  esac
 
   local native_store_adapter
   native_store_adapter=$(resolve_trusted_command 'native-store adapter' \
@@ -566,9 +671,20 @@ main() {
     fail_readiness invalid-bootstrap-value \
       'the native bootstrap item must contain one non-empty line' unrecorded
 
-  # pass-cli refuses login while unusable local authentication state remains.
-  run_bounded "$PROTON_PASS_INFO_TIMEOUT_SECONDS" discard -- \
-    "$backend" logout || true
+  if [[ $session_state == invalidated ]]; then
+    integer logout_status=0
+    run_bounded "$PROTON_PASS_INFO_TIMEOUT_SECONDS" discard -- \
+      "$backend" logout --force || logout_status=$?
+    local logout_waiter_stage=$PROTON_PASS_LAST_WAITER_STAGE
+    if (( logout_status != 0 )); then
+      if (( logout_status == 124 )) && [[ $logout_waiter_stage != child-status ]]; then
+        fail_readiness logout-timeout 'provider-session cleanup timed out' \
+          "$logout_waiter_stage"
+      fi
+      fail_readiness logout-failed 'provider-session cleanup failed' \
+        "$logout_waiter_stage"
+    fi
+  fi
 
   local PROTON_PASS_CHILD_ENVIRONMENT_VALUE=$bootstrap_token
   unset bootstrap_token

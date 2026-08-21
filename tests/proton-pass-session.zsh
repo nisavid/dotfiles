@@ -462,8 +462,22 @@ case $1 in
     if [[ -e $FAKE_PASS_INFO_HANG && ! -e $FAKE_PASS_REMOTE_SESSION ]]; then
       hang_forever
     fi
-    print -r -- 'account-metadata-canary'
-    [[ -e $FAKE_PASS_LOCAL_SESSION && -e $FAKE_PASS_REMOTE_SESSION ]]
+    if [[ -e $FAKE_PASS_INFO_TRANSIENT ]]; then
+      print -u2 -r -- 'Error: temporary provider failure'
+      exit 76
+    fi
+    if [[ -e $FAKE_PASS_LOCAL_SESSION && -e $FAKE_PASS_REMOTE_SESSION ]]; then
+      print -r -- 'account-metadata-canary'
+      exit 0
+    fi
+    if [[ -e $FAKE_PASS_INFO_INVALIDATED ]]; then
+      print -u2 -rl -- \
+        'Your session has been invalidated and you have been logged out automatically.' \
+        'Please log in again with: pass login'
+      exit 77
+    fi
+    print -u2 -r -- 'Error: This operation requires an authenticated client'
+    exit 78
     ;;
   login)
     (( $# == 1 )) || exit 65
@@ -496,8 +510,10 @@ case $1 in
       print -r -- provider-completed >> "$PROVIDER_COMPLETION_MARKER"
     ;;
   logout)
-    (( $# == 1 )) || exit 74
+    (( $# == 1 )) || [[ $# == 2 && $2 == --force ]] || exit 74
     [[ -z ${${(P)bootstrap_field}:-} ]] || exit 75
+    [[ ! -e $FAKE_PASS_LOGOUT_HANG ]] || hang_forever
+    [[ ! -e $FAKE_PASS_LOGOUT_FAIL ]] || exit 79
     /bin/rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION"
     ;;
   *)
@@ -611,6 +627,8 @@ export FAKE_PASS_LOG=$test_dir/pass.log
 export FAKE_PASS_LOGIN_DELAY=$test_dir/login-delay
 export FAKE_PASS_LOGIN_FAIL=$test_dir/login-fail
 export FAKE_PASS_REQUIRE_LOGOUT=$test_dir/require-logout
+export FAKE_PASS_LOGOUT_FAIL=$test_dir/logout-fail
+export FAKE_PASS_LOGOUT_HANG=$test_dir/logout-hang
 export FAKE_PASS_LOGIN_EXIT_124=$test_dir/login-exit-124
 export FAKE_PASS_LOGIN_HANG=$test_dir/login-hang
 export FAKE_PASS_LOGIN_DESCENDANT=$test_dir/login-descendant
@@ -619,6 +637,8 @@ export FAKE_PASS_REMOTE_SESSION=$test_dir/remote-session
 export FAKE_PASS_SKIP_REMOTE_SESSION=$test_dir/skip-remote-session
 export FAKE_PASS_VERIFY_HANG=$test_dir/verify-hang
 export FAKE_PASS_INFO_HANG=$test_dir/info-hang
+export FAKE_PASS_INFO_TRANSIENT=$test_dir/info-transient
+export FAKE_PASS_INFO_INVALIDATED=$test_dir/info-invalidated
 export FAKE_SECRET_TOOL_LOG=$test_dir/secret-tool.log
 export FAKE_NATIVE_STORE_LOCKED=$test_dir/native-store-locked
 export FAKE_NATIVE_STORE_HANG=$test_dir/native-store-hang
@@ -730,7 +750,7 @@ run_waiter_stage_mapping() {
     fail "the $mode waiter-stage fixture must prove its exact trigger"
   [[ $(<"$provider_start") == provider-started ]] ||
     fail "the $mode waiter-stage fixture must prove provider execution"
-  [[ $(<"$FAKE_PASS_LOG") == $'info\ninfo\nlogout\nlogin' ]] ||
+  [[ $(<"$FAKE_PASS_LOG") == $'info\ninfo\nlogin' ]] ||
     fail "the $mode waiter-stage fixture must target the direct login waiter"
   case $completion_expectation in
     completed)
@@ -854,8 +874,14 @@ fi
 test_process_fixture_untrack_pid $info_hang_entrypoint_pid
 typeset -F info_hang_elapsed=$(( EPOCHREALTIME - info_hang_started ))
 rm -f -- "$FAKE_PASS_INFO_HANG"
-(( ! info_hang_timed_out && info_hang_status == 0 && info_hang_elapsed < 7.5 )) ||
+(( ! info_hang_timed_out && info_hang_status == 1 && info_hang_elapsed < 7.5 )) ||
   fail 'the whole readiness entrypoint must bound initial and locked session probes'
+[[ $(<"$test_dir/info-hang.err") ==
+  'proton-pass-ensure-ready: provider-session readiness check timed out' ]] ||
+  fail 'a timed-out locked session probe must report one fixed diagnostic'
+grep -Fqx 'reason=session-probe-timeout' \
+  "$state_home/secret-exec/proton-pass-readiness.status" ||
+  fail 'a timed-out locked session probe must record its value-free reason'
 hanging_child_pid=$(<"$FAKE_HANGING_CHILD_PID")
 if kill -0 $hanging_child_pid 2>/dev/null; then
   kill -TERM $hanging_child_pid 2>/dev/null || true
@@ -932,8 +958,32 @@ zsh "$ensure_ready"
 grep -Fqx 'reason=existing-session' "$status_file" ||
   fail 'an existing session must record its value-free reason'
 
+touch -- "$FAKE_PASS_INFO_TRANSIENT"
+: > "$FAKE_PASS_LOG"
+: > "$FAKE_SECRET_TOOL_LOG"
+set +e
+transient_output=$(zsh "$ensure_ready" 2>&1)
+transient_status=$?
+set -e
+rm -f -- "$FAKE_PASS_INFO_TRANSIENT"
+(( transient_status != 0 )) ||
+  fail 'an unclassified readiness failure must not replace an existing session'
+[[ $transient_output ==
+  'proton-pass-ensure-ready: provider-session readiness could not be classified' ]] ||
+  fail 'an unclassified readiness failure must report one fixed diagnostic'
+[[ -e $FAKE_PASS_LOCAL_SESSION && -e $FAKE_PASS_REMOTE_SESSION ]] ||
+  fail 'an unclassified readiness failure must preserve the existing session'
+! /usr/bin/grep -Eq '^(logout|login)' "$FAKE_PASS_LOG" ||
+  fail 'an unclassified readiness failure must not mutate provider authentication'
+[[ ! -s $FAKE_SECRET_TOOL_LOG ]] ||
+  fail 'an unclassified readiness failure must not read the bootstrap item'
+probe_artifacts=( "$state_home/secret-exec"/.proton-pass-session-probe.*(N) )
+(( ! ${#probe_artifacts} )) ||
+  fail 'a classified readiness check must remove its private diagnostic file'
+
 rm -f -- "$FAKE_PASS_REMOTE_SESSION"
 : > "$FAKE_PASS_REQUIRE_LOGOUT"
+: > "$FAKE_PASS_INFO_INVALIDATED"
 : > "$FAKE_PASS_LOG"
 : > "$FAKE_SECRET_TOOL_LOG"
 zsh "$ensure_ready"
@@ -941,9 +991,64 @@ zsh "$ensure_ready"
   fail 'a stale local session marker must not satisfy remote readiness'
 [[ $(/usr/bin/grep -Fxc login "$FAKE_PASS_LOG") == 1 ]] ||
   fail 'a stale local session marker must trigger one repair login'
-[[ $(<"$FAKE_PASS_LOG") == $'info\ninfo\nlogout\nlogin\ninfo' ]] ||
+[[ $(<"$FAKE_PASS_LOG") == $'info\ninfo\nlogout --force\nlogin\ninfo' ]] ||
   fail 'a stale local session must be logged out before repair login'
-rm -f -- "$FAKE_PASS_REQUIRE_LOGOUT"
+rm -f -- "$FAKE_PASS_INFO_INVALIDATED"
+
+rm -f -- "$FAKE_PASS_REMOTE_SESSION"
+: > "$FAKE_PASS_REQUIRE_LOGOUT"
+: > "$FAKE_PASS_INFO_INVALIDATED"
+: > "$FAKE_PASS_LOGOUT_FAIL"
+: > "$FAKE_PASS_LOG"
+: > "$FAKE_SECRET_TOOL_LOG"
+set +e
+logout_failure_output=$(zsh "$ensure_ready" 2>&1)
+logout_failure_status=$?
+set -e
+rm -f -- \
+  "$FAKE_PASS_REQUIRE_LOGOUT" \
+  "$FAKE_PASS_INFO_INVALIDATED" \
+  "$FAKE_PASS_LOGOUT_FAIL"
+(( logout_failure_status != 0 )) ||
+  fail 'a failed stale-session cleanup must fail readiness'
+[[ $logout_failure_output ==
+  'proton-pass-ensure-ready: provider-session cleanup failed' ]] ||
+  fail 'a failed stale-session cleanup must report one fixed diagnostic'
+[[ $(<"$FAKE_PASS_LOG") == $'info\ninfo\nlogout --force' ]] ||
+  fail 'a failed stale-session cleanup must not attempt provider login'
+grep -Fqx 'reason=logout-failed' "$status_file" ||
+  fail 'a failed stale-session cleanup must record its value-free reason'
+
+rm -f -- "$FAKE_PASS_REMOTE_SESSION" "$FAKE_HANGING_CHILD_PID"
+: > "$FAKE_PASS_REQUIRE_LOGOUT"
+: > "$FAKE_PASS_INFO_INVALIDATED"
+: > "$FAKE_PASS_LOGOUT_HANG"
+: > "$FAKE_PASS_LOG"
+: > "$FAKE_SECRET_TOOL_LOG"
+test_process_fixture_track_pid_file "$FAKE_HANGING_CHILD_PID"
+typeset -F logout_timeout_started=$EPOCHREALTIME
+set +e
+logout_timeout_output=$(zsh "$ensure_ready" 2>&1)
+logout_timeout_status=$?
+set -e
+typeset -F logout_timeout_elapsed=$(( EPOCHREALTIME - logout_timeout_started ))
+rm -f -- \
+  "$FAKE_PASS_REQUIRE_LOGOUT" \
+  "$FAKE_PASS_INFO_INVALIDATED" \
+  "$FAKE_PASS_LOGOUT_HANG"
+(( logout_timeout_status != 0 && logout_timeout_elapsed < 4.5 )) ||
+  fail 'a hanging stale-session cleanup must fail within its production deadline'
+[[ $logout_timeout_output ==
+  'proton-pass-ensure-ready: provider-session cleanup timed out' ]] ||
+  fail 'a stale-session cleanup timeout must report one fixed diagnostic'
+[[ $(<"$FAKE_PASS_LOG") == $'info\ninfo\nlogout --force' ]] ||
+  fail 'a stale-session cleanup timeout must not attempt provider login'
+grep -Fqx 'reason=logout-timeout' "$status_file" ||
+  fail 'a stale-session cleanup timeout must record its value-free reason'
+hanging_child_pid=$(<"$FAKE_HANGING_CHILD_PID")
+! kill -0 $hanging_child_pid 2>/dev/null ||
+  fail 'a timed-out stale-session cleanup child must be terminated and reaped'
+test_process_fixture_untrack_pid_file "$FAKE_HANGING_CHILD_PID"
 
 rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION"
 : > "$FAKE_PASS_LOG"

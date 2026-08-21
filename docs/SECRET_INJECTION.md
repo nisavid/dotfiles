@@ -60,13 +60,17 @@ executable, owned by root or the current user, and not writable by its group or
 other users. Readiness status housekeeping also uses fixed system utility paths
 instead of ambient `PATH` resolution.
 
-When repair is needed, the helper serializes callers, checks readiness again,
-retrieves the fixed bootstrap item from the native credential store, and gives
-the value only to a background subshell that immediately replaces itself with
-the trusted `pass-cli login` backend. The controller clears its non-exported
-copy immediately after the fork, the caller clears its shell value after
-registering the process group, and readiness verifies the repaired session
-before returning.
+When repair is needed, the helper serializes callers and classifies a second
+bounded readiness check from a private diagnostic file. A positively identified
+unauthenticated state proceeds directly to login. A positively identified
+invalidated session first requires a successful `pass-cli logout --force`;
+unknown or transient failures preserve the local session and fail closed. The
+helper then retrieves the fixed bootstrap item from the native credential store
+and gives the value only to a background subshell that immediately replaces
+itself with the trusted `pass-cli login` backend. The controller clears its
+non-exported copy immediately after the fork, the caller clears its shell value
+after registering the process group, and readiness verifies the repaired
+session before returning.
 The lock uses zsh's `zsystem flock`, so the repair path has no external `flock`
 dependency. The helper rejects symbolic-link, non-regular, wrong-owner, or
 replaced lock files and compares the locked descriptor with the published
@@ -92,23 +96,26 @@ proton-pass-ensure-ready
 ```
 
 The helper accepts no arguments and does not accept an ambient token as a
-bootstrap source. A failed native-store lookup, login, or verification fails
-closed before the consumer starts. A remote info check, native-store read, and
-verification each have a three-second deadline; login has an eight-second
-deadline. Each bounded operation and all of its descendants run in a dedicated
-process group. Timeout cleanup sends `TERM`, then `KILL` within a
-100-millisecond cleanup window and reaps the managed child. Provider output
-bypasses the process-group controller through inherited anonymous descriptors;
+bootstrap source. An unclassified readiness failure, failed stale-session
+cleanup, failed native-store lookup, failed login, or failed verification stops
+before the consumer starts. A remote info check, stale-session cleanup,
+native-store read, and verification each have a three-second deadline; login
+has an eight-second deadline. Each bounded operation and all of its descendants
+run in a dedicated process group. Timeout cleanup sends `TERM`, then `KILL`
+within a 100-millisecond cleanup window and reaps the managed child. Provider
+output bypasses the process-group controller through inherited anonymous descriptors;
 the controller receives only an exit-status marker. The lock grants a
 five-second takeover window when no repair succeeds. A caller that finds a valid
 repair still in progress can wait another thirteen seconds, then rechecks
 readiness without starting a second repair. The takeover path and the extended
 concurrent-wait path each remain below the 26-second per-call startup budget,
-including cleanup and bounded polling overhead. The helper does not log out a
-stale local session. Platform selection uses zsh's `OSTYPE`, so no
-external platform probe runs ahead of the first bounded info call. Failed
-remote info proceeds directly to the serialized login repair, preserving
-a potentially usable local session during a network failure.
+including cleanup and bounded polling overhead. The helper logs out only when
+the provider reports its exact invalidated-session diagnostic, and requires the
+forced local cleanup to succeed before login. Platform selection uses zsh's
+`OSTYPE`, so no external platform probe runs ahead of the first bounded info
+call. Unknown provider failures never read the bootstrap item or mutate local
+authentication state, preserving a potentially usable session during a network
+failure.
 
 ### Graphical-session startup
 
