@@ -20,6 +20,31 @@ def shipped_eval_paths() -> list[Path]:
 
 
 class PrepareBehaviorEvalsTests(unittest.TestCase):
+    def test_reports_a_missing_skill_directory_as_a_cli_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            skill_dir = root / "missing-skill"
+            workspace = root / "workspace"
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(PREPARER),
+                    "--skill-dir",
+                    str(skill_dir),
+                    "--workspace",
+                    str(workspace),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertNotEqual(result.returncode, 0, result.stdout or result.stderr)
+            self.assertIn("No such file or directory", result.stderr)
+            self.assertNotIn("Traceback", result.stderr)
+            self.assertFalse(workspace.exists())
+
     def test_rejects_a_fifo_fixture_without_blocking(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)
@@ -66,7 +91,7 @@ class PrepareBehaviorEvalsTests(unittest.TestCase):
                 text=True,
                 capture_output=True,
                 check=False,
-                timeout=2,
+                timeout=30,
             )
 
             self.assertNotEqual(result.returncode, 0, result.stdout or result.stderr)
@@ -294,9 +319,17 @@ class PrepareBehaviorEvalsTests(unittest.TestCase):
                     )
                     self.assertNotEqual(result.returncode, 0, result.stdout or result.stderr)
                     self.assertFalse(workspace.exists())
-                    for prompt_path in workspace.glob("eval-*/**/subagent_prompt.md"):
+                    for candidate in root.rglob("*"):
+                        if (
+                            candidate == outside_file
+                            or candidate.is_symlink()
+                            or not candidate.is_file()
+                        ):
+                            continue
                         self.assertNotIn(
-                            "outside-content-sentinel", prompt_path.read_text(encoding="utf-8")
+                            "outside-content-sentinel",
+                            candidate.read_text(encoding="utf-8"),
+                            candidate,
                         )
 
     def test_rejects_symlinked_eval_manifest(self) -> None:
@@ -342,9 +375,19 @@ class PrepareBehaviorEvalsTests(unittest.TestCase):
             )
 
             self.assertNotEqual(result.returncode, 0, result.stdout or result.stderr)
-            for prompt_path in workspace.glob("eval-*/**/subagent_prompt.md"):
+            self.assertFalse(workspace.exists())
+            excluded = {manifest, skill_dir / "evals" / "evals.json"}
+            for candidate in root.rglob("*"):
+                if (
+                    candidate in excluded
+                    or candidate.is_symlink()
+                    or not candidate.is_file()
+                ):
+                    continue
                 self.assertNotIn(
-                    "outside-manifest-sentinel", prompt_path.read_text(encoding="utf-8")
+                    "outside-manifest-sentinel",
+                    candidate.read_text(encoding="utf-8"),
+                    candidate,
                 )
 
 

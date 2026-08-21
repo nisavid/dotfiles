@@ -84,9 +84,14 @@ test_context7() {
   assert_symlink_source "$link" '../../.agents/skills/context7-mcp'
 }
 
+test_skill_creator_adapter() {
+  local adapter_dir="$repo_dir/home/dot_agents/skills/adapting-skill-creator-to-harnesses"
+
+  python3 -m unittest discover -s "$adapter_dir/tests" -p 'test_*.py'
+}
+
 test_git_publication() {
   local skill_dir="$repo_dir/home/dot_agents/skills/checkpointing-and-publishing-git-work"
-  local adapter_dir="$repo_dir/home/dot_agents/skills/adapting-skill-creator-to-harnesses"
   local skill="$skill_dir/SKILL.md"
   local metadata="$skill_dir/agents/openai.yaml"
   local link="$repo_dir/home/dot_claude/skills/symlink_checkpointing-and-publishing-git-work"
@@ -165,7 +170,6 @@ test_git_publication() {
   done
   assert_contains "$skill" 'only the raw prompt and fixture' 'Git publication eval instructions must prevent answer leakage'
 
-  python3 -m unittest discover -s "$adapter_dir/tests" -p 'test_*.py'
   python3 -m unittest discover -s "$skill_dir/tests" -p 'test_*.py'
 }
 
@@ -222,6 +226,7 @@ case "${1:-all}" in
     )
     ;;
   git-publication)
+    test_skill_creator_adapter
     test_git_publication
     projection_targets=(
       "$HOME/.agents/skills/checkpointing-and-publishing-git-work"
@@ -241,6 +246,7 @@ case "${1:-all}" in
     ;;
   all)
     test_context7
+    test_skill_creator_adapter
     test_git_publication
     test_pr_publication
     projection_targets=(

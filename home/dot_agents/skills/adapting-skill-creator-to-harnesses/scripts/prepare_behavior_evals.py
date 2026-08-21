@@ -27,7 +27,6 @@ def load_evals(skill_dir: Path) -> dict:
 
 
 def read_scoped_text(skill_dir: Path, relative_path: str) -> str:
-    skill_root = skill_dir.resolve(strict=True)
     path = Path(relative_path)
     if path.is_absolute() or not path.parts or ".." in path.parts:
         raise ValueError(f"source path must stay within the skill directory: {relative_path}")
@@ -38,6 +37,7 @@ def read_scoped_text(skill_dir: Path, relative_path: str) -> str:
     directory_flags = nofollow_flags | os.O_DIRECTORY
     source_flags = nofollow_flags | os.O_NONBLOCK
     try:
+        skill_root = skill_dir.resolve(strict=True)
         directory_fds.append(os.open(skill_root, directory_flags))
         for part in path.parts[:-1]:
             directory_fds.append(
@@ -54,7 +54,8 @@ def read_scoped_text(skill_dir: Path, relative_path: str) -> str:
             return source.read()
     except OSError as error:
         raise ValueError(
-            f"source path must be a regular file within the skill directory: {relative_path}"
+            "source path must be a regular file within the skill directory: "
+            f"{relative_path}: {error.strerror or error}"
         ) from error
     finally:
         if source_fd is not None:
@@ -159,11 +160,14 @@ def main() -> int:
     workspace = args.workspace.absolute()
     if workspace.exists() or workspace.is_symlink():
         parser.error("--workspace must not already exist")
-    data = load_evals(skill_dir)
-    prepared_evals = [
-        (eval_item, prompt_variants(skill_dir=skill_dir, eval_item=eval_item))
-        for eval_item in data["evals"]
-    ]
+    try:
+        data = load_evals(skill_dir)
+        prepared_evals = [
+            (eval_item, prompt_variants(skill_dir=skill_dir, eval_item=eval_item))
+            for eval_item in data["evals"]
+        ]
+    except ValueError as error:
+        parser.error(str(error))
     try:
         workspace.mkdir(parents=True)
     except FileExistsError:
