@@ -588,10 +588,15 @@ def plan_action_set_for_configure(plan: ValidatedPlan) -> dict[str, object]:
         assert len(equipment) == 1
         target_equipment = equipment[0]
         surface_kind = "mcp_selection"
+        source, root = {
+            "claude": ("settings", "mcpServers"),
+            "codex": ("config", "mcp_servers"),
+            "cursor": ("config", "mcpServers"),
+        }[str(payload["harness"])]
         locator = {
             "owner": payload["harness"],
-            "source": "config",
-            "key_path": ["mcp_servers", provider["server_name"]],
+            "source": source,
+            "key_path": [root, provider["server_name"]],
         }
     else:
         assert provider_kind == "native_plugin" and payload["harness"] == "codex"
@@ -2666,52 +2671,54 @@ class ResolverMatrixTest(unittest.TestCase):
         self.assertIsNone(resolution.candidate_plan)
         self.assertIsNone(resolution.mutation_plan)
 
-    def test_real_control_free_configure_plan_crosses_action_set_admission(
+    def test_real_direct_mcp_configure_plan_crosses_action_set_admission_for_each_harness(
         self,
     ) -> None:
-        inventory, capabilities = converged_inventory_with_configuration_drift(
-            self.validated, "route:codex/direct-context7"
-        )
-        resolution = resolve(
-            "status",
-            self.validated.catalog,
-            self.validated.lock,
-            inventory,
-            capabilities,
-        )
+        for harness in ("claude", "codex", "cursor"):
+            with self.subTest(harness=harness):
+                inventory, capabilities = converged_inventory_with_configuration_drift(
+                    self.validated, f"route:{harness}/direct-context7"
+                )
+                resolution = resolve(
+                    "status",
+                    self.validated.catalog,
+                    self.validated.lock,
+                    inventory,
+                    capabilities,
+                )
 
-        self.assertEqual(resolution.diagnostics, ())
-        plan = resolution.candidate_plan
-        self.assertIsNotNone(plan)
-        assert plan is not None
-        document = plan_action_set_for_configure(plan)
-        action = document["actions"][0]["action_payload"]
-        self.assertEqual(
-            action["desired_state"],
-            {
-                "configuration": {
-                    "status": "desired",
-                    "digest": canonical_json_sha256(
-                        {
-                            "provider": action["provider"],
-                            "component_controls": [],
+                self.assertEqual(resolution.diagnostics, ())
+                plan = resolution.candidate_plan
+                self.assertIsNotNone(plan)
+                assert plan is not None
+                document = plan_action_set_for_configure(plan)
+                action = document["actions"][0]["action_payload"]
+                self.assertEqual(
+                    action["desired_state"],
+                    {
+                        "configuration": {
+                            "status": "desired",
+                            "digest": canonical_json_sha256(
+                                {
+                                    "provider": action["provider"],
+                                    "component_controls": [],
+                                }
+                            ),
                         }
+                    },
+                )
+                expected_digest = document["action_set_digest"]
+                assert isinstance(expected_digest, str)
+
+                admitted = admit_plan_action_set(
+                    canonical_json_bytes(document),
+                    PlanActionSetTrust(
+                        validated_plan=plan,
+                        expected_action_set_digest=expected_digest,
                     ),
-                }
-            },
-        )
-        expected_digest = document["action_set_digest"]
-        assert isinstance(expected_digest, str)
+                )
 
-        admitted = admit_plan_action_set(
-            canonical_json_bytes(document),
-            PlanActionSetTrust(
-                validated_plan=plan,
-                expected_action_set_digest=expected_digest,
-            ),
-        )
-
-        self.assertIsInstance(admitted, AdmittedPlanActionSet)
+                self.assertIsInstance(admitted, AdmittedPlanActionSet)
 
     def test_real_controlled_configure_plan_crosses_action_set_admission(
         self,
