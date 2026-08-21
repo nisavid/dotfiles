@@ -81,15 +81,17 @@ def write_eval(
             (run_dir / "subagent_prompt.md").write_text(prompts[run_kind])
 
 
-def write_run_instructions(workspace: Path, skill_name: str) -> None:
+def write_run_instructions(workspace: Path, skill_name: str, runs: int) -> None:
     instructions = f"""# Behavioral Eval Run Instructions
 
 This workspace was generated for the `skill-creator` behavioral eval flow.
 
 For each `eval-*` directory:
 
-1. Spawn one subagent with `with_skill/run-1/subagent_prompt.md`.
-2. Spawn one baseline subagent with `without_skill/run-1/subagent_prompt.md`.
+1. For every run from `run-1` through `run-{runs}`, spawn one subagent with the
+   corresponding `with_skill/<run>/subagent_prompt.md`.
+2. For every run from `run-1` through `run-{runs}`, spawn one baseline subagent
+   with the corresponding `without_skill/<run>/subagent_prompt.md`.
 3. Allow no tool use for either subagent.
 4. Capture each subagent's final response and write it to that run's `outputs/response.md`.
 5. Grade each run against `eval_metadata.json` assertions and save `grading.json`
@@ -142,7 +144,7 @@ def main() -> int:
     for eval_item, prompts in prepared_evals:
         write_eval(workspace, eval_item, args.runs, prompts)
 
-    write_run_instructions(workspace, data["skill_name"])
+    write_run_instructions(workspace, data["skill_name"], args.runs)
     print(f"Prepared behavioral eval workspace: {workspace}")
     return 0
 
