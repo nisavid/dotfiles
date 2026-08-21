@@ -10,6 +10,7 @@ from pathlib import Path
 
 SKILL_DIR = Path(__file__).resolve().parents[1]
 SCRIPT = SKILL_DIR / "scripts" / "check_eval_gate.py"
+REPO_ROOT = SKILL_DIR.parents[3]
 
 
 class EvalGateCliTests(unittest.TestCase):
@@ -251,6 +252,40 @@ class EvalGateCliTests(unittest.TestCase):
             ),
             encoding="utf-8",
         )
+
+
+class RepoEvalSchemaConformanceTests(unittest.TestCase):
+    def test_every_shipped_eval_file_conforms_to_the_shared_gate_schema(self) -> None:
+        eval_paths = sorted((REPO_ROOT / "home" / "dot_agents" / "skills").glob("*/evals/evals.json"))
+        self.assertTrue(eval_paths, "repository must ship at least one behavior eval file")
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            workspace = Path(tempdir) / "empty-workspace"
+            workspace.mkdir()
+            for eval_path in eval_paths:
+                with self.subTest(eval_path=eval_path.relative_to(REPO_ROOT)):
+                    result = subprocess.run(
+                        [
+                            sys.executable,
+                            str(SCRIPT),
+                            "--workspace",
+                            str(workspace),
+                            "--evals",
+                            str(eval_path),
+                            "--runs",
+                            "1",
+                        ],
+                        text=True,
+                        capture_output=True,
+                        check=False,
+                    )
+                    self.assertEqual(result.returncode, 1, result.stdout or result.stderr)
+                    payload = json.loads(result.stdout)
+                    self.assertTrue(payload["errors"])
+                    self.assertTrue(
+                        any("evaluation path is not an isolated directory" in error for error in payload["errors"]),
+                        payload,
+                    )
 
 
 if __name__ == "__main__":
