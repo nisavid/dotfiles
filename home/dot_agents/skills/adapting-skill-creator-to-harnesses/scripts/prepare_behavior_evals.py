@@ -32,9 +32,9 @@ def prompt_text(
     run_kind: str,
     outputs_dir: Path,
 ) -> str:
-    files = eval_item.get("files", [])
-    file_lines = "\n".join(f"- {skill_dir / file_path}" for file_path in files) or "- none"
-    expectations = "\n".join(f"- {item}" for item in eval_item.get("expectations", []))
+    fixture_paths = eval_item["fixture_paths"]
+    file_lines = "\n".join(f"- {skill_dir / fixture_path}" for fixture_path in fixture_paths) or "- none"
+    expectations = "\n".join(f"- {expectation['text']}" for expectation in eval_item["expectations"])
 
     if run_kind == "with_skill":
         skill_line = f"- Skill path: {skill_dir}"

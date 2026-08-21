@@ -11,6 +11,12 @@ from pathlib import Path
 SKILL_DIR = Path(__file__).resolve().parents[1]
 SCRIPT = SKILL_DIR / "scripts" / "check_eval_gate.py"
 REPO_ROOT = SKILL_DIR.parents[3]
+EVALS_ROOT = REPO_ROOT / "home" / "dot_agents" / "skills"
+PREPARER = EVALS_ROOT / "adapting-skill-creator-to-harnesses" / "scripts" / "prepare_behavior_evals.py"
+
+
+def shipped_eval_paths() -> list[Path]:
+    return sorted(EVALS_ROOT.glob("*/evals/evals.json"))
 
 
 class EvalGateCliTests(unittest.TestCase):
@@ -256,7 +262,7 @@ class EvalGateCliTests(unittest.TestCase):
 
 class RepoEvalSchemaConformanceTests(unittest.TestCase):
     def test_every_shipped_eval_file_conforms_to_the_shared_gate_schema(self) -> None:
-        eval_paths = sorted((REPO_ROOT / "home" / "dot_agents" / "skills").glob("*/evals/evals.json"))
+        eval_paths = shipped_eval_paths()
         self.assertTrue(eval_paths, "repository must ship at least one behavior eval file")
 
         with tempfile.TemporaryDirectory() as tempdir:
@@ -286,6 +292,44 @@ class RepoEvalSchemaConformanceTests(unittest.TestCase):
                         any("evaluation path is not an isolated directory" in error for error in payload["errors"]),
                         payload,
                     )
+
+    def test_every_shipped_eval_file_scaffolds_fixture_paths_and_typed_expectations(self) -> None:
+        eval_paths = shipped_eval_paths()
+        self.assertTrue(eval_paths, "repository must ship at least one behavior eval file")
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            for eval_path in eval_paths:
+                skill_dir = eval_path.parents[1]
+                workspace = Path(tempdir) / skill_dir.name
+                with self.subTest(eval_path=eval_path.relative_to(REPO_ROOT)):
+                    result = subprocess.run(
+                        [
+                            sys.executable,
+                            str(PREPARER),
+                            "--skill-dir",
+                            str(skill_dir),
+                            "--workspace",
+                            str(workspace),
+                        ],
+                        text=True,
+                        capture_output=True,
+                        check=False,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stdout or result.stderr)
+                    document = json.loads(eval_path.read_text(encoding="utf-8"))
+                    for evaluation in document["evals"]:
+                        eval_dirs = list(workspace.glob(f"eval-{evaluation['id']}-*"))
+                        self.assertEqual(len(eval_dirs), 1, eval_dirs)
+                        prompt = (eval_dirs[0] / "with_skill" / "run-1" / "subagent_prompt.md").read_text(
+                            encoding="utf-8"
+                        )
+                        metadata = json.loads((eval_dirs[0] / "eval_metadata.json").read_text(encoding="utf-8"))
+                        for fixture_path in evaluation["fixture_paths"]:
+                            self.assertIn(f"- {skill_dir / fixture_path}", prompt)
+                        for expectation in evaluation["expectations"]:
+                            self.assertIn(f"- {expectation['text']}", prompt)
+                            self.assertNotIn(repr(expectation), prompt)
+                        self.assertEqual(metadata["assertions"], evaluation["expectations"])
 
 
 if __name__ == "__main__":
