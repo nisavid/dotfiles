@@ -1018,7 +1018,7 @@ class PlanActionSetAdmissionTest(unittest.TestCase):
 
         self.assertIn("PLAN_ACTION_VERIFICATION_DEPENDENCY_INVALID", _diagnostic_codes(result))
 
-    def test_reordered_actions_keep_the_canonical_set_digest_but_fail_membership(
+    def test_reordered_actions_change_the_canonical_set_digest_and_fail_membership(
         self,
     ) -> None:
         plan, original = _valid_plan_and_action_set()
@@ -1033,20 +1033,21 @@ class PlanActionSetAdmissionTest(unittest.TestCase):
         payload["route_identity"] = "route:fixture/other-plugin"
         _reseal(document)
         actions.append(second)
-        actions.reverse()
         _reseal(document)
+        ordered_digest = str(document["action_set_digest"])
+        actions.reverse()
 
         result = admit_plan_action_set(
             canonical_json_bytes(document),
             PlanActionSetTrust(
                 validated_plan=plan,
-                expected_action_set_digest=str(document["action_set_digest"]),
+                expected_action_set_digest=ordered_digest,
             ),
         )
 
         codes = _diagnostic_codes(result)
         self.assertIn("PLAN_ACTION_SET_MEMBERSHIP_INVALID", codes)
-        self.assertNotIn("PLAN_ACTION_SET_DIGEST_INVALID", codes)
+        self.assertIn("PLAN_ACTION_SET_DIGEST_INVALID", codes)
 
     def test_malformed_or_oversized_bytes_fail_closed_before_admission(self) -> None:
         plan, document = _valid_plan_and_action_set()
@@ -1877,6 +1878,7 @@ class PlanActionSetAdmissionTest(unittest.TestCase):
         assert isinstance(targets, list)
         target = targets[0]
         assert isinstance(target, dict)
+        expected_equipment_identity = str(target["equipment_identity"])
         locator = target["locator"]
         assert isinstance(locator, dict)
         locator["source"] = "attacker-controlled"
@@ -1890,6 +1892,18 @@ class PlanActionSetAdmissionTest(unittest.TestCase):
             "PLAN_ACTION_TARGET_BINDING_INVALID",
             _diagnostic_codes(result),
         )
+        assert isinstance(result, PlanActionSetRejection)
+        diagnostic = next(
+            diagnostic
+            for diagnostic in result.diagnostics
+            if diagnostic.code == "PLAN_ACTION_TARGET_BINDING_INVALID"
+        )
+        self.assertEqual(
+            diagnostic.equipment_identity,
+            expected_equipment_identity,
+        )
+        self.assertEqual(diagnostic.harness, payload["harness"])
+        self.assertEqual(diagnostic.route_identity, payload["route_identity"])
 
     def test_plugin_selection_requires_its_exact_codex_config_key(self) -> None:
         plan, original = _plugin_selection_plan_and_action_set()
@@ -2133,13 +2147,16 @@ class PlanActionSetAdmissionTest(unittest.TestCase):
         for attribute_name, candidate in vars(plan_action_set_module).items():
             with (
                 self.subTest(imported_attribute=attribute_name),
-                self.assertRaises((TypeError, ValueError)),
+                self.assertRaisesRegex(
+                    (TypeError, ValueError),
+                    "admitted plan-action set requires typed trust",
+                ),
             ):
                 AdmittedPlanActionSet(
                     document=frozen,
                     canonical_bytes=canonical_json_bytes(frozen),
                     action_set_digest=str(document["action_set_digest"]),
-                    _construction_key=candidate,  # type: ignore[call-arg]
+                    trust=candidate,  # type: ignore[arg-type]
                 )
 
 

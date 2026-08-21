@@ -24,6 +24,7 @@ from agent_equipment.model import (
 )
 from agent_equipment.plan_action_set import (
     AdmittedPlanActionSet,
+    PlanActionSetRejection,
     PlanActionSetTrust,
     admit_plan_action_set,
 )
@@ -36,6 +37,7 @@ from agent_equipment.resolver import (
     _observation_binding_diagnostics,
     _operation_matrix,
     _retirement_route_groups,
+    _surface_scope,
     resolve,
 )
 from agent_equipment.validator import load_catalog_lock
@@ -96,6 +98,7 @@ def capability(
     component_mode: str | None = None,
     native_update_control: str | None = None,
     operation_modes: dict[str, str] | None = None,
+    surface_rule: str = "route_and_equipment_identity",
 ) -> CapabilityRecord:
     provider_match = {"kind": kind, **selector}
     identity = f"capability:{harness}/{kind}"
@@ -179,7 +182,7 @@ def capability(
         "provider_match": provider_match,
         "manager_version_evidence": manager_evidence,
         "surface_identity_rule": {
-            "rule": "route_and_equipment_identity",
+            "rule": surface_rule,
             "version": 1,
         },
         "operation_support": operation_support,
@@ -254,6 +257,7 @@ def complete_capabilities() -> tuple[CapabilityRecord, ...]:
                 "skill:github/yeet",
             ),
             native_update_control="unknown",
+            surface_rule="route_identity",
         ),
         capability("codex", "standalone_skill", {"canonical_root": "agents_skills"}),
         capability(
@@ -356,13 +360,9 @@ def runtime_inventory(
             ),
         }
         state_digest = canonical_json_sha256(normalized_state)
-        surface_scope = [
-            f"surface:{group.route_identity}/{identity}"
-            for identity in sorted(
-                set(group.equipment_identities)
-                | set(group.controlled_equipment_identities)
-            )
-        ]
+        derived_scope = _surface_scope(selected, group)
+        assert derived_scope is not None
+        surface_scope = list(derived_scope)
         document = freeze_json(
             {
                 "contract_version": "adapter-contract-v1",
@@ -499,10 +499,14 @@ def with_normalized_state(
 def converged_inventory_with_configuration_drift(
     validated,
     route_identity: str,
+    *,
+    capability_records: tuple[CapabilityRecord, ...] | None = None,
 ) -> tuple[RuntimeInventory, CapabilityDiscovery]:
     """Build admitted observations whose only mutation is one configuration drift."""
 
-    inventory, capabilities = runtime_inventory(validated)
+    inventory, capabilities = runtime_inventory(
+        validated, capabilities=capability_records
+    )
     for group in _active_route_groups(validated):
         selected = _matching_capability(group, capabilities.records)
         assert selected is not None
@@ -561,7 +565,7 @@ def converged_inventory_with_configuration_drift(
     return with_normalized_state(inventory, route_identity, normalized), capabilities
 
 
-def plan_action_set_for_direct_mcp_configure(plan: ValidatedPlan) -> dict[str, object]:
+def plan_action_set_for_configure(plan: ValidatedPlan) -> dict[str, object]:
     """Supply the strict action projection for one actual resolver mutation."""
 
     mutations = tuple(node for node in plan.nodes if node.kind == "mutation")
@@ -572,20 +576,53 @@ def plan_action_set_for_direct_mcp_configure(plan: ValidatedPlan) -> dict[str, o
     route_record = payload.pop("route_record", None)
     assert isinstance(route_record, dict)
     provider = route_record.get("provider")
-    assert isinstance(provider, dict) and provider.get("kind") == "direct_mcp"
+    assert isinstance(provider, dict)
     surface_scope = payload.get("surface_scope")
     equipment = payload.get("equipment_identities")
-    assert isinstance(surface_scope, list) and len(surface_scope) == 1
-    assert isinstance(equipment, list) and len(equipment) == 1
-    target_payload = {
-        "write_surface_identity": surface_scope[0],
-        "surface_kind": "mcp_selection",
-        "equipment_identity": equipment[0],
-        "locator": {
+    controlled = payload.get("controlled_equipment_identities")
+    assert isinstance(surface_scope, list) and surface_scope
+    assert isinstance(equipment, list)
+    assert isinstance(controlled, list)
+    provider_kind = provider.get("kind")
+    if provider_kind == "direct_mcp":
+        assert len(equipment) == 1
+        target_equipment = equipment[0]
+        surface_kind = "mcp_selection"
+        locator = {
             "owner": payload["harness"],
             "source": "config",
             "key_path": ["mcp_servers", provider["server_name"]],
-        },
+        }
+    else:
+        assert provider_kind == "native_plugin" and payload["harness"] == "codex"
+        plugin_identities = sorted(
+            identity
+            for identity in {*equipment, *controlled}
+            if isinstance(identity, str) and identity.startswith("plugin:")
+        )
+        assert len(plugin_identities) == 1
+        target_equipment = plugin_identities[0]
+        surface_kind = "plugin_selection"
+        locator = {
+            "owner": "codex",
+            "source": "config",
+            "key_path": ["plugins", provider["plugin_id"]],
+        }
+    route_surface = f"surface:{payload['route_identity']}"
+    target_surface = (
+        route_surface
+        if route_surface in surface_scope
+        else next(
+            surface
+            for surface in surface_scope
+            if surface.endswith(f"/{target_equipment}")
+        )
+    )
+    target_payload = {
+        "write_surface_identity": target_surface,
+        "surface_kind": surface_kind,
+        "equipment_identity": target_equipment,
+        "locator": locator,
     }
     target = {
         "target_identity": "target:" + canonical_json_sha256(target_payload),
@@ -2646,7 +2683,7 @@ class ResolverMatrixTest(unittest.TestCase):
         plan = resolution.candidate_plan
         self.assertIsNotNone(plan)
         assert plan is not None
-        document = plan_action_set_for_direct_mcp_configure(plan)
+        document = plan_action_set_for_configure(plan)
         action = document["actions"][0]["action_payload"]
         self.assertEqual(
             action["desired_state"],
@@ -2675,7 +2712,7 @@ class ResolverMatrixTest(unittest.TestCase):
 
         self.assertIsInstance(admitted, AdmittedPlanActionSet)
 
-    def test_real_controlled_configure_plan_projects_exact_desired_controls(
+    def test_real_controlled_configure_plan_crosses_action_set_admission(
         self,
     ) -> None:
         inventory, capabilities = converged_inventory_with_configuration_drift(
@@ -2717,6 +2754,79 @@ class ResolverMatrixTest(unittest.TestCase):
                     key=lambda control: control["equipment_identity"],
                 ),
             },
+        )
+        document = plan_action_set_for_configure(plan)
+        expected_digest = document["action_set_digest"]
+        assert isinstance(expected_digest, str)
+
+        admitted = admit_plan_action_set(
+            canonical_json_bytes(document),
+            PlanActionSetTrust(
+                validated_plan=plan,
+                expected_action_set_digest=expected_digest,
+            ),
+        )
+
+        self.assertIsInstance(admitted, AdmittedPlanActionSet)
+
+    def test_controlled_route_and_equipment_plan_cannot_claim_one_plugin_target(
+        self,
+    ) -> None:
+        route_and_equipment_capability = capability(
+            "codex",
+            "native_plugin",
+            {"manager": "codex", "scope": "user"},
+            supported_controls=(
+                "mcp:github/server",
+                "other:github/codex-app",
+                "skill:github/gh-address-comments",
+                "skill:github/gh-fix-ci",
+                "skill:github/github",
+                "skill:github/yeet",
+            ),
+            native_update_control="unknown",
+            surface_rule="route_and_equipment_identity",
+        )
+        records = tuple(
+            route_and_equipment_capability
+            if record.capability_identity == "capability:codex/native_plugin"
+            else record
+            for record in complete_capabilities()
+        )
+        inventory, capabilities = converged_inventory_with_configuration_drift(
+            self.validated,
+            "route:codex/github-plugin",
+            capability_records=records,
+        )
+        resolution = resolve(
+            "status",
+            self.validated.catalog,
+            self.validated.lock,
+            inventory,
+            capabilities,
+        )
+
+        self.assertEqual(resolution.diagnostics, ())
+        plan = resolution.candidate_plan
+        self.assertIsNotNone(plan)
+        assert plan is not None
+        document = plan_action_set_for_configure(plan)
+        expected_digest = document["action_set_digest"]
+        assert isinstance(expected_digest, str)
+
+        rejected = admit_plan_action_set(
+            canonical_json_bytes(document),
+            PlanActionSetTrust(
+                validated_plan=plan,
+                expected_action_set_digest=expected_digest,
+            ),
+        )
+
+        self.assertIsInstance(rejected, PlanActionSetRejection)
+        assert isinstance(rejected, PlanActionSetRejection)
+        self.assertIn(
+            "PLAN_ACTION_TARGET_SCOPE_INVALID",
+            tuple(diagnostic.code for diagnostic in rejected.diagnostics),
         )
 
 

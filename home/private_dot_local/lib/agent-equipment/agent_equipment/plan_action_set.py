@@ -44,7 +44,7 @@ def _canonical_action_set_digest(document: FrozenJsonObject) -> str:
                 "implementation_manifest_digest"
             ),
             "plan_digest": document.get("plan_digest"),
-            "actions": tuple(sorted(typed_actions, key=_action_sort_key)),
+            "actions": tuple(typed_actions),
         }
     )
 
@@ -266,7 +266,8 @@ def _semantic_diagnostics(
             )
         ):
             diagnostics.append(
-                _diagnostic(
+                _action_diagnostic(
+                    payload,
                     "PLAN_ACTION_SET_PLAN_BINDING_INVALID",
                     "A plan action disagrees with the complete trusted plan tuple.",
                 )
@@ -274,14 +275,16 @@ def _semantic_diagnostics(
 
         if evidence.get("action_digest") != canonical_json_sha256(payload):
             diagnostics.append(
-                _diagnostic(
+                _action_diagnostic(
+                    payload,
                     "PLAN_ACTION_DIGEST_INVALID",
                     "A plan action does not match its complete canonical digest.",
                 )
             )
         if identity != _action_identity(payload):
             diagnostics.append(
-                _diagnostic(
+                _action_diagnostic(
+                    payload,
                     "PLAN_ACTION_IDENTITY_INVALID",
                     "A plan action does not match its canonical execution coordinates.",
                 )
@@ -289,7 +292,8 @@ def _semantic_diagnostics(
         desired_state = payload.get("desired_state")
         if payload.get("desired_state_digest") != canonical_json_sha256(desired_state):
             diagnostics.append(
-                _diagnostic(
+                _action_diagnostic(
+                    payload,
                     "PLAN_ACTION_DESIRED_STATE_INVALID",
                     "A plan action desired state does not match its canonical digest.",
                 )
@@ -297,14 +301,16 @@ def _semantic_diagnostics(
         node = mutation_nodes[index] if index < len(mutation_nodes) else None
         if node is None or not _matches_validated_plan(payload, node.definition, node):
             diagnostics.append(
-                _diagnostic(
+                _action_diagnostic(
+                    payload,
                     "PLAN_ACTION_SET_MEMBERSHIP_INVALID",
                     "A plan action is not the exact projection of its validated mutation.",
                 )
             )
         if not _preconditions_match(payload, node.definition if node else None):
             diagnostics.append(
-                _diagnostic(
+                _action_diagnostic(
+                    payload,
                     "PLAN_ACTION_PRECONDITION_INVALID",
                     "A plan action precondition does not repeat its proven authority.",
                 )
@@ -317,7 +323,8 @@ def _semantic_diagnostics(
         for target_key in target_keys:
             if target_key in physical_targets:
                 diagnostics.append(
-                    _diagnostic(
+                    _action_diagnostic(
+                        payload,
                         "PLAN_ACTION_PHYSICAL_TARGET_DUPLICATE",
                         "One mutable physical target is claimed by more than one action.",
                     )
@@ -325,14 +332,16 @@ def _semantic_diagnostics(
             physical_targets.add(target_key)
         if not _secret_references_match(payload):
             diagnostics.append(
-                _diagnostic(
+                _action_diagnostic(
+                    payload,
                     "PLAN_ACTION_SECRET_REFERENCE_INVALID",
                     "A provider does not consume exactly the declared secret references.",
                 )
             )
         if not _verification_dependencies_match(payload):
             diagnostics.append(
-                _diagnostic(
+                _action_diagnostic(
+                    payload,
                     "PLAN_ACTION_VERIFICATION_DEPENDENCY_INVALID",
                     "A verification dependency does not match its exact Claude write target.",
                 )
@@ -591,9 +600,11 @@ def _target_diagnostics(
             "target:" + canonical_json_sha256(target_payload)
         ):
             diagnostics.append(
-                _diagnostic(
+                _action_diagnostic(
+                    payload,
                     "PLAN_ACTION_TARGET_IDENTITY_INVALID",
                     "A physical write target does not match its canonical identity.",
+                    equipment_identity=target.get("equipment_identity"),
                 )
             )
         target_surfaces.append(str(target.get("write_surface_identity")))
@@ -608,28 +619,34 @@ def _target_diagnostics(
         )
         if target.get("surface_kind") == "legacy_projector":
             diagnostics.append(
-                _diagnostic(
+                _action_diagnostic(
+                    payload,
                     "PLAN_ACTION_TARGET_AUTHORITY_UNAVAILABLE",
                     "Legacy projector locator authority is not yet specified.",
+                    equipment_identity=target.get("equipment_identity"),
                 )
             )
         elif not _target_matches_plan_authority(target, payload, definition):
             diagnostics.append(
-                _diagnostic(
+                _action_diagnostic(
+                    payload,
                     "PLAN_ACTION_TARGET_BINDING_INVALID",
                     "A physical write target is foreign to its validated route authority.",
+                    equipment_identity=target.get("equipment_identity"),
                 )
             )
     if target_identities != sorted(set(target_identities)):
         diagnostics.append(
-            _diagnostic(
+            _action_diagnostic(
+                payload,
                 "PLAN_ACTION_TARGET_ORDER_INVALID",
                 "Physical write targets are not in unique canonical identity order.",
             )
         )
     if tuple(sorted(target_surfaces)) != tuple(surface_scope):
         diagnostics.append(
-            _diagnostic(
+            _action_diagnostic(
+                payload,
                 "PLAN_ACTION_TARGET_SCOPE_INVALID",
                 "Physical write targets do not cover the exact logical surface scope.",
             )
@@ -928,17 +945,49 @@ def _action_identity(payload: FrozenJsonObject) -> str:
     )
 
 
-def _action_sort_key(evidence: FrozenJsonObject) -> tuple[int, str]:
-    payload = evidence.get("action_payload")
-    assert isinstance(payload, FrozenJsonObject)
-    ordinal = payload.get("ordinal")
-    identity = payload.get("action_identity")
-    assert type(ordinal) is int and type(identity) is str
-    return ordinal, identity
+def _diagnostic_sort_key(
+    diagnostic: Diagnostic,
+) -> tuple[str, str, str, str, str, str]:
+    return (
+        diagnostic.equipment_identity or "",
+        diagnostic.harness or "",
+        diagnostic.route_identity or "",
+        diagnostic.code,
+        diagnostic.message,
+        diagnostic.evidence_source or "",
+    )
 
 
-def _diagnostic_sort_key(diagnostic: Diagnostic) -> tuple[str, str]:
-    return diagnostic.code, diagnostic.message
+def _action_diagnostic(
+    payload: FrozenJsonObject,
+    code: str,
+    message: str,
+    *,
+    equipment_identity: object = None,
+) -> Diagnostic:
+    if type(equipment_identity) is not str:
+        active = payload.get("equipment_identities")
+        controlled = payload.get("controlled_equipment_identities")
+        identities = (
+            set(active) | set(controlled)
+            if isinstance(active, tuple) and isinstance(controlled, tuple)
+            else set()
+        )
+        equipment_identity = next(iter(identities)) if len(identities) == 1 else None
+    harness = payload.get("harness")
+    route_identity = payload.get("route_identity")
+    return Diagnostic(
+        code,
+        message,
+        equipment_identity=(
+            equipment_identity if type(equipment_identity) is str else None
+        ),
+        harness=harness if type(harness) is str else None,
+        route_identity=(
+            route_identity if type(route_identity) is str else None
+        ),
+        evidence_source="plan-action-set",
+    )
 
 
 def _diagnostic(code: str, message: str) -> Diagnostic:
