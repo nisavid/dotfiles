@@ -245,12 +245,12 @@ test_model_selection() {
     'Daybreak fallback must cover selector, identity, capacity, probe, and authority failures'
   assert_contains "$skill" '~/.agents/daybreak-account-bindings.md' \
     'Daybreak account routing must read the private binding catalog'
-  assert_contains "$skill" 'local non-Daybreak fall-through is forbidden' \
-    'OpenAI-authenticated ChatGPT and Codex must prohibit local non-Daybreak fallback'
+  assert_contains "$skill" 'For Daybreak-routed work in ChatGPT or Codex using an OpenAI account for inference, local non-Daybreak fall-through is forbidden.' \
+    'OpenAI-authenticated ChatGPT and Codex must scope the local non-Daybreak fallback prohibition to Daybreak-routed work'
   assert_contains "$skill" 'Cross-harness delegation to an operator-approved non-Daybreak candidate is permitted' \
     'OpenAI-authenticated harnesses must permit approved cross-harness fallback when Daybreak has no capacity'
-  assert_contains "$skill" 'including ChatGPT or Codex without an OpenAI login' \
-    'other-harness behavior must cover unauthenticated ChatGPT and Codex'
+  assert_contains "$skill" 'For Daybreak-routed work in every other harness, including ChatGPT or Codex without an OpenAI login' \
+    'other-harness behavior must scope fallback handling to Daybreak-routed work and cover unauthenticated ChatGPT and Codex'
   assert_contains "$skill" 'may also fall through locally' \
     'other harnesses must retain local next-best fallback'
   assert_contains "$skill" 'this skill does not perform those actions' \
