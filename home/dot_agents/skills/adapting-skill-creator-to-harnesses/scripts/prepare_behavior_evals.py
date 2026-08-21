@@ -21,8 +21,7 @@ def slugify(value: str) -> str:
 
 
 def load_evals(skill_dir: Path) -> dict:
-    evals_path = skill_dir / "evals" / "evals.json"
-    return json.loads(evals_path.read_text())
+    return json.loads(read_scoped_text(skill_dir, "evals/evals.json"))
 
 
 def read_scoped_text(skill_dir: Path, relative_path: str) -> str:

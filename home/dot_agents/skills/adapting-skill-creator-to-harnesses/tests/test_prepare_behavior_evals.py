@@ -133,6 +133,54 @@ class PrepareBehaviorEvalsTests(unittest.TestCase):
                             "outside-content-sentinel", prompt_path.read_text(encoding="utf-8")
                         )
 
+    def test_rejects_symlinked_eval_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            manifest = root / "outside-evals.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "skill_name": "outside-manifest",
+                        "evals": [
+                            {
+                                "id": 1,
+                                "name": "outside manifest",
+                                "prompt": "outside-manifest-sentinel",
+                                "fixture_paths": [],
+                                "expected_output": "No prompt is generated.",
+                                "expectations": [],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            skill_dir = root / "skill"
+            (skill_dir / "evals").mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text("candidate skill", encoding="utf-8")
+            (skill_dir / "evals" / "evals.json").symlink_to(manifest)
+            workspace = root / "workspace"
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(PREPARER),
+                    "--skill-dir",
+                    str(skill_dir),
+                    "--workspace",
+                    str(workspace),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertNotEqual(result.returncode, 0, result.stdout or result.stderr)
+            for prompt_path in workspace.glob("eval-*/**/subagent_prompt.md"):
+                self.assertNotIn(
+                    "outside-manifest-sentinel", prompt_path.read_text(encoding="utf-8")
+                )
+
 
 if __name__ == "__main__":
     unittest.main()
