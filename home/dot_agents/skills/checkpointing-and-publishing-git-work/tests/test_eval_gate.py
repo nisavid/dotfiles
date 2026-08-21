@@ -347,12 +347,12 @@ class RepoEvalSchemaConformanceTests(unittest.TestCase):
     def test_preparer_rejects_fixture_paths_outside_the_skill_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)
-            secret = root / "secret.txt"
-            secret.write_text("do-not-inline", encoding="utf-8")
+            outside_file = root / "outside.txt"
+            outside_file.write_text("outside-content-sentinel", encoding="utf-8")
 
             for label, fixture_path in {
-                "absolute": str(secret),
-                "traversal": "../secret.txt",
+                "absolute": str(outside_file),
+                "traversal": "../outside.txt",
                 "symlink": "evals/fixtures/leak.txt",
             }.items():
                 with self.subTest(label=label):
@@ -361,7 +361,7 @@ class RepoEvalSchemaConformanceTests(unittest.TestCase):
                     fixtures_dir.mkdir(parents=True)
                     (skill_dir / "SKILL.md").write_text("candidate skill", encoding="utf-8")
                     if label == "symlink":
-                        (fixtures_dir / "leak.txt").symlink_to(secret)
+                        (fixtures_dir / "leak.txt").symlink_to(outside_file)
                     evals = {
                         "skill_name": f"skill-{label}",
                         "evals": [
@@ -394,7 +394,7 @@ class RepoEvalSchemaConformanceTests(unittest.TestCase):
                     )
                     self.assertNotEqual(result.returncode, 0, result.stdout or result.stderr)
                     for prompt_path in workspace.glob("eval-*/**/subagent_prompt.md"):
-                        self.assertNotIn("do-not-inline", prompt_path.read_text(encoding="utf-8"))
+                        self.assertNotIn("outside-content-sentinel", prompt_path.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":
