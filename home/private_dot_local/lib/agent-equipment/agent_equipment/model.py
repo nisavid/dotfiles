@@ -28,6 +28,7 @@ _INSTALLED_IMPLEMENTATION_PATHS = (
     "lib/agent-equipment/agent_equipment/discovery.py",
     "lib/agent-equipment/agent_equipment/inventory.py",
     "lib/agent-equipment/agent_equipment/model.py",
+    "lib/agent-equipment/agent_equipment/plan_action_set.py",
     "lib/agent-equipment/agent_equipment/resolver.py",
     "lib/agent-equipment/agent_equipment/secrets.py",
     "lib/agent-equipment/agent_equipment/source_resolution.py",

@@ -27,6 +27,7 @@ PACKAGE_NAMES = (
     "discovery.py",
     "inventory.py",
     "model.py",
+    "plan_action_set.py",
     "resolver.py",
     "secrets.py",
     "source_resolution.py",
