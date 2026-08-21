@@ -25,7 +25,6 @@ from .validator import validate_captured_schema_document
 MAX_PLAN_ACTION_SET_BYTES = 16 * 1024 * 1024
 _SCHEMA_NAME = "plan-action-set-v1.schema.json"
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
-_ADMITTED_CONSTRUCTION_KEY = object()
 
 
 def _canonical_action_set_digest(document: FrozenJsonObject) -> str:
@@ -86,16 +85,28 @@ class AdmittedPlanActionSet:
         document: FrozenJsonObject,
         canonical_bytes: bytes,
         action_set_digest: str,
-        _construction_key: object,
+        trust: PlanActionSetTrust,
     ) -> None:
-        if _construction_key is not _ADMITTED_CONSTRUCTION_KEY:
-            raise TypeError(
-                "admitted plan-action sets are created only by trusted admission"
-            )
+        if type(trust) is not PlanActionSetTrust:
+            raise TypeError("admitted plan-action set requires typed trust")
         object.__setattr__(self, "document", document)
         object.__setattr__(self, "canonical_bytes", canonical_bytes)
         object.__setattr__(self, "action_set_digest", action_set_digest)
         self.__post_init__()
+        mutable_document = thaw_json(document)
+        if (
+            len(canonical_bytes) > MAX_PLAN_ACTION_SET_BYTES
+            or type(mutable_document) is not dict
+            or not validate_captured_schema_document(
+                mutable_document,
+                root_schema_name=_SCHEMA_NAME,
+            )
+            or contains_literal_credential(mutable_document)
+            or _semantic_diagnostics(document, trust)
+        ):
+            raise ValueError(
+                "admitted plan-action set does not satisfy complete trusted admission"
+            )
 
     def __post_init__(self) -> None:
         if type(self.document) is not FrozenJsonObject:
@@ -187,7 +198,7 @@ def admit_plan_action_set(
         document=document,
         canonical_bytes=canonical_bytes,
         action_set_digest=action_set_digest,
-        _construction_key=_ADMITTED_CONSTRUCTION_KEY,
+        trust=trust,
     )
 
 
@@ -387,12 +398,44 @@ def _matches_validated_plan(
         and all(payload.get(field) == definition.get(field) for field in direct_fields)
         and isinstance(route, FrozenJsonObject)
         and definition.get("route_digest") == canonical_json_sha256(route)
+        and _route_owned_fields_match(definition, route)
         and _surface_scope_matches_plan_authority(definition)
         and payload.get("provider") == route.get("provider")
     )
 
 
+def _route_owned_fields_match(
+    definition: FrozenJsonObject,
+    route: FrozenJsonObject,
+) -> bool:
+    controls = route.get("component_controls")
+    controlled = definition.get("controlled_equipment_identities")
+    if not isinstance(controls, tuple) or not isinstance(controlled, tuple):
+        return False
+    control_identities: list[str] = []
+    for control in controls:
+        if not isinstance(control, FrozenJsonObject):
+            return False
+        identity = control.get("equipment_identity")
+        if type(identity) is not str:
+            return False
+        control_identities.append(identity)
+    return (
+        route.get("control_owner") == "reconciler_owned"
+        and route.get("activation_group") == definition.get("activation_group")
+        and route.get("secret_references") == definition.get("secret_references")
+        and tuple(control_identities) == tuple(sorted(set(control_identities)))
+        and tuple(control_identities) == controlled
+    )
+
+
 def _surface_scope_matches_plan_authority(definition: FrozenJsonObject) -> bool:
+    return _surface_rule_for_plan_authority(definition) is not None
+
+
+def _surface_rule_for_plan_authority(
+    definition: FrozenJsonObject,
+) -> str | None:
     route_identity = definition.get("route_identity")
     active = definition.get("equipment_identities")
     controlled = definition.get("controlled_equipment_identities")
@@ -403,7 +446,7 @@ def _surface_scope_matches_plan_authority(definition: FrozenJsonObject) -> bool:
         or not isinstance(controlled, tuple)
         or not isinstance(surface_scope, tuple)
     ):
-        return False
+        return None
     active_identities: list[str] = []
     controlled_identities: list[str] = []
     for source, destination in (
@@ -412,24 +455,35 @@ def _surface_scope_matches_plan_authority(definition: FrozenJsonObject) -> bool:
     ):
         for identity in source:
             if type(identity) is not str:
-                return False
+                return None
             destination.append(identity)
     if (
         active != tuple(sorted(set(active_identities)))
         or controlled != tuple(sorted(set(controlled_identities)))
     ):
-        return False
+        return None
     identities = tuple(
         sorted(set(active_identities) | set(controlled_identities))
     )
     if not identities:
-        return False
-    expected_scopes = (
-        (f"surface:{route_identity}",),
-        tuple(f"surface:shared/{identity}" for identity in identities),
-        tuple(f"surface:{route_identity}/{identity}" for identity in identities),
+        return None
+    expected_scopes = {
+        "route_identity": (f"surface:{route_identity}",),
+        "shared_equipment_identity": tuple(
+            f"surface:shared/{identity}" for identity in identities
+        ),
+        "route_and_equipment_identity": tuple(
+            f"surface:{route_identity}/{identity}" for identity in identities
+        ),
+    }
+    return next(
+        (
+            rule
+            for rule, expected_scope in expected_scopes.items()
+            if surface_scope == expected_scope
+        ),
+        None,
     )
-    return surface_scope in expected_scopes
 
 
 def _preconditions_match(
@@ -563,16 +617,17 @@ def _target_matches_plan_authority(
         return False
     authoritative_equipment = set(active) | set(controlled)
     trusted_scope = definition.get("surface_scope")
+    surface_rule = _surface_rule_for_plan_authority(definition)
     if (
         not isinstance(trusted_scope, tuple)
-        or not _surface_scope_matches_plan_authority(definition)
+        or surface_rule is None
         or surface not in trusted_scope
     ):
         return False
-    route_surface = f"surface:{route_identity}"
     if type(equipment) is str and (
         equipment not in authoritative_equipment
-        or not surface.endswith(f"/{equipment}")
+        or surface
+        != _surface_for_rule(surface_rule, route_identity, equipment)
     ):
         return False
 
@@ -604,15 +659,21 @@ def _target_matches_plan_authority(
                 }
             )
             and len(plugin_equipment) == 1
-            and (
-                surface == route_surface
-                or surface.endswith(f"/{plugin_equipment[0]}")
+            and surface
+            == _surface_for_rule(
+                surface_rule, route_identity, plugin_equipment[0]
             )
         )
     if kind == "claude_skill_entry":
         path = locator.get("path")
+        allowed_operations = {
+            "native_plugin": {"install"},
+            "standalone_skill": {"install", "remove", "restore"},
+        }
         return (
             provider_kind in {"native_plugin", "standalone_skill"}
+            and payload.get("operation")
+            in allowed_operations.get(str(provider_kind), set())
             and harness == "claude"
             and type(equipment) is str
             and equipment.startswith("skill:")
@@ -637,6 +698,18 @@ def _target_matches_plan_authority(
     if kind == "legacy_projector":
         return False
     return False
+
+
+def _surface_for_rule(
+    rule: str,
+    route_identity: str,
+    equipment_identity: str,
+) -> str:
+    if rule == "route_identity":
+        return f"surface:{route_identity}"
+    if rule == "shared_equipment_identity":
+        return f"surface:shared/{equipment_identity}"
+    return f"surface:{route_identity}/{equipment_identity}"
 
 
 def _expected_selection_locator(
