@@ -895,14 +895,22 @@ def _verification_dependencies_match(payload: FrozenJsonObject) -> bool:
         if target.get("surface_kind") == "claude_skill_entry":
             claude_target_surfaces.add(surface)
     claimed_surfaces: set[str] = set()
+    claimed_dependency_identities: set[str] = set()
     canonical_dependencies: list[bytes] = []
     for dependency in dependencies:
         if not isinstance(dependency, FrozenJsonObject):
             return False
         surface = dependency.get("write_surface_identity")
-        if type(surface) is not str or surface in claimed_surfaces:
+        dependency_identity = dependency.get("dependency_identity")
+        if (
+            type(surface) is not str
+            or surface in claimed_surfaces
+            or type(dependency_identity) is not str
+            or dependency_identity in claimed_dependency_identities
+        ):
             return False
         claimed_surfaces.add(surface)
+        claimed_dependency_identities.add(dependency_identity)
         canonical_dependencies.append(canonical_json_bytes(dependency))
         target = target_by_surface.get(surface)
         target_locator = (

@@ -1018,6 +1018,79 @@ class PlanActionSetAdmissionTest(unittest.TestCase):
 
         self.assertIn("PLAN_ACTION_VERIFICATION_DEPENDENCY_INVALID", _diagnostic_codes(result))
 
+    def test_canonical_skill_dependency_identities_must_be_unique(self) -> None:
+        plan, document = _valid_plan_and_action_set()
+        actions = document["actions"]
+        assert isinstance(actions, list)
+        evidence = actions[0]
+        assert isinstance(evidence, dict)
+        payload = evidence["action_payload"]
+        assert isinstance(payload, dict)
+        targets = payload["write_targets"]
+        dependencies = payload["verification_dependencies"]
+        assert isinstance(targets, list)
+        assert isinstance(dependencies, list) and len(dependencies) == 1
+
+        second_target = deepcopy(targets[1])
+        assert isinstance(second_target, dict)
+        second_surface = (
+            "surface:route:fixture/claude-plugin/skill:fixture/other"
+        )
+        _replace_target(
+            second_target,
+            write_surface_identity=second_surface,
+            equipment_identity="skill:fixture/other",
+            locator={"path": "~/.claude/skills/other"},
+        )
+        targets.append(second_target)
+        targets.sort(key=lambda target: str(target["target_identity"]))
+
+        second_dependency = deepcopy(dependencies[0])
+        assert isinstance(second_dependency, dict)
+        second_dependency.update(
+            {
+                "write_surface_identity": second_surface,
+                "equipment_identity": "skill:fixture/other",
+                "target_locator": {"path": "~/.agents/skills/other"},
+            }
+        )
+        dependencies.append(second_dependency)
+        dependencies.sort(key=canonical_json_bytes)
+
+        equipment_identities = [
+            "plugin:fixture/example",
+            "skill:fixture/example",
+            "skill:fixture/other",
+        ]
+        surface_scope = [
+            "surface:route:fixture/claude-plugin/plugin:fixture/example",
+            "surface:route:fixture/claude-plugin/skill:fixture/example",
+            second_surface,
+        ]
+        payload["equipment_identities"] = equipment_identities
+        payload["surface_scope"] = surface_scope
+        preconditions = payload["preconditions"]
+        assert isinstance(preconditions, dict)
+        preconditions["surface_scope"] = surface_scope
+
+        mutation_definition = thaw_json(plan.nodes[0].definition)
+        assert isinstance(mutation_definition, dict)
+        mutation_definition["equipment_identities"] = equipment_identities
+        mutation_definition["surface_scope"] = surface_scope
+        plan = _rebuild_plan_for_document(plan, document, mutation_definition)
+        trust = PlanActionSetTrust(
+            validated_plan=plan,
+            expected_action_set_digest=str(document["action_set_digest"]),
+        )
+
+        result = admit_plan_action_set(canonical_json_bytes(document), trust)
+
+        self.assertIsInstance(result, PlanActionSetRejection)
+        self.assertIn(
+            "PLAN_ACTION_VERIFICATION_DEPENDENCY_INVALID",
+            _diagnostic_codes(result),
+        )
+
     def test_reordered_actions_change_the_canonical_set_digest_and_fail_membership(
         self,
     ) -> None:
