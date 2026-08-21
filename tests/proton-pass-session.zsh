@@ -17,12 +17,59 @@ process_fixture_helper=$repo_root/tests/helpers/process-fixture.zsh
 [[ -r $process_fixture_helper ]] ||
   fail 'the shared process-fixture helper is required'
 source "$process_fixture_helper"
+if /bin/zsh -f -c '
+  source "$1"
+  test_process_fixture_init "$2"
+' -- "$process_fixture_helper" "$repo_root"; then
+  fail 'the process-fixture helper must reject recursive cleanup outside the temporary root'
+fi
 test_dir=$(mktemp -d "${TMPDIR:-/tmp}/proton-pass-session.XXXXXX")
 test_process_fixture_init "$test_dir" || fail 'could not initialize process-fixture cleanup'
 trap test_process_fixture_cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+survivor_probe_root=$test_dir/survivor-probe
+survivor_probe_error=$test_dir/survivor-probe.err
+mkdir -p -- "$survivor_probe_root"
+if /bin/zsh -f -c '
+  source "$1"
+  test_process_fixture_init "$2" || exit
+  kill() { return 0 }
+  zselect() { return 0 }
+  test_process_fixture_track_pid 2147483646 || exit
+  trap test_process_fixture_cleanup EXIT
+  exit 0
+' -- "$process_fixture_helper" "$survivor_probe_root" 2>"$survivor_probe_error"; then
+  fail 'EXIT cleanup must fail when a tracked process survives'
+fi
+[[ $(<"$survivor_probe_error") ==
+  'process fixture: tracked PID 2147483646 survived cleanup' ]] ||
+  fail 'the process-fixture helper must identify each surviving tracked process'
+cleanup_temp_root=$test_dir/cleanup-temp
+cleanup_registered_root=$cleanup_temp_root/registered
+cleanup_outside_root=$test_dir/cleanup-outside
+cleanup_outside_canary=$cleanup_outside_root/canary
+cleanup_recheck_error=$test_dir/cleanup-recheck.err
+mkdir -p -- "$cleanup_registered_root" "$cleanup_outside_root"
+: > "$cleanup_outside_canary"
+set +e
+TMPDIR=$cleanup_temp_root /bin/zsh -f -c '
+  source "$1"
+  test_process_fixture_init "$2" || exit
+  TEST_PROCESS_FIXTURE_ROOT=$3
+  test_process_fixture_cleanup
+' -- "$process_fixture_helper" "$cleanup_registered_root" \
+  "$cleanup_outside_root" 2>"$cleanup_recheck_error"
+cleanup_recheck_status=$?
+set -e
+(( cleanup_recheck_status == 1 )) ||
+  fail 'EXIT cleanup must fail when its registered root leaves the temporary root'
+[[ -e $cleanup_outside_canary ]] ||
+  fail 'EXIT cleanup must preserve data outside the temporary root'
+[[ $(<"$cleanup_recheck_error") ==
+  'process fixture: refusing recursive cleanup outside the temporary root' ]] ||
+  fail 'EXIT cleanup must report a refused recursive deletion'
 test_process_fixture_run_signal_probe_mode
 kill_audit_library=
 kill_audit_log=$test_dir/negative-pgid-kill-audit.log
@@ -38,6 +85,17 @@ if [[ $OSTYPE == linux* ]]; then
   /usr/bin/cc -shared -fPIC -O2 -Wall -Wextra -Werror \
     -o "$kill_audit_library" \
     "$repo_root/tests/fixtures/negative-pgid-kill-audit.c" -ldl
+  set +e
+  NEGATIVE_PGID_KILL_AUDIT_LOG=$test_dir/missing/audit.log \
+    LD_PRELOAD=$kill_audit_library \
+    /bin/zsh -f -c '
+      kill -0 -- -2147483647 2>/dev/null || true
+      kill -TERM -- -2147483647 2>/dev/null || true
+    '
+  kill_audit_failure_status=$?
+  set -e
+  (( kill_audit_failure_status == 125 )) ||
+    fail 'the stale-identity audit must fail closed when its log cannot be opened'
   status_fragment_library=$test_dir/zpty-status-fragment.so
   /usr/bin/cc -shared -fPIC -O2 -Wall -Wextra -Werror \
     -o "$status_fragment_library" \

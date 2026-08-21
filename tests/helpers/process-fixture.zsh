@@ -4,6 +4,7 @@ fi
 
 typeset -gr TEST_PROCESS_FIXTURE_HELPER_LOADED=1
 typeset -g TEST_PROCESS_FIXTURE_ROOT=
+typeset -g TEST_PROCESS_FIXTURE_TEMP_ROOT=
 typeset -gA TEST_PROCESS_FIXTURE_PIDS=()
 typeset -gA TEST_PROCESS_FIXTURE_PID_FILES=()
 typeset -gA TEST_PROCESS_FIXTURE_PID_LIST_FILES=()
@@ -13,11 +14,17 @@ test_process_fixture_init() {
   emulate -L zsh
 
   local root=${1-}
+  local temporary_root=${TMPDIR:-/tmp}
   (( $# == 1 )) && [[ $root == /* && $root != / ]] || return 64
+  [[ -d $root && ! -L $root && -d $temporary_root ]] || return 64
+  root=${root:A}
+  temporary_root=${temporary_root:A}
+  [[ $root == "$temporary_root"/* ]] || return 64
   [[ -z $TEST_PROCESS_FIXTURE_ROOT || $TEST_PROCESS_FIXTURE_ROOT == $root ]] ||
     return 64
 
   TEST_PROCESS_FIXTURE_ROOT=$root
+  TEST_PROCESS_FIXTURE_TEMP_ROOT=$temporary_root
   TEST_PROCESS_FIXTURE_PIDS=()
   TEST_PROCESS_FIXTURE_PID_FILES=()
   TEST_PROCESS_FIXTURE_PID_LIST_FILES=()
@@ -145,10 +152,16 @@ test_process_fixture_stop_all() {
     (( live )) || break
     zselect -t 1 2>/dev/null || true
   done
+  integer survivors=0
   for pid in ${(k)targets}; do
-    kill -0 $pid 2>/dev/null || unset "TEST_PROCESS_FIXTURE_STOPPING_PIDS[$pid]"
+    if kill -0 $pid 2>/dev/null; then
+      print -u2 -r -- "process fixture: tracked PID $pid survived cleanup"
+      survivors=1
+    else
+      unset "TEST_PROCESS_FIXTURE_STOPPING_PIDS[$pid]"
+    fi
   done
-  (( ! consumption_failed ))
+  (( ! consumption_failed && ! survivors ))
 }
 
 test_process_fixture_cleanup() {
@@ -156,16 +169,25 @@ test_process_fixture_cleanup() {
   emulate -L zsh
   unsetopt err_exit
   local fixture_root=$TEST_PROCESS_FIXTURE_ROOT
+  local temporary_root=$TEST_PROCESS_FIXTURE_TEMP_ROOT
+  integer cleanup_failed=0
 
   trap - EXIT HUP INT TERM
-  test_process_fixture_stop_all || true
+  test_process_fixture_stop_all || cleanup_failed=1
   TEST_PROCESS_FIXTURE_PID_LIST_FILES=()
   TEST_PROCESS_FIXTURE_STOPPING_PIDS=()
   TEST_PROCESS_FIXTURE_ROOT=
-  if [[ $fixture_root == /* && $fixture_root != / ]]; then
-    /bin/rm -rf -- "$fixture_root"
+  TEST_PROCESS_FIXTURE_TEMP_ROOT=
+  if [[ -d $fixture_root && ! -L $fixture_root &&
+    ${fixture_root:A} == "${temporary_root:A}"/* ]]; then
+    /bin/rm -rf -- "$fixture_root" || cleanup_failed=1
+  else
+    print -u2 -r -- \
+      "process fixture: refusing recursive cleanup outside the temporary root"
+    cleanup_failed=1
   fi
-  return $cleanup_status
+  (( cleanup_status == 0 && cleanup_failed )) && cleanup_status=1
+  exit $cleanup_status
 }
 
 test_process_fixture_run_signal_probe_mode() {
