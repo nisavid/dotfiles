@@ -25,6 +25,7 @@ from .validator import validate_captured_schema_document
 MAX_PLAN_ACTION_SET_BYTES = 16 * 1024 * 1024
 _SCHEMA_NAME = "plan-action-set-v1.schema.json"
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
+_ADMITTED_CONSTRUCTION_KEY = object()
 
 
 def _canonical_action_set_digest(document: FrozenJsonObject) -> str:
@@ -66,7 +67,7 @@ class PlanActionSetTrust:
             raise ValueError("expected plan-action-set digest is invalid")
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, init=False)
 class AdmittedPlanActionSet:
     """One immutable projection admitted against all currently provable bindings.
 
@@ -78,6 +79,23 @@ class AdmittedPlanActionSet:
     document: FrozenJsonObject
     canonical_bytes: bytes
     action_set_digest: str
+
+    def __init__(
+        self,
+        *,
+        document: FrozenJsonObject,
+        canonical_bytes: bytes,
+        action_set_digest: str,
+        _construction_key: object,
+    ) -> None:
+        if _construction_key is not _ADMITTED_CONSTRUCTION_KEY:
+            raise TypeError(
+                "admitted plan-action sets are created only by trusted admission"
+            )
+        object.__setattr__(self, "document", document)
+        object.__setattr__(self, "canonical_bytes", canonical_bytes)
+        object.__setattr__(self, "action_set_digest", action_set_digest)
+        self.__post_init__()
 
     def __post_init__(self) -> None:
         if type(self.document) is not FrozenJsonObject:
@@ -169,6 +187,7 @@ def admit_plan_action_set(
         document=document,
         canonical_bytes=canonical_bytes,
         action_set_digest=action_set_digest,
+        _construction_key=_ADMITTED_CONSTRUCTION_KEY,
     )
 
 
@@ -368,8 +387,49 @@ def _matches_validated_plan(
         and all(payload.get(field) == definition.get(field) for field in direct_fields)
         and isinstance(route, FrozenJsonObject)
         and definition.get("route_digest") == canonical_json_sha256(route)
+        and _surface_scope_matches_plan_authority(definition)
         and payload.get("provider") == route.get("provider")
     )
+
+
+def _surface_scope_matches_plan_authority(definition: FrozenJsonObject) -> bool:
+    route_identity = definition.get("route_identity")
+    active = definition.get("equipment_identities")
+    controlled = definition.get("controlled_equipment_identities")
+    surface_scope = definition.get("surface_scope")
+    if (
+        type(route_identity) is not str
+        or not isinstance(active, tuple)
+        or not isinstance(controlled, tuple)
+        or not isinstance(surface_scope, tuple)
+    ):
+        return False
+    active_identities: list[str] = []
+    controlled_identities: list[str] = []
+    for source, destination in (
+        (active, active_identities),
+        (controlled, controlled_identities),
+    ):
+        for identity in source:
+            if type(identity) is not str:
+                return False
+            destination.append(identity)
+    if (
+        active != tuple(sorted(set(active_identities)))
+        or controlled != tuple(sorted(set(controlled_identities)))
+    ):
+        return False
+    identities = tuple(
+        sorted(set(active_identities) | set(controlled_identities))
+    )
+    if not identities:
+        return False
+    expected_scopes = (
+        (f"surface:{route_identity}",),
+        tuple(f"surface:shared/{identity}" for identity in identities),
+        tuple(f"surface:{route_identity}/{identity}" for identity in identities),
+    )
+    return surface_scope in expected_scopes
 
 
 def _preconditions_match(
@@ -442,7 +502,14 @@ def _target_diagnostics(
                 }
             )
         )
-        if not _target_matches_plan_authority(target, payload, definition):
+        if target.get("surface_kind") == "legacy_projector":
+            diagnostics.append(
+                _diagnostic(
+                    "PLAN_ACTION_TARGET_AUTHORITY_UNAVAILABLE",
+                    "Legacy projector locator authority is not yet specified.",
+                )
+            )
+        elif not _target_matches_plan_authority(target, payload, definition):
             diagnostics.append(
                 _diagnostic(
                     "PLAN_ACTION_TARGET_BINDING_INVALID",
@@ -495,9 +562,14 @@ def _target_matches_plan_authority(
     ):
         return False
     authoritative_equipment = set(active) | set(controlled)
-    route_surface = f"surface:{route_identity}"
-    if surface != route_surface and not surface.startswith(f"{route_surface}/"):
+    trusted_scope = definition.get("surface_scope")
+    if (
+        not isinstance(trusted_scope, tuple)
+        or not _surface_scope_matches_plan_authority(definition)
+        or surface not in trusted_scope
+    ):
         return False
+    route_surface = f"surface:{route_identity}"
     if type(equipment) is str and (
         equipment not in authoritative_equipment
         or not surface.endswith(f"/{equipment}")
@@ -563,11 +635,7 @@ def _target_matches_plan_authority(
         )
         return expected_locator is not None and locator == expected_locator
     if kind == "legacy_projector":
-        return (
-            provider_kind == "standalone_skill"
-            and equipment is None
-            and locator.get("owner") == harness
-        )
+        return False
     return False
 
 
@@ -580,7 +648,13 @@ def _expected_selection_locator(
 ) -> FrozenJsonObject | None:
     provider_kind = provider.get("kind")
     if kind == "mcp_selection":
-        if provider_kind != "direct_mcp" or operation != "configure":
+        if provider_kind != "direct_mcp" or operation not in {
+            "configure",
+            "enable",
+            "disable",
+            "remove",
+            "restore",
+        }:
             return None
         server_name = provider.get("server_name")
         coordinates = {
