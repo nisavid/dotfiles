@@ -233,6 +233,13 @@ class IndentedCodeTests(unittest.TestCase):
         body = "Intro:\n\n    code line one\n    code line two\n\nProse.\n"
         self.assertEqual([], self.kinds(body))
 
+    def test_an_indented_code_block_may_begin_with_a_quote_marker(self) -> None:
+        # Four spaces make this indented code, not a blockquote.
+        self.assertEqual([], self.kinds("Intro:\n\n    > literal\n    next\n"))
+
+    def test_a_blockquote_may_carry_up_to_three_spaces(self) -> None:
+        self.assertEqual([2], self.kinds("   > quoted prose\n   > wrapped here.\n"))
+
     def test_indentation_cannot_interrupt_a_paragraph(self) -> None:
         # An indented code block cannot interrupt a paragraph, so this is a
         # lazy continuation that GitHub renders with a break.
@@ -286,6 +293,13 @@ class SetextHeadingTests(unittest.TestCase):
         for rule in ("***", "___", "---"):
             with self.subTest(rule=rule):
                 self.assertEqual([], self.kinds(f"Prose.\n\n{rule}\n\nMore.\n"))
+
+    def test_a_thematic_break_between_adjacent_prose_is_a_boundary(self) -> None:
+        # A thematic break may interrupt a paragraph, and GitHub renders each
+        # side as its own paragraph, so neither neighbour is a continuation.
+        for rule in ("***", "___", "---", "* * *", "_ _ _", "- - -", "*\t*\t*"):
+            with self.subTest(rule=rule):
+                self.assertEqual([], self.kinds(f"Prose.\n{rule}\nMore.\n"))
 
 
 class QuoteDepthRegressionTests(unittest.TestCase):
