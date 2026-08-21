@@ -9,7 +9,9 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Protocol, TypeAlias
+from threading import Lock
+from types import TracebackType
+from typing import Protocol, Self, TypeAlias
 
 from ._json_schema import validate_document
 from .canonical import (
@@ -31,19 +33,11 @@ _UTC_TIMESTAMP = re.compile(
 _EXECUTION_DOMAIN_IDENTITY = re.compile(
     r"execution-domain:[A-Za-z0-9][A-Za-z0-9._/-]{0,254}"
 )
+_APPLY_AUTHORIZATION_IDENTITY = re.compile(r"apply-authorization:sha256:[0-9a-f]{64}")
+_EXECUTION_NONCE = re.compile(r"execution-nonce:sha256:[0-9a-f]{64}")
+_RUN_IDENTITY = re.compile(r"run:sha256:[0-9a-f]{64}")
 _CLAIM_IDENTITY = re.compile(r"authorization-ledger-claim:sha256:([0-9a-f]{64})")
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
-_CLAIM_MEMBERS = frozenset(
-    {
-        "schema_version",
-        "claim_identity",
-        "apply_authorization_identity",
-        "apply_authorization_digest",
-        "execution_domain_identity",
-        "execution_nonce",
-        "run_identity",
-    }
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,12 +66,93 @@ class AuthorizationLedgerClaimStatus(Enum):
     DURABILITY_UNCERTAIN = "durability_uncertain"
 
 
+@dataclass(frozen=True, slots=True)
+class AuthorizationLedgerClaim:
+    """One closed authorization and run binding submitted to durable CAS."""
+
+    apply_authorization_identity: str
+    apply_authorization_digest: str
+    execution_domain_identity: str
+    execution_nonce: str
+    run_identity: str
+
+    def __post_init__(self) -> None:
+        if not _valid_claim_bindings(self):
+            raise ValueError("authorization ledger claim bindings are invalid")
+
+    @property
+    def claim_identity(self) -> str:
+        return authorization_ledger_claim_identity(
+            self.execution_domain_identity,
+            self.execution_nonce,
+        )
+
+    def as_json(self) -> FrozenJsonObject:
+        document = freeze_json(
+            {
+                "schema_version": ("agent-equipment-authorization-ledger-claim/v1"),
+                "claim_identity": self.claim_identity,
+                "apply_authorization_identity": (self.apply_authorization_identity),
+                "apply_authorization_digest": self.apply_authorization_digest,
+                "execution_domain_identity": self.execution_domain_identity,
+                "execution_nonce": self.execution_nonce,
+                "run_identity": self.run_identity,
+            }
+        )
+        if not isinstance(document, FrozenJsonObject):
+            raise TypeError("authorization ledger claim must be JSON")
+        return document
+
+
 class AuthorizationLedger(Protocol):
     """Domain-level port for one durable execution-nonce claim."""
 
-    execution_domain_identity: str
+    def claim(
+        self,
+        claim: AuthorizationLedgerClaim,
+    ) -> AuthorizationLedgerClaimStatus: ...
 
-    def claim(self, claim: FrozenJsonObject) -> AuthorizationLedgerClaimStatus: ...
+
+@dataclass(frozen=True, slots=True)
+class TrustedExecutionDomain:
+    """Bind one deployment-owned domain identity to its sole CAS target."""
+
+    identity: str
+    authorization_ledger: AuthorizationLedger
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.identity) is not str
+            or _EXECUTION_DOMAIN_IDENTITY.fullmatch(self.identity) is None
+        ):
+            raise ValueError("trusted execution domain identity is invalid")
+        if not callable(getattr(self.authorization_ledger, "claim", None)):
+            raise TypeError("trusted execution domain requires a claim ledger")
+
+
+@dataclass(frozen=True, slots=True)
+class ApplyAuthorizationGate:
+    """A validation gate prebound to one authoritative execution domain."""
+
+    _execution_domain: TrustedExecutionDomain
+
+    def __init__(self, execution_domain: TrustedExecutionDomain) -> None:
+        if type(execution_domain) is not TrustedExecutionDomain:
+            raise TypeError("authorization gate requires a trusted execution domain")
+        object.__setattr__(self, "_execution_domain", execution_domain)
+
+    def authorize_apply_start(
+        self,
+        raw_authorization: bytes,
+        trust: ApplyAuthorizationTrust,
+    ) -> ApplyAuthorizationResult:
+        """Validate one external authority, then claim its domain nonce."""
+
+        return _authorize_apply_start(
+            raw_authorization,
+            trust,
+            self._execution_domain,
+        )
 
 
 class FileAuthorizationLedger:
@@ -86,43 +161,79 @@ class FileAuthorizationLedger:
     def __init__(
         self,
         root: Path,
-        *,
-        execution_domain_identity: str,
     ) -> None:
         if not isinstance(root, Path) or not root.is_absolute() or ".." in root.parts:
             raise ValueError("authorization ledger root must be one absolute path")
-        if (
-            type(execution_domain_identity) is not str
-            or _EXECUTION_DOMAIN_IDENTITY.fullmatch(execution_domain_identity) is None
-        ):
-            raise ValueError("authorization ledger requires one execution domain")
-        self._root = root
-        self.execution_domain_identity = execution_domain_identity
+        self._descriptor_lock = Lock()
+        self._directory_descriptor = self._open_directory(root)
 
-    def claim(self, claim: FrozenJsonObject) -> AuthorizationLedgerClaimStatus:
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(
+        self,
+        exception_type: type[BaseException] | None,
+        exception: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self.close()
+
+    def close(self) -> None:
+        """Release this ledger's stable directory binding."""
+
+        with self._descriptor_lock:
+            descriptor = self._directory_descriptor
+            self._directory_descriptor = None
+        if descriptor is not None:
+            os.close(descriptor)
+
+    @staticmethod
+    def _open_directory(root: Path) -> int | None:
+        no_follow = getattr(os, "O_NOFOLLOW", None)
+        directory = getattr(os, "O_DIRECTORY", None)
+        if no_follow is None or directory is None:
+            return None
+        try:
+            return os.open(
+                root,
+                os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | no_follow | directory,
+            )
+        except OSError:
+            return None
+
+    def _duplicate_directory(self) -> int | None:
+        with self._descriptor_lock:
+            if self._directory_descriptor is None:
+                return None
+            try:
+                return os.dup(self._directory_descriptor)
+            except OSError:
+                return None
+
+    def claim(
+        self,
+        claim: AuthorizationLedgerClaim,
+    ) -> AuthorizationLedgerClaimStatus:
         """Exclusively persist one closed claim and its directory entry."""
 
         claim_name = self._claim_name(claim)
         if claim_name is None:
             return AuthorizationLedgerClaimStatus.UNAVAILABLE
         try:
-            claim_bytes = canonical_json_bytes(claim)
+            claim_bytes = canonical_json_bytes(claim.as_json())
         except (RecursionError, UnicodeError, TypeError, ValueError):
             return AuthorizationLedgerClaimStatus.UNAVAILABLE
 
         no_follow = getattr(os, "O_NOFOLLOW", None)
-        directory = getattr(os, "O_DIRECTORY", None)
-        if no_follow is None or directory is None:
+        if no_follow is None:
             return AuthorizationLedgerClaimStatus.UNAVAILABLE
-        directory_descriptor: int | None = None
+        directory_descriptor = self._duplicate_directory()
+        if directory_descriptor is None:
+            return AuthorizationLedgerClaimStatus.UNAVAILABLE
         claim_descriptor: int | None = None
         created = False
         status = AuthorizationLedgerClaimStatus.UNAVAILABLE
         try:
-            directory_descriptor = os.open(
-                self._root,
-                os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | no_follow | directory,
-            )
             try:
                 claim_descriptor = os.open(
                     claim_name,
@@ -160,9 +271,7 @@ class FileAuthorizationLedger:
                     os.close(descriptor_to_close)
                 except OSError:
                     if created:
-                        status = (
-                            AuthorizationLedgerClaimStatus.DURABILITY_UNCERTAIN
-                        )
+                        status = AuthorizationLedgerClaimStatus.DURABILITY_UNCERTAIN
             if directory_descriptor is not None:
                 descriptor_to_close = directory_descriptor
                 directory_descriptor = None
@@ -170,33 +279,15 @@ class FileAuthorizationLedger:
                     os.close(descriptor_to_close)
                 except OSError:
                     if created:
-                        status = (
-                            AuthorizationLedgerClaimStatus.DURABILITY_UNCERTAIN
-                        )
+                        status = AuthorizationLedgerClaimStatus.DURABILITY_UNCERTAIN
         return status
 
-    def _claim_name(self, claim: FrozenJsonObject) -> str | None:
-        if type(claim) is not FrozenJsonObject or set(claim) != _CLAIM_MEMBERS:
-            return None
-        if (
-            claim.get("schema_version")
-            != "agent-equipment-authorization-ledger-claim/v1"
-            or claim.get("execution_domain_identity")
-            != self.execution_domain_identity
-            or type(claim.get("execution_nonce")) is not str
-            or type(claim.get("run_identity")) is not str
-            or type(claim.get("apply_authorization_identity")) is not str
-            or type(claim.get("apply_authorization_digest")) is not str
-            or _DIGEST.fullmatch(str(claim.get("apply_authorization_digest"))) is None
+    def _claim_name(self, claim: AuthorizationLedgerClaim) -> str | None:
+        if type(claim) is not AuthorizationLedgerClaim or not _valid_claim_bindings(
+            claim
         ):
             return None
-        expected_identity = authorization_ledger_claim_identity(
-            self.execution_domain_identity,
-            str(claim["execution_nonce"]),
-        )
-        if claim.get("claim_identity") != expected_identity:
-            return None
-        match = _CLAIM_IDENTITY.fullmatch(expected_identity)
+        match = _CLAIM_IDENTITY.fullmatch(claim.claim_identity)
         if match is None:
             return None
         return f"{match.group(1)}.json"
@@ -207,8 +298,15 @@ class ClaimedApplyAuthorization:
     """One validated authorization whose nonce is durably consumed."""
 
     authorization: FrozenJsonObject
-    authorization_digest: str
-    claim_identity: str
+    ledger_claim: AuthorizationLedgerClaim
+
+    @property
+    def authorization_digest(self) -> str:
+        return self.ledger_claim.apply_authorization_digest
+
+    @property
+    def claim_identity(self) -> str:
+        return self.ledger_claim.claim_identity
 
 
 @dataclass(frozen=True, slots=True)
@@ -224,15 +322,13 @@ class AuthorizationRejection:
             raise ValueError("authorization rejection requires typed diagnostics")
 
 
-ApplyAuthorizationResult: TypeAlias = (
-    ClaimedApplyAuthorization | AuthorizationRejection
-)
+ApplyAuthorizationResult: TypeAlias = ClaimedApplyAuthorization | AuthorizationRejection
 
 
-def authorize_apply_start(
+def _authorize_apply_start(
     raw_authorization: bytes,
     trust: ApplyAuthorizationTrust,
-    ledger: AuthorizationLedger,
+    execution_domain: TrustedExecutionDomain,
 ) -> ApplyAuthorizationResult:
     """Validate one external apply authority, then durably claim its nonce."""
 
@@ -289,41 +385,30 @@ def authorize_apply_start(
     diagnostics = _semantic_diagnostics(mutable_authorization, trust)
     if diagnostics:
         return AuthorizationRejection(diagnostics)
-    if ledger.execution_domain_identity != trust.expected_execution_domain_identity:
+    if execution_domain.identity != trust.expected_execution_domain_identity:
         return _rejection(
             "EXECUTION_DOMAIN_MISMATCH",
-            "The authorization ledger does not match the trusted execution domain.",
+            "The authorization gate does not match the trusted execution domain.",
         )
 
     authorization_digest = canonical_json_sha256(mutable_authorization)
-    claim_identity = authorization_ledger_claim_identity(
-        trust.expected_execution_domain_identity,
-        trust.expected_execution_nonce,
+    claim = AuthorizationLedgerClaim(
+        apply_authorization_identity=str(
+            mutable_authorization["authorization_identity"]
+        ),
+        apply_authorization_digest=authorization_digest,
+        execution_domain_identity=execution_domain.identity,
+        execution_nonce=trust.expected_execution_nonce,
+        run_identity=trust.expected_run_identity,
     )
-    claim = freeze_json(
-        {
-            "schema_version": "agent-equipment-authorization-ledger-claim/v1",
-            "claim_identity": claim_identity,
-            "apply_authorization_identity": mutable_authorization[
-                "authorization_identity"
-            ],
-            "apply_authorization_digest": authorization_digest,
-            "execution_domain_identity": trust.expected_execution_domain_identity,
-            "execution_nonce": trust.expected_execution_nonce,
-            "run_identity": trust.expected_run_identity,
-        }
-    )
-    if not isinstance(claim, FrozenJsonObject):
-        raise TypeError("authorization ledger claim must be an immutable JSON object")
     try:
-        claim_status = ledger.claim(claim)
-    except Exception:
+        claim_status = execution_domain.authorization_ledger.claim(claim)
+    except Exception:  # noqa: BLE001 - every ledger fault fails closed.
         claim_status = AuthorizationLedgerClaimStatus.DURABILITY_UNCERTAIN
     if claim_status is AuthorizationLedgerClaimStatus.DURABLE:
         return ClaimedApplyAuthorization(
             authorization=authorization,
-            authorization_digest=authorization_digest,
-            claim_identity=claim_identity,
+            ledger_claim=claim,
         )
     return _ledger_rejection(claim_status)
 
@@ -342,6 +427,23 @@ def authorization_ledger_claim_identity(
     )
 
 
+def _valid_claim_bindings(claim: AuthorizationLedgerClaim) -> bool:
+    patterns = (
+        (
+            claim.apply_authorization_identity,
+            _APPLY_AUTHORIZATION_IDENTITY,
+        ),
+        (claim.apply_authorization_digest, _DIGEST),
+        (claim.execution_domain_identity, _EXECUTION_DOMAIN_IDENTITY),
+        (claim.execution_nonce, _EXECUTION_NONCE),
+        (claim.run_identity, _RUN_IDENTITY),
+    )
+    return all(
+        type(value) is str and pattern.fullmatch(value) is not None
+        for value, pattern in patterns
+    )
+
+
 def _semantic_diagnostics(
     authorization: dict[str, object],
     trust: ApplyAuthorizationTrust,
@@ -350,14 +452,16 @@ def _semantic_diagnostics(
         return (
             Diagnostic(
                 code="TRUSTED_CLOCK_INVALID",
-                message="The executor must supply a timezone-aware trusted clock.",
+                message=("The executor must supply a timezone-aware trusted clock."),
             ),
         )
     if type(trust.expected_bindings) is not FrozenJsonObject:
         return (
             Diagnostic(
                 code="APPLY_AUTHORIZATION_TRUST_INVALID",
-                message="The executor must supply one immutable trusted binding tuple.",
+                message=(
+                    "The executor must supply one immutable trusted binding tuple."
+                ),
             ),
         )
 
@@ -367,29 +471,24 @@ def _semantic_diagnostics(
         for key, value in authorization.items()
         if key != "authorization_identity"
     }
-    derived_identity = "apply-authorization:" + canonical_json_sha256(
-        identity_payload
-    )
+    derived_identity = "apply-authorization:" + canonical_json_sha256(identity_payload)
     if authorization["authorization_identity"] != derived_identity:
         diagnostics.append(
             Diagnostic(
                 code="APPLY_AUTHORIZATION_IDENTITY_INVALID",
                 message=(
-                    "The apply-authorization identity does not match its canonical "
-                    "payload."
+                    "The apply-authorization identity does not match its "
+                    "canonical payload."
                 ),
             )
         )
-    if (
-        authorization["authorization_identity"]
-        != trust.expected_authorization_identity
-    ):
+    if authorization["authorization_identity"] != trust.expected_authorization_identity:
         diagnostics.append(
             Diagnostic(
                 code="APPLY_AUTHORIZATION_TRUST_MISMATCH",
                 message=(
-                    "The apply authorization does not match the independently trusted "
-                    "identity."
+                    "The apply authorization does not match the independently "
+                    "trusted identity."
                 ),
             )
         )
@@ -398,8 +497,8 @@ def _semantic_diagnostics(
             Diagnostic(
                 code="APPLY_AUTHORIZATION_DIGEST_MISMATCH",
                 message=(
-                    "The apply authorization does not match the independently trusted "
-                    "digest."
+                    "The apply authorization does not match the independently "
+                    "trusted digest."
                 ),
             )
         )
@@ -407,7 +506,7 @@ def _semantic_diagnostics(
         diagnostics.append(
             Diagnostic(
                 code="APPLY_AUTHORIZATION_BINDING_MISMATCH",
-                message="The apply authorization does not match the trusted issuer.",
+                message=("The apply authorization does not match the trusted issuer."),
             )
         )
     if (
@@ -418,8 +517,8 @@ def _semantic_diagnostics(
             Diagnostic(
                 code="EXECUTION_DOMAIN_MISMATCH",
                 message=(
-                    "The apply authorization does not match the independently trusted "
-                    "ledger domain."
+                    "The apply authorization does not match the independently "
+                    "trusted ledger domain."
                 ),
             )
         )
@@ -431,8 +530,8 @@ def _semantic_diagnostics(
             Diagnostic(
                 code="APPLY_AUTHORIZATION_BINDING_MISMATCH",
                 message=(
-                    "The apply authorization does not match the complete independently "
-                    "trusted binding tuple."
+                    "The apply authorization does not match the complete "
+                    "independently trusted binding tuple."
                 ),
             )
         )
@@ -456,8 +555,8 @@ def _semantic_diagnostics(
                         else "APPLY_AUTHORIZATION_BINDING_MISMATCH"
                     ),
                     message=(
-                        "The apply authorization does not match independently trusted "
-                        "execution material."
+                        "The apply authorization does not match independently "
+                        "trusted execution material."
                     ),
                 )
             )
@@ -478,8 +577,8 @@ def _semantic_diagnostics(
             Diagnostic(
                 code="APPLY_AUTHORIZATION_TIME_INVALID",
                 message=(
-                    "The trusted clock is outside the authorization's ordered validity "
-                    "window."
+                    "The trusted clock is outside the authorization's ordered "
+                    "validity window."
                 ),
             )
         )
@@ -500,7 +599,7 @@ def _valid_trusted_clock(value: object) -> bool:
         return False
     try:
         return value.utcoffset() is not None
-    except Exception:
+    except Exception:  # noqa: BLE001 - hostile datetime subclasses fail closed.
         return False
 
 

@@ -5,7 +5,7 @@ import os
 import stat
 import unittest
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import replace
+from dataclasses import FrozenInstanceError, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -13,12 +13,15 @@ from unittest.mock import patch
 
 from agent_equipment.authorization import (
     MAX_APPLY_AUTHORIZATION_BYTES,
+    ApplyAuthorizationGate,
     ApplyAuthorizationTrust,
+    AuthorizationLedger,
+    AuthorizationLedgerClaim,
     AuthorizationLedgerClaimStatus,
     AuthorizationRejection,
     ClaimedApplyAuthorization,
     FileAuthorizationLedger,
-    authorize_apply_start,
+    TrustedExecutionDomain,
     authorization_ledger_claim_identity,
 )
 from agent_equipment.canonical import (
@@ -64,7 +67,7 @@ def _valid_authorization() -> tuple[dict[str, object], str]:
         "expires_at": "2026-08-13T08:00:00Z",
         "execution_nonce": "execution-nonce:sha256:" + "e" * 64,
         "run_identity": "run:sha256:" + "f" * 64,
-        "execution_domain_identity": "execution-domain:fixture/global-ledger-v1",
+        "execution_domain_identity": ("execution-domain:fixture/global-ledger-v1"),
         "command": "apply",
         "bindings": bindings,
     }
@@ -74,8 +77,8 @@ def _valid_authorization() -> tuple[dict[str, object], str]:
 def _seal(document: dict[str, object]) -> str:
     identity_payload = copy.deepcopy(document)
     identity_payload.pop("authorization_identity")
-    document["authorization_identity"] = (
-        "apply-authorization:" + canonical_json_sha256(identity_payload)
+    document["authorization_identity"] = "apply-authorization:" + canonical_json_sha256(
+        identity_payload
     )
     return canonical_json_sha256(document)
 
@@ -92,9 +95,7 @@ def _trust(
         ),
         expected_authorization_identity=str(document["authorization_identity"]),
         expected_authorization_digest=authorization_digest,
-        expected_execution_domain_identity=str(
-            document["execution_domain_identity"]
-        ),
+        expected_execution_domain_identity=str(document["execution_domain_identity"]),
         expected_execution_nonce=str(document["execution_nonce"]),
         expected_run_identity=str(document["run_identity"]),
         expected_operator_review_package_digest=str(
@@ -109,20 +110,41 @@ def _trust(
 class _RecordingLedger:
     def __init__(
         self,
-        execution_domain_identity: str,
-        status: AuthorizationLedgerClaimStatus = AuthorizationLedgerClaimStatus.DURABLE,
+        status: AuthorizationLedgerClaimStatus = (
+            AuthorizationLedgerClaimStatus.DURABLE
+        ),
     ) -> None:
-        self.execution_domain_identity = execution_domain_identity
         self.status = status
-        self.claims: list[FrozenJsonObject] = []
+        self.claims: list[AuthorizationLedgerClaim] = []
 
-    def claim(self, claim: FrozenJsonObject) -> AuthorizationLedgerClaimStatus:
+    def claim(self, claim: AuthorizationLedgerClaim) -> AuthorizationLedgerClaimStatus:
         self.claims.append(claim)
         return self.status
 
 
+def _authorize(
+    raw_authorization: bytes,
+    trust: ApplyAuthorizationTrust,
+    ledger: AuthorizationLedger,
+) -> object:
+    gate = ApplyAuthorizationGate(
+        TrustedExecutionDomain(
+            identity=trust.expected_execution_domain_identity,
+            authorization_ledger=ledger,
+        )
+    )
+    return gate.authorize_apply_start(raw_authorization, trust)
+
+
 class ApplyAuthorizationTest(unittest.TestCase):
-    def test_ledger_claim_identity_matches_the_independent_design_golden(self) -> None:
+    def _file_ledger(self, root: Path) -> FileAuthorizationLedger:
+        ledger = FileAuthorizationLedger(root)
+        self.addCleanup(ledger.close)
+        return ledger
+
+    def test_ledger_claim_identity_matches_the_independent_design_golden(
+        self,
+    ) -> None:
         self.assertEqual(
             authorization_ledger_claim_identity(
                 "execution-domain:fixture/global-ledger-v1",
@@ -132,14 +154,21 @@ class ApplyAuthorizationTest(unittest.TestCase):
             "9e9791ab1c9634b4c9740924bf7370ce1418ab20e1a9666656e8c43ad2c36ebd",
         )
 
-    def test_valid_authorization_is_claimed_once_after_complete_validation(self) -> None:
+    def test_valid_authorization_is_claimed_once_after_complete_validation(
+        self,
+    ) -> None:
         document, authorization_digest = _valid_authorization()
-        ledger = _RecordingLedger(str(document["execution_domain_identity"]))
+        ledger = _RecordingLedger()
+        gate = ApplyAuthorizationGate(
+            TrustedExecutionDomain(
+                identity=str(document["execution_domain_identity"]),
+                authorization_ledger=ledger,
+            )
+        )
 
-        result = authorize_apply_start(
+        result = gate.authorize_apply_start(
             canonical_json_bytes(document),
             _trust(document, authorization_digest),
-            ledger,
         )
 
         self.assertIsInstance(result, ClaimedApplyAuthorization)
@@ -147,34 +176,30 @@ class ApplyAuthorizationTest(unittest.TestCase):
         self.assertEqual(result.authorization, freeze_json(document))
         self.assertEqual(result.authorization_digest, authorization_digest)
         self.assertEqual(len(ledger.claims), 1)
-        self.assertEqual(result.claim_identity, ledger.claims[0]["claim_identity"])
+        self.assertEqual(result.claim_identity, ledger.claims[0].claim_identity)
         self.assertEqual(
-            ledger.claims[0],
+            ledger.claims[0].as_json(),
             freeze_json(
                 {
-                    "schema_version": "agent-equipment-authorization-ledger-claim/v1",
+                    "schema_version": ("agent-equipment-authorization-ledger-claim/v1"),
                     "claim_identity": result.claim_identity,
-                    "apply_authorization_identity": document[
-                        "authorization_identity"
-                    ],
+                    "apply_authorization_identity": document["authorization_identity"],
                     "apply_authorization_digest": authorization_digest,
-                    "execution_domain_identity": document[
-                        "execution_domain_identity"
-                    ],
+                    "execution_domain_identity": document["execution_domain_identity"],
                     "execution_nonce": document["execution_nonce"],
                     "run_identity": document["run_identity"],
                 }
             ),
         )
 
-    def test_oversized_raw_input_is_rejected_before_all_other_work(self) -> None:
+    def test_oversized_raw_input_is_rejected_before_all_other_work(
+        self,
+    ) -> None:
         document, authorization_digest = _valid_authorization()
-        ledger = _RecordingLedger(str(document["execution_domain_identity"]))
+        ledger = _RecordingLedger()
 
         with (
-            patch(
-                "agent_equipment.authorization.strict_load_json_bytes"
-            ) as parse_json,
+            patch("agent_equipment.authorization.strict_load_json_bytes") as parse_json,
             patch("agent_equipment.authorization.validate_document") as validate_schema,
             patch(
                 "agent_equipment.authorization.contains_literal_credential"
@@ -183,7 +208,7 @@ class ApplyAuthorizationTest(unittest.TestCase):
                 "agent_equipment.authorization.canonical_json_sha256"
             ) as hash_document,
         ):
-            result = authorize_apply_start(
+            result = _authorize(
                 b"x" * (MAX_APPLY_AUTHORIZATION_BYTES + 1),
                 _trust(document, authorization_digest),
                 ledger,
@@ -201,12 +226,14 @@ class ApplyAuthorizationTest(unittest.TestCase):
         hash_document.assert_not_called()
         self.assertEqual(ledger.claims, [])
 
-    def test_only_exact_bytes_cross_the_raw_authorization_boundary(self) -> None:
+    def test_only_exact_bytes_cross_the_raw_authorization_boundary(
+        self,
+    ) -> None:
         class BytesSubclass(bytes):
             pass
 
         document, authorization_digest = _valid_authorization()
-        ledger = _RecordingLedger(str(document["execution_domain_identity"]))
+        ledger = _RecordingLedger()
         for raw in (
             "{}",
             bytearray(b"{}"),
@@ -214,7 +241,7 @@ class ApplyAuthorizationTest(unittest.TestCase):
             BytesSubclass(b"{}"),
         ):
             with self.subTest(raw_type=type(raw).__name__):
-                result = authorize_apply_start(  # type: ignore[arg-type]
+                result = _authorize(  # type: ignore[arg-type]
                     raw,
                     _trust(document, authorization_digest),
                     ledger,
@@ -234,15 +261,10 @@ class ApplyAuthorizationTest(unittest.TestCase):
         with TemporaryDirectory() as temporary:
             root = Path(temporary) / "authorization-ledger"
             root.mkdir(mode=0o700)
-            ledger = FileAuthorizationLedger(
-                root,
-                execution_domain_identity=str(
-                    document["execution_domain_identity"]
-                ),
-            )
+            ledger = self._file_ledger(root)
 
-            first = authorize_apply_start(raw_authorization, trust, ledger)
-            second = authorize_apply_start(raw_authorization, trust, ledger)
+            first = _authorize(raw_authorization, trust, ledger)
+            second = _authorize(raw_authorization, trust, ledger)
 
             self.assertIsInstance(first, ClaimedApplyAuthorization)
             self.assertIsInstance(second, AuthorizationRejection)
@@ -257,27 +279,52 @@ class ApplyAuthorizationTest(unittest.TestCase):
             claim_path = claim_paths[0]
             self.assertEqual(
                 claim_path.name,
-                first.claim_identity.removeprefix(
-                    "authorization-ledger-claim:sha256:"
-                )
+                first.claim_identity.removeprefix("authorization-ledger-claim:sha256:")
                 + ".json",
             )
             self.assertEqual(stat.S_IMODE(claim_path.stat().st_mode), 0o600)
             claim = thaw_json(strict_load_json_bytes(claim_path.read_bytes()))
             self.assertEqual(claim["claim_identity"], first.claim_identity)
-            self.assertEqual(
-                claim["apply_authorization_digest"], authorization_digest
+            self.assertEqual(claim["apply_authorization_digest"], authorization_digest)
+
+    def test_file_ledger_keeps_one_cas_target_after_path_replacement(
+        self,
+    ) -> None:
+        document, authorization_digest = _valid_authorization()
+        raw_authorization = canonical_json_bytes(document)
+        trust = _trust(document, authorization_digest)
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary) / "authorization-ledger"
+            displaced_root = Path(temporary) / "displaced-ledger"
+            root.mkdir(mode=0o700)
+            ledger = self._file_ledger(root)
+            gate = ApplyAuthorizationGate(
+                TrustedExecutionDomain(
+                    identity=trust.expected_execution_domain_identity,
+                    authorization_ledger=ledger,
+                )
             )
 
-    def test_ambiguous_or_canonically_oversized_json_never_reaches_schema(self) -> None:
+            first = gate.authorize_apply_start(raw_authorization, trust)
+            root.rename(displaced_root)
+            root.mkdir(mode=0o700)
+            second = gate.authorize_apply_start(raw_authorization, trust)
+
+            self.assertIsInstance(first, ClaimedApplyAuthorization)
+            self.assertEqual(
+                _diagnostic_codes(second),
+                ["APPLY_AUTHORIZATION_REPLAYED"],
+            )
+            self.assertEqual(len(list(displaced_root.iterdir())), 1)
+            self.assertEqual(list(root.iterdir()), [])
+
+    def test_ambiguous_or_canonically_oversized_json_never_reaches_schema(
+        self,
+    ) -> None:
         document, authorization_digest = _valid_authorization()
-        ledger = _RecordingLedger(str(document["execution_domain_identity"]))
-        canonically_oversized = (
-            b"[" + b",".join([b"1e9"] * 50_000) + b"]"
-        )
-        self.assertLessEqual(
-            len(canonically_oversized), MAX_APPLY_AUTHORIZATION_BYTES
-        )
+        ledger = _RecordingLedger()
+        canonically_oversized = b"[" + b",".join([b"1e9"] * 50_000) + b"]"
+        self.assertLessEqual(len(canonically_oversized), MAX_APPLY_AUTHORIZATION_BYTES)
 
         for label, raw in (
             ("invalid UTF-8", b"\xff"),
@@ -285,10 +332,13 @@ class ApplyAuthorizationTest(unittest.TestCase):
             ("nonfinite number", b"NaN"),
             ("canonical oversize", canonically_oversized),
         ):
-            with self.subTest(label=label), patch(
-                "agent_equipment.authorization.validate_document"
-            ) as validate_schema:
-                result = authorize_apply_start(
+            with (
+                self.subTest(label=label),
+                patch(
+                    "agent_equipment.authorization.validate_document"
+                ) as validate_schema,
+            ):
+                result = _authorize(
                     raw,
                     _trust(document, authorization_digest),
                     ledger,
@@ -308,13 +358,11 @@ class ApplyAuthorizationTest(unittest.TestCase):
     ) -> None:
         document, authorization_digest = _valid_authorization()
         trusted = _trust(document, authorization_digest)
-        ledger = _RecordingLedger(str(document["execution_domain_identity"]))
+        ledger = _RecordingLedger()
 
         extra_member = copy.deepcopy(document)
         extra_member["approval"] = True
-        schema_result = authorize_apply_start(
-            canonical_json_bytes(extra_member), trusted, ledger
-        )
+        schema_result = _authorize(canonical_json_bytes(extra_member), trusted, ledger)
         self.assertEqual(
             _diagnostic_codes(schema_result),
             ["APPLY_AUTHORIZATION_SCHEMA_INVALID"],
@@ -323,13 +371,11 @@ class ApplyAuthorizationTest(unittest.TestCase):
         secret = copy.deepcopy(document)
         secret["issuer_identity"] = "authority:sk-" + "A" * 48
         secret_digest = _seal(secret)
-        secret_result = authorize_apply_start(
+        secret_result = _authorize(
             canonical_json_bytes(secret),
             replace(
                 trusted,
-                expected_authorization_identity=str(
-                    secret["authorization_identity"]
-                ),
+                expected_authorization_identity=str(secret["authorization_identity"]),
                 expected_authorization_digest=secret_digest,
                 expected_issuer_identity=str(secret["issuer_identity"]),
             ),
@@ -367,7 +413,7 @@ class ApplyAuthorizationTest(unittest.TestCase):
                 assert isinstance(misbound["bindings"], dict)
                 misbound["bindings"][field] = alternate
                 misbound_digest = _seal(misbound)
-                misbound_result = authorize_apply_start(
+                misbound_result = _authorize(
                     canonical_json_bytes(misbound),
                     replace(
                         trusted,
@@ -388,16 +434,26 @@ class ApplyAuthorizationTest(unittest.TestCase):
         self,
     ) -> None:
         document, authorization_digest = _valid_authorization()
-        ledger = _RecordingLedger(str(document["execution_domain_identity"]))
+        ledger = _RecordingLedger()
         trusted = _trust(document, authorization_digest)
 
         for label, trusted_now in (
             ("before", datetime(2026, 8, 13, 6, 59, 59, tzinfo=timezone.utc)),
             ("expired", datetime(2026, 8, 13, 8, 0, tzinfo=timezone.utc)),
-            ("naive", datetime(2026, 8, 13, 7, 30)),
+            (
+                "naive",
+                datetime(
+                    2026,
+                    8,
+                    13,
+                    7,
+                    30,
+                    tzinfo=timezone.utc,
+                ).replace(tzinfo=None),
+            ),
         ):
             with self.subTest(label=label):
-                result = authorize_apply_start(
+                result = _authorize(
                     canonical_json_bytes(document),
                     replace(trusted, trusted_now=trusted_now),
                     ledger,
@@ -414,7 +470,7 @@ class ApplyAuthorizationTest(unittest.TestCase):
         nanosecond_document = copy.deepcopy(document)
         nanosecond_document["not_before"] = "2026-08-13T07:30:00.000000001Z"
         nanosecond_digest = _seal(nanosecond_document)
-        nanosecond_result = authorize_apply_start(
+        nanosecond_result = _authorize(
             canonical_json_bytes(nanosecond_document),
             replace(
                 trusted,
@@ -430,6 +486,25 @@ class ApplyAuthorizationTest(unittest.TestCase):
             "APPLY_AUTHORIZATION_TIME_INVALID",
             _diagnostic_codes(nanosecond_result),
         )
+
+        invalid_calendar = copy.deepcopy(document)
+        invalid_calendar["issued_at"] = "2026-02-30T07:00:00Z"
+        invalid_calendar_digest = _seal(invalid_calendar)
+        invalid_calendar_result = _authorize(
+            canonical_json_bytes(invalid_calendar),
+            replace(
+                trusted,
+                expected_authorization_identity=str(
+                    invalid_calendar["authorization_identity"]
+                ),
+                expected_authorization_digest=invalid_calendar_digest,
+            ),
+            ledger,
+        )
+        self.assertEqual(
+            _diagnostic_codes(invalid_calendar_result),
+            ["APPLY_AUTHORIZATION_SCHEMA_INVALID"],
+        )
         self.assertEqual(ledger.claims, [])
 
     def test_identity_digest_issuer_domain_nonce_and_run_are_independent_trust(
@@ -437,7 +512,7 @@ class ApplyAuthorizationTest(unittest.TestCase):
     ) -> None:
         document, authorization_digest = _valid_authorization()
         trusted = _trust(document, authorization_digest)
-        ledger = _RecordingLedger(str(document["execution_domain_identity"]))
+        ledger = _RecordingLedger()
 
         forged_identity = copy.deepcopy(document)
         forged_identity["authorization_identity"] = (
@@ -446,16 +521,14 @@ class ApplyAuthorizationTest(unittest.TestCase):
         self.assertIn(
             "APPLY_AUTHORIZATION_IDENTITY_INVALID",
             _diagnostic_codes(
-                authorize_apply_start(
-                    canonical_json_bytes(forged_identity), trusted, ledger
-                )
+                _authorize(canonical_json_bytes(forged_identity), trusted, ledger)
             ),
         )
 
         self.assertIn(
             "APPLY_AUTHORIZATION_DIGEST_MISMATCH",
             _diagnostic_codes(
-                authorize_apply_start(
+                _authorize(
                     canonical_json_bytes(document),
                     replace(trusted, expected_authorization_digest=_digest("0")),
                     ledger,
@@ -486,7 +559,7 @@ class ApplyAuthorizationTest(unittest.TestCase):
                 candidate = copy.deepcopy(document)
                 candidate[field] = alternate
                 candidate_digest = _seal(candidate)
-                result = authorize_apply_start(
+                result = _authorize(
                     canonical_json_bytes(candidate),
                     replace(
                         trusted,
@@ -500,7 +573,9 @@ class ApplyAuthorizationTest(unittest.TestCase):
                 self.assertIn(expected_code, _diagnostic_codes(result))
         self.assertEqual(ledger.claims, [])
 
-    def test_file_ledger_fsyncs_the_claim_before_its_parent_directory(self) -> None:
+    def test_file_ledger_fsyncs_the_claim_before_its_parent_directory(
+        self,
+    ) -> None:
         document, authorization_digest = _valid_authorization()
         trust = _trust(document, authorization_digest)
         original_fsync = os.fsync
@@ -516,18 +591,12 @@ class ApplyAuthorizationTest(unittest.TestCase):
         with TemporaryDirectory() as temporary:
             root = Path(temporary) / "authorization-ledger"
             root.mkdir(mode=0o700)
-            ledger = FileAuthorizationLedger(
-                root,
-                execution_domain_identity=str(
-                    document["execution_domain_identity"]
-                ),
-            )
+            ledger = self._file_ledger(root)
             with patch(
-                "agent_equipment.authorization.os.fsync", side_effect=record_fsync
+                "agent_equipment.authorization.os.fsync",
+                side_effect=record_fsync,
             ):
-                result = authorize_apply_start(
-                    canonical_json_bytes(document), trust, ledger
-                )
+                result = _authorize(canonical_json_bytes(document), trust, ledger)
 
         self.assertIsInstance(result, ClaimedApplyAuthorization)
         self.assertEqual(fsync_kinds, ["file", "directory"])
@@ -538,22 +607,23 @@ class ApplyAuthorizationTest(unittest.TestCase):
         original_fsync = os.fsync
 
         for failing_kind in ("file", "directory"):
-            with self.subTest(failing_kind=failing_kind), TemporaryDirectory() as temporary:
+            with (
+                self.subTest(failing_kind=failing_kind),
+                TemporaryDirectory() as temporary,
+            ):
                 root = Path(temporary) / "authorization-ledger"
                 root.mkdir(mode=0o700)
-                ledger = FileAuthorizationLedger(
-                    root,
-                    execution_domain_identity=str(
-                        document["execution_domain_identity"]
-                    ),
-                )
+                ledger = self._file_ledger(root)
 
-                def fail_selected_fsync(descriptor: int) -> None:
+                def fail_selected_fsync(
+                    descriptor: int,
+                    selected_kind: str = failing_kind,
+                ) -> None:
                     metadata = os.fstat(descriptor)
                     observed_kind = (
                         "directory" if stat.S_ISDIR(metadata.st_mode) else "file"
                     )
-                    if observed_kind == failing_kind:
+                    if observed_kind == selected_kind:
                         raise OSError("private fsync detail")
                     original_fsync(descriptor)
 
@@ -561,12 +631,8 @@ class ApplyAuthorizationTest(unittest.TestCase):
                     "agent_equipment.authorization.os.fsync",
                     side_effect=fail_selected_fsync,
                 ):
-                    failed = authorize_apply_start(
-                        canonical_json_bytes(document), trust, ledger
-                    )
-                replay = authorize_apply_start(
-                    canonical_json_bytes(document), trust, ledger
-                )
+                    failed = _authorize(canonical_json_bytes(document), trust, ledger)
+                replay = _authorize(canonical_json_bytes(document), trust, ledger)
 
                 self.assertEqual(
                     _diagnostic_codes(failed),
@@ -588,16 +654,12 @@ class ApplyAuthorizationTest(unittest.TestCase):
         with TemporaryDirectory() as temporary:
             root = Path(temporary) / "authorization-ledger"
             root.mkdir(mode=0o700)
-            ledger = FileAuthorizationLedger(
-                root,
-                execution_domain_identity=str(
-                    document["execution_domain_identity"]
-                ),
-            )
+            ledger = self._file_ledger(root)
             with patch(
-                "agent_equipment.authorization.os.write", side_effect=short_write
+                "agent_equipment.authorization.os.write",
+                side_effect=short_write,
             ):
-                result = authorize_apply_start(
+                result = _authorize(
                     canonical_json_bytes(document),
                     _trust(document, authorization_digest),
                     ledger,
@@ -606,9 +668,7 @@ class ApplyAuthorizationTest(unittest.TestCase):
             self.assertIsInstance(result, ClaimedApplyAuthorization)
             [claim_path] = list(root.iterdir())
             claim = thaw_json(strict_load_json_bytes(claim_path.read_bytes()))
-            self.assertEqual(
-                claim["apply_authorization_digest"], authorization_digest
-            )
+            self.assertEqual(claim["apply_authorization_digest"], authorization_digest)
 
     def test_failed_write_is_redacted_and_permanently_consumes_the_nonce(
         self,
@@ -619,15 +679,10 @@ class ApplyAuthorizationTest(unittest.TestCase):
         with TemporaryDirectory() as temporary:
             root = Path(temporary) / "authorization-ledger"
             root.mkdir(mode=0o700)
-            ledger = FileAuthorizationLedger(
-                root,
-                execution_domain_identity=str(
-                    document["execution_domain_identity"]
-                ),
-            )
+            ledger = self._file_ledger(root)
             with patch("agent_equipment.authorization.os.write", return_value=0):
-                failed = authorize_apply_start(raw_authorization, trust, ledger)
-            replay = authorize_apply_start(raw_authorization, trust, ledger)
+                failed = _authorize(raw_authorization, trust, ledger)
+            replay = _authorize(raw_authorization, trust, ledger)
 
             self.assertEqual(
                 _diagnostic_codes(failed),
@@ -664,11 +719,9 @@ class ApplyAuthorizationTest(unittest.TestCase):
             target_root.mkdir(mode=0o700)
             symlink_root = temporary_root / "symlink-ledger"
             symlink_root.symlink_to(target_root, target_is_directory=True)
-            symlink_ledger = FileAuthorizationLedger(
-                symlink_root, execution_domain_identity=domain
-            )
+            symlink_ledger = self._file_ledger(symlink_root)
 
-            unsafe_root = authorize_apply_start(
+            unsafe_root = _authorize(
                 canonical_json_bytes(document), trust, symlink_ledger
             )
 
@@ -681,19 +734,50 @@ class ApplyAuthorizationTest(unittest.TestCase):
             sentinel = temporary_root / "sentinel"
             sentinel.write_bytes(b"unchanged\n")
             (target_root / claim_name).symlink_to(sentinel)
-            ledger = FileAuthorizationLedger(
-                target_root, execution_domain_identity=domain
-            )
+            ledger = self._file_ledger(target_root)
 
-            existing_name = authorize_apply_start(
-                canonical_json_bytes(document), trust, ledger
-            )
+            existing_name = _authorize(canonical_json_bytes(document), trust, ledger)
 
             self.assertEqual(
                 _diagnostic_codes(existing_name),
                 ["APPLY_AUTHORIZATION_REPLAYED"],
             )
             self.assertEqual(sentinel.read_bytes(), b"unchanged\n")
+
+    def test_file_ledger_revalidates_typed_claims_and_fails_closed_after_close(
+        self,
+    ) -> None:
+        document, authorization_digest = _valid_authorization()
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary) / "authorization-ledger"
+            root.mkdir(mode=0o700)
+            ledger = self._file_ledger(root)
+            claim = AuthorizationLedgerClaim(
+                apply_authorization_identity=str(document["authorization_identity"]),
+                apply_authorization_digest=authorization_digest,
+                execution_domain_identity=str(document["execution_domain_identity"]),
+                execution_nonce=str(document["execution_nonce"]),
+                run_identity=str(document["run_identity"]),
+            )
+            object.__setattr__(claim, "run_identity", "run:invalid")
+
+            malformed = ledger.claim(claim)
+            ledger.close()
+            closed = _authorize(
+                canonical_json_bytes(document),
+                _trust(document, authorization_digest),
+                ledger,
+            )
+
+            self.assertIs(
+                malformed,
+                AuthorizationLedgerClaimStatus.UNAVAILABLE,
+            )
+            self.assertEqual(
+                _diagnostic_codes(closed),
+                ["AUTHORIZATION_LEDGER_UNAVAILABLE"],
+            )
+            self.assertEqual(list(root.iterdir()), [])
 
     def test_concurrent_claims_have_exactly_one_durable_winner(self) -> None:
         document, authorization_digest = _valid_authorization()
@@ -702,25 +786,20 @@ class ApplyAuthorizationTest(unittest.TestCase):
         with TemporaryDirectory() as temporary:
             root = Path(temporary) / "authorization-ledger"
             root.mkdir(mode=0o700)
-            ledger = FileAuthorizationLedger(
-                root,
-                execution_domain_identity=str(
-                    document["execution_domain_identity"]
-                ),
-            )
+            ledger = self._file_ledger(root)
 
             with ThreadPoolExecutor(max_workers=8) as executor:
                 results = tuple(
                     executor.map(
-                        lambda _: authorize_apply_start(
-                            raw_authorization, trust, ledger
-                        ),
+                        lambda _: _authorize(raw_authorization, trust, ledger),
                         range(8),
                     )
                 )
 
             self.assertEqual(
-                sum(isinstance(result, ClaimedApplyAuthorization) for result in results),
+                sum(
+                    isinstance(result, ClaimedApplyAuthorization) for result in results
+                ),
                 1,
             )
             self.assertEqual(
@@ -732,27 +811,65 @@ class ApplyAuthorizationTest(unittest.TestCase):
             )
             self.assertEqual(len(list(root.iterdir())), 1)
 
-    def test_trusted_execution_domain_must_match_the_bound_ledger(self) -> None:
+    def test_gate_prebinds_one_authoritative_domain_and_cas_target(
+        self,
+    ) -> None:
         document, authorization_digest = _valid_authorization()
-        ledger = _RecordingLedger("execution-domain:fixture/other-ledger-v1")
+        authoritative_ledger = _RecordingLedger()
+        foreign_ledger = _RecordingLedger()
+        gate = ApplyAuthorizationGate(
+            TrustedExecutionDomain(
+                identity=str(document["execution_domain_identity"]),
+                authorization_ledger=authoritative_ledger,
+            )
+        )
+        raw_authorization = canonical_json_bytes(document)
+        trust = _trust(document, authorization_digest)
 
-        result = authorize_apply_start(
-            canonical_json_bytes(document),
-            _trust(document, authorization_digest),
-            ledger,
+        with self.assertRaises(FrozenInstanceError):
+            gate._execution_domain = TrustedExecutionDomain(  # type: ignore[misc]
+                identity=str(document["execution_domain_identity"]),
+                authorization_ledger=foreign_ledger,
+            )
+
+        with self.assertRaises(TypeError):
+            gate.authorize_apply_start(  # type: ignore[call-arg]
+                raw_authorization,
+                trust,
+                foreign_ledger,
+            )
+
+        admitted = gate.authorize_apply_start(
+            raw_authorization,
+            trust,
         )
 
+        foreign = copy.deepcopy(document)
+        foreign["execution_domain_identity"] = (
+            "execution-domain:fixture/other-ledger-v1"
+        )
+        foreign_digest = _seal(foreign)
+
+        rejected = gate.authorize_apply_start(
+            canonical_json_bytes(foreign),
+            _trust(foreign, foreign_digest),
+        )
+
+        self.assertIsInstance(admitted, ClaimedApplyAuthorization)
         self.assertEqual(
-            _diagnostic_codes(result),
+            _diagnostic_codes(rejected),
             ["EXECUTION_DOMAIN_MISMATCH"],
         )
-        self.assertEqual(ledger.claims, [])
+        self.assertEqual(len(authoritative_ledger.claims), 1)
+        self.assertEqual(foreign_ledger.claims, [])
 
-    def test_only_a_durable_ledger_outcome_grants_claimed_authority(self) -> None:
+    def test_only_a_durable_ledger_outcome_grants_claimed_authority(
+        self,
+    ) -> None:
         document, authorization_digest = _valid_authorization()
         trust = _trust(document, authorization_digest)
         expected = {
-            AuthorizationLedgerClaimStatus.REPLAY: "APPLY_AUTHORIZATION_REPLAYED",
+            AuthorizationLedgerClaimStatus.REPLAY: ("APPLY_AUTHORIZATION_REPLAYED"),
             AuthorizationLedgerClaimStatus.UNAVAILABLE: (
                 "AUTHORIZATION_LEDGER_UNAVAILABLE"
             ),
@@ -763,15 +880,35 @@ class ApplyAuthorizationTest(unittest.TestCase):
 
         for status, expected_code in expected.items():
             with self.subTest(status=status):
-                ledger = _RecordingLedger(
-                    str(document["execution_domain_identity"]), status
-                )
-                result = authorize_apply_start(
-                    canonical_json_bytes(document), trust, ledger
-                )
+                ledger = _RecordingLedger(status)
+                result = _authorize(canonical_json_bytes(document), trust, ledger)
 
                 self.assertEqual(_diagnostic_codes(result), [expected_code])
                 self.assertEqual(len(ledger.claims), 1)
+
+        invalid_status_ledger = _RecordingLedger()
+        invalid_status_ledger.status = object()  # type: ignore[assignment]
+        invalid_status_result = _authorize(
+            canonical_json_bytes(document), trust, invalid_status_ledger
+        )
+        self.assertEqual(
+            _diagnostic_codes(invalid_status_result),
+            ["AUTHORIZATION_LEDGER_DURABILITY_UNCERTAIN"],
+        )
+
+        raising_ledger = _RecordingLedger()
+        with patch.object(
+            raising_ledger,
+            "claim",
+            side_effect=RuntimeError("private ledger failure"),
+        ):
+            raised_result = _authorize(
+                canonical_json_bytes(document), trust, raising_ledger
+            )
+        self.assertEqual(
+            _diagnostic_codes(raised_result),
+            ["AUTHORIZATION_LEDGER_DURABILITY_UNCERTAIN"],
+        )
 
 
 def _diagnostic_codes(result: object) -> list[str]:
