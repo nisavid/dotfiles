@@ -19,8 +19,10 @@ BLOCK_START = re.compile(
         | \#{1,6}[ \t]         # ATX heading
         | \|                   # table row
         | ```|~~~              # fenced code
-        | (?:-+|=+)\s*$        # setext underline of any length
-        | (?:\*{3,}|_{3,})\s*$  # thematic break
+        | (?:-+|=+)[ \t]*$      # setext underline of any length
+        | (?:\*[ \t]*){3,}$     # thematic break, markers may be spaced
+        | (?:_[ \t]*){3,}$
+        | (?:-[ \t]*){3,}$
         | \[[^\]]+\]:          # link or footnote reference definition
     )""",
     re.VERBOSE,
@@ -29,8 +31,10 @@ BLOCK_END = re.compile(
     r"""^(?:
           \#{1,6}[ \t]                   # ATX heading, a single-line block
         | \|                             # table row
-        | (?:-+|=+)\s*$                  # setext underline of any length
-        | (?:\*{3,}|_{3,})\s*$            # thematic break
+        | (?:-+|=+)[ \t]*$                # setext underline of any length
+        | (?:\*[ \t]*){3,}$               # thematic break, markers may be spaced
+        | (?:_[ \t]*){3,}$
+        | (?:-[ \t]*){3,}$
     )""",
     re.VERBOSE,
 )
@@ -109,7 +113,7 @@ BLOCK_TAGS = frozenset(
 )
 # CommonMark HTML block type 1. These end at their closing tag, not a blank line.
 RAW_TEXT_TAGS = frozenset({"pre", "script", "style", "textarea"})
-QUOTE_MARKER = re.compile(r"^\s*(?:>\s?)+")
+QUOTE_MARKER = re.compile(r"^ {0,3}(?:>[ \t]?)+")
 ALERT = re.compile(r"^\[!(?:NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*$")
 EXPLICIT_BREAK = re.compile(r"(?:<br\s*/?>|\\)$")
 
