@@ -5,7 +5,7 @@
       "id": 1,
       "name": "documentation-flag-correction",
       "prompt": "Using the fixture, write a proposed PR title followed by only the reviewer-facing body prose that comes after the already-valid Diff disclosure. Do not use tools.",
-      "files": [
+      "fixture_paths": [
         "evals/fixtures/documentation-flag-correction.md"
       ],
       "expected_output": "A concrete repository-conforming title and tiny, preservation-safe explanation state the exact correction and observed verification without importing a larger section structure, manual plan, or visual.",
@@ -36,7 +36,7 @@
       "id": 2,
       "name": "preview-server-port-selection",
       "prompt": "Using the fixture, draft the reviewer-facing PR body prose that follows the already-valid Diff disclosure. Do not use tools.",
-      "files": [
+      "fixture_paths": [
         "evals/fixtures/preview-server-port-selection.md"
       ],
       "expected_output": "A concise straightforward body explains why ephemeral ports matter, states the narrow contract, and uses the author-validated parallel allocation comparison as the core manual path before clearly classified variants and cleanup.",
@@ -77,7 +77,7 @@
       "id": 3,
       "name": "command-envelope-stack",
       "prompt": "Using the fixture, draft the complete reviewer-facing PR body prose after the already-valid Stack and Diff disclosures. Do not use tools.",
-      "files": [
+      "fixture_paths": [
         "evals/fixtures/command-envelope-stack.md"
       ],
       "expected_output": "A proportionate stacked-PR narrative makes the current command-envelope boundary reviewable, separates Before / This PR / Later ownership, routes review around generated noise, uses one focused visual only if it shortens comprehension, and presents bounded operational testing.",
@@ -123,7 +123,7 @@
       "id": 4,
       "name": "provider-plugin-framework-request",
       "prompt": "Using the fixture, respond to the request for an approval-ready PR title and body. Do not use tools.",
-      "files": [
+      "fixture_paths": [
         "evals/fixtures/provider-plugin-framework.md"
       ],
       "expected_output": "The agent declines approval-ready marketing around an unsupported abstraction, identifies the consequential product/design decision, and recommends a truthful draft or authorized narrowing and validation before an approval case.",
@@ -154,7 +154,7 @@
       "id": 5,
       "name": "chat-only-draft",
       "prompt": "Using the fixture, respond as the agent handling this request: \"Draft a better pull request title and body here in chat. Do not change GitHub.\" Write the proposed title, the reviewer-facing body prose that follows the already-valid Diff disclosure, and your final user-facing status. Do not use tools.",
-      "files": [
+      "fixture_paths": [
         "evals/fixtures/chat-only-draft.md"
       ],
       "expected_output": "A complete unpublished proposal pairs a concrete Conventional Commit title with a template-conforming body covering the exact pushed diff and observed verification, then ends with a chat-only status that performs and plans no preimage capture or GitHub mutation.",
@@ -185,7 +185,7 @@
       "id": 6,
       "name": "config-loader-precedence",
       "prompt": "Using the fixture, draft the reviewer-facing PR body prose that follows the already-valid Diff disclosure. Do not use tools.",
-      "files": [
+      "fixture_paths": [
         "evals/fixtures/config-loader-precedence.md"
       ],
       "expected_output": "Reviewer-facing prose that states the precedence change, the operator problem it solves, and the observed evidence, with every paragraph and list item on one source line and any intended intra-item break written as an explicit <br>.",
