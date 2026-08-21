@@ -39,7 +39,13 @@ class PrepareBehaviorEvalsTests(unittest.TestCase):
                                 "prompt": "Run the isolated evaluation.",
                                 "fixture_paths": ["evals/fixtures/blocked-input"],
                                 "expected_output": "No prompt is generated.",
-                                "expectations": [],
+                                "expectations": [
+                                    {
+                                        "id": "regular-source",
+                                        "text": "Rejects a nonregular prompt source.",
+                                        "severity": "safety",
+                                    }
+                                ],
                             }
                         ],
                     }
@@ -64,6 +70,7 @@ class PrepareBehaviorEvalsTests(unittest.TestCase):
             )
 
             self.assertNotEqual(result.returncode, 0, result.stdout or result.stderr)
+            self.assertIn("source path must be a regular file", result.stderr)
             self.assertFalse(workspace.exists())
 
     def test_rejects_a_dangling_workspace_symlink(self) -> None:
