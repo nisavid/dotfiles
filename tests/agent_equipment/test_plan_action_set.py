@@ -38,6 +38,12 @@ def _valid_plan_and_action_set() -> tuple[ValidatedPlan, dict[str, object]]:
     payload = evidence["action_payload"]
     assert isinstance(payload, dict)
 
+    route_record = {
+        "provider": payload["provider"],
+        "control_owner": "reconciler_owned",
+        "secret_references": payload["secret_references"],
+    }
+    payload["route_digest"] = canonical_json_sha256(route_record)
     mutation_definition = freeze_json(
         {
             "candidate_identity": payload["candidate_identity"],
@@ -56,11 +62,7 @@ def _valid_plan_and_action_set() -> tuple[ValidatedPlan, dict[str, object]]:
             "harness": payload["harness"],
             "route_identity": payload["route_identity"],
             "route_digest": payload["route_digest"],
-            "route_record": {
-                "provider": payload["provider"],
-                "control_owner": "reconciler_owned",
-                "secret_references": payload["secret_references"],
-            },
+            "route_record": route_record,
             "equipment_identities": payload["equipment_identities"],
             "controlled_equipment_identities": payload[
                 "controlled_equipment_identities"
@@ -180,6 +182,208 @@ def _valid_plan_and_action_set() -> tuple[ValidatedPlan, dict[str, object]]:
         preimage=preimage,
     )
     return plan, document
+
+
+def _rebuild_plan_for_document(
+    original: ValidatedPlan,
+    document: dict[str, object],
+    mutation_definition: dict[str, object],
+) -> ValidatedPlan:
+    """Rebuild trusted plan coordinates after a test changes one definition."""
+
+    actions = document["actions"]
+    assert isinstance(actions, list) and len(actions) == 1
+    evidence = actions[0]
+    assert isinstance(evidence, dict)
+    payload = evidence["action_payload"]
+    assert isinstance(payload, dict)
+    preimage = thaw_json(original.preimage)
+    assert isinstance(preimage, dict)
+    nodes = preimage["nodes"]
+    assert isinstance(nodes, list)
+    mutation_preimage = nodes[0]
+    assert isinstance(mutation_preimage, dict)
+    mutation_preimage["definition"] = mutation_definition
+    frozen_preimage = freeze_json(preimage)
+    assert isinstance(frozen_preimage, type(original.preimage))
+    plan_digest = canonical_json_sha256(frozen_preimage)
+    payload["plan_digest"] = plan_digest
+    preconditions = payload["preconditions"]
+    assert isinstance(preconditions, dict)
+    preconditions["plan_digest"] = plan_digest
+    payload["action_identity"] = plan_action_identity(payload)
+    evidence["action_digest"] = plan_action_digest(payload)
+    document["plan_digest"] = plan_digest
+    document["action_set_digest"] = plan_action_set_digest(
+        str(document["candidate_identity"]),
+        str(document["implementation_manifest_digest"]),
+        plan_digest,
+        actions,
+    )
+    mutation_identity = str(payload["action_identity"])
+    final = original.nodes[1]
+    final_identity = "verification:" + canonical_json_sha256(
+        {
+            "plan_digest": plan_digest,
+            "ordinal": final.ordinal,
+            "semantic_definition_digest": canonical_json_sha256(final.definition),
+            "predecessor_identities": (mutation_identity,),
+        }
+    )
+    frozen_definition = freeze_json(mutation_definition)
+    assert isinstance(frozen_definition, type(original.nodes[0].definition))
+    return ValidatedPlan(
+        nodes=(
+            PlanNode(
+                key=original.nodes[0].key,
+                kind="mutation",
+                ordinal=0,
+                identity=mutation_identity,
+                dependencies=(),
+                definition=frozen_definition,
+            ),
+            PlanNode(
+                key=final.key,
+                kind=final.kind,
+                ordinal=final.ordinal,
+                identity=final_identity,
+                dependencies=(mutation_identity,),
+                definition=final.definition,
+            ),
+        ),
+        edges=((mutation_identity, final_identity),),
+        digest=plan_digest,
+        preimage=frozen_preimage,
+    )
+
+
+def _replace_target(target: dict[str, object], **changes: object) -> None:
+    target.update(changes)
+    target["target_identity"] = "target:" + canonical_json_sha256(
+        {key: value for key, value in target.items() if key != "target_identity"}
+    )
+
+
+def _direct_mcp_plan_and_action_set(
+    harness: str,
+) -> tuple[ValidatedPlan, dict[str, object]]:
+    plan, document = _valid_plan_and_action_set()
+    actions = document["actions"]
+    assert isinstance(actions, list)
+    evidence = actions[0]
+    assert isinstance(evidence, dict)
+    payload = evidence["action_payload"]
+    assert isinstance(payload, dict)
+    provider = {
+        "kind": "direct_mcp",
+        "server_name": "context7",
+        "transport": "stdio",
+        "command": "npx",
+        "arguments": [{"literal": "context7"}],
+    }
+    source, root = {
+        "claude": ("settings", "mcpServers"),
+        "codex": ("config", "mcp_servers"),
+        "cursor": ("config", "mcpServers"),
+    }[harness]
+    route_identity = f"route:fixture/{harness}-direct-mcp"
+    surface = f"surface:{route_identity}/mcp:fixture/context7"
+    target = {
+        "target_identity": "",
+        "write_surface_identity": surface,
+        "surface_kind": "mcp_selection",
+        "equipment_identity": "mcp:fixture/context7",
+        "locator": {
+            "owner": harness,
+            "source": source,
+            "key_path": [root, "context7"],
+        },
+    }
+    _replace_target(target)
+    route_record = {
+        "provider": provider,
+        "control_owner": "reconciler_owned",
+        "secret_references": [],
+    }
+    route_digest = canonical_json_sha256(route_record)
+    payload.update(
+        {
+            "harness": harness,
+            "route_identity": route_identity,
+            "route_digest": route_digest,
+            "provider": provider,
+            "equipment_identities": ["mcp:fixture/context7"],
+            "controlled_equipment_identities": [],
+            "surface_scope": [surface],
+            "write_targets": [target],
+            "operation": "configure",
+            "secret_references": [],
+            "verification_dependencies": [],
+        }
+    )
+    preconditions = payload["preconditions"]
+    assert isinstance(preconditions, dict)
+    preconditions.update(
+        {
+            "route_digest": route_digest,
+            "surface_scope": [surface],
+        }
+    )
+    definition = thaw_json(plan.nodes[0].definition)
+    assert isinstance(definition, dict)
+    for field in (
+        "harness",
+        "route_identity",
+        "route_digest",
+        "equipment_identities",
+        "controlled_equipment_identities",
+        "surface_scope",
+        "operation",
+        "secret_references",
+    ):
+        definition[field] = deepcopy(payload[field])
+    definition["route_record"] = route_record
+    return _rebuild_plan_for_document(plan, document, definition), document
+
+
+def _plugin_selection_plan_and_action_set() -> tuple[ValidatedPlan, dict[str, object]]:
+    plan, document = _valid_plan_and_action_set()
+    actions = document["actions"]
+    assert isinstance(actions, list)
+    evidence = actions[0]
+    assert isinstance(evidence, dict)
+    payload = evidence["action_payload"]
+    assert isinstance(payload, dict)
+    surface = "surface:route:fixture/claude-plugin/plugin:fixture/example"
+    target = {
+        "target_identity": "",
+        "write_surface_identity": surface,
+        "surface_kind": "plugin_selection",
+        "equipment_identity": "plugin:fixture/example",
+        "locator": {
+            "owner": "claude",
+            "source": "settings",
+            "key_path": ["enabledPlugins", "example@fixture"],
+        },
+    }
+    _replace_target(target)
+    payload.update(
+        {
+            "equipment_identities": ["plugin:fixture/example"],
+            "surface_scope": [surface],
+            "write_targets": [target],
+            "operation": "configure",
+            "verification_dependencies": [],
+        }
+    )
+    preconditions = payload["preconditions"]
+    assert isinstance(preconditions, dict)
+    preconditions["surface_scope"] = [surface]
+    definition = thaw_json(plan.nodes[0].definition)
+    assert isinstance(definition, dict)
+    for field in ("equipment_identities", "surface_scope", "operation"):
+        definition[field] = deepcopy(payload[field])
+    return _rebuild_plan_for_document(plan, document, definition), document
 
 
 def _reseal(document: dict[str, object]) -> None:
@@ -884,6 +1088,229 @@ class PlanActionSetAdmissionTest(unittest.TestCase):
 
         self.assertIsInstance(result, PlanActionSetRejection)
         self.assertIn("PLAN_ACTION_SET_DIGEST_INVALID", _diagnostic_codes(result))
+
+    def test_route_digest_must_hash_the_complete_validated_route_record(self) -> None:
+        plan, document = _valid_plan_and_action_set()
+        actions = document["actions"]
+        assert isinstance(actions, list)
+        evidence = actions[0]
+        assert isinstance(evidence, dict)
+        payload = evidence["action_payload"]
+        assert isinstance(payload, dict)
+        forged_digest = "sha256:" + "7" * 64
+        payload["route_digest"] = forged_digest
+        preconditions = payload["preconditions"]
+        assert isinstance(preconditions, dict)
+        preconditions["route_digest"] = forged_digest
+        definition = thaw_json(plan.nodes[0].definition)
+        assert isinstance(definition, dict)
+        definition["route_digest"] = forged_digest
+        forged_plan = _rebuild_plan_for_document(plan, document, definition)
+        fixed_trust = PlanActionSetTrust(
+            validated_plan=forged_plan,
+            expected_action_set_digest=str(document["action_set_digest"]),
+        )
+
+        result = admit_plan_action_set(canonical_json_bytes(document), fixed_trust)
+
+        self.assertIsInstance(result, PlanActionSetRejection)
+        self.assertIn("PLAN_ACTION_SET_MEMBERSHIP_INVALID", _diagnostic_codes(result))
+
+    def test_operation_and_provider_close_selection_target_authority(self) -> None:
+        plan, document = _valid_plan_and_action_set()
+        fixed_trust = PlanActionSetTrust(
+            validated_plan=plan,
+            expected_action_set_digest=str(document["action_set_digest"]),
+        )
+        actions = document["actions"]
+        assert isinstance(actions, list)
+        evidence = actions[0]
+        assert isinstance(evidence, dict)
+        payload = evidence["action_payload"]
+        assert isinstance(payload, dict)
+        targets = payload["write_targets"]
+        assert isinstance(targets, list)
+        relabelled = targets[0]
+        assert isinstance(relabelled, dict)
+        _replace_target(
+            relabelled,
+            surface_kind="plugin_selection",
+            equipment_identity="plugin:fixture/example",
+            locator={
+                "owner": "claude",
+                "source": "attacker-controlled",
+                "key_path": ["enabledPlugins", "example"],
+            },
+        )
+        targets.sort(key=lambda target: str(target["target_identity"]))
+        _reseal_digest_fields_only(document)
+
+        result = admit_plan_action_set(canonical_json_bytes(document), fixed_trust)
+
+        self.assertIsInstance(result, PlanActionSetRejection)
+        self.assertIn("PLAN_ACTION_TARGET_BINDING_INVALID", _diagnostic_codes(result))
+
+    def test_direct_mcp_selection_locator_is_complete_for_each_harness(self) -> None:
+        for harness in ("claude", "codex", "cursor"):
+            with self.subTest(harness=harness):
+                plan, document = _direct_mcp_plan_and_action_set(harness)
+                trust = PlanActionSetTrust(
+                    validated_plan=plan,
+                    expected_action_set_digest=str(document["action_set_digest"]),
+                )
+                valid_result = admit_plan_action_set(
+                    canonical_json_bytes(document), trust
+                )
+                self.assertIsInstance(valid_result, AdmittedPlanActionSet)
+
+                actions = document["actions"]
+                assert isinstance(actions, list)
+                evidence = actions[0]
+                assert isinstance(evidence, dict)
+                payload = evidence["action_payload"]
+                assert isinstance(payload, dict)
+                targets = payload["write_targets"]
+                assert isinstance(targets, list)
+                target = targets[0]
+                assert isinstance(target, dict)
+                locator = target["locator"]
+                assert isinstance(locator, dict)
+                locator["source"] = "attacker-controlled"
+                _replace_target(target)
+                _reseal_digest_fields_only(document)
+
+                result = admit_plan_action_set(canonical_json_bytes(document), trust)
+
+                self.assertIsInstance(result, PlanActionSetRejection)
+                self.assertIn(
+                    "PLAN_ACTION_TARGET_BINDING_INVALID",
+                    _diagnostic_codes(result),
+                )
+
+    def test_plugin_selection_requires_its_exact_claude_settings_key(self) -> None:
+        plan, original = _plugin_selection_plan_and_action_set()
+        fixed_trust = PlanActionSetTrust(
+            validated_plan=plan,
+            expected_action_set_digest=str(original["action_set_digest"]),
+        )
+        self.assertIsInstance(
+            admit_plan_action_set(canonical_json_bytes(original), fixed_trust),
+            AdmittedPlanActionSet,
+        )
+        mutations = {
+            "owner": ("owner", "cursor"),
+            "source": ("source", "attacker-controlled"),
+            "key_path": ("key_path", ["enabledPlugins", "foreign@fixture"]),
+        }
+        for case, (field, value) in mutations.items():
+            with self.subTest(case=case):
+                document = deepcopy(original)
+                actions = document["actions"]
+                assert isinstance(actions, list)
+                evidence = actions[0]
+                assert isinstance(evidence, dict)
+                payload = evidence["action_payload"]
+                assert isinstance(payload, dict)
+                targets = payload["write_targets"]
+                assert isinstance(targets, list)
+                target = targets[0]
+                assert isinstance(target, dict)
+                locator = target["locator"]
+                assert isinstance(locator, dict)
+                locator[field] = value
+                _replace_target(target)
+                _reseal_digest_fields_only(document)
+
+                result = admit_plan_action_set(
+                    canonical_json_bytes(document), fixed_trust
+                )
+
+                self.assertIsInstance(result, PlanActionSetRejection)
+                self.assertIn(
+                    "PLAN_ACTION_TARGET_BINDING_INVALID",
+                    _diagnostic_codes(result),
+                )
+
+    def test_route_only_surface_is_valid_but_foreign_route_is_not(self) -> None:
+        plan, document = _valid_plan_and_action_set()
+        actions = document["actions"]
+        assert isinstance(actions, list)
+        evidence = actions[0]
+        assert isinstance(evidence, dict)
+        payload = evidence["action_payload"]
+        assert isinstance(payload, dict)
+        route_surface = f"surface:{payload['route_identity']}"
+        targets = payload["write_targets"]
+        assert isinstance(targets, list)
+        target = targets[0]
+        assert isinstance(target, dict)
+        _replace_target(target, write_surface_identity=route_surface)
+        payload["write_targets"] = [target]
+        payload["surface_scope"] = [route_surface]
+        payload["verification_dependencies"] = []
+        preconditions = payload["preconditions"]
+        assert isinstance(preconditions, dict)
+        preconditions["surface_scope"] = [route_surface]
+        definition = thaw_json(plan.nodes[0].definition)
+        assert isinstance(definition, dict)
+        definition["surface_scope"] = [route_surface]
+        route_plan = _rebuild_plan_for_document(plan, document, definition)
+        trust = PlanActionSetTrust(
+            validated_plan=route_plan,
+            expected_action_set_digest=str(document["action_set_digest"]),
+        )
+
+        valid_result = admit_plan_action_set(canonical_json_bytes(document), trust)
+        self.assertIsInstance(valid_result, AdmittedPlanActionSet)
+
+        for foreign_surface in (
+            "surface:route:fixture/foreign",
+            "attacker/plugin:fixture/example",
+        ):
+            with self.subTest(foreign_surface=foreign_surface):
+                attack = deepcopy(document)
+                attack_actions = attack["actions"]
+                assert isinstance(attack_actions, list)
+                attack_evidence = attack_actions[0]
+                assert isinstance(attack_evidence, dict)
+                attack_payload = attack_evidence["action_payload"]
+                assert isinstance(attack_payload, dict)
+                attack_targets = attack_payload["write_targets"]
+                assert isinstance(attack_targets, list)
+                attack_target = attack_targets[0]
+                assert isinstance(attack_target, dict)
+                _replace_target(
+                    attack_target,
+                    write_surface_identity=foreign_surface,
+                )
+                attack_payload["surface_scope"] = [foreign_surface]
+                attack_preconditions = attack_payload["preconditions"]
+                assert isinstance(attack_preconditions, dict)
+                attack_preconditions["surface_scope"] = [foreign_surface]
+                _reseal_digest_fields_only(attack)
+
+                foreign_result = admit_plan_action_set(
+                    canonical_json_bytes(attack), trust
+                )
+
+                self.assertIsInstance(foreign_result, PlanActionSetRejection)
+                self.assertIn(
+                    "PLAN_ACTION_TARGET_BINDING_INVALID",
+                    _diagnostic_codes(foreign_result),
+                )
+
+    def test_direct_constructor_recomputes_the_canonical_set_digest(self) -> None:
+        _, document = _valid_plan_and_action_set()
+        document["action_set_digest"] = "sha256:" + "0" * 64
+        frozen = freeze_json(document)
+        assert isinstance(frozen, type(freeze_json({})))
+
+        with self.assertRaises(ValueError):
+            AdmittedPlanActionSet(
+                document=frozen,
+                canonical_bytes=canonical_json_bytes(frozen),
+                action_set_digest=str(document["action_set_digest"]),
+            )
 
 
 if __name__ == "__main__":
