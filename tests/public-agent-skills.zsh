@@ -16,6 +16,14 @@ assert_contains() {
   rg -F -q -- "$text" "$file" || fail "$message"
 }
 
+assert_not_contains() {
+  local file="$1"
+  local text="$2"
+  local message="$3"
+
+  ! rg -F -q -- "$text" "$file" || fail "$message"
+}
+
 assert_skill_frontmatter() {
   local file="$1"
   local name="$2"
@@ -209,6 +217,84 @@ test_pr_publication() {
   python3 "$repo_dir/tests/test_modify_private_config.py"
 }
 
+test_model_selection() {
+  local skill_dir="$repo_dir/home/dot_agents/skills/choosing-agent-models"
+  local skill="$repo_dir/home/dot_agents/skills/choosing-agent-models/SKILL.md"
+  local evals="$skill_dir/evals/evals.json"
+  local trigger_evals="$skill_dir/evals/trigger-evals.json"
+  local bindings="$repo_dir/home/.private-daybreak-account-bindings.md.age"
+  local binding_template="$repo_dir/home/dot_agents/private_daybreak-account-bindings.md.tmpl"
+  local link="$repo_dir/home/dot_claude/skills/symlink_choosing-agent-models"
+
+  assert_skill_frontmatter "$skill" choosing-agent-models
+  assert_contains "$skill" 'cybersecurity-related or cybersecurity-adjacent' \
+    'model-selection trigger must cover Daybreak-routed cybersecurity work'
+  assert_contains "$skill" '## Daybreak Routing For Cybersecurity Work' \
+    'model-selection skill must own the public Daybreak routing policy'
+  assert_contains "$skill" 'must use Daybreak for model selection' \
+    'OpenAI-authenticated ChatGPT and Codex must route available Daybreak work to Daybreak'
+  assert_contains "$skill" 'should use Daybreak for model selection' \
+    'other harnesses should prefer an available Daybreak route'
+  assert_contains "$skill" 'These modal verbs govern model routing; they do not make the work optional.' \
+    'Daybreak modal verbs must qualify model choice rather than task execution'
+  assert_contains "$skill" 'Every harness must inventory cross-harness Codex invocation' \
+    'every harness must consider cross-harness Daybreak routes'
+  assert_contains "$skill" 'usage capacity' \
+    'Daybreak availability must include usage capacity'
+  assert_contains "$skill" 'When no permitted Daybreak route is genuinely runnable' \
+    'Daybreak fallback must cover selector, identity, capacity, probe, and authority failures'
+  assert_contains "$skill" '~/.agents/daybreak-account-bindings.md' \
+    'Daybreak account routing must read the private binding catalog'
+  assert_contains "$skill" 'local non-Daybreak fall-through is forbidden' \
+    'OpenAI-authenticated ChatGPT and Codex must prohibit local non-Daybreak fallback'
+  assert_contains "$skill" 'Cross-harness delegation to an operator-approved non-Daybreak candidate is permitted' \
+    'OpenAI-authenticated harnesses must permit approved cross-harness fallback when Daybreak has no capacity'
+  assert_contains "$skill" 'including ChatGPT or Codex without an OpenAI login' \
+    'other-harness behavior must cover unauthenticated ChatGPT and Codex'
+  assert_contains "$skill" 'may also fall through locally' \
+    'other harnesses must retain local next-best fallback'
+  assert_contains "$skill" 'this skill does not perform those actions' \
+    'model selection must return workflow dispositions without mutating tasks or trackers'
+  assert_not_contains "$skill" '.codex/.auth/' \
+    'public model-selection policy must not expose account-home locations'
+  assert_not_contains "$skill" 'CODEX_HOME=' \
+    'public model-selection policy must not expose exact Codex account bindings'
+
+  [[ -f "$evals" ]] || fail 'model-selection behavior evals are missing'
+  [[ -f "$trigger_evals" ]] || fail 'model-selection trigger evals are missing'
+  jq -e '
+    .skill_name == "choosing-agent-models" and
+    ([.evals[].name] | sort) == ["daybreak-route-evidence", "daybreak-routing-matrix"] and
+    ([.evals[].expectations[].id] | sort) == [
+      "account-binding-boundary",
+      "availability-facts",
+      "cross-harness-inventory",
+      "no-runnable-openai",
+      "other-harness-local-fallback",
+      "probe-tuple",
+      "runnable-daybreak",
+      "workflow-ownership"
+    ]
+  ' "$evals" >/dev/null || fail 'model-selection behavior evals do not cover the Daybreak routing contract'
+  while IFS= read -r fixture; do
+    [[ -f "$skill_dir/$fixture" ]] || fail "missing model-selection eval fixture: $fixture"
+  done < <(jq -r '.evals[].fixture_paths[]' "$evals")
+  jq -e '
+    (map(select(.should_trigger == true)) | length) >= 4 and
+    (map(select(.should_trigger == false)) | length) >= 4
+  ' "$trigger_evals" >/dev/null || fail 'model-selection trigger evals need positive and negative coverage'
+
+  [[ -f "$bindings" ]] || fail 'encrypted Daybreak account binding catalog is missing'
+  [[ "$(head -n 1 "$bindings")" == 'age-encryption.org/v1' ]] || \
+    fail 'Daybreak account binding catalog must be an age v1 envelope'
+  assert_contains "$binding_template" '{{ include ".private-daybreak-account-bindings.md.age" | decrypt -}}' \
+    'private Daybreak account bindings must render from the encrypted catalog'
+  [[ "$(chezmoi -S "$repo_dir/home" target-path "$binding_template")" == \
+    "$HOME/.agents/daybreak-account-bindings.md" ]] || \
+    fail 'private Daybreak account bindings must target the shared agent home'
+  assert_symlink_source "$link" '../../.agents/skills/choosing-agent-models'
+}
+
 typeset -a projection_targets
 
 case "${1:-all}" in
@@ -237,10 +323,18 @@ case "${1:-all}" in
       "$HOME/.claude/skills/graphite"
     )
     ;;
+  model-selection)
+    test_model_selection
+    projection_targets=(
+      "$HOME/.agents/skills/choosing-agent-models"
+      "$HOME/.claude/skills/choosing-agent-models"
+    )
+    ;;
   all)
     test_context7
     test_git_publication
     test_pr_publication
+    test_model_selection
     projection_targets=(
       "$HOME/.agents/skills/context7-mcp"
       "$HOME/.claude/skills/context7-mcp"
@@ -252,10 +346,12 @@ case "${1:-all}" in
       "$HOME/.claude/skills/publishing-reviewable-prs"
       "$HOME/.claude/skills/writing-reviewable-pr-descriptions"
       "$HOME/.claude/skills/graphite"
+      "$HOME/.agents/skills/choosing-agent-models"
+      "$HOME/.claude/skills/choosing-agent-models"
     )
     ;;
   *)
-    fail 'usage: public-agent-skills.zsh [context7|git-publication|pr-publication|all]'
+    fail 'usage: public-agent-skills.zsh [context7|git-publication|pr-publication|model-selection|all]'
     ;;
 esac
 
@@ -267,7 +363,8 @@ mkdir -p -- "$isolated_source/dot_agents/skills" "$isolated_source/dot_claude/sk
 
 for skill in \
   checkpointing-and-publishing-git-work context7-mcp graphite \
-  publishing-reviewable-prs writing-reviewable-pr-descriptions; do
+  publishing-reviewable-prs writing-reviewable-pr-descriptions \
+  choosing-agent-models; do
   cp -R -- \
     "$repo_dir/home/dot_agents/skills/$skill" \
     "$isolated_source/dot_agents/skills/$skill"
@@ -275,7 +372,8 @@ done
 
 for link in \
   checkpointing-and-publishing-git-work context7-mcp graphite \
-  publishing-reviewable-prs writing-reviewable-pr-descriptions; do
+  publishing-reviewable-prs writing-reviewable-pr-descriptions \
+  choosing-agent-models; do
   cp -- \
     "$repo_dir/home/dot_claude/skills/symlink_$link" \
     "$isolated_source/dot_claude/skills/symlink_$link"
@@ -300,7 +398,8 @@ done
 
 for skill in \
   checkpointing-and-publishing-git-work context7-mcp graphite \
-  publishing-reviewable-prs writing-reviewable-pr-descriptions; do
+  publishing-reviewable-prs writing-reviewable-pr-descriptions \
+  choosing-agent-models; do
   canonical="$isolated_home/.agents/skills/$skill"
   link="$isolated_home/.claude/skills/$skill"
   if [[ -e "$canonical" || -e "$link" || -L "$link" ]]; then

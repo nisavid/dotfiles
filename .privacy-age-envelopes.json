@@ -3,11 +3,15 @@
   "envelopes": [
     {
       "path": "home/.private-agents.md.age",
-      "sha256": "sha256:362b1832ab1274424ed49aec055e9020acbaf4ffeebf644b49ddadb2c135ebb2"
+      "sha256": "sha256:07ad318d9f7ea7a82d53b28f0c0308b3d278f446d70b1f5cccdb58a8a9648191"
     },
     {
       "path": "home/.private-codex-work.toml.age",
       "sha256": "sha256:ffe3297e65694a413a25d3fe08264a1f9f262dafdcbc2704f4b42d34a8d3c4d6"
+    },
+    {
+      "path": "home/.private-daybreak-account-bindings.md.age",
+      "sha256": "sha256:e3932b8fa742b1e218b6998ef1b82d94a5445689f8314210bb4d538f075a1f44"
     },
     {
       "path": "home/.private-git-identities.toml.age",
