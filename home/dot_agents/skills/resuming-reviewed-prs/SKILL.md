@@ -31,12 +31,9 @@ Authority comes from the current instruction, repo policy, and `resolving-workfl
 
 ## Workflow
 
-1. Resolve the PR, branch, base, head SHA, and current local worktree state.
-   Preserve unrelated local changes.
+1. Resolve the PR, branch, base, head SHA, and current local worktree state. Preserve unrelated local changes.
 2. Inventory the PR before editing: all review threads, top-level PR comments, non-thread review comments, review bodies, requested-changes reviews, checks, conflicts, changed files, linked requirements, and acceptance criteria.
-3. Refresh the branch. Fetch and rebase or merge as instructed. Resolve
-   conflicts semantically. Push only when the current instruction and git policy
-   authorize the needed push mode; never force-push by implication.
+3. Refresh the branch. Fetch and rebase or merge as instructed. Resolve conflicts semantically. Push only when the current instruction and git policy authorize the needed push mode; never force-push by implication.
 4. Refresh PR state after branch changes. Re-anchor comments against the current diff. Stale or outdated comments still need evidence before they are passed over.
 5. Build a ledger for every comment, review, and check. For questions, draft answers from accepted requirements when possible; otherwise mark `needs_human_decision` when the answer affects product behavior or acceptance criteria. For critiques, decide validity, scope, proposed disposition, required fix, and verification.
 6. Fix valid, in-scope blockers first: conflicts, CI failures caused by the PR, correctness/security issues, then review findings and safe simplifications.
@@ -44,19 +41,11 @@ Authority comes from the current instruction, repo policy, and `resolving-workfl
 8. Run relevant verification after each meaningful batch. Report skipped checks with the reason.
 9. Pass fixes and judgments through `ralph-review-until-clean`. One review pass is not Ralph review.
 10. Apply `tightening-code-for-review` to reduce reader burden without changing acceptance criteria. Reviewer-unmentioned bloat is fair game when introduced or amplified by the PR. Remove compatibility shims only when no persisted data, public API, deployed customer behavior, or accepted requirement depends on them. If the PR is too broad to make reviewable safely, recommend splitting, deferring, or narrowing instead of polishing around it.
-11. Close out according to the authority model. In autonomous repo-ops contexts,
-    post scoped replies, resolve evidenced handled threads, refresh PR state,
-    update stale title/body facts through `publishing-reviewable-prs`, rerun
-    required review/check gates, mark ready, and merge when
-    `pr-review-orchestration` merge-readiness gates and workflow ownership pass.
-    If actuation is not agent-owned, prepare the pause packet and stop.
+11. Close out according to the authority model. In autonomous repo-ops contexts, post scoped replies, resolve evidenced handled threads, refresh PR state, update stale title/body facts through `publishing-reviewable-prs`, rerun required review/check gates, mark ready, and merge when `pr-review-orchestration` merge-readiness gates and workflow ownership pass. If actuation is not agent-owned, prepare the pause packet and stop.
 
 ## Triage Ledger
 
-Use `pr-review-orchestration` categories:
-`valid_fix_required`, `valid_but_already_fixed`, `stale_or_outdated`,
-`conflicts_with_spec`, `non_actionable_preference`, `duplicate`, and
-`needs_human_decision`.
+Use `pr-review-orchestration` categories: `valid_fix_required`, `valid_but_already_fixed`, `stale_or_outdated`, `conflicts_with_spec`, `non_actionable_preference`, `duplicate`, and `needs_human_decision`.
 
 Each item records reviewer, URL, file or topic, synopsis, category, evidence, action taken or proposed, verification, and draft reply.
 
@@ -82,10 +71,8 @@ Present:
 - Do not let tightening become cosmetic-only formatting or broad unrelated refactoring.
 - Do not change acceptance criteria under the label of cleanup.
 - Do not trust subagent conclusions without independent verification.
-- Draft replies as Ivan in first person, and post them when workflow ownership
-  and repo policy make reply actuation agent-owned.
-- Do not resolve reviewer-owned threads unless ownership and disposition
-  evidence make resolution agent-owned for this PR.
+- Draft replies as Ivan in first person, and post them when workflow ownership and repo policy make reply actuation agent-owned.
+- Do not resolve reviewer-owned threads unless ownership and disposition evidence make resolution agent-owned for this PR.
 
 ## Common Mistakes
 

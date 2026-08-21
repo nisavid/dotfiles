@@ -7,9 +7,7 @@ description: Use when a workflow reaches sudo, password-gated, privileged, or us
 
 ## Core Principle
 
-Privilege boundaries are handoff boundaries. Once a step is gated by `sudo`,
-password entry, host trust, or user-owned mutation, repeated agent attempts create
-risk without creating progress.
+Privilege boundaries are handoff boundaries. Once a step is gated by `sudo`, password entry, host trust, or user-owned mutation, repeated agent attempts create risk without creating progress.
 
 ## Quick Rules
 
@@ -54,12 +52,8 @@ Stop and hand off when you notice:
 
 ## AFK Handling
 
-If the session is AFK or non-interactive, do not ask for privileged action yet.
-Continue only work that remains valid before the privileged step. Leave a precise
-handoff and do not mark deploy/install/runtime validation complete.
+If the session is AFK or non-interactive, do not ask for privileged action yet. Continue only work that remains valid before the privileged step. Leave a precise handoff and do not mark deploy/install/runtime validation complete.
 
 ## Resume Handling
 
-When the user says they ran the command, do not rerun the privileged command.
-Verify the installed, deployed, or live state with read-only or non-privileged
-checks where possible, then continue the workflow from the first blocked gate.
+When the user says they ran the command, do not rerun the privileged command. Verify the installed, deployed, or live state with read-only or non-privileged checks where possible, then continue the workflow from the first blocked gate.

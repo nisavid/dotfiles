@@ -5,58 +5,24 @@ description: Use when handling any Git-backed change and safe task completion. U
 
 # Checkpoint, Publish, And Finish Git Work
 
-Own the local Git safety boundary. This skill is the sole local owner of Git baseline capture,
-task-only checkpoint commits, publication and reconciliation,
-exact CAS leases, remote verification, completion choices, local integration or
-discard, and provenance-aware branch/worktree cleanup.
+Own the local Git safety boundary. This skill is the sole local owner of Git baseline capture, task-only checkpoint commits, publication and reconciliation, exact CAS leases, remote verification, completion choices, local integration or discard, and provenance-aware branch/worktree cleanup.
 
 ## Resolve Completion Only When Needed
 
-Do not present a completion menu when the operator already chose the outcome or
-the active workflow still owns ordinary iteration. Preserve every worktree and
-branch while a PR is active or review feedback remains. When a completed,
-verified named branch has no chosen outcome, offer the applicable choices:
-merge locally, publish a PR, keep it, or discard it. A selected push follows this
-skill's planner; PR creation and text/state publication belong to
-`publishing-reviewable-prs`.
+Do not present a completion menu when the operator already chose the outcome or the active workflow still owns ordinary iteration. Preserve every worktree and branch while a PR is active or review feedback remains. When a completed, verified named branch has no chosen outcome, offer the applicable choices: merge locally, publish a PR, keep it, or discard it. A selected push follows this skill's planner; PR creation and text/state publication belong to `publishing-reviewable-prs`.
 
-Verify the completed branch before offering or executing a choice. For detached
-HEAD, offer keep-and-report or explicit new-branch publication. Never offer detached discard.
+Verify the completed branch before offering or executing a choice. For detached HEAD, offer keep-and-report or explicit new-branch publication. Never offer detached discard.
 
-Before cleanup, classify the workspace from creation records, harness metadata,
-or an explicit operator statement; a path-name heuristic is insufficient:
+Before cleanup, classify the workspace from creation records, harness metadata, or an explicit operator statement; a path-name heuristic is insufficient:
 
 - A normal checkout has no linked worktree to remove.
-- A directly agent-created worktree has an explicit record that this agent ran
-  `git worktree add`; raw Git cleanup is permitted only for this class.
-- A harness-created worktree must be cleaned up only through the harness's
-  native cleanup actuator. Never run raw worktree removal against it.
-- A user-created, externally managed, or unknown-provenance worktree is
-  preserved and handed off without cleanup.
+- A directly agent-created worktree has an explicit record that this agent ran `git worktree add`; raw Git cleanup is permitted only for this class.
+- A harness-created worktree must be cleaned up only through the harness's native cleanup actuator. Never run raw worktree removal against it.
+- A user-created, externally managed, or unknown-provenance worktree is preserved and handed off without cleanup.
 
-For local merge, integrate into the verified intended base, then run required
-verification on the merged result. Only after merge and verification succeed may
-terminal cleanup begin. Cleanup is target-local: act only on the selected branch
-and its proven worktree registration. Never run global `git worktree prune`.
-For a normal checkout, check out the verified safe base before deleting the normal-checkout branch. For a directly agent-created worktree, leave it, remove
-that exact registered path, and delete only its merged branch. For a harness
-worktree, invoke its native cleanup actuator. Preserve user/external worktrees.
-If an action is not target-local, preserve and report the remaining state.
+For local merge, integrate into the verified intended base, then run required verification on the merged result. Only after merge and verification succeed may terminal cleanup begin. Cleanup is target-local: act only on the selected branch and its proven worktree registration. Never run global `git worktree prune`. For a normal checkout, check out the verified safe base before deleting the normal-checkout branch. For a directly agent-created worktree, leave it, remove that exact registered path, and delete only its merged branch. For a harness worktree, invoke its native cleanup actuator. Preserve user/external worktrees. If an action is not target-local, preserve and report the remaining state.
 
-Discard is destructive. Enumerate the branch, commits, uncommitted files, and
-worktree registration and path, then wait for the operator to type exactly `discard`.
-The confirmation binds only that enumerated branch, worktree
-registration and path, commit set, and dirty-path snapshot. Immediately before
-any forced branch or worktree removal, re-enumerate those values and compare
-them with the confirmed snapshot. If any value changed, invalidate the
-confirmation, preserve and report the state, and require a new exact
-confirmation. After a still-valid confirmation, use the same provenance-aware
-terminal cleanup rules; force-delete a branch only for a normal checkout or
-directly agent-created worktree. Use `git worktree remove --force` only after exact discard confirmation covered
-every dirty path in that directly agent-created worktree and the immediate
-re-enumeration still matches.
-Otherwise preserve and report it. Never infer discard authority from a generic
-completion request.
+Discard is destructive. Enumerate the branch, commits, uncommitted files, and worktree registration and path, then wait for the operator to type exactly `discard`. The confirmation binds only that enumerated branch, worktree registration and path, commit set, and dirty-path snapshot. Immediately before any forced branch or worktree removal, re-enumerate those values and compare them with the confirmed snapshot. If any value changed, invalidate the confirmation, preserve and report the state, and require a new exact confirmation. After a still-valid confirmation, use the same provenance-aware terminal cleanup rules; force-delete a branch only for a normal checkout or directly agent-created worktree. Use `git worktree remove --force` only after exact discard confirmation covered every dirty path in that directly agent-created worktree and the immediate re-enumeration still matches. Otherwise preserve and report it. Never infer discard authority from a generic completion request.
 
 ## Establish The Baseline
 

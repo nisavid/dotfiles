@@ -9,12 +9,7 @@ description: Use when creating a stacked PR-fixup, follow-up patch PR, companion
 
 A PR-fixup branch is a narrow patch stacked on the PR under review. Its base is the reviewed PR's head branch, and its readiness depends on how complete the requested fixes are.
 
-**Required sub-skills:** Use `checkpointing-and-publishing-git-work` for
-task-only commits and pushes, `publishing-reviewable-prs` for PR creation,
-title/body updates, or draft-to-ready transitions, and
-`ralph-review-until-clean` before publishing when requested. For creation or a
-text update, the publisher must use `writing-reviewable-pr-descriptions`; for a
-draft-to-ready-only transition, use the publisher alone.
+**Required sub-skills:** Use `checkpointing-and-publishing-git-work` for task-only commits and pushes, `publishing-reviewable-prs` for PR creation, title/body updates, or draft-to-ready transitions, and `ralph-review-until-clean` before publishing when requested. For creation or a text update, the publisher must use `writing-reviewable-pr-descriptions`; for a draft-to-ready-only transition, use the publisher alone.
 
 ## Workflow
 
