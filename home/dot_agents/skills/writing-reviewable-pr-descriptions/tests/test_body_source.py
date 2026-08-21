@@ -210,6 +210,36 @@ class HtmlBlockTests(unittest.TestCase):
         self.assertEqual([], self.kinds(body))
 
 
+class SetextHeadingTests(unittest.TestCase):
+    """A setext underline is a heading, not wrapped prose.
+
+    GitHub renders `===` and a single `=` as H1, and a single `-` as H2, so the
+    underline length is not bounded the way a thematic break's is.
+    """
+
+    def kinds(self, body: str) -> list[int]:
+        return [o.line for o in BODY_SOURCE.wrap_offenses(body)]
+
+    def test_an_equals_underline_of_any_length_is_a_heading(self) -> None:
+        for underline in ("=", "==", "===", "======"):
+            with self.subTest(underline=underline):
+                self.assertEqual([], self.kinds(f"A heading\n{underline}\n"))
+
+    def test_a_dash_underline_of_any_length_is_a_heading(self) -> None:
+        for underline in ("-", "--", "---", "------"):
+            with self.subTest(underline=underline):
+                self.assertEqual([], self.kinds(f"A heading\n{underline}\n"))
+
+    def test_prose_after_a_setext_underline_opens_a_new_block(self) -> None:
+        self.assertEqual([], self.kinds("A heading\n===\nFollowing prose.\n"))
+        self.assertEqual([], self.kinds("A heading\n=\nFollowing prose.\n"))
+
+    def test_thematic_breaks_remain_boundaries(self) -> None:
+        for rule in ("***", "___", "---"):
+            with self.subTest(rule=rule):
+                self.assertEqual([], self.kinds(f"Prose.\n\n{rule}\n\nMore.\n"))
+
+
 class QuoteDepthRegressionTests(unittest.TestCase):
     """Pin the CommonMark laziness behavior against a plausible misreading."""
 
