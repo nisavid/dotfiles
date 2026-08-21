@@ -44,7 +44,8 @@ classify_latest_readiness_status() {
     while IFS= read -r readiness_status_line || [[ -n $readiness_status_line ]]; do
       case $readiness_status_line in
         reason=existing-session|reason=concurrent-repair|reason=repaired|\
-        reason=unsafe-lock|reason=lock-timeout|reason=native-store-timeout|\
+        reason=unsafe-lock|reason=lock-timeout|reason=concurrent-repair-failed|\
+        reason=native-store-timeout|\
         reason=native-store-unavailable|reason=invalid-bootstrap-value|\
         reason=login-timeout|reason=login-failed|reason=verify-timeout|\
         reason=verify-failed)
@@ -921,7 +922,8 @@ if (( lazy_repair_status != 0 )); then
   if [[ -r $status_file ]]; then
     while IFS= read -r readiness_status_line || [[ -n $readiness_status_line ]]; do
       case $readiness_status_line in
-        reason=unsafe-lock|reason=lock-timeout|reason=native-store-timeout|\
+        reason=unsafe-lock|reason=lock-timeout|reason=concurrent-repair-failed|\
+        reason=native-store-timeout|\
         reason=native-store-unavailable|reason=invalid-bootstrap-value|\
         reason=login-timeout|reason=login-failed|reason=verify-timeout|\
         reason=verify-failed)
@@ -931,7 +933,7 @@ if (( lazy_repair_status != 0 )); then
     done < "$status_file"
   fi
   case $repair_reason in
-    unsafe-lock|lock-timeout) repair_stage=lock ;;
+    unsafe-lock|lock-timeout|concurrent-repair-failed) repair_stage=lock ;;
     native-store-*|invalid-bootstrap-value) repair_stage=native-store ;;
     login-*) repair_stage=login ;;
     verify-*) repair_stage=verify ;;

@@ -99,10 +99,13 @@ deadline. Each bounded operation and all of its descendants run in a dedicated
 process group. Timeout cleanup sends `TERM`, then `KILL` within a
 100-millisecond cleanup window and reaps the managed child. Provider output
 bypasses the process-group controller through inherited anonymous descriptors;
-the controller receives only an exit-status marker. Including the five-second
-lock, cleanup window, and bounded polling overhead, the credential-boundary
-wait remains below the 26-second per-call startup budget. The helper does not log
-out a stale local session. Platform selection uses zsh's `OSTYPE`, so no
+the controller receives only an exit-status marker. The lock grants a
+five-second takeover window when no repair succeeds. A caller that finds a valid
+repair still in progress can wait another thirteen seconds, then rechecks
+readiness without starting a second repair. The takeover path and the extended
+concurrent-wait path each remain below the 26-second per-call startup budget,
+including cleanup and bounded polling overhead. The helper does not log out a
+stale local session. Platform selection uses zsh's `OSTYPE`, so no
 external platform probe runs ahead of the first bounded info call. Failed
 remote info proceeds directly to the serialized login repair, preserving
 a potentially usable local session during a network failure.

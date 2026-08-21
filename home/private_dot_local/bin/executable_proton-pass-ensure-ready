@@ -9,7 +9,8 @@ set -euo pipefail
 umask 077
 
 readonly PROTON_PASS_INFO_TIMEOUT_SECONDS=3
-readonly PROTON_PASS_LOCK_TIMEOUT_SECONDS=5
+readonly PROTON_PASS_LOCK_TAKEOVER_SECONDS=5
+readonly PROTON_PASS_CONCURRENT_REPAIR_WAIT_SECONDS=13
 readonly PROTON_PASS_NATIVE_STORE_TIMEOUT_SECONDS=3
 readonly PROTON_PASS_LOGIN_TIMEOUT_SECONDS=8
 readonly PROTON_PASS_POLL_CENTISECONDS=1
@@ -490,9 +491,25 @@ main() {
   exec {lock_create_fd}>&-
 
   integer lock_fd
-  zsystem flock -t "$PROTON_PASS_LOCK_TIMEOUT_SECONDS" -i 0.05 \
-    -f lock_fd "$lock_file" ||
-    fail_readiness lock-timeout 'timed out waiting for provider-session repair' unrecorded
+  integer lock_status=0
+  integer waited_for_concurrent_repair=0
+  zsystem flock -t "$PROTON_PASS_LOCK_TAKEOVER_SECONDS" -i 0.05 \
+    -f lock_fd "$lock_file" || lock_status=$?
+  if (( lock_status != 0 )); then
+    (( lock_status == 2 )) ||
+      fail_readiness unsafe-lock 'cannot acquire the readiness lock' unrecorded
+    waited_for_concurrent_repair=1
+    lock_status=0
+    zsystem flock -t "$PROTON_PASS_CONCURRENT_REPAIR_WAIT_SECONDS" -i 0.05 \
+      -f lock_fd "$lock_file" || lock_status=$?
+    if (( lock_status != 0 )); then
+      if (( lock_status == 2 )); then
+        fail_readiness lock-timeout \
+          'timed out waiting for provider-session repair' unrecorded
+      fi
+      fail_readiness unsafe-lock 'cannot acquire the readiness lock' unrecorded
+    fi
+  fi
   [[ ! -L $lock_file ]] || {
     zsystem flock -u lock_fd
     fail_readiness unsafe-lock 'readiness lock must not be a symbolic link' unrecorded
@@ -522,6 +539,11 @@ main() {
   if session_ready "$backend"; then
     write_status ready concurrent-repair unrecorded
     return 0
+  fi
+  if (( waited_for_concurrent_repair )); then
+    zsystem flock -u lock_fd
+    fail_readiness concurrent-repair-failed \
+      'the concurrent provider-session repair did not establish readiness' unrecorded
   fi
 
   local native_store_adapter

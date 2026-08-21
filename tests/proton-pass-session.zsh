@@ -426,7 +426,8 @@ case $1 in
       exit 0
     fi
     [[ ! -e $FAKE_PASS_LOGIN_HANG ]] || hang_forever
-    [[ ! -e $FAKE_PASS_LOGIN_DELAY ]] || /bin/sleep 0.2
+    [[ ! -e $FAKE_PASS_LOGIN_DELAY ]] ||
+      /bin/sleep "${FAKE_PASS_LOGIN_DELAY_SECONDS:-0.2}"
     [[ ! -e $FAKE_PASS_LOGIN_EXIT_124 ]] || exit 124
     [[ ! -e $FAKE_PASS_LOGIN_FAIL ]] || exit 71
     : > "$FAKE_PASS_LOCAL_SESSION"
@@ -904,6 +905,96 @@ login_count=$(/usr/bin/grep -Fxc login "$FAKE_PASS_LOG")
 rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION"
 : > "$FAKE_PASS_LOG"
 : > "$FAKE_SECRET_TOOL_LOG"
+: > "$FAKE_PASS_LOGIN_DELAY"
+slow_repair_started=$test_dir/slow-repair-started
+/usr/bin/env \
+  FAKE_PASS_LOGIN_DELAY_SECONDS=6 \
+  PROVIDER_START_MARKER="$slow_repair_started" \
+  zsh "$ensure_ready" >"$test_dir/slow-repair-owner.out" \
+  2>"$test_dir/slow-repair-owner.err" &
+slow_repair_owner_pid=$!
+test_process_fixture_track_pid $slow_repair_owner_pid
+integer slow_repair_start_polls=200
+while [[ ! -s $slow_repair_started && slow_repair_start_polls -gt 0 ]]; do
+  (( --slow_repair_start_polls ))
+  zselect -t 1 2>/dev/null || true
+done
+[[ -s $slow_repair_started ]] ||
+  fail 'the slow repair owner must reach the provider login'
+set +e
+zsh "$ensure_ready" >"$test_dir/slow-repair-waiter.out" \
+  2>"$test_dir/slow-repair-waiter.err"
+slow_repair_waiter_status=$?
+set -e
+if wait $slow_repair_owner_pid; then
+  slow_repair_owner_status=0
+else
+  slow_repair_owner_status=$?
+fi
+test_process_fixture_untrack_pid $slow_repair_owner_pid
+rm -f -- "$FAKE_PASS_LOGIN_DELAY"
+(( slow_repair_owner_status == 0 )) ||
+  fail 'the slow repair owner must establish provider readiness'
+(( slow_repair_waiter_status == 0 )) ||
+  fail 'a concurrent readiness caller must wait for a valid slow repair'
+[[ $(/usr/bin/grep -Fxc login "$FAKE_PASS_LOG") == 1 ]] ||
+  fail 'a valid slow concurrent repair must perform exactly one login'
+[[ ! -s $test_dir/slow-repair-owner.err &&
+  ! -s $test_dir/slow-repair-waiter.err ]] ||
+  fail 'a valid slow concurrent repair must not emit diagnostics'
+
+rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION"
+: > "$FAKE_PASS_LOG"
+: > "$FAKE_SECRET_TOOL_LOG"
+: > "$FAKE_PASS_LOGIN_DELAY"
+: > "$FAKE_PASS_LOGIN_FAIL"
+failed_repair_started=$test_dir/failed-repair-started
+/usr/bin/env \
+  FAKE_PASS_LOGIN_DELAY_SECONDS=6 \
+  PROVIDER_START_MARKER="$failed_repair_started" \
+  zsh "$ensure_ready" >"$test_dir/failed-repair-owner.out" \
+  2>"$test_dir/failed-repair-owner.err" &
+failed_repair_owner_pid=$!
+test_process_fixture_track_pid $failed_repair_owner_pid
+integer failed_repair_start_polls=200
+while [[ ! -s $failed_repair_started && failed_repair_start_polls -gt 0 ]]; do
+  (( --failed_repair_start_polls ))
+  zselect -t 1 2>/dev/null || true
+done
+[[ -s $failed_repair_started ]] ||
+  fail 'the failed repair owner must reach the provider login'
+set +e
+zsh "$ensure_ready" >"$test_dir/failed-repair-waiter.out" \
+  2>"$test_dir/failed-repair-waiter.err"
+failed_repair_waiter_status=$?
+set -e
+if wait $failed_repair_owner_pid; then
+  failed_repair_owner_status=0
+else
+  failed_repair_owner_status=$?
+fi
+test_process_fixture_untrack_pid $failed_repair_owner_pid
+rm -f -- "$FAKE_PASS_LOGIN_DELAY" "$FAKE_PASS_LOGIN_FAIL"
+(( failed_repair_owner_status != 0 )) ||
+  fail 'the failed repair owner must report unavailable readiness'
+(( failed_repair_waiter_status != 0 )) ||
+  fail 'a waiter must fail when the slow repair owner does not establish readiness'
+[[ $(<"$test_dir/failed-repair-owner.err") ==
+  'proton-pass-ensure-ready: provider-session repair failed' ]] ||
+  fail 'the failed repair owner must preserve its value-free diagnostic'
+[[ $(<"$test_dir/failed-repair-waiter.err") ==
+  'proton-pass-ensure-ready: the concurrent provider-session repair did not establish readiness' ]] ||
+  fail 'the failed concurrent repair must preserve its value-free diagnostic'
+[[ $(/usr/bin/grep -Fxc login "$FAKE_PASS_LOG") == 1 ]] ||
+  fail 'a failed slow concurrent repair must not start a second login'
+[[ $(<"$FAKE_SECRET_TOOL_LOG") == proton-bootstrap ]] ||
+  fail 'a failed slow concurrent repair must not repeat the bootstrap lookup'
+grep -Fqx 'reason=concurrent-repair-failed' "$status_file" ||
+  fail 'a failed concurrent repair must record its value-free reason'
+
+rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION"
+: > "$FAKE_PASS_LOG"
+: > "$FAKE_SECRET_TOOL_LOG"
 : > "$FAKE_NATIVE_STORE_LOCKED"
 set +e
 locked_output=$(zsh "$ensure_ready" 2>&1)
@@ -1118,7 +1209,7 @@ zsh -f -c '
   integer lock_fd
   zsystem flock -t 1 -f lock_fd "$1"
   : > "$2"
-  zselect -t 550 || true
+  zselect -t 1850 || true
 ' -- "$lock_file" "$lock_ready" &
 lock_holder_pid=$!
 test_process_fixture_track_pid $lock_holder_pid
