@@ -150,5 +150,79 @@ class SkippedRegionTests(unittest.TestCase):
         self.assertEqual([], self.kinds("> First quoted line.\n>\n> Second block.\n"))
 
 
+class FenceDelimiterTests(unittest.TestCase):
+    """A fence closes only on its own delimiter, at least as long."""
+
+    def kinds(self, body: str) -> list[int]:
+        return [o.line for o in BODY_SOURCE.wrap_offenses(body)]
+
+    def test_a_tilde_line_does_not_close_a_backtick_fence(self) -> None:
+        body = "```\nwrapped code\n~~~\nstill code\n```\n"
+        self.assertEqual([], self.kinds(body))
+
+    def test_a_shorter_run_does_not_close_a_longer_fence(self) -> None:
+        body = "````\nwrapped code\n```\nstill code\n````\n"
+        self.assertEqual([], self.kinds(body))
+
+    def test_a_longer_run_closes_a_shorter_fence(self) -> None:
+        body = "```\ncode\n````\n\nProse.\n"
+        self.assertEqual([], self.kinds(body))
+
+    def test_prose_directly_after_a_closing_fence_is_its_own_block(self) -> None:
+        # GitHub renders this as a separate paragraph, not a continuation.
+        body = "Intro:\n\n```sh\necho hi\n```\nProse after the fence.\n"
+        self.assertEqual([], self.kinds(body))
+
+    def test_a_quoted_fence_is_detected_after_stripping_markers(self) -> None:
+        body = "> ```\n> wrapped code\n> still code\n> ```\n"
+        self.assertEqual([], self.kinds(body))
+
+
+class HtmlBlockTests(unittest.TestCase):
+    """Only a real HTML block exempts its newlines."""
+
+    def kinds(self, body: str) -> list[int]:
+        return [o.line for o in BODY_SOURCE.wrap_offenses(body)]
+
+    def test_inline_html_opening_a_paragraph_does_not_exempt_the_wrap(self) -> None:
+        # GitHub renders this as one paragraph joined by <br>.
+        body = "<span>First</span> some prose\nthat the author wrapped here.\n"
+        self.assertEqual([2], self.kinds(body))
+
+    def test_a_block_level_tag_starts_a_raw_html_block(self) -> None:
+        body = "<div>First</div>\nthat the author wrapped here.\n"
+        self.assertEqual([], self.kinds(body))
+
+    def test_inline_html_cannot_interrupt_a_paragraph(self) -> None:
+        body = "Prose that runs on\n<span>and continues here.</span>\n"
+        self.assertEqual([2], self.kinds(body))
+
+    def test_a_block_level_tag_may_interrupt_a_paragraph(self) -> None:
+        body = "Prose that runs on\n<table><tr><td>cell</td></tr></table>\n"
+        self.assertEqual([], self.kinds(body))
+
+    def test_a_script_block_ends_at_its_closing_tag_not_a_blank_line(self) -> None:
+        body = "<script>\nvar a = 1;\n</script>\nProse that the author\nwrapped here.\n"
+        self.assertEqual([5], self.kinds(body))
+
+    def test_an_html_comment_block_is_exempt(self) -> None:
+        body = "<!-- a comment\nspanning lines -->\n\nProse.\n"
+        self.assertEqual([], self.kinds(body))
+
+
+class QuoteDepthRegressionTests(unittest.TestCase):
+    """Pin the CommonMark laziness behavior against a plausible misreading."""
+
+    def test_a_shallower_quote_line_continues_the_nested_paragraph(self) -> None:
+        # Verified against GitHub's renderer: `> > nested` then `> outer`
+        # produces one nested paragraph joined by <br>, so the quote level does
+        # not close and this is a real accidental break.
+        body = "> > nested\n> outer\n"
+        self.assertEqual(
+            [(2, BODY_SOURCE.ACCIDENTAL_BREAK)],
+            [(o.line, o.kind) for o in BODY_SOURCE.wrap_offenses(body)],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
