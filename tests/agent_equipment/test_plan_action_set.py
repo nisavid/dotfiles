@@ -267,6 +267,43 @@ def _replace_target(target: dict[str, object], **changes: object) -> None:
     )
 
 
+def _configure_desired_state(
+    provider: dict[str, object],
+    controls: list[dict[str, object]],
+) -> dict[str, object]:
+    desired: dict[str, object] = {
+        "configuration": {
+            "status": "desired",
+            "digest": canonical_json_sha256(
+                {"provider": provider, "component_controls": controls}
+            ),
+        }
+    }
+    if controls:
+        desired["component_states"] = sorted(
+            deepcopy(controls), key=lambda control: str(control["equipment_identity"])
+        )
+    return desired
+
+
+def _set_operation_desired_state(
+    payload: dict[str, object],
+    operation: str,
+    provider: dict[str, object],
+    controls: list[dict[str, object]],
+) -> None:
+    desired_state = {
+        "install": {"route_presence": "present"},
+        "configure": _configure_desired_state(provider, controls),
+        "enable": {"enablement": "enabled"},
+        "disable": {"enablement": "disabled"},
+        "remove": {"route_presence": "absent"},
+        "restore": {"route_presence": "present"},
+    }.get(operation, {"route_presence": "present"})
+    payload["desired_state"] = desired_state
+    payload["desired_state_digest"] = canonical_json_sha256(desired_state)
+
+
 def _direct_mcp_plan_and_action_set(
     harness: str,
     operation: str = "configure",
@@ -317,6 +354,7 @@ def _direct_mcp_plan_and_action_set(
         "secret_references": [],
     }
     route_digest = canonical_json_sha256(route_record)
+    _set_operation_desired_state(payload, operation, provider, [])
     payload.update(
         {
             "harness": harness,
@@ -350,6 +388,8 @@ def _direct_mcp_plan_and_action_set(
         "controlled_equipment_identities",
         "surface_scope",
         "operation",
+        "desired_state",
+        "desired_state_digest",
         "secret_references",
     ):
         definition[field] = deepcopy(payload[field])
@@ -397,6 +437,7 @@ def _claude_skill_plan_and_action_set(
         "secret_references": [],
     }
     route_digest = canonical_json_sha256(route_record)
+    _set_operation_desired_state(payload, operation, provider, [])
     payload.update(
         {
             "provider": provider,
@@ -422,6 +463,8 @@ def _claude_skill_plan_and_action_set(
         "controlled_equipment_identities",
         "surface_scope",
         "operation",
+        "desired_state",
+        "desired_state_digest",
         "secret_references",
     ):
         definition[field] = deepcopy(payload[field])
@@ -471,6 +514,7 @@ def _native_plugin_plan_and_action_set(
         "secret_references": [],
     }
     route_digest = canonical_json_sha256(route_record)
+    _set_operation_desired_state(payload, operation, provider, [])
     payload.update(
         {
             "harness": manager,
@@ -499,6 +543,8 @@ def _native_plugin_plan_and_action_set(
         "controlled_equipment_identities",
         "surface_scope",
         "operation",
+        "desired_state",
+        "desired_state_digest",
         "secret_references",
     ):
         definition[field] = deepcopy(payload[field])
@@ -626,7 +672,12 @@ def _legacy_projector_plan_and_action_set() -> tuple[ValidatedPlan, dict[str, ob
     return _rebuild_plan_for_document(plan, document, definition), document
 
 
-def _plugin_selection_plan_and_action_set() -> tuple[ValidatedPlan, dict[str, object]]:
+def _plugin_selection_plan_and_action_set(
+    manager: str = "codex",
+    *,
+    desired_controls: list[dict[str, object]] | None = None,
+    configuration_digest: str | None = None,
+) -> tuple[ValidatedPlan, dict[str, object]]:
     plan, document = _valid_plan_and_action_set()
     actions = document["actions"]
     assert isinstance(actions, list)
@@ -634,35 +685,93 @@ def _plugin_selection_plan_and_action_set() -> tuple[ValidatedPlan, dict[str, ob
     assert isinstance(evidence, dict)
     payload = evidence["action_payload"]
     assert isinstance(payload, dict)
-    surface = "surface:route:fixture/claude-plugin/plugin:fixture/example"
+    provider = {
+        "kind": "native_plugin",
+        "manager": manager,
+        "plugin_id": "example@fixture",
+        "scope": "user",
+    }
+    route_identity = f"route:fixture/{manager}-plugin"
+    surface = f"surface:{route_identity}"
+    controls = [
+        {"equipment_identity": "plugin:fixture/example", "state": "disabled"},
+        {"equipment_identity": "skill:fixture/aux", "state": "enabled"},
+    ]
     target = {
         "target_identity": "",
         "write_surface_identity": surface,
         "surface_kind": "plugin_selection",
         "equipment_identity": "plugin:fixture/example",
-        "locator": {
-            "owner": "claude",
-            "source": "settings",
-            "key_path": ["enabledPlugins", "example@fixture"],
-        },
+        "locator": (
+            {
+                "owner": "codex",
+                "source": "config",
+                "key_path": ["plugins", "example@fixture"],
+            }
+            if manager == "codex"
+            else {
+                "owner": "claude",
+                "source": "settings",
+                "key_path": ["enabledPlugins", "example@fixture"],
+            }
+        ),
     }
     _replace_target(target)
+    route_record = {
+        "provider": provider,
+        "control_owner": "reconciler_owned",
+        "activation_group": payload["activation_group"],
+        "component_controls": controls,
+        "secret_references": [],
+    }
+    route_digest = canonical_json_sha256(route_record)
+    desired_state = _configure_desired_state(
+        provider,
+        controls if desired_controls is None else desired_controls,
+    )
+    if configuration_digest is not None:
+        configuration = desired_state["configuration"]
+        assert isinstance(configuration, dict)
+        configuration["digest"] = configuration_digest
     payload.update(
         {
+            "harness": manager,
+            "provider": provider,
+            "route_identity": route_identity,
+            "route_digest": route_digest,
             "equipment_identities": ["plugin:fixture/example"],
+            "controlled_equipment_identities": [
+                "plugin:fixture/example",
+                "skill:fixture/aux",
+            ],
             "surface_scope": [surface],
             "write_targets": [target],
             "operation": "configure",
+            "desired_state": desired_state,
+            "desired_state_digest": canonical_json_sha256(desired_state),
+            "secret_references": [],
             "verification_dependencies": [],
         }
     )
     preconditions = payload["preconditions"]
     assert isinstance(preconditions, dict)
-    preconditions["surface_scope"] = [surface]
+    preconditions.update({"route_digest": route_digest, "surface_scope": [surface]})
     definition = thaw_json(plan.nodes[0].definition)
     assert isinstance(definition, dict)
-    for field in ("equipment_identities", "surface_scope", "operation"):
+    for field in (
+        "harness",
+        "route_identity",
+        "route_digest",
+        "equipment_identities",
+        "controlled_equipment_identities",
+        "surface_scope",
+        "operation",
+        "desired_state",
+        "desired_state_digest",
+        "secret_references",
+    ):
         definition[field] = deepcopy(payload[field])
+    definition["route_record"] = route_record
     return _rebuild_plan_for_document(plan, document, definition), document
 
 
@@ -1782,7 +1891,7 @@ class PlanActionSetAdmissionTest(unittest.TestCase):
             _diagnostic_codes(result),
         )
 
-    def test_plugin_selection_requires_its_exact_claude_settings_key(self) -> None:
+    def test_plugin_selection_requires_its_exact_codex_config_key(self) -> None:
         plan, original = _plugin_selection_plan_and_action_set()
         fixed_trust = PlanActionSetTrust(
             validated_plan=plan,
@@ -1795,7 +1904,7 @@ class PlanActionSetAdmissionTest(unittest.TestCase):
         mutations = {
             "owner": ("owner", "cursor"),
             "source": ("source", "attacker-controlled"),
-            "key_path": ("key_path", ["enabledPlugins", "foreign@fixture"]),
+            "key_path": ("key_path", ["plugins", "foreign@fixture"]),
         }
         for case, (field, value) in mutations.items():
             with self.subTest(case=case):
@@ -1825,6 +1934,73 @@ class PlanActionSetAdmissionTest(unittest.TestCase):
                     "PLAN_ACTION_TARGET_BINDING_INVALID",
                     _diagnostic_codes(result),
                 )
+
+    def test_claude_plugin_configure_remains_unavailable(self) -> None:
+        plan, document = _plugin_selection_plan_and_action_set("claude")
+        fixed_trust = PlanActionSetTrust(
+            validated_plan=plan,
+            expected_action_set_digest=str(document["action_set_digest"]),
+        )
+
+        result = admit_plan_action_set(canonical_json_bytes(document), fixed_trust)
+
+        self.assertIsInstance(result, PlanActionSetRejection)
+        self.assertIn(
+            "PLAN_ACTION_TARGET_BINDING_INVALID",
+            _diagnostic_codes(result),
+        )
+
+    def test_configure_desired_state_is_derived_from_route_controls(self) -> None:
+        route_controls = [
+            {"equipment_identity": "plugin:fixture/example", "state": "disabled"},
+            {"equipment_identity": "skill:fixture/aux", "state": "enabled"},
+        ]
+        cases = {
+            "state_mismatch": [
+                {"equipment_identity": "plugin:fixture/example", "state": "enabled"},
+                route_controls[1],
+            ],
+            "missing_control": [route_controls[0]],
+            "extra_control": [
+                *route_controls,
+                {"equipment_identity": "skill:fixture/extra", "state": "enabled"},
+            ],
+        }
+        for case, desired_controls in cases.items():
+            with self.subTest(case=case):
+                plan, document = _plugin_selection_plan_and_action_set(
+                    desired_controls=desired_controls
+                )
+                fixed_trust = PlanActionSetTrust(
+                    validated_plan=plan,
+                    expected_action_set_digest=str(document["action_set_digest"]),
+                )
+
+                result = admit_plan_action_set(
+                    canonical_json_bytes(document), fixed_trust
+                )
+
+                self.assertIsInstance(result, PlanActionSetRejection)
+                self.assertIn(
+                    "PLAN_ACTION_SET_MEMBERSHIP_INVALID",
+                    _diagnostic_codes(result),
+                )
+
+        plan, document = _plugin_selection_plan_and_action_set(
+            configuration_digest="sha256:" + "0" * 64
+        )
+        fixed_trust = PlanActionSetTrust(
+            validated_plan=plan,
+            expected_action_set_digest=str(document["action_set_digest"]),
+        )
+
+        result = admit_plan_action_set(canonical_json_bytes(document), fixed_trust)
+
+        self.assertIsInstance(result, PlanActionSetRejection)
+        self.assertIn(
+            "PLAN_ACTION_SET_MEMBERSHIP_INVALID",
+            _diagnostic_codes(result),
+        )
 
     def test_each_exact_surface_identity_rule_admits_only_its_derived_set(self) -> None:
         for rule in (
