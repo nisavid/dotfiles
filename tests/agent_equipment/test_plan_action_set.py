@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import json
-import tempfile
 import unittest
 from copy import deepcopy
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 from unittest.mock import patch
 
-from agent_equipment import validator as validator_module
+from agent_equipment import _json_schema as json_schema_module
 from agent_equipment.canonical import canonical_json_bytes, canonical_json_sha256
 from agent_equipment.model import PlanNode, ValidatedPlan, freeze_json, thaw_json
 from agent_equipment.plan_action_set import (
@@ -686,18 +685,15 @@ class PlanActionSetAdmissionTest(unittest.TestCase):
             "type": "object",
         }
 
-        with tempfile.TemporaryDirectory() as directory:
-            schema_path = Path(directory) / "plan-action-set-v1.schema.json"
-            schema_path.write_text(json.dumps(permissive_schema), encoding="utf-8")
-            with patch.object(
-                validator_module,
-                "SCHEMA_DIRECTORY",
-                Path(directory),
-            ):
-                result = admit_plan_action_set(
-                    canonical_json_bytes(document),
-                    fixed_trust,
-                )
+        with patch.object(
+            json_schema_module,
+            "_load_schemas",
+            return_value={"plan-action-set-v1.schema.json": permissive_schema},
+        ):
+            result = admit_plan_action_set(
+                canonical_json_bytes(document),
+                fixed_trust,
+            )
 
         self.assertIsInstance(result, PlanActionSetRejection)
         self.assertIn("PLAN_ACTION_SET_SCHEMA_INVALID", _diagnostic_codes(result))
@@ -708,23 +704,15 @@ class PlanActionSetAdmissionTest(unittest.TestCase):
             validated_plan=plan,
             expected_action_set_digest=str(document["action_set_digest"]),
         )
-        rejecting_schema = {
-            "$schema": "https://json-schema.org/draft/2020-12/schema",
-            "not": {},
-        }
-
-        with tempfile.TemporaryDirectory() as directory:
-            schema_path = Path(directory) / "plan-action-set-v1.schema.json"
-            schema_path.write_text(json.dumps(rejecting_schema), encoding="utf-8")
-            with patch.object(
-                validator_module,
-                "SCHEMA_DIRECTORY",
-                Path(directory),
-            ):
-                result = admit_plan_action_set(
-                    canonical_json_bytes(document),
-                    fixed_trust,
-                )
+        with patch.object(
+            json_schema_module,
+            "_load_schemas",
+            side_effect=AssertionError("admission reread the live Schema path"),
+        ):
+            result = admit_plan_action_set(
+                canonical_json_bytes(document),
+                fixed_trust,
+            )
 
         self.assertIsInstance(result, AdmittedPlanActionSet)
 
