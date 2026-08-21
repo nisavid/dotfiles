@@ -14,4 +14,14 @@ The five canonical triage labels, verbatim: `needs-triage`, `needs-info`, `ready
 
 ### Domain docs
 
-Single-context: root `CONTEXT.md` plus `docs/adr/`, with per-area glossaries under `docs/`. See `docs/agents/domain.md`.
+Multi-context: root `CONTEXT-MAP.md` names each context and links its `CONTEXT.md` under `docs/<context>/`; system-wide ADRs live under `docs/adr/`. The map lists in-repo contexts only. See `docs/agents/domain.md`.
+
+## Git and validation
+
+This is a personal `nisavid` project. Use `Ivan D Vasin <ivan@nisavid.io>` for Git work and the `nisavid` GitHub account for repository mutations. Prefix branches with `ivan/`. Use Conventional Commits for commits and pull request titles; `cog.toml` and the repository hooks enforce the policy.
+
+For every Git-backed task, use `checkpointing-and-publishing-git-work` at the start, at clean checkpoints, and before stopping. Every change requires `git diff --check`.
+
+Before publication, run the test suites that own the touched surface: `zsh tests/public-agent-skills.zsh` for agent skills, `zsh tests/platform-portability.zsh` for deployment bindings, and `zsh tests/privacy-scan.zsh` plus `python3 scripts/privacy-scan --root . --require-age-manifest` for anything touching encrypted or private material. CI runs all of them; local `privacy-scan` needs `age` installed.
+
+Never commit plaintext secrets. Secret-bearing snippets live as `.age` envelopes under `home/`; treat any plaintext credential in the working tree as a stop-and-report gate.
