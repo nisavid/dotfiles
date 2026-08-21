@@ -25,6 +25,24 @@ def load_evals(skill_dir: Path) -> dict:
     return json.loads(evals_path.read_text())
 
 
+def read_scoped_text(skill_dir: Path, relative_path: str) -> str:
+    skill_root = skill_dir.resolve(strict=True)
+    path = Path(relative_path)
+    if path.is_absolute() or ".." in path.parts:
+        raise ValueError(f"source path must stay within the skill directory: {relative_path}")
+
+    candidate = skill_root
+    for part in path.parts:
+        candidate /= part
+        if candidate.is_symlink():
+            raise ValueError(f"source path must not contain symlinks: {relative_path}")
+
+    resolved = candidate.resolve(strict=True)
+    if not resolved.is_relative_to(skill_root) or not resolved.is_file():
+        raise ValueError(f"source path must be a regular file within the skill directory: {relative_path}")
+    return resolved.read_text(encoding="utf-8")
+
+
 def prompt_text(
     *,
     skill_dir: Path,
@@ -32,9 +50,9 @@ def prompt_text(
     run_kind: str,
 ) -> str:
     prompt_parts = [eval_item["prompt"]]
-    prompt_parts.extend((skill_dir / fixture_path).read_text() for fixture_path in eval_item["fixture_paths"])
+    prompt_parts.extend(read_scoped_text(skill_dir, fixture_path) for fixture_path in eval_item["fixture_paths"])
     if run_kind == "with_skill":
-        prompt_parts.append((skill_dir / "SKILL.md").read_text())
+        prompt_parts.append(read_scoped_text(skill_dir, "SKILL.md"))
     return "\n\n".join(prompt_parts)
 
 
@@ -74,7 +92,7 @@ For each `eval-*` directory:
 
 1. Spawn one subagent with `with_skill/run-1/subagent_prompt.md`.
 2. Spawn one baseline subagent with `without_skill/run-1/subagent_prompt.md`.
-3. Ask each subagent to save `response.md` under its listed `outputs/` directory.
+3. Capture each subagent's final response and write it to that run's `outputs/response.md`.
 4. Grade each run against `eval_metadata.json` assertions and save `grading.json`
    in the run directory using skill-creator's required fields:
    `expectations[].text`, `expectations[].passed`, and `expectations[].evidence`.
