@@ -507,13 +507,13 @@ def _validate_adapter_contract_document(
         return False
     if type(document) is not dict or document.get("record_type") != record_type:
         return False
-    return _validate_captured_schema_document(
+    return validate_captured_schema_document(
         document,
         root_schema_name="adapter-contract-v1.schema.json",
     )
 
 
-def _validate_captured_schema_document(
+def validate_captured_schema_document(
     document: object,
     *,
     root_schema_name: str,

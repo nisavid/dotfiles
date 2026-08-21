@@ -20,11 +20,33 @@ from .model import (
     thaw_json,
 )
 from .secrets import contains_literal_credential
-from .validator import _validate_captured_schema_document
+from .validator import validate_captured_schema_document
 
 MAX_PLAN_ACTION_SET_BYTES = 16 * 1024 * 1024
 _SCHEMA_NAME = "plan-action-set-v1.schema.json"
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
+
+
+def _canonical_action_set_digest(document: FrozenJsonObject) -> str:
+    actions = document.get("actions")
+    if not isinstance(actions, tuple):
+        raise TypeError("plan-action-set actions are invalid")
+    typed_actions: list[FrozenJsonObject] = []
+    for action in actions:
+        if not isinstance(action, FrozenJsonObject):
+            raise TypeError("plan-action-set actions are invalid")
+        typed_actions.append(action)
+    return canonical_json_sha256(
+        {
+            "schema_version": document.get("schema_version"),
+            "candidate_identity": document.get("candidate_identity"),
+            "implementation_manifest_digest": document.get(
+                "implementation_manifest_digest"
+            ),
+            "plan_digest": document.get("plan_digest"),
+            "actions": tuple(sorted(typed_actions, key=_action_sort_key)),
+        }
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +90,8 @@ class AdmittedPlanActionSet:
             type(self.action_set_digest) is not str
             or _DIGEST.fullmatch(self.action_set_digest) is None
             or self.document.get("action_set_digest") != self.action_set_digest
+            or _canonical_action_set_digest(self.document)
+            != self.action_set_digest
         ):
             raise ValueError("admitted plan-action-set digest is invalid")
 
@@ -123,7 +147,7 @@ def admit_plan_action_set(
             "The plan-action set does not satisfy the checked-in closed schema.",
         )
     mutable_document = thaw_json(document)
-    if type(mutable_document) is not dict or not _validate_captured_schema_document(
+    if type(mutable_document) is not dict or not validate_captured_schema_document(
         mutable_document,
         root_schema_name=_SCHEMA_NAME,
     ):
@@ -194,12 +218,10 @@ def _semantic_diagnostics(
 
     actions = document.get("actions")
     assert isinstance(actions, tuple)
-    typed_actions: list[FrozenJsonObject] = []
     coordinates: list[tuple[int, str]] = []
     physical_targets: set[bytes] = set()
     for index, evidence in enumerate(actions):
         assert isinstance(evidence, FrozenJsonObject)
-        typed_actions.append(evidence)
         payload = evidence.get("action_payload")
         assert isinstance(payload, FrozenJsonObject)
         identity = payload.get("action_identity")
@@ -296,23 +318,7 @@ def _semantic_diagnostics(
                 "The plan-action set is not the ordered all-and-only mutation projection.",
             )
         )
-    canonical_actions = tuple(
-        sorted(
-            typed_actions,
-            key=_action_sort_key,
-        )
-    )
-    expected_set_digest = canonical_json_sha256(
-        {
-            "schema_version": document.get("schema_version"),
-            "candidate_identity": document.get("candidate_identity"),
-            "implementation_manifest_digest": document.get(
-                "implementation_manifest_digest"
-            ),
-            "plan_digest": document.get("plan_digest"),
-            "actions": canonical_actions,
-        }
-    )
+    expected_set_digest = _canonical_action_set_digest(document)
     if (
         document.get("action_set_digest") != expected_set_digest
         or expected_set_digest != trust.expected_action_set_digest
@@ -361,6 +367,7 @@ def _matches_validated_plan(
         and payload.get("plan_digest") is not None
         and all(payload.get(field) == definition.get(field) for field in direct_fields)
         and isinstance(route, FrozenJsonObject)
+        and definition.get("route_digest") == canonical_json_sha256(route)
         and payload.get("provider") == route.get("provider")
     )
 
@@ -488,9 +495,8 @@ def _target_matches_plan_authority(
     ):
         return False
     authoritative_equipment = set(active) | set(controlled)
-    if surface.startswith("surface:route:") and not surface.startswith(
-        f"surface:{route_identity}/"
-    ):
+    route_surface = f"surface:{route_identity}"
+    if surface != route_surface and not surface.startswith(f"{route_surface}/"):
         return False
     if type(equipment) is str and (
         equipment not in authoritative_equipment
@@ -526,7 +532,10 @@ def _target_matches_plan_authority(
                 }
             )
             and len(plugin_equipment) == 1
-            and surface.endswith(f"/{plugin_equipment[0]}")
+            and (
+                surface == route_surface
+                or surface.endswith(f"/{plugin_equipment[0]}")
+            )
         )
     if kind == "claude_skill_entry":
         path = locator.get("path")
@@ -540,25 +549,19 @@ def _target_matches_plan_authority(
             == equipment.rsplit("/", 1)[-1]
         )
     if kind in {"mcp_selection", "plugin_selection"}:
-        key_path = locator.get("key_path")
         expected_prefix = "mcp:" if kind == "mcp_selection" else "plugin:"
         if (
             type(equipment) is not str
             or not equipment.startswith(expected_prefix)
-            or locator.get("owner") != harness
-            or not isinstance(key_path, tuple)
-            or not key_path
         ):
             return False
-        terminal = key_path[-1]
-        expected_terminal = (
-            provider.get("server_name")
-            if kind == "mcp_selection" and provider_kind == "direct_mcp"
-            else equipment.rsplit("/", 1)[-1]
+        expected_locator = _expected_selection_locator(
+            kind=kind,
+            harness=harness,
+            operation=payload.get("operation"),
+            provider=provider,
         )
-        return terminal == expected_terminal and (
-            provider_kind != "direct_mcp" or kind == "mcp_selection"
-        )
+        return expected_locator is not None and locator == expected_locator
     if kind == "legacy_projector":
         return (
             provider_kind == "standalone_skill"
@@ -566,6 +569,57 @@ def _target_matches_plan_authority(
             and locator.get("owner") == harness
         )
     return False
+
+
+def _expected_selection_locator(
+    *,
+    kind: str,
+    harness: str,
+    operation: object,
+    provider: FrozenJsonObject,
+) -> FrozenJsonObject | None:
+    provider_kind = provider.get("kind")
+    if kind == "mcp_selection":
+        if provider_kind != "direct_mcp" or operation != "configure":
+            return None
+        server_name = provider.get("server_name")
+        coordinates = {
+            "claude": ("settings", "mcpServers"),
+            "codex": ("config", "mcp_servers"),
+            "cursor": ("config", "mcpServers"),
+        }.get(harness)
+        if type(server_name) is not str or coordinates is None:
+            return None
+        source, root = coordinates
+        expected = freeze_json(
+            {
+                "owner": harness,
+                "source": source,
+                "key_path": [root, server_name],
+            }
+        )
+        assert isinstance(expected, FrozenJsonObject)
+        return expected
+    if kind == "plugin_selection":
+        if (
+            provider_kind != "native_plugin"
+            or operation != "configure"
+            or harness != "claude"
+        ):
+            return None
+        plugin_id = provider.get("plugin_id")
+        if type(plugin_id) is not str:
+            return None
+        expected = freeze_json(
+            {
+                "owner": "claude",
+                "source": "settings",
+                "key_path": ["enabledPlugins", plugin_id],
+            }
+        )
+        assert isinstance(expected, FrozenJsonObject)
+        return expected
+    return None
 
 
 def _secret_references_match(payload: FrozenJsonObject) -> bool:
