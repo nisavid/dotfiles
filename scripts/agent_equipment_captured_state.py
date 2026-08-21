@@ -194,15 +194,21 @@ def plan_action_digest(action_payload: JsonObject) -> str:
 def write_target_identity(write_target: JsonObject) -> str:
     """Derive one physical write-target identity from its closed descriptor."""
 
-    identity_payload = {
-        key: value
-        for key, value in write_target.items()
-        if key != "target_identity"
+    descriptor = {
+        key: value for key, value in write_target.items() if key != "target_identity"
     }
     if not _has_write_target_shape(
-        {"target_identity": "target:sha256:" + "0" * 64, **identity_payload}
+        {"target_identity": "target:sha256:" + "0" * 64, **descriptor}
     ):
         raise ValueError("write target must use the closed v1 descriptor shape")
+    identity_payload = {
+        "surface_kind": write_target.get("surface_kind"),
+        "locator": write_target.get("locator"),
+    }
+    if "equipment_identity" in write_target:
+        identity_payload["equipment_identity"] = write_target.get(
+            "equipment_identity"
+        )
     return (
         "target:sha256:"
         f"{hashlib.sha256(_canonical_bytes(identity_payload)).hexdigest()}"

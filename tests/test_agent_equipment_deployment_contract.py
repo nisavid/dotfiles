@@ -62,6 +62,16 @@ def canonical_digest(value: object) -> str:
     return "sha256:" + hashlib.sha256(payload).hexdigest()
 
 
+def target_identity(target: dict[str, object]) -> str:
+    payload = {
+        "surface_kind": target["surface_kind"],
+        "locator": target["locator"],
+    }
+    if "equipment_identity" in target:
+        payload["equipment_identity"] = target["equipment_identity"]
+    return "target:" + canonical_digest(payload)
+
+
 def byte_digest(payload: bytes) -> str:
     return "sha256:" + hashlib.sha256(payload).hexdigest()
 
@@ -206,13 +216,7 @@ def valid_plan_action_set(action_count: int = 2) -> dict[str, object]:
                 target["write_surface_identity"] = skill_surface
                 target["equipment_identity"] = f"skill:fixture/example-{suffix}"
                 target["locator"]["path"] = f"~/.claude/skills/example-{suffix}"
-            target["target_identity"] = "target:" + canonical_digest(
-                {
-                    key: value
-                    for key, value in target.items()
-                    if key != "target_identity"
-                }
-            )
+            target["target_identity"] = target_identity(target)
         payload["write_targets"].sort(key=lambda target: target["target_identity"])
         payload["preconditions"]["route_digest"] = payload["route_digest"]
         payload["preconditions"]["activation_group"] = payload["activation_group"]
@@ -311,9 +315,7 @@ def valid_provider_family_plan_action_set(
             "route_identity": route_identity,
         }
     )
-    write_target["target_identity"] = "target:" + canonical_digest(
-        {key: value for key, value in write_target.items() if key != "target_identity"}
-    )
+    write_target["target_identity"] = target_identity(write_target)
     action.update(
         {
             "capability_identity": capability_identity,
@@ -1991,11 +1993,11 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
         # fixture. Regenerate both when that fixture changes.
         self.assertEqual(
             authorization["authorization_identity"],
-            "apply-authorization:sha256:176cc103aec3f22e4ed27afd0515740f7929ac507b4da72aa31045c8816dcc8d",
+            "apply-authorization:sha256:27b965fd807bb51dd8b5e769fdd952b4585b8e710fc316db45e913263acc5d0c",
         )
         self.assertEqual(
             trusted_digest,
-            "sha256:f9e9deff6a343b0ddb3f2dd49dc87cd0fa8fc773faccbc18208b4a48b12ac355",
+            "sha256:5515c29f55b2739ab39e98dfe87aef45b58399969d3a349f446e8928107dc2fd",
         )
 
         diagnostics = EXECUTION_AUTHORITY.validate_apply_authorization(

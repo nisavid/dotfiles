@@ -213,14 +213,16 @@ coverage.
 `surface_scope` retains the adapter contract's sorted logical surface
 identities. A separate closed `write_targets` set binds every logical identity
 to its exact physical target kind, applicable equipment identity, and
-secret-free locator. Derive each `target_identity` by canonicalizing that
-descriptor without `target_identity` and SHA-256 digesting it. Captured action
-references bind every target identity exactly once to one captured surface ID;
-the surface must match the target's kind, equipment, locator, route, route slot,
-and reconciler ownership. MCP and plugin selections always carry equipment
-identity in both the target and capture; the route-wide legacy projector does
-not. This preserves the authoritative adapter vocabulary
-without treating a capture-local record ID as plan authority.
+secret-free locator. Derive each `target_identity` by canonicalizing the target's
+kind, locator, and applicable equipment identity, then SHA-256 digesting that
+physical coordinate set. Exclude `write_surface_identity`; validate that logical
+binding separately. Captured action references bind every target identity
+exactly once to one captured surface ID; the surface must match the target's
+kind, equipment, locator, route, route slot, and reconciler ownership. MCP and
+plugin selections always carry equipment identity in both the target and
+capture; the route-wide legacy projector does not. This preserves the
+authoritative adapter vocabulary without treating a capture-local record ID as
+plan authority.
 
 The provider projection uses the same closed standalone-skill, native-plugin,
 and direct-MCP variants as the catalog. Direct-MCP arguments retain literals,

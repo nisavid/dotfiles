@@ -39,22 +39,22 @@
         ],
         "write_targets": [
           {
-            "target_identity": "target:sha256:49f1077c7da53464e95128bd0db26571dc3f7a27499daf326c6244bd6683e68b",
+            "target_identity": "target:sha256:4de5cb4117744ca11db80c4160c75f5885375c369f9a3c5875f759480a23487f",
+            "write_surface_identity": "surface:route:fixture/claude-plugin/skill:fixture/example",
+            "surface_kind": "claude_skill_entry",
+            "equipment_identity": "skill:fixture/example",
+            "locator": {
+              "path": "~/.claude/skills/example"
+            }
+          },
+          {
+            "target_identity": "target:sha256:538a207952e8740fbe46ac1556844ac754baa055d8de972e7fde436d6be04c5a",
             "write_surface_identity": "surface:route:fixture/claude-plugin/plugin:fixture/example",
             "surface_kind": "plugin_installation",
             "locator": {
               "manager": "claude",
               "native_identity": "example@fixture",
               "scope": "user"
-            }
-          },
-          {
-            "target_identity": "target:sha256:a0fb563ad0ccb7e62865f02dd6643574ce285ef7eced23e85c31d9ebec3541b7",
-            "write_surface_identity": "surface:route:fixture/claude-plugin/skill:fixture/example",
-            "surface_kind": "claude_skill_entry",
-            "equipment_identity": "skill:fixture/example",
-            "locator": {
-              "path": "~/.claude/skills/example"
             }
           }
         ],
@@ -102,8 +102,8 @@
           "captured_state_version": "agent-equipment-captured-state/v1"
         }
       },
-      "action_digest": "sha256:fcf1a7236d2e4f41dc1b427e74f8551ad1230a2362c3ed404e1f1cdd8d6091c2"
+      "action_digest": "sha256:4848ea6909780c3c2636d5b27689bceda0a3e65e8b145b7be5d6447115615e1c"
     }
   ],
-  "action_set_digest": "sha256:9bb22725fddc7dc0487f33b92c589b1ab2214b4632ee7ac3f958f5f49daeebb7"
+  "action_set_digest": "sha256:754e481a3c58351647538562742433fa334b96ed8c0f04147a4e0008812f5d54"
 }

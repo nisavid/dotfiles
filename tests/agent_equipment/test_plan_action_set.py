@@ -262,8 +262,14 @@ def _rebuild_plan_for_document(
 
 def _replace_target(target: dict[str, object], **changes: object) -> None:
     target.update(changes)
+    identity_payload = {
+        "surface_kind": target.get("surface_kind"),
+        "locator": target.get("locator"),
+    }
+    if "equipment_identity" in target:
+        identity_payload["equipment_identity"] = target.get("equipment_identity")
     target["target_identity"] = "target:" + canonical_json_sha256(
-        {key: value for key, value in target.items() if key != "target_identity"}
+        identity_payload
     )
 
 
@@ -566,7 +572,14 @@ def _surface_rule_plan_and_action_set(
     assert isinstance(targets, list)
     route_identity = str(payload["route_identity"])
     if rule == "route_identity":
-        targets = [targets[0]]
+        targets = [
+            next(
+                target
+                for target in targets
+                if isinstance(target, dict)
+                and target.get("surface_kind") == "plugin_installation"
+            )
+        ]
         payload["write_targets"] = targets
         payload["verification_dependencies"] = []
         surfaces = [f"surface:{route_identity}"]
@@ -637,6 +650,7 @@ def _legacy_projector_plan_and_action_set() -> tuple[ValidatedPlan, dict[str, ob
         "secret_references": [],
     }
     route_digest = canonical_json_sha256(route_record)
+    _set_operation_desired_state(payload, "configure", provider, [])
     payload.update(
         {
             "harness": "claude",
@@ -665,6 +679,8 @@ def _legacy_projector_plan_and_action_set() -> tuple[ValidatedPlan, dict[str, ob
         "controlled_equipment_identities",
         "surface_scope",
         "operation",
+        "desired_state",
+        "desired_state_digest",
         "secret_references",
     ):
         definition[field] = deepcopy(payload[field])
@@ -1031,7 +1047,14 @@ class PlanActionSetAdmissionTest(unittest.TestCase):
         assert isinstance(targets, list)
         assert isinstance(dependencies, list) and len(dependencies) == 1
 
-        second_target = deepcopy(targets[1])
+        second_target = deepcopy(
+            next(
+                target
+                for target in targets
+                if isinstance(target, dict)
+                and target.get("surface_kind") == "claude_skill_entry"
+            )
+        )
         assert isinstance(second_target, dict)
         second_surface = (
             "surface:route:fixture/claude-plugin/skill:fixture/other"
@@ -1201,6 +1224,53 @@ class PlanActionSetAdmissionTest(unittest.TestCase):
         )
         self.assertNotIn(canary, repr(secret_result))
 
+    def test_schema_pins_skill_roots_and_requires_nonempty_desired_state(
+        self,
+    ) -> None:
+        plan, original = _valid_plan_and_action_set()
+        cases: dict[str, dict[str, object]] = {}
+
+        unrooted_write = deepcopy(original)
+        write_payload = unrooted_write["actions"][0]["action_payload"]  # type: ignore[index]
+        write_target = next(
+            target
+            for target in write_payload["write_targets"]  # type: ignore[index]
+            if target["surface_kind"] == "claude_skill_entry"
+        )
+        write_target["locator"] = {"path": "example"}
+        cases["unrooted_write"] = unrooted_write
+
+        unrooted_dependency = deepcopy(original)
+        dependency_payload = unrooted_dependency["actions"][0][  # type: ignore[index]
+            "action_payload"
+        ]
+        dependency_payload["verification_dependencies"][0][  # type: ignore[index]
+            "target_locator"
+        ] = {"path": "example"}
+        cases["unrooted_dependency"] = unrooted_dependency
+
+        empty_desired_state = deepcopy(original)
+        empty_payload = empty_desired_state["actions"][0][  # type: ignore[index]
+            "action_payload"
+        ]
+        empty_payload["desired_state"] = {}
+        cases["empty_desired_state"] = empty_desired_state
+
+        for case, document in cases.items():
+            with self.subTest(case=case):
+                result = admit_plan_action_set(
+                    canonical_json_bytes(document),
+                    PlanActionSetTrust(
+                        validated_plan=plan,
+                        expected_action_set_digest=str(document["action_set_digest"]),
+                    ),
+                )
+
+                self.assertEqual(
+                    _diagnostic_codes(result),
+                    ("PLAN_ACTION_SET_SCHEMA_INVALID",),
+                )
+
     def test_coordinated_reseal_cannot_substitute_validated_action_authority(
         self,
     ) -> None:
@@ -1280,8 +1350,10 @@ class PlanActionSetAdmissionTest(unittest.TestCase):
         first = targets[0]
         assert isinstance(first, dict)
         first["target_identity"] = "target:sha256:" + "0" * 64
-        first["write_surface_identity"] = str(
-            payload["surface_scope"][1]  # type: ignore[index]
+        first["write_surface_identity"] = next(
+            str(surface)
+            for surface in payload["surface_scope"]  # type: ignore[union-attr]
+            if surface != first["write_surface_identity"]
         )
         _reseal(document)
 
@@ -1295,6 +1367,37 @@ class PlanActionSetAdmissionTest(unittest.TestCase):
 
         self.assertIn("PLAN_ACTION_TARGET_IDENTITY_INVALID", _diagnostic_codes(result))
         self.assertIn("PLAN_ACTION_TARGET_SCOPE_INVALID", _diagnostic_codes(result))
+
+    def test_logical_surface_relabel_does_not_change_physical_target_identity(
+        self,
+    ) -> None:
+        plan, document = _valid_plan_and_action_set()
+        fixed_trust = PlanActionSetTrust(
+            validated_plan=plan,
+            expected_action_set_digest=str(document["action_set_digest"]),
+        )
+        actions = document["actions"]
+        assert isinstance(actions, list)
+        evidence = actions[0]
+        assert isinstance(evidence, dict)
+        payload = evidence["action_payload"]
+        assert isinstance(payload, dict)
+        targets = payload["write_targets"]
+        assert isinstance(targets, list)
+        target = targets[0]
+        assert isinstance(target, dict)
+        original_identity = target["target_identity"]
+        target["write_surface_identity"] = "surface:route:fixture/relabelled"
+        _reseal_digest_fields_only(document)
+
+        result = admit_plan_action_set(canonical_json_bytes(document), fixed_trust)
+
+        self.assertEqual(target["target_identity"], original_identity)
+        self.assertNotIn(
+            "PLAN_ACTION_TARGET_IDENTITY_INVALID",
+            _diagnostic_codes(result),
+        )
+        self.assertIn("PLAN_ACTION_TARGET_BINDING_INVALID", _diagnostic_codes(result))
 
     def test_physical_targets_require_the_canonical_identity_order(self) -> None:
         plan, original = _valid_plan_and_action_set()
@@ -1363,14 +1466,7 @@ class PlanActionSetAdmissionTest(unittest.TestCase):
         second = targets[1]
         assert isinstance(second, dict)
         relabelled["write_surface_identity"] = second["write_surface_identity"]
-        relabelled_payload = {
-            key: value
-            for key, value in relabelled.items()
-            if key != "target_identity"
-        }
-        relabelled["target_identity"] = (
-            "target:" + canonical_json_sha256(relabelled_payload)
-        )
+        _replace_target(relabelled)
         targets.append(relabelled)
         _reseal_digest_fields_only(document)
 
@@ -1484,18 +1580,17 @@ class PlanActionSetAdmissionTest(unittest.TestCase):
         assert isinstance(payload, dict)
         targets = payload["write_targets"]
         assert isinstance(targets, list)
-        native_target = targets[0]
+        native_target = next(
+            target
+            for target in targets
+            if isinstance(target, dict)
+            and target.get("surface_kind") == "plugin_installation"
+        )
         assert isinstance(native_target, dict)
         locator = native_target["locator"]
         assert isinstance(locator, dict)
         locator["native_identity"] = "foreign@fixture"
-        native_target["target_identity"] = "target:" + canonical_json_sha256(
-            {
-                key: value
-                for key, value in native_target.items()
-                if key != "target_identity"
-            }
-        )
+        _replace_target(native_target)
         targets.sort(key=lambda target: str(target["target_identity"]))
         _reseal_digest_fields_only(document)
 
@@ -1509,16 +1604,26 @@ class PlanActionSetAdmissionTest(unittest.TestCase):
 
     def test_target_kind_equipment_manager_and_route_are_plan_bound(self) -> None:
         mutations = {
-            "kind": lambda targets: targets[0].__setitem__(
-                "surface_kind", "plugin_enablement"
-            ),
-            "equipment": lambda targets: targets[1].__setitem__(
-                "equipment_identity", "skill:fixture/foreign"
-            ),
-            "manager": lambda targets: targets[0]["locator"].__setitem__(
-                "manager", "cursor"
-            ),
-            "route": lambda targets: targets[1].__setitem__(
+            "kind": lambda targets: next(
+                target
+                for target in targets
+                if target["surface_kind"] == "plugin_installation"
+            ).__setitem__("surface_kind", "plugin_enablement"),
+            "equipment": lambda targets: next(
+                target
+                for target in targets
+                if target["surface_kind"] == "claude_skill_entry"
+            ).__setitem__("equipment_identity", "skill:fixture/foreign"),
+            "manager": lambda targets: next(
+                target
+                for target in targets
+                if target["surface_kind"] == "plugin_installation"
+            )["locator"].__setitem__("manager", "cursor"),
+            "route": lambda targets: next(
+                target
+                for target in targets
+                if target["surface_kind"] == "claude_skill_entry"
+            ).__setitem__(
                 "write_surface_identity",
                 "surface:route:fixture/foreign/skill:fixture/example",
             ),
@@ -1541,16 +1646,7 @@ class PlanActionSetAdmissionTest(unittest.TestCase):
                 mutate(targets)
                 for target in targets:
                     assert isinstance(target, dict)
-                    target["target_identity"] = (
-                        "target:"
-                        + canonical_json_sha256(
-                            {
-                                key: value
-                                for key, value in target.items()
-                                if key != "target_identity"
-                            }
-                        )
-                    )
+                    _replace_target(target)
                 targets.sort(key=lambda target: str(target["target_identity"]))
                 _reseal_digest_fields_only(document)
 
@@ -2165,9 +2261,9 @@ class PlanActionSetAdmissionTest(unittest.TestCase):
         result = admit_plan_action_set(canonical_json_bytes(document), trust)
 
         self.assertIsInstance(result, PlanActionSetRejection)
-        self.assertIn(
-            "PLAN_ACTION_TARGET_AUTHORITY_UNAVAILABLE",
+        self.assertEqual(
             _diagnostic_codes(result),
+            ("PLAN_ACTION_TARGET_AUTHORITY_UNAVAILABLE",),
         )
 
     def test_direct_constructor_recomputes_the_canonical_set_digest(self) -> None:

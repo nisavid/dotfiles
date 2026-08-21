@@ -8,7 +8,7 @@
     "catalog_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
     "lock_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
     "plan_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
-    "plan_action_set_digest": "sha256:9bb22725fddc7dc0487f33b92c589b1ab2214b4632ee7ac3f958f5f49daeebb7",
+    "plan_action_set_digest": "sha256:754e481a3c58351647538562742433fa334b96ed8c0f04147a4e0008812f5d54",
     "capability_bindings": [
       {
         "capability_identity": "capability:claude-native-plugin-v1",
@@ -38,15 +38,15 @@
       "planned_actions": [
         {
           "action_identity": "action:sha256:8b668d90aa623f6dcb459a029ee8af002d434a3a4ba3991c61c158a135268a35",
-          "action_digest": "sha256:fcf1a7236d2e4f41dc1b427e74f8551ad1230a2362c3ed404e1f1cdd8d6091c2",
+          "action_digest": "sha256:4848ea6909780c3c2636d5b27689bceda0a3e65e8b145b7be5d6447115615e1c",
           "write_bindings": [
             {
-              "target_identity": "target:sha256:49f1077c7da53464e95128bd0db26571dc3f7a27499daf326c6244bd6683e68b",
-              "surface_id": "surface:fixture/plugin-installation"
+              "target_identity": "target:sha256:4de5cb4117744ca11db80c4160c75f5885375c369f9a3c5875f759480a23487f",
+              "surface_id": "surface:fixture/claude-skill"
             },
             {
-              "target_identity": "target:sha256:a0fb563ad0ccb7e62865f02dd6643574ce285ef7eced23e85c31d9ebec3541b7",
-              "surface_id": "surface:fixture/claude-skill"
+              "target_identity": "target:sha256:538a207952e8740fbe46ac1556844ac754baa055d8de972e7fde436d6be04c5a",
+              "surface_id": "surface:fixture/plugin-installation"
             }
           ],
           "verification_dependency_bindings": [

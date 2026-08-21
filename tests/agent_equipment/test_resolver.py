@@ -618,15 +618,16 @@ def plan_action_set_for_configure(plan: ValidatedPlan) -> dict[str, object]:
             if surface.endswith(f"/{target_equipment}")
         )
     )
-    target_payload = {
-        "write_surface_identity": target_surface,
+    target_identity_payload = {
         "surface_kind": surface_kind,
         "equipment_identity": target_equipment,
         "locator": locator,
     }
     target = {
-        "target_identity": "target:" + canonical_json_sha256(target_payload),
-        **target_payload,
+        "target_identity": "target:"
+        + canonical_json_sha256(target_identity_payload),
+        "write_surface_identity": target_surface,
+        **target_identity_payload,
     }
     payload.update(
         {
