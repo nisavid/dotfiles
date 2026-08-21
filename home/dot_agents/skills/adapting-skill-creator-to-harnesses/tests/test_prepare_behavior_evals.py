@@ -36,6 +36,8 @@ class PrepareBehaviorEvalsTests(unittest.TestCase):
                             str(skill_dir),
                             "--workspace",
                             str(workspace),
+                            "--runs",
+                            "3",
                         ],
                         text=True,
                         capture_output=True,
@@ -46,12 +48,6 @@ class PrepareBehaviorEvalsTests(unittest.TestCase):
                     for evaluation in document["evals"]:
                         eval_dirs = list(workspace.glob(f"eval-{evaluation['id']}-*"))
                         self.assertEqual(len(eval_dirs), 1, eval_dirs)
-                        with_skill_prompt = (
-                            eval_dirs[0] / "with_skill" / "run-1" / "subagent_prompt.md"
-                        ).read_text(encoding="utf-8")
-                        without_skill_prompt = (
-                            eval_dirs[0] / "without_skill" / "run-1" / "subagent_prompt.md"
-                        ).read_text(encoding="utf-8")
                         metadata = json.loads(
                             (eval_dirs[0] / "eval_metadata.json").read_text(encoding="utf-8")
                         )
@@ -60,9 +56,24 @@ class PrepareBehaviorEvalsTests(unittest.TestCase):
                             (skill_dir / fixture_path).read_text(encoding="utf-8")
                             for fixture_path in evaluation["fixture_paths"]
                         )
-                        self.assertEqual(without_skill_prompt, "\n\n".join(execution_parts))
+                        expected_without_skill = "\n\n".join(execution_parts)
                         execution_parts.append((skill_dir / "SKILL.md").read_text(encoding="utf-8"))
-                        self.assertEqual(with_skill_prompt, "\n\n".join(execution_parts))
+                        expected_with_skill = "\n\n".join(execution_parts)
+                        for run_number in range(1, 4):
+                            with_skill_prompt = (
+                                eval_dirs[0]
+                                / "with_skill"
+                                / f"run-{run_number}"
+                                / "subagent_prompt.md"
+                            ).read_text(encoding="utf-8")
+                            without_skill_prompt = (
+                                eval_dirs[0]
+                                / "without_skill"
+                                / f"run-{run_number}"
+                                / "subagent_prompt.md"
+                            ).read_text(encoding="utf-8")
+                            self.assertEqual(without_skill_prompt, expected_without_skill)
+                            self.assertEqual(with_skill_prompt, expected_with_skill)
                         self.assertEqual(metadata["assertions"], evaluation["expectations"])
 
                     instructions = (workspace / "RUN_INSTRUCTIONS.md").read_text(encoding="utf-8")
@@ -128,6 +139,7 @@ class PrepareBehaviorEvalsTests(unittest.TestCase):
                         check=False,
                     )
                     self.assertNotEqual(result.returncode, 0, result.stdout or result.stderr)
+                    self.assertFalse(workspace.exists())
                     for prompt_path in workspace.glob("eval-*/**/subagent_prompt.md"):
                         self.assertNotIn(
                             "outside-content-sentinel", prompt_path.read_text(encoding="utf-8")

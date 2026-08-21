@@ -42,20 +42,24 @@ def read_scoped_text(skill_dir: Path, relative_path: str) -> str:
     return resolved.read_text(encoding="utf-8")
 
 
-def prompt_text(
+def prompt_variants(
     *,
     skill_dir: Path,
     eval_item: dict,
-    run_kind: str,
-) -> str:
+) -> dict[str, str]:
     prompt_parts = [eval_item["prompt"]]
     prompt_parts.extend(read_scoped_text(skill_dir, fixture_path) for fixture_path in eval_item["fixture_paths"])
-    if run_kind == "with_skill":
-        prompt_parts.append(read_scoped_text(skill_dir, "SKILL.md"))
-    return "\n\n".join(prompt_parts)
+    without_skill = "\n\n".join(prompt_parts)
+    with_skill = "\n\n".join([*prompt_parts, read_scoped_text(skill_dir, "SKILL.md")])
+    return {"with_skill": with_skill, "without_skill": without_skill}
 
 
-def write_eval(workspace: Path, skill_dir: Path, eval_item: dict, runs: int) -> None:
+def write_eval(
+    workspace: Path,
+    eval_item: dict,
+    runs: int,
+    prompts: dict[str, str],
+) -> None:
     eval_name = eval_item.get("name") or slugify(eval_item["prompt"])[:48]
     eval_dir = workspace / f"eval-{eval_item['id']}-{slugify(eval_name)}"
     eval_dir.mkdir(parents=True, exist_ok=True)
@@ -74,12 +78,7 @@ def write_eval(workspace: Path, skill_dir: Path, eval_item: dict, runs: int) -> 
             outputs_dir = run_dir / "outputs"
             outputs_dir.mkdir(parents=True, exist_ok=True)
             (run_dir / "eval_metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
-            prompt = prompt_text(
-                skill_dir=skill_dir,
-                eval_item=eval_item,
-                run_kind=run_kind,
-            )
-            (run_dir / "subagent_prompt.md").write_text(prompt)
+            (run_dir / "subagent_prompt.md").write_text(prompts[run_kind])
 
 
 def write_run_instructions(workspace: Path, skill_name: str) -> None:
@@ -134,10 +133,14 @@ def main() -> int:
     skill_dir = args.skill_dir.resolve()
     workspace = args.workspace.resolve()
     data = load_evals(skill_dir)
+    prepared_evals = [
+        (eval_item, prompt_variants(skill_dir=skill_dir, eval_item=eval_item))
+        for eval_item in data["evals"]
+    ]
     workspace.mkdir(parents=True, exist_ok=True)
 
-    for eval_item in data["evals"]:
-        write_eval(workspace, skill_dir, eval_item, args.runs)
+    for eval_item, prompts in prepared_evals:
+        write_eval(workspace, eval_item, args.runs, prompts)
 
     write_run_instructions(workspace, data["skill_name"])
     print(f"Prepared behavioral eval workspace: {workspace}")
