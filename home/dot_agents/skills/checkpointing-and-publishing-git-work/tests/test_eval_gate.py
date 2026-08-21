@@ -269,6 +269,7 @@ class RepoEvalSchemaConformanceTests(unittest.TestCase):
             workspace.mkdir()
             for eval_path in eval_paths:
                 with self.subTest(eval_path=eval_path.relative_to(REPO_ROOT)):
+                    document = json.loads(eval_path.read_text(encoding="utf-8"))
                     result = subprocess.run(
                         [
                             sys.executable,
@@ -286,9 +287,17 @@ class RepoEvalSchemaConformanceTests(unittest.TestCase):
                     )
                     self.assertEqual(result.returncode, 1, result.stdout or result.stderr)
                     payload = json.loads(result.stdout)
+                    self.assertEqual(
+                        {evaluation["id"] for evaluation in payload["evals"]},
+                        {evaluation["id"] for evaluation in document["evals"]},
+                        payload,
+                    )
                     self.assertTrue(payload["errors"])
                     self.assertTrue(
-                        any("evaluation path is not an isolated directory" in error for error in payload["errors"]),
+                        any(
+                            "evaluation path is not an isolated directory" in error
+                            for error in payload["errors"]
+                        ),
                         payload,
                     )
 
