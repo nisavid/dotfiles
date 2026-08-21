@@ -19,6 +19,32 @@ def shipped_eval_paths() -> list[Path]:
 
 
 class PrepareBehaviorEvalsTests(unittest.TestCase):
+    def test_rejects_nonpositive_run_counts_before_creating_workspace(self) -> None:
+        skill_dir = shipped_eval_paths()[0].parents[1]
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            for runs in (0, -1):
+                with self.subTest(runs=runs):
+                    workspace = Path(tempdir) / f"workspace-{runs}"
+                    result = subprocess.run(
+                        [
+                            sys.executable,
+                            str(PREPARER),
+                            "--skill-dir",
+                            str(skill_dir),
+                            "--workspace",
+                            str(workspace),
+                            "--runs",
+                            str(runs),
+                        ],
+                        text=True,
+                        capture_output=True,
+                        check=False,
+                    )
+
+                    self.assertNotEqual(result.returncode, 0, result.stdout or result.stderr)
+                    self.assertFalse(workspace.exists())
+
     def test_every_shipped_eval_file_scaffolds_isolated_execution_prompts(self) -> None:
         eval_paths = shipped_eval_paths()
         self.assertTrue(eval_paths, "repository must ship at least one behavior eval file")
