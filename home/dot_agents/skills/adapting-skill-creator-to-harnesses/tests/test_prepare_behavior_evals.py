@@ -19,6 +19,33 @@ def shipped_eval_paths() -> list[Path]:
 
 
 class PrepareBehaviorEvalsTests(unittest.TestCase):
+    def test_rejects_a_dangling_workspace_symlink(self) -> None:
+        skill_dir = shipped_eval_paths()[0].parents[1]
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            target = root / "outside-created"
+            workspace = root / "workspace-link"
+            workspace.symlink_to(target, target_is_directory=True)
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(PREPARER),
+                    "--skill-dir",
+                    str(skill_dir),
+                    "--workspace",
+                    str(workspace),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertNotEqual(result.returncode, 0, result.stdout or result.stderr)
+            self.assertTrue(workspace.is_symlink())
+            self.assertFalse(target.exists())
+
     def test_rejects_reusing_an_existing_workspace(self) -> None:
         skill_dir = shipped_eval_paths()[0].parents[1]
 
