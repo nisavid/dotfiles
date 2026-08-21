@@ -49,6 +49,16 @@ def _canonical_action_set_digest(document: FrozenJsonObject) -> str:
     )
 
 
+def _target_identity_payload(target: FrozenJsonObject) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "surface_kind": target.get("surface_kind"),
+        "locator": target.get("locator"),
+    }
+    if "equipment_identity" in target:
+        payload["equipment_identity"] = target.get("equipment_identity")
+    return payload
+
+
 @dataclass(frozen=True, slots=True)
 class PlanActionSetTrust:
     """Independently validated plan and expected complete projection digest."""
@@ -593,11 +603,8 @@ def _target_diagnostics(
     target_surfaces: list[str] = []
     for target in targets:
         assert isinstance(target, FrozenJsonObject)
-        target_payload = {
-            key: value for key, value in target.items() if key != "target_identity"
-        }
         if target.get("target_identity") != (
-            "target:" + canonical_json_sha256(target_payload)
+            "target:" + canonical_json_sha256(_target_identity_payload(target))
         ):
             diagnostics.append(
                 _action_diagnostic(
