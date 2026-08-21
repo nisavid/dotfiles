@@ -131,6 +131,8 @@ def main() -> int:
         help="Runs per configuration to scaffold",
     )
     args = parser.parse_args()
+    if args.runs <= 0:
+        parser.error("--runs must be greater than zero")
 
     skill_dir = args.skill_dir.resolve()
     workspace = args.workspace.resolve()
