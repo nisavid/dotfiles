@@ -30,40 +30,12 @@ def prompt_text(
     skill_dir: Path,
     eval_item: dict,
     run_kind: str,
-    outputs_dir: Path,
 ) -> str:
-    fixture_paths = eval_item["fixture_paths"]
-    file_lines = "\n".join(f"- {skill_dir / fixture_path}" for fixture_path in fixture_paths) or "- none"
-    expectations = "\n".join(f"- {expectation['text']}" for expectation in eval_item["expectations"])
-
+    prompt_parts = [eval_item["prompt"]]
+    prompt_parts.extend((skill_dir / fixture_path).read_text() for fixture_path in eval_item["fixture_paths"])
     if run_kind == "with_skill":
-        skill_line = f"- Skill path: {skill_dir}"
-        setup = "Read and apply the skill before answering."
-    else:
-        skill_line = "- Skill path: none"
-        setup = "Do not read or apply the skill. Answer from the prompt and files only."
-
-    return f"""Execute this skill behavioral eval.
-
-{skill_line}
-- Task: {eval_item["prompt"]}
-- Input files:
-{file_lines}
-- Save outputs to: {outputs_dir}
-- Outputs to save: `response.md` containing the final response or action trace.
-
-{setup}
-
-Do not run live git or GitHub commands. Treat the input files as the complete
-mock repository and PR state. If you would normally run a command, describe the
-command and the expected gate it checks instead.
-
-Expected behavior:
-{eval_item.get("expected_output", "")}
-
-Assertions the grader will check:
-{expectations}
-"""
+        prompt_parts.append((skill_dir / "SKILL.md").read_text())
+    return "\n\n".join(prompt_parts)
 
 
 def write_eval(workspace: Path, skill_dir: Path, eval_item: dict, runs: int) -> None:
@@ -89,7 +61,6 @@ def write_eval(workspace: Path, skill_dir: Path, eval_item: dict, runs: int) -> 
                 skill_dir=skill_dir,
                 eval_item=eval_item,
                 run_kind=run_kind,
-                outputs_dir=outputs_dir,
             )
             (run_dir / "subagent_prompt.md").write_text(prompt)
 
