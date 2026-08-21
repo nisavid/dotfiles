@@ -599,6 +599,7 @@ case $1 in
     esac
     record_stage 'item:ready'
     print -r -- "$5" >> "$FAKE_PASS_LOG"
+    [[ ! -e $FAKE_PASS_ITEM_EXIT_124 ]] || exit 124
     if [[ -e $FAKE_PASS_ITEM_DESCENDANT ]]; then
       print -r -- 'context7-canary'
       (
@@ -748,6 +749,7 @@ export FAKE_PASS_LOGIN_DELAY=$test_dir/provider-login-delay
 export FAKE_SECRET_TOOL_LOG=$test_dir/secret-tool-requests.log
 export FAKE_NATIVE_STORE_LOCKED=$test_dir/native-store-locked
 export FAKE_PASS_ITEM_DESCENDANT=$test_dir/pass-item-descendant
+export FAKE_PASS_ITEM_EXIT_124=$test_dir/pass-item-exit-124
 export FAKE_SECRET_LOOKUP_HANG=$test_dir/secret-lookup-hang
 export FAKE_RESOLUTION_CHILD_PID=$test_dir/resolution-child.pid
 export HOSTILE_UNAME_MARKER=$test_dir/hostile-uname-ran
@@ -809,6 +811,20 @@ fi
   fail 'the launcher must retrieve only the selected profile'
 
 export TARGET_MARKER=$test_dir/target-ran
+rm -f -- "$TARGET_MARKER"
+: > "$FAKE_PASS_ITEM_EXIT_124"
+set +e
+item_exit_124_output=$(zsh "$launcher" context7 -- mark-target 2>&1)
+item_exit_124_status=$?
+set -e
+rm -f -- "$FAKE_PASS_ITEM_EXIT_124"
+(( item_exit_124_status != 0 )) ||
+  fail 'a provider-reported status 124 must fail resolution'
+[[ $item_exit_124_output == 'secret-exec: failed to resolve CONTEXT7_API_KEY' ]] ||
+  fail 'a provider-reported status 124 must not be mislabeled as a timeout'
+[[ ! -e $TARGET_MARKER ]] ||
+  fail 'a provider-reported status 124 must not start the consumer'
+
 rm -f -- "$TARGET_MARKER" "$FAKE_RESOLUTION_CHILD_PID"
 : > "$FAKE_PASS_ITEM_DESCENDANT"
 test_process_fixture_track_pid_file "$FAKE_RESOLUTION_CHILD_PID"
