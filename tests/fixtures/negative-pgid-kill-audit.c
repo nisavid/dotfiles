@@ -40,12 +40,6 @@ static void remember_absent_group(pid_t target) {
   absent_groups[absent_group_count++] = target;
 }
 
-void negative_pgid_kill_audit_remember_absent(pid_t target) {
-  if (target < -1) {
-    remember_absent_group(target);
-  }
-}
-
 static bool process_was_absent(pid_t target) {
   size_t index;
 
@@ -100,7 +94,7 @@ static void record_stale_signal(const char *environment_name,
   descriptor = open(path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC | O_NOFOLLOW,
                     0600);
   if (descriptor < 0) {
-    return;
+    _exit(AUDIT_WRITE_FAILURE_EXIT);
   }
   length = snprintf(record, sizeof(record),
                     "stale-%s-signal target=%ld signal=%d\n", identity_kind,
