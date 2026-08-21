@@ -28,6 +28,7 @@ MANIFEST_PATHS = (
     "lib/agent-equipment/agent_equipment/__init__.py",
     "lib/agent-equipment/agent_equipment/_json_schema.py",
     "lib/agent-equipment/agent_equipment/authoring.py",
+    "lib/agent-equipment/agent_equipment/authorization.py",
     "lib/agent-equipment/agent_equipment/canonical.py",
     "lib/agent-equipment/agent_equipment/discovery.py",
     "lib/agent-equipment/agent_equipment/inventory.py",

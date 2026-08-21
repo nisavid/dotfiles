@@ -22,6 +22,7 @@ PACKAGE_NAMES = (
     "__init__.py",
     "_json_schema.py",
     "authoring.py",
+    "authorization.py",
     "canonical.py",
     "discovery.py",
     "inventory.py",
