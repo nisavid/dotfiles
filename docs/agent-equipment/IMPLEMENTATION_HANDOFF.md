@@ -135,6 +135,7 @@ home/private_dot_local/lib/agent-equipment/agent_equipment/discovery.py
 home/private_dot_local/lib/agent-equipment/agent_equipment/authoring.py
 home/private_dot_local/lib/agent-equipment/agent_equipment/source_resolution.py
 home/private_dot_local/lib/agent-equipment/agent_equipment/updater.py
+home/private_dot_local/lib/agent-equipment/agent_equipment/plan_action_set.py
 home/private_dot_local/lib/agent-equipment/agent_equipment/checkpoint.py
 home/private_dot_local/lib/agent-equipment/agent_equipment/authorization.py
 home/private_dot_local/lib/agent-equipment/agent_equipment/executor.py
