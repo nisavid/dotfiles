@@ -168,8 +168,7 @@ their newlines are not reader-visible breaks. A blank line separates block
 elements as usual.
 
 This file, the fixtures under `evals/`, and the diffs you read are repository
-files wrapped to the `.editorconfig` column budget. Their shape is correct for
-them and is not a model for the body.
+files; however they are wrapped, their shape is not a model for the body.
 
 ## Preservation
 

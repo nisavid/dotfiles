@@ -23,9 +23,9 @@ title and body supplied to it. Generated `--fill` text is never a substitute.
 GitHub renders a body as a comment field, where a source newline in prose
 becomes a visible line break. Write each paragraph, list item, table row, and
 blockquote line as one source line, however long it runs, and write an intended
-break as `<br>`. The `.editorconfig` column budget governs repository files,
-including this skill and the fixtures and diffs you read; a body is not one of
-them.
+break as `<br>`. A repository column budget, such as `.editorconfig`'s
+`max_line_length`, governs repository files; a body is not one of them, and
+prose you read wrapped to a budget is not a model for it.
 
 ## Routing
 
@@ -66,22 +66,11 @@ them.
      /absolute/path/to/pr-body.md
    ```
 
-   Validation covers source line breaks. Check or repair a body that carries
-   repository wrapping instead of rewriting it by hand:
-
-   ```bash
-   python3 "$HOME/.agents/skills/writing-reviewable-pr-descriptions/scripts/unwrap_pr_body.py" \
-     --check /absolute/path/to/pr-body.md
-   ```
-
-   `--in-place` repairs what `--check` reports.
-
    A chat-only draft with no existing PR has no PR number for this
    identity-bound validation. Build its disclosure links with the publisher's
    literal PR-number placeholder token, never an invented number that renders
-   a live-looking URL. Source line breaks carry no identity, so run `--check`
-   on that draft too. Deliver it unvalidated for navigation with those links
-   marked inert, and require publication to substitute the assigned
+   a live-looking URL. Deliver the draft explicitly unvalidated with those
+   links marked inert, and require publication to substitute the assigned
    number and rerun this validation before treating the stored body as
    reviewer-ready.
 
