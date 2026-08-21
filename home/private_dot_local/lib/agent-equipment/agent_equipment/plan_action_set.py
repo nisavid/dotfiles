@@ -399,6 +399,7 @@ def _matches_validated_plan(
         and isinstance(route, FrozenJsonObject)
         and definition.get("route_digest") == canonical_json_sha256(route)
         and _route_owned_fields_match(definition, route)
+        and _desired_state_matches_route(payload, route)
         and _surface_scope_matches_plan_authority(definition)
         and payload.get("provider") == route.get("provider")
     )
@@ -432,6 +433,50 @@ def _route_owned_fields_match(
         and len(control_identities) == len(set(control_identities))
         and tuple(sorted(control_identities)) == controlled
     )
+
+
+def _desired_state_matches_route(
+    payload: FrozenJsonObject,
+    route: FrozenJsonObject,
+) -> bool:
+    operation = payload.get("operation")
+    if operation == "configure":
+        provider = route.get("provider")
+        controls = route.get("component_controls")
+        if not isinstance(provider, FrozenJsonObject) or not isinstance(controls, tuple):
+            return False
+        typed_controls: list[FrozenJsonObject] = []
+        for control in controls:
+            if not isinstance(control, FrozenJsonObject):
+                return False
+            typed_controls.append(control)
+        desired_state: dict[str, object] = {
+            "configuration": {
+                "status": "desired",
+                "digest": canonical_json_sha256(
+                    {"provider": provider, "component_controls": controls}
+                ),
+            }
+        }
+        if typed_controls:
+            typed_controls.sort(
+                key=_component_control_identity,
+            )
+            desired_state["component_states"] = tuple(typed_controls)
+    else:
+        operation_states: dict[str, dict[str, object]] = {
+            "install": {"route_presence": "present"},
+            "enable": {"enablement": "enabled"},
+            "disable": {"enablement": "disabled"},
+            "remove": {"route_presence": "absent"},
+            "restore": {"route_presence": "present"},
+        }
+        desired_state = operation_states.get(str(operation), {})
+    return payload.get("desired_state") == freeze_json(desired_state)
+
+
+def _component_control_identity(control: FrozenJsonObject) -> str:
+    return str(control.get("equipment_identity"))
 
 
 def _surface_scope_matches_plan_authority(definition: FrozenJsonObject) -> bool:
@@ -764,7 +809,7 @@ def _expected_selection_locator(
         if (
             provider_kind != "native_plugin"
             or operation != "configure"
-            or harness != "claude"
+            or harness != "codex"
         ):
             return None
         plugin_id = provider.get("plugin_id")
@@ -772,9 +817,9 @@ def _expected_selection_locator(
             return None
         expected = freeze_json(
             {
-                "owner": "claude",
-                "source": "settings",
-                "key_path": ["enabledPlugins", plugin_id],
+                "owner": "codex",
+                "source": "config",
+                "key_path": ["plugins", plugin_id],
             }
         )
         assert isinstance(expected, FrozenJsonObject)
