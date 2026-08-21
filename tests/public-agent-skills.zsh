@@ -86,6 +86,7 @@ test_context7() {
 
 test_git_publication() {
   local skill_dir="$repo_dir/home/dot_agents/skills/checkpointing-and-publishing-git-work"
+  local adapter_dir="$repo_dir/home/dot_agents/skills/adapting-skill-creator-to-harnesses"
   local skill="$skill_dir/SKILL.md"
   local metadata="$skill_dir/agents/openai.yaml"
   local link="$repo_dir/home/dot_claude/skills/symlink_checkpointing-and-publishing-git-work"
@@ -164,6 +165,7 @@ test_git_publication() {
   done
   assert_contains "$skill" 'only the raw prompt and fixture' 'Git publication eval instructions must prevent answer leakage'
 
+  python3 -m unittest discover -s "$adapter_dir/tests" -p 'test_*.py'
   python3 -m unittest discover -s "$skill_dir/tests" -p 'test_*.py'
 }
 
