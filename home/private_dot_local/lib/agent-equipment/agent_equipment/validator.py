@@ -507,17 +507,37 @@ def _validate_adapter_contract_document(
         return False
     if type(document) is not dict or document.get("record_type") != record_type:
         return False
-    schemas = _ADAPTER_CONTRACT_SCHEMA_DOCUMENTS
-    if schemas is None:
+    return _validate_captured_schema_document(
+        document,
+        root_schema_name="adapter-contract-v1.schema.json",
+    )
+
+
+def _validate_captured_schema_document(
+    document: object,
+    *,
+    root_schema_name: str,
+) -> bool:
+    """Validate through the one import-time captured, digest-pinned Schema set."""
+
+    allowed_by_root = {
+        "adapter-contract-v1.schema.json": {
+            "adapter-contract-v1.schema.json",
+            "catalog-v1.schema.json",
+        },
+        "plan-action-set-v1.schema.json": {
+            "plan-action-set-v1.schema.json",
+        },
+    }
+    allowed = allowed_by_root.get(root_schema_name)
+    schemas = _CAPTURED_SCHEMA_DOCUMENTS
+    if allowed is None or schemas is None:
         return False
     return _validate_schema(
         document,
         schema_directory=SCHEMA_DIRECTORY,
-        root_schema_name="adapter-contract-v1.schema.json",
-        allowed_schema_names={
-            "adapter-contract-v1.schema.json",
-            "catalog-v1.schema.json",
-        },
+        root_schema_name=root_schema_name,
+        allowed_schema_names=allowed,
         schema_documents=schemas,
     )
 
@@ -656,7 +676,7 @@ def _installed_schema_documents() -> dict[str, dict[str, Any]] | None:
     return _trusted_schema_documents(SCHEMA_DIRECTORY)
 
 
-_ADAPTER_CONTRACT_SCHEMA_DOCUMENTS = _installed_schema_documents()
+_CAPTURED_SCHEMA_DOCUMENTS = _installed_schema_documents()
 
 
 def _schema_manifest_failure() -> CatalogLockValidation:

@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TypeAlias
 
-from ._json_schema import validate_document
 from .canonical import (
     canonical_json_bytes,
     canonical_json_sha256,
@@ -22,10 +20,10 @@ from .model import (
     thaw_json,
 )
 from .secrets import contains_literal_credential
+from .validator import _validate_captured_schema_document
 
 MAX_PLAN_ACTION_SET_BYTES = 16 * 1024 * 1024
 _SCHEMA_NAME = "plan-action-set-v1.schema.json"
-_SCHEMA_DIRECTORY = Path(__file__).resolve().parent.parent / "schemas"
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 
 
@@ -125,11 +123,9 @@ def admit_plan_action_set(
             "The plan-action set does not satisfy the checked-in closed schema.",
         )
     mutable_document = thaw_json(document)
-    if type(mutable_document) is not dict or not validate_document(
+    if type(mutable_document) is not dict or not _validate_captured_schema_document(
         mutable_document,
-        schema_directory=_SCHEMA_DIRECTORY,
         root_schema_name=_SCHEMA_NAME,
-        allowed_schema_names=(_SCHEMA_NAME,),
     ):
         return _rejection(
             "PLAN_ACTION_SET_SCHEMA_INVALID",
@@ -174,10 +170,31 @@ def _semantic_diagnostics(
             )
         )
 
+    plan_tuple_fields = (
+        "candidate_identity",
+        "implementation_manifest_digest",
+        "catalog_digest",
+        "lock_digest",
+    )
+    expected_plan_tuple = {
+        field: preimage.get(field) for field in plan_tuple_fields
+    }
+    mutation_nodes = tuple(node for node in plan.nodes if node.kind == "mutation")
+    if any(
+        node.definition.get(field) != value
+        for node in mutation_nodes
+        for field, value in expected_plan_tuple.items()
+    ):
+        diagnostics.append(
+            _diagnostic(
+                "PLAN_ACTION_SET_PLAN_BINDING_INVALID",
+                "Validated mutation authority disagrees with its plan preimage tuple.",
+            )
+        )
+
     actions = document.get("actions")
     assert isinstance(actions, tuple)
     typed_actions: list[FrozenJsonObject] = []
-    mutation_nodes = tuple(node for node in plan.nodes if node.kind == "mutation")
     coordinates: list[tuple[int, str]] = []
     physical_targets: set[bytes] = set()
     for index, evidence in enumerate(actions):
@@ -189,6 +206,19 @@ def _semantic_diagnostics(
         ordinal = payload.get("ordinal")
         if type(identity) is str and type(ordinal) is int:
             coordinates.append((ordinal, identity))
+        if (
+            payload.get("plan_digest") != plan.digest
+            or any(
+                payload.get(field) != value
+                for field, value in expected_plan_tuple.items()
+            )
+        ):
+            diagnostics.append(
+                _diagnostic(
+                    "PLAN_ACTION_SET_PLAN_BINDING_INVALID",
+                    "A plan action disagrees with the complete trusted plan tuple.",
+                )
+            )
 
         if evidence.get("action_digest") != canonical_json_sha256(payload):
             diagnostics.append(
@@ -227,7 +257,10 @@ def _semantic_diagnostics(
                     "A plan action precondition does not repeat its proven authority.",
                 )
             )
-        target_diagnostics, target_keys = _target_diagnostics(payload)
+        target_diagnostics, target_keys = _target_diagnostics(
+            payload,
+            node.definition if node else None,
+        )
         diagnostics.extend(target_diagnostics)
         for target_key in target_keys:
             if target_key in physical_targets:
@@ -368,6 +401,7 @@ def _preconditions_match(
 
 def _target_diagnostics(
     payload: FrozenJsonObject,
+    definition: FrozenJsonObject | None,
 ) -> tuple[list[Diagnostic], tuple[bytes, ...]]:
     targets = payload.get("write_targets")
     surface_scope = payload.get("surface_scope")
@@ -401,6 +435,13 @@ def _target_diagnostics(
                 }
             )
         )
+        if not _target_matches_plan_authority(target, payload, definition):
+            diagnostics.append(
+                _diagnostic(
+                    "PLAN_ACTION_TARGET_BINDING_INVALID",
+                    "A physical write target is foreign to its validated route authority.",
+                )
+            )
     if target_identities != sorted(set(target_identities)):
         diagnostics.append(
             _diagnostic(
@@ -416,6 +457,115 @@ def _target_diagnostics(
             )
         )
     return diagnostics, tuple(target_keys)
+
+
+def _target_matches_plan_authority(
+    target: FrozenJsonObject,
+    payload: FrozenJsonObject,
+    definition: FrozenJsonObject | None,
+) -> bool:
+    if definition is None:
+        return False
+    route = definition.get("route_record")
+    provider = route.get("provider") if isinstance(route, FrozenJsonObject) else None
+    locator = target.get("locator")
+    surface = target.get("write_surface_identity")
+    kind = target.get("surface_kind")
+    route_identity = payload.get("route_identity")
+    harness = payload.get("harness")
+    equipment = target.get("equipment_identity")
+    active = payload.get("equipment_identities")
+    controlled = payload.get("controlled_equipment_identities")
+    if (
+        not isinstance(provider, FrozenJsonObject)
+        or not isinstance(locator, FrozenJsonObject)
+        or type(surface) is not str
+        or type(kind) is not str
+        or type(route_identity) is not str
+        or type(harness) is not str
+        or not isinstance(active, tuple)
+        or not isinstance(controlled, tuple)
+    ):
+        return False
+    authoritative_equipment = set(active) | set(controlled)
+    if surface.startswith("surface:route:") and not surface.startswith(
+        f"surface:{route_identity}/"
+    ):
+        return False
+    if type(equipment) is str and (
+        equipment not in authoritative_equipment
+        or not surface.endswith(f"/{equipment}")
+    ):
+        return False
+
+    provider_kind = provider.get("kind")
+    if kind in {"plugin_installation", "plugin_enablement"}:
+        operation = payload.get("operation")
+        expected_kind = {
+            "install": "plugin_installation",
+            "remove": "plugin_installation",
+            "enable": "plugin_enablement",
+            "disable": "plugin_enablement",
+        }.get(operation) if type(operation) is str else None
+        plugin_equipment = tuple(
+            identity
+            for identity in authoritative_equipment
+            if type(identity) is str and identity.startswith("plugin:")
+        )
+        return (
+            provider_kind == "native_plugin"
+            and kind == expected_kind
+            and equipment is None
+            and harness == provider.get("manager")
+            and locator
+            == freeze_json(
+                {
+                    "manager": provider.get("manager"),
+                    "native_identity": provider.get("plugin_id"),
+                    "scope": provider.get("scope"),
+                }
+            )
+            and len(plugin_equipment) == 1
+            and surface.endswith(f"/{plugin_equipment[0]}")
+        )
+    if kind == "claude_skill_entry":
+        path = locator.get("path")
+        return (
+            provider_kind in {"native_plugin", "standalone_skill"}
+            and harness == "claude"
+            and type(equipment) is str
+            and equipment.startswith("skill:")
+            and type(path) is str
+            and path.removeprefix("~/.claude/skills/")
+            == equipment.rsplit("/", 1)[-1]
+        )
+    if kind in {"mcp_selection", "plugin_selection"}:
+        key_path = locator.get("key_path")
+        expected_prefix = "mcp:" if kind == "mcp_selection" else "plugin:"
+        if (
+            type(equipment) is not str
+            or not equipment.startswith(expected_prefix)
+            or locator.get("owner") != harness
+            or not isinstance(key_path, tuple)
+            or not key_path
+        ):
+            return False
+        terminal = key_path[-1]
+        expected_terminal = (
+            provider.get("server_name")
+            if kind == "mcp_selection" and provider_kind == "direct_mcp"
+            else equipment.rsplit("/", 1)[-1]
+        )
+        return terminal == expected_terminal and (
+            provider_kind != "direct_mcp" or kind == "mcp_selection"
+        )
+    if kind == "legacy_projector":
+        return (
+            provider_kind == "standalone_skill"
+            and equipment is None
+            and locator.get("owner") == harness
+        )
+    return False
 
 
 def _secret_references_match(payload: FrozenJsonObject) -> bool:
@@ -458,6 +608,7 @@ def _verification_dependencies_match(payload: FrozenJsonObject) -> bool:
     if not isinstance(dependencies, tuple) or not isinstance(targets, tuple):
         return False
     target_by_surface: dict[str, FrozenJsonObject] = {}
+    claude_target_surfaces: set[str] = set()
     for target in targets:
         if not isinstance(target, FrozenJsonObject):
             return False
@@ -465,6 +616,8 @@ def _verification_dependencies_match(payload: FrozenJsonObject) -> bool:
         if type(surface) is not str or surface in target_by_surface:
             return False
         target_by_surface[surface] = target
+        if target.get("surface_kind") == "claude_skill_entry":
+            claude_target_surfaces.add(surface)
     claimed_surfaces: set[str] = set()
     canonical_dependencies: list[bytes] = []
     for dependency in dependencies:
@@ -498,7 +651,10 @@ def _verification_dependencies_match(payload: FrozenJsonObject) -> bool:
             != dependency_path.removeprefix("~/.agents/skills/")
         ):
             return False
-    return canonical_dependencies == sorted(set(canonical_dependencies))
+    return (
+        claimed_surfaces == claude_target_surfaces
+        and canonical_dependencies == sorted(set(canonical_dependencies))
+    )
 
 
 def _action_identity(payload: FrozenJsonObject) -> str:
