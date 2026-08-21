@@ -429,6 +429,83 @@ def _claude_skill_plan_and_action_set(
     return _rebuild_plan_for_document(plan, document, definition), document
 
 
+def _native_plugin_plan_and_action_set(
+    manager: str,
+    operation: str,
+) -> tuple[ValidatedPlan, dict[str, object]]:
+    plan, document = _valid_plan_and_action_set()
+    actions = document["actions"]
+    assert isinstance(actions, list)
+    evidence = actions[0]
+    assert isinstance(evidence, dict)
+    payload = evidence["action_payload"]
+    assert isinstance(payload, dict)
+    provider = {
+        "kind": "native_plugin",
+        "manager": manager,
+        "plugin_id": "example@fixture",
+        "scope": "user",
+    }
+    route_identity = f"route:fixture/{manager}-native-plugin"
+    surface = f"surface:{route_identity}/plugin:fixture/example"
+    target = {
+        "target_identity": "",
+        "write_surface_identity": surface,
+        "surface_kind": (
+            "plugin_enablement"
+            if operation in {"enable", "disable"}
+            else "plugin_installation"
+        ),
+        "locator": {
+            "manager": manager,
+            "native_identity": "example@fixture",
+            "scope": "user",
+        },
+    }
+    _replace_target(target)
+    route_record = {
+        "provider": provider,
+        "control_owner": "reconciler_owned",
+        "activation_group": payload["activation_group"],
+        "component_controls": [],
+        "secret_references": [],
+    }
+    route_digest = canonical_json_sha256(route_record)
+    payload.update(
+        {
+            "harness": manager,
+            "provider": provider,
+            "route_identity": route_identity,
+            "route_digest": route_digest,
+            "equipment_identities": ["plugin:fixture/example"],
+            "controlled_equipment_identities": [],
+            "surface_scope": [surface],
+            "write_targets": [target],
+            "operation": operation,
+            "secret_references": [],
+            "verification_dependencies": [],
+        }
+    )
+    preconditions = payload["preconditions"]
+    assert isinstance(preconditions, dict)
+    preconditions.update({"route_digest": route_digest, "surface_scope": [surface]})
+    definition = thaw_json(plan.nodes[0].definition)
+    assert isinstance(definition, dict)
+    for field in (
+        "harness",
+        "route_identity",
+        "route_digest",
+        "equipment_identities",
+        "controlled_equipment_identities",
+        "surface_scope",
+        "operation",
+        "secret_references",
+    ):
+        definition[field] = deepcopy(payload[field])
+    definition["route_record"] = route_record
+    return _rebuild_plan_for_document(plan, document, definition), document
+
+
 def _surface_rule_plan_and_action_set(
     rule: str,
 ) -> tuple[ValidatedPlan, dict[str, object]]:
@@ -655,6 +732,39 @@ def _plan_with_foreign_route_field(
     assert isinstance(evidence, dict)
     payload = evidence["action_payload"]
     assert isinstance(payload, dict)
+    payload["route_digest"] = route_digest
+    preconditions = payload["preconditions"]
+    assert isinstance(preconditions, dict)
+    preconditions["route_digest"] = route_digest
+    return _rebuild_plan_for_document(plan, document, definition), document
+
+
+def _plan_with_component_controls(
+    controls: list[dict[str, object]],
+) -> tuple[ValidatedPlan, dict[str, object]]:
+    plan, document = _surface_rule_plan_and_action_set("route_identity")
+    definition = thaw_json(plan.nodes[0].definition)
+    assert isinstance(definition, dict)
+    route_record = definition["route_record"]
+    assert isinstance(route_record, dict)
+    route_record["component_controls"] = deepcopy(controls)
+    identities = sorted(
+        {
+            str(control["equipment_identity"])
+            for control in controls
+            if "equipment_identity" in control
+        }
+    )
+    definition["controlled_equipment_identities"] = identities
+    route_digest = canonical_json_sha256(route_record)
+    definition["route_digest"] = route_digest
+    actions = document["actions"]
+    assert isinstance(actions, list)
+    evidence = actions[0]
+    assert isinstance(evidence, dict)
+    payload = evidence["action_payload"]
+    assert isinstance(payload, dict)
+    payload["controlled_equipment_identities"] = identities
     payload["route_digest"] = route_digest
     preconditions = payload["preconditions"]
     assert isinstance(preconditions, dict)
@@ -1461,6 +1571,73 @@ class PlanActionSetAdmissionTest(unittest.TestCase):
                                 _diagnostic_codes(result),
                             )
 
+    def test_native_plugin_target_operation_matrix_is_manager_specific(
+        self,
+    ) -> None:
+        automated_operations = {
+            "claude": {"install", "enable", "disable"},
+            "codex": {"install", "enable", "disable"},
+            "cursor": set(),
+        }
+        operations = (
+            "install",
+            "configure",
+            "enable",
+            "disable",
+            "remove",
+            "restore",
+        )
+        for manager, automated in automated_operations.items():
+            for operation in operations:
+                with self.subTest(manager=manager, operation=operation):
+                    plan, document = _native_plugin_plan_and_action_set(
+                        manager, operation
+                    )
+                    result = admit_plan_action_set(
+                        canonical_json_bytes(document),
+                        PlanActionSetTrust(
+                            validated_plan=plan,
+                            expected_action_set_digest=str(
+                                document["action_set_digest"]
+                            ),
+                        ),
+                    )
+                    if operation in automated:
+                        self.assertIsInstance(result, AdmittedPlanActionSet)
+                    else:
+                        self.assertIsInstance(result, PlanActionSetRejection)
+                        self.assertIn(
+                            "PLAN_ACTION_TARGET_BINDING_INVALID",
+                            _diagnostic_codes(result),
+                        )
+
+        for disposition in ("operator_action", "unavailable"):
+            with self.subTest(disposition=disposition):
+                plan, document = _native_plugin_plan_and_action_set(
+                    "claude", "install"
+                )
+                original_digest = str(document["action_set_digest"])
+                actions = document["actions"]
+                assert isinstance(actions, list)
+                evidence = actions[0]
+                assert isinstance(evidence, dict)
+                payload = evidence["action_payload"]
+                assert isinstance(payload, dict)
+                payload["operation_disposition"] = disposition
+                _reseal_digest_fields_only(document)
+                result = admit_plan_action_set(
+                    canonical_json_bytes(document),
+                    PlanActionSetTrust(
+                        validated_plan=plan,
+                        expected_action_set_digest=original_digest,
+                    ),
+                )
+                self.assertIsInstance(result, PlanActionSetRejection)
+                self.assertIn(
+                    "PLAN_ACTION_SET_SCHEMA_INVALID",
+                    _diagnostic_codes(result),
+                )
+
     def test_direct_mcp_route_only_surface_admits_equipment_target(self) -> None:
         plan, document = _direct_mcp_plan_and_action_set(
             "codex", surface_rule="route_identity"
@@ -1511,6 +1688,62 @@ class PlanActionSetAdmissionTest(unittest.TestCase):
 
                 result = admit_plan_action_set(
                     canonical_json_bytes(document), trust
+                )
+
+                self.assertIsInstance(result, PlanActionSetRejection)
+                self.assertIn(
+                    "PLAN_ACTION_SET_MEMBERSHIP_INVALID",
+                    _diagnostic_codes(result),
+                )
+
+    def test_component_controls_are_closed_unique_and_order_independent(
+        self,
+    ) -> None:
+        unsorted_controls = [
+            {"equipment_identity": "skill:fixture/example", "state": "disabled"},
+            {"equipment_identity": "plugin:fixture/example", "state": "enabled"},
+        ]
+        with self.subTest(case="unsorted_valid"):
+            plan, document = _plan_with_component_controls(unsorted_controls)
+            valid_result = admit_plan_action_set(
+                canonical_json_bytes(document),
+                PlanActionSetTrust(
+                    validated_plan=plan,
+                    expected_action_set_digest=str(document["action_set_digest"]),
+                ),
+            )
+            self.assertIsInstance(valid_result, AdmittedPlanActionSet)
+
+        invalid_controls = {
+            "duplicate": [unsorted_controls[0], deepcopy(unsorted_controls[0])],
+            "invalid_state": [
+                {
+                    "equipment_identity": "skill:fixture/example",
+                    "state": "attacker",
+                }
+            ],
+            "extra_member": [
+                {
+                    "equipment_identity": "skill:fixture/example",
+                    "state": "enabled",
+                    "attacker": True,
+                }
+            ],
+        }
+        for case, controls in invalid_controls.items():
+            with self.subTest(case=case):
+                invalid_plan, invalid_document = _plan_with_component_controls(
+                    controls
+                )
+                fixed_trust = PlanActionSetTrust(
+                    validated_plan=invalid_plan,
+                    expected_action_set_digest=str(
+                        invalid_document["action_set_digest"]
+                    ),
+                )
+
+                result = admit_plan_action_set(
+                    canonical_json_bytes(invalid_document), fixed_trust
                 )
 
                 self.assertIsInstance(result, PlanActionSetRejection)

@@ -417,15 +417,20 @@ def _route_owned_fields_match(
         if not isinstance(control, FrozenJsonObject):
             return False
         identity = control.get("equipment_identity")
-        if type(identity) is not str:
+        state = control.get("state")
+        if (
+            set(control) != {"equipment_identity", "state"}
+            or type(identity) is not str
+            or state not in {"enabled", "disabled"}
+        ):
             return False
         control_identities.append(identity)
     return (
         route.get("control_owner") == "reconciler_owned"
         and route.get("activation_group") == definition.get("activation_group")
         and route.get("secret_references") == definition.get("secret_references")
-        and tuple(control_identities) == tuple(sorted(set(control_identities)))
-        and tuple(control_identities) == controlled
+        and len(control_identities) == len(set(control_identities))
+        and tuple(sorted(control_identities)) == controlled
     )
 
 
@@ -634,12 +639,20 @@ def _target_matches_plan_authority(
     provider_kind = provider.get("kind")
     if kind in {"plugin_installation", "plugin_enablement"}:
         operation = payload.get("operation")
+        manager = provider.get("manager")
         expected_kind = {
-            "install": "plugin_installation",
-            "remove": "plugin_installation",
-            "enable": "plugin_enablement",
-            "disable": "plugin_enablement",
-        }.get(operation) if type(operation) is str else None
+            "claude": {
+                "install": "plugin_installation",
+                "enable": "plugin_enablement",
+                "disable": "plugin_enablement",
+            },
+            "codex": {
+                "install": "plugin_installation",
+                "enable": "plugin_enablement",
+                "disable": "plugin_enablement",
+            },
+            "cursor": {},
+        }.get(str(manager), {}).get(str(operation))
         plugin_equipment = tuple(
             identity
             for identity in authoritative_equipment
@@ -649,11 +662,11 @@ def _target_matches_plan_authority(
             provider_kind == "native_plugin"
             and kind == expected_kind
             and equipment is None
-            and harness == provider.get("manager")
+            and harness == manager
             and locator
             == freeze_json(
                 {
-                    "manager": provider.get("manager"),
+                    "manager": manager,
                     "native_identity": provider.get("plugin_id"),
                     "scope": provider.get("scope"),
                 }
