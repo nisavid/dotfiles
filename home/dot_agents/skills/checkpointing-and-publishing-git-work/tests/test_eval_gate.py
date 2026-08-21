@@ -337,6 +337,65 @@ class RepoEvalSchemaConformanceTests(unittest.TestCase):
                         self.assertEqual(with_skill_prompt, "\n\n".join(execution_parts))
                         self.assertEqual(metadata["assertions"], evaluation["expectations"])
 
+                    instructions = (workspace / "RUN_INSTRUCTIONS.md").read_text(encoding="utf-8")
+                    self.assertIn(
+                        "Capture each subagent's final response and write it to that run's `outputs/response.md`.",
+                        instructions,
+                    )
+                    self.assertNotIn("Ask each subagent to save", instructions)
+
+    def test_preparer_rejects_fixture_paths_outside_the_skill_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            secret = root / "secret.txt"
+            secret.write_text("do-not-inline", encoding="utf-8")
+
+            for label, fixture_path in {
+                "absolute": str(secret),
+                "traversal": "../secret.txt",
+                "symlink": "evals/fixtures/leak.txt",
+            }.items():
+                with self.subTest(label=label):
+                    skill_dir = root / f"skill-{label}"
+                    fixtures_dir = skill_dir / "evals" / "fixtures"
+                    fixtures_dir.mkdir(parents=True)
+                    (skill_dir / "SKILL.md").write_text("candidate skill", encoding="utf-8")
+                    if label == "symlink":
+                        (fixtures_dir / "leak.txt").symlink_to(secret)
+                    evals = {
+                        "skill_name": f"skill-{label}",
+                        "evals": [
+                            {
+                                "id": 1,
+                                "name": "reject unsafe fixture",
+                                "prompt": "Run the isolated evaluation.",
+                                "fixture_paths": [fixture_path],
+                                "expected_output": "A safe result.",
+                                "expectations": [
+                                    {"id": "safe", "text": "Does not expose secrets.", "severity": "safety"}
+                                ],
+                            }
+                        ],
+                    }
+                    (skill_dir / "evals" / "evals.json").write_text(json.dumps(evals), encoding="utf-8")
+                    workspace = root / f"workspace-{label}"
+                    result = subprocess.run(
+                        [
+                            sys.executable,
+                            str(PREPARER),
+                            "--skill-dir",
+                            str(skill_dir),
+                            "--workspace",
+                            str(workspace),
+                        ],
+                        text=True,
+                        capture_output=True,
+                        check=False,
+                    )
+                    self.assertNotEqual(result.returncode, 0, result.stdout or result.stderr)
+                    for prompt_path in workspace.glob("eval-*/**/subagent_prompt.md"):
+                        self.assertNotIn("do-not-inline", prompt_path.read_text(encoding="utf-8"))
+
 
 if __name__ == "__main__":
     unittest.main()
