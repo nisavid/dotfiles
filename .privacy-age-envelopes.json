@@ -3,7 +3,7 @@
   "envelopes": [
     {
       "path": "home/.private-agents.md.age",
-      "sha256": "sha256:a879f9d9d19c34f40e43d4c3b7c8137db9d4789c56b1868bb03a3df5d1273f66"
+      "sha256": "sha256:362b1832ab1274424ed49aec055e9020acbaf4ffeebf644b49ddadb2c135ebb2"
     },
     {
       "path": "home/.private-codex-work.toml.age",
