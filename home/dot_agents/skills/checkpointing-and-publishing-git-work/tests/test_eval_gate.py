@@ -293,7 +293,7 @@ class RepoEvalSchemaConformanceTests(unittest.TestCase):
                         payload,
                     )
 
-    def test_every_shipped_eval_file_scaffolds_fixture_paths_and_typed_expectations(self) -> None:
+    def test_every_shipped_eval_file_scaffolds_isolated_execution_prompts(self) -> None:
         eval_paths = shipped_eval_paths()
         self.assertTrue(eval_paths, "repository must ship at least one behavior eval file")
 
@@ -320,15 +320,21 @@ class RepoEvalSchemaConformanceTests(unittest.TestCase):
                     for evaluation in document["evals"]:
                         eval_dirs = list(workspace.glob(f"eval-{evaluation['id']}-*"))
                         self.assertEqual(len(eval_dirs), 1, eval_dirs)
-                        prompt = (eval_dirs[0] / "with_skill" / "run-1" / "subagent_prompt.md").read_text(
-                            encoding="utf-8"
-                        )
+                        with_skill_prompt = (
+                            eval_dirs[0] / "with_skill" / "run-1" / "subagent_prompt.md"
+                        ).read_text(encoding="utf-8")
+                        without_skill_prompt = (
+                            eval_dirs[0] / "without_skill" / "run-1" / "subagent_prompt.md"
+                        ).read_text(encoding="utf-8")
                         metadata = json.loads((eval_dirs[0] / "eval_metadata.json").read_text(encoding="utf-8"))
-                        for fixture_path in evaluation["fixture_paths"]:
-                            self.assertIn(f"- {skill_dir / fixture_path}", prompt)
-                        for expectation in evaluation["expectations"]:
-                            self.assertIn(f"- {expectation['text']}", prompt)
-                            self.assertNotIn(repr(expectation), prompt)
+                        execution_parts = [evaluation["prompt"]]
+                        execution_parts.extend(
+                            (skill_dir / fixture_path).read_text(encoding="utf-8")
+                            for fixture_path in evaluation["fixture_paths"]
+                        )
+                        self.assertEqual(without_skill_prompt, "\n\n".join(execution_parts))
+                        execution_parts.append((skill_dir / "SKILL.md").read_text(encoding="utf-8"))
+                        self.assertEqual(with_skill_prompt, "\n\n".join(execution_parts))
                         self.assertEqual(metadata["assertions"], evaluation["expectations"])
 
 
