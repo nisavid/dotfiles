@@ -30,20 +30,11 @@ For PR review loops, ready-for-review, bot reruns, or merge readiness:
 
 ## Branch Publishing Gate
 
-When you first push a task branch, create a draft PR in the same workflow turn
-unless the operator explicitly says not to create a PR. Do not leave pushed
-work branches PR-less as handoff state.
+When you first push a task branch, create a draft PR in the same workflow turn unless the operator explicitly says not to create a PR. Do not leave pushed work branches PR-less as handoff state.
 
-Use `publishing-reviewable-prs` for that creation, every later title/body
-mutation, and any draft-to-ready transition. For creation or a text mutation,
-it must construct the complete body through
-`writing-reviewable-pr-descriptions`; for a draft-to-ready-only transition, use
-the publisher alone. Generated `--fill` text is prohibited.
+Use `publishing-reviewable-prs` for that creation, every later title/body mutation, and any draft-to-ready transition. For creation or a text mutation, it must construct the complete body through `writing-reviewable-pr-descriptions`; for a draft-to-ready-only transition, use the publisher alone. Generated `--fill` text is prohibited.
 
-Mark the PR ready through the publisher's guarded `ready` operation only after
-local readiness gates pass, the PR body records the verification evidence, and
-required live-render inspection passes. If the branch is not review-ready, keep
-the draft PR open and state the blocker in the PR body or a comment.
+Mark the PR ready through the publisher's guarded `ready` operation only after local readiness gates pass, the PR body records the verification evidence, and required live-render inspection passes. If the branch is not review-ready, keep the draft PR open and state the blocker in the PR body or a comment.
 
 Use `scripts/pr_review_state.py` for PR state and ledger work:
 
@@ -119,10 +110,7 @@ After resolving any thread, refresh thread-aware PR state and verify the unresol
 
 ## Merge Readiness
 
-**REQUIRED SUB-SKILL:** Use `resolving-workflow-ownership` before final PR
-closeout when readiness, approval, merge actuation, or handoff ownership affects
-what the agent may decide, say, or do. Keep ownership policy in that skill; this
-skill only applies it to PR state.
+**REQUIRED SUB-SKILL:** Use `resolving-workflow-ownership` before final PR closeout when readiness, approval, merge actuation, or handoff ownership affects what the agent may decide, say, or do. Keep ownership policy in that skill; this skill only applies it to PR state.
 
 Do not use a single bot approval as merge readiness. Merge readiness requires:
 
@@ -134,11 +122,7 @@ Do not use a single bot approval as merge readiness. Merge readiness requires:
 - review decision approved, or no review required by branch protection
 - GitHub merge state is mergeable or explicitly accepted
 
-After these gates pass, merge only when PR readiness decision and merge
-actuation are both agent-owned, required approvals are present, and hard
-constraints pass. If another owner controls an undecided readiness state, report
-the evidence without saying the PR is ready to merge. If another owner controls
-merge actuation, hand off without merging.
+After these gates pass, merge only when PR readiness decision and merge actuation are both agent-owned, required approvals are present, and hard constraints pass. If another owner controls an undecided readiness state, report the evidence without saying the PR is ready to merge. If another owner controls merge actuation, hand off without merging.
 
 When merge state is blocked or ambiguous, run `pr_review_state.py` before rerunning CodeRabbit or another external reviewer.
 

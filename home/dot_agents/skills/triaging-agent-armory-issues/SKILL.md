@@ -5,31 +5,24 @@ description: Use when triaging, bulk triaging, auditing, or preparing GitHub Iss
 
 # Triaging Agent Armory Issues
 
-Armory issue triage extends the generic `triage` skill. Use `triage` for the
-base category/state machine and required AI disclaimer, then apply this
-Armory-specific label-axis and depth policy.
+Armory issue triage extends the generic `triage` skill. Use `triage` for the base category/state machine and required AI disclaimer, then apply this Armory-specific label-axis and depth policy.
 
-Core rule: preserve underlying intent, match rigor to unresolved uncertainty,
-and minimize spend inside that quality boundary.
+Core rule: preserve underlying intent, match rigor to unresolved uncertainty, and minimize spend inside that quality boundary.
 
 ## Required Context
 
-When in the Agent Armory repo, read or verify these surfaces before making
-tracker writes that depend on current policy:
+When in the Agent Armory repo, read or verify these surfaces before making tracker writes that depend on current policy:
 
 - `AGENTS.md`
 - `docs/agents/issue-tracker.md`
 - `docs/agents/triage-labels.md`
-- relevant issue body, labels, comments, and linked first-order references when
-  the selected triage depth requires them
+- relevant issue body, labels, comments, and linked first-order references when the selected triage depth requires them
 
-If those docs are unavailable, state the context gap and avoid irreversible
-tracker decisions.
+If those docs are unavailable, state the context gap and avoid irreversible tracker decisions.
 
 ## Baseline Axes
 
-Use GitHub Issues labels for the current baseline. Do not switch to GitHub
-Projects custom fields yet.
+Use GitHub Issues labels for the current baseline. Do not switch to GitHub Projects custom fields yet.
 
 | Axis | Labels |
 | --- | --- |
@@ -52,32 +45,20 @@ python3.14 tools/issue_tracker_ops.py audit-labels --repo nisavid/agent-armory -
 
 Choose the shallowest depth that preserves intent.
 
-- `depth:L0`: semantic hygiene only. Use for obvious label cleanup or simple
-  tracker normalization without reflective issue analysis.
-- `depth:L1`: critically read the issue body and comments. Brainstorm missing
-  domains, cases, concerns, layers, related work, and intent/spec mismatches.
-- `depth:L2`: include first-order linked issues, docs, PRs, dependencies, or
-  source references.
-- `depth:L3`: focused one-issue session with repo scouting, reproduction,
-  design facilitation, and review as needed.
+- `depth:L0`: semantic hygiene only. Use for obvious label cleanup or simple tracker normalization without reflective issue analysis.
+- `depth:L1`: critically read the issue body and comments. Brainstorm missing domains, cases, concerns, layers, related work, and intent/spec mismatches.
+- `depth:L2`: include first-order linked issues, docs, PRs, dependencies, or source references.
+- `depth:L3`: focused one-issue session with repo scouting, reproduction, design facilitation, and review as needed.
 
-Bulk triage is normally L0/L1 only. Process issues one at a time, but do not
-pull deep context into a bulk pass. If an issue needs linked context, code
-scouting, reproduction, or design facilitation, label the reached depth and
-route the next engagement with `mode:linked-context-triage` or `mode:deep-session`.
+Bulk triage is normally L0/L1 only. Process issues one at a time, but do not pull deep context into a bulk pass. If an issue needs linked context, code scouting, reproduction, or design facilitation, label the reached depth and route the next engagement with `mode:linked-context-triage` or `mode:deep-session`.
 
 ## Outcome Rules
 
-- Do not mark `ready-for-agent` merely because the written specification is
-  satisfiable. Confirm the underlying intent is coherent enough for delegation.
-- Use `needs-info` only when waiting on a specific answer, artifact,
-  confirmation, or decision from a reporter or operator.
-- Use `needs-triage` when the next decision depends on unresolved context that
-  is not specifically waiting on a reporter.
-- Use `ready-for-human` when judgment, authority, access, or subjective design
-  choice must happen before implementation.
-- Use `brief:needed` when an issue is otherwise close to delegation but lacks a
-  safe handoff brief.
+- Do not mark `ready-for-agent` merely because the written specification is satisfiable. Confirm the underlying intent is coherent enough for delegation.
+- Use `needs-info` only when waiting on a specific answer, artifact, confirmation, or decision from a reporter or operator.
+- Use `needs-triage` when the next decision depends on unresolved context that is not specifically waiting on a reporter.
+- Use `ready-for-human` when judgment, authority, access, or subjective design choice must happen before implementation.
+- Use `brief:needed` when an issue is otherwise close to delegation but lacks a safe handoff brief.
 
 ## Triage Record
 
@@ -87,8 +68,7 @@ Every tracker comment posted during triage starts with:
 > *This was generated by AI during triage.*
 ```
 
-Use a concise triage record when labels, readiness, unresolved factors, or the
-delegation path would not be obvious from the issue alone:
+Use a concise triage record when labels, readiness, unresolved factors, or the delegation path would not be obvious from the issue alone:
 
 ```markdown
 > *This was generated by AI during triage.*

@@ -9,13 +9,7 @@ description: Use when syncing a fork with upstream, clicking Sync fork, using gh
 
 Fork sync preserves upstream commit identity and local contracts. Use before choosing a merge method, resolving conflicts, pushing a sync branch, or merging a sync PR.
 
-The default completed state is that the maintained fork's target branch
-contains the synced upstream head. When branch protection requires a PR, the
-sync work includes opening the PR, driving it through required checks and review
-state, merging it with the repo-approved sync merge method, and verifying the
-post-merge target branch. Stop at an open PR only when the operator explicitly
-asks for that handoff, merge actuation is not agent-owned, or a concrete blocker
-remains.
+The default completed state is that the maintained fork's target branch contains the synced upstream head. When branch protection requires a PR, the sync work includes opening the PR, driving it through required checks and review state, merging it with the repo-approved sync merge method, and verifying the post-merge target branch. Stop at an open PR only when the operator explicitly asks for that handoff, merge actuation is not agent-owned, or a concrete blocker remains.
 
 ## Start With The Fork Contract
 
@@ -46,15 +40,9 @@ git remote -v
 gh repo view --json nameWithOwner,parent
 ```
 
-For downstream fork sync PRs, pass `--repository OWNER/FORK` to the owned
-creator in `publishing-reviewable-prs`. Use its owned helper for ready
-actuation. Pass the fork explicitly to subsequent read/merge commands, such as
-`gh pr view --repo OWNER/FORK`, `gh pr checks --repo OWNER/FORK`, and
-`gh pr merge --repo OWNER/FORK`.
+For downstream fork sync PRs, pass `--repository OWNER/FORK` to the owned creator in `publishing-reviewable-prs`. Use its owned helper for ready actuation. Pass the fork explicitly to subsequent read/merge commands, such as `gh pr view --repo OWNER/FORK`, `gh pr checks --repo OWNER/FORK`, and `gh pr merge --repo OWNER/FORK`.
 
-Use `publishing-reviewable-prs` for every sync PR creation, title edit, or body
-edit. It must use `writing-reviewable-pr-descriptions` and an explicit body file;
-never use `gh pr create --fill`. Preserve the sync ledger in the canonical body.
+Use `publishing-reviewable-prs` for every sync PR creation, title edit, or body edit. It must use `writing-reviewable-pr-descriptions` and an explicit body file; never use `gh pr create --fill`. Preserve the sync ledger in the canonical body.
 
 If `gh` opens a PR against the source upstream or parent repository, stop treating that PR as the sync PR. Close it if appropriate, recreate the PR against the maintained fork, and record the mistake in the handoff notes.
 
@@ -67,33 +55,22 @@ Keep a short PR-body or temporary ledger:
 - intentional divergences checked;
 - affected contracts classified as preserved, upstream now implements it, obsolete by policy, intentionally changed, or uncertain;
 - exact local gates run before push;
-- unresolved uncertainty escalated to the operator, or linked to a durable,
-  discoverable follow-up when escalation is unavailable.
+- unresolved uncertainty escalated to the operator, or linked to a durable, discoverable follow-up when escalation is unavailable.
 
 For changes touching names, paths, packaging, generated artifacts, release flow, security boundaries, updater behavior, or docs, adapt upstream behavior under local contracts. Do not push or merge while contracts are unchecked, uncertainty is untriaged, or local gates are missing. Generated/runtime artifacts are evidence, not durable fixes.
 
 ## Policy Gap Closeout
 
-During a sync, treat a discovered repeatable failure mode as part of the work.
-If you notice a hazard that future sync agents could miss, codify the rule
-before handoff instead of leaving it only in chat, the PR description, or local
-memory.
+During a sync, treat a discovered repeatable failure mode as part of the work. If you notice a hazard that future sync agents could miss, codify the rule before handoff instead of leaving it only in chat, the PR description, or local memory.
 
 Use the narrowest durable surface that will load at the right time:
 
-- repo-local fork policy for repository-specific names, paths, rename maps,
-  contracts, gates, and source boundaries;
+- repo-local fork policy for repository-specific names, paths, rename maps, contracts, gates, and source boundaries;
 - this skill for fork-sync behavior that applies across maintained forks;
-- always-loaded repo instructions only for rules needed before a workflow can
-  choose the right triggered guidance;
+- always-loaded repo instructions only for rules needed before a workflow can choose the right triggered guidance;
 - tests or scripts for repeatable mechanical checks.
 
-Record the policy update in the sync ledger. If the right owner is unclear,
-escalate to the operator when the session allows. Only defer the decision when
-escalation is unavailable or the operator requested an uninterrupted run; in
-that case, record a durable, discoverable follow-up where the escalation would
-have happened. Preserve the safest local guard that prevents silent data loss,
-dropped upstream changes, history replay, or contract drift.
+Record the policy update in the sync ledger. If the right owner is unclear, escalate to the operator when the session allows. Only defer the decision when escalation is unavailable or the operator requested an uninterrupted run; in that case, record a durable, discoverable follow-up where the escalation would have happened. Preserve the safest local guard that prevents silent data loss, dropped upstream changes, history replay, or contract drift.
 
 ## Verification
 

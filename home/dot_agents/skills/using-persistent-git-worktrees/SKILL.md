@@ -5,20 +5,15 @@ description: Use with using-git-worktrees when starting feature work that needs 
 
 # Using Persistent Git Worktrees
 
-Read the applicable base worktree skill first, then apply this policy for
-durable, human-discoverable coding-agent worktrees.
+Read the applicable base worktree skill first, then apply this policy for durable, human-discoverable coding-agent worktrees.
 
 This skill is an override for persistent coding worktrees:
 
 - Use a sibling `.wt` directory beside the main clone.
-- Do not follow the base skill's `.worktrees` / `worktrees` directory
-  selection, ignore-check, or ask-the-user fallback when this persistent
-  worktree policy applies.
-- After the worktree exists, continue with the base skill's project setup and
-  baseline verification unless the user or repo docs say otherwise.
+- Do not follow the base skill's `.worktrees` / `worktrees` directory selection, ignore-check, or ask-the-user fallback when this persistent worktree policy applies.
+- After the worktree exists, continue with the base skill's project setup and baseline verification unless the user or repo docs say otherwise.
 
-Precedence is: user instruction, then repo-local policy, then this skill, then
-the base worktree skill.
+Precedence is: user instruction, then repo-local policy, then this skill, then the base worktree skill.
 
 ## Use When
 
@@ -30,25 +25,20 @@ the base worktree skill.
 
 ## Directory Policy
 
-Default to a sibling `.wt` directory beside the main clone unless repo docs or
-the user explicitly require a different persistent location.
+Default to a sibling `.wt` directory beside the main clone unless repo docs or the user explicitly require a different persistent location.
 
 ```text
 ~/src/project
 ~/src/project.wt/<branch-or-task-name>
 ```
 
-Do not place persistent coding worktrees under `/tmp`, cache directories, or
-other automatically cleaned locations. Use temporary paths only for disposable
-experiments that contain no in-progress branch work.
+Do not place persistent coding worktrees under `/tmp`, cache directories, or other automatically cleaned locations. Use temporary paths only for disposable experiments that contain no in-progress branch work.
 
 Report the full worktree path and branch name after creation.
 
 ## Sandbox And Approval Policy
 
-If the sibling `.wt` path or shared `git worktree` metadata writes need
-approval because they sit outside the writable roots, request escalation.
-Do not reroute persistent branch work to `/tmp` just because it is writable.
+If the sibling `.wt` path or shared `git worktree` metadata writes need approval because they sit outside the writable roots, request escalation. Do not reroute persistent branch work to `/tmp` just because it is writable.
 
 ## Creation Pattern
 
@@ -68,8 +58,7 @@ If the branch already exists, omit `-b`:
 git worktree add /path/to/project.wt/feature-x feature-x
 ```
 
-After creation, continue with the base skill's project setup and baseline
-verification from inside the worktree.
+After creation, continue with the base skill's project setup and baseline verification from inside the worktree.
 
 ## Context Checks
 
@@ -80,13 +69,11 @@ git worktree list --porcelain
 git status --short
 ```
 
-When the active worktree differs from the main checkout, check both and report
-which path is active.
+When the active worktree differs from the main checkout, check both and report which path is active.
 
 ## Submodules
 
-In a new worktree, initialize submodules recursively when the task depends on
-upstream, recipe, fixture, or reference source:
+In a new worktree, initialize submodules recursively when the task depends on upstream, recipe, fixture, or reference source:
 
 ```bash
 git submodule update --init --recursive
@@ -102,11 +89,9 @@ If a worktree was created in the wrong location, prefer:
 git worktree move <old-path> <new-path>
 ```
 
-Do not copy a worktree with `cp -a`; duplicate filesystem copies can share Git
-administrative state and leave agents operating in the wrong path.
+Do not copy a worktree with `cp -a`; duplicate filesystem copies can share Git administrative state and leave agents operating in the wrong path.
 
-If `git worktree move` cannot move the worktree and it has no uncommitted work,
-remove and recreate it:
+If `git worktree move` cannot move the worktree and it has no uncommitted work, remove and recreate it:
 
 ```bash
 git -C <old-path> status --short
@@ -116,8 +101,7 @@ git -C <new-path> status --short
 git worktree list --porcelain
 ```
 
-If the wrongly placed worktree has uncommitted work, stop and ask before moving
-or recreating it.
+If the wrongly placed worktree has uncommitted work, stop and ask before moving or recreating it.
 
 ## Handoff
 
@@ -131,11 +115,7 @@ Every worktree handoff should state:
 
 ## Completion Cleanup
 
-`checkpointing-and-publishing-git-work` owns terminal branch and worktree
-cleanup. The move/repair commands above apply only to an explicitly selected
-persistent worktree whose provenance and ownership are established. Never use
-them to remove a harness-created, user-created, externally managed, or
-unknown-provenance worktree during task closeout. Preserve active PR worktrees.
+`checkpointing-and-publishing-git-work` owns terminal branch and worktree cleanup. The move/repair commands above apply only to an explicitly selected persistent worktree whose provenance and ownership are established. Never use them to remove a harness-created, user-created, externally managed, or unknown-provenance worktree during task closeout. Preserve active PR worktrees.
 
 ## Guardrails
 
