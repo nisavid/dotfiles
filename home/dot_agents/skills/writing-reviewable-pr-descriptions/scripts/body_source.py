@@ -34,7 +34,8 @@ BLOCK_END = re.compile(
     )""",
     re.VERBOSE,
 )
-FENCE = re.compile(r"^(?P<marker>`{3,}|~{3,})(?P<info>.*)$")
+FENCE = re.compile(r"^ {0,3}(?P<marker>`{3,}|~{3,})(?P<info>.*)$")
+INDENTED_CODE = re.compile(r"^ {4,}\S")
 TAG_NAME = re.compile(r"^</?([A-Za-z][A-Za-z0-9-]*)")
 COMPLETE_TAG = re.compile(
     r"^<(?:/[A-Za-z][A-Za-z0-9-]*\s*|[A-Za-z][A-Za-z0-9-]*(?:\s+[^<>]*?)?/?)>\s*$"
@@ -126,9 +127,14 @@ class Offense:
     current: str
 
 
+def _unquoted(line: str) -> str:
+    """Return ``line`` without blockquote markers, preserving indentation."""
+    return QUOTE_MARKER.sub("", line)
+
+
 def _quoteless(line: str) -> str:
-    """Return ``line`` without its leading blockquote markers."""
-    return QUOTE_MARKER.sub("", line).strip()
+    """Return ``line`` without its leading blockquote markers or indentation."""
+    return _unquoted(line).strip()
 
 
 def _fence_marker(text: str) -> tuple[str, int] | None:
@@ -151,6 +157,14 @@ def _closes_fence(text: str, fence: tuple[str, int]) -> bool:
         and length >= fence[1]
         and not FENCE.match(text).group("info").strip()
     )
+
+
+def _closes_html(text: str, html: tuple[str, str], *, offset: int = 0) -> bool:
+    """Report whether ``text`` ends the open HTML block ``html``."""
+    kind, closer = html
+    if kind == "blank":
+        return not text.strip()
+    return closer.lower() in text[offset:].lower()
 
 
 def _html_block_start(text: str, in_paragraph: bool) -> tuple[str, str] | None:
@@ -213,33 +227,35 @@ def wrap_offenses(body: str) -> list[Offense]:
     html: tuple[str, str] | None = None
     previous: str | None = None
     for index, raw in enumerate(lines):
-        text = _quoteless(raw)
+        unquoted = _unquoted(raw)
+        text = unquoted.strip()
         if fence is not None:
-            if _closes_fence(text, fence):
+            if _closes_fence(unquoted, fence):
                 fence = None
             previous = None
             continue
-        marker = _fence_marker(text)
-        if marker is not None:
-            fence = marker
-            previous = None
-            continue
         if html is not None:
-            kind, closer = html
-            if (kind == "closer" and closer in text) or (kind == "blank" and not text):
+            if _closes_html(text, html):
                 html = None
             previous = None
             continue
         if not text:
             previous = None
             continue
+        if previous is None and INDENTED_CODE.match(unquoted):
+            # Four spaces open an indented code block, which cannot interrupt a
+            # paragraph, so this applies only outside one.
+            continue
+        marker = _fence_marker(unquoted)
+        if marker is not None:
+            fence = marker
+            previous = None
+            continue
         started = _html_block_start(text, previous is not None)
         if started is not None:
-            kind, closer = started
-            # A raw-text or comment block may also close on its opening line.
-            html = (
-                None if kind == "closer" and closer in text[len(closer) :] else started
-            )
+            # A raw-text or comment block may also close on its opening line,
+            # which is why the search starts after the opening angle bracket.
+            html = None if _closes_html(text, started, offset=1) else started
             previous = None
             continue
         if previous is not None:

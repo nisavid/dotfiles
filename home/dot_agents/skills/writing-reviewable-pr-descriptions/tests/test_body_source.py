@@ -210,6 +210,54 @@ class HtmlBlockTests(unittest.TestCase):
         self.assertEqual([], self.kinds(body))
 
 
+class IndentedCodeTests(unittest.TestCase):
+    """Four spaces of indentation is a code block, not a fence."""
+
+    def kinds(self, body: str) -> list[int]:
+        return [o.line for o in BODY_SOURCE.wrap_offenses(body)]
+
+    def test_an_indented_literal_fence_does_not_open_a_fenced_region(self) -> None:
+        body = (
+            "Intro:\n\n"
+            "    ```\n"
+            "    literal fence inside indented code\n\n"
+            "Prose that the author\nwrapped here.\n"
+        )
+        self.assertEqual([7], self.kinds(body))
+
+    def test_three_spaces_still_open_a_fence(self) -> None:
+        body = "Intro:\n\n   ```\nwrapped code\n   ```\n\nProse.\n"
+        self.assertEqual([], self.kinds(body))
+
+    def test_an_indented_code_block_keeps_its_own_lines(self) -> None:
+        body = "Intro:\n\n    code line one\n    code line two\n\nProse.\n"
+        self.assertEqual([], self.kinds(body))
+
+    def test_indentation_cannot_interrupt_a_paragraph(self) -> None:
+        # An indented code block cannot interrupt a paragraph, so this is a
+        # lazy continuation that GitHub renders with a break.
+        self.assertEqual([2], self.kinds("Prose that runs\n    on with indent.\n"))
+
+
+class HtmlCloserCaseTests(unittest.TestCase):
+    """Raw HTML closers are case-insensitive and may close on the open line."""
+
+    def kinds(self, body: str) -> list[int]:
+        return [o.line for o in BODY_SOURCE.wrap_offenses(body)]
+
+    def test_an_uppercase_closing_tag_closes_the_block(self) -> None:
+        body = "<SCRIPT>\nvar a = 1;\n</SCRIPT>\nProse that the author\nwrapped here.\n"
+        self.assertEqual([5], self.kinds(body))
+
+    def test_a_same_line_raw_html_block_closes_on_that_line(self) -> None:
+        body = "<script></script>\nProse that the author\nwrapped here.\n"
+        self.assertEqual([3], self.kinds(body))
+
+    def test_an_uppercase_comment_closer_closes_the_block(self) -> None:
+        body = "<!-- note -->\nProse that the author\nwrapped here.\n"
+        self.assertEqual([3], self.kinds(body))
+
+
 class SetextHeadingTests(unittest.TestCase):
     """A setext underline is a heading, not wrapped prose.
 
