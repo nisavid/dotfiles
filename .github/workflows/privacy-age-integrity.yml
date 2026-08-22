@@ -70,6 +70,171 @@ jobs:
             "$RUNNER_TEMP/age-bin"
           printf '%s\n' "$RUNNER_TEMP/age-bin" >>"$GITHUB_PATH"
 
+      - name: Verify checkout bytes match Git objects
+        shell: bash
+        env:
+          PRIVACY_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PRIVACY_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          python3 - "$PRIVACY_BASE_SHA" trusted-base "$PRIVACY_HEAD_SHA" untrusted-head <<'PY'
+          import os
+          import re
+          import stat
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          MAX_TREE_BYTES = 8 * 1024 * 1024
+          MAX_TREE_ENTRIES = 10_000
+          MAX_BLOB_BYTES = 16 * 1024 * 1024
+          MAX_TOTAL_BLOB_BYTES = 16 * 1024 * 1024
+          NO_FOLLOW = getattr(os, "O_NOFOLLOW", None)
+          if NO_FOLLOW is None:
+              raise SystemExit("checkout byte verification unavailable")
+
+          def git(
+              repository: str,
+              *arguments: str,
+              maximum_output_bytes: int,
+          ) -> bytes:
+              environment = os.environ.copy()
+              for variable in (
+                  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+                  "GIT_COMMON_DIR",
+                  "GIT_CONFIG_COUNT",
+                  "GIT_CONFIG_PARAMETERS",
+                  "GIT_CONFIG_LOCAL",
+                  "GIT_CONFIG_SYSTEM",
+                  "GIT_DIR",
+                  "GIT_INDEX_FILE",
+                  "GIT_OBJECT_DIRECTORY",
+                  "GIT_WORK_TREE",
+              ):
+                  environment.pop(variable, None)
+              for variable in tuple(environment):
+                  if variable.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")):
+                      environment.pop(variable, None)
+              environment.update(
+                  {
+                      "GIT_CONFIG_GLOBAL": os.devnull,
+                      "GIT_CONFIG_NOSYSTEM": "1",
+                      "GIT_NO_LAZY_FETCH": "1",
+                      "GIT_NO_REPLACE_OBJECTS": "1",
+                      "GIT_OPTIONAL_LOCKS": "0",
+                      "GIT_TERMINAL_PROMPT": "0",
+                      "LC_ALL": "C",
+                  }
+              )
+              result = subprocess.run(
+                  [
+                      "git",
+                      "-c",
+                      "core.fsmonitor=false",
+                      "-c",
+                      f"core.hooksPath={os.devnull}",
+                      "-C",
+                      repository,
+                      *arguments,
+                  ],
+                  check=False,
+                  capture_output=True,
+                  env=environment,
+                  timeout=30,
+              )
+              if result.returncode != 0 or len(result.stdout) > maximum_output_bytes:
+                  raise SystemExit("checkout byte verification failed")
+              return result.stdout
+
+          def read_regular(path: Path) -> bytes:
+              try:
+                  descriptor = os.open(path, os.O_RDONLY | NO_FOLLOW)
+              except OSError as error:
+                  raise SystemExit("checkout byte verification failed") from error
+              try:
+                  info = os.fstat(descriptor)
+                  if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_BLOB_BYTES:
+                      raise SystemExit("checkout byte verification failed")
+                  chunks: list[bytes] = []
+                  remaining = MAX_BLOB_BYTES + 1
+                  while remaining:
+                      chunk = os.read(descriptor, min(remaining, 64 * 1024))
+                      if not chunk:
+                          break
+                      chunks.append(chunk)
+                      remaining -= len(chunk)
+                  return b"".join(chunks)
+              finally:
+                  os.close(descriptor)
+
+          def verify(repository: str, commit: str) -> None:
+              root = Path(repository).resolve(strict=True)
+              raw_tree = git(
+                  repository,
+                  "ls-tree",
+                  "-r",
+                  "-z",
+                  "--full-tree",
+                  commit,
+                  maximum_output_bytes=MAX_TREE_BYTES,
+              )
+              seen_paths: set[bytes] = set()
+              total_blob_bytes = 0
+              for record in raw_tree.split(b"\0"):
+                  if not record:
+                      continue
+                  if len(seen_paths) >= MAX_TREE_ENTRIES:
+                      raise SystemExit("checkout byte verification failed")
+                  try:
+                      metadata, raw_path = record.split(b"\t", 1)
+                      mode, kind, object_id = metadata.split(b" ", 2)
+                      relative = raw_path.decode("utf-8")
+                  except (UnicodeDecodeError, ValueError) as error:
+                      raise SystemExit("checkout byte verification failed") from error
+                  if (
+                      kind != b"blob"
+                      or raw_path in seen_paths
+                      or len(object_id) != 40
+                      or not re.fullmatch(rb"[0-9a-f]{40}", object_id)
+                      or not relative
+                      or relative.startswith("/")
+                      or "\\" in relative
+                  ):
+                      raise SystemExit("checkout byte verification failed")
+                  if any(segment in {"", ".", ".."} for segment in relative.split("/")):
+                      raise SystemExit("checkout byte verification failed")
+                  seen_paths.add(raw_path)
+                  path = root.joinpath(*relative.split("/"))
+                  expected = git(
+                      repository,
+                      "cat-file",
+                      "blob",
+                      object_id.decode("ascii"),
+                      maximum_output_bytes=MAX_BLOB_BYTES,
+                  )
+                  total_blob_bytes += len(expected)
+                  if total_blob_bytes > MAX_TOTAL_BLOB_BYTES:
+                      raise SystemExit("checkout byte verification failed")
+                  try:
+                      info = path.lstat()
+                  except OSError as error:
+                      raise SystemExit("checkout byte verification failed") from error
+                  if mode == b"120000":
+                      if not stat.S_ISLNK(info.st_mode) or os.fsencode(os.readlink(path)) != expected:
+                          raise SystemExit("checkout byte verification failed")
+                  elif mode in {b"100644", b"100755"}:
+                      if not stat.S_ISREG(info.st_mode) or read_regular(path) != expected:
+                          raise SystemExit("checkout byte verification failed")
+                      expected_mode = 0o755 if mode == b"100755" else 0o644
+                      if stat.S_IMODE(info.st_mode) & 0o111 != expected_mode & 0o111:
+                          raise SystemExit("checkout byte verification failed")
+                  else:
+                      raise SystemExit("checkout byte verification failed")
+
+          verify(sys.argv[2], sys.argv[1])
+          verify(sys.argv[4], sys.argv[3])
+          PY
+
       - name: Verify the protected transition and scan candidate data
         shell: bash
         env:
@@ -95,9 +260,11 @@ jobs:
           event = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
           pull_request = event.get("pull_request")
           body = pull_request.get("body") if isinstance(pull_request, dict) else ""
-          body = body or ""
-          if not isinstance(body, str):
+          if body is None:
+              body = ""
+          elif not isinstance(body, str):
               raise SystemExit("pull request body is not text")
+          body = body or ""
           destination = Path(sys.argv[2])
           destination.write_bytes(body.encode("utf-8"))
           os.chmod(destination, 0o600)

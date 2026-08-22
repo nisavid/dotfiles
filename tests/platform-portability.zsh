@@ -159,6 +159,9 @@ done
   fail 'age admission receipt command is not executable'
 [[ -f "$repo_root/.github/age-admission/allowed_signers" ]] ||
   fail 'age admission allowed-signers configuration is missing'
+grep -Eq '^repository-owner ssh-[a-z0-9-]+ [A-Za-z0-9+/=]+$' \
+  "$repo_root/.github/age-admission/allowed_signers" ||
+  fail 'age admission allowed-signers configuration lacks the owner principal'
 
 chezmoi -S "$repo_root/home" execute-template \
   --override-data '{"chezmoi":{"os":"linux"}}' \

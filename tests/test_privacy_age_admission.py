@@ -159,6 +159,44 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
                     allowed_signers=allowed,
                 )
 
+            (root / "other-namespace").write_bytes(message)
+            subprocess.run(
+                [
+                    "ssh-keygen",
+                    "-Y",
+                    "sign",
+                    "-f",
+                    str(key),
+                    "-n",
+                    "other/namespace/v1",
+                    str(root / "other-namespace"),
+                ],
+                check=True,
+                capture_output=True,
+            )
+            with self.assertRaisesRegex(ValueError, "signature"):
+                verify_receipt_signature(
+                    message,
+                    (root / "other-namespace.sig").read_bytes(),
+                    allowed_signers=allowed,
+                )
+
+            other_allowed = root / "other-allowed-signers"
+            other_allowed.write_text(
+                allowed.read_text(encoding="ascii").replace(
+                    ADMISSION_PRINCIPAL,
+                    "someone-else",
+                    1,
+                ),
+                encoding="ascii",
+            )
+            with self.assertRaisesRegex(ValueError, "signature"):
+                verify_receipt_signature(
+                    message,
+                    (root / "message.sig").read_bytes(),
+                    allowed_signers=other_allowed,
+                )
+
     def test_creator_validates_ciphertexts_and_gate_accepts_its_receipt(self) -> None:
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -224,6 +262,12 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
                 path = base / relative
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(contents)
+            (base / ".gitattributes").write_text(
+                "home/private.age filter=admission-test\n",
+                encoding="ascii",
+            )
+            (base / "AGENTS.md").write_text("trusted fixture guidance\n", encoding="ascii")
+            (base / "CLAUDE.md").symlink_to("AGENTS.md")
             shutil.copy2(ADMITTER, base / "scripts/admit-age-envelopes")
             for script_name in (
                 "create-age-admission-receipt",
@@ -268,6 +312,23 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
             )
             base_commit = _commit(base, "base")
             _run("git", "clone", "--quiet", "--no-local", str(base), str(head), cwd=root)
+            filter_script = root / "smudge-filter.sh"
+            filter_sentinel = root / "smudge-filter-ran"
+            filter_script.write_text(
+                "#!/bin/sh\n"
+                f"printf ran > {str(filter_sentinel)!r}\n"
+                "printf 'transformed-by-filter\\n'\n",
+                encoding="ascii",
+            )
+            filter_script.chmod(0o755)
+            for checkout in (base, head):
+                _run(
+                    "git",
+                    "config",
+                    "filter.admission-test.smudge",
+                    f"{filter_script} %f",
+                    cwd=checkout,
+                )
             (head / "home/private.age").write_bytes(changed_ciphertext)
             manifest["envelopes"][0]["sha256"] = "sha256:" + hashlib.sha256(changed_ciphertext).hexdigest()
             (head / ".privacy-age-envelopes.json").write_text(
@@ -275,6 +336,24 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
                 encoding="ascii",
             )
             head_commit = _commit(head, "candidate")
+
+            clean_filter_script = root / "clean-filter.sh"
+            clean_filter_sentinel = root / "clean-filter-ran"
+            clean_filter_script.write_text(
+                "#!/bin/sh\n"
+                f"printf ran > {str(clean_filter_sentinel)!r}\n"
+                "cat\n",
+                encoding="ascii",
+            )
+            clean_filter_script.chmod(0o755)
+            for checkout in (base, head):
+                _run(
+                    "git",
+                    "config",
+                    "filter.admission-test.clean",
+                    f"{clean_filter_script} %f",
+                    cwd=checkout,
+                )
 
             output = root / "receipt.txt"
             creator = base / "scripts/create-age-admission-receipt"
@@ -314,6 +393,8 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
                 timeout=30,
             )
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertFalse(filter_sentinel.exists())
+            self.assertFalse(clean_filter_sentinel.exists())
             receipt = output.read_bytes()
             self.assertNotIn(b"base secret", receipt)
             self.assertNotIn(b"changed secret", receipt)
@@ -373,6 +454,25 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 1)
 
+            external_fake_tool_dir = root / "fake-tools"
+            external_fake_tool_dir.mkdir()
+            external_fake_tool = external_fake_tool_dir / "ssh-keygen"
+            external_fake_tool.write_text("#!/bin/sh\nexit 99\n", encoding="ascii")
+            external_fake_tool.chmod(0o775)
+            writable_tool_environment = environment.copy()
+            writable_tool_environment["PATH"] = (
+                f"{external_fake_tool_dir}{os.pathsep}{environment['PATH']}"
+            )
+            result = subprocess.run(
+                creator_command(identity, root / "writable-signing-tool-receipt.txt"),
+                check=False,
+                capture_output=True,
+                text=True,
+                env=writable_tool_environment,
+                timeout=30,
+            )
+            self.assertEqual(result.returncode, 1)
+
             output_alias = root / "output-alias"
             output_alias.symlink_to(base, target_is_directory=True)
             result = subprocess.run(
@@ -407,6 +507,74 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
                 ROOT / "scripts/privacy_age_admission.py",
                 base / "scripts/privacy_age_admission.py",
             )
+            hidden_marker = root / "hidden-module-imported"
+            hidden_module = base / "scripts/privacy_age_admission.py"
+            hidden_module.write_text(
+                "from pathlib import Path\n"
+                f"Path({str(hidden_marker)!r}).write_text('imported')\n",
+                encoding="utf-8",
+            )
+            _run(
+                "git",
+                "update-index",
+                "--assume-unchanged",
+                "scripts/privacy_age_admission.py",
+                cwd=base,
+            )
+            result = subprocess.run(
+                creator_command(identity, root / "hidden-dirt-receipt.txt"),
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+                timeout=30,
+            )
+            # The no-filter worktree comparison rejects hidden tracked dirt;
+            # the trusted module must still never execute from the worktree.
+            self.assertEqual(result.returncode, 1)
+            self.assertFalse(hidden_marker.exists())
+            _run(
+                "git",
+                "update-index",
+                "--no-assume-unchanged",
+                "scripts/privacy_age_admission.py",
+                cwd=base,
+            )
+            shutil.copy2(ROOT / "scripts/privacy_age_admission.py", hidden_module)
+
+            launcher = base / "scripts/create-age-admission-receipt"
+            launcher_bytes = launcher.read_bytes()
+            launcher.write_bytes(
+                launcher_bytes.replace(
+                    b"sys.dont_write_bytecode = True",
+                    b"sys.dont_write_bytecode = False",
+                    1,
+                )
+            )
+            _run(
+                "git",
+                "update-index",
+                "--assume-unchanged",
+                "scripts/create-age-admission-receipt",
+                cwd=base,
+            )
+            result = subprocess.run(
+                creator_command(identity, root / "hidden-launcher-receipt.txt"),
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+                timeout=30,
+            )
+            self.assertEqual(result.returncode, 1)
+            _run(
+                "git",
+                "update-index",
+                "--no-assume-unchanged",
+                "scripts/create-age-admission-receipt",
+                cwd=base,
+            )
+            launcher.write_bytes(launcher_bytes)
             (head / "home/private.age").write_bytes(b"dirty candidate ciphertext\n")
             result = subprocess.run(
                 creator_command(identity, root / "dirty-head-receipt.txt"),
