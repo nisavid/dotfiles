@@ -221,6 +221,10 @@ grep -Fq \
   fail 'encryption policy does not bound the persistent catalog exception'
 grep -Fq '`chezmoi apply` does not prune a private target' "$daybreak_encryption_doc" ||
   fail 'encryption policy does not document stale-target rollback'
+grep -Fq 'set -eu' "$daybreak_encryption_doc" ||
+  fail 'encryption policy does not fail closed before exact-target cleanup'
+grep -Fq 'refusing exact-target cleanup' "$daybreak_encryption_doc" ||
+  fail 'encryption policy does not reject an unsafe exact-target precondition'
 grep -Fq 'Perform that exact-target cleanup before removing or reverting the encrypted' \
   "$daybreak_encryption_doc" ||
   fail 'encryption policy does not order target cleanup before source rollback'
@@ -261,6 +265,15 @@ fi
 rm -- "$daybreak_mode_target"
 [[ ! -e "$daybreak_mode_target" && ! -L "$daybreak_mode_target" ]] ||
   fail 'exact-target Daybreak rollback did not remove the stale target'
+print -r -- 'sentinel' > "$daybreak_mode_root/sentinel"
+ln -s -- "$daybreak_mode_root/sentinel" "$daybreak_mode_target"
+if [[ -f "$daybreak_mode_target" && ! -L "$daybreak_mode_target" ]]; then
+  rm -- "$daybreak_mode_target"
+  fail 'exact-target Daybreak rollback guard accepted a symlink'
+fi
+[[ -L "$daybreak_mode_target" ]] ||
+  fail 'symlink precondition fixture was not created'
+rm -- "$daybreak_mode_target"
 
 chezmoi -S "$repo_root/home" execute-template \
   --override-data '{"chezmoi":{"os":"linux"}}' \
