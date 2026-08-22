@@ -1,0 +1,288 @@
+#!/usr/bin/env python3
+"""Create a signed, exact-head admission receipt without exposing plaintext."""
+
+from __future__ import annotations
+
+import argparse
+import os
+import secrets
+import shutil
+import stat
+import subprocess
+import sys
+import tempfile
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+sys.dont_write_bytecode = True
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+if os.fspath(REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, os.fspath(REPOSITORY_ROOT))
+
+from scripts.privacy_age_admission import (  # noqa: E402
+    AdmissionReceiptError,
+    ADMISSION_MAX_LIFETIME,
+    canonical_payload_bytes,
+    encode_receipt,
+)
+from scripts.privacy_age_integrity_gate import (  # noqa: E402
+    IntegrityGateError,
+    build_admission_payload,
+)
+from scripts.privacy_age_envelopes import (  # noqa: E402
+    AgeEnvelopeError,
+    open_regular_file_descriptor,
+)
+
+CHECK_TIMEOUT_SECONDS = 60
+SIGN_TIMEOUT_SECONDS = 15
+MAX_SIGNING_KEY_BYTES = 64 * 1024
+
+
+def _within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def _validated_checkout_root(raw: Path) -> Path:
+    try:
+        canonical = raw.resolve(strict=True)
+    except OSError as error:
+        raise AdmissionReceiptError("checkout is unavailable") from error
+    if not canonical.is_dir():
+        raise AdmissionReceiptError("checkout is unavailable")
+    return canonical
+
+
+def _validated_signing_key(raw: Path, *, forbidden_roots: tuple[Path, ...]) -> bytes:
+    lexical = Path(os.path.abspath(raw))
+    try:
+        canonical = lexical.resolve(strict=True)
+    except OSError as error:
+        raise AdmissionReceiptError("signing key is unavailable") from error
+    if any(_within(lexical, root) or _within(canonical, root) for root in forbidden_roots):
+        raise AdmissionReceiptError("signing key must be outside the checkouts")
+    try:
+        descriptor, info = open_regular_file_descriptor(lexical)
+    except AgeEnvelopeError as error:
+        raise AdmissionReceiptError("signing key is unavailable") from error
+    try:
+        canonical_info = canonical.stat(follow_symlinks=False)
+        if (
+            not stat.S_ISREG(canonical_info.st_mode)
+            or (info.st_dev, info.st_ino) != (canonical_info.st_dev, canonical_info.st_ino)
+            or stat.S_IMODE(info.st_mode) != 0o600
+        ):
+            raise AdmissionReceiptError("signing key must be a mode-0600 regular file")
+        chunks: list[bytes] = []
+        remaining = MAX_SIGNING_KEY_BYTES + 1
+        while remaining:
+            chunk = os.read(descriptor, min(remaining, 64 * 1024))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        data = b"".join(chunks)
+    except OSError as error:
+        raise AdmissionReceiptError("signing key is unavailable") from error
+    finally:
+        os.close(descriptor)
+    if len(data) > MAX_SIGNING_KEY_BYTES:
+        raise AdmissionReceiptError("signing key is oversized")
+    return data
+
+
+def _run_local_admission(
+    *,
+    admitter: Path,
+    head: Path,
+    identity: Path,
+) -> None:
+    try:
+        result = subprocess.run(
+            [
+                sys.executable,
+                os.fspath(admitter),
+                "--root",
+                os.fspath(head),
+                "--identity",
+                os.fspath(identity),
+                "--check-only",
+            ],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=CHECK_TIMEOUT_SECONDS,
+            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise AdmissionReceiptError("local ciphertext admission failed") from error
+    if result.returncode != 0:
+        raise AdmissionReceiptError("local ciphertext admission failed")
+
+
+def _sign_payload(payload: bytes, signing_key: bytes) -> bytes:
+    ssh_keygen = shutil.which("ssh-keygen")
+    if ssh_keygen is None:
+        raise AdmissionReceiptError("admission signature tooling is unavailable")
+    try:
+        with tempfile.TemporaryDirectory(prefix="age-admission-sign.") as temporary:
+            root = Path(temporary)
+            key = root / "signing-key"
+            message = root / "payload"
+            key.write_bytes(signing_key)
+            message.write_bytes(payload)
+            os.chmod(key, 0o600)
+            os.chmod(message, 0o600)
+            result = subprocess.run(
+                [
+                    ssh_keygen,
+                    "-Y",
+                    "sign",
+                    "-f",
+                    os.fspath(key),
+                    "-n",
+                    "nisavid/dotfiles/age-admission/v1",
+                    os.fspath(message),
+                ],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=SIGN_TIMEOUT_SECONDS,
+                env={
+                    **os.environ,
+                    "DISPLAY": "",
+                    "GIT_TERMINAL_PROMPT": "0",
+                    "SSH_ASKPASS": os.devnull,
+                },
+            )
+            if result.returncode != 0:
+                raise AdmissionReceiptError("admission signature generation failed")
+            signature_path = message.with_name(f"{message.name}.sig")
+            try:
+                signature = signature_path.read_bytes()
+            except OSError as error:
+                raise AdmissionReceiptError("admission signature generation failed") from error
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise AdmissionReceiptError("admission signature generation failed") from error
+    if not signature or len(signature) > 8 * 1024:
+        raise AdmissionReceiptError("admission signature is invalid")
+    return signature
+
+
+def _write_output(path: Path, data: bytes, *, forbidden_roots: tuple[Path, ...]) -> None:
+    lexical = Path(os.path.abspath(path))
+    if any(_within(lexical, root) for root in forbidden_roots):
+        raise AdmissionReceiptError("receipt output must be outside the checkouts")
+    parent = lexical.parent
+    try:
+        parent = parent.resolve(strict=True)
+    except OSError as error:
+        raise AdmissionReceiptError("receipt output directory is unavailable") from error
+    if not parent.is_dir():
+        raise AdmissionReceiptError("receipt output directory is unavailable")
+    if lexical.exists() or lexical.is_symlink():
+        raise AdmissionReceiptError("receipt output already exists")
+    temporary: Path | None = None
+    descriptor: int | None = None
+    try:
+        descriptor, name = tempfile.mkstemp(dir=parent, prefix=f".{lexical.name}.")
+        temporary = Path(name)
+        with os.fdopen(descriptor, "wb") as stream:
+            descriptor = None
+            os.fchmod(stream.fileno(), 0o600)
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, lexical)
+        temporary = None
+    except OSError as error:
+        raise AdmissionReceiptError("receipt output could not be installed") from error
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if temporary is not None:
+            try:
+                temporary.unlink()
+            except OSError:
+                pass
+
+
+def create_receipt(arguments: argparse.Namespace) -> None:
+    base = _validated_checkout_root(arguments.base_repository)
+    head = _validated_checkout_root(arguments.head_repository)
+    forbidden_roots = (base, head)
+    try:
+        admitter = arguments.trusted_admitter.resolve(strict=True)
+        expected_admitter = (base / "scripts/admit-age-envelopes").resolve(strict=True)
+    except OSError as error:
+        raise AdmissionReceiptError("trusted admission command is unavailable") from error
+    if (
+        admitter != expected_admitter
+        or not admitter.is_file()
+        or _within(admitter, head)
+        or not _within(admitter, base)
+    ):
+        raise AdmissionReceiptError("trusted admission command is unavailable")
+    identity = arguments.identity
+    signing_key = _validated_signing_key(
+        arguments.signing_key,
+        forbidden_roots=forbidden_roots,
+    )
+    _run_local_admission(admitter=admitter, head=head, identity=identity)
+
+    issued = datetime.now(timezone.utc).replace(microsecond=0)
+    lifetime = min(arguments.lifetime, ADMISSION_MAX_LIFETIME)
+    if lifetime <= timedelta(0):
+        raise AdmissionReceiptError("admission lifetime is invalid")
+    payload = build_admission_payload(
+        base_repository=base,
+        base_commit=arguments.base_commit,
+        head_repository=head,
+        head_commit=arguments.head_commit,
+        repository=arguments.repository,
+        issued_at=issued.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        expires_at=(issued + lifetime).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        nonce=secrets.token_hex(16),
+    )
+    payload_bytes = canonical_payload_bytes(payload)
+    signature = _sign_payload(payload_bytes, signing_key)
+    _write_output(
+        arguments.output,
+        encode_receipt(payload, signature) + b"\n",
+        forbidden_roots=forbidden_roots,
+    )
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--base-repository", type=Path, required=True)
+    parser.add_argument("--base-commit", required=True)
+    parser.add_argument("--head-repository", type=Path, required=True)
+    parser.add_argument("--head-commit", required=True)
+    parser.add_argument("--repository", required=True)
+    parser.add_argument("--identity", type=Path, required=True)
+    parser.add_argument("--signing-key", type=Path, required=True)
+    parser.add_argument("--trusted-admitter", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--lifetime-seconds",
+        type=int,
+        default=int(ADMISSION_MAX_LIFETIME.total_seconds()),
+    )
+    arguments = parser.parse_args()
+    arguments.lifetime = timedelta(seconds=arguments.lifetime_seconds)
+    try:
+        create_receipt(arguments)
+    except (AdmissionReceiptError, IntegrityGateError, OSError):
+        print("age-transition admission failed", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

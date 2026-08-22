@@ -77,6 +77,7 @@ jobs:
           PRIVACY_BASE_REF: ${{ github.event.pull_request.base.ref }}
           PRIVACY_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PRIVACY_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PRIVACY_REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
           test "$PRIVACY_BASE_REF" = "main"
@@ -85,11 +86,30 @@ jobs:
           test "$(git -C trusted-base rev-parse HEAD)" = "$PRIVACY_BASE_SHA"
           test "$(git -C untrusted-head rev-parse HEAD)" = "$PRIVACY_HEAD_SHA"
           test "$("$AGE_TOOLING_DIRECTORY/age-inspect" --version)" = "v${AGE_VERSION}"
+          python3 - "$GITHUB_EVENT_PATH" "$RUNNER_TEMP/privacy-age-admission-body" <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          event = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          pull_request = event.get("pull_request")
+          body = pull_request.get("body") if isinstance(pull_request, dict) else ""
+          body = body or ""
+          if not isinstance(body, str):
+              raise SystemExit("pull request body is not text")
+          destination = Path(sys.argv[2])
+          destination.write_bytes(body.encode("utf-8"))
+          os.chmod(destination, 0o600)
+          PY
           python3 trusted-base/scripts/privacy_age_integrity_gate.py \
             --base-repository trusted-base \
             --base-commit "$PRIVACY_BASE_SHA" \
             --head-repository untrusted-head \
-            --head-commit "$PRIVACY_HEAD_SHA"
+            --head-commit "$PRIVACY_HEAD_SHA" \
+            --admission-body "$RUNNER_TEMP/privacy-age-admission-body" \
+            --allowed-signers trusted-base/.github/age-admission/allowed_signers \
+            --repository "$PRIVACY_REPOSITORY"
           python3 trusted-base/scripts/privacy-scan \
             --root "$GITHUB_WORKSPACE/untrusted-head" \
             --require-age-manifest

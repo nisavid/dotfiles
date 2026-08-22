@@ -19,6 +19,7 @@ from privacy_age_envelopes import (
     AGE_MANIFEST_NAME,
     AGE_VERSION,
     MAX_AGE_ENVELOPE_BYTES,
+    MAX_AGE_MANIFEST_BYTES,
     AgeEnvelopeError,
     age_inspection_has_exact_postquantum_stanzas,
     canonical_manifest_bytes,
@@ -329,7 +330,12 @@ def _replace_manifest(root: Path, data: bytes) -> None:
                 pass
 
 
-def admit(root: Path, raw_identities: list[Path]) -> None:
+def admit(
+    root: Path,
+    raw_identities: list[Path],
+    *,
+    replace_manifest: bool = True,
+) -> bytes:
     try:
         root = root.resolve(strict=True)
     except OSError as error:
@@ -379,7 +385,24 @@ def admit(root: Path, raw_identities: list[Path]) -> None:
                         raise AgeEnvelopeError("an envelope did not decrypt to EOF")
                     admitted[relative] = "sha256:" + hashlib.sha256(data).hexdigest()
 
-                _replace_manifest(root, canonical_manifest_bytes(admitted))
+                manifest = canonical_manifest_bytes(admitted)
+                if replace_manifest:
+                    _replace_manifest(root, manifest)
+                else:
+                    try:
+                        existing = read_regular_file(
+                            root / AGE_MANIFEST_NAME,
+                            maximum=MAX_AGE_MANIFEST_BYTES,
+                        )
+                    except AgeEnvelopeError as error:
+                        raise AgeEnvelopeError(
+                            "validated envelope manifest is unavailable"
+                        ) from error
+                    if existing != manifest:
+                        raise AgeEnvelopeError(
+                            "validated envelope manifest does not match candidate"
+                        )
+                return manifest
             finally:
                 for descriptor in identities:
                     os.close(descriptor)
@@ -391,9 +414,18 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, default=Path.cwd())
     parser.add_argument("--identity", type=Path, action="append", required=True)
+    parser.add_argument(
+        "--check-only",
+        action="store_true",
+        help="validate every envelope without replacing the manifest",
+    )
     arguments = parser.parse_args()
     try:
-        admit(arguments.root, arguments.identity)
+        admit(
+            arguments.root,
+            arguments.identity,
+            replace_manifest=not arguments.check_only,
+        )
     except ManifestDurabilityUncertainError:
         print("age-envelope manifest durability uncertain", file=sys.stderr)
         return 2
