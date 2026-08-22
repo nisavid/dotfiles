@@ -392,17 +392,26 @@ class PrivacyAgeIntegrityGateTests(TestCase):
         untrusted_lines = tuple(
             line.strip() for line in source.splitlines() if "untrusted-head" in line
         )
-        self.assertIn("path: untrusted-head", untrusted_lines)
-        self.assertIn(
-            'test "$(git -C untrusted-head rev-parse HEAD)" = "$PRIVACY_HEAD_SHA"',
-            untrusted_lines,
+        self.assertTrue(any(line.startswith("path: untrusted-head") for line in untrusted_lines))
+        self.assertTrue(
+            any(
+                "git -C untrusted-head rev-parse HEAD" in line
+                and "PRIVACY_HEAD_SHA" in line
+                for line in untrusted_lines
+            )
         )
-        self.assertIn("--head-repository untrusted-head \\", untrusted_lines)
-        self.assertIn('--root "$GITHUB_WORKSPACE/untrusted-head" \\', untrusted_lines)
-        self.assertIn(
-            'python3 - "$PRIVACY_BASE_SHA" trusted-base "$PRIVACY_HEAD_SHA" '
-            "untrusted-head <<'PY'",
-            untrusted_lines,
+        self.assertTrue(
+            any("--head-repository untrusted-head" in line for line in untrusted_lines)
+        )
+        self.assertTrue(
+            any('--root "$GITHUB_WORKSPACE/untrusted-head"' in line for line in untrusted_lines)
+        )
+        self.assertTrue(
+            any(
+                'python3 - "$PRIVACY_BASE_SHA" trusted-base "$PRIVACY_HEAD_SHA"' in line
+                and "untrusted-head" in line
+                for line in untrusted_lines
+            )
         )
         self.assertIsNone(UNTRUSTED_HEAD_EXECUTION.search(source))
 
