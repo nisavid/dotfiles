@@ -172,6 +172,10 @@ grep -Fq 'set -eu' "$daybreak_encryption_doc" ||
   fail 'encryption policy does not fail closed before exact-target cleanup'
 grep -Fq 'refusing exact-target cleanup' "$daybreak_encryption_doc" ||
   fail 'encryption policy does not reject an unsafe exact-target precondition'
+grep -Fq 'parent="${target:h}"' "$daybreak_encryption_doc" ||
+  fail 'encryption policy does not bind cleanup to the expected parent'
+grep -Fq 'unexpected owner or mode' "$daybreak_encryption_doc" ||
+  fail 'encryption policy does not reject an unexpected owner or mode'
 grep -Fq 'Perform that exact-target cleanup before removing or reverting the encrypted' \
   "$daybreak_encryption_doc" ||
   fail 'encryption policy does not order target cleanup before source rollback'
@@ -210,6 +214,13 @@ fi
 [[ "$(mode_of "$daybreak_mode_target")" == 600 ]] ||
   fail 'stale Daybreak target mode changed before authorized cleanup'
 rm -- "$daybreak_mode_target"
+mv -- "$daybreak_mode_home/.agents" "$daybreak_mode_root/agents-real"
+ln -s -- "$daybreak_mode_root/agents-real" "$daybreak_mode_home/.agents"
+if [[ -d "${daybreak_mode_target:h}" && ! -L "${daybreak_mode_target:h}" ]]; then
+  fail 'exact-target Daybreak rollback guard accepted a symlinked parent'
+fi
+rm -- "$daybreak_mode_home/.agents"
+mv -- "$daybreak_mode_root/agents-real" "$daybreak_mode_home/.agents"
 [[ ! -e "$daybreak_mode_target" && ! -L "$daybreak_mode_target" ]] ||
   fail 'exact-target Daybreak rollback did not remove the stale target'
 print -r -- 'sentinel' > "$daybreak_mode_root/sentinel"
