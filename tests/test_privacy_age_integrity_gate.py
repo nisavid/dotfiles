@@ -226,6 +226,38 @@ class PrivacyAgeIntegrityGateTests(TestCase):
                 with self.assertRaisesRegex(RuntimeError, "complete admission infrastructure"):
                     self.verify(base, head, base_commit, head_commit)
 
+    def test_bootstrap_rejects_collateral_protected_changes(self) -> None:
+        _, base, head, _ = self.make_checkouts()
+        for relative in (
+            ".github/age-admission/allowed_signers",
+            "scripts/create-age-admission-receipt",
+            "scripts/run-trusted-age-admission",
+            "scripts/privacy_age_admission.py",
+        ):
+            (base / relative).unlink()
+        base_commit = commit_all(base, "pre-bootstrap collateral base")
+        required_modes = {
+            ".github/age-admission/allowed_signers": 0o644,
+            ".github/workflows/privacy-age-integrity.yml": 0o644,
+            "scripts/admit-age-envelopes": 0o755,
+            "scripts/create-age-admission-receipt": 0o755,
+            "scripts/run-trusted-age-admission": 0o755,
+            "scripts/privacy_age_admission.py": 0o644,
+            "scripts/privacy_age_envelopes.py": 0o644,
+            "scripts/privacy_age_integrity_gate.py": 0o755,
+        }
+        for relative, mode in required_modes.items():
+            path = head / relative
+            path.write_text("bootstrap replacement\n", encoding="utf-8")
+            path.chmod(mode)
+        (head / "home/private.age").write_text(
+            "collateral ciphertext\n",
+            encoding="utf-8",
+        )
+        head_commit = commit_all(head, "bootstrap with collateral protected change")
+        with self.assertRaisesRegex(RuntimeError, "not limited"):
+            self.verify(base, head, base_commit, head_commit)
+
     def test_signed_admission_accepts_only_the_exact_transition(self) -> None:
         temporary, base, head, base_commit = self.make_checkouts()
         key = Path(temporary.name) / "admission-key"

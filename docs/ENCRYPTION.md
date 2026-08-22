@@ -52,124 +52,9 @@ receipt. The `pull_request_target` boundary executes only verifier and scanner
 code from the exact trusted base commit and treats the pull-request checkout as
 data. It rejects any candidate change to ciphertexts, this inventory, the
 recipient configuration, admission or scanning code, encryption policy, or any
-workflow unless a trusted owner admission is present. Ordinary pull requests
-cannot mint admission authority by editing the candidate manifest, labels, or
-comments.
-
-### Owner admission receipts
-
-After the candidate commit is final, use an operator-owned wrapper copied to a
-location outside both the trusted and candidate checkouts. The wrapper reads the
-receipt creator as a raw blob from the trusted base commit, compares it with the
-live trusted-checkout file before execution, and executes only the verified blob.
-Do not run a wrapper from either checkout. The creator then requires both
-checkouts to be clean (including untracked and ignored files), materializes the
-exact candidate Git tree, and independently validates every envelope with the
-machine-local identity in check-only mode before signing a canonical,
-secret-free receipt with the owner admission key. Its in-process source check is
-defense-in-depth; the external wrapper is the independent launcher trust root:
-
-For an ordinary transition, materialize the wrapper from the already trusted
-base commit into an operator-owned mode-`0755` location and verify that copy
-before use. During the one-time bootstrap, use a separately reviewed external
-copy of the bootstrap wrapper; the pre-bootstrap base cannot supply it yet.
-In either case, verify the external file is a regular mode-`0755` file and
-compare its SHA-256 with the reviewed wrapper source before invoking it.
-
-For a materialized wrapper, establish the operator-owned copy and its reviewed
-digest before the invocation above:
-
-```zsh
-git -C "$TRUSTED_MAIN_CHECKOUT" show \
-  "$BASE_COMMIT:scripts/run-trusted-age-admission" \
-  >"$TRUSTED_ADMISSION_WRAPPER"
-chmod 0755 "$TRUSTED_ADMISSION_WRAPPER"
-test -f "$TRUSTED_ADMISSION_WRAPPER"
-test ! -L "$TRUSTED_ADMISSION_WRAPPER"
-stat -f '%Sp %N' "$TRUSTED_ADMISSION_WRAPPER" 2>/dev/null ||
-  stat -c '%A %n' "$TRUSTED_ADMISSION_WRAPPER"
-printf '%s  %s\n' "$REVIEWED_WRAPPER_SHA256" "$TRUSTED_ADMISSION_WRAPPER" |
-  shasum -a 256 --check
-```
-
-```zsh
-# Supply these operator-owned locations outside this document.
-: "${TRUSTED_MAIN_CHECKOUT:?set TRUSTED_MAIN_CHECKOUT to the trusted checkout}"
-: "${CANDIDATE_CHECKOUT:?set CANDIDATE_CHECKOUT to the candidate checkout}"
-: "${TRUSTED_ADMISSION_WRAPPER:?set TRUSTED_ADMISSION_WRAPPER to external wrapper}"
-: "${AGE_IDENTITY:?set AGE_IDENTITY to the external age identity}"
-: "${ADMISSION_SIGNING_KEY:?set ADMISSION_SIGNING_KEY to the external signing key}"
-: "${AGE_TOOLING_DIRECTORY:?set AGE_TOOLING_DIRECTORY to verified age tooling}"
-: "${ADMISSION_RECEIPT_OUTPUT:?set ADMISSION_RECEIPT_OUTPUT to an external output file}"
-BASE_COMMIT=0123456789abcdef0123456789abcdef01234567
-HEAD_COMMIT=89abcdef0123456789abcdef0123456789abcdef
-AGE_TOOLING_DIRECTORY="$AGE_TOOLING_DIRECTORY" \
-  python3 "$TRUSTED_ADMISSION_WRAPPER" \
-  --base-repository "$TRUSTED_MAIN_CHECKOUT" \
-  --base-commit "$BASE_COMMIT" \
-  -- \
-  --base-repository "$TRUSTED_MAIN_CHECKOUT" \
-  --base-commit "$BASE_COMMIT" \
-  --head-repository "$CANDIDATE_CHECKOUT" \
-  --head-commit "$HEAD_COMMIT" \
-  --repository nisavid/dotfiles \
-  --identity "$AGE_IDENTITY" \
-  --signing-key "$ADMISSION_SIGNING_KEY" \
-  --trusted-admitter "$TRUSTED_MAIN_CHECKOUT/scripts/admit-age-envelopes" \
-  --output "$ADMISSION_RECEIPT_OUTPUT"
-```
-
-The output is one bounded `privacy-age-admission/v1` pull-request-body marker.
-Add exactly that marker to the pull request body after the candidate head is
-published. Editing the body triggers the trusted boundary workflow. The
-workflow computes the protected transition itself, then requires the receipt
-to match the repository, base and head commits, every protected path's mode,
-kind, and SHA-256 digest, the expiry window at the time the workflow runs, and
-the signature namespace and principal. A changed head requires a new receipt;
-an expired or ambiguous marker fails closed during that run. GitHub preserves a
-successful required-check conclusion after the receipt expires, so the owner
-must trigger a fresh trusted run after adding the marker and immediately before
-merging. The check is not a time-based merge gate by itself.
-The nonce identifies the signed receipt but is not a one-time ledger. A valid
-receipt may be replayed only for the exact base/head transition until its
-expiry; changing either commit requires a new receipt.
-
-The committed public verifier key is
-`.github/age-admission/allowed_signers`. Rotate that key only as another
-owner-admitted protected transition. Never send the age identity, signing
-private key, decrypted catalog, or decrypted diagnostics to hosted CI. The
-receipt contains no plaintext identifiers.
-
-The first bootstrap of this boundary is a one-time exception: the trusted
-base predates the signer and verifier paths, so it cannot verify a v1 receipt.
-Create the bootstrap branch from `main` and open its pull request targeting
-`main`. The branch must contain and replace every admission infrastructure path
-before the exception is used: the signer, external launcher wrapper, creator,
-admission module, legacy admitter, envelope helper, trusted gate, and boundary
-workflow. Keep its review and required checks visible, and use an owner-approved,
-branch-scoped break-glass exception only long enough to merge that pull
-request. Do not push directly to `main`, disable unrelated protections, or
-reuse the exception for ordinary changes. Re-enable the protection
-immediately, verify that `main` contains the signer and verifier paths, and
-record the exact Checks API `name` emitted by the job — currently
-`Verify trusted base against candidate data` (the UI may render it with the
-workflow name prefixed). Read that name from a fresh check run. Do not treat
-that Actions job name as the final authenticated admission requirement; verify
-the dedicated App-pinned context described below through the live
-branch-protection API before creating a receipt for the next protected pull
-request.
-
-The Actions job name is not a provenance boundary: GitHub keys a required
-check by its job name and the shared Actions app, without binding it to the
-trusted `pull_request_target` workflow. Before ordinary protected merges,
-install a repository-scoped GitHub App dedicated to this admission controller,
-have it publish a stable admission context, and pin that context to the App ID
-in branch protection. Verify the live API preserves every existing check,
-strictness, administrator enforcement, review requirement, and the new
-App-pinned context. Until that App-backed source is installed and verified,
-keep ordinary protected merges owner-controlled and treat the Actions check as
-advisory; do not claim that the bootstrap workflow alone closes the merge
-boundary.
+workflow. A legitimate rotation therefore requires local identity-backed
+admission plus an explicit owner-controlled ruleset disposition; ordinary pull
+requests cannot mint admission authority by editing the candidate manifest.
 
 The v1 repository policy authorizes exactly one post-quantum recipient stanza
 per ciphertext. Hosted scanning enforces that public structural invariant;
@@ -208,12 +93,6 @@ this command. Exit status `2` with `age-envelope manifest durability uncertain`
 means the exact new manifest bytes are installed but the directory durability
 commit could not be confirmed; inspect the installed manifest and rerun
 admission before treating it as durable.
-
-`--check-only` runs the same identity-backed validation without replacing the
-manifest. It also requires the committed manifest to equal the manifest that
-validation computed, so a stale or hand-edited inventory fails the check. The
-receipt command uses this mode against the final candidate tree before it signs
-the transition.
 
 ## Source-Only Catalog Editing
 
