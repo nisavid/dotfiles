@@ -209,6 +209,8 @@ jobs:
             python3 -m unittest tests/test_agent_equipment_public_data.py
           python3 -m unittest tests/test_privacy_age_integrity_gate.py
           REQUIRE_AGE_TOOLING=1 \
+            python3 -m unittest tests/test_privacy_age_admission.py
+          REQUIRE_AGE_TOOLING=1 \
             python3 -m unittest tests/test_privacy_age_envelopes.py
           uvx --from check-jsonschema==0.35.0 \
             check-jsonschema --check-metaschema \

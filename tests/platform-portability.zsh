@@ -116,6 +116,20 @@ grep -Fq '          path: untrusted-head' "$age_boundary_workflow" ||
 grep -Fq 'python3 trusted-base/scripts/privacy_age_integrity_gate.py' \
   "$age_boundary_workflow" ||
   fail 'age boundary does not execute the trusted transition verifier'
+grep -Fq 'PRIVACY_REPOSITORY: ${{ github.repository }}' \
+  "$age_boundary_workflow" ||
+  fail 'age boundary does not bind the repository identity'
+grep -Fq 'python3 - "$GITHUB_EVENT_PATH"' "$age_boundary_workflow" ||
+  fail 'age boundary does not extract the pull-request body from the trusted event'
+grep -Fq -- '--admission-body "$RUNNER_TEMP/privacy-age-admission-body"' \
+  "$age_boundary_workflow" ||
+  fail 'age boundary does not pass the bounded admission body'
+grep -Fq -- \
+  '--allowed-signers trusted-base/.github/age-admission/allowed_signers' \
+  "$age_boundary_workflow" ||
+  fail 'age boundary does not use the trusted signer configuration'
+grep -Fq -- '--repository "$PRIVACY_REPOSITORY"' "$age_boundary_workflow" ||
+  fail 'age boundary does not bind admission to the repository'
 grep -Fq 'python3 trusted-base/scripts/privacy-scan' "$age_boundary_workflow" ||
   fail 'age boundary does not execute the trusted privacy scanner'
 grep -Fq 'AGE_TOOLING_DIRECTORY: ${{ runner.temp }}/age-bin' "$age_boundary_workflow" ||
@@ -141,6 +155,10 @@ for safe_line in \
   ! print -r -- "$safe_line" | grep -Eq "$untrusted_head_execution_pattern" ||
     fail "age boundary execution guard overmatched: $safe_line"
 done
+[[ -x "$repo_root/scripts/create-age-admission-receipt" ]] ||
+  fail 'age admission receipt command is not executable'
+[[ -f "$repo_root/.github/age-admission/allowed_signers" ]] ||
+  fail 'age admission allowed-signers configuration is missing'
 
 chezmoi -S "$repo_root/home" execute-template \
   --override-data '{"chezmoi":{"os":"linux"}}' \

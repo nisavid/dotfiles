@@ -52,9 +52,47 @@ receipt. The `pull_request_target` boundary executes only verifier and scanner
 code from the exact trusted base commit and treats the pull-request checkout as
 data. It rejects any candidate change to ciphertexts, this inventory, the
 recipient configuration, admission or scanning code, encryption policy, or any
-workflow. A legitimate rotation therefore requires local identity-backed
-admission plus an explicit owner-controlled ruleset disposition; ordinary pull
-requests cannot mint admission authority by editing the candidate manifest.
+workflow unless a trusted owner admission is present. Ordinary pull requests
+cannot mint admission authority by editing the candidate manifest, labels, or
+comments.
+
+### Owner admission receipts
+
+After the candidate commit is final, run the receipt command from the trusted
+main checkout at the exact base commit. The `--trusted-admitter` path must be
+that checkout's `scripts/admit-age-envelopes`; this prevents a candidate
+checkout from supplying the validation program. It independently validates
+every candidate envelope with the machine-local identity in check-only mode,
+then signs a canonical, secret-free receipt with the owner admission key:
+
+```zsh
+AGE_TOOLING_DIRECTORY=/absolute/path/to/checksum-verified-age-bin \
+  python3 <trusted-main-checkout>/scripts/create-age-admission-receipt \
+  --base-repository <trusted-main-checkout> \
+  --base-commit <main-commit> \
+  --head-repository <candidate-checkout> \
+  --head-commit <candidate-commit> \
+  --repository nisavid/dotfiles \
+  --identity ~/.config/age/key.txt \
+  --signing-key ~/.ssh/<owner-admission-key> \
+  --trusted-admitter <trusted-main-checkout>/scripts/admit-age-envelopes \
+  --output /private/temporary/age-admission-receipt.txt
+```
+
+The output is one bounded `privacy-age-admission/v1` pull-request-body marker.
+Add exactly that marker to the pull request body after the candidate head is
+published. Editing the body triggers the trusted boundary workflow. The
+workflow computes the protected transition itself, then requires the receipt
+to match the repository, base and head commits, every protected path's mode,
+kind, and SHA-256 digest, the expiry window, and the signature namespace and
+principal. A changed head requires a new receipt; an expired or ambiguous
+marker fails closed.
+
+The committed public verifier key is
+`.github/age-admission/allowed_signers`. Rotate that key only as another
+owner-admitted protected transition. Never send the age identity, signing
+private key, decrypted catalog, or decrypted diagnostics to hosted CI. The
+receipt contains no plaintext identifiers.
 
 The v1 repository policy authorizes exactly one post-quantum recipient stanza
 per ciphertext. Hosted scanning enforces that public structural invariant;
@@ -93,6 +131,10 @@ this command. Exit status `2` with `age-envelope manifest durability uncertain`
 means the exact new manifest bytes are installed but the directory durability
 commit could not be confirmed; inspect the installed manifest and rerun
 admission before treating it as durable.
+
+`--check-only` runs the same identity-backed validation without replacing the
+manifest. The receipt command uses this mode against the final candidate tree
+before it signs the transition.
 
 ## Source-Only Catalog Editing
 

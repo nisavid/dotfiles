@@ -193,6 +193,7 @@ class PrivacyAgeEnvelopeTests(TestCase):
         *,
         identity: Path,
         additional_identities: list[Path] | None = None,
+        check_only: bool = False,
         environment: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
         command = [
@@ -205,6 +206,8 @@ class PrivacyAgeEnvelopeTests(TestCase):
         ]
         for additional_identity in additional_identities or []:
             command.extend(("--identity", str(additional_identity)))
+        if check_only:
+            command.append("--check-only")
         effective_environment = (
             os.environ.copy() if environment is None else environment.copy()
         )
@@ -330,6 +333,22 @@ class PrivacyAgeEnvelopeTests(TestCase):
         )
         scan = self.run_scanner()
         self.assertEqual(scan.returncode, 0, scan.stdout + scan.stderr)
+
+    def test_check_only_admission_validates_without_replacing_the_manifest(self) -> None:
+        candidate = self.encrypt(b"check-only fixture")
+        (self.root / "candidate.age").write_bytes(candidate)
+        expected = manifest_bytes([("candidate.age", candidate)])
+        (self.root / MANIFEST).write_bytes(expected)
+
+        result = self.run_admitter_with(identity=self.identity, check_only=True)
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.root / MANIFEST).read_bytes(), expected)
+
+        (self.root / MANIFEST).write_bytes(manifest_bytes([]))
+        result = self.run_admitter_with(identity=self.identity, check_only=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual((self.root / MANIFEST).read_bytes(), manifest_bytes([]))
 
     def test_admission_rejects_an_additional_postquantum_recipient(self) -> None:
         _, additional_recipient = self.make_identity("additional-identity.txt")

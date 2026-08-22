@@ -2,14 +2,23 @@ from __future__ import annotations
 
 import os
 import re
+import hashlib
 import stat
 import subprocess
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase
 
 from scripts.privacy_age_integrity_gate import verify_integrity_boundary
+from scripts.privacy_age_admission import (
+    ADMISSION_NAMESPACE,
+    ADMISSION_PRINCIPAL,
+    ADMISSION_VERSION,
+    canonical_payload_bytes,
+    encode_receipt,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 GATE = ROOT / "scripts/privacy_age_integrity_gate.py"
@@ -28,6 +37,7 @@ UNTRUSTED_HEAD_EXECUTION = re.compile(
 )
 
 PROTECTED_FILES = {
+    ".github/age-admission/allowed_signers": "repository-owner ssh-ed25519 fixture\n",
     ".github/actions/privacy-boundary/action.yml": "name: boundary action\n",
     ".github/workflows/platform-portability.yml": "name: platform\n",
     ".github/workflows/privacy-age-integrity.yml": "name: boundary\n",
@@ -40,7 +50,9 @@ PROTECTED_FILES = {
     "home/private.age": "ciphertext fixture\n",
     "scripts/admit-age-envelopes": "#!/bin/sh\n",
     "scripts/agent_equipment_public_data.py": "# policy\n",
+    "scripts/create-age-admission-receipt": "#!/bin/sh\n",
     "scripts/privacy-scan": "#!/usr/bin/env python3\n",
+    "scripts/privacy_age_admission.py": "# admission\n",
     "scripts/privacy_age_envelopes.py": "# inventory\n",
     "scripts/privacy_age_integrity_gate.py": "# gate\n",
 }
@@ -116,14 +128,131 @@ class PrivacyAgeIntegrityGateTests(TestCase):
         return temporary, base, head, base_commit
 
     def verify(
-        self, base: Path, head: Path, base_commit: str, head_commit: str
+        self,
+        base: Path,
+        head: Path,
+        base_commit: str,
+        head_commit: str,
+        *,
+        admission_body: bytes | None = None,
+        allowed_signers: Path | None = None,
+        repository: str | None = None,
     ) -> None:
         verify_integrity_boundary(
             base_repository=base,
             base_commit=base_commit,
             head_repository=head,
             head_commit=head_commit,
+            admission_body=admission_body,
+            allowed_signers=allowed_signers,
+            repository=repository,
         )
+
+    def test_signed_admission_accepts_only_the_exact_transition(self) -> None:
+        temporary, base, head, base_commit = self.make_checkouts()
+        key = Path(temporary.name) / "admission-key"
+        subprocess.run(
+            ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)],
+            check=True,
+            capture_output=True,
+        )
+        public_key = (Path(f"{key}.pub")).read_text(encoding="ascii").split()
+        (base / ".github/age-admission/allowed_signers").write_text(
+            f"{ADMISSION_PRINCIPAL} {public_key[0]} {public_key[1]}\n",
+            encoding="ascii",
+        )
+        base_commit = commit_all(base, "signer")
+        (head / ".github/age-admission/allowed_signers").write_text(
+            f"{ADMISSION_PRINCIPAL} {public_key[0]} {public_key[1]}\n",
+            encoding="ascii",
+        )
+        (head / "home/private.age").write_text(
+            "candidate ciphertext\n",
+            encoding="utf-8",
+        )
+        head_commit = commit_all(head, "protected transition")
+
+        base_bytes = subprocess.run(
+            ["git", "show", f"{base_commit}:home/private.age"],
+            cwd=base,
+            check=True,
+            capture_output=True,
+        ).stdout
+        head_bytes = subprocess.run(
+            ["git", "show", f"{head_commit}:home/private.age"],
+            cwd=head,
+            check=True,
+            capture_output=True,
+        ).stdout
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        payload = {
+            "base_commit": base_commit,
+            "expires_at": (now + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "head_commit": head_commit,
+            "issued_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "nonce": "b" * 32,
+            "paths": [
+                {
+                    "base": {
+                        "kind": "blob",
+                        "mode": "100644",
+                        "sha256": "sha256:" + hashlib.sha256(base_bytes).hexdigest(),
+                    },
+                    "head": {
+                        "kind": "blob",
+                        "mode": "100644",
+                        "sha256": "sha256:" + hashlib.sha256(head_bytes).hexdigest(),
+                    },
+                    "path": "home/private.age",
+                }
+            ],
+            "repository": "nisavid/dotfiles",
+            "version": ADMISSION_VERSION,
+        }
+        message = canonical_payload_bytes(payload)
+        message_file = Path(temporary.name) / "payload"
+        message_file.write_bytes(message)
+        subprocess.run(
+            [
+                "ssh-keygen",
+                "-Y",
+                "sign",
+                "-f",
+                str(key),
+                "-n",
+                ADMISSION_NAMESPACE,
+                str(message_file),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        receipt = encode_receipt(payload, (message_file.with_suffix(".sig")).read_bytes())
+
+        self.verify(
+            base,
+            head,
+            base_commit,
+            head_commit,
+            admission_body=receipt,
+            allowed_signers=base / ".github/age-admission/allowed_signers",
+            repository="nisavid/dotfiles",
+        )
+
+        tampered = dict(payload)
+        tampered["head_commit"] = "f" * 40
+        with self.assertRaisesRegex(RuntimeError, "admission"):
+            self.verify(
+                base,
+                head,
+                base_commit,
+                head_commit,
+                admission_body=encode_receipt(
+                    tampered,
+                    (message_file.with_suffix(".sig")).read_bytes(),
+                ),
+                allowed_signers=base / ".github/age-admission/allowed_signers",
+                repository="nisavid/dotfiles",
+            )
 
     def test_unrelated_candidate_changes_are_allowed(self) -> None:
         _, base, head, base_commit = self.make_checkouts()
@@ -155,6 +284,15 @@ class PrivacyAgeIntegrityGateTests(TestCase):
         self.assertIn(
             "python3 trusted-base/scripts/privacy_age_integrity_gate.py", source
         )
+        self.assertIn('PRIVACY_REPOSITORY: ${{ github.repository }}', source)
+        self.assertIn('python3 - "$GITHUB_EVENT_PATH"', source)
+        self.assertIn('privacy-age-admission-body', source)
+        self.assertIn(
+            '--allowed-signers trusted-base/.github/age-admission/allowed_signers',
+            source,
+        )
+        self.assertIn('--admission-body "$RUNNER_TEMP/privacy-age-admission-body"', source)
+        self.assertIn('--repository "$PRIVACY_REPOSITORY"', source)
         self.assertIn("python3 trusted-base/scripts/privacy-scan", source)
         self.assertNotIn("python3 untrusted-head/", source)
         self.assertEqual(
