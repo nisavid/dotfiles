@@ -16,6 +16,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+try:
+    from .privacy_age_envelopes import AgeEnvelopeError, read_regular_file
+except ImportError:  # pragma: no cover - direct module loading
+    from privacy_age_envelopes import AgeEnvelopeError, read_regular_file
+
 ADMISSION_VERSION = "privacy-age-admission/v1"
 ADMISSION_NAMESPACE = "nisavid/dotfiles/age-admission/v1"
 ADMISSION_PRINCIPAL = "repository-owner"
@@ -327,48 +332,6 @@ def extract_receipt(body: bytes) -> tuple[dict[str, Any], bytes, bytes] | None:
     return _decode_receipt_marker(matches[0].group(1))
 
 
-def _read_bounded_regular_file(
-    path: Path,
-    *,
-    maximum: int,
-    expected: os.stat_result,
-) -> bytes:
-    """Read a bounded regular file without accepting a path replacement."""
-
-    no_follow = getattr(os, "O_NOFOLLOW", None)
-    if no_follow is None:
-        raise AdmissionReceiptError("admission signer configuration is unavailable")
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | no_follow
-    try:
-        descriptor = os.open(path, flags)
-    except OSError as error:
-        raise AdmissionReceiptError("admission signer configuration is unavailable") from error
-    try:
-        info = os.fstat(descriptor)
-        if (
-            not stat.S_ISREG(info.st_mode)
-            or (info.st_dev, info.st_ino) != (expected.st_dev, expected.st_ino)
-            or info.st_size > maximum
-        ):
-            raise AdmissionReceiptError("admission signer configuration is unavailable")
-        chunks: list[bytes] = []
-        remaining = maximum + 1
-        while remaining:
-            chunk = os.read(descriptor, min(remaining, 64 * 1024))
-            if not chunk:
-                break
-            chunks.append(chunk)
-            remaining -= len(chunk)
-        data = b"".join(chunks)
-    except OSError as error:
-        raise AdmissionReceiptError("admission signer configuration is unavailable") from error
-    finally:
-        os.close(descriptor)
-    if len(data) > maximum:
-        raise AdmissionReceiptError("admission signer configuration is unavailable")
-    return data
-
-
 def verify_receipt_signature(
     message: bytes,
     signature: bytes,
@@ -395,13 +358,17 @@ def verify_receipt_signature(
             root = Path(temporary)
             signer_copy = root / "allowed-signers"
             signature_file = root / "receipt.sig"
-            signer_copy.write_bytes(
-                _read_bounded_regular_file(
+            try:
+                signer_data = read_regular_file(
                     canonical_allowed_signers,
                     maximum=32 * 1024,
                     expected=info,
                 )
-            )
+            except (AgeEnvelopeError, OSError) as error:
+                raise AdmissionReceiptError(
+                    "admission signer configuration is unavailable"
+                ) from error
+            signer_copy.write_bytes(signer_data)
             signature_file.write_bytes(signature)
             os.chmod(signer_copy, 0o600)
             os.chmod(signature_file, 0o600)

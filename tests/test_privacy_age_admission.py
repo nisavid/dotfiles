@@ -21,7 +21,6 @@ from scripts.privacy_age_admission import (
 from scripts.privacy_age_integrity_gate import verify_integrity_boundary
 
 ROOT = Path(__file__).resolve().parents[1]
-CREATOR = ROOT / "scripts/create-age-admission-receipt"
 ADMITTER = ROOT / "scripts/admit-age-envelopes"
 
 
@@ -226,11 +225,15 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(contents)
             shutil.copy2(ADMITTER, base / "scripts/admit-age-envelopes")
-            shutil.copy2(
-                ROOT / "scripts/privacy_age_envelopes.py",
-                base / "scripts/privacy_age_envelopes.py",
-            )
+            for script_name in (
+                "create-age-admission-receipt",
+                "privacy_age_admission.py",
+                "privacy_age_envelopes.py",
+                "privacy_age_integrity_gate.py",
+            ):
+                shutil.copy2(ROOT / "scripts" / script_name, base / "scripts" / script_name)
             (base / "scripts/admit-age-envelopes").chmod(0o755)
+            (base / "scripts/create-age-admission-receipt").chmod(0o755)
             signing_key = root / "signing-key"
             _run(
                 "ssh-keygen",
@@ -274,13 +277,14 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
             head_commit = _commit(head, "candidate")
 
             output = root / "receipt.txt"
+            creator = base / "scripts/create-age-admission-receipt"
             environment = os.environ.copy()
             environment["AGE_TOOLING_DIRECTORY"] = str(
                 Path(os.environ.get("AGE_TOOLING_DIRECTORY", "/opt/homebrew/bin"))
             )
             def creator_command(identity_path: Path, output_path: Path) -> list[str]:
                 return [
-                    str(CREATOR),
+                    str(creator),
                     "--base-repository",
                     str(base),
                     "--base-commit",
@@ -323,7 +327,7 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
                 repository="nisavid/dotfiles",
             )
 
-            identity_in_base = base / "identity-in-base"
+            identity_in_base = base / ".git/identity-in-base"
             shutil.copy2(identity, identity_in_base)
             identity_in_base.chmod(0o600)
             result = subprocess.run(
@@ -336,7 +340,7 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 1)
 
-            tooling_in_base = base / "age-tooling"
+            tooling_in_base = base / ".git/age-tooling"
             tooling_in_base.mkdir()
             tooling_environment = environment.copy()
             tooling_environment["AGE_TOOLING_DIRECTORY"] = str(tooling_in_base)
@@ -346,6 +350,70 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
                 capture_output=True,
                 text=True,
                 env=tooling_environment,
+                timeout=30,
+            )
+            self.assertEqual(result.returncode, 1)
+
+            fake_tool_dir = base / ".git/fake-tools"
+            fake_tool_dir.mkdir()
+            fake_tool = fake_tool_dir / "ssh-keygen"
+            fake_tool.write_text("#!/bin/sh\nexit 99\n", encoding="ascii")
+            fake_tool.chmod(0o755)
+            untrusted_tool_environment = environment.copy()
+            untrusted_tool_environment["PATH"] = (
+                f"{fake_tool_dir}{os.pathsep}{environment['PATH']}"
+            )
+            result = subprocess.run(
+                creator_command(identity, root / "untrusted-signing-tool-receipt.txt"),
+                check=False,
+                capture_output=True,
+                text=True,
+                env=untrusted_tool_environment,
+                timeout=30,
+            )
+            self.assertEqual(result.returncode, 1)
+
+            output_alias = root / "output-alias"
+            output_alias.symlink_to(base, target_is_directory=True)
+            result = subprocess.run(
+                creator_command(identity, output_alias / "receipt.txt"),
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+                timeout=30,
+            )
+            self.assertEqual(result.returncode, 1)
+
+            import_marker = root / "trusted-module-imported"
+            (base / "scripts/privacy_age_admission.py").write_text(
+                "from pathlib import Path\n"
+                f"Path({str(import_marker)!r}).write_text('imported')\n",
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                creator_command(identity, root / "dirty-base-receipt.txt"),
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+                timeout=30,
+            )
+            self.assertEqual(result.returncode, 1)
+            self.assertFalse(import_marker.exists())
+
+            (base / "scripts/privacy_age_admission.py").unlink()
+            shutil.copy2(
+                ROOT / "scripts/privacy_age_admission.py",
+                base / "scripts/privacy_age_admission.py",
+            )
+            (head / "home/private.age").write_bytes(b"dirty candidate ciphertext\n")
+            result = subprocess.run(
+                creator_command(identity, root / "dirty-head-receipt.txt"),
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
                 timeout=30,
             )
             self.assertEqual(result.returncode, 1)
