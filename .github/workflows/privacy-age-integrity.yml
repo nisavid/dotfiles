@@ -1,3 +1,4 @@
+# Protected admission activation sentinel: owner-signed-age-v1
 name: Privacy age protected boundary
 
 on:
@@ -82,7 +83,7 @@ jobs:
           # match their advertised Git objects. Its deliberate overlap with
           # the local receipt creator is defense in depth against changed
           # candidate data or checkout state that does not match Git objects.
-          python3 - "$PRIVACY_BASE_SHA" trusted-base "$PRIVACY_HEAD_SHA" untrusted-head <<'PY'
+          python3 -I - "$PRIVACY_BASE_SHA" trusted-base "$PRIVACY_HEAD_SHA" untrusted-head <<'PY'
           import os
           import re
           import stat
@@ -103,6 +104,7 @@ jobs:
               repository: str,
               *arguments: str,
               maximum_output_bytes: int,
+              input_data: bytes | None = None,
           ) -> bytes:
               environment = os.environ.copy()
               for variable in (
@@ -145,6 +147,7 @@ jobs:
                   ],
                   check=False,
                   capture_output=True,
+                  input=input_data,
                   env=environment,
                   timeout=30,
               )
@@ -173,6 +176,108 @@ jobs:
               finally:
                   os.close(descriptor)
 
+          def blob_batch(repository: str, object_ids: list[bytes]) -> dict[bytes, bytes]:
+              unique_object_ids = list(dict.fromkeys(object_ids))
+              if not unique_object_ids:
+                  return {}
+              if any(
+                  len(object_id) != 40
+                  or not re.fullmatch(rb"[0-9a-f]{40}", object_id)
+                  for object_id in unique_object_ids
+              ):
+                  raise SystemExit("checkout byte verification failed")
+              request = b"".join(object_id + b"\n" for object_id in unique_object_ids)
+              raw = git(
+                  repository,
+                  "cat-file",
+                  "--batch",
+                  maximum_output_bytes=MAX_TOTAL_BLOB_BYTES + len(unique_object_ids) * 96,
+                  input_data=request,
+              )
+              blobs: dict[bytes, bytes] = {}
+              offset = 0
+              total_blob_bytes = 0
+              for object_id in unique_object_ids:
+                  line_end = raw.find(b"\n", offset)
+                  if line_end < 0:
+                      raise SystemExit("checkout byte verification failed")
+                  header = raw[offset:line_end].split(b" ")
+                  offset = line_end + 1
+                  if len(header) != 3 or header[0] != object_id or header[1] != b"blob":
+                      raise SystemExit("checkout byte verification failed")
+                  try:
+                      size = int(header[2], 10)
+                  except (TypeError, ValueError) as error:
+                      raise SystemExit("checkout byte verification failed") from error
+                  if size < 0 or size > MAX_BLOB_BYTES:
+                      raise SystemExit("checkout byte verification failed")
+                  total_blob_bytes += size
+                  if total_blob_bytes > MAX_TOTAL_BLOB_BYTES:
+                      raise SystemExit("checkout byte verification failed")
+                  end = offset + size
+                  if end >= len(raw) or raw[end : end + 1] != b"\n":
+                      raise SystemExit("checkout byte verification failed")
+                  blobs[object_id] = raw[offset:end]
+                  offset = end + 1
+              if offset != len(raw):
+                  raise SystemExit("checkout byte verification failed")
+              return blobs
+
+          def verify_filesystem_entries(
+              root: Path,
+              seen_paths: set[bytes],
+          ) -> None:
+              """Reject checkout leaves and directories absent from the Git tree."""
+
+              actual_paths: set[bytes] = set()
+              actual_directories: set[bytes] = set()
+              pending = [root]
+              while pending:
+                  current = pending.pop()
+                  try:
+                      entries = os.scandir(current)
+                  except OSError as error:
+                      raise SystemExit("checkout byte verification failed") from error
+                  with entries:
+                      for entry in entries:
+                          if current == root and entry.name == ".git":
+                              continue
+                          try:
+                              relative = os.fsencode(
+                                  Path(entry.path).relative_to(root).as_posix()
+                              )
+                              if not relative or b"\x00" in relative:
+                                  raise SystemExit("checkout byte verification failed")
+                              if entry.is_symlink():
+                                  actual_paths.add(relative)
+                              elif entry.is_dir(follow_symlinks=False):
+                                  actual_directories.add(relative)
+                                  pending.append(Path(entry.path))
+                              elif entry.is_file(follow_symlinks=False):
+                                  actual_paths.add(relative)
+                              else:
+                                  raise SystemExit("checkout byte verification failed")
+                          except OSError as error:
+                              raise SystemExit("checkout byte verification failed") from error
+                          if (
+                              len(actual_paths) > MAX_TREE_ENTRIES
+                              or len(actual_directories) > MAX_TREE_ENTRIES
+                          ):
+                              raise SystemExit("checkout byte verification failed")
+
+              expected_directories: set[bytes] = set()
+              for raw_path in seen_paths:
+                  parts = raw_path.split(b"/")
+                  expected_directories.update(
+                      b"/".join(parts[:index])
+                      for index in range(1, len(parts))
+                  )
+              if (
+                  actual_paths != seen_paths
+                  or not actual_directories <= expected_directories
+              ):
+                  raise SystemExit("checkout byte verification failed")
+
           def verify(repository: str, commit: str) -> None:
               root = Path(repository).resolve(strict=True)
               raw_tree = git(
@@ -185,7 +290,7 @@ jobs:
                   maximum_output_bytes=MAX_TREE_BYTES,
               )
               seen_paths: set[bytes] = set()
-              total_blob_bytes = 0
+              records: list[tuple[bytes, str, bytes]] = []
               for record in raw_tree.split(b"\0"):
                   if not record:
                       continue
@@ -210,17 +315,18 @@ jobs:
                   if any(segment in {"", ".", ".."} for segment in relative.split("/")):
                       raise SystemExit("checkout byte verification failed")
                   seen_paths.add(raw_path)
-                  path = root.joinpath(*relative.split("/"))
-                  expected = git(
-                      repository,
-                      "cat-file",
-                      "blob",
-                      object_id.decode("ascii"),
-                      maximum_output_bytes=MAX_BLOB_BYTES,
-                  )
+                  records.append((mode, relative, object_id))
+              blobs = blob_batch(repository, [record[2] for record in records])
+              total_blob_bytes = 0
+              for mode, relative, object_id in records:
+                  try:
+                      expected = blobs[object_id]
+                  except KeyError as error:
+                      raise SystemExit("checkout byte verification failed") from error
                   total_blob_bytes += len(expected)
                   if total_blob_bytes > MAX_TOTAL_BLOB_BYTES:
                       raise SystemExit("checkout byte verification failed")
+                  path = root.joinpath(*relative.split("/"))
                   try:
                       info = path.lstat()
                   except OSError as error:
@@ -236,7 +342,23 @@ jobs:
                           raise SystemExit("checkout byte verification failed")
                   else:
                       raise SystemExit("checkout byte verification failed")
+              verify_filesystem_entries(root, seen_paths)
 
+          def require_trusted_executable(repository: str, relative: str, mode: int) -> None:
+              path = Path(repository).joinpath(*relative.split("/"))
+              try:
+                  info = path.lstat()
+              except OSError as error:
+                  raise SystemExit("trusted verifier path is unavailable") from error
+              if not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != mode:
+                  raise SystemExit("trusted verifier path is not a regular executable")
+
+          require_trusted_executable(
+              sys.argv[2],
+              "scripts/privacy_age_integrity_gate.py",
+              0o755,
+          )
+          require_trusted_executable(sys.argv[2], "scripts/privacy-scan", 0o755)
           verify(sys.argv[2], sys.argv[1])
           verify(sys.argv[4], sys.argv[3])
           PY
@@ -257,7 +379,7 @@ jobs:
           test "$(git -C trusted-base rev-parse HEAD)" = "$PRIVACY_BASE_SHA"
           test "$(git -C untrusted-head rev-parse HEAD)" = "$PRIVACY_HEAD_SHA"
           test "$("$AGE_TOOLING_DIRECTORY/age-inspect" --version)" = "v${AGE_VERSION}"
-          python3 - "$GITHUB_EVENT_PATH" "$RUNNER_TEMP/privacy-age-admission-body" <<'PY'
+          python3 -I - "$GITHUB_EVENT_PATH" "$RUNNER_TEMP/privacy-age-admission-body" <<'PY'
           import json
           import os
           import sys
@@ -265,17 +387,31 @@ jobs:
 
           event = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
           pull_request = event.get("pull_request")
-          body = pull_request.get("body") if isinstance(pull_request, dict) else ""
+          if not isinstance(pull_request, dict):
+              raise SystemExit("pull request event is not an object")
+          body = pull_request.get("body")
           if body is None:
               body = ""
           elif not isinstance(body, str):
               raise SystemExit("pull request body is not text")
-          body = body or ""
           destination = Path(sys.argv[2])
-          destination.write_bytes(body.encode("utf-8"))
-          os.chmod(destination, 0o600)
+          no_follow = getattr(os, "O_NOFOLLOW", 0)
+          if not no_follow:
+              raise SystemExit("safe admission-body creation is unavailable")
+          descriptor = os.open(
+              destination,
+              os.O_WRONLY | os.O_CREAT | os.O_EXCL | no_follow,
+              0o600,
+          )
+          try:
+              with os.fdopen(descriptor, "wb") as handle:
+                  descriptor = -1
+                  handle.write(body.encode("utf-8"))
+          finally:
+              if descriptor >= 0:
+                  os.close(descriptor)
           PY
-          python3 trusted-base/scripts/privacy_age_integrity_gate.py \
+          python3 -I trusted-base/scripts/privacy_age_integrity_gate.py \
             --base-repository trusted-base \
             --base-commit "$PRIVACY_BASE_SHA" \
             --head-repository untrusted-head \
@@ -283,6 +419,6 @@ jobs:
             --admission-body "$RUNNER_TEMP/privacy-age-admission-body" \
             --allowed-signers trusted-base/.github/age-admission/allowed_signers \
             --repository "$PRIVACY_REPOSITORY"
-          python3 trusted-base/scripts/privacy-scan \
+          python3 -I trusted-base/scripts/privacy-scan \
             --root "$GITHUB_WORKSPACE/untrusted-head" \
             --require-age-manifest

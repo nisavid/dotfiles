@@ -106,6 +106,9 @@ grep -Fq -- \
   fail 'platform workflow does not anchor adapter schema references to the local file'
 
 age_boundary_workflow=$repo_root/.github/workflows/privacy-age-integrity.yml
+grep -Fxq '# Protected admission activation sentinel: owner-signed-age-v1' \
+  "$age_boundary_workflow" ||
+  fail 'age boundary is missing the admission activation sentinel'
 untrusted_head_execution_pattern='^[[:space:]]*((uses|working-directory):[[:space:]]*(\./)?untrusted-head(/|$)|(run:[[:space:]]*)?(\./)?untrusted-head/|(run:[[:space:]]*)?.*((cd|source)[[:space:]]+|\.[[:space:]]+)([^[:space:]]*/)?untrusted-head(/|[[:space:]]|$)|(run:[[:space:]]*)?.*(^|[^[:alnum:]_])(python[0-9.]*|bash|sh|zsh|ruby|perl|node|npm|npx|make)([[:space:]]|$).*untrusted-head/|(run:[[:space:]]*)?.*(&&|\|\||;)[[:space:]]*(\./)?untrusted-head/)'
 grep -Fq '  pull_request_target:' "$age_boundary_workflow" ||
   fail 'age boundary does not execute from the trusted base event'
@@ -113,13 +116,15 @@ grep -Fq '          path: trusted-base' "$age_boundary_workflow" ||
   fail 'age boundary does not isolate the trusted base checkout'
 grep -Fq '          path: untrusted-head' "$age_boundary_workflow" ||
   fail 'age boundary does not isolate the candidate data checkout'
-grep -Fq 'python3 trusted-base/scripts/privacy_age_integrity_gate.py' \
+grep -Fq 'python3 -I trusted-base/scripts/privacy_age_integrity_gate.py' \
   "$age_boundary_workflow" ||
   fail 'age boundary does not execute the trusted transition verifier'
+grep -Fq 'require_trusted_executable' "$age_boundary_workflow" ||
+  fail 'age boundary does not validate trusted verifier file kinds and modes'
 grep -Fq 'PRIVACY_REPOSITORY: ${{ github.repository }}' \
   "$age_boundary_workflow" ||
   fail 'age boundary does not bind the repository identity'
-grep -Fq 'python3 - "$GITHUB_EVENT_PATH"' "$age_boundary_workflow" ||
+grep -Fq 'python3 -I - "$GITHUB_EVENT_PATH"' "$age_boundary_workflow" ||
   fail 'age boundary does not extract the pull-request body from the trusted event'
 grep -Fq -- '--admission-body "$RUNNER_TEMP/privacy-age-admission-body"' \
   "$age_boundary_workflow" ||
@@ -130,8 +135,13 @@ grep -Fq -- \
   fail 'age boundary does not use the trusted signer configuration'
 grep -Fq -- '--repository "$PRIVACY_REPOSITORY"' "$age_boundary_workflow" ||
   fail 'age boundary does not bind admission to the repository'
-grep -Fq 'python3 trusted-base/scripts/privacy-scan' "$age_boundary_workflow" ||
+grep -Fq 'python3 -I trusted-base/scripts/privacy-scan' "$age_boundary_workflow" ||
   fail 'age boundary does not execute the trusted privacy scanner'
+grep -Fq 'REVIEWED_BOOTSTRAP_MANIFEST' "$repo_root/docs/ENCRYPTION.md" ||
+  fail 'bootstrap runbook does not require a detached reviewed manifest'
+grep -Fq 'test "$tree_digest" = "$manifest_tree_digest"' \
+  "$repo_root/docs/ENCRYPTION.md" ||
+  fail 'bootstrap runbook does not enforce the reviewed tree digest'
 grep -Fq 'AGE_TOOLING_DIRECTORY: ${{ runner.temp }}/age-bin' "$age_boundary_workflow" ||
   fail 'age boundary does not bind scanning to the checksum-verified parser directory'
 ! grep -Eq \
