@@ -106,6 +106,26 @@ success, failure, or interruption. Source-only catalogs have no persistent
 plaintext target; never render one into the repository or another persistent
 path. Catalogs with an explicit target listed above may render only to that documented mode-restricted path.
 
+## Retiring The Daybreak Catalog
+
+`chezmoi apply` does not prune a private target when its source is removed or
+rolled back. Under explicit operator authorization for this exact target, first
+verify that `~/.agents/daybreak-account-bindings.md` is a regular mode-`0600`
+file and not a symlink, then remove only that path and verify that it is absent:
+
+```zsh
+target="$HOME/.agents/daybreak-account-bindings.md"
+test -f "$target" && test ! -L "$target"
+# Confirm the owner and mode with the platform's lstat/stat command.
+rm -- "$target"
+test ! -e "$target" && test ! -L "$target"
+```
+
+Perform that exact-target cleanup before removing or reverting the encrypted
+catalog and its template. Never use a recursive cleanup or infer a target from
+decrypted catalog contents. Re-apply only after the authorized source change is
+complete and the target has been re-verified.
+
 ## Transactional Private-Skill Restore
 
 `home/run_onchange_after_restore-private-skills.sh.tmpl` hashes every ciphertext pair for change detection and passes the pairs to `scripts/private-skill-transaction`. The transaction:
