@@ -312,6 +312,7 @@ def _protected_transition(
 
 
 def _require_bootstrap_head_complete(transition: ProtectedTransition) -> None:
+    unexpected = set(transition.changed) - BOOTSTRAP_REQUIRED_PATHS
     missing = BOOTSTRAP_REQUIRED_PATHS - transition.head_tree.keys()
     malformed = {
         path
@@ -337,6 +338,10 @@ def _require_bootstrap_head_complete(transition: ProtectedTransition) -> None:
             transition.base_tree[path].object_id,
         )
     }
+    if unexpected:
+        raise IntegrityGateError(
+            "bootstrap candidate is not limited to admission infrastructure"
+        )
     if missing or malformed or stale:
         raise IntegrityGateError(
             "bootstrap candidate is missing complete admission infrastructure"

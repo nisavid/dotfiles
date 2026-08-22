@@ -84,10 +84,14 @@ def _git(repository: Path, *arguments: str, maximum: int | None = None) -> bytes
 
 def _read_regular(path: Path) -> tuple[bytes, os.stat_result]:
     no_follow = getattr(os, "O_NOFOLLOW", None)
-    if no_follow is None:
+    no_block = getattr(os, "O_NONBLOCK", None)
+    if no_follow is None or no_block is None:
         raise TrustedLauncherError("safe launcher validation is unavailable")
     try:
-        descriptor = os.open(path, os.O_RDONLY | no_follow | getattr(os, "O_CLOEXEC", 0))
+        descriptor = os.open(
+            path,
+            os.O_RDONLY | no_follow | no_block | getattr(os, "O_CLOEXEC", 0),
+        )
     except OSError as error:
         raise TrustedLauncherError("trusted launcher is unavailable") from error
     try:

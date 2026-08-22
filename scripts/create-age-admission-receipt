@@ -143,12 +143,13 @@ def _validated_checkout(
 
 def _read_launcher(path: Path) -> bytes:
     no_follow = getattr(os, "O_NOFOLLOW", None)
-    if no_follow is None:
+    no_block = getattr(os, "O_NONBLOCK", None)
+    if no_follow is None or no_block is None:
         raise ReceiptRequestError("safe launcher validation is unavailable")
     try:
         descriptor = os.open(
             path,
-            os.O_RDONLY | no_follow | getattr(os, "O_CLOEXEC", 0),
+            os.O_RDONLY | no_follow | no_block | getattr(os, "O_CLOEXEC", 0),
         )
     except OSError as error:
         raise ReceiptRequestError("trusted receipt command is unavailable") from error
@@ -689,6 +690,34 @@ def _run_local_admission(
         raise ReceiptRequestError("local ciphertext admission failed")
 
 
+def _validate_signing_tool_path_authority(*paths: Path) -> None:
+    """Require every signer parent directory to resist untrusted replacement."""
+
+    try:
+        owner = os.getuid()
+    except AttributeError:  # pragma: no cover - this project requires POSIX
+        owner = None
+    for path in paths:
+        current = path.parent
+        while True:
+            try:
+                info = current.lstat()
+            except OSError as error:
+                raise ReceiptRequestError(
+                    "admission signature tooling is unavailable"
+                ) from error
+            if (
+                not stat.S_ISDIR(info.st_mode)
+                or info.st_mode & 0o022
+                or owner is not None and info.st_uid not in {0, owner}
+            ):
+                raise ReceiptRequestError("admission signature tooling is unavailable")
+            parent = current.parent
+            if parent == current:
+                break
+            current = parent
+
+
 def _validated_signing_tool(
     *,
     forbidden_roots: tuple[Path, ...],
@@ -708,6 +737,7 @@ def _validated_signing_tool(
         for root in forbidden_roots
     ):
         raise ReceiptRequestError("admission signature tooling is unavailable")
+    _validate_signing_tool_path_authority(lexical, canonical)
     try:
         descriptor, info = envelope_module.open_regular_file_descriptor(lexical)
     except (AttributeError, ValueError, OSError) as error:
@@ -741,16 +771,18 @@ def _sign_payload(
         envelope_module=envelope_module,
     )
     try:
-        envelope_module.read_regular_file(
-            tool,
-            maximum=MAX_SIGNING_TOOL_BYTES,
-            expected=tool_info,
-        )
-    except (AttributeError, ValueError, OSError) as error:
-        raise ReceiptRequestError("admission signature tooling is unavailable") from error
-    try:
         with tempfile.TemporaryDirectory(prefix="age-admission-sign.") as temporary:
             root = Path(temporary)
+            try:
+                envelope_module.read_regular_file(
+                    tool,
+                    maximum=MAX_SIGNING_TOOL_BYTES,
+                    expected=tool_info,
+                )
+            except (AttributeError, ValueError, OSError) as error:
+                raise ReceiptRequestError(
+                    "admission signature tooling is unavailable"
+                ) from error
             key = root / "signing-key"
             message = root / "payload"
             key.write_bytes(signing_key)
