@@ -164,6 +164,9 @@ class PrivacyAgeIntegrityGateTests(TestCase):
             "scripts/privacy_age_integrity_gate.py",
         ):
             (head / relative).write_text("bootstrap replacement\n", encoding="utf-8")
+        (head / "scripts/admit-age-envelopes").chmod(0o755)
+        (head / "scripts/create-age-admission-receipt").chmod(0o755)
+        (head / "scripts/privacy_age_integrity_gate.py").chmod(0o755)
         head_commit = commit_all(head, "complete bootstrap candidate")
 
         with self.assertRaisesRegex(RuntimeError, "bootstrap owner exception"):
@@ -182,6 +185,40 @@ class PrivacyAgeIntegrityGateTests(TestCase):
         incomplete_head_commit = commit_all(head, "incomplete bootstrap candidate")
         with self.assertRaisesRegex(RuntimeError, "complete admission infrastructure"):
             self.verify(base, head, base_commit, incomplete_head_commit)
+
+    def test_bootstrap_requires_regular_entries_with_expected_modes(self) -> None:
+        for malformed in ("mode", "symlink"):
+            with self.subTest(malformed=malformed):
+                _, base, head, _ = self.make_checkouts()
+                for relative in (
+                    ".github/age-admission/allowed_signers",
+                    "scripts/create-age-admission-receipt",
+                    "scripts/privacy_age_admission.py",
+                ):
+                    (base / relative).unlink()
+                base_commit = commit_all(base, f"pre-bootstrap {malformed}")
+                required_modes = {
+                    ".github/age-admission/allowed_signers": 0o644,
+                    ".github/workflows/privacy-age-integrity.yml": 0o644,
+                    "scripts/admit-age-envelopes": 0o755,
+                    "scripts/create-age-admission-receipt": 0o755,
+                    "scripts/privacy_age_admission.py": 0o644,
+                    "scripts/privacy_age_envelopes.py": 0o644,
+                    "scripts/privacy_age_integrity_gate.py": 0o755,
+                }
+                for relative, mode in required_modes.items():
+                    path = head / relative
+                    path.write_text("bootstrap replacement\n", encoding="utf-8")
+                    path.chmod(mode)
+                malformed_path = head / "scripts/create-age-admission-receipt"
+                if malformed == "mode":
+                    malformed_path.chmod(0o644)
+                else:
+                    malformed_path.unlink()
+                    malformed_path.symlink_to("admit-age-envelopes")
+                head_commit = commit_all(head, f"malformed bootstrap {malformed}")
+                with self.assertRaisesRegex(RuntimeError, "complete admission infrastructure"):
+                    self.verify(base, head, base_commit, head_commit)
 
     def test_signed_admission_accepts_only_the_exact_transition(self) -> None:
         temporary, base, head, base_commit = self.make_checkouts()
@@ -275,6 +312,22 @@ class PrivacyAgeIntegrityGateTests(TestCase):
 
         tampered = dict(payload)
         tampered["head_commit"] = "f" * 40
+        tampered_message_file = Path(temporary.name) / "tampered-payload"
+        tampered_message_file.write_bytes(canonical_payload_bytes(tampered))
+        subprocess.run(
+            [
+                "ssh-keygen",
+                "-Y",
+                "sign",
+                "-f",
+                str(key),
+                "-n",
+                ADMISSION_NAMESPACE,
+                str(tampered_message_file),
+            ],
+            check=True,
+            capture_output=True,
+        )
         with self.assertRaisesRegex(RuntimeError, "admission"):
             self.verify(
                 base,
@@ -283,7 +336,7 @@ class PrivacyAgeIntegrityGateTests(TestCase):
                 head_commit,
                 admission_body=encode_receipt(
                     tampered,
-                    (message_file.with_suffix(".sig")).read_bytes(),
+                    (tampered_message_file.with_suffix(".sig")).read_bytes(),
                 ),
                 allowed_signers=base / ".github/age-admission/allowed_signers",
                 repository="nisavid/dotfiles",
@@ -330,16 +383,20 @@ class PrivacyAgeIntegrityGateTests(TestCase):
         self.assertIn('--repository "$PRIVACY_REPOSITORY"', source)
         self.assertIn("python3 trusted-base/scripts/privacy-scan", source)
         self.assertNotIn("python3 untrusted-head/", source)
-        self.assertEqual(
-            tuple(
-                line.strip() for line in source.splitlines() if "untrusted-head" in line
-            ),
-            (
-                "path: untrusted-head",
-                'test "$(git -C untrusted-head rev-parse HEAD)" = "$PRIVACY_HEAD_SHA"',
-                "--head-repository untrusted-head \\",
-                '--root "$GITHUB_WORKSPACE/untrusted-head" \\',
-            ),
+        untrusted_lines = tuple(
+            line.strip() for line in source.splitlines() if "untrusted-head" in line
+        )
+        self.assertIn("path: untrusted-head", untrusted_lines)
+        self.assertIn(
+            'test "$(git -C untrusted-head rev-parse HEAD)" = "$PRIVACY_HEAD_SHA"',
+            untrusted_lines,
+        )
+        self.assertIn("--head-repository untrusted-head \\", untrusted_lines)
+        self.assertIn('--root "$GITHUB_WORKSPACE/untrusted-head" \\', untrusted_lines)
+        self.assertIn(
+            'python3 - "$PRIVACY_BASE_SHA" trusted-base "$PRIVACY_HEAD_SHA" '
+            "untrusted-head <<'PY'",
+            untrusted_lines,
         )
         self.assertIsNone(UNTRUSTED_HEAD_EXECUTION.search(source))
 

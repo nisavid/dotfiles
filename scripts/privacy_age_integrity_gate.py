@@ -34,6 +34,8 @@ except ImportError:  # pragma: no cover - direct script execution
     from privacy_age_envelopes import AgeEnvelopeError, read_regular_file
 
 COMMIT_ID = re.compile(r"[0-9a-f]{40}\Z", re.ASCII)
+MAX_GIT_TREE_BYTES = 8 * 1024 * 1024
+MAX_GIT_TREE_ENTRIES = 10_000
 
 # Changes to these paths require a signed owner admission after local
 # identity-backed validation. The pull_request_target workflow executes this
@@ -72,6 +74,15 @@ BOOTSTRAP_REQUIRED_PATHS = ADMISSION_INFRASTRUCTURE_PATHS | frozenset(
         b"scripts/privacy_age_integrity_gate.py",
     }
 )
+BOOTSTRAP_REQUIRED_ENTRIES = {
+    b".github/age-admission/allowed_signers": (b"blob", b"100644"),
+    b".github/workflows/privacy-age-integrity.yml": (b"blob", b"100644"),
+    b"scripts/admit-age-envelopes": (b"blob", b"100755"),
+    b"scripts/create-age-admission-receipt": (b"blob", b"100755"),
+    b"scripts/privacy_age_admission.py": (b"blob", b"100644"),
+    b"scripts/privacy_age_envelopes.py": (b"blob", b"100644"),
+    b"scripts/privacy_age_integrity_gate.py": (b"blob", b"100755"),
+}
 PROTECTED_OPTIONAL_PATHS = frozenset({b".gitattributes", b".gitmodules"})
 PROTECTED_PREFIXES = (b".github/actions/", b".github/workflows/")
 
@@ -112,6 +123,8 @@ def _git(
         "GIT_COMMON_DIR",
         "GIT_CONFIG_COUNT",
         "GIT_CONFIG_PARAMETERS",
+        "GIT_CONFIG_LOCAL",
+        "GIT_CONFIG_SYSTEM",
         "GIT_DIR",
         "GIT_INDEX_FILE",
         "GIT_OBJECT_DIRECTORY",
@@ -193,6 +206,7 @@ def _tree(repository: Path, commit: str) -> dict[bytes, TreeEntry]:
         "-z",
         "--full-tree",
         commit,
+        maximum_output_bytes=MAX_GIT_TREE_BYTES,
     )
     entries: dict[bytes, TreeEntry] = {}
     for record in raw.split(b"\0"):
@@ -205,6 +219,8 @@ def _tree(repository: Path, commit: str) -> dict[bytes, TreeEntry]:
             raise IntegrityGateError("git tree record is malformed") from error
         if not path or path in entries:
             raise IntegrityGateError("git tree paths are not unique")
+        if len(entries) >= MAX_GIT_TREE_ENTRIES:
+            raise IntegrityGateError("git tree contains too many entries")
         entries[path] = TreeEntry(mode=mode, kind=kind, object_id=object_id)
     return entries
 
@@ -233,18 +249,16 @@ def _tree_side(
         mode = entry.mode.decode("ascii")
     except UnicodeDecodeError as error:
         raise IntegrityGateError("protected tree metadata is not ASCII") from error
-    digest: str | None = None
-    if kind == "blob":
-        data = _git(
-            repository,
-            "cat-file",
-            "blob",
-            entry.object_id.decode("ascii"),
-            maximum_output_bytes=16 * 1024 * 1024,
-        )
-        # Keep the digest over the exact blob bytes, independent of Git's
-        # object hash algorithm.
-        digest = "sha256:" + hashlib.sha256(data).hexdigest()
+    data = _git(
+        repository,
+        "cat-file",
+        kind,
+        entry.object_id.decode("ascii"),
+        maximum_output_bytes=16 * 1024 * 1024,
+    )
+    # Keep the digest over the exact Git object bytes, independent of Git's
+    # object hash algorithm. This also binds symlink and gitlink transitions.
+    digest = "sha256:" + hashlib.sha256(data).hexdigest()
     return {"kind": kind, "mode": mode, "sha256": digest}
 
 
@@ -295,6 +309,16 @@ def _protected_transition(
 
 def _require_bootstrap_head_complete(transition: ProtectedTransition) -> None:
     missing = BOOTSTRAP_REQUIRED_PATHS - transition.head_tree.keys()
+    malformed = {
+        path
+        for path, expected in BOOTSTRAP_REQUIRED_ENTRIES.items()
+        if path in transition.head_tree
+        and (
+            transition.head_tree[path].kind,
+            transition.head_tree[path].mode,
+        )
+        != expected
+    }
     stale = {
         path
         for path in BOOTSTRAP_REQUIRED_PATHS
@@ -309,7 +333,7 @@ def _require_bootstrap_head_complete(transition: ProtectedTransition) -> None:
             transition.base_tree[path].object_id,
         )
     }
-    if missing or stale:
+    if missing or malformed or stale:
         raise IntegrityGateError(
             "bootstrap candidate is missing complete admission infrastructure"
         )

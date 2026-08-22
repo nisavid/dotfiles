@@ -70,13 +70,16 @@ machine-local identity in check-only mode,
 then signs a canonical, secret-free receipt with the owner admission key:
 
 ```zsh
-TRUSTED_MAIN_CHECKOUT=/absolute/path/to/trusted-main-checkout
-CANDIDATE_CHECKOUT=/absolute/path/to/candidate-checkout
+# Supply these operator-owned locations outside this document.
+: "${TRUSTED_MAIN_CHECKOUT:?set TRUSTED_MAIN_CHECKOUT to the trusted checkout}"
+: "${CANDIDATE_CHECKOUT:?set CANDIDATE_CHECKOUT to the candidate checkout}"
+: "${AGE_IDENTITY:?set AGE_IDENTITY to the external age identity}"
+: "${ADMISSION_SIGNING_KEY:?set ADMISSION_SIGNING_KEY to the external signing key}"
+: "${AGE_TOOLING_DIRECTORY:?set AGE_TOOLING_DIRECTORY to verified age tooling}"
+: "${ADMISSION_RECEIPT_OUTPUT:?set ADMISSION_RECEIPT_OUTPUT to an external output file}"
 BASE_COMMIT=0123456789abcdef0123456789abcdef01234567
 HEAD_COMMIT=89abcdef0123456789abcdef0123456789abcdef
-AGE_IDENTITY=/absolute/path/to/age/key.txt
-ADMISSION_SIGNING_KEY=/absolute/path/to/owner-admission-key
-AGE_TOOLING_DIRECTORY=/absolute/path/to/checksum-verified-age-bin \
+AGE_TOOLING_DIRECTORY="$AGE_TOOLING_DIRECTORY" \
   python3 "$TRUSTED_MAIN_CHECKOUT/scripts/create-age-admission-receipt" \
   --base-repository "$TRUSTED_MAIN_CHECKOUT" \
   --base-commit "$BASE_COMMIT" \
@@ -86,7 +89,7 @@ AGE_TOOLING_DIRECTORY=/absolute/path/to/checksum-verified-age-bin \
   --identity "$AGE_IDENTITY" \
   --signing-key "$ADMISSION_SIGNING_KEY" \
   --trusted-admitter "$TRUSTED_MAIN_CHECKOUT/scripts/admit-age-envelopes" \
-  --output /private/temporary/age-admission-receipt.txt
+  --output "$ADMISSION_RECEIPT_OUTPUT"
 ```
 
 The output is one bounded `privacy-age-admission/v1` pull-request-body marker.
