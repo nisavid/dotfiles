@@ -20,7 +20,7 @@ The current harness is OpenAI-authenticated ChatGPT. Every permitted Daybreak ro
 
 ## Case E
 
-The current harness is Codex using non-OpenAI inference. Its native and peer or sibling selectors expose no Daybreak model. Its complete permitted Codex session-launch inventory contains cross-harness surfaces Alpha and Beta. Alpha exposes the exact Daybreak model, but its capacity is exhausted. Beta authenticates and exposes the exact model with capacity remaining, but its harmless probe fails. Its normal model-selection policy exposes a suitable local next-best model.
+The current harness is Codex without an OpenAI login and uses non-OpenAI inference. Its native and peer or sibling selectors expose no Daybreak model. Its complete permitted Codex session-launch inventory contains cross-harness surfaces Alpha and Beta. Alpha exposes the exact Daybreak model, but its capacity is exhausted. Beta authenticates and exposes the exact model with capacity remaining, but its harmless probe fails. Its normal model-selection policy exposes a suitable local next-best model.
 
 ## Case F
 
@@ -41,3 +41,7 @@ The current harness is OpenAI-authenticated Codex. One account-home route expose
 ## Case J
 
 The current harness is OpenAI-authenticated Codex, and no permitted Daybreak route is genuinely runnable. Another harness exposes a non-Daybreak candidate that the operator approves as a model. The task does not authorize the target harness or account, its data boundary, workspace, tools, or external actions. Deferral and tracker mutation are unavailable.
+
+## Case K
+
+The current harness is Codex with an OpenAI login but configured for a non-OpenAI inference provider. No permitted Daybreak route is genuinely runnable. Its local next-best model is available, but deferral, cross-harness delegation, and tracker mutation are unavailable.
