@@ -77,6 +77,11 @@ jobs:
           PRIVACY_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
+          # Keep this verifier self-contained and before any trusted-base
+          # import: it is the pre-import boundary that proves both checkouts
+          # match their advertised Git objects. Its deliberate overlap with
+          # the local receipt creator is defense in depth against a changed
+          # candidate or a compromised checkout helper.
           python3 - "$PRIVACY_BASE_SHA" trusted-base "$PRIVACY_HEAD_SHA" untrusted-head <<'PY'
           import os
           import re
