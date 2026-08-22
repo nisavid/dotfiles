@@ -40,6 +40,14 @@ MAX_WORKTREE_ENTRIES = 10_000
 MAX_WORKTREE_BYTES = 16 * 1024 * 1024
 MAX_LAUNCHER_BYTES = 256 * 1024
 COMMIT_ID = re.compile(r"[0-9a-f]{40}\Z", re.ASCII)
+_MACHO_MAGICS = {
+    b"\xca\xfe\xba\xbe",
+    b"\xca\xfe\xba\xbf",
+    b"\xce\xfa\xed\xfe",
+    b"\xcf\xfa\xed\xfe",
+    b"\xfe\xed\xfa\xce",
+    b"\xfe\xed\xfa\xcf",
+}
 
 
 def _within(path: Path, root: Path) -> bool:
@@ -722,7 +730,7 @@ def _validated_signing_tool(
     *,
     forbidden_roots: tuple[Path, ...],
     envelope_module: types.ModuleType,
-) -> tuple[Path, os.stat_result]:
+) -> bytes:
     raw = shutil.which("ssh-keygen")
     if raw is None:
         raise ReceiptRequestError("admission signature tooling is unavailable")
@@ -751,11 +759,98 @@ def _validated_signing_tool(
             or info.st_mode & 0o022 != 0
         ):
             raise ReceiptRequestError("admission signature tooling is unavailable")
+        chunks: list[bytes] = []
+        remaining = MAX_SIGNING_TOOL_BYTES + 1
+        while remaining:
+            chunk = os.read(descriptor, min(remaining, 64 * 1024))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        data = b"".join(chunks)
+        if len(data) > MAX_SIGNING_TOOL_BYTES:
+            raise ReceiptRequestError("admission signature tooling is unavailable")
+        return data
     except (AttributeError, ValueError, OSError) as error:
         raise ReceiptRequestError("admission signature tooling is unavailable") from error
     finally:
         os.close(descriptor)
-    return canonical, info
+
+def _stage_signing_tool(root: Path, data: bytes) -> Path:
+    """Execute only signer bytes read through the validated descriptor."""
+
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    if no_follow is None:
+        raise ReceiptRequestError("admission signature tooling is unavailable")
+    path = root / "ssh-keygen"
+    try:
+        descriptor = os.open(
+            path,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | no_follow
+            | getattr(os, "O_CLOEXEC", 0),
+            0o700,
+        )
+    except OSError as error:
+        raise ReceiptRequestError("admission signature tooling is unavailable") from error
+    try:
+        offset = 0
+        while offset < len(data):
+            written = os.write(descriptor, data[offset:])
+            if written <= 0:
+                raise ReceiptRequestError("admission signature tooling is unavailable")
+            offset += written
+        os.fchmod(descriptor, 0o700)
+        os.fsync(descriptor)
+        info = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_size != len(data)
+            or stat.S_IMODE(info.st_mode) != 0o700
+        ):
+            raise ReceiptRequestError("admission signature tooling is unavailable")
+    except (OSError, ValueError) as error:
+        raise ReceiptRequestError("admission signature tooling is unavailable") from error
+    finally:
+        os.close(descriptor)
+    return path
+
+
+def _authorize_staged_macos_tool(path: Path, data: bytes) -> None:
+    """Ad-hoc sign staged Mach-O bytes so macOS accepts the verified copy."""
+
+    if sys.platform != "darwin" or data[:4] not in _MACHO_MAGICS:
+        return
+    codesign = shutil.which("codesign")
+    if codesign is None:
+        raise ReceiptRequestError("admission signature tooling is unavailable")
+    codesign_path = Path(os.path.abspath(codesign))
+    try:
+        codesign_path = codesign_path.resolve(strict=True)
+    except OSError as error:
+        raise ReceiptRequestError("admission signature tooling is unavailable") from error
+    _validate_signing_tool_path_authority(codesign_path)
+    try:
+        result = subprocess.run(
+            [
+                os.fspath(codesign_path),
+                "--force",
+                "--sign",
+                "-",
+                "--timestamp=none",
+                os.fspath(path),
+            ],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=SIGN_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise ReceiptRequestError("admission signature tooling is unavailable") from error
+    if result.returncode != 0:
+        raise ReceiptRequestError("admission signature tooling is unavailable")
 
 
 def _sign_payload(
@@ -766,23 +861,15 @@ def _sign_payload(
     envelope_module: types.ModuleType,
     namespace: str,
 ) -> bytes:
-    tool, tool_info = _validated_signing_tool(
+    tool_data = _validated_signing_tool(
         forbidden_roots=forbidden_roots,
         envelope_module=envelope_module,
     )
     try:
         with tempfile.TemporaryDirectory(prefix="age-admission-sign.") as temporary:
             root = Path(temporary)
-            try:
-                envelope_module.read_regular_file(
-                    tool,
-                    maximum=MAX_SIGNING_TOOL_BYTES,
-                    expected=tool_info,
-                )
-            except (AttributeError, ValueError, OSError) as error:
-                raise ReceiptRequestError(
-                    "admission signature tooling is unavailable"
-                ) from error
+            tool = _stage_signing_tool(root, tool_data)
+            _authorize_staged_macos_tool(tool, tool_data)
             key = root / "signing-key"
             message = root / "payload"
             key.write_bytes(signing_key)

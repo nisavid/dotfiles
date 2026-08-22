@@ -87,6 +87,21 @@ BOOTSTRAP_REQUIRED_ENTRIES = {
     b"scripts/privacy_age_envelopes.py": (b"blob", b"100644"),
     b"scripts/privacy_age_integrity_gate.py": (b"blob", b"100755"),
 }
+# These support files are part of this reviewed bootstrap revision, but are not
+# admission authority. Permit only their exact reviewed Git blobs; every other
+# protected collateral change remains outside the one-time exception.
+BOOTSTRAP_REVIEWED_SUPPORT_ENTRIES = {
+    b".github/workflows/platform-portability.yml": (
+        b"blob",
+        b"100644",
+        b"fea93f6a2805d1899722f806ecd11d40c6c259c6",
+    ),
+    b"docs/ENCRYPTION.md": (
+        b"blob",
+        b"100644",
+        b"50ea29d9d96c1d3c63866cea1cc39040bf83ea09",
+    ),
+}
 PROTECTED_OPTIONAL_PATHS = frozenset({b".gitattributes", b".gitmodules"})
 PROTECTED_PREFIXES = (b".github/actions/", b".github/workflows/")
 
@@ -312,7 +327,20 @@ def _protected_transition(
 
 
 def _require_bootstrap_head_complete(transition: ProtectedTransition) -> None:
-    unexpected = set(transition.changed) - BOOTSTRAP_REQUIRED_PATHS
+    unexpected = {
+        path
+        for path in set(transition.changed) - BOOTSTRAP_REQUIRED_PATHS
+        if (
+            path not in BOOTSTRAP_REVIEWED_SUPPORT_ENTRIES
+            or transition.head_tree.get(path) is None
+            or (
+                transition.head_tree[path].kind,
+                transition.head_tree[path].mode,
+                transition.head_tree[path].object_id,
+            )
+            != BOOTSTRAP_REVIEWED_SUPPORT_ENTRIES[path]
+        )
+    }
     missing = BOOTSTRAP_REQUIRED_PATHS - transition.head_tree.keys()
     malformed = {
         path

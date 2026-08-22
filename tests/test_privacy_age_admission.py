@@ -598,6 +598,26 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 1)
 
+            writable_parent_tool_dir = root / "writable-parent-tools"
+            writable_parent_tool_dir.mkdir()
+            writable_parent_tool_dir.chmod(0o775)
+            writable_parent_tool = writable_parent_tool_dir / "ssh-keygen"
+            writable_parent_tool.write_text("#!/bin/sh\nexit 99\n", encoding="ascii")
+            writable_parent_tool.chmod(0o755)
+            writable_parent_environment = environment.copy()
+            writable_parent_environment["PATH"] = (
+                f"{writable_parent_tool_dir}{os.pathsep}{environment['PATH']}"
+            )
+            result = subprocess.run(
+                creator_command(identity, root / "writable-parent-receipt.txt"),
+                check=False,
+                capture_output=True,
+                text=True,
+                env=writable_parent_environment,
+                timeout=30,
+            )
+            self.assertEqual(result.returncode, 1)
+
             output_alias = root / "output-alias"
             output_alias.symlink_to(base, target_is_directory=True)
             result = subprocess.run(

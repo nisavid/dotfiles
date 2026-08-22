@@ -18,7 +18,10 @@ from scripts.privacy_age_admission import (
     canonical_payload_bytes,
     encode_receipt,
 )
-from scripts.privacy_age_integrity_gate import verify_integrity_boundary
+from scripts.privacy_age_integrity_gate import (
+    BOOTSTRAP_REVIEWED_SUPPORT_ENTRIES,
+    verify_integrity_boundary,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 GATE = ROOT / "scripts/privacy_age_integrity_gate.py"
@@ -148,6 +151,19 @@ class PrivacyAgeIntegrityGateTests(TestCase):
             allowed_signers=allowed_signers,
             repository=repository,
         )
+
+    def test_bootstrap_support_allowlist_matches_reviewed_tree(self) -> None:
+        for raw_path, (kind, mode, object_id) in BOOTSTRAP_REVIEWED_SUPPORT_ENTRIES.items():
+            path = ROOT / os.fsdecode(raw_path)
+            self.assertEqual(kind, b"blob")
+            self.assertEqual(
+                mode,
+                f"{0o100000 | (path.stat().st_mode & 0o777):06o}".encode(),
+            )
+            self.assertEqual(
+                object_id.decode("ascii"),
+                run("git", "hash-object", "--", os.fspath(path), cwd=ROOT),
+            )
 
     def test_prebootstrap_base_requires_the_explicit_owner_exception(self) -> None:
         _, base, head, _ = self.make_checkouts()
