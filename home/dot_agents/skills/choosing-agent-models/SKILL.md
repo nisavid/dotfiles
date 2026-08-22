@@ -26,7 +26,7 @@ Do not use this for product runtime model routing, AI feature configuration, or 
 
 Treat cybersecurity-related and cybersecurity-adjacent whole tasks and bounded subtasks as Daybreak-routed work. This section overrides the general matrix and fallback rules for that scope.
 
-In ChatGPT or Codex when an OpenAI account supplies inference, agents **must use Daybreak for model selection** whenever any permitted Daybreak route is genuinely runnable. In every other harness, agents **should use Daybreak for model selection** whenever any permitted Daybreak route is genuinely runnable. These modal verbs govern model routing; they do not make the work optional.
+In ChatGPT or Codex when an OpenAI account supplies inference, agents **must route cybersecurity-related or cybersecurity-adjacent work to a Daybreak model** whenever any permitted Daybreak route is genuinely runnable. In every other harness, agents **should route that work to a Daybreak model** whenever any permitted Daybreak route is genuinely runnable. The Daybreak model executes the routed cybersecurity work rather than choosing a model for another agent. These rules do not govern unrelated work. Their modal verbs govern routing, not whether the cybersecurity work is optional.
 
 Before selecting a model, inventory each distinct route independently. A route is one invocation surface plus any account home, authenticated identity, model, and capability state required by that surface. Catalog entries are route inputs, not routes by themselves.
 

@@ -248,12 +248,15 @@ test_model_selection() {
   local routing_fixture="$skill_dir/evals/fixtures/daybreak-routing-matrix.md"
   local trigger_evals="$skill_dir/evals/trigger-evals.json"
   local link="$repo_dir/home/dot_claude/skills/symlink_choosing-agent-models"
-  local mandatory_route_rule openai_fallback_rule other_fallback_rule preferred_route_rule
+  local openai_fallback_rule other_fallback_rule routing_scope_rule
 
-  mandatory_route_rule='**must use Daybreak for model selection** whenever any permitted Daybreak route is '
-  mandatory_route_rule+='genuinely runnable.'
-  preferred_route_rule='**should use Daybreak for model selection** whenever any permitted Daybreak route is '
-  preferred_route_rule+='genuinely runnable.'
+  routing_scope_rule='In ChatGPT or Codex when an OpenAI account supplies inference, agents **must route '
+  routing_scope_rule+='cybersecurity-related or cybersecurity-adjacent work to a Daybreak model** whenever '
+  routing_scope_rule+='any permitted Daybreak route is genuinely runnable. In every other harness, agents '
+  routing_scope_rule+='**should route that work to a Daybreak model** whenever any permitted Daybreak route '
+  routing_scope_rule+='is genuinely runnable. The Daybreak model executes the routed cybersecurity work '
+  routing_scope_rule+='rather than choosing a model for another agent. These rules do not govern unrelated '
+  routing_scope_rule+='work. Their modal verbs govern routing, not whether the cybersecurity work is optional.'
   openai_fallback_rule='For Daybreak-routed work in ChatGPT or Codex using an OpenAI account for inference, '
   openai_fallback_rule+='local non-Daybreak fall-through is forbidden.'
   other_fallback_rule='For Daybreak-routed work in every other harness, including ChatGPT or Codex without '
@@ -264,16 +267,8 @@ test_model_selection() {
     'model-selection trigger must cover Daybreak-routed cybersecurity work'
   assert_contains "$skill" '## Daybreak Routing For Cybersecurity Work' \
     'model-selection skill must own the public Daybreak routing policy'
-  assert_contains "$skill" 'must use Daybreak for model selection' \
-    'OpenAI-authenticated ChatGPT and Codex must route available Daybreak work to Daybreak'
-  assert_contains "$skill" 'should use Daybreak for model selection' \
-    'other harnesses should prefer an available Daybreak route'
-  assert_contains "$skill" "$mandatory_route_rule" \
-    'mandatory Daybreak routing must use the complete runnable-route predicate'
-  assert_contains "$skill" "$preferred_route_rule" \
-    'preferred Daybreak routing must use the complete runnable-route predicate'
-  assert_contains "$skill" 'These modal verbs govern model routing; they do not make the work optional.' \
-    'Daybreak modal verbs must qualify model choice rather than task execution'
+  assert_contains "$skill" "$routing_scope_rule" \
+    'Daybreak routing must canonically scope execution to cybersecurity work'
   assert_contains "$skill" 'Every harness must inventory cross-harness Codex invocation' \
     'every harness must consider cross-harness Daybreak routes'
   assert_contains "$skill" 'A route is one invocation surface' \
@@ -310,6 +305,7 @@ test_model_selection() {
       "account-binding-boundary",
       "availability-facts",
       "cross-harness-inventory",
+      "cybersecurity-scope",
       "no-runnable-openai",
       "other-harness-local-fallback",
       "probe-tuple",
@@ -322,7 +318,7 @@ test_model_selection() {
   ' "$evals" >/dev/null || fail 'model-selection behavior evals do not cover the Daybreak routing contract'
   local expected_routing_headings
   expected_routing_headings="$(printf '%s\n' \
-    '## Case A' '## Case B' '## Case C' '## Case D' '## Case E' '## Case F')"
+    '## Case A' '## Case B' '## Case C' '## Case D' '## Case E' '## Case F' '## Case G')"
   [[ "$(rg '^## ' "$routing_fixture")" == "$expected_routing_headings" ]] || \
     fail 'model-selection routing cases must use neutral headings without expected dispositions'
   while IFS= read -r fixture; do

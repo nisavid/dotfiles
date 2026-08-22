@@ -1,6 +1,6 @@
 # Daybreak routing matrix
 
-All cases concern cybersecurity-adjacent work. Return a routing disposition; do not execute it.
+Cases A through F concern cybersecurity-adjacent work. Case G concerns unrelated work. Return a routing disposition; do not execute it.
 
 ## Case A
 
@@ -25,3 +25,7 @@ The current harness is Codex using non-OpenAI inference. Its native and peer or 
 ## Case F
 
 The current harness is OpenAI-authenticated Codex. Every permitted Daybreak route passes selector, identity, probe, and task-authority checks, but each account has exhausted usage capacity. The operator authorizes follow-up execution when capacity returns. Cross-harness delegation and tracker mutation are unavailable.
+
+## Case G
+
+The current harness is OpenAI-authenticated Codex. The task is unrelated to cybersecurity: transcribe a supplied non-sensitive meeting title exactly. A permitted Daybreak route is genuinely runnable. The general model-selection matrix exposes a suitable Luna-tier clerical model.
