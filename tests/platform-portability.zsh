@@ -219,6 +219,11 @@ grep -Fq \
   'Catalogs with an explicit target listed above may render only to that documented mode-restricted path.' \
   "$daybreak_encryption_doc" ||
   fail 'encryption policy does not bound the persistent catalog exception'
+grep -Fq '`chezmoi apply` does not prune a private target' "$daybreak_encryption_doc" ||
+  fail 'encryption policy does not document stale-target rollback'
+grep -Fq 'Perform that exact-target cleanup before removing or reverting the encrypted' \
+  "$daybreak_encryption_doc" ||
+  fail 'encryption policy does not order target cleanup before source rollback'
 
 daybreak_mode_root=$test_root/daybreak-bindings
 daybreak_mode_home=$daybreak_mode_root/home
@@ -240,6 +245,22 @@ HOME="$daybreak_mode_home" \
     apply --parent-dirs "$daybreak_mode_target"
 [[ "$(mode_of "$daybreak_mode_target")" == 600 ]] ||
   fail 'rendered private Daybreak account bindings do not have mode 0600'
+rm -- "$daybreak_mode_source/dot_agents/private_daybreak-account-bindings.md.tmpl"
+if HOME="$daybreak_mode_home" \
+  XDG_CACHE_HOME="$daybreak_mode_root/cache" \
+  XDG_CONFIG_HOME="$daybreak_mode_root/config" \
+  XDG_STATE_HOME="$daybreak_mode_root/state" \
+  chezmoi --source "$daybreak_mode_source" --destination "$daybreak_mode_home" \
+    apply --parent-dirs "$daybreak_mode_target" >/dev/null 2>&1; then
+  fail 'source removal unexpectedly made stale Daybreak target apply cleanly'
+fi
+[[ -f "$daybreak_mode_target" && ! -L "$daybreak_mode_target" ]] ||
+  fail 'source removal unexpectedly pruned or replaced stale Daybreak target'
+[[ "$(mode_of "$daybreak_mode_target")" == 600 ]] ||
+  fail 'stale Daybreak target mode changed before authorized cleanup'
+rm -- "$daybreak_mode_target"
+[[ ! -e "$daybreak_mode_target" && ! -L "$daybreak_mode_target" ]] ||
+  fail 'exact-target Daybreak rollback did not remove the stale target'
 
 chezmoi -S "$repo_root/home" execute-template \
   --override-data '{"chezmoi":{"os":"linux"}}' \
