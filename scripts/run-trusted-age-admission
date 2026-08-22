@@ -1,0 +1,213 @@
+#!/usr/bin/env python3
+"""Run the exact receipt creator blob from an operator-owned location."""
+
+from __future__ import annotations
+
+import argparse
+import os
+import re
+import stat
+import subprocess
+import sys
+from pathlib import Path
+
+MAX_LAUNCHER_BYTES = 256 * 1024
+COMMIT_ID = re.compile(r"[0-9a-f]{40}\Z", re.ASCII)
+
+
+class TrustedLauncherError(ValueError):
+    """The operator wrapper could not establish the trusted launcher."""
+
+
+def _within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def _git(repository: Path, *arguments: str, maximum: int | None = None) -> bytes:
+    environment = os.environ.copy()
+    for variable in (
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_COMMON_DIR",
+        "GIT_CONFIG_COUNT",
+        "GIT_CONFIG_PARAMETERS",
+        "GIT_CONFIG_LOCAL",
+        "GIT_CONFIG_SYSTEM",
+        "GIT_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_WORK_TREE",
+    ):
+        environment.pop(variable, None)
+    for variable in tuple(environment):
+        if variable.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")):
+            environment.pop(variable, None)
+    environment.update(
+        {
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_NO_LAZY_FETCH": "1",
+            "GIT_NO_REPLACE_OBJECTS": "1",
+            "GIT_OPTIONAL_LOCKS": "0",
+            "GIT_TERMINAL_PROMPT": "0",
+            "LC_ALL": "C",
+        }
+    )
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "-c",
+                "core.fsmonitor=false",
+                "-c",
+                f"core.hooksPath={os.devnull}",
+                "-C",
+                os.fspath(repository),
+                *arguments,
+            ],
+            check=False,
+            capture_output=True,
+            env=environment,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise TrustedLauncherError("trusted checkout inspection failed") from error
+    if result.returncode != 0:
+        raise TrustedLauncherError("trusted checkout inspection failed")
+    if maximum is not None and len(result.stdout) > maximum:
+        raise TrustedLauncherError("trusted launcher exceeds its size limit")
+    return result.stdout
+
+
+def _read_regular(path: Path) -> tuple[bytes, os.stat_result]:
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    if no_follow is None:
+        raise TrustedLauncherError("safe launcher validation is unavailable")
+    try:
+        descriptor = os.open(path, os.O_RDONLY | no_follow | getattr(os, "O_CLOEXEC", 0))
+    except OSError as error:
+        raise TrustedLauncherError("trusted launcher is unavailable") from error
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_LAUNCHER_BYTES:
+            raise TrustedLauncherError("trusted launcher is unavailable")
+        chunks: list[bytes] = []
+        remaining = MAX_LAUNCHER_BYTES + 1
+        while remaining:
+            chunk = os.read(descriptor, min(remaining, 64 * 1024))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+    except OSError as error:
+        raise TrustedLauncherError("trusted launcher is unavailable") from error
+    finally:
+        os.close(descriptor)
+    data = b"".join(chunks)
+    if len(data) > MAX_LAUNCHER_BYTES:
+        raise TrustedLauncherError("trusted launcher is unavailable")
+    return data, info
+
+
+def _value(arguments: list[str], option: str) -> str:
+    values = [
+        arguments[index + 1]
+        for index, value in enumerate(arguments[:-1])
+        if value == option
+    ]
+    if len(values) != 1 or not values[0]:
+        raise TrustedLauncherError(f"creator arguments must contain one {option}")
+    return values[0]
+
+
+def _launcher_source(base: Path, commit: str, relative: str) -> bytes:
+    if relative != "scripts/create-age-admission-receipt":
+        raise TrustedLauncherError("only the receipt creator may be launched")
+    if COMMIT_ID.fullmatch(commit) is None:
+        raise TrustedLauncherError("trusted base commit is invalid")
+    record = _git(
+        base,
+        "ls-tree",
+        "-z",
+        commit,
+        "--",
+        relative,
+        maximum=1024,
+    )
+    records = [item for item in record.split(b"\0") if item]
+    if len(records) != 1:
+        raise TrustedLauncherError("trusted launcher is unavailable")
+    try:
+        metadata, path = records[0].split(b"\t", 1)
+        mode, kind, object_id = metadata.split(b" ", 2)
+    except ValueError as error:
+        raise TrustedLauncherError("trusted launcher metadata is invalid") from error
+    if mode != b"100755" or kind != b"blob" or path != relative.encode("ascii"):
+        raise TrustedLauncherError("trusted launcher must be an executable blob")
+    if re.fullmatch(rb"[0-9a-f]{40}", object_id) is None:
+        raise TrustedLauncherError("trusted launcher metadata is invalid")
+    return _git(base, "cat-file", "blob", object_id.decode("ascii"), maximum=MAX_LAUNCHER_BYTES)
+
+
+def _run(arguments: argparse.Namespace) -> None:
+    base = Path(arguments.base_repository).resolve(strict=True)
+    if not base.is_dir():
+        raise TrustedLauncherError("trusted base checkout is unavailable")
+    actual = _git(base, "rev-parse", "--verify", "HEAD").decode("ascii").strip()
+    if actual != arguments.base_commit:
+        raise TrustedLauncherError("trusted base checkout does not match its commit")
+
+    creator_arguments = list(arguments.creator_arguments)
+    if creator_arguments[:1] == ["--"]:
+        creator_arguments = creator_arguments[1:]
+    if not creator_arguments:
+        raise TrustedLauncherError("receipt creator arguments are required")
+    if Path(_value(creator_arguments, "--base-repository")).resolve(strict=True) != base:
+        raise TrustedLauncherError("creator base checkout does not match wrapper base")
+    if _value(creator_arguments, "--base-commit") != arguments.base_commit:
+        raise TrustedLauncherError("creator base commit does not match wrapper base")
+    head = Path(_value(creator_arguments, "--head-repository")).resolve(strict=True)
+    wrapper = Path(__file__).resolve(strict=True)
+    if _within(wrapper, base) or _within(wrapper, head):
+        raise TrustedLauncherError("operator wrapper must be outside both checkouts")
+
+    relative = arguments.launcher
+    expected = _launcher_source(base, arguments.base_commit, relative)
+    live_path = base.joinpath(*relative.split("/"))
+    live, info = _read_regular(live_path)
+    if stat.S_IMODE(info.st_mode) != 0o755 or live != expected:
+        raise TrustedLauncherError("trusted checkout launcher does not match its Git blob")
+
+    sys.argv = [os.fspath(live_path), *creator_arguments]
+    namespace = {
+        "__file__": os.fspath(live_path),
+        "__name__": "__main__",
+        "__package__": None,
+        "__cached__": None,
+    }
+    exec(compile(expected, os.fspath(live_path), "exec"), namespace)  # noqa: S102
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--base-repository", required=True)
+    parser.add_argument("--base-commit", required=True)
+    parser.add_argument(
+        "--launcher",
+        default="scripts/create-age-admission-receipt",
+    )
+    parser.add_argument("creator_arguments", nargs=argparse.REMAINDER)
+    arguments = parser.parse_args()
+    try:
+        _run(arguments)
+    except (TrustedLauncherError, OSError, UnicodeError, ValueError):
+        print("trusted age admission launcher rejected", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

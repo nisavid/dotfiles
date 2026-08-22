@@ -91,6 +91,72 @@ def _validated_identities(raw_identities: list[Path], root: Path) -> list[int]:
     return identities
 
 
+def _descriptor_target(descriptor: int) -> Path:
+    """Resolve an inherited descriptor to its source path for boundary checks."""
+
+    try:
+        if sys.platform == "darwin":
+            import fcntl
+
+            raw = fcntl.fcntl(descriptor, 50, b"\0" * 1024)
+            target = raw.split(b"\0", 1)[0].decode("utf-8")
+        else:
+            target = os.readlink(f"/proc/self/fd/{descriptor}")
+    except (AttributeError, OSError, UnicodeError) as error:
+        raise AgeEnvelopeError("identity source cannot be established") from error
+    if not target or target.endswith(" (deleted)"):
+        raise AgeEnvelopeError("identity source cannot be established")
+    return Path(target)
+
+
+def _validated_identity_descriptors(
+    raw_descriptors: list[int],
+    root: Path,
+) -> list[int]:
+    """Duplicate inherited, already-bound identity descriptors safely."""
+
+    if len(raw_descriptors) != 1:
+        raise AgeEnvelopeError("v1 requires exactly one identity")
+    identities: list[int] = []
+    identity_objects: set[tuple[int, int]] = set()
+    try:
+        for raw_descriptor in raw_descriptors:
+            descriptor: int | None = None
+            try:
+                descriptor = os.dup(raw_descriptor)
+                info = os.fstat(descriptor)
+            except OSError as error:
+                if descriptor is not None:
+                    os.close(descriptor)
+                raise AgeEnvelopeError("identity is unavailable") from error
+            if not stat.S_ISREG(info.st_mode):
+                os.close(descriptor)
+                raise AgeEnvelopeError("identity is not regular")
+            if stat.S_IMODE(info.st_mode) != 0o600:
+                os.close(descriptor)
+                raise AgeEnvelopeError("identity does not have mode 0600")
+            target = _descriptor_target(descriptor)
+            try:
+                canonical = target.resolve(strict=True)
+            except OSError as error:
+                os.close(descriptor)
+                raise AgeEnvelopeError("identity source cannot be established") from error
+            if _is_within(target, root) or _is_within(canonical, root):
+                os.close(descriptor)
+                raise AgeEnvelopeError("identity must be outside the repository")
+            identity_object = (info.st_dev, info.st_ino)
+            if identity_object in identity_objects:
+                os.close(descriptor)
+                raise AgeEnvelopeError("duplicate identity")
+            identities.append(descriptor)
+            identity_objects.add(identity_object)
+    except BaseException:
+        for descriptor in identities:
+            os.close(descriptor)
+        raise
+    return identities
+
+
 def _read_age_tool(path: Path, *, root: Path) -> bytes:
     try:
         canonical = path.resolve(strict=True)
@@ -334,6 +400,7 @@ def admit(
     root: Path,
     raw_identities: list[Path],
     *,
+    identity_descriptors: list[int] | None = None,
     replace_manifest: bool = True,
 ) -> bytes:
     try:
@@ -359,7 +426,12 @@ def admit(
                 stage,
                 root=root,
             )
-            identities = _validated_identities(raw_identities, root)
+            if identity_descriptors is None:
+                identities = _validated_identities(raw_identities, root)
+            else:
+                if raw_identities:
+                    raise AgeEnvelopeError("identity arguments are ambiguous")
+                identities = _validated_identity_descriptors(identity_descriptors, root)
             try:
                 _validated_identity_recipients(age_keygen, identities)
                 discovered = discover_age_files(
@@ -394,7 +466,7 @@ def admit(
                             root / AGE_MANIFEST_NAME,
                             maximum=MAX_AGE_MANIFEST_BYTES,
                         )
-                    except AgeEnvelopeError as error:
+                    except (AgeEnvelopeError, OSError) as error:
                         raise AgeEnvelopeError(
                             "validated envelope manifest is unavailable"
                         ) from error
@@ -413,7 +485,14 @@ def admit(
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, default=Path.cwd())
-    parser.add_argument("--identity", type=Path, action="append", required=True)
+    identity_arguments = parser.add_mutually_exclusive_group(required=True)
+    identity_arguments.add_argument("--identity", type=Path, action="append")
+    identity_arguments.add_argument(
+        "--identity-fd",
+        type=int,
+        action="append",
+        help="use a descriptor already validated by the trusted receipt creator",
+    )
     parser.add_argument(
         "--check-only",
         action="store_true",
@@ -423,7 +502,8 @@ def main() -> int:
     try:
         admit(
             arguments.root,
-            arguments.identity,
+            arguments.identity or [],
+            identity_descriptors=arguments.identity_fd,
             replace_manifest=not arguments.check_only,
         )
     except ManifestDurabilityUncertainError:

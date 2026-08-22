@@ -28,6 +28,8 @@ ADMISSION_MARKER_PREFIX = b"<!-- privacy-age-admission/v1 "
 ADMISSION_MARKER_SUFFIX = b" -->"
 MAX_ADMISSION_BODY_BYTES = 256 * 1024
 MAX_ADMISSION_RECEIPT_BYTES = 64 * 1024
+# The marker and body limits are intentionally tighter than the structural
+# path-count ceiling; bounded pull-request text remains the authoritative cap.
 MAX_ADMISSION_PAYLOAD_BYTES = 32 * 1024
 MAX_ADMISSION_SIGNATURE_BYTES = 8 * 1024
 MAX_ADMISSION_PATHS = 4096

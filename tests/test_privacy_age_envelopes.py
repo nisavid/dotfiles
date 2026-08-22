@@ -350,6 +350,44 @@ class PrivacyAgeEnvelopeTests(TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertEqual((self.root / MANIFEST).read_bytes(), manifest_bytes([]))
 
+    def test_admission_uses_a_held_identity_descriptor_after_path_replacement(self) -> None:
+        candidate = self.encrypt(b"descriptor-bound fixture")
+        (self.root / "candidate.age").write_bytes(candidate)
+        expected = manifest_bytes([("candidate.age", candidate)])
+        (self.root / MANIFEST).write_bytes(expected)
+
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0)
+        descriptor = os.open(self.identity, flags)
+        moved = self.identity.with_name("identity-moved.txt")
+        try:
+            os.replace(self.identity, moved)
+            self.identity.write_text("not an age identity\n", encoding="ascii")
+            self.identity.chmod(0o600)
+            environment = os.environ.copy()
+            environment["AGE_TOOLING_DIRECTORY"] = os.fspath(self.age_tooling_directory)
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ADMITTER),
+                    "--root",
+                    str(self.root),
+                    "--identity-fd",
+                    str(descriptor),
+                    "--check-only",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+                pass_fds=(descriptor,),
+                timeout=TOOL_TIMEOUT_SECONDS,
+            )
+        finally:
+            os.close(descriptor)
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.root / MANIFEST).read_bytes(), expected)
+
     def test_admission_rejects_an_additional_postquantum_recipient(self) -> None:
         _, additional_recipient = self.make_identity("additional-identity.txt")
         candidate = self.encrypt(

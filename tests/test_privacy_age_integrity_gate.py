@@ -51,6 +51,7 @@ PROTECTED_FILES = {
     "scripts/admit-age-envelopes": "#!/bin/sh\n",
     "scripts/agent_equipment_public_data.py": "# policy\n",
     "scripts/create-age-admission-receipt": "#!/bin/sh\n",
+    "scripts/run-trusted-age-admission": "#!/bin/sh\n",
     "scripts/privacy-scan": "#!/usr/bin/env python3\n",
     "scripts/privacy_age_admission.py": "# admission\n",
     "scripts/privacy_age_envelopes.py": "# inventory\n",
@@ -153,6 +154,7 @@ class PrivacyAgeIntegrityGateTests(TestCase):
         for relative in (
             ".github/age-admission/allowed_signers",
             "scripts/create-age-admission-receipt",
+            "scripts/run-trusted-age-admission",
             "scripts/privacy_age_admission.py",
         ):
             (base / relative).unlink()
@@ -160,12 +162,14 @@ class PrivacyAgeIntegrityGateTests(TestCase):
         for relative in (
             ".github/workflows/privacy-age-integrity.yml",
             "scripts/admit-age-envelopes",
+            "scripts/run-trusted-age-admission",
             "scripts/privacy_age_envelopes.py",
             "scripts/privacy_age_integrity_gate.py",
         ):
             (head / relative).write_text("bootstrap replacement\n", encoding="utf-8")
         (head / "scripts/admit-age-envelopes").chmod(0o755)
         (head / "scripts/create-age-admission-receipt").chmod(0o755)
+        (head / "scripts/run-trusted-age-admission").chmod(0o755)
         (head / "scripts/privacy_age_integrity_gate.py").chmod(0o755)
         head_commit = commit_all(head, "complete bootstrap candidate")
 
@@ -193,6 +197,7 @@ class PrivacyAgeIntegrityGateTests(TestCase):
                 for relative in (
                     ".github/age-admission/allowed_signers",
                     "scripts/create-age-admission-receipt",
+                    "scripts/run-trusted-age-admission",
                     "scripts/privacy_age_admission.py",
                 ):
                     (base / relative).unlink()
@@ -202,6 +207,7 @@ class PrivacyAgeIntegrityGateTests(TestCase):
                     ".github/workflows/privacy-age-integrity.yml": 0o644,
                     "scripts/admit-age-envelopes": 0o755,
                     "scripts/create-age-admission-receipt": 0o755,
+                    "scripts/run-trusted-age-admission": 0o755,
                     "scripts/privacy_age_admission.py": 0o644,
                     "scripts/privacy_age_envelopes.py": 0o644,
                     "scripts/privacy_age_integrity_gate.py": 0o755,

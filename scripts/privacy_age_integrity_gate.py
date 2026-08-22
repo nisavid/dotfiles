@@ -36,6 +36,7 @@ except ImportError:  # pragma: no cover - direct script execution
 COMMIT_ID = re.compile(r"[0-9a-f]{40}\Z", re.ASCII)
 MAX_GIT_TREE_BYTES = 8 * 1024 * 1024
 MAX_GIT_TREE_ENTRIES = 10_000
+MAX_GIT_OBJECT_BYTES = 16 * 1024 * 1024
 
 # Changes to these paths require a signed owner admission after local
 # identity-backed validation. The pull_request_target workflow executes this
@@ -50,6 +51,7 @@ PROTECTED_EXACT_PATHS = frozenset(
         b"scripts/admit-age-envelopes",
         b"scripts/agent_equipment_public_data.py",
         b"scripts/create-age-admission-receipt",
+        b"scripts/run-trusted-age-admission",
         b"scripts/privacy-scan",
         b"scripts/privacy_age_admission.py",
         b"scripts/privacy_age_envelopes.py",
@@ -60,6 +62,7 @@ ADMISSION_INFRASTRUCTURE_PATHS = frozenset(
     {
         b".github/age-admission/allowed_signers",
         b"scripts/create-age-admission-receipt",
+        b"scripts/run-trusted-age-admission",
         b"scripts/privacy_age_admission.py",
     }
 )
@@ -79,6 +82,7 @@ BOOTSTRAP_REQUIRED_ENTRIES = {
     b".github/workflows/privacy-age-integrity.yml": (b"blob", b"100644"),
     b"scripts/admit-age-envelopes": (b"blob", b"100755"),
     b"scripts/create-age-admission-receipt": (b"blob", b"100755"),
+    b"scripts/run-trusted-age-admission": (b"blob", b"100755"),
     b"scripts/privacy_age_admission.py": (b"blob", b"100644"),
     b"scripts/privacy_age_envelopes.py": (b"blob", b"100644"),
     b"scripts/privacy_age_integrity_gate.py": (b"blob", b"100755"),
@@ -254,7 +258,7 @@ def _tree_side(
         "cat-file",
         kind,
         entry.object_id.decode("ascii"),
-        maximum_output_bytes=16 * 1024 * 1024,
+        maximum_output_bytes=MAX_GIT_OBJECT_BYTES,
     )
     # Keep the digest over the exact Git object bytes, independent of Git's
     # object hash algorithm. This also binds symlink and gitlink transitions.
