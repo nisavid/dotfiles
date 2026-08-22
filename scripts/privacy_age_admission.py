@@ -122,10 +122,12 @@ def _validated_timestamp(value: object, *, name: str) -> datetime:
     if not isinstance(value, str) or _TIMESTAMP.fullmatch(value) is None:
         raise AdmissionReceiptError(f"admission {name} is invalid")
     try:
-        parsed = datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
+        parsed = datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=timezone.utc
+        )
     except ValueError as error:
         raise AdmissionReceiptError(f"admission {name} is invalid") from error
-    return parsed.replace(tzinfo=timezone.utc)
+    return parsed
 
 
 def _validated_path(value: object) -> str:

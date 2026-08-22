@@ -14,9 +14,9 @@ from pathlib import Path
 
 try:
     from .privacy_age_admission import (
-        AdmissionReceiptError,
         ADMISSION_VERSION,
         MAX_ADMISSION_BODY_BYTES,
+        AdmissionReceiptError,
         extract_receipt,
         validate_payload,
         verify_receipt_signature,
@@ -24,9 +24,9 @@ try:
     from .privacy_age_envelopes import AgeEnvelopeError, read_regular_file
 except ImportError:  # pragma: no cover - direct script execution
     from privacy_age_admission import (
-        AdmissionReceiptError,
         ADMISSION_VERSION,
         MAX_ADMISSION_BODY_BYTES,
+        AdmissionReceiptError,
         extract_receipt,
         validate_payload,
         verify_receipt_signature,
@@ -52,6 +52,13 @@ PROTECTED_EXACT_PATHS = frozenset(
         b"scripts/privacy_age_admission.py",
         b"scripts/privacy_age_envelopes.py",
         b"scripts/privacy_age_integrity_gate.py",
+    }
+)
+ADMISSION_INFRASTRUCTURE_PATHS = frozenset(
+    {
+        b".github/age-admission/allowed_signers",
+        b"scripts/create-age-admission-receipt",
+        b"scripts/privacy_age_admission.py",
     }
 )
 PROTECTED_OPTIONAL_PATHS = frozenset({b".gitattributes", b".gitmodules"})
@@ -303,9 +310,14 @@ def verify_integrity_boundary(
     base_tree = _tree(base, base_commit)
     head_tree = _tree(head, head_commit)
 
-    missing_base_paths = sorted(PROTECTED_EXACT_PATHS - base_tree.keys())
+    missing_base_paths = sorted(
+        (PROTECTED_EXACT_PATHS - ADMISSION_INFRASTRUCTURE_PATHS) - base_tree.keys()
+    )
     if missing_base_paths:
         raise IntegrityGateError("trusted base is missing a protected path")
+    infrastructure_present = ADMISSION_INFRASTRUCTURE_PATHS & base_tree.keys()
+    if infrastructure_present and infrastructure_present != ADMISSION_INFRASTRUCTURE_PATHS:
+        raise IntegrityGateError("trusted base has an incomplete admission boundary")
 
     protected_paths = {
         path for path in base_tree.keys() | head_tree.keys() if _is_protected(path)
@@ -316,6 +328,10 @@ def verify_integrity_boundary(
         path for path in protected_paths if base_tree.get(path) != head_tree.get(path)
     )
     if changed:
+        if infrastructure_present != ADMISSION_INFRASTRUCTURE_PATHS:
+            raise IntegrityGateError(
+                "trusted base predates signed admission; bootstrap owner exception required"
+            )
         _verify_admission(
             base=base,
             base_commit=base_commit,
@@ -347,9 +363,18 @@ def build_admission_payload(
     head = _validated_checkout(head_repository, head_commit)
     base_tree = _tree(base, base_commit)
     head_tree = _tree(head, head_commit)
-    missing_base_paths = sorted(PROTECTED_EXACT_PATHS - base_tree.keys())
+    missing_base_paths = sorted(
+        (PROTECTED_EXACT_PATHS - ADMISSION_INFRASTRUCTURE_PATHS) - base_tree.keys()
+    )
     if missing_base_paths:
         raise IntegrityGateError("trusted base is missing a protected path")
+    infrastructure_present = ADMISSION_INFRASTRUCTURE_PATHS & base_tree.keys()
+    if infrastructure_present and infrastructure_present != ADMISSION_INFRASTRUCTURE_PATHS:
+        raise IntegrityGateError("trusted base has an incomplete admission boundary")
+    if infrastructure_present != ADMISSION_INFRASTRUCTURE_PATHS:
+        raise IntegrityGateError(
+            "trusted base predates signed admission; bootstrap owner exception required"
+        )
     protected_paths = {
         path for path in base_tree.keys() | head_tree.keys() if _is_protected(path)
     }

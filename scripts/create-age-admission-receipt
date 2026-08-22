@@ -20,19 +20,19 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 if os.fspath(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, os.fspath(REPOSITORY_ROOT))
 
-from scripts.privacy_age_admission import (  # noqa: E402
-    AdmissionReceiptError,
+from scripts.privacy_age_admission import (
     ADMISSION_MAX_LIFETIME,
+    AdmissionReceiptError,
     canonical_payload_bytes,
     encode_receipt,
 )
-from scripts.privacy_age_integrity_gate import (  # noqa: E402
-    IntegrityGateError,
-    build_admission_payload,
-)
-from scripts.privacy_age_envelopes import (  # noqa: E402
+from scripts.privacy_age_envelopes import (
     AgeEnvelopeError,
     open_regular_file_descriptor,
+)
+from scripts.privacy_age_integrity_gate import (
+    IntegrityGateError,
+    build_admission_payload,
 )
 
 CHECK_TIMEOUT_SECONDS = 60

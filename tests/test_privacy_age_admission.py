@@ -10,7 +10,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from scripts.privacy_age_integrity_gate import verify_integrity_boundary
 from scripts.privacy_age_admission import (
     ADMISSION_NAMESPACE,
     ADMISSION_PRINCIPAL,
@@ -19,6 +18,7 @@ from scripts.privacy_age_admission import (
     extract_receipt,
     verify_receipt_signature,
 )
+from scripts.privacy_age_integrity_gate import verify_integrity_boundary
 
 ROOT = Path(__file__).resolve().parents[1]
 CREATOR = ROOT / "scripts/create-age-admission-receipt"

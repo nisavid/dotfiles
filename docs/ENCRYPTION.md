@@ -66,16 +66,22 @@ every candidate envelope with the machine-local identity in check-only mode,
 then signs a canonical, secret-free receipt with the owner admission key:
 
 ```zsh
+TRUSTED_MAIN_CHECKOUT=/absolute/path/to/trusted-main-checkout
+CANDIDATE_CHECKOUT=/absolute/path/to/candidate-checkout
+BASE_COMMIT=0123456789abcdef0123456789abcdef01234567
+HEAD_COMMIT=89abcdef0123456789abcdef0123456789abcdef
+AGE_IDENTITY=/absolute/path/to/age/key.txt
+ADMISSION_SIGNING_KEY=/absolute/path/to/owner-admission-key
 AGE_TOOLING_DIRECTORY=/absolute/path/to/checksum-verified-age-bin \
-  python3 <trusted-main-checkout>/scripts/create-age-admission-receipt \
-  --base-repository <trusted-main-checkout> \
-  --base-commit <main-commit> \
-  --head-repository <candidate-checkout> \
-  --head-commit <candidate-commit> \
+  python3 "$TRUSTED_MAIN_CHECKOUT/scripts/create-age-admission-receipt" \
+  --base-repository "$TRUSTED_MAIN_CHECKOUT" \
+  --base-commit "$BASE_COMMIT" \
+  --head-repository "$CANDIDATE_CHECKOUT" \
+  --head-commit "$HEAD_COMMIT" \
   --repository nisavid/dotfiles \
-  --identity ~/.config/age/key.txt \
-  --signing-key ~/.ssh/<owner-admission-key> \
-  --trusted-admitter <trusted-main-checkout>/scripts/admit-age-envelopes \
+  --identity "$AGE_IDENTITY" \
+  --signing-key "$ADMISSION_SIGNING_KEY" \
+  --trusted-admitter "$TRUSTED_MAIN_CHECKOUT/scripts/admit-age-envelopes" \
   --output /private/temporary/age-admission-receipt.txt
 ```
 
@@ -93,6 +99,16 @@ The committed public verifier key is
 owner-admitted protected transition. Never send the age identity, signing
 private key, decrypted catalog, or decrypted diagnostics to hosted CI. The
 receipt contains no plaintext identifiers.
+
+The first bootstrap of this boundary is a one-time exception: the trusted
+base predates the signer and verifier paths, so it cannot verify a v1 receipt.
+Publish the bootstrap branch as a pull request from `main`, keep its review
+and required checks visible, and use an owner-approved, branch-scoped
+break-glass exception only long enough to merge that pull request. Do not push
+directly to `main`, disable unrelated protections, or reuse the exception for
+ordinary changes. Re-enable the protection immediately, verify that `main`
+contains the signer and verifier paths, and only then create a receipt for the
+next protected pull request.
 
 The v1 repository policy authorizes exactly one post-quantum recipient stanza
 per ciphertext. Hosted scanning enforces that public structural invariant;
