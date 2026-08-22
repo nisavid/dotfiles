@@ -594,11 +594,29 @@ file and not a symlink, then remove only that path and verify that it is absent:
 ```zsh
 set -eu
 target="$HOME/.agents/daybreak-account-bindings.md"
-if [[ ! -f "$target" || -L "$target" ]]; then
+parent="${target:h}"
+if [[ ! -d "$parent" || -L "$parent" || ! -f "$target" || -L "$target" ]]; then
   print -u2 -- 'refusing exact-target cleanup'
   exit 1
 fi
-# Confirm the owner and mode with the platform's lstat/stat command.
+case "$(uname -s)" in
+Darwin)
+  mode="$(stat -f '%Lp' "$target")"
+  owner="$(stat -f '%u' "$target")"
+  ;;
+Linux)
+  mode="$(stat -c '%a' -- "$target")"
+  owner="$(stat -c '%u' -- "$target")"
+  ;;
+*)
+  print -u2 -- 'refusing exact-target cleanup on an unsupported platform'
+  exit 1
+  ;;
+esac
+if [[ "$mode" != 600 || "$owner" != "$EUID" ]]; then
+  print -u2 -- 'refusing exact-target cleanup for an unexpected owner or mode'
+  exit 1
+fi
 rm -- "$target"
 test ! -e "$target" && test ! -L "$target"
 ```
