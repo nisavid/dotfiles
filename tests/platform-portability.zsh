@@ -13,6 +13,14 @@ fail() {
   return 1
 }
 
+mode_of() {
+  case "$(uname -s)" in
+    Darwin) stat -f '%Lp' "$1" ;;
+    Linux) stat -c '%a' -- "$1" ;;
+    *) fail "unsupported test platform: $(uname -s)" ;;
+  esac
+}
+
 assert_line() {
   local line=$1 file=$2
   grep -Fqx -- "$line" "$file" || fail "missing ignore entry: $line"
@@ -141,6 +149,44 @@ for safe_line in \
   ! print -r -- "$safe_line" | grep -Eq "$untrusted_head_execution_pattern" ||
     fail "age boundary execution guard overmatched: $safe_line"
 done
+
+daybreak_binding_template=$repo_root/home/dot_agents/private_daybreak-account-bindings.md.tmpl
+daybreak_encryption_doc=$repo_root/docs/ENCRYPTION.md
+grep -Fq '{{ include ".private-daybreak-account-bindings.md.age" | decrypt -}}' \
+  "$daybreak_binding_template" ||
+  fail 'private Daybreak account bindings do not render from the encrypted catalog'
+[[ "$(chezmoi -S "$repo_root/home" target-path "$daybreak_binding_template")" == \
+  "$HOME/.agents/daybreak-account-bindings.md" ]] ||
+  fail 'private Daybreak account bindings do not target the shared agent home'
+grep -Fq 'home/.private-daybreak-account-bindings.md.age' "$daybreak_encryption_doc" ||
+  fail 'encryption policy does not register the private Daybreak catalog'
+grep -Fq 'mode-`0600` `~/.agents/daybreak-account-bindings.md` target' "$daybreak_encryption_doc" ||
+  fail 'encryption policy does not authorize the private Daybreak target and mode'
+grep -Fq \
+  'Catalogs with an explicit target listed above may render only to that documented mode-restricted path.' \
+  "$daybreak_encryption_doc" ||
+  fail 'encryption policy does not bound the persistent catalog exception'
+
+daybreak_mode_root=$test_root/daybreak-bindings
+daybreak_mode_home=$daybreak_mode_root/home
+daybreak_mode_source=$daybreak_mode_root/source
+daybreak_mode_target=$daybreak_mode_home/.agents/daybreak-account-bindings.md
+mkdir -p -- \
+  "$daybreak_mode_root/cache" \
+  "$daybreak_mode_root/config" \
+  "$daybreak_mode_home" \
+  "$daybreak_mode_source/dot_agents" \
+  "$daybreak_mode_root/state"
+print -r -- 'private binding fixture' > \
+  "$daybreak_mode_source/dot_agents/private_daybreak-account-bindings.md.tmpl"
+HOME="$daybreak_mode_home" \
+  XDG_CACHE_HOME="$daybreak_mode_root/cache" \
+  XDG_CONFIG_HOME="$daybreak_mode_root/config" \
+  XDG_STATE_HOME="$daybreak_mode_root/state" \
+  chezmoi --source "$daybreak_mode_source" --destination "$daybreak_mode_home" \
+    apply --parent-dirs "$daybreak_mode_target"
+[[ "$(mode_of "$daybreak_mode_target")" == 600 ]] ||
+  fail 'rendered private Daybreak account bindings do not have mode 0600'
 
 chezmoi -S "$repo_root/home" execute-template \
   --override-data '{"chezmoi":{"os":"linux"}}' \
