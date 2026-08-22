@@ -271,12 +271,13 @@ def _index_records(repository: Path) -> dict[bytes, tuple[bytes, bytes]]:
 
 def _read_worktree_regular(path: Path) -> tuple[bytes, os.stat_result]:
     no_follow = getattr(os, "O_NOFOLLOW", None)
-    if no_follow is None:
+    no_block = getattr(os, "O_NONBLOCK", None)
+    if no_follow is None or no_block is None:
         raise ReceiptRequestError("safe checkout validation is unavailable")
     try:
         descriptor = os.open(
             path,
-            os.O_RDONLY | no_follow | getattr(os, "O_CLOEXEC", 0),
+            os.O_RDONLY | no_follow | no_block | getattr(os, "O_CLOEXEC", 0),
         )
     except OSError as error:
         raise ReceiptRequestError("checkout entry is unavailable") from error
@@ -451,10 +452,10 @@ def _materialize_commit_tree(repository: Path, commit: str) -> tuple[tempfile.Te
     """Materialize raw Git blobs without invoking filters or checkout hooks."""
 
     temporary = tempfile.TemporaryDirectory(prefix="age-admission-tree.")
-    root = Path(temporary.name) / "tree"
-    root.mkdir()
-    root = root.resolve()
     try:
+        root = Path(temporary.name) / "tree"
+        root.mkdir()
+        root = root.resolve()
         materialized_bytes = 0
         for entry_count, (raw_path, (mode, kind, object_id)) in enumerate(
             _tree_records(repository, commit).items(),
@@ -478,6 +479,9 @@ def _materialize_commit_tree(repository: Path, commit: str) -> tuple[tempfile.Te
     except (ReceiptRequestError, UnicodeDecodeError):
         temporary.cleanup()
         raise ReceiptRequestError("candidate tree materialization failed")
+    except BaseException:
+        temporary.cleanup()
+        raise
     return temporary, root
 
 
@@ -706,10 +710,10 @@ def _validated_signing_tool(
         raise ReceiptRequestError("admission signature tooling is unavailable")
     try:
         descriptor, info = envelope_module.open_regular_file_descriptor(lexical)
-        canonical_info = canonical.stat(follow_symlinks=False)
     except (AttributeError, ValueError, OSError) as error:
         raise ReceiptRequestError("admission signature tooling is unavailable") from error
     try:
+        canonical_info = canonical.stat(follow_symlinks=False)
         if (
             not stat.S_ISREG(canonical_info.st_mode)
             or (info.st_dev, info.st_ino) != (canonical_info.st_dev, canonical_info.st_ino)
@@ -717,6 +721,8 @@ def _validated_signing_tool(
             or info.st_mode & 0o022 != 0
         ):
             raise ReceiptRequestError("admission signature tooling is unavailable")
+    except (AttributeError, ValueError, OSError) as error:
+        raise ReceiptRequestError("admission signature tooling is unavailable") from error
     finally:
         os.close(descriptor)
     return canonical, info

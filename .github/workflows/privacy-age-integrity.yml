@@ -80,8 +80,8 @@ jobs:
           # Keep this verifier self-contained and before any trusted-base
           # import: it is the pre-import boundary that proves both checkouts
           # match their advertised Git objects. Its deliberate overlap with
-          # the local receipt creator is defense in depth against a changed
-          # candidate or a compromised checkout helper.
+          # the local receipt creator is defense in depth against changed
+          # candidate data or checkout state that does not match Git objects.
           python3 - "$PRIVACY_BASE_SHA" trusted-base "$PRIVACY_HEAD_SHA" untrusted-head <<'PY'
           import os
           import re
@@ -95,7 +95,8 @@ jobs:
           MAX_BLOB_BYTES = 16 * 1024 * 1024
           MAX_TOTAL_BLOB_BYTES = 16 * 1024 * 1024
           NO_FOLLOW = getattr(os, "O_NOFOLLOW", None)
-          if NO_FOLLOW is None:
+          NO_BLOCK = getattr(os, "O_NONBLOCK", None)
+          if NO_FOLLOW is None or NO_BLOCK is None:
               raise SystemExit("checkout byte verification unavailable")
 
           def git(
@@ -153,7 +154,7 @@ jobs:
 
           def read_regular(path: Path) -> bytes:
               try:
-                  descriptor = os.open(path, os.O_RDONLY | NO_FOLLOW)
+                  descriptor = os.open(path, os.O_RDONLY | NO_FOLLOW | NO_BLOCK)
               except OSError as error:
                   raise SystemExit("checkout byte verification failed") from error
               try:

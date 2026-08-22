@@ -76,6 +76,22 @@ copy of the bootstrap wrapper; the pre-bootstrap base cannot supply it yet.
 In either case, verify the external file is a regular mode-`0755` file and
 compare its SHA-256 with the reviewed wrapper source before invoking it.
 
+For a materialized wrapper, establish the operator-owned copy and its reviewed
+digest before the invocation above:
+
+```zsh
+git -C "$TRUSTED_MAIN_CHECKOUT" show \
+  "$BASE_COMMIT:scripts/run-trusted-age-admission" \
+  >"$TRUSTED_ADMISSION_WRAPPER"
+chmod 0755 "$TRUSTED_ADMISSION_WRAPPER"
+test -f "$TRUSTED_ADMISSION_WRAPPER"
+test ! -L "$TRUSTED_ADMISSION_WRAPPER"
+stat -f '%Sp %N' "$TRUSTED_ADMISSION_WRAPPER" 2>/dev/null ||
+  stat -c '%A %n' "$TRUSTED_ADMISSION_WRAPPER"
+printf '%s  %s\n' "$REVIEWED_WRAPPER_SHA256" "$TRUSTED_ADMISSION_WRAPPER" |
+  shasum -a 256 --check
+```
+
 ```zsh
 # Supply these operator-owned locations outside this document.
 : "${TRUSTED_MAIN_CHECKOUT:?set TRUSTED_MAIN_CHECKOUT to the trusted checkout}"
@@ -108,9 +124,12 @@ Add exactly that marker to the pull request body after the candidate head is
 published. Editing the body triggers the trusted boundary workflow. The
 workflow computes the protected transition itself, then requires the receipt
 to match the repository, base and head commits, every protected path's mode,
-kind, and SHA-256 digest, the expiry window, and the signature namespace and
-principal. A changed head requires a new receipt; an expired or ambiguous
-marker fails closed.
+kind, and SHA-256 digest, the expiry window at the time the workflow runs, and
+the signature namespace and principal. A changed head requires a new receipt;
+an expired or ambiguous marker fails closed during that run. GitHub preserves a
+successful required-check conclusion after the receipt expires, so the owner
+must trigger a fresh trusted run after adding the marker and immediately before
+merging. The check is not a time-based merge gate by itself.
 The nonce identifies the signed receipt but is not a one-time ledger. A valid
 receipt may be replayed only for the exact base/head transition until its
 expiry; changing either commit requires a new receipt.
@@ -132,12 +151,25 @@ branch-scoped break-glass exception only long enough to merge that pull
 request. Do not push directly to `main`, disable unrelated protections, or
 reuse the exception for ordinary changes. Re-enable the protection
 immediately, verify that `main` contains the signer and verifier paths, and
-require the exact Checks API `name` emitted by the job — currently
+record the exact Checks API `name` emitted by the job — currently
 `Verify trusted base against candidate data` (the UI may render it with the
-workflow name prefixed) — alongside the other required checks. Read that name
-from a fresh check run and verify the requirement through the live
+workflow name prefixed). Read that name from a fresh check run. Do not treat
+that Actions job name as the final authenticated admission requirement; verify
+the dedicated App-pinned context described below through the live
 branch-protection API before creating a receipt for the next protected pull
 request.
+
+The Actions job name is not a provenance boundary: GitHub keys a required
+check by its job name and the shared Actions app, without binding it to the
+trusted `pull_request_target` workflow. Before ordinary protected merges,
+install a repository-scoped GitHub App dedicated to this admission controller,
+have it publish a stable admission context, and pin that context to the App ID
+in branch protection. Verify the live API preserves every existing check,
+strictness, administrator enforcement, review requirement, and the new
+App-pinned context. Until that App-backed source is installed and verified,
+keep ordinary protected merges owner-controlled and treat the Actions check as
+advisory; do not claim that the bootstrap workflow alone closes the merge
+boundary.
 
 The v1 repository policy authorizes exactly one post-quantum recipient stanza
 per ciphertext. Hosted scanning enforces that public structural invariant;

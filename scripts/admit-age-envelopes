@@ -34,6 +34,9 @@ MAX_RECIPIENT_BYTES = 4096
 MAX_AGE_TOOL_BYTES = 32 * 1024 * 1024
 SKIPPED_DIRECTORIES = {".git"}
 _POSTQUANTUM_RECIPIENT = re.compile(rb"age1pq1[a-z0-9]+\n\Z", re.ASCII)
+# Darwin ``fcntl`` request that returns the path bound to a descriptor. CPython
+# does not expose ``F_GETPATH`` on every supported build.
+_DARWIN_F_GETPATH = 50
 
 
 class ManifestDurabilityUncertainError(AgeEnvelopeError):
@@ -98,7 +101,7 @@ def _descriptor_target(descriptor: int) -> Path:
         if sys.platform == "darwin":
             import fcntl
 
-            raw = fcntl.fcntl(descriptor, 50, b"\0" * 1024)
+            raw = fcntl.fcntl(descriptor, _DARWIN_F_GETPATH, b"\0" * 1024)
             target = raw.split(b"\0", 1)[0].decode("utf-8")
         else:
             target = os.readlink(f"/proc/self/fd/{descriptor}")
@@ -135,7 +138,11 @@ def _validated_identity_descriptors(
             if stat.S_IMODE(info.st_mode) != 0o600:
                 os.close(descriptor)
                 raise AgeEnvelopeError("identity does not have mode 0600")
-            target = _descriptor_target(descriptor)
+            try:
+                target = _descriptor_target(descriptor)
+            except BaseException:
+                os.close(descriptor)
+                raise
             try:
                 canonical = target.resolve(strict=True)
             except OSError as error:
