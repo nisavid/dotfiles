@@ -12,6 +12,7 @@ Dot-prefixed ciphertext files are source-only data. Chezmoi ignores them as targ
 
 - `home/.private-agents.md.age` supplies the private section of `home/dot_codex/private_AGENTS.md.tmpl`. Chezmoi renders the combined policy only to `~/.codex/AGENTS.md`; the `private_` source attribute gives that target mode `0600`.
 - `home/.private-codex-work.toml.age` supplies private Codex writable roots and trusted project paths to the mode-`0600` `~/.codex/config.toml` overlay.
+- `home/.private-daybreak-account-bindings.md.age` supplies exact Codex account-home bindings to the mode-`0600` `~/.agents/daybreak-account-bindings.md` target. Public policy may name only this neutral target path; exact account homes, authenticated identities, classifications, and other properties remain private.
 - `home/.private-git-identities.toml.age` supplies hostname selection, identity records, editor preference, branch prefix, and tracking policy to generated configuration targets. Public data contains only a synthetic fixture and the allowed personal fallback.
 - `home/.private-machine.toml.age` supplies machine-local checkout paths and identity-bearing GnuPG configuration.
 - `home/.private-hindsight.toml.age` supplies the complete Darwin-only Hindsight consumer binding. Public Hindsight data contains only the reusable release pin.
@@ -572,15 +573,16 @@ validation computed, so a stale or hand-edited inventory fails the check. The
 receipt command uses this mode against the final candidate tree before it signs
 the transition.
 
-## Source-Only Catalog Editing
+## Private Catalog Editing
 
-Edit a source-only catalog in a mode-`0700` temporary directory with a
+Edit a private catalog in a mode-`0700` temporary directory with a
 mode-`0600` plaintext file. Decrypt without writing plaintext to standard
 output, keep editor swap and backup files inside that phase, validate the
 catalog, re-encrypt to a temporary ciphertext with the committed recipient,
 and atomically replace the source ciphertext. Remove the plaintext phase on
-success, failure, or interruption. Never render the catalog into the repository
-or a persistent plaintext target.
+success, failure, or interruption. Source-only catalogs have no persistent
+plaintext target; never render one into the repository or another persistent
+path. Catalogs with an explicit target listed above may render only to that documented mode-restricted path.
 
 ## Transactional Private-Skill Restore
 
