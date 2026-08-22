@@ -278,8 +278,8 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
             environment["AGE_TOOLING_DIRECTORY"] = str(
                 Path(os.environ.get("AGE_TOOLING_DIRECTORY", "/opt/homebrew/bin"))
             )
-            result = subprocess.run(
-                [
+            def creator_command(identity_path: Path, output_path: Path) -> list[str]:
+                return [
                     str(CREATOR),
                     "--base-repository",
                     str(base),
@@ -292,14 +292,17 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
                     "--repository",
                     "nisavid/dotfiles",
                     "--identity",
-                    str(identity),
+                    str(identity_path),
                     "--signing-key",
                     str(signing_key),
                     "--trusted-admitter",
                     str(base / "scripts/admit-age-envelopes"),
                     "--output",
-                    str(output),
-                ],
+                    str(output_path),
+                ]
+
+            result = subprocess.run(
+                creator_command(identity, output),
                 check=False,
                 capture_output=True,
                 text=True,
@@ -319,6 +322,33 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
                 allowed_signers=base / ".github/age-admission/allowed_signers",
                 repository="nisavid/dotfiles",
             )
+
+            identity_in_base = base / "identity-in-base"
+            shutil.copy2(identity, identity_in_base)
+            identity_in_base.chmod(0o600)
+            result = subprocess.run(
+                creator_command(identity_in_base, root / "identity-receipt.txt"),
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+                timeout=30,
+            )
+            self.assertEqual(result.returncode, 1)
+
+            tooling_in_base = base / "age-tooling"
+            tooling_in_base.mkdir()
+            tooling_environment = environment.copy()
+            tooling_environment["AGE_TOOLING_DIRECTORY"] = str(tooling_in_base)
+            result = subprocess.run(
+                creator_command(identity, root / "tooling-receipt.txt"),
+                check=False,
+                capture_output=True,
+                text=True,
+                env=tooling_environment,
+                timeout=30,
+            )
+            self.assertEqual(result.returncode, 1)
 
 
 if __name__ == "__main__":
