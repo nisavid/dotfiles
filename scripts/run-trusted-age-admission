@@ -3,16 +3,22 @@
 
 from __future__ import annotations
 
+import sys
+
+if not sys.flags.isolated:
+    print("trusted launcher requires isolated Python", file=sys.stderr)
+    raise SystemExit(1)
+
 import argparse
 import os
 import re
 import stat
 import subprocess
-import sys
 from pathlib import Path
 
 MAX_LAUNCHER_BYTES = 256 * 1024
 COMMIT_ID = re.compile(r"[0-9a-f]{40}\Z", re.ASCII)
+LAUNCHER_PATH = "scripts/create-age-admission-receipt"
 
 
 class TrustedLauncherError(ValueError):
@@ -25,6 +31,62 @@ def _within(path: Path, root: Path) -> bool:
     except ValueError:
         return False
     return True
+
+
+def _validate_wrapper_path_authority(path: Path) -> None:
+    """Require the external launcher and every parent to resist replacement."""
+
+    try:
+        owner = os.getuid()
+    except AttributeError:  # pragma: no cover - this project requires POSIX
+        owner = None
+    current = Path(os.path.abspath(path)).parent
+    visited: set[Path] = set()
+    while True:
+        if current in visited:
+            raise TrustedLauncherError("trusted launcher path is not authoritative")
+        visited.add(current)
+        try:
+            info = current.lstat()
+        except OSError as error:
+            raise TrustedLauncherError("trusted launcher is unavailable") from error
+        if stat.S_ISLNK(info.st_mode):
+            if info.st_uid != 0:
+                raise TrustedLauncherError("trusted launcher path is not authoritative")
+            try:
+                current = current.resolve(strict=True)
+            except OSError as error:
+                raise TrustedLauncherError("trusted launcher path is not authoritative") from error
+            if not current.is_dir():
+                raise TrustedLauncherError("trusted launcher path is not authoritative")
+            continue
+        if not stat.S_ISDIR(info.st_mode) or info.st_mode & 0o022 or (
+            owner is not None and info.st_uid not in {0, owner}
+        ):
+            raise TrustedLauncherError("trusted launcher path is not authoritative")
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+
+
+def _validated_wrapper(path: Path) -> Path:
+    """Require the launched wrapper itself to be a stable executable file."""
+
+    lexical = Path(os.path.abspath(path))
+    try:
+        info = lexical.lstat()
+        canonical = lexical.resolve(strict=True)
+    except OSError as error:
+        raise TrustedLauncherError("trusted launcher is unavailable") from error
+    if (
+        not stat.S_ISREG(info.st_mode)
+        or stat.S_IMODE(info.st_mode) != 0o755
+        or info.st_uid not in {0, os.getuid()}
+    ):
+        raise TrustedLauncherError("trusted launcher is not an authoritative file")
+    _validate_wrapper_path_authority(lexical)
+    return canonical
 
 
 def _git(repository: Path, *arguments: str, maximum: int | None = None) -> bytes:
@@ -117,28 +179,34 @@ def _read_regular(path: Path) -> tuple[bytes, os.stat_result]:
 
 
 def _value(arguments: list[str], option: str) -> str:
-    values = [
-        arguments[index + 1]
-        for index, value in enumerate(arguments[:-1])
-        if value == option
-    ]
+    values: list[str] = []
+    index = 0
+    while index < len(arguments):
+        value = arguments[index]
+        if value.startswith(f"{option}="):
+            raise TrustedLauncherError(
+                f"creator arguments must use a separate value for {option}"
+            )
+        if value != option:
+            index += 1
+            continue
+        if index + 1 >= len(arguments):
+            raise TrustedLauncherError(f"creator arguments must contain one {option}")
+        values.append(arguments[index + 1])
+        index += 2
     if len(values) != 1 or not values[0]:
         raise TrustedLauncherError(f"creator arguments must contain one {option}")
     return values[0]
 
 
-def _launcher_source(base: Path, commit: str, relative: str) -> bytes:
-    if relative != "scripts/create-age-admission-receipt":
-        raise TrustedLauncherError("only the receipt creator may be launched")
-    if COMMIT_ID.fullmatch(commit) is None:
-        raise TrustedLauncherError("trusted base commit is invalid")
+def _launcher_source(base: Path, commit: str) -> bytes:
     record = _git(
         base,
         "ls-tree",
         "-z",
         commit,
         "--",
-        relative,
+        LAUNCHER_PATH,
         maximum=1024,
     )
     records = [item for item in record.split(b"\0") if item]
@@ -149,7 +217,7 @@ def _launcher_source(base: Path, commit: str, relative: str) -> bytes:
         mode, kind, object_id = metadata.split(b" ", 2)
     except ValueError as error:
         raise TrustedLauncherError("trusted launcher metadata is invalid") from error
-    if mode != b"100755" or kind != b"blob" or path != relative.encode("ascii"):
+    if mode != b"100755" or kind != b"blob" or path != LAUNCHER_PATH.encode("ascii"):
         raise TrustedLauncherError("trusted launcher must be an executable blob")
     if re.fullmatch(rb"[0-9a-f]{40}", object_id) is None:
         raise TrustedLauncherError("trusted launcher metadata is invalid")
@@ -157,6 +225,8 @@ def _launcher_source(base: Path, commit: str, relative: str) -> bytes:
 
 
 def _run(arguments: argparse.Namespace) -> None:
+    if COMMIT_ID.fullmatch(arguments.base_commit) is None:
+        raise TrustedLauncherError("trusted base commit is invalid")
     base = Path(arguments.base_repository).resolve(strict=True)
     if not base.is_dir():
         raise TrustedLauncherError("trusted base checkout is unavailable")
@@ -174,15 +244,18 @@ def _run(arguments: argparse.Namespace) -> None:
     if _value(creator_arguments, "--base-commit") != arguments.base_commit:
         raise TrustedLauncherError("creator base commit does not match wrapper base")
     head = Path(_value(creator_arguments, "--head-repository")).resolve(strict=True)
-    wrapper = Path(__file__).resolve(strict=True)
+    wrapper = _validated_wrapper(Path(__file__))
     if _within(wrapper, base) or _within(wrapper, head):
         raise TrustedLauncherError("operator wrapper must be outside both checkouts")
 
-    relative = arguments.launcher
-    expected = _launcher_source(base, arguments.base_commit, relative)
-    live_path = base.joinpath(*relative.split("/"))
+    expected = _launcher_source(base, arguments.base_commit)
+    live_path = base.joinpath(*LAUNCHER_PATH.split("/"))
     live, info = _read_regular(live_path)
-    if stat.S_IMODE(info.st_mode) != 0o755 or live != expected:
+    if (
+        stat.S_IMODE(info.st_mode) != 0o755
+        or info.st_uid not in {0, os.getuid()}
+        or live != expected
+    ):
         raise TrustedLauncherError("trusted checkout launcher does not match its Git blob")
 
     sys.argv = [os.fspath(live_path), *creator_arguments]
@@ -193,18 +266,22 @@ def _run(arguments: argparse.Namespace) -> None:
         "__cached__": None,
     }
     exec(compile(expected, os.fspath(live_path), "exec"), namespace)  # noqa: S102
+    raise TrustedLauncherError("trusted launcher did not terminate")
 
 
 def main() -> int:
+    raw_arguments = sys.argv[1:]
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-repository", required=True)
     parser.add_argument("--base-commit", required=True)
-    parser.add_argument(
-        "--launcher",
-        default="scripts/create-age-admission-receipt",
-    )
-    parser.add_argument("creator_arguments", nargs=argparse.REMAINDER)
-    arguments = parser.parse_args()
+    try:
+        separator = raw_arguments.index("--")
+    except ValueError:
+        parser.error("an explicit -- separator is required before creator arguments")
+    if separator == len(raw_arguments) - 1:
+        parser.error("receipt creator arguments are required after --")
+    arguments = parser.parse_args(raw_arguments[:separator])
+    arguments.creator_arguments = raw_arguments[separator + 1 :]
     try:
         _run(arguments)
     except (TrustedLauncherError, OSError, UnicodeError, ValueError):

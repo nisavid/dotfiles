@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -16,12 +17,17 @@ from scripts.privacy_age_admission import (
     ADMISSION_NAMESPACE,
     ADMISSION_PRINCIPAL,
     ADMISSION_VERSION,
+    canonical_payload_bytes,
     encode_receipt,
     extract_receipt,
     validate_payload,
     verify_receipt_signature,
 )
 from scripts.privacy_age_integrity_gate import verify_integrity_boundary
+from tests.age_tooling_test_support import (
+    require_age_tooling_or_skip,
+    shared_age_tooling_directory_or_skip,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 ADMITTER = ROOT / "scripts/admit-age-envelopes"
@@ -91,10 +97,7 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
         parsed_payload, parsed_bytes, parsed_signature = parsed
         self.assertEqual(parsed_payload, payload)
         self.assertEqual(parsed_signature, signature)
-        self.assertEqual(
-            json.loads(parsed_bytes),
-            payload,
-        )
+        self.assertEqual(parsed_bytes, canonical_payload_bytes(payload))
 
     def test_receipt_requires_one_unambiguous_body_marker(self) -> None:
         now = datetime.now(timezone.utc).replace(microsecond=0)
@@ -153,7 +156,33 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "lifetime"):
             validate_payload(overlong, now=now)
 
-    def test_external_launcher_rejects_a_hidden_worktree_replacement(self) -> None:
+    def test_payload_accepts_printable_ascii_path_punctuation(self) -> None:
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        payload = {
+            "base_commit": "0" * 40,
+            "expires_at": (now + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "head_commit": "1" * 40,
+            "issued_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "nonce": "a" * 32,
+            "paths": [
+                {
+                    "base": None,
+                    "head": None,
+                    "path": "docs/Release notes+@~=,v1.md",
+                }
+            ],
+            "repository": "nisavid/dotfiles",
+            "version": ADMISSION_VERSION,
+        }
+
+        self.assertEqual(validate_payload(payload, now=now), payload)
+        with self.assertRaisesRegex(ValueError, "canonical"):
+            validate_payload(
+                payload | {"paths": [payload["paths"][0] | {"path": "docs/bad\tname"}]},
+                now=now,
+            )
+
+    def test_trusted_wrapper_rejects_every_untrusted_launch_path(self) -> None:
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
             base = root / "base"
@@ -166,7 +195,8 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
                 "#!/usr/bin/env python3\n"
                 "import os\n"
                 "from pathlib import Path\n"
-                "Path(os.environ['ADMISSION_LAUNCHER_MARKER']).write_text('ran')\n",
+                "Path(os.environ['ADMISSION_LAUNCHER_MARKER']).write_text('ran')\n"
+                "raise SystemExit(0)\n",
                 encoding="ascii",
             )
             launcher.chmod(0o755)
@@ -189,6 +219,8 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
                 base_commit,
             ]
             command = [
+                sys.executable,
+                "-I",
                 str(wrapper),
                 "--base-repository",
                 str(base),
@@ -209,6 +241,108 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
             self.assertTrue(marker.exists())
 
             marker.unlink()
+            writable_wrapper_dir = root / "writable-wrapper-dir"
+            writable_wrapper_dir.mkdir()
+            writable_wrapper_dir.chmod(0o775)
+            writable_wrapper = writable_wrapper_dir / "trusted-wrapper"
+            shutil.copy2(wrapper, writable_wrapper)
+            writable_wrapper.chmod(0o755)
+            writable_command = [
+                sys.executable,
+                "-I",
+                str(writable_wrapper),
+                "--base-repository",
+                str(base),
+                "--base-commit",
+                base_commit,
+                "--",
+                *creator_arguments,
+            ]
+            result = subprocess.run(
+                writable_command,
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+                timeout=30,
+            )
+            self.assertEqual(result.returncode, 1, "writable wrapper directory")
+            self.assertFalse(marker.exists())
+
+            missing_separator_command = [
+                sys.executable,
+                "-I",
+                str(wrapper),
+                "--base-repository",
+                str(base),
+                "--base-commit",
+                base_commit,
+                *creator_arguments,
+            ]
+            result = subprocess.run(
+                missing_separator_command,
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+                timeout=30,
+            )
+            self.assertEqual(result.returncode, 2, "missing creator separator")
+            self.assertIn("explicit -- separator", result.stderr)
+            self.assertFalse(marker.exists())
+
+            symlink_wrapper = root / "symlink-wrapper"
+            symlink_wrapper.symlink_to(wrapper)
+            symlink_command = [
+                sys.executable,
+                "-I",
+                str(symlink_wrapper),
+                "--base-repository",
+                str(base),
+                "--base-commit",
+                base_commit,
+                "--",
+                *creator_arguments,
+            ]
+            result = subprocess.run(
+                symlink_command,
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+                timeout=30,
+            )
+            self.assertEqual(result.returncode, 1, "symlink wrapper")
+            self.assertFalse(marker.exists())
+
+            equals_command = [
+                sys.executable,
+                "-I",
+                str(wrapper),
+                "--base-repository",
+                str(base),
+                "--base-commit",
+                base_commit,
+                "--",
+                f"--base-repository={base}",
+                "--base-commit",
+                base_commit,
+                "--head-repository",
+                str(head),
+                "--head-commit",
+                base_commit,
+            ]
+            result = subprocess.run(
+                equals_command,
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+                timeout=30,
+            )
+            self.assertEqual(result.returncode, 1, "equals-form creator option")
+            self.assertFalse(marker.exists())
+
             launcher.write_text(
                 "#!/usr/bin/env python3\n"
                 "import os\n"
@@ -231,7 +365,7 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
                 env=environment,
                 timeout=30,
             )
-            self.assertEqual(result.returncode, 1)
+            self.assertEqual(result.returncode, 1, "tampered trusted launcher")
             self.assertFalse(marker.exists())
 
     def test_ssh_signature_verification_is_bound_to_namespace_and_principal(self) -> None:
@@ -244,11 +378,13 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
                 ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)],
                 check=True,
                 capture_output=True,
+                timeout=10,
             )
-            public_key = (root / "admission-key.pub").read_text(encoding="ascii")
+            public_key = (root / "admission-key.pub").read_text(encoding="ascii").split(
+                maxsplit=2
+            )
             allowed.write_text(
-                f"{ADMISSION_PRINCIPAL} {public_key.split(maxsplit=2)[0]} "
-                f"{public_key.split(maxsplit=2)[1]}\n",
+                f"{ADMISSION_PRINCIPAL} {public_key[0]} {public_key[1]}\n",
                 encoding="ascii",
             )
             # The signing command consumes a file, so create the exact signed
@@ -267,6 +403,7 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
                 ],
                 check=True,
                 capture_output=True,
+                timeout=10,
             )
 
             verify_receipt_signature(
@@ -297,6 +434,7 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
                 ],
                 check=True,
                 capture_output=True,
+                timeout=10,
             )
             with self.assertRaisesRegex(ValueError, "signature"):
                 verify_receipt_signature(
@@ -322,6 +460,19 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
                 )
 
     def test_creator_validates_ciphertexts_and_gate_accepts_its_receipt(self) -> None:
+        # Keep the expensive raw-tree fixture together: each rejection probes
+        # the same trusted-launch boundary, and splitting it would duplicate
+        # setup while making the scenario matrix easier to drift. Decompose
+        # after bootstrap once the boundary has an independent App root.
+        age_binaries = [
+            shutil.which(name) for name in ("age", "age-keygen", "age-inspect")
+        ]
+        if any(binary is None for binary in age_binaries):
+            require_age_tooling_or_skip("age tooling is unavailable")
+        age_tooling_directory = shared_age_tooling_directory_or_skip(
+            (binary for binary in age_binaries if binary is not None),
+            "age tooling does not share one trusted install directory",
+        )
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
             base = root / "base"
@@ -368,7 +519,10 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
             protected = {
                 ".github/age-admission/allowed_signers": b"",
                 ".github/actions/privacy-boundary/action.yml": b"boundary\n",
-                ".github/workflows/privacy-age-integrity.yml": b"workflow\n",
+                ".github/workflows/privacy-age-integrity.yml": (
+                    b"# Protected admission activation sentinel: owner-signed-age-v1\n"
+                    b"workflow\n"
+                ),
                 ".privacy-age-envelopes.json": b"",
                 "docs/ENCRYPTION.md": b"encryption\n",
                 "home/.chezmoi.toml.tmpl": b"recipient\n",
@@ -396,6 +550,7 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
             shutil.copy2(ADMITTER, base / "scripts/admit-age-envelopes")
             for script_name in (
                 "create-age-admission-receipt",
+                "privacy-scan",
                 "privacy_age_admission.py",
                 "privacy_age_envelopes.py",
                 "privacy_age_integrity_gate.py",
@@ -403,6 +558,8 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
                 shutil.copy2(ROOT / "scripts" / script_name, base / "scripts" / script_name)
             (base / "scripts/admit-age-envelopes").chmod(0o755)
             (base / "scripts/create-age-admission-receipt").chmod(0o755)
+            (base / "scripts/privacy-scan").chmod(0o755)
+            (base / "scripts/run-trusted-age-admission").chmod(0o755)
             signing_key = root / "signing-key"
             _run(
                 "ssh-keygen",
@@ -419,7 +576,7 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
             )
             public = (root / "signing-key.pub").read_text(encoding="ascii").split()
             (base / ".github/age-admission/allowed_signers").write_text(
-                f"repository-owner {public[0]} {public[1]}\n",
+                f"{ADMISSION_PRINCIPAL} {public[0]} {public[1]}\n",
                 encoding="ascii",
             )
             manifest = {
@@ -483,9 +640,7 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
             output = root / "receipt.txt"
             creator = base / "scripts/create-age-admission-receipt"
             environment = os.environ.copy()
-            environment["AGE_TOOLING_DIRECTORY"] = str(
-                Path(os.environ.get("AGE_TOOLING_DIRECTORY", "/opt/homebrew/bin"))
-            )
+            environment["AGE_TOOLING_DIRECTORY"] = os.fspath(age_tooling_directory)
             def creator_command(identity_path: Path, output_path: Path) -> list[str]:
                 return [
                     str(creator),
@@ -544,7 +699,7 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
                 env=environment,
                 timeout=30,
             )
-            self.assertEqual(result.returncode, 1)
+            self.assertEqual(result.returncode, 1, "identity inside trusted checkout")
 
             tooling_in_base = base / ".git/age-tooling"
             tooling_in_base.mkdir()
@@ -558,7 +713,7 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
                 env=tooling_environment,
                 timeout=30,
             )
-            self.assertEqual(result.returncode, 1)
+            self.assertEqual(result.returncode, 1, "tooling inside trusted checkout")
 
             fake_tool_dir = base / ".git/fake-tools"
             fake_tool_dir.mkdir()
@@ -577,7 +732,7 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
                 env=untrusted_tool_environment,
                 timeout=30,
             )
-            self.assertEqual(result.returncode, 1)
+            self.assertEqual(result.returncode, 1, "signing tool inside trusted checkout")
 
             external_fake_tool_dir = root / "fake-tools"
             external_fake_tool_dir.mkdir()
@@ -596,7 +751,7 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
                 env=writable_tool_environment,
                 timeout=30,
             )
-            self.assertEqual(result.returncode, 1)
+            self.assertEqual(result.returncode, 1, "writable signing tool")
 
             writable_parent_tool_dir = root / "writable-parent-tools"
             writable_parent_tool_dir.mkdir()
@@ -616,7 +771,7 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
                 env=writable_parent_environment,
                 timeout=30,
             )
-            self.assertEqual(result.returncode, 1)
+            self.assertEqual(result.returncode, 1, "writable signing-tool parent")
 
             output_alias = root / "output-alias"
             output_alias.symlink_to(base, target_is_directory=True)
@@ -628,7 +783,7 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
                 env=environment,
                 timeout=30,
             )
-            self.assertEqual(result.returncode, 1)
+            self.assertEqual(result.returncode, 1, "output symlink")
 
             import_marker = root / "trusted-module-imported"
             (base / "scripts/privacy_age_admission.py").write_text(
@@ -644,14 +799,9 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
                 env=environment,
                 timeout=30,
             )
-            self.assertEqual(result.returncode, 1)
+            self.assertEqual(result.returncode, 1, "dirty trusted base")
             self.assertFalse(import_marker.exists())
 
-            (base / "scripts/privacy_age_admission.py").unlink()
-            shutil.copy2(
-                ROOT / "scripts/privacy_age_admission.py",
-                base / "scripts/privacy_age_admission.py",
-            )
             hidden_marker = root / "hidden-module-imported"
             hidden_module = base / "scripts/privacy_age_admission.py"
             hidden_module.write_text(
@@ -676,7 +826,7 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
             )
             # The no-filter worktree comparison rejects hidden tracked dirt;
             # the trusted module must still never execute from the worktree.
-            self.assertEqual(result.returncode, 1)
+            self.assertEqual(result.returncode, 1, "hidden module worktree dirt")
             self.assertFalse(hidden_marker.exists())
             _run(
                 "git",
@@ -689,13 +839,15 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
 
             launcher = base / "scripts/create-age-admission-receipt"
             launcher_bytes = launcher.read_bytes()
-            launcher.write_bytes(
-                launcher_bytes.replace(
-                    b"sys.dont_write_bytecode = True",
-                    b"sys.dont_write_bytecode = False",
-                    1,
-                )
+            tamper_marker = b"sys.dont_write_bytecode = True"
+            self.assertEqual(launcher_bytes.count(tamper_marker), 1)
+            tampered_launcher_bytes = launcher_bytes.replace(
+                tamper_marker,
+                b"sys.dont_write_bytecode = False",
+                1,
             )
+            self.assertNotEqual(tampered_launcher_bytes, launcher_bytes)
+            launcher.write_bytes(tampered_launcher_bytes)
             _run(
                 "git",
                 "update-index",
@@ -711,7 +863,7 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
                 env=environment,
                 timeout=30,
             )
-            self.assertEqual(result.returncode, 1)
+            self.assertEqual(result.returncode, 1, "hidden launcher worktree dirt")
             _run(
                 "git",
                 "update-index",
@@ -729,7 +881,7 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
                 env=environment,
                 timeout=30,
             )
-            self.assertEqual(result.returncode, 1)
+            self.assertEqual(result.returncode, 1, "dirty candidate worktree")
 
 
 if __name__ == "__main__":

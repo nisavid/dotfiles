@@ -17,9 +17,17 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from .privacy_age_envelopes import AgeEnvelopeError, read_regular_file
+    from .privacy_age_envelopes import (
+        AgeEnvelopeError,
+        open_regular_file_descriptor,
+        read_regular_file,
+    )
 except ImportError:  # pragma: no cover - direct module loading
-    from privacy_age_envelopes import AgeEnvelopeError, read_regular_file
+    from privacy_age_envelopes import (
+        AgeEnvelopeError,
+        open_regular_file_descriptor,
+        read_regular_file,
+    )
 
 ADMISSION_VERSION = "privacy-age-admission/v1"
 ADMISSION_NAMESPACE = "nisavid/dotfiles/age-admission/v1"
@@ -40,6 +48,11 @@ _COMMIT_ID = re.compile(r"[0-9a-f]{40}\Z", re.ASCII)
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z", re.ASCII)
 _NONCE = re.compile(r"[0-9a-f]{32,128}\Z", re.ASCII)
 _TIMESTAMP = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\Z")
+# Git permits printable ASCII punctuation in path components.  Validate the
+# path structurally below rather than narrowing it to an incidental filename
+# subset; controls, traversal components, leading roots, and backslashes stay
+# forbidden.
+_PATH_SEGMENT = re.compile(r"[ -~]+\Z", re.ASCII)
 _MARKER = re.compile(
     re.escape(ADMISSION_MARKER_PREFIX)
     + rb"([A-Za-z0-9_-]{1,65536})"
@@ -49,6 +62,68 @@ _MARKER = re.compile(
 
 class AdmissionReceiptError(ValueError):
     """An admission receipt failed closed validation."""
+
+
+def _validate_executable_path_authority(raw: str) -> Path:
+    """Resolve one executable only through root/current-owned, non-writable parents."""
+
+    lexical = Path(os.path.abspath(raw))
+    try:
+        canonical = lexical.resolve(strict=True)
+        owner = os.getuid()
+    except (AttributeError, OSError) as error:
+        raise AdmissionReceiptError("admission signature tooling is unavailable") from error
+    current = lexical.parent
+    visited: set[Path] = set()
+    while True:
+        if current in visited:
+            raise AdmissionReceiptError("admission signature tooling is unavailable")
+        visited.add(current)
+        try:
+            info = current.lstat()
+        except OSError as error:
+            raise AdmissionReceiptError("admission signature tooling is unavailable") from error
+        if stat.S_ISLNK(info.st_mode):
+            if info.st_uid != 0:
+                raise AdmissionReceiptError("admission signature tooling is unavailable")
+            try:
+                current = current.resolve(strict=True)
+            except OSError as error:
+                raise AdmissionReceiptError(
+                    "admission signature tooling is unavailable"
+                ) from error
+            if not current.is_dir():
+                raise AdmissionReceiptError("admission signature tooling is unavailable")
+            continue
+        if not stat.S_ISDIR(info.st_mode) or info.st_mode & 0o022 or info.st_uid not in {0, owner}:
+            raise AdmissionReceiptError("admission signature tooling is unavailable")
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+    try:
+        descriptor, info = open_regular_file_descriptor(lexical)
+    except (AgeEnvelopeError, OSError) as error:
+        raise AdmissionReceiptError("admission signature tooling is unavailable") from error
+    try:
+        try:
+            canonical_info = canonical.stat(follow_symlinks=False)
+        except OSError as error:
+            raise AdmissionReceiptError(
+                "admission signature tooling is unavailable"
+            ) from error
+        if (
+            not stat.S_ISREG(canonical_info.st_mode)
+            or (info.st_dev, info.st_ino) != (canonical_info.st_dev, canonical_info.st_ino)
+            or info.st_mode & 0o111 == 0
+            or info.st_mode & 0o022
+            or info.st_uid not in {0, owner}
+            or canonical_info.st_uid not in {0, owner}
+        ):
+            raise AdmissionReceiptError("admission signature tooling is unavailable")
+    finally:
+        os.close(descriptor)
+    return canonical
 
 
 def _reject_constant(_: str) -> None:
@@ -149,7 +224,7 @@ def _validated_path(value: object) -> str:
     segments = value.split("/")
     if any(
         segment in {"", ".", ".."}
-        or re.fullmatch(r"[A-Za-z0-9._-]+", segment) is None
+        or _PATH_SEGMENT.fullmatch(segment) is None
         for segment in segments
     ):
         raise AdmissionReceiptError("admission path is not canonical")
@@ -351,9 +426,10 @@ def verify_receipt_signature(
         raise AdmissionReceiptError("admission signer configuration is unavailable") from error
     if not stat.S_ISREG(info.st_mode) or info.st_size > 32 * 1024:
         raise AdmissionReceiptError("admission signer configuration is unavailable")
-    ssh_keygen = shutil.which("ssh-keygen")
-    if ssh_keygen is None:
+    raw_ssh_keygen = shutil.which("ssh-keygen")
+    if raw_ssh_keygen is None:
         raise AdmissionReceiptError("admission signature tooling is unavailable")
+    ssh_keygen = _validate_executable_path_authority(raw_ssh_keygen)
 
     try:
         with tempfile.TemporaryDirectory(prefix="age-admission-verify.") as temporary:

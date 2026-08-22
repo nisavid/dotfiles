@@ -48,6 +48,7 @@ _MACHO_MAGICS = {
     b"\xfe\xed\xfa\xce",
     b"\xfe\xed\xfa\xcf",
 }
+_MACOS_CODESIGN = Path("/usr/bin/codesign")
 
 
 def _within(path: Path, root: Path) -> bool:
@@ -73,6 +74,7 @@ def _git(
     *arguments: str,
     maximum_output_bytes: int | None = None,
     environment_overrides: dict[str, str] | None = None,
+    input_data: bytes | None = None,
 ) -> bytes:
     environment = os.environ.copy()
     for variable in (
@@ -118,6 +120,7 @@ def _git(
             ],
             check=False,
             capture_output=True,
+            input=input_data,
             env=environment,
             timeout=30,
         )
@@ -128,6 +131,67 @@ def _git(
     if maximum_output_bytes is not None and len(result.stdout) > maximum_output_bytes:
         raise ReceiptRequestError("checkout state inspection exceeded its size limit")
     return result.stdout
+
+
+def _git_blob_batch(
+    repository: Path,
+    object_ids: list[bytes],
+    *,
+    maximum_total_bytes: int,
+) -> dict[bytes, bytes]:
+    """Read bounded Git blobs through one sanitized ``cat-file --batch`` call."""
+
+    unique_object_ids = list(dict.fromkeys(object_ids))
+    if any(
+        len(object_id) != 40
+        or re.fullmatch(rb"[0-9a-f]{40}", object_id) is None
+        for object_id in unique_object_ids
+    ):
+        raise ReceiptRequestError("Git object identity is malformed")
+    if not unique_object_ids:
+        return {}
+    request = b"".join(object_id + b"\n" for object_id in unique_object_ids)
+    # Headers are small and bounded by the object identity and Git's type/size
+    # fields.  Keep the capture bounded even when a repository contains an
+    # unexpectedly large blob; the aggregate caller limit remains authoritative.
+    maximum_output_bytes = maximum_total_bytes + len(unique_object_ids) * 96
+    raw = _git(
+        repository,
+        "cat-file",
+        "--batch",
+        input_data=request,
+        maximum_output_bytes=maximum_output_bytes,
+    )
+    blobs: dict[bytes, bytes] = {}
+    offset = 0
+    total_bytes = 0
+    for object_id in unique_object_ids:
+        line_end = raw.find(b"\n", offset)
+        if line_end < 0:
+            raise ReceiptRequestError("Git object response is malformed")
+        header = raw[offset:line_end].split(b" ")
+        offset = line_end + 1
+        if len(header) == 2 and header[0] == object_id and header[1] == b"missing":
+            raise ReceiptRequestError("Git object is unavailable")
+        if len(header) != 3 or header[0] != object_id or header[1] != b"blob":
+            raise ReceiptRequestError("Git object response is malformed")
+        try:
+            size = int(header[2], 10)
+        except (TypeError, ValueError) as error:
+            raise ReceiptRequestError("Git object response is malformed") from error
+        if size < 0 or size > maximum_total_bytes:
+            raise ReceiptRequestError("Git object exceeds its size limit")
+        total_bytes += size
+        if total_bytes > maximum_total_bytes:
+            raise ReceiptRequestError("Git object aggregate exceeds its size limit")
+        end = offset + size
+        if end >= len(raw) or raw[end : end + 1] != b"\n":
+            raise ReceiptRequestError("Git object response is malformed")
+        blobs[object_id] = raw[offset:end]
+        offset = end + 1
+    if offset != len(raw):
+        raise ReceiptRequestError("Git object response is malformed")
+    return blobs
 
 
 def _validated_checkout(
@@ -320,6 +384,12 @@ def _validate_worktree_shape(
 ) -> None:
     """Reject untracked entries and symlinked parent directories without Git filters."""
 
+    expected_directories: set[bytes] = set()
+    for raw_path in expected_paths:
+        parts = raw_path.split(b"/")
+        expected_directories.update(
+            b"/".join(parts[:index]) for index in range(1, len(parts))
+        )
     pending = [checkout]
     seen_entries = 0
     while pending:
@@ -341,8 +411,7 @@ def _validate_worktree_shape(
             except (OSError, ValueError) as error:
                 raise ReceiptRequestError(f"{label} checkout cannot be inspected") from error
             if stat.S_ISDIR(info.st_mode):
-                prefix = relative_raw + b"/"
-                if not any(path.startswith(prefix) for path in expected_paths):
+                if relative_raw not in expected_directories:
                     raise ReceiptRequestError(f"{label} checkout must be clean")
                 pending.append(Path(entry.path))
             elif relative_raw not in expected_paths:
@@ -371,10 +440,16 @@ def _validate_checkout_content(
         raise ReceiptRequestError(f"{label} checkout index does not match its commit")
     _validate_worktree_shape(checkout, set(tree), label=label)
 
-    compared_bytes = 0
-    for raw_path, (mode, kind, object_id) in tree.items():
+    for mode, kind, _ in tree.values():
         if kind != b"blob" or mode not in {b"100644", b"100755", b"120000"}:
             raise ReceiptRequestError(f"{label} checkout contains an unsupported entry kind")
+    blobs = _git_blob_batch(
+        checkout,
+        [entry[2] for entry in tree.values()],
+        maximum_total_bytes=MAX_WORKTREE_BYTES,
+    )
+    compared_bytes = 0
+    for raw_path, (mode, kind, object_id) in tree.items():
         destination = checkout.joinpath(*_tree_relative_path(raw_path))
         try:
             info = destination.lstat()
@@ -394,13 +469,10 @@ def _validate_checkout_content(
             expected_executable = mode == b"100755"
             if bool(info.st_mode & 0o111) != expected_executable:
                 raise ReceiptRequestError(f"{label} checkout mode does not match Git")
-        expected = _git(
-            checkout,
-            "cat-file",
-            "blob",
-            object_id.decode("ascii"),
-            maximum_output_bytes=MAX_WORKTREE_BYTES,
-        )
+        try:
+            expected = blobs[object_id]
+        except KeyError as error:
+            raise ReceiptRequestError("Git object response is malformed") from error
         compared_bytes += len(expected)
         if compared_bytes > MAX_WORKTREE_BYTES:
             raise ReceiptRequestError(f"{label} checkout is too large")
@@ -466,21 +538,24 @@ def _materialize_commit_tree(repository: Path, commit: str) -> tuple[tempfile.Te
         root.mkdir()
         root = root.resolve()
         materialized_bytes = 0
+        tree = _tree_records(repository, commit)
+        if any(kind != b"blob" for _, kind, _ in tree.values()):
+            raise ReceiptRequestError("Git tree contains an unsupported entry kind")
+        blobs = _git_blob_batch(
+            repository,
+            [entry[2] for entry in tree.values()],
+            maximum_total_bytes=MAX_MATERIALIZED_TREE_BYTES,
+        )
         for entry_count, (raw_path, (mode, kind, object_id)) in enumerate(
-            _tree_records(repository, commit).items(),
+            tree.items(),
             start=1,
         ):
-            if kind != b"blob":
-                raise ReceiptRequestError("Git tree contains an unsupported entry kind")
             if entry_count > MAX_MATERIALIZED_TREE_ENTRIES:
                 raise ReceiptRequestError("candidate tree is too large")
-            data = _git(
-                repository,
-                "cat-file",
-                "blob",
-                object_id.decode("ascii"),
-                maximum_output_bytes=MAX_MATERIALIZED_TREE_BYTES,
-            )
+            try:
+                data = blobs[object_id]
+            except KeyError as error:
+                raise ReceiptRequestError("Git object response is malformed") from error
             materialized_bytes += len(data)
             if materialized_bytes > MAX_MATERIALIZED_TREE_BYTES:
                 raise ReceiptRequestError("candidate tree is too large")
@@ -503,6 +578,12 @@ def _load_trusted_modules(root: Path) -> dict[str, types.ModuleType]:
     package.__package__ = package_name
     sys.modules[package_name] = package
     modules: dict[str, types.ModuleType] = {}
+
+    def cleanup() -> None:
+        for name in tuple(sys.modules):
+            if name == package_name or name.startswith(f"{package_name}."):
+                sys.modules.pop(name, None)
+
     try:
         for module_name in (
             "privacy_age_envelopes",
@@ -519,9 +600,14 @@ def _load_trusted_modules(root: Path) -> dict[str, types.ModuleType]:
             module = importlib.util.module_from_spec(spec)
             sys.modules[spec.name] = module
             spec.loader.exec_module(module)
+            setattr(package, module_name, module)
             modules[module_name] = module
-    except (ImportError, OSError, SyntaxError, ValueError) as error:
+    except Exception as error:
+        cleanup()
         raise ReceiptRequestError("trusted admission modules are unavailable") from error
+    except BaseException:
+        cleanup()
+        raise
     return modules
 
 
@@ -707,13 +793,29 @@ def _validate_signing_tool_path_authority(*paths: Path) -> None:
         owner = None
     for path in paths:
         current = path.parent
+        visited: set[Path] = set()
         while True:
+            if current in visited:
+                raise ReceiptRequestError("admission signature tooling is unavailable")
+            visited.add(current)
             try:
                 info = current.lstat()
             except OSError as error:
                 raise ReceiptRequestError(
                     "admission signature tooling is unavailable"
                 ) from error
+            if stat.S_ISLNK(info.st_mode):
+                if info.st_uid != 0:
+                    raise ReceiptRequestError("admission signature tooling is unavailable")
+                try:
+                    current = current.resolve(strict=True)
+                except OSError as error:
+                    raise ReceiptRequestError(
+                        "admission signature tooling is unavailable"
+                    ) from error
+                if not current.is_dir():
+                    raise ReceiptRequestError("admission signature tooling is unavailable")
+                continue
             if (
                 not stat.S_ISDIR(info.st_mode)
                 or info.st_mode & 0o022
@@ -757,6 +859,8 @@ def _validated_signing_tool(
             or (info.st_dev, info.st_ino) != (canonical_info.st_dev, canonical_info.st_ino)
             or info.st_mode & 0o111 == 0
             or info.st_mode & 0o022 != 0
+            or info.st_uid not in {0, os.getuid()}
+            or canonical_info.st_uid not in {0, os.getuid()}
         ):
             raise ReceiptRequestError("admission signature tooling is unavailable")
         chunks: list[bytes] = []
@@ -818,20 +922,62 @@ def _stage_signing_tool(root: Path, data: bytes) -> Path:
     return path
 
 
-def _authorize_staged_macos_tool(path: Path, data: bytes) -> None:
+def _validated_macos_codesign(forbidden_roots: tuple[Path, ...]) -> Path:
+    """Use only Apple's fixed, root-owned codesign binary on Darwin."""
+
+    lexical = _MACOS_CODESIGN
+    try:
+        canonical = lexical.resolve(strict=True)
+    except OSError as error:
+        raise ReceiptRequestError("admission signature tooling is unavailable") from error
+    if (
+        canonical != lexical
+        or any(
+            _within(candidate, root)
+            for candidate in (lexical, canonical)
+            for root in forbidden_roots
+        )
+    ):
+        raise ReceiptRequestError("admission signature tooling is unavailable")
+    _validate_signing_tool_path_authority(lexical, canonical)
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    no_block = getattr(os, "O_NONBLOCK", None)
+    if no_follow is None or no_block is None:
+        raise ReceiptRequestError("admission signature tooling is unavailable")
+    try:
+        descriptor = os.open(
+            lexical,
+            os.O_RDONLY | no_follow | no_block | getattr(os, "O_CLOEXEC", 0),
+        )
+    except OSError as error:
+        raise ReceiptRequestError("admission signature tooling is unavailable") from error
+    try:
+        info = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_mode & 0o111 == 0
+            or info.st_mode & 0o022
+            or info.st_uid != 0
+        ):
+            raise ReceiptRequestError("admission signature tooling is unavailable")
+    except OSError as error:
+        raise ReceiptRequestError("admission signature tooling is unavailable") from error
+    finally:
+        os.close(descriptor)
+    return canonical
+
+
+def _authorize_staged_macos_tool(
+    path: Path,
+    data: bytes,
+    *,
+    forbidden_roots: tuple[Path, ...],
+) -> None:
     """Ad-hoc sign staged Mach-O bytes so macOS accepts the verified copy."""
 
     if sys.platform != "darwin" or data[:4] not in _MACHO_MAGICS:
         return
-    codesign = shutil.which("codesign")
-    if codesign is None:
-        raise ReceiptRequestError("admission signature tooling is unavailable")
-    codesign_path = Path(os.path.abspath(codesign))
-    try:
-        codesign_path = codesign_path.resolve(strict=True)
-    except OSError as error:
-        raise ReceiptRequestError("admission signature tooling is unavailable") from error
-    _validate_signing_tool_path_authority(codesign_path)
+    codesign_path = _validated_macos_codesign(forbidden_roots)
     try:
         result = subprocess.run(
             [
@@ -845,12 +991,56 @@ def _authorize_staged_macos_tool(path: Path, data: bytes) -> None:
             check=False,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            env={
+                "PATH": "/usr/bin:/bin",
+                "LANG": "C",
+                "LC_ALL": "C",
+            },
             timeout=SIGN_TIMEOUT_SECONDS,
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         raise ReceiptRequestError("admission signature tooling is unavailable") from error
     if result.returncode != 0:
         raise ReceiptRequestError("admission signature tooling is unavailable")
+
+
+def _write_private_staged_file(path: Path, data: bytes) -> None:
+    """Create one signer input with an exclusive, exact mode-0600 inode."""
+
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    if no_follow is None:
+        raise ReceiptRequestError("admission signature generation failed")
+    flags = (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | no_follow
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    try:
+        descriptor = os.open(path, flags, 0o600)
+    except OSError as error:
+        raise ReceiptRequestError("admission signature generation failed") from error
+    try:
+        offset = 0
+        while offset < len(data):
+            written = os.write(descriptor, data[offset:])
+            if written <= 0:
+                raise ReceiptRequestError("admission signature generation failed")
+            offset += written
+        os.fchmod(descriptor, 0o600)
+        os.fsync(descriptor)
+        info = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_size != len(data)
+            or stat.S_IMODE(info.st_mode) != 0o600
+        ):
+            raise ReceiptRequestError("admission signature generation failed")
+    except (OSError, ValueError) as error:
+        raise ReceiptRequestError("admission signature generation failed") from error
+    finally:
+        os.close(descriptor)
 
 
 def _sign_payload(
@@ -860,6 +1050,7 @@ def _sign_payload(
     forbidden_roots: tuple[Path, ...],
     envelope_module: types.ModuleType,
     namespace: str,
+    maximum_signature_bytes: int,
 ) -> bytes:
     tool_data = _validated_signing_tool(
         forbidden_roots=forbidden_roots,
@@ -869,13 +1060,15 @@ def _sign_payload(
         with tempfile.TemporaryDirectory(prefix="age-admission-sign.") as temporary:
             root = Path(temporary)
             tool = _stage_signing_tool(root, tool_data)
-            _authorize_staged_macos_tool(tool, tool_data)
+            _authorize_staged_macos_tool(
+                tool,
+                tool_data,
+                forbidden_roots=forbidden_roots,
+            )
             key = root / "signing-key"
             message = root / "payload"
-            key.write_bytes(signing_key)
-            message.write_bytes(payload)
-            os.chmod(key, 0o600)
-            os.chmod(message, 0o600)
+            _write_private_staged_file(key, signing_key)
+            _write_private_staged_file(message, payload)
             result = subprocess.run(
                 [
                     os.fspath(tool),
@@ -888,6 +1081,7 @@ def _sign_payload(
                     os.fspath(message),
                 ],
                 check=False,
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 timeout=SIGN_TIMEOUT_SECONDS,
@@ -907,7 +1101,7 @@ def _sign_payload(
                 raise ReceiptRequestError("admission signature generation failed") from error
     except (OSError, subprocess.TimeoutExpired) as error:
         raise ReceiptRequestError("admission signature generation failed") from error
-    if not signature or len(signature) > 8 * 1024:
+    if not signature or len(signature) > maximum_signature_bytes:
         raise ReceiptRequestError("admission signature is invalid")
     return signature
 
@@ -939,7 +1133,14 @@ def _write_output(path: Path, data: bytes, *, forbidden_roots: tuple[Path, ...])
             stream.write(data)
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temporary, lexical)
+        # The output is intentionally create-only.  Linking the private
+        # temporary inode into place fails if another actor wins the pathname
+        # race, so it cannot replace an operator-created file or symlink.
+        if os.link in os.supports_follow_symlinks:
+            os.link(temporary, lexical, follow_symlinks=False)
+        else:  # pragma: no cover - supported on the project POSIX targets
+            os.link(temporary, lexical)
+        os.unlink(temporary)
         temporary = None
     except OSError as error:
         raise ReceiptRequestError("receipt output could not be installed") from error
@@ -984,6 +1185,9 @@ def create_receipt(arguments: argparse.Namespace) -> None:
         or not _within(admitter, base)
     ):
         raise ReceiptRequestError("trusted admission command is unavailable")
+    # The supplied path is an operator-intent witness only.  Admission always
+    # executes the exact admitter bytes materialized from the trusted base tree
+    # below, never the caller's pathname.
     _validate_external_tooling_directory(
         os.environ.get("AGE_TOOLING_DIRECTORY"),
         forbidden_roots=forbidden_roots,
@@ -993,15 +1197,20 @@ def create_receipt(arguments: argparse.Namespace) -> None:
         arguments.base_commit,
     )
     candidate_temporary: tempfile.TemporaryDirectory[str] | None = None
+    modules: dict[str, types.ModuleType] = {}
+    sys_path_snapshot = list(sys.path)
     try:
         candidate_temporary, candidate_tree = _materialize_commit_tree(
             head,
             arguments.head_commit,
         )
         modules = _load_trusted_modules(trusted_tree)
-        envelope_module = modules["privacy_age_envelopes"]
-        admission_module = modules["privacy_age_admission"]
-        integrity_module = modules["privacy_age_integrity_gate"]
+        try:
+            envelope_module = modules["privacy_age_envelopes"]
+            admission_module = modules["privacy_age_admission"]
+            integrity_module = modules["privacy_age_integrity_gate"]
+        except (KeyError, AttributeError, TypeError) as error:
+            raise ReceiptRequestError("trusted admission modules are unavailable") from error
         _, identity_descriptor = _validate_external_identity(
             arguments.identity,
             forbidden_roots=forbidden_roots,
@@ -1048,15 +1257,20 @@ def create_receipt(arguments: argparse.Namespace) -> None:
             forbidden_roots=forbidden_roots,
             envelope_module=envelope_module,
             namespace=admission_module.ADMISSION_NAMESPACE,
+            maximum_signature_bytes=admission_module.MAX_ADMISSION_SIGNATURE_BYTES,
         )
         _write_output(
             arguments.output,
             admission_module.encode_receipt(payload, signature) + b"\n",
             forbidden_roots=forbidden_roots,
         )
-    except (KeyError, AttributeError, TypeError) as error:
-        raise ReceiptRequestError("trusted admission modules are unavailable") from error
     finally:
+        if modules:
+            package_name = next(iter(modules.values())).__name__.split(".", 1)[0]
+            for name in tuple(sys.modules):
+                if name == package_name or name.startswith(f"{package_name}."):
+                    sys.modules.pop(name, None)
+        sys.path[:] = sys_path_snapshot
         if candidate_temporary is not None:
             candidate_temporary.cleanup()
         trusted_temporary.cleanup()
@@ -1080,7 +1294,15 @@ def main() -> int:
     arguments = parser.parse_args()
     try:
         create_receipt(arguments)
-    except (ReceiptRequestError, ValueError, RuntimeError, OSError, OverflowError):
+    except (
+        ReceiptRequestError,
+        ValueError,
+        RuntimeError,
+        OSError,
+        OverflowError,
+        AttributeError,
+        TypeError,
+    ):
         print("age-transition admission failed", file=sys.stderr)
         return 1
     return 0

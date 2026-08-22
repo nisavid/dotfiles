@@ -339,16 +339,22 @@ class PrivacyAgeEnvelopeTests(TestCase):
         (self.root / "candidate.age").write_bytes(candidate)
         expected = manifest_bytes([("candidate.age", candidate)])
         (self.root / MANIFEST).write_bytes(expected)
+        original_inode = (self.root / MANIFEST).stat().st_ino
 
         result = self.run_admitter_with(identity=self.identity, check_only=True)
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual((self.root / MANIFEST).read_bytes(), expected)
+        self.assertEqual((self.root / MANIFEST).stat().st_ino, original_inode)
+        self.assertEqual(list(self.root.glob(f"{MANIFEST}.*")), [])
 
         (self.root / MANIFEST).write_bytes(manifest_bytes([]))
         result = self.run_admitter_with(identity=self.identity, check_only=True)
         self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, "age-envelope admission failed\n")
         self.assertEqual((self.root / MANIFEST).read_bytes(), manifest_bytes([]))
+        self.assertEqual(list(self.root.glob(f"{MANIFEST}.*")), [])
 
     def test_admission_uses_a_held_identity_descriptor_after_path_replacement(self) -> None:
         candidate = self.encrypt(b"descriptor-bound fixture")
@@ -362,7 +368,7 @@ class PrivacyAgeEnvelopeTests(TestCase):
         try:
             os.replace(self.identity, moved)
             self.identity.write_text("not an age identity\n", encoding="ascii")
-            self.identity.chmod(0o600)
+            self.identity.chmod(0o000)
             environment = os.environ.copy()
             environment["AGE_TOOLING_DIRECTORY"] = os.fspath(self.age_tooling_directory)
             result = subprocess.run(

@@ -15,6 +15,9 @@ identity-backed validation. The signed tree digests therefore describe the same
 bytes that local validation inspected. The creator's in-process source check is
 defense-in-depth and is not an independent trust root; a compromised operator
 host or wrapper remains outside this repository-level guarantee.
+The creator and its integration fixture intentionally retain a self-contained
+raw-blob trust boundary for bootstrap; decomposition is a post-bootstrap
+maintenance task after an independent App-backed admission root exists.
 The v1 nonce is an identifier rather than a durable one-time claim: exact
 base/head replay remains valid until expiry, while any changed commit requires
 a new receipt. Expiry is evaluated whenever the trusted boundary workflow runs.
@@ -24,9 +27,13 @@ receipt's expiry is not, by itself, a merge-time revocation mechanism.
 
 The initial bootstrap is necessarily exceptional because the pre-bootstrap
 trusted base cannot know the v1 receipt format, signer, or external launcher
-wrapper. It must land through one owner-approved, branch-scoped break-glass
-merge with the existing review record intact; protection is restored
-immediately afterward. The verifier reports this state explicitly and never
+wrapper. Classic GitHub branch protection has no per-pull-request,
+branch-scoped bypass. If the owner authorizes this exception, record the exact
+live protection-rule preimage, freeze concurrent `main` merges, apply only the
+temporary narrowly scoped rule change needed for the named pull request, and
+restore the preimage immediately after the merge. Keep the pull request and
+required checks visible; never push directly to `main` or disable unrelated
+protections. The verifier reports the pre-bootstrap state explicitly and never
 treats a pre-bootstrap base as admitted.
 
 The Actions job name is not an independent provenance root: GitHub identifies

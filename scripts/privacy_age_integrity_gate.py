@@ -12,6 +12,13 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+# Isolated Python omits the script directory from `sys.path`. Re-add only this
+# canonical trusted directory before loading the sibling verifier modules; the
+# workflow verifies this file's exact Git blob before execution.
+_SCRIPT_DIRECTORY = str(Path(__file__).resolve().parent)
+if _SCRIPT_DIRECTORY not in sys.path:
+    sys.path.insert(0, _SCRIPT_DIRECTORY)
+
 try:
     from .privacy_age_admission import (
         ADMISSION_VERSION,
@@ -73,6 +80,7 @@ BOOTSTRAP_REQUIRED_PATHS = ADMISSION_INFRASTRUCTURE_PATHS | frozenset(
     {
         b".github/workflows/privacy-age-integrity.yml",
         b"scripts/admit-age-envelopes",
+        b"scripts/privacy-scan",
         b"scripts/privacy_age_envelopes.py",
         b"scripts/privacy_age_integrity_gate.py",
     }
@@ -81,16 +89,76 @@ BOOTSTRAP_REQUIRED_ENTRIES = {
     b".github/age-admission/allowed_signers": (b"blob", b"100644"),
     b".github/workflows/privacy-age-integrity.yml": (b"blob", b"100644"),
     b"scripts/admit-age-envelopes": (b"blob", b"100755"),
+    b"scripts/privacy-scan": (b"blob", b"100755"),
     b"scripts/create-age-admission-receipt": (b"blob", b"100755"),
     b"scripts/run-trusted-age-admission": (b"blob", b"100755"),
     b"scripts/privacy_age_admission.py": (b"blob", b"100644"),
     b"scripts/privacy_age_envelopes.py": (b"blob", b"100644"),
     b"scripts/privacy_age_integrity_gate.py": (b"blob", b"100755"),
+    # The scanner's classifier is inherited unchanged during bootstrap; keep
+    # its mode invariant here without making an unchanged base blob a stale
+    # bootstrap replacement.
+    b"scripts/agent_equipment_public_data.py": (b"blob", b"100644"),
+}
+# Once activated, every trusted verifier, scanner, parser, launcher, and the
+# protected workflow remains a required regular entry. A signed receipt may
+# authorize its content change, but it cannot silently remove a seam and leave
+# the next run without the code that enforces the boundary.
+ACTIVE_REQUIRED_PATHS = BOOTSTRAP_REQUIRED_PATHS | frozenset(
+    {b"scripts/agent_equipment_public_data.py"}
+)
+# The first verifier key is an authority root, not merely bootstrap collateral.
+# Pin its exact reviewed blob so the one-time owner exception cannot install a
+# candidate-chosen key that would authorize later transitions indefinitely.
+BOOTSTRAP_REVIEWED_SIGNER_ENTRY = (
+    b"blob",
+    b"100644",
+    b"c239e930a6fcd54a56faf58dfd6bf5d8444c0341",
+)
+# Pin every bootstrap authority blob that is not self-referential. The
+# remaining gate blob is covered by the independent owner-side tree digest in
+# the bootstrap runbook because embedding its own object ID would be circular.
+BOOTSTRAP_REVIEWED_AUTHORITY_ENTRIES = {
+    b"scripts/admit-age-envelopes": (
+        b"blob",
+        b"100755",
+        b"0920208ec85d1c01f004695395eb6f413e7e6f01",
+    ),
+    b"scripts/privacy-scan": (
+        b"blob",
+        b"100755",
+        b"612a2ae9acde883d3f2b5e92ce8cefc4fcf0d1bf",
+    ),
+    b"scripts/create-age-admission-receipt": (
+        b"blob",
+        b"100755",
+        b"59db480adef74bae52f74a991bb79af84c2e6e58",
+    ),
+    b"scripts/privacy_age_admission.py": (
+        b"blob",
+        b"100644",
+        b"d92fd11bd6fddcd5a1847226f6bbd1b5676ae871",
+    ),
+    b"scripts/privacy_age_envelopes.py": (
+        b"blob",
+        b"100644",
+        b"b052cbfcff312a37e4ecf38a88f6fac77025cc3e",
+    ),
+    b"scripts/run-trusted-age-admission": (
+        b"blob",
+        b"100755",
+        b"55fabfffe72b2e0a099f0effaf673380219f4889",
+    ),
 }
 # These support files are part of this reviewed bootstrap revision, but are not
 # admission authority. Permit only their exact reviewed Git blobs; every other
 # protected collateral change remains outside the one-time exception.
 BOOTSTRAP_REVIEWED_SUPPORT_ENTRIES = {
+    b".github/workflows/privacy-age-integrity.yml": (
+        b"blob",
+        b"100644",
+        b"bc2209312c003522ab17c4ea6cd4ce2a605644e6",
+    ),
     b".github/workflows/platform-portability.yml": (
         b"blob",
         b"100644",
@@ -99,9 +167,18 @@ BOOTSTRAP_REVIEWED_SUPPORT_ENTRIES = {
     b"docs/ENCRYPTION.md": (
         b"blob",
         b"100644",
-        b"50ea29d9d96c1d3c63866cea1cc39040bf83ea09",
+        b"93d8aa0b8360418ba721b03d246b7bdbc297a104",
     ),
 }
+# This marker lives in the already protected workflow.  The legacy
+# pre-bootstrap gate therefore prevents a pull request from activating the
+# new boundary merely by pre-seeding the four new pathnames.  Keep the marker
+# when making later workflow edits; it is a reservation, not a whole-file
+# digest.
+ADMISSION_ACTIVATION_PATH = b".github/workflows/privacy-age-integrity.yml"
+ADMISSION_ACTIVATION_MARKER = (
+    b"# Protected admission activation sentinel: owner-signed-age-v1\n"
+)
 PROTECTED_OPTIONAL_PATHS = frozenset({b".gitattributes", b".gitmodules"})
 PROTECTED_PREFIXES = (b".github/actions/", b".github/workflows/")
 
@@ -129,6 +206,7 @@ class ProtectedTransition:
     head_tree: dict[bytes, TreeEntry]
     changed: tuple[bytes, ...]
     infrastructure_present: frozenset[bytes]
+    activation_present: bool
 
 
 def _git(
@@ -238,10 +316,35 @@ def _tree(repository: Path, commit: str) -> dict[bytes, TreeEntry]:
             raise IntegrityGateError("git tree record is malformed") from error
         if not path or path in entries:
             raise IntegrityGateError("git tree paths are not unique")
+        if (
+            len(object_id) != 40
+            or COMMIT_ID.fullmatch(object_id.decode("ascii", "ignore")) is None
+        ):
+            raise IntegrityGateError("git tree object identity is malformed")
         if len(entries) >= MAX_GIT_TREE_ENTRIES:
             raise IntegrityGateError("git tree contains too many entries")
         entries[path] = TreeEntry(mode=mode, kind=kind, object_id=object_id)
     return entries
+
+
+def _has_activation_sentinel(
+    repository: Path,
+    tree: dict[bytes, TreeEntry],
+) -> bool:
+    """Recognize the boundary only after the legacy-protected marker landed."""
+
+    entry = tree.get(ADMISSION_ACTIVATION_PATH)
+    if entry is None or entry.kind != b"blob" or entry.mode != b"100644":
+        return False
+    data = _git(
+        repository,
+        "cat-file",
+        "blob",
+        entry.object_id.decode("ascii"),
+        maximum_output_bytes=MAX_GIT_OBJECT_BYTES,
+    )
+    marker = ADMISSION_ACTIVATION_MARKER.rstrip(b"\r\n")
+    return marker in data.splitlines()
 
 
 def _is_age_path(path: bytes) -> bool:
@@ -305,6 +408,10 @@ def _protected_transition(
     )
     if infrastructure_present and infrastructure_present != ADMISSION_INFRASTRUCTURE_PATHS:
         raise IntegrityGateError("trusted base has an incomplete admission boundary")
+    activation_present = (
+        infrastructure_present == ADMISSION_INFRASTRUCTURE_PATHS
+        and _has_activation_sentinel(base, base_tree)
+    )
 
     protected_paths = {
         path for path in base_tree.keys() | head_tree.keys() if _is_protected(path)
@@ -323,6 +430,7 @@ def _protected_transition(
         head_tree=head_tree,
         changed=changed,
         infrastructure_present=infrastructure_present,
+        activation_present=activation_present,
     )
 
 
@@ -366,6 +474,37 @@ def _require_bootstrap_head_complete(transition: ProtectedTransition) -> None:
             transition.base_tree[path].object_id,
         )
     }
+    malformed.update(
+        path
+        for path, expected in BOOTSTRAP_REVIEWED_SUPPORT_ENTRIES.items()
+        if path in transition.head_tree
+        and (
+            transition.head_tree[path].kind,
+            transition.head_tree[path].mode,
+            transition.head_tree[path].object_id,
+        )
+        != expected
+    )
+    malformed.update(
+        path
+        for path, expected in BOOTSTRAP_REVIEWED_AUTHORITY_ENTRIES.items()
+        if path in transition.head_tree
+        and (
+            transition.head_tree[path].kind,
+            transition.head_tree[path].mode,
+            transition.head_tree[path].object_id,
+        )
+        != expected
+    )
+    signer = transition.head_tree.get(b".github/age-admission/allowed_signers")
+    if (
+        signer is None
+        or (signer.kind, signer.mode, signer.object_id)
+        != BOOTSTRAP_REVIEWED_SIGNER_ENTRY
+    ):
+        malformed.add(b".github/age-admission/allowed_signers")
+    if not _has_activation_sentinel(transition.head, transition.head_tree):
+        malformed.add(ADMISSION_ACTIVATION_PATH)
     if unexpected:
         raise IntegrityGateError(
             "bootstrap candidate is not limited to admission infrastructure"
@@ -373,6 +512,50 @@ def _require_bootstrap_head_complete(transition: ProtectedTransition) -> None:
     if missing or malformed or stale:
         raise IntegrityGateError(
             "bootstrap candidate is missing complete admission infrastructure"
+        )
+
+
+def _require_active_head_complete(transition: ProtectedTransition) -> None:
+    """Never admit a transition that removes or disables the active boundary."""
+
+    missing = ACTIVE_REQUIRED_PATHS - transition.head_tree.keys()
+    malformed = {
+        path
+        for path, expected in BOOTSTRAP_REQUIRED_ENTRIES.items()
+        if path in ACTIVE_REQUIRED_PATHS
+        and (
+            path not in transition.head_tree
+            or (
+                transition.head_tree[path].kind,
+                transition.head_tree[path].mode,
+            )
+            != expected
+        )
+    }
+    if missing or malformed:
+        raise IntegrityGateError(
+            "active admission infrastructure must remain complete"
+        )
+    if not _has_activation_sentinel(transition.head, transition.head_tree):
+        raise IntegrityGateError("admission activation sentinel must remain present")
+
+
+def _require_admission_boundary_ready(
+    transition: ProtectedTransition,
+    *,
+    require_bootstrap: bool,
+) -> None:
+    """Share active-boundary and one-time bootstrap ordering across callers."""
+
+    if transition.activation_present:
+        _require_active_head_complete(transition)
+    if require_bootstrap and (
+        transition.infrastructure_present != ADMISSION_INFRASTRUCTURE_PATHS
+        or not transition.activation_present
+    ):
+        _require_bootstrap_head_complete(transition)
+        raise IntegrityGateError(
+            "trusted base predates signed admission; bootstrap owner exception required"
         )
 
 
@@ -429,19 +612,42 @@ def _verify_admission(
         expected_paths = _admission_paths(transition)
         if validated["paths"] != expected_paths:
             raise AdmissionReceiptError("admission paths do not match transition")
+        signer_path = b".github/age-admission/allowed_signers"
+        signer_entry = transition.base_tree.get(signer_path)
         canonical_allowed_signers = allowed_signers.resolve(strict=True)
-        try:
-            canonical_allowed_signers.relative_to(transition.base)
-        except ValueError as error:
+        expected_signers_path = (transition.base / os.fsdecode(signer_path)).resolve(
+            strict=True
+        )
+        if (
+            canonical_allowed_signers != expected_signers_path
+            or signer_entry is None
+            or signer_entry.kind != b"blob"
+            or signer_entry.mode != b"100644"
+        ):
             raise AdmissionReceiptError(
                 "admission signer configuration is not trusted"
-            ) from error
+            )
+        signer_bytes = read_regular_file(
+            canonical_allowed_signers,
+            maximum=MAX_GIT_OBJECT_BYTES,
+        )
+        expected_signer_bytes = _git(
+            transition.base,
+            "cat-file",
+            "blob",
+            signer_entry.object_id.decode("ascii"),
+            maximum_output_bytes=MAX_GIT_OBJECT_BYTES,
+        )
+        if signer_bytes != expected_signer_bytes:
+            raise AdmissionReceiptError(
+                "admission signer configuration does not match the trusted tree"
+            )
         verify_receipt_signature(
             payload_bytes,
             signature,
             allowed_signers=canonical_allowed_signers,
         )
-    except (AdmissionReceiptError, OSError) as error:
+    except (AdmissionReceiptError, AgeEnvelopeError, OSError) as error:
         raise IntegrityGateError("admission receipt is not authorized") from error
 
 
@@ -463,12 +669,11 @@ def verify_integrity_boundary(
         head_repository=head_repository,
         head_commit=head_commit,
     )
+    _require_admission_boundary_ready(
+        transition,
+        require_bootstrap=bool(transition.changed),
+    )
     if transition.changed:
-        if transition.infrastructure_present != ADMISSION_INFRASTRUCTURE_PATHS:
-            _require_bootstrap_head_complete(transition)
-            raise IntegrityGateError(
-                "trusted base predates signed admission; bootstrap owner exception required"
-            )
         _verify_admission(
             transition,
             admission_body=admission_body,
@@ -496,11 +701,7 @@ def build_admission_payload(
         head_repository=head_repository,
         head_commit=head_commit,
     )
-    if transition.infrastructure_present != ADMISSION_INFRASTRUCTURE_PATHS:
-        _require_bootstrap_head_complete(transition)
-        raise IntegrityGateError(
-            "trusted base predates signed admission; bootstrap owner exception required"
-        )
+    _require_admission_boundary_ready(transition, require_bootstrap=True)
     if not transition.changed:
         raise IntegrityGateError("candidate has no protected transition to admit")
     payload: dict[str, object] = {
