@@ -13,6 +13,14 @@ fail() {
   return 1
 }
 
+mode_of() {
+  case "$(uname -s)" in
+    Darwin) stat -f '%Lp' "$1" ;;
+    Linux) stat -c '%a' -- "$1" ;;
+    *) fail "unsupported test platform: $(uname -s)" ;;
+  esac
+}
+
 assert_line() {
   local line=$1 file=$2
   grep -Fqx -- "$line" "$file" || fail "missing ignore entry: $line"
@@ -141,6 +149,89 @@ for safe_line in \
   ! print -r -- "$safe_line" | grep -Eq "$untrusted_head_execution_pattern" ||
     fail "age boundary execution guard overmatched: $safe_line"
 done
+
+daybreak_binding_template=$repo_root/home/dot_agents/private_daybreak-account-bindings.md.tmpl
+daybreak_encryption_doc=$repo_root/docs/ENCRYPTION.md
+grep -Fq '{{ include ".private-daybreak-account-bindings.md.age" | decrypt -}}' \
+  "$daybreak_binding_template" ||
+  fail 'private Daybreak account bindings do not render from the encrypted catalog'
+[[ "$(chezmoi -S "$repo_root/home" target-path "$daybreak_binding_template")" == \
+  "$HOME/.agents/daybreak-account-bindings.md" ]] ||
+  fail 'private Daybreak account bindings do not target the shared agent home'
+grep -Fq 'home/.private-daybreak-account-bindings.md.age' "$daybreak_encryption_doc" ||
+  fail 'encryption policy does not register the private Daybreak catalog'
+grep -Fq 'mode-`0600` `~/.agents/daybreak-account-bindings.md` target' "$daybreak_encryption_doc" ||
+  fail 'encryption policy does not authorize the private Daybreak target and mode'
+grep -Fq \
+  'Catalogs with an explicit target listed above may render only to that documented mode-restricted path.' \
+  "$daybreak_encryption_doc" ||
+  fail 'encryption policy does not bound the persistent catalog exception'
+grep -Fq '`chezmoi apply` does not prune a private target' "$daybreak_encryption_doc" ||
+  fail 'encryption policy does not document stale-target rollback'
+grep -Fq 'set -eu' "$daybreak_encryption_doc" ||
+  fail 'encryption policy does not fail closed before exact-target cleanup'
+grep -Fq 'refusing exact-target cleanup' "$daybreak_encryption_doc" ||
+  fail 'encryption policy does not reject an unsafe exact-target precondition'
+grep -Fq 'parent="${target:h}"' "$daybreak_encryption_doc" ||
+  fail 'encryption policy does not bind cleanup to the expected parent'
+grep -Fq 'unexpected owner or mode' "$daybreak_encryption_doc" ||
+  fail 'encryption policy does not reject an unexpected owner or mode'
+grep -Fq 'Perform that exact-target cleanup before removing or reverting the encrypted' \
+  "$daybreak_encryption_doc" ||
+  fail 'encryption policy does not order target cleanup before source rollback'
+
+daybreak_mode_root=$test_root/daybreak-bindings
+daybreak_mode_home=$daybreak_mode_root/home
+daybreak_mode_source=$daybreak_mode_root/source
+daybreak_mode_target=$daybreak_mode_home/.agents/daybreak-account-bindings.md
+mkdir -p -- \
+  "$daybreak_mode_root/cache" \
+  "$daybreak_mode_root/config" \
+  "$daybreak_mode_home" \
+  "$daybreak_mode_source/dot_agents" \
+  "$daybreak_mode_root/state"
+print -r -- 'private binding fixture' > \
+  "$daybreak_mode_source/dot_agents/private_daybreak-account-bindings.md.tmpl"
+HOME="$daybreak_mode_home" \
+  XDG_CACHE_HOME="$daybreak_mode_root/cache" \
+  XDG_CONFIG_HOME="$daybreak_mode_root/config" \
+  XDG_STATE_HOME="$daybreak_mode_root/state" \
+  chezmoi --source "$daybreak_mode_source" --destination "$daybreak_mode_home" \
+    apply --parent-dirs "$daybreak_mode_target"
+[[ "$(mode_of "$daybreak_mode_target")" == 600 ]] ||
+  fail 'rendered private Daybreak account bindings do not have mode 0600'
+rm -- "$daybreak_mode_source/dot_agents/private_daybreak-account-bindings.md.tmpl"
+if HOME="$daybreak_mode_home" \
+  XDG_CACHE_HOME="$daybreak_mode_root/cache" \
+  XDG_CONFIG_HOME="$daybreak_mode_root/config" \
+  XDG_STATE_HOME="$daybreak_mode_root/state" \
+  chezmoi --source "$daybreak_mode_source" --destination "$daybreak_mode_home" \
+    apply --parent-dirs "$daybreak_mode_target" >/dev/null 2>&1; then
+  fail 'source removal unexpectedly made stale Daybreak target apply cleanly'
+fi
+[[ -f "$daybreak_mode_target" && ! -L "$daybreak_mode_target" ]] ||
+  fail 'source removal unexpectedly pruned or replaced stale Daybreak target'
+[[ "$(mode_of "$daybreak_mode_target")" == 600 ]] ||
+  fail 'stale Daybreak target mode changed before authorized cleanup'
+rm -- "$daybreak_mode_target"
+mv -- "$daybreak_mode_home/.agents" "$daybreak_mode_root/agents-real"
+ln -s -- "$daybreak_mode_root/agents-real" "$daybreak_mode_home/.agents"
+if [[ -d "${daybreak_mode_target:h}" && ! -L "${daybreak_mode_target:h}" ]]; then
+  fail 'exact-target Daybreak rollback guard accepted a symlinked parent'
+fi
+rm -- "$daybreak_mode_home/.agents"
+mv -- "$daybreak_mode_root/agents-real" "$daybreak_mode_home/.agents"
+[[ ! -e "$daybreak_mode_target" && ! -L "$daybreak_mode_target" ]] ||
+  fail 'exact-target Daybreak rollback did not remove the stale target'
+print -r -- 'sentinel' > "$daybreak_mode_root/sentinel"
+ln -s -- "$daybreak_mode_root/sentinel" "$daybreak_mode_target"
+if [[ -f "$daybreak_mode_target" && ! -L "$daybreak_mode_target" ]]; then
+  rm -- "$daybreak_mode_target"
+  fail 'exact-target Daybreak rollback guard accepted a symlink'
+fi
+[[ -L "$daybreak_mode_target" ]] ||
+  fail 'symlink precondition fixture was not created'
+rm -- "$daybreak_mode_target"
 
 chezmoi -S "$repo_root/home" execute-template \
   --override-data '{"chezmoi":{"os":"linux"}}' \

@@ -1,0 +1,38 @@
+[
+  {
+    "query": "Choose a model for a subagent that will review this authentication hardening change.",
+    "should_trigger": true
+  },
+  {
+    "query": "Route this cybersecurity-adjacent task when every visible Daybreak account is out of capacity.",
+    "should_trigger": true
+  },
+  {
+    "query": "Prepare a writer subagent and select its explicit model and reasoning effort.",
+    "should_trigger": true
+  },
+  {
+    "query": "Can another harness invoke a Codex Daybreak account for this bounded security review?",
+    "should_trigger": true
+  },
+  {
+    "query": "Fix this vulnerability in the current task even if delegation was not requested.",
+    "should_trigger": true
+  },
+  {
+    "query": "Configure the model router in our product runtime.",
+    "should_trigger": false
+  },
+  {
+    "query": "Should this ordinary formatting task be delegated at all? Do not choose a model yet.",
+    "should_trigger": false
+  },
+  {
+    "query": "Implement this local parser without using an agent or subagent.",
+    "should_trigger": false
+  },
+  {
+    "query": "Explain the difference between supervised and unsupervised learning.",
+    "should_trigger": false
+  }
+]
