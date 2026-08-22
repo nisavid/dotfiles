@@ -58,21 +58,29 @@ comments.
 
 ### Owner admission receipts
 
-After the candidate commit is final, run the receipt command from the trusted
-main checkout at the exact base commit, with both the trusted and candidate
-checkouts clean (including untracked and ignored files). The creator itself
-must be the script in that trusted checkout, and the `--trusted-admitter` path
-must be that checkout's `scripts/admit-age-envelopes`; this binds every local
-validation module to the trusted base commit and prevents a candidate checkout
-from supplying the validation program. The creator materializes the exact
-candidate Git tree before it independently validates every envelope with the
-machine-local identity in check-only mode,
-then signs a canonical, secret-free receipt with the owner admission key:
+After the candidate commit is final, use an operator-owned wrapper copied to a
+location outside both the trusted and candidate checkouts. The wrapper reads the
+receipt creator as a raw blob from the trusted base commit, compares it with the
+live trusted-checkout file before execution, and executes only the verified blob.
+Do not run a wrapper from either checkout. The creator then requires both
+checkouts to be clean (including untracked and ignored files), materializes the
+exact candidate Git tree, and independently validates every envelope with the
+machine-local identity in check-only mode before signing a canonical,
+secret-free receipt with the owner admission key. Its in-process source check is
+defense-in-depth; the external wrapper is the independent launcher trust root:
+
+For an ordinary transition, materialize the wrapper from the already trusted
+base commit into an operator-owned mode-`0755` location and verify that copy
+before use. During the one-time bootstrap, use a separately reviewed external
+copy of the bootstrap wrapper; the pre-bootstrap base cannot supply it yet.
+In either case, verify the external file is a regular mode-`0755` file and
+compare its SHA-256 with the reviewed wrapper source before invoking it.
 
 ```zsh
 # Supply these operator-owned locations outside this document.
 : "${TRUSTED_MAIN_CHECKOUT:?set TRUSTED_MAIN_CHECKOUT to the trusted checkout}"
 : "${CANDIDATE_CHECKOUT:?set CANDIDATE_CHECKOUT to the candidate checkout}"
+: "${TRUSTED_ADMISSION_WRAPPER:?set TRUSTED_ADMISSION_WRAPPER to external wrapper}"
 : "${AGE_IDENTITY:?set AGE_IDENTITY to the external age identity}"
 : "${ADMISSION_SIGNING_KEY:?set ADMISSION_SIGNING_KEY to the external signing key}"
 : "${AGE_TOOLING_DIRECTORY:?set AGE_TOOLING_DIRECTORY to verified age tooling}"
@@ -80,7 +88,10 @@ then signs a canonical, secret-free receipt with the owner admission key:
 BASE_COMMIT=0123456789abcdef0123456789abcdef01234567
 HEAD_COMMIT=89abcdef0123456789abcdef0123456789abcdef
 AGE_TOOLING_DIRECTORY="$AGE_TOOLING_DIRECTORY" \
-  python3 "$TRUSTED_MAIN_CHECKOUT/scripts/create-age-admission-receipt" \
+  python3 "$TRUSTED_ADMISSION_WRAPPER" \
+  --base-repository "$TRUSTED_MAIN_CHECKOUT" \
+  --base-commit "$BASE_COMMIT" \
+  -- \
   --base-repository "$TRUSTED_MAIN_CHECKOUT" \
   --base-commit "$BASE_COMMIT" \
   --head-repository "$CANDIDATE_CHECKOUT" \
@@ -112,11 +123,11 @@ receipt contains no plaintext identifiers.
 
 The first bootstrap of this boundary is a one-time exception: the trusted
 base predates the signer and verifier paths, so it cannot verify a v1 receipt.
-The bootstrap head must contain and replace every admission infrastructure path
-before the exception is used: the signer, creator, admission module, legacy
-admitter, envelope helper, trusted gate, and boundary workflow. Publish the
-bootstrap branch as a pull request from `main`,
-keep its review and required checks visible, and use an owner-approved,
+Create the bootstrap branch from `main` and open its pull request targeting
+`main`. The branch must contain and replace every admission infrastructure path
+before the exception is used: the signer, external launcher wrapper, creator,
+admission module, legacy admitter, envelope helper, trusted gate, and boundary
+workflow. Keep its review and required checks visible, and use an owner-approved,
 branch-scoped break-glass exception only long enough to merge that pull
 request. Do not push directly to `main`, disable unrelated protections, or
 reuse the exception for ordinary changes. Re-enable the protection
@@ -167,8 +178,10 @@ commit could not be confirmed; inspect the installed manifest and rerun
 admission before treating it as durable.
 
 `--check-only` runs the same identity-backed validation without replacing the
-manifest. The receipt command uses this mode against the final candidate tree
-before it signs the transition.
+manifest. It also requires the committed manifest to equal the manifest that
+validation computed, so a stale or hand-edited inventory fails the check. The
+receipt command uses this mode against the final candidate tree before it signs
+the transition.
 
 ## Source-Only Catalog Editing
 

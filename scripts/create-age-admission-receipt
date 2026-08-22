@@ -32,8 +32,11 @@ MAX_SIGNING_TOOL_BYTES = 32 * 1024 * 1024
 MAX_GIT_TREE_BYTES = 8 * 1024 * 1024
 MAX_GIT_INDEX_BYTES = 8 * 1024 * 1024
 MAX_MATERIALIZED_TREE_ENTRIES = 10_000
+# Keep the aggregate cap equal to the per-object cap so local materialization
+# cannot exceed the hosted verifier's bounded Git-object surface.
 MAX_MATERIALIZED_TREE_BYTES = 16 * 1024 * 1024
 MAX_WORKTREE_ENTRIES = 10_000
+# Keep the aggregate cap equal to the per-object cap for the same reason.
 MAX_WORKTREE_BYTES = 16 * 1024 * 1024
 MAX_LAUNCHER_BYTES = 256 * 1024
 COMMIT_ID = re.compile(r"[0-9a-f]{40}\Z", re.ASCII)
@@ -509,14 +512,14 @@ def _load_trusted_modules(root: Path) -> dict[str, types.ModuleType]:
     return modules
 
 
-def _validated_external_file(
+def _open_validated_external_file(
     raw: Path,
     *,
     forbidden_roots: tuple[Path, ...],
     label: str,
     envelope_module: types.ModuleType,
-) -> tuple[Path, os.stat_result]:
-    """Validate one stable, mode-0600 regular file outside both checkouts."""
+) -> tuple[Path, os.stat_result, int]:
+    """Open one stable, mode-0600 regular file outside both checkouts."""
 
     lexical = Path(os.path.abspath(raw))
     try:
@@ -538,9 +541,30 @@ def _validated_external_file(
         ):
             raise ReceiptRequestError(f"{label} must be a mode-0600 regular file")
     except OSError as error:
-        raise ReceiptRequestError(f"{label} is unavailable") from error
-    finally:
         os.close(descriptor)
+        raise ReceiptRequestError(f"{label} is unavailable") from error
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return canonical, info, descriptor
+
+
+def _validated_external_file(
+    raw: Path,
+    *,
+    forbidden_roots: tuple[Path, ...],
+    label: str,
+    envelope_module: types.ModuleType,
+) -> tuple[Path, os.stat_result]:
+    """Validate one stable, mode-0600 regular file outside both checkouts."""
+
+    canonical, info, descriptor = _open_validated_external_file(
+        raw,
+        forbidden_roots=forbidden_roots,
+        label=label,
+        envelope_module=envelope_module,
+    )
+    os.close(descriptor)
     return canonical, info
 
 
@@ -571,15 +595,20 @@ def _validate_external_identity(
     *,
     forbidden_roots: tuple[Path, ...],
     envelope_module: types.ModuleType,
-) -> Path:
-    """Require the age identity to be a stable mode-0600 file outside both trees."""
-    canonical, _ = _validated_external_file(
+) -> tuple[Path, int]:
+    """Hold the validated identity descriptor through the admission child."""
+    canonical, _, descriptor = _open_validated_external_file(
         raw,
         forbidden_roots=forbidden_roots,
         label="identity",
         envelope_module=envelope_module,
     )
-    return canonical
+    try:
+        os.set_inheritable(descriptor, True)
+    except OSError as error:
+        os.close(descriptor)
+        raise ReceiptRequestError("identity is unavailable") from error
+    return canonical, descriptor
 
 
 def _validate_external_tooling_directory(
@@ -611,7 +640,7 @@ def _run_local_admission(
     trusted_tree: Path,
     candidate_tree: Path,
     trusted_admitter: Path,
-    identity: Path,
+    identity_descriptor: int,
 ) -> None:
     try:
         result = subprocess.run(
@@ -620,11 +649,12 @@ def _run_local_admission(
                 os.fspath(trusted_admitter),
                 "--root",
                 os.fspath(candidate_tree),
-                "--identity",
-                os.fspath(identity),
+                "--identity-fd",
+                str(identity_descriptor),
                 "--check-only",
             ],
             check=False,
+            pass_fds=(identity_descriptor,),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=CHECK_TIMEOUT_SECONDS,
@@ -698,6 +728,7 @@ def _sign_payload(
     *,
     forbidden_roots: tuple[Path, ...],
     envelope_module: types.ModuleType,
+    namespace: str,
 ) -> bytes:
     tool, tool_info = _validated_signing_tool(
         forbidden_roots=forbidden_roots,
@@ -728,7 +759,7 @@ def _sign_payload(
                     "-f",
                     os.fspath(key),
                     "-n",
-                    "nisavid/dotfiles/age-admission/v1",
+                    namespace,
                     os.fspath(message),
                 ],
                 check=False,
@@ -846,21 +877,24 @@ def create_receipt(arguments: argparse.Namespace) -> None:
         envelope_module = modules["privacy_age_envelopes"]
         admission_module = modules["privacy_age_admission"]
         integrity_module = modules["privacy_age_integrity_gate"]
-        identity = _validate_external_identity(
+        _, identity_descriptor = _validate_external_identity(
             arguments.identity,
             forbidden_roots=forbidden_roots,
             envelope_module=envelope_module,
         )
+        try:
+            _run_local_admission(
+                trusted_tree=trusted_tree,
+                candidate_tree=candidate_tree,
+                trusted_admitter=trusted_tree / "scripts/admit-age-envelopes",
+                identity_descriptor=identity_descriptor,
+            )
+        finally:
+            os.close(identity_descriptor)
         signing_key = _validated_signing_key(
             arguments.signing_key,
             forbidden_roots=forbidden_roots,
             envelope_module=envelope_module,
-        )
-        _run_local_admission(
-            trusted_tree=trusted_tree,
-            candidate_tree=candidate_tree,
-            trusted_admitter=trusted_tree / "scripts/admit-age-envelopes",
-            identity=identity,
         )
 
         issued = datetime.now(timezone.utc).replace(microsecond=0)
@@ -888,6 +922,7 @@ def create_receipt(arguments: argparse.Namespace) -> None:
             signing_key,
             forbidden_roots=forbidden_roots,
             envelope_module=envelope_module,
+            namespace=admission_module.ADMISSION_NAMESPACE,
         )
         _write_output(
             arguments.output,

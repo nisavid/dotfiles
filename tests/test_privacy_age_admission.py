@@ -11,17 +11,21 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from scripts.privacy_age_admission import (
+    ADMISSION_CLOCK_SKEW,
+    ADMISSION_MAX_LIFETIME,
     ADMISSION_NAMESPACE,
     ADMISSION_PRINCIPAL,
     ADMISSION_VERSION,
     encode_receipt,
     extract_receipt,
+    validate_payload,
     verify_receipt_signature,
 )
 from scripts.privacy_age_integrity_gate import verify_integrity_boundary
 
 ROOT = Path(__file__).resolve().parents[1]
 ADMITTER = ROOT / "scripts/admit-age-envelopes"
+TRUSTED_LAUNCHER = ROOT / "scripts/run-trusted-age-admission"
 
 
 def _run(*command: str, cwd: Path, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
@@ -109,6 +113,126 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
         self.assertIsNone(extract_receipt(b"ordinary body"))
         with self.assertRaisesRegex(ValueError, "ambiguous"):
             extract_receipt(marker + b"\n" + marker)
+
+    def test_payload_rejects_invalid_time_window(self) -> None:
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        payload = {
+            "base_commit": "0" * 40,
+            "expires_at": (now + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "head_commit": "1" * 40,
+            "issued_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "nonce": "a" * 32,
+            "paths": [],
+            "repository": "nisavid/dotfiles",
+            "version": ADMISSION_VERSION,
+        }
+
+        expired = payload | {
+            "issued_at": (now - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "expires_at": (now - ADMISSION_CLOCK_SKEW - timedelta(seconds=1)).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            ),
+        }
+        with self.assertRaisesRegex(ValueError, "expired"):
+            validate_payload(expired, now=now)
+
+        future = payload | {
+            "issued_at": (now + ADMISSION_CLOCK_SKEW + timedelta(seconds=1)).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            ),
+            "expires_at": (now + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+        with self.assertRaisesRegex(ValueError, "future"):
+            validate_payload(future, now=now)
+
+        overlong = payload | {
+            "expires_at": (now + ADMISSION_MAX_LIFETIME + timedelta(seconds=1)).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            ),
+        }
+        with self.assertRaisesRegex(ValueError, "lifetime"):
+            validate_payload(overlong, now=now)
+
+    def test_external_launcher_rejects_a_hidden_worktree_replacement(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            base = root / "base"
+            head = root / "head"
+            base.mkdir()
+            _run("git", "init", "--quiet", cwd=base)
+            launcher = base / "scripts/create-age-admission-receipt"
+            launcher.parent.mkdir(parents=True)
+            launcher.write_text(
+                "#!/usr/bin/env python3\n"
+                "import os\n"
+                "from pathlib import Path\n"
+                "Path(os.environ['ADMISSION_LAUNCHER_MARKER']).write_text('ran')\n",
+                encoding="ascii",
+            )
+            launcher.chmod(0o755)
+            base_commit = _commit(base, "trusted launcher")
+            _run("git", "clone", "--quiet", "--no-local", str(base), str(head), cwd=root)
+            wrapper = root / "trusted-wrapper"
+            shutil.copy2(TRUSTED_LAUNCHER, wrapper)
+            wrapper.chmod(0o755)
+            marker = root / "launcher-ran"
+            environment = os.environ.copy()
+            environment["ADMISSION_LAUNCHER_MARKER"] = str(marker)
+            creator_arguments = [
+                "--base-repository",
+                str(base),
+                "--base-commit",
+                base_commit,
+                "--head-repository",
+                str(head),
+                "--head-commit",
+                base_commit,
+            ]
+            command = [
+                str(wrapper),
+                "--base-repository",
+                str(base),
+                "--base-commit",
+                base_commit,
+                "--",
+                *creator_arguments,
+            ]
+            result = subprocess.run(
+                command,
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+                timeout=30,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertTrue(marker.exists())
+
+            marker.unlink()
+            launcher.write_text(
+                "#!/usr/bin/env python3\n"
+                "import os\n"
+                "from pathlib import Path\n"
+                "Path(os.environ['ADMISSION_LAUNCHER_MARKER']).write_text('tampered')\n",
+                encoding="ascii",
+            )
+            _run(
+                "git",
+                "update-index",
+                "--assume-unchanged",
+                "scripts/create-age-admission-receipt",
+                cwd=base,
+            )
+            result = subprocess.run(
+                command,
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+                timeout=30,
+            )
+            self.assertEqual(result.returncode, 1)
+            self.assertFalse(marker.exists())
 
     def test_ssh_signature_verification_is_bound_to_namespace_and_principal(self) -> None:
         with TemporaryDirectory() as temporary:
@@ -253,6 +377,7 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
                 "scripts/admit-age-envelopes": b"admit\n",
                 "scripts/agent_equipment_public_data.py": b"public\n",
                 "scripts/create-age-admission-receipt": b"creator\n",
+                "scripts/run-trusted-age-admission": b"wrapper\n",
                 "scripts/privacy-scan": b"scan\n",
                 "scripts/privacy_age_admission.py": b"receipt\n",
                 "scripts/privacy_age_envelopes.py": b"envelopes\n",
