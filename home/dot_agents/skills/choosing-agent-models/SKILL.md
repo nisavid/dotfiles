@@ -26,20 +26,19 @@ Do not use this for product runtime model routing, AI feature configuration, or 
 
 Treat cybersecurity-related and cybersecurity-adjacent whole tasks and bounded subtasks as Daybreak-routed work. This section overrides the general matrix and fallback rules for that scope.
 
-In ChatGPT or Codex when an OpenAI account supplies inference, agents **must use Daybreak for model selection** whenever any permitted Daybreak-capable surface has usage capacity. In every other harness, agents **should use Daybreak for model selection** whenever any permitted Daybreak-capable surface has usage capacity. These modal verbs govern model routing; they do not make the work optional.
+In ChatGPT or Codex when an OpenAI account supplies inference, agents **must use Daybreak for model selection** whenever any permitted Daybreak route is genuinely runnable. In every other harness, agents **should use Daybreak for model selection** whenever any permitted Daybreak route is genuinely runnable. These modal verbs govern model routing; they do not make the work optional.
 
-Before selecting a model, inventory these routes independently:
+Before selecting a model, inventory each distinct route independently. A route is one invocation surface plus any account home, authenticated identity, model, and capability state required by that surface. Catalog entries are route inputs, not routes by themselves.
 
 1. A Daybreak model in the native subagent selector.
 2. A Daybreak model in the peer or sibling task selector.
-3. Each authenticated Codex account home in `~/.agents/daybreak-account-bindings.md`.
-4. Cross-harness invocation of a Codex agent through any permitted account home.
+3. Each Codex session-launch surface available to the current harness, expanded across every permitted authenticated account home in `~/.agents/daybreak-account-bindings.md`. This includes cross-harness invocation of Codex agents.
 
 Every harness must inventory cross-harness Codex invocation before concluding that Daybreak is unavailable. Read the private binding catalog before using an account-home route. If the catalog is absent, unreadable, or does not match the authenticated identity, treat that route as unavailable. Never disclose catalog entries or infer a binding from a directory name.
 
 A route is genuinely runnable only when its current selector exposes the exact Daybreak model, the bound account is authenticated, usage capacity remains, one harmless probe containing no task data succeeds, and the task authorizes that account, data boundary, workspace, tools, and any external actions. Picker visibility, model selectability, authentication, capacity, session start, and successful execution are separate facts. Resolve the exact exposed model; never invent a slug or reuse a stale one.
 
-Probe each exact route, account home, identity, model, and capability-state tuple at most once per task. A failure applies only to that tuple. A concrete capacity, entitlement, authentication, model, or selector change creates a new tuple eligible for one probe. Retain redacted evidence without credentials, account IDs, account-home names, or task data.
+Probe each exact invocation surface, account home when applicable, identity, model, and capability-state tuple at most once per task. A failure applies only to that tuple. A concrete capacity, entitlement, authentication, model, or selector change creates a new tuple eligible for one probe. Retain redacted evidence without credentials, account IDs, account-home names, or task data.
 
 When no permitted Daybreak route is genuinely runnable, select one disposition by harness and record why the routes failed:
 

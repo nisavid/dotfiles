@@ -14,6 +14,7 @@ Read `skill-creator` first. Then apply these local modifications: treat Claude-s
 Before running evals or description optimization, identify:
 
 - whether the current harness can spawn isolated agents
+- whether eval agents can run with harness-enforced tool removal or in a read-isolated execution sandbox that excludes the source skill, source evals, grader data, and other non-prompt artifacts
 - whether spawned agents inherit the current model and reasoning settings
 - whether timing and token metadata are available from spawned runs
 - whether a browser, static HTML review file, or file presentation path is available
@@ -27,8 +28,8 @@ Report any missing capability before substituting a weaker workflow.
 | Claude-specific wording | Current-harness meaning |
 | --- | --- |
 | `Claude`, `Claude Code`, or `Claude.ai` as the actor | The active agent or agent harness, unless the user specifically asks about Claude. |
-| `claude-with-access-to-the-skill` | A spawned/isolated agent run that is explicitly given the skill path and task. |
-| Baseline run "without skill" | A spawned/isolated agent run with the same prompt and files, without loading the skill. |
+| `claude-with-access-to-the-skill` | A spawned/isolated agent run given the candidate skill body, raw task, and any fixture content. Do not give the execution agent a local skill path. |
+| Baseline run "without skill" | A spawned/isolated agent run with the same raw task and fixture content, without the candidate skill body. |
 | `claude -p`, `.claude/commands`, and `available_skills` trigger tests | Claude Code trigger tests only. Replace with the current harness's native trigger test if one exists. |
 | `open <file>` or `webbrowser.open()` | Use the harness browser, a static HTML file, or a clickable local path supported by the environment. |
 | `present_files` | Use the current harness's file presentation mechanism if available; otherwise report the generated path. |
@@ -41,11 +42,14 @@ For skill behavior tests, preserve the `skill-creator` structure: `evals/evals.j
 Adapt execution to the current harness:
 
 - In Codex, use subagents only when explicitly authorized by the user or active instructions. Omit model overrides so subagents inherit the current model; override reasoning effort only when requested.
-- If the harness lacks subagents, run with-skill cases yourself and explain that baseline benchmarking is unavailable.
+- If the harness lacks subagents, run with-skill cases yourself only when the required tool-removal or read-isolation boundary still holds, and explain that baseline benchmarking is unavailable.
 - If the harness lacks completion timing or token metadata, leave timing absent or record the limitation instead of fabricating it.
 - If the harness lacks an interactive browser, generate a static review HTML file.
 - Keep baseline and with-skill prompts otherwise identical so differences measure the skill, not the setup.
-- To scaffold the standard workspace from `evals/evals.json`, run `scripts/prepare_behavior_evals.py --skill-dir <skill-dir> --workspace <workspace>`.
+- Give execution agents only the raw task and fixture content and, for with-skill runs, the candidate skill body. Do not expose local paths, expected output, or grader expectations. Supply grader-only data after execution.
+- For every eval, require either harness-enforced tool removal or a read-isolated execution sandbox that excludes the source skill, source evals, grader data, and other non-prompt artifacts. A prompt sentence forbidding tools is not enforcement. If the harness can provide neither boundary, report behavior evaluation as unavailable.
+- Preserve prompt-only evals. Use `files` for new fixture-backed evals; the scaffolder also accepts the legacy `fixture_paths` key.
+- Finalize the expected output and grader assertions before preparation. Scaffold into a new or empty execution workspace with `scripts/prepare_behavior_evals.py --skill-dir <skill-dir> --workspace <workspace> --runs <count>`. The grader-free execution plan binds the exact skill, eval set, run count, grading-contract digest, and prompt hashes. After every response exists, repeat the exact command with `--stage-grader-data`; only then run graders and aggregation. Changing the grading contract requires a new workspace and fresh executions. Never reuse a prepared workspace for a new execution set.
 
 ## Trigger Evals
 

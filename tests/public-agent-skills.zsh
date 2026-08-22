@@ -217,14 +217,47 @@ test_pr_publication() {
   python3 "$repo_dir/tests/test_modify_private_config.py"
 }
 
+test_eval_adapter() {
+  local skill_dir="$repo_dir/home/dot_agents/skills/adapting-skill-creator-to-harnesses"
+  local skill="$skill_dir/SKILL.md"
+  local link="$repo_dir/home/dot_claude/skills/symlink_adapting-skill-creator-to-harnesses"
+
+  assert_skill_frontmatter "$skill" adapting-skill-creator-to-harnesses
+  assert_contains "$skill" 'candidate skill body' \
+    'eval adapter must embed candidate skill content instead of exposing a local path'
+  assert_contains "$skill" 'Supply grader-only data after execution.' \
+    'eval adapter must stage grading data only after execution'
+  assert_contains "$skill" 'For every eval, require either harness-enforced tool removal' \
+    'every behavior eval must have an enforced tool or read-isolation boundary'
+  assert_contains "$skill" 'A prompt sentence forbidding tools is not enforcement.' \
+    'prompt wording must not substitute for a harness-enforced eval boundary'
+  assert_contains "$skill" 'read-isolated execution sandbox' \
+    'behavior evals must not expose source or grader data'
+  assert_contains "$skill" 'report behavior evaluation as unavailable' \
+    'shared-filesystem harnesses must report missing eval isolation'
+  assert_contains "$skill" 'Finalize the expected output and grader assertions before preparation.' \
+    'behavior evals must freeze the grading contract before execution'
+  assert_symlink_source "$link" '../../.agents/skills/adapting-skill-creator-to-harnesses'
+  python3 -m unittest discover -s "$skill_dir/tests" -p 'test_*.py'
+}
+
 test_model_selection() {
   local skill_dir="$repo_dir/home/dot_agents/skills/choosing-agent-models"
   local skill="$repo_dir/home/dot_agents/skills/choosing-agent-models/SKILL.md"
   local evals="$skill_dir/evals/evals.json"
+  local routing_fixture="$skill_dir/evals/fixtures/daybreak-routing-matrix.md"
   local trigger_evals="$skill_dir/evals/trigger-evals.json"
-  local bindings="$repo_dir/home/.private-daybreak-account-bindings.md.age"
-  local binding_template="$repo_dir/home/dot_agents/private_daybreak-account-bindings.md.tmpl"
   local link="$repo_dir/home/dot_claude/skills/symlink_choosing-agent-models"
+  local mandatory_route_rule openai_fallback_rule other_fallback_rule preferred_route_rule
+
+  mandatory_route_rule='**must use Daybreak for model selection** whenever any permitted Daybreak route is '
+  mandatory_route_rule+='genuinely runnable.'
+  preferred_route_rule='**should use Daybreak for model selection** whenever any permitted Daybreak route is '
+  preferred_route_rule+='genuinely runnable.'
+  openai_fallback_rule='For Daybreak-routed work in ChatGPT or Codex using an OpenAI account for inference, '
+  openai_fallback_rule+='local non-Daybreak fall-through is forbidden.'
+  other_fallback_rule='For Daybreak-routed work in every other harness, including ChatGPT or Codex without '
+  other_fallback_rule+='an OpenAI login'
 
   assert_skill_frontmatter "$skill" choosing-agent-models
   assert_contains "$skill" 'cybersecurity-related or cybersecurity-adjacent' \
@@ -235,22 +268,30 @@ test_model_selection() {
     'OpenAI-authenticated ChatGPT and Codex must route available Daybreak work to Daybreak'
   assert_contains "$skill" 'should use Daybreak for model selection' \
     'other harnesses should prefer an available Daybreak route'
+  assert_contains "$skill" "$mandatory_route_rule" \
+    'mandatory Daybreak routing must use the complete runnable-route predicate'
+  assert_contains "$skill" "$preferred_route_rule" \
+    'preferred Daybreak routing must use the complete runnable-route predicate'
   assert_contains "$skill" 'These modal verbs govern model routing; they do not make the work optional.' \
     'Daybreak modal verbs must qualify model choice rather than task execution'
   assert_contains "$skill" 'Every harness must inventory cross-harness Codex invocation' \
     'every harness must consider cross-harness Daybreak routes'
+  assert_contains "$skill" 'A route is one invocation surface' \
+    'Daybreak routing must give each route one unambiguous invocation surface'
+  assert_contains "$skill" 'Catalog entries are route inputs, not routes by themselves.' \
+    'private account bindings must not be double-counted as invocation routes'
   assert_contains "$skill" 'usage capacity' \
     'Daybreak availability must include usage capacity'
   assert_contains "$skill" 'When no permitted Daybreak route is genuinely runnable' \
     'Daybreak fallback must cover selector, identity, capacity, probe, and authority failures'
   assert_contains "$skill" '~/.agents/daybreak-account-bindings.md' \
     'Daybreak account routing must read the private binding catalog'
-  assert_contains "$skill" 'For Daybreak-routed work in ChatGPT or Codex using an OpenAI account for inference, local non-Daybreak fall-through is forbidden.' \
-    'OpenAI-authenticated ChatGPT and Codex must scope the local non-Daybreak fallback prohibition to Daybreak-routed work'
+  assert_contains "$skill" "$openai_fallback_rule" \
+    'OpenAI fallback prohibition must be scoped to Daybreak-routed work'
   assert_contains "$skill" 'Cross-harness delegation to an operator-approved non-Daybreak candidate is permitted' \
     'OpenAI-authenticated harnesses must permit approved cross-harness fallback when Daybreak has no capacity'
-  assert_contains "$skill" 'For Daybreak-routed work in every other harness, including ChatGPT or Codex without an OpenAI login' \
-    'other-harness behavior must scope fallback handling to Daybreak-routed work and cover unauthenticated ChatGPT and Codex'
+  assert_contains "$skill" "$other_fallback_rule" \
+    'other-harness fallback must be scoped to Daybreak-routed work'
   assert_contains "$skill" 'may also fall through locally' \
     'other harnesses must retain local next-best fallback'
   assert_contains "$skill" 'this skill does not perform those actions' \
@@ -272,26 +313,49 @@ test_model_selection() {
       "no-runnable-openai",
       "other-harness-local-fallback",
       "probe-tuple",
+      "route-shape",
       "runnable-daybreak",
       "workflow-ownership"
-    ]
+    ] and
+    all(.evals[]; (.files | type) == "array" and (.files | length) > 0)
+    and all(.evals[]; .prompt | contains("Do not use tools"))
   ' "$evals" >/dev/null || fail 'model-selection behavior evals do not cover the Daybreak routing contract'
+  local expected_routing_headings
+  expected_routing_headings="$(printf '%s\n' \
+    '## Case A' '## Case B' '## Case C' '## Case D' '## Case E' '## Case F')"
+  [[ "$(rg '^## ' "$routing_fixture")" == "$expected_routing_headings" ]] || \
+    fail 'model-selection routing cases must use neutral headings without expected dispositions'
   while IFS= read -r fixture; do
     [[ -f "$skill_dir/$fixture" ]] || fail "missing model-selection eval fixture: $fixture"
-  done < <(jq -r '.evals[].fixture_paths[]' "$evals")
+  done < <(jq -r '.evals[].files[]' "$evals")
+  (
+    local eval_workspace fixture fixture_content grading_value preparer
+    local -a eval_prompts
+
+    eval_workspace="$(mktemp -d)"
+    trap 'rm -rf -- "$eval_workspace"' EXIT
+    preparer="$repo_dir/home/dot_agents/skills/adapting-skill-creator-to-harnesses/scripts/prepare_behavior_evals.py"
+    python3 "$preparer" --skill-dir "$skill_dir" --workspace "$eval_workspace" >/dev/null
+    eval_prompts=("$eval_workspace"/**/subagent_prompt.md)
+    while IFS= read -r fixture; do
+      fixture_content="$(<"$skill_dir/$fixture")"
+      rg -U -F -q -- "$fixture_content" $eval_prompts || \
+        fail "model-selection eval prompt omits fixture content: $fixture"
+    done < <(jq -r '.evals[].files[]' "$evals")
+    while IFS= read -r grading_value; do
+      ! rg -F -q -- "$grading_value" $eval_prompts || \
+        fail 'model-selection execution prompt exposes grader-only behavior'
+    done < <(jq -r '.evals[] | .expected_output, .expectations[].text' "$evals")
+    ! rg -F -q -- "$eval_workspace" $eval_prompts || \
+      fail 'model-selection execution prompt exposes its run workspace path'
+    ! rg -F -q -- "$skill_dir" $eval_prompts || \
+      fail 'model-selection execution prompt exposes its candidate skill path'
+  )
   jq -e '
     (map(select(.should_trigger == true)) | length) >= 4 and
     (map(select(.should_trigger == false)) | length) >= 4
   ' "$trigger_evals" >/dev/null || fail 'model-selection trigger evals need positive and negative coverage'
 
-  [[ -f "$bindings" ]] || fail 'encrypted Daybreak account binding catalog is missing'
-  [[ "$(head -n 1 "$bindings")" == 'age-encryption.org/v1' ]] || \
-    fail 'Daybreak account binding catalog must be an age v1 envelope'
-  assert_contains "$binding_template" '{{ include ".private-daybreak-account-bindings.md.age" | decrypt -}}' \
-    'private Daybreak account bindings must render from the encrypted catalog'
-  [[ "$(chezmoi -S "$repo_dir/home" target-path "$binding_template")" == \
-    "$HOME/.agents/daybreak-account-bindings.md" ]] || \
-    fail 'private Daybreak account bindings must target the shared agent home'
   assert_symlink_source "$link" '../../.agents/skills/choosing-agent-models'
 }
 
@@ -330,12 +394,22 @@ case "${1:-all}" in
       "$HOME/.claude/skills/choosing-agent-models"
     )
     ;;
+  eval-adapter)
+    test_eval_adapter
+    projection_targets=(
+      "$HOME/.agents/skills/adapting-skill-creator-to-harnesses"
+      "$HOME/.claude/skills/adapting-skill-creator-to-harnesses"
+    )
+    ;;
   all)
     test_context7
     test_git_publication
     test_pr_publication
+    test_eval_adapter
     test_model_selection
     projection_targets=(
+      "$HOME/.agents/skills/adapting-skill-creator-to-harnesses"
+      "$HOME/.claude/skills/adapting-skill-creator-to-harnesses"
       "$HOME/.agents/skills/context7-mcp"
       "$HOME/.claude/skills/context7-mcp"
       "$HOME/.agents/skills/checkpointing-and-publishing-git-work"
@@ -351,7 +425,7 @@ case "${1:-all}" in
     )
     ;;
   *)
-    fail 'usage: public-agent-skills.zsh [context7|git-publication|pr-publication|model-selection|all]'
+    fail 'usage: public-agent-skills.zsh [context7|eval-adapter|git-publication|pr-publication|model-selection|all]'
     ;;
 esac
 
@@ -362,7 +436,7 @@ isolated_home="$tmpdir/home"
 mkdir -p -- "$isolated_source/dot_agents/skills" "$isolated_source/dot_claude/skills" "$isolated_home"
 
 for skill in \
-  checkpointing-and-publishing-git-work context7-mcp graphite \
+  adapting-skill-creator-to-harnesses checkpointing-and-publishing-git-work context7-mcp graphite \
   publishing-reviewable-prs writing-reviewable-pr-descriptions \
   choosing-agent-models; do
   cp -R -- \
@@ -371,7 +445,7 @@ for skill in \
 done
 
 for link in \
-  checkpointing-and-publishing-git-work context7-mcp graphite \
+  adapting-skill-creator-to-harnesses checkpointing-and-publishing-git-work context7-mcp graphite \
   publishing-reviewable-prs writing-reviewable-pr-descriptions \
   choosing-agent-models; do
   cp -- \
@@ -397,7 +471,7 @@ for target in $isolated_targets; do
 done
 
 for skill in \
-  checkpointing-and-publishing-git-work context7-mcp graphite \
+  adapting-skill-creator-to-harnesses checkpointing-and-publishing-git-work context7-mcp graphite \
   publishing-reviewable-prs writing-reviewable-pr-descriptions \
   choosing-agent-models; do
   canonical="$isolated_home/.agents/skills/$skill"

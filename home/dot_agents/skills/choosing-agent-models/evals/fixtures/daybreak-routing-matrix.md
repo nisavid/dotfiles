@@ -2,26 +2,26 @@
 
 All cases concern cybersecurity-adjacent work. Return a routing disposition; do not execute it.
 
-## Case A: runnable Daybreak
+## Case A
 
-The current harness is OpenAI-authenticated Codex. One account-home route exposes the exact Daybreak model, its bound identity matches, usage capacity remains, a harmless probe succeeds, and the account and data boundary are authorized. The native and peer selectors have no Daybreak model.
+The current harness is OpenAI-authenticated Codex. One Codex session-launch surface exposes the exact Daybreak model, its bound identity is authenticated and matches the private catalog, usage capacity remains, and a harmless probe succeeds. The task authorizes that account, data boundary, workspace, required tools, and any external actions. The native and peer selectors have no Daybreak model.
 
-## Case B: OpenAI-authenticated fallback
+## Case B
 
-The current harness is OpenAI-authenticated Codex. The native selector lacks Daybreak, the peer route has exhausted capacity, one account route fails authentication, and the remaining account routes lack Daybreak in their selectors. Another non-Codex harness is available, cross-harness delegation is authorized, and its next-best candidate is operator-approved. The current local non-Daybreak model is fast and has substantial sunk work.
+The current harness is OpenAI-authenticated Codex. The native selector lacks Daybreak. The peer or sibling selector exposes the exact Daybreak model, but that surface has exhausted capacity. Its complete permitted Codex session-launch inventory contains surfaces Alpha, Beta, and Gamma. Alpha is a local Codex session-launch surface; its bound identity fails authentication. Beta and Gamma are cross-harness Codex surfaces with authenticated bound identities, but neither selector exposes a Daybreak model. Another non-Codex harness is available, cross-harness delegation is authorized, and its next-best candidate is operator-approved. The current local non-Daybreak model is fast and has substantial sunk work.
 
-## Case C: other-harness fallback
+## Case C
 
-The current harness is not ChatGPT or Codex and uses no OpenAI account for inference. All cross-harness Daybreak routes are unavailable. Its normal model-selection policy exposes a suitable local next-best model.
+The current harness is not ChatGPT or Codex and uses no OpenAI account for inference. Its native and peer or sibling selectors expose no Daybreak model. Its complete permitted Codex session-launch inventory contains cross-harness surfaces Alpha and Beta. Alpha's bound identity fails authentication. Beta authenticates, but its selector exposes no Daybreak model. Its normal model-selection policy exposes a suitable local next-best model.
 
-## Case D: spent routes without delegation authority
+## Case D
 
 The current harness is OpenAI-authenticated ChatGPT. Every permitted Daybreak route is present but has exhausted usage capacity. Tracker mutation is authorized; peer-task creation and cross-harness delegation are not.
 
-## Case E: Codex without OpenAI login
+## Case E
 
-The current harness is Codex using non-OpenAI inference. Every permitted cross-harness Daybreak route is unavailable. Its normal model-selection policy exposes a suitable local next-best model.
+The current harness is Codex using non-OpenAI inference. Its native and peer or sibling selectors expose no Daybreak model. Its complete permitted Codex session-launch inventory contains cross-harness surfaces Alpha and Beta. Alpha exposes the exact Daybreak model, but its capacity is exhausted. Beta authenticates and exposes the exact model with capacity remaining, but its harmless probe fails. Its normal model-selection policy exposes a suitable local next-best model.
 
-## Case F: capacity deferral
+## Case F
 
 The current harness is OpenAI-authenticated Codex. Every permitted Daybreak route passes selector, identity, probe, and task-authority checks, but each account has exhausted usage capacity. The operator authorizes follow-up execution when capacity returns. Cross-harness delegation and tracker mutation are unavailable.
