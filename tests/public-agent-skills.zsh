@@ -219,6 +219,8 @@ test_model_selection() {
   local skill_dir="$repo_dir/home/dot_agents/skills/choosing-agent-models"
   local skill="$skill_dir/SKILL.md"
   local evals="$skill_dir/evals/evals.json"
+  local routing_fixture="$skill_dir/evals/fixtures/daybreak-routing-matrix.md"
+  local evidence_fixture="$skill_dir/evals/fixtures/daybreak-route-evidence.md"
   local trigger_evals="$skill_dir/evals/trigger-evals.json"
   local link="$repo_dir/home/dot_claude/skills/symlink_choosing-agent-models"
 
@@ -300,6 +302,18 @@ test_model_selection() {
   while IFS= read -r fixture; do
     [[ -f "$skill_dir/$fixture" ]] || fail "missing model-selection eval fixture: $fixture"
   done < <(jq -r '.evals[].fixture_paths[]' "$evals")
+  assert_contains "$routing_fixture" '## Case H' \
+    'model-selection fixture must cover the root-only peer boundary'
+  assert_contains "$routing_fixture" 'does not authorize that account, workspace, tools, probe' \
+    'model-selection fixture must cover authority-before-probe refusal'
+  assert_contains "$routing_fixture" \
+    'with an OpenAI login but configured for a non-OpenAI inference provider' \
+    'model-selection fixture must separate login state from provider choice'
+  assert_contains "$evidence_fixture" 'concrete entitlement change and a refreshed selector' \
+    'route-evidence fixture must cover capability-state re-probing'
+  assert_contains "$evidence_fixture" \
+    "Gamma's task authority expands to include its account, data boundary, workspace, tools, and probe" \
+    'route-evidence fixture must cover authority-state re-probing'
   jq -e '
     (map(select(.should_trigger == true)) | length) >= 4 and
     (map(select(.should_trigger == false)) | length) >= 4

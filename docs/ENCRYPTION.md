@@ -114,8 +114,12 @@ verify that `~/.agents/daybreak-account-bindings.md` is a regular mode-`0600`
 file and not a symlink, then remove only that path and verify that it is absent:
 
 ```zsh
+set -eu
 target="$HOME/.agents/daybreak-account-bindings.md"
-test -f "$target" && test ! -L "$target"
+if [[ ! -f "$target" || -L "$target" ]]; then
+  print -u2 -- 'refusing exact-target cleanup'
+  exit 1
+fi
 # Confirm the owner and mode with the platform's lstat/stat command.
 rm -- "$target"
 test ! -e "$target" && test ! -L "$target"
