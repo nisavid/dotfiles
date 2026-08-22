@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import re
-import hashlib
 import stat
 import subprocess
 import sys
@@ -11,7 +11,6 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase
 
-from scripts.privacy_age_integrity_gate import verify_integrity_boundary
 from scripts.privacy_age_admission import (
     ADMISSION_NAMESPACE,
     ADMISSION_PRINCIPAL,
@@ -19,6 +18,7 @@ from scripts.privacy_age_admission import (
     canonical_payload_bytes,
     encode_receipt,
 )
+from scripts.privacy_age_integrity_gate import verify_integrity_boundary
 
 ROOT = Path(__file__).resolve().parents[1]
 GATE = ROOT / "scripts/privacy_age_integrity_gate.py"
@@ -147,6 +147,20 @@ class PrivacyAgeIntegrityGateTests(TestCase):
             allowed_signers=allowed_signers,
             repository=repository,
         )
+
+    def test_prebootstrap_base_requires_the_explicit_owner_exception(self) -> None:
+        _, base, head, _ = self.make_checkouts()
+        for relative in (
+            ".github/age-admission/allowed_signers",
+            "scripts/create-age-admission-receipt",
+            "scripts/privacy_age_admission.py",
+        ):
+            (base / relative).unlink()
+        base_commit = commit_all(base, "pre-bootstrap base")
+        head_commit = run("git", "rev-parse", "HEAD", cwd=head)
+
+        with self.assertRaisesRegex(RuntimeError, "bootstrap owner exception"):
+            self.verify(base, head, base_commit, head_commit)
 
     def test_signed_admission_accepts_only_the_exact_transition(self) -> None:
         temporary, base, head, base_commit = self.make_checkouts()
