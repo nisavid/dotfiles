@@ -59,10 +59,14 @@ comments.
 ### Owner admission receipts
 
 After the candidate commit is final, run the receipt command from the trusted
-main checkout at the exact base commit. The `--trusted-admitter` path must be
-that checkout's `scripts/admit-age-envelopes`; this prevents a candidate
-checkout from supplying the validation program. It independently validates
-every candidate envelope with the machine-local identity in check-only mode,
+main checkout at the exact base commit, with both the trusted and candidate
+checkouts clean (including untracked and ignored files). The creator itself
+must be the script in that trusted checkout, and the `--trusted-admitter` path
+must be that checkout's `scripts/admit-age-envelopes`; this binds every local
+validation module to the trusted base commit and prevents a candidate checkout
+from supplying the validation program. The creator materializes the exact
+candidate Git tree before it independently validates every envelope with the
+machine-local identity in check-only mode,
 then signs a canonical, secret-free receipt with the owner admission key:
 
 ```zsh
@@ -93,6 +97,9 @@ to match the repository, base and head commits, every protected path's mode,
 kind, and SHA-256 digest, the expiry window, and the signature namespace and
 principal. A changed head requires a new receipt; an expired or ambiguous
 marker fails closed.
+The nonce identifies the signed receipt but is not a one-time ledger. A valid
+receipt may be replayed only for the exact base/head transition until its
+expiry; changing either commit requires a new receipt.
 
 The committed public verifier key is
 `.github/age-admission/allowed_signers`. Rotate that key only as another
@@ -102,13 +109,21 @@ receipt contains no plaintext identifiers.
 
 The first bootstrap of this boundary is a one-time exception: the trusted
 base predates the signer and verifier paths, so it cannot verify a v1 receipt.
-Publish the bootstrap branch as a pull request from `main`, keep its review
-and required checks visible, and use an owner-approved, branch-scoped
-break-glass exception only long enough to merge that pull request. Do not push
-directly to `main`, disable unrelated protections, or reuse the exception for
-ordinary changes. Re-enable the protection immediately, verify that `main`
-contains the signer and verifier paths, and only then create a receipt for the
-next protected pull request.
+The bootstrap head must contain and replace every admission infrastructure path
+before the exception is used: the signer, creator, admission module, legacy
+admitter, envelope helper, trusted gate, and boundary workflow. Publish the
+bootstrap branch as a pull request from `main`,
+keep its review and required checks visible, and use an owner-approved,
+branch-scoped break-glass exception only long enough to merge that pull
+request. Do not push directly to `main`, disable unrelated protections, or
+reuse the exception for ordinary changes. Re-enable the protection
+immediately, verify that `main` contains the signer and verifier paths, and
+require the exact Checks API `name` emitted by the job — currently
+`Verify trusted base against candidate data` (the UI may render it with the
+workflow name prefixed) — alongside the other required checks. Read that name
+from a fresh check run and verify the requirement through the live
+branch-protection API before creating a receipt for the next protected pull
+request.
 
 The v1 repository policy authorizes exactly one post-quantum recipient stanza
 per ciphertext. Hosted scanning enforces that public structural invariant;

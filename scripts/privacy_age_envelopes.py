@@ -184,11 +184,21 @@ def open_regular_file_descriptor(path: Path) -> tuple[int, os.stat_result]:
     return descriptor, info
 
 
-def read_regular_file(path: Path, *, maximum: int) -> bytes:
+def read_regular_file(
+    path: Path,
+    *,
+    maximum: int,
+    expected: os.stat_result | None = None,
+) -> bytes:
     """Read one bounded regular file through a stable descriptor."""
 
-    descriptor, _ = open_regular_file_descriptor(path)
+    descriptor, info = open_regular_file_descriptor(path)
     try:
+        if expected is not None and (info.st_dev, info.st_ino) != (
+            expected.st_dev,
+            expected.st_ino,
+        ):
+            raise AgeEnvelopeError("file changed during validation")
         chunks: list[bytes] = []
         remaining = maximum + 1
         while remaining:

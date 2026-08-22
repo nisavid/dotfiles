@@ -157,10 +157,31 @@ class PrivacyAgeIntegrityGateTests(TestCase):
         ):
             (base / relative).unlink()
         base_commit = commit_all(base, "pre-bootstrap base")
-        head_commit = run("git", "rev-parse", "HEAD", cwd=head)
+        for relative in (
+            ".github/workflows/privacy-age-integrity.yml",
+            "scripts/admit-age-envelopes",
+            "scripts/privacy_age_envelopes.py",
+            "scripts/privacy_age_integrity_gate.py",
+        ):
+            (head / relative).write_text("bootstrap replacement\n", encoding="utf-8")
+        head_commit = commit_all(head, "complete bootstrap candidate")
 
         with self.assertRaisesRegex(RuntimeError, "bootstrap owner exception"):
             self.verify(base, head, base_commit, head_commit)
+
+        (head / "scripts/admit-age-envelopes").write_text(
+            PROTECTED_FILES["scripts/admit-age-envelopes"],
+            encoding="utf-8",
+        )
+        (head / "scripts/admit-age-envelopes").chmod(0o755)
+        stale_head_commit = commit_all(head, "stale bootstrap candidate")
+        with self.assertRaisesRegex(RuntimeError, "complete admission infrastructure"):
+            self.verify(base, head, base_commit, stale_head_commit)
+
+        (head / "scripts/create-age-admission-receipt").unlink()
+        incomplete_head_commit = commit_all(head, "incomplete bootstrap candidate")
+        with self.assertRaisesRegex(RuntimeError, "complete admission infrastructure"):
+            self.verify(base, head, base_commit, incomplete_head_commit)
 
     def test_signed_admission_accepts_only_the_exact_transition(self) -> None:
         temporary, base, head, base_commit = self.make_checkouts()

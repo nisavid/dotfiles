@@ -61,6 +61,17 @@ ADMISSION_INFRASTRUCTURE_PATHS = frozenset(
         b"scripts/privacy_age_admission.py",
     }
 )
+# A pre-bootstrap base already has the legacy gate, workflow, and envelope
+# scanner. The break-glass merge is safe only when the head replaces all of
+# those legacy seams and adds the signed-admission seams together.
+BOOTSTRAP_REQUIRED_PATHS = ADMISSION_INFRASTRUCTURE_PATHS | frozenset(
+    {
+        b".github/workflows/privacy-age-integrity.yml",
+        b"scripts/admit-age-envelopes",
+        b"scripts/privacy_age_envelopes.py",
+        b"scripts/privacy_age_integrity_gate.py",
+    }
+)
 PROTECTED_OPTIONAL_PATHS = frozenset({b".gitattributes", b".gitmodules"})
 PROTECTED_PREFIXES = (b".github/actions/", b".github/workflows/")
 
@@ -76,16 +87,46 @@ class TreeEntry:
     object_id: bytes
 
 
+@dataclass(frozen=True)
+class ProtectedTransition:
+    """The exact protected tree transition shared by signing and verification."""
+
+    base: Path
+    base_commit: str
+    head: Path
+    head_commit: str
+    base_tree: dict[bytes, TreeEntry]
+    head_tree: dict[bytes, TreeEntry]
+    changed: tuple[bytes, ...]
+    infrastructure_present: frozenset[bytes]
+
+
 def _git(
     repository: Path,
     *arguments: str,
     maximum_output_bytes: int | None = None,
 ) -> bytes:
     environment = os.environ.copy()
+    for variable in (
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_COMMON_DIR",
+        "GIT_CONFIG_COUNT",
+        "GIT_CONFIG_PARAMETERS",
+        "GIT_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_WORK_TREE",
+    ):
+        environment.pop(variable, None)
+    for variable in tuple(environment):
+        if variable.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")):
+            environment.pop(variable, None)
     environment.update(
         {
             "GIT_CONFIG_GLOBAL": os.devnull,
             "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_NO_LAZY_FETCH": "1",
+            "GIT_NO_REPLACE_OBJECTS": "1",
             "GIT_OPTIONAL_LOCKS": "0",
             "LC_ALL": "C",
         }
@@ -207,16 +248,78 @@ def _tree_side(
     return {"kind": kind, "mode": mode, "sha256": digest}
 
 
-def _admission_paths(
+def _protected_transition(
     *,
-    base: Path,
-    base_tree: dict[bytes, TreeEntry],
-    head: Path,
-    head_tree: dict[bytes, TreeEntry],
-    changed: list[bytes],
+    base_repository: Path,
+    base_commit: str,
+    head_repository: Path,
+    head_commit: str,
+) -> ProtectedTransition:
+    """Inspect one exact base/head pair and derive its protected transition."""
+
+    base = _validated_checkout(base_repository, base_commit)
+    head = _validated_checkout(head_repository, head_commit)
+    base_tree = _tree(base, base_commit)
+    head_tree = _tree(head, head_commit)
+
+    missing_base_paths = sorted(
+        (PROTECTED_EXACT_PATHS - ADMISSION_INFRASTRUCTURE_PATHS) - base_tree.keys()
+    )
+    if missing_base_paths:
+        raise IntegrityGateError("trusted base is missing a protected path")
+    infrastructure_present = frozenset(
+        ADMISSION_INFRASTRUCTURE_PATHS & base_tree.keys()
+    )
+    if infrastructure_present and infrastructure_present != ADMISSION_INFRASTRUCTURE_PATHS:
+        raise IntegrityGateError("trusted base has an incomplete admission boundary")
+
+    protected_paths = {
+        path for path in base_tree.keys() | head_tree.keys() if _is_protected(path)
+    }
+    if not protected_paths:
+        raise IntegrityGateError("trusted base has no protected boundary")
+    changed = tuple(
+        sorted(path for path in protected_paths if base_tree.get(path) != head_tree.get(path))
+    )
+    return ProtectedTransition(
+        base=base,
+        base_commit=base_commit,
+        head=head,
+        head_commit=head_commit,
+        base_tree=base_tree,
+        head_tree=head_tree,
+        changed=changed,
+        infrastructure_present=infrastructure_present,
+    )
+
+
+def _require_bootstrap_head_complete(transition: ProtectedTransition) -> None:
+    missing = BOOTSTRAP_REQUIRED_PATHS - transition.head_tree.keys()
+    stale = {
+        path
+        for path in BOOTSTRAP_REQUIRED_PATHS
+        if path in transition.base_tree
+        and transition.head_tree.get(path) is not None
+        and (
+            transition.head_tree[path].kind,
+            transition.head_tree[path].object_id,
+        )
+        == (
+            transition.base_tree[path].kind,
+            transition.base_tree[path].object_id,
+        )
+    }
+    if missing or stale:
+        raise IntegrityGateError(
+            "bootstrap candidate is missing complete admission infrastructure"
+        )
+
+
+def _admission_paths(
+    transition: ProtectedTransition,
 ) -> list[dict[str, object]]:
     paths: list[dict[str, object]] = []
-    for path in changed:
+    for path in transition.changed:
         try:
             relative = path.decode("ascii")
         except UnicodeDecodeError as error:
@@ -224,12 +327,12 @@ def _admission_paths(
         paths.append(
             {
                 "base": _tree_side(
-                    base,
-                    base_tree.get(path),
+                    transition.base,
+                    transition.base_tree.get(path),
                 ),
                 "head": _tree_side(
-                    head,
-                    head_tree.get(path),
+                    transition.head,
+                    transition.head_tree.get(path),
                 ),
                 "path": relative,
             }
@@ -238,21 +341,15 @@ def _admission_paths(
 
 
 def _verify_admission(
+    transition: ProtectedTransition,
     *,
-    base: Path,
-    base_commit: str,
-    head: Path,
-    head_commit: str,
-    base_tree: dict[bytes, TreeEntry],
-    head_tree: dict[bytes, TreeEntry],
-    changed: list[bytes],
     admission_body: bytes | None,
     allowed_signers: Path | None,
     repository: str | None,
 ) -> None:
     if admission_body is None:
         raise IntegrityGateError(
-            f"candidate changes {len(changed)} protected path(s) without admission"
+            f"candidate changes {len(transition.changed)} protected path(s) without admission"
         )
     try:
         receipt = extract_receipt(admission_body)
@@ -265,21 +362,15 @@ def _verify_admission(
         validated = validate_payload(
             payload,
             expected_repository=repository,
-            expected_base_commit=base_commit,
-            expected_head_commit=head_commit,
+            expected_base_commit=transition.base_commit,
+            expected_head_commit=transition.head_commit,
         )
-        expected_paths = _admission_paths(
-            base=base,
-            base_tree=base_tree,
-            head=head,
-            head_tree=head_tree,
-            changed=changed,
-        )
+        expected_paths = _admission_paths(transition)
         if validated["paths"] != expected_paths:
             raise AdmissionReceiptError("admission paths do not match transition")
         canonical_allowed_signers = allowed_signers.resolve(strict=True)
         try:
-            canonical_allowed_signers.relative_to(base)
+            canonical_allowed_signers.relative_to(transition.base)
         except ValueError as error:
             raise AdmissionReceiptError(
                 "admission signer configuration is not trusted"
@@ -305,41 +396,20 @@ def verify_integrity_boundary(
 ) -> None:
     """Reject every unadmitted protected transition between exact checkouts."""
 
-    base = _validated_checkout(base_repository, base_commit)
-    head = _validated_checkout(head_repository, head_commit)
-    base_tree = _tree(base, base_commit)
-    head_tree = _tree(head, head_commit)
-
-    missing_base_paths = sorted(
-        (PROTECTED_EXACT_PATHS - ADMISSION_INFRASTRUCTURE_PATHS) - base_tree.keys()
+    transition = _protected_transition(
+        base_repository=base_repository,
+        base_commit=base_commit,
+        head_repository=head_repository,
+        head_commit=head_commit,
     )
-    if missing_base_paths:
-        raise IntegrityGateError("trusted base is missing a protected path")
-    infrastructure_present = ADMISSION_INFRASTRUCTURE_PATHS & base_tree.keys()
-    if infrastructure_present and infrastructure_present != ADMISSION_INFRASTRUCTURE_PATHS:
-        raise IntegrityGateError("trusted base has an incomplete admission boundary")
-
-    protected_paths = {
-        path for path in base_tree.keys() | head_tree.keys() if _is_protected(path)
-    }
-    if not protected_paths:
-        raise IntegrityGateError("trusted base has no protected boundary")
-    changed = sorted(
-        path for path in protected_paths if base_tree.get(path) != head_tree.get(path)
-    )
-    if changed:
-        if infrastructure_present != ADMISSION_INFRASTRUCTURE_PATHS:
+    if transition.changed:
+        if transition.infrastructure_present != ADMISSION_INFRASTRUCTURE_PATHS:
+            _require_bootstrap_head_complete(transition)
             raise IntegrityGateError(
                 "trusted base predates signed admission; bootstrap owner exception required"
             )
         _verify_admission(
-            base=base,
-            base_commit=base_commit,
-            head=head,
-            head_commit=head_commit,
-            base_tree=base_tree,
-            head_tree=head_tree,
-            changed=changed,
+            transition,
             admission_body=admission_body,
             allowed_signers=allowed_signers,
             repository=repository,
@@ -359,31 +429,18 @@ def build_admission_payload(
 ) -> dict[str, object]:
     """Build the signed payload for the exact protected transition."""
 
-    base = _validated_checkout(base_repository, base_commit)
-    head = _validated_checkout(head_repository, head_commit)
-    base_tree = _tree(base, base_commit)
-    head_tree = _tree(head, head_commit)
-    missing_base_paths = sorted(
-        (PROTECTED_EXACT_PATHS - ADMISSION_INFRASTRUCTURE_PATHS) - base_tree.keys()
+    transition = _protected_transition(
+        base_repository=base_repository,
+        base_commit=base_commit,
+        head_repository=head_repository,
+        head_commit=head_commit,
     )
-    if missing_base_paths:
-        raise IntegrityGateError("trusted base is missing a protected path")
-    infrastructure_present = ADMISSION_INFRASTRUCTURE_PATHS & base_tree.keys()
-    if infrastructure_present and infrastructure_present != ADMISSION_INFRASTRUCTURE_PATHS:
-        raise IntegrityGateError("trusted base has an incomplete admission boundary")
-    if infrastructure_present != ADMISSION_INFRASTRUCTURE_PATHS:
+    if transition.infrastructure_present != ADMISSION_INFRASTRUCTURE_PATHS:
+        _require_bootstrap_head_complete(transition)
         raise IntegrityGateError(
             "trusted base predates signed admission; bootstrap owner exception required"
         )
-    protected_paths = {
-        path for path in base_tree.keys() | head_tree.keys() if _is_protected(path)
-    }
-    if not protected_paths:
-        raise IntegrityGateError("trusted base has no protected boundary")
-    changed = sorted(
-        path for path in protected_paths if base_tree.get(path) != head_tree.get(path)
-    )
-    if not changed:
+    if not transition.changed:
         raise IntegrityGateError("candidate has no protected transition to admit")
     payload: dict[str, object] = {
         "base_commit": base_commit,
@@ -391,13 +448,7 @@ def build_admission_payload(
         "head_commit": head_commit,
         "issued_at": issued_at,
         "nonce": nonce,
-        "paths": _admission_paths(
-            base=base,
-            base_tree=base_tree,
-            head=head,
-            head_tree=head_tree,
-            changed=changed,
-        ),
+        "paths": _admission_paths(transition),
         "repository": repository,
         "version": ADMISSION_VERSION,
     }
