@@ -184,7 +184,7 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
             )
 
     def test_trusted_wrapper_rejects_every_untrusted_launch_path(self) -> None:
-        with TemporaryDirectory() as temporary:
+        with TemporaryDirectory(dir="/tmp") as temporary:
             root = Path(temporary)
             base = root / "base"
             head = root / "head"
@@ -219,25 +219,32 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
                 "--head-commit",
                 base_commit,
             ]
-            command = [
-                sys.executable,
-                "-I",
-                str(wrapper),
-                "--base-repository",
-                str(base),
-                "--base-commit",
-                base_commit,
-                "--",
-                *creator_arguments,
-            ]
-            result = subprocess.run(
-                command,
-                check=False,
-                capture_output=True,
-                text=True,
-                env=environment,
-                timeout=30,
-            )
+
+            def wrapper_command(candidate: Path) -> list[str]:
+                return [
+                    sys.executable,
+                    "-I",
+                    str(candidate),
+                    "--base-repository",
+                    str(base),
+                    "--base-commit",
+                    base_commit,
+                    "--",
+                    *creator_arguments,
+                ]
+
+            def launch(command: list[str]) -> subprocess.CompletedProcess[str]:
+                return subprocess.run(
+                    command,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    env=environment,
+                    timeout=30,
+                )
+
+            command = wrapper_command(wrapper)
+            result = launch(command)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertTrue(marker.exists())
 
@@ -248,27 +255,20 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
             writable_wrapper = writable_wrapper_dir / "trusted-wrapper"
             shutil.copy2(wrapper, writable_wrapper)
             writable_wrapper.chmod(0o755)
-            writable_command = [
-                sys.executable,
-                "-I",
-                str(writable_wrapper),
-                "--base-repository",
-                str(base),
-                "--base-commit",
-                base_commit,
-                "--",
-                *creator_arguments,
-            ]
-            result = subprocess.run(
-                writable_command,
-                check=False,
-                capture_output=True,
-                text=True,
-                env=environment,
-                timeout=30,
-            )
+            result = launch(wrapper_command(writable_wrapper))
             self.assertEqual(result.returncode, 1, "writable wrapper directory")
             self.assertFalse(marker.exists())
+
+            if os.getuid() != 0:
+                sticky_wrapper_dir = root / "user-owned-sticky-wrapper-dir"
+                sticky_wrapper_dir.mkdir()
+                sticky_wrapper_dir.chmod(0o1777)
+                sticky_wrapper = sticky_wrapper_dir / "trusted-wrapper"
+                shutil.copy2(wrapper, sticky_wrapper)
+                sticky_wrapper.chmod(0o755)
+                result = launch(wrapper_command(sticky_wrapper))
+                self.assertEqual(result.returncode, 1, "user-owned sticky wrapper directory")
+                self.assertFalse(marker.exists())
 
             missing_separator_command = [
                 sys.executable,
@@ -280,39 +280,14 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
                 base_commit,
                 *creator_arguments,
             ]
-            result = subprocess.run(
-                missing_separator_command,
-                check=False,
-                capture_output=True,
-                text=True,
-                env=environment,
-                timeout=30,
-            )
+            result = launch(missing_separator_command)
             self.assertEqual(result.returncode, 2, "missing creator separator")
             self.assertIn("explicit -- separator", result.stderr)
             self.assertFalse(marker.exists())
 
             symlink_wrapper = root / "symlink-wrapper"
             symlink_wrapper.symlink_to(wrapper)
-            symlink_command = [
-                sys.executable,
-                "-I",
-                str(symlink_wrapper),
-                "--base-repository",
-                str(base),
-                "--base-commit",
-                base_commit,
-                "--",
-                *creator_arguments,
-            ]
-            result = subprocess.run(
-                symlink_command,
-                check=False,
-                capture_output=True,
-                text=True,
-                env=environment,
-                timeout=30,
-            )
+            result = launch(wrapper_command(symlink_wrapper))
             self.assertEqual(result.returncode, 1, "symlink wrapper")
             self.assertFalse(marker.exists())
 
@@ -333,14 +308,7 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
                 "--head-commit",
                 base_commit,
             ]
-            result = subprocess.run(
-                equals_command,
-                check=False,
-                capture_output=True,
-                text=True,
-                env=environment,
-                timeout=30,
-            )
+            result = launch(equals_command)
             self.assertEqual(result.returncode, 1, "equals-form creator option")
             self.assertFalse(marker.exists())
 
@@ -358,14 +326,7 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
                 "scripts/create-age-admission-receipt",
                 cwd=base,
             )
-            result = subprocess.run(
-                command,
-                check=False,
-                capture_output=True,
-                text=True,
-                env=environment,
-                timeout=30,
-            )
+            result = launch(command)
             self.assertEqual(result.returncode, 1, "tampered trusted launcher")
             self.assertFalse(marker.exists())
 
