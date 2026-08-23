@@ -21,6 +21,7 @@ from scripts.privacy_age_envelopes import (
     age_inspection_has_exact_postquantum_stanzas,
     canonical_manifest_bytes,
     discover_age_files,
+    read_regular_file,
 )
 from tests.age_tooling_test_support import (
     require_age_tooling_or_skip,
@@ -34,6 +35,25 @@ AGE_VERSION = "v1.3.1"
 MANIFEST = ".privacy-age-envelopes.json"
 MANIFEST_VERSION = "privacy-age-envelopes/v1"
 TOOL_TIMEOUT_SECONDS = 10
+
+
+class PrivacyAgeRegularFileTests(TestCase):
+    def test_read_rejects_an_expected_inode_mismatch(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            expected_path = root / "expected"
+            opened_path = root / "opened"
+            expected_path.write_bytes(b"expected")
+            opened_path.write_bytes(b"opened")
+
+            with self.assertRaises(AgeEnvelopeError) as caught:
+                read_regular_file(
+                    opened_path,
+                    maximum=64,
+                    expected=expected_path.stat(),
+                )
+
+        self.assertEqual(str(caught.exception), "file changed during validation")
 
 
 def sha256(data: bytes) -> str:
