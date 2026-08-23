@@ -99,6 +99,11 @@ jobs:
           NO_BLOCK = getattr(os, "O_NONBLOCK", None)
           if NO_FOLLOW is None or NO_BLOCK is None:
               raise SystemExit("checkout byte verification unavailable")
+          if len(sys.argv) != 5 or any(
+              re.fullmatch(r"[0-9a-f]{40}", value) is None
+              for value in (sys.argv[1], sys.argv[3])
+          ):
+              raise SystemExit("checkout byte verification failed")
 
           def git(
               repository: str,
