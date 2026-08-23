@@ -373,16 +373,22 @@ def _tree_side(
         mode = entry.mode.decode("ascii")
     except UnicodeDecodeError as error:
         raise IntegrityGateError("protected tree metadata is not ASCII") from error
-    data = _git(
-        repository,
-        "cat-file",
-        kind,
-        entry.object_id.decode("ascii"),
-        maximum_output_bytes=MAX_GIT_OBJECT_BYTES,
-    )
-    # Keep the digest over the exact Git object bytes, independent of Git's
-    # object hash algorithm. This also binds symlink and gitlink transitions.
-    digest = "sha256:" + hashlib.sha256(data).hexdigest()
+    if kind == "commit":
+        # A gitlink records a commit identity, but the submodule object is not
+        # guaranteed to exist in either checkout. Bind the recorded identity
+        # directly instead of asking Git to load an unavailable submodule.
+        digest = "sha256:" + hashlib.sha256(entry.object_id).hexdigest()
+    else:
+        data = _git(
+            repository,
+            "cat-file",
+            kind,
+            entry.object_id.decode("ascii"),
+            maximum_output_bytes=MAX_GIT_OBJECT_BYTES,
+        )
+        # Keep the digest over exact Git object bytes, independent of Git's
+        # object hash algorithm, for blobs, trees, and symlink targets.
+        digest = "sha256:" + hashlib.sha256(data).hexdigest()
     return {"kind": kind, "mode": mode, "sha256": digest}
 
 
