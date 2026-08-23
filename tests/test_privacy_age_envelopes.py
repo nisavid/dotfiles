@@ -356,13 +356,14 @@ class PrivacyAgeEnvelopeTests(TestCase):
         self.assertEqual((self.root / MANIFEST).read_bytes(), manifest_bytes([]))
         self.assertEqual(list(self.root.glob(f"{MANIFEST}.*")), [])
 
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "descriptor passing requires POSIX")
     def test_admission_uses_a_held_identity_descriptor_after_path_replacement(self) -> None:
         candidate = self.encrypt(b"descriptor-bound fixture")
         (self.root / "candidate.age").write_bytes(candidate)
         expected = manifest_bytes([("candidate.age", candidate)])
         (self.root / MANIFEST).write_bytes(expected)
 
-        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0)
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
         descriptor = os.open(self.identity, flags)
         moved = self.identity.with_name("identity-moved.txt")
         try:
@@ -390,6 +391,8 @@ class PrivacyAgeEnvelopeTests(TestCase):
             )
         finally:
             os.close(descriptor)
+            if self.identity.exists():
+                self.identity.chmod(0o600)
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual((self.root / MANIFEST).read_bytes(), expected)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -717,10 +718,17 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 1, "tooling inside trusted checkout")
 
+            real_ssh_keygen = shutil.which("ssh-keygen", path=environment["PATH"])
+            self.assertIsNotNone(real_ssh_keygen)
+            passthrough = (
+                "#!/bin/sh\n"
+                f"exec {shlex.quote(real_ssh_keygen)} \"$@\"\n"
+            )
+
             fake_tool_dir = base / ".git/fake-tools"
             fake_tool_dir.mkdir()
             fake_tool = fake_tool_dir / "ssh-keygen"
-            fake_tool.write_text("#!/bin/sh\nexit 99\n", encoding="ascii")
+            fake_tool.write_text(passthrough, encoding="ascii")
             fake_tool.chmod(0o755)
             untrusted_tool_environment = environment.copy()
             untrusted_tool_environment["PATH"] = (
@@ -739,7 +747,7 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
             external_fake_tool_dir = root / "fake-tools"
             external_fake_tool_dir.mkdir()
             external_fake_tool = external_fake_tool_dir / "ssh-keygen"
-            external_fake_tool.write_text("#!/bin/sh\nexit 99\n", encoding="ascii")
+            external_fake_tool.write_text(passthrough, encoding="ascii")
             external_fake_tool.chmod(0o775)
             writable_tool_environment = environment.copy()
             writable_tool_environment["PATH"] = (
@@ -759,7 +767,7 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
             writable_parent_tool_dir.mkdir()
             writable_parent_tool_dir.chmod(0o775)
             writable_parent_tool = writable_parent_tool_dir / "ssh-keygen"
-            writable_parent_tool.write_text("#!/bin/sh\nexit 99\n", encoding="ascii")
+            writable_parent_tool.write_text(passthrough, encoding="ascii")
             writable_parent_tool.chmod(0o755)
             writable_parent_environment = environment.copy()
             writable_parent_environment["PATH"] = (
