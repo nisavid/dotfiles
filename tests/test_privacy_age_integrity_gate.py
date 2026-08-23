@@ -46,7 +46,10 @@ UNTRUSTED_HEAD_EXECUTION = re.compile(
 PROTECTED_FILES = {
     # These are placeholders for fixture-only paths.  REAL_SOURCE_FILES below
     # is the explicit set replaced with the reviewed repository bytes.
-    ".github/age-admission/allowed_signers": "repository-owner ssh-ed25519 fixture\n",
+    ".github/age-admission/allowed_signers": (
+        'repository-owner namespaces="nisavid/dotfiles/age-admission/v1" '
+        "ssh-ed25519 fixture\n"
+    ),
     ".github/actions/privacy-boundary/action.yml": "name: boundary action\n",
     ".github/workflows/platform-portability.yml": "name: platform\n",
     ".github/workflows/privacy-age-integrity.yml": (
@@ -420,12 +423,14 @@ class PrivacyAgeIntegrityGateTests(TestCase):
         )
         public_key = (Path(f"{key}.pub")).read_text(encoding="ascii").split()
         (base / ".github/age-admission/allowed_signers").write_text(
-            f"{ADMISSION_PRINCIPAL} {public_key[0]} {public_key[1]}\n",
+            f'{ADMISSION_PRINCIPAL} namespaces="{ADMISSION_NAMESPACE}" '
+            f"{public_key[0]} {public_key[1]}\n",
             encoding="ascii",
         )
         base_commit = commit_all(base, "signer")
         (head / ".github/age-admission/allowed_signers").write_text(
-            f"{ADMISSION_PRINCIPAL} {public_key[0]} {public_key[1]}\n",
+            f'{ADMISSION_PRINCIPAL} namespaces="{ADMISSION_NAMESPACE}" '
+            f"{public_key[0]} {public_key[1]}\n",
             encoding="ascii",
         )
         (head / "home/private.age").write_text(

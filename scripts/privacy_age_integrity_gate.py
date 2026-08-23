@@ -113,7 +113,7 @@ ACTIVE_REQUIRED_PATHS = BOOTSTRAP_REQUIRED_PATHS | frozenset(
 BOOTSTRAP_REVIEWED_SIGNER_ENTRY = (
     b"blob",
     b"100644",
-    b"c239e930a6fcd54a56faf58dfd6bf5d8444c0341",
+    b"3455d1413afc070001e300e622bccd5427eda72c",
 )
 # Pin every bootstrap authority blob that is not self-referential. The
 # remaining gate blob is covered by the independent owner-side tree digest in
@@ -167,7 +167,7 @@ BOOTSTRAP_REVIEWED_SUPPORT_ENTRIES = {
     b"docs/ENCRYPTION.md": (
         b"blob",
         b"100644",
-        b"93d8aa0b8360418ba721b03d246b7bdbc297a104",
+        b"64f297f1bd17670d21c8cef32e67f7f966ad86fe",
     ),
 }
 # This marker lives in the already protected workflow.  The legacy
