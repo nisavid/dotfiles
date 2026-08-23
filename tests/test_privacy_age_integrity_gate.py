@@ -533,6 +533,39 @@ class PrivacyAgeIntegrityGateTests(TestCase):
                 repository="nisavid/dotfiles",
             )
 
+        foreign = dict(payload)
+        foreign["repository"] = "attacker/dotfiles"
+        foreign_message_file = Path(temporary.name) / "foreign-payload"
+        foreign_message_file.write_bytes(canonical_payload_bytes(foreign))
+        subprocess.run(
+            [
+                "ssh-keygen",
+                "-Y",
+                "sign",
+                "-f",
+                str(key),
+                "-n",
+                ADMISSION_NAMESPACE,
+                str(foreign_message_file),
+            ],
+            check=True,
+            capture_output=True,
+            timeout=10,
+        )
+        with self.assertRaisesRegex(RuntimeError, "admission receipt is not authorized"):
+            self.verify(
+                base,
+                head,
+                base_commit,
+                head_commit,
+                admission_body=encode_receipt(
+                    foreign,
+                    (foreign_message_file.with_suffix(".sig")).read_bytes(),
+                ),
+                allowed_signers=base / ".github/age-admission/allowed_signers",
+                repository="nisavid/dotfiles",
+            )
+
     def test_unrelated_candidate_changes_are_allowed(self) -> None:
         _, base, head, base_commit = self.make_checkouts()
         (head / "README.md").write_text("candidate docs\n", encoding="utf-8")
