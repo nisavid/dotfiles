@@ -23,6 +23,7 @@ try:
     from .privacy_age_admission import (
         ADMISSION_VERSION,
         MAX_ADMISSION_BODY_BYTES,
+        MAX_ADMISSION_PATHS,
         AdmissionReceiptError,
         extract_receipt,
         validate_payload,
@@ -33,6 +34,7 @@ except ImportError:  # pragma: no cover - direct script execution
     from privacy_age_admission import (
         ADMISSION_VERSION,
         MAX_ADMISSION_BODY_BYTES,
+        MAX_ADMISSION_PATHS,
         AdmissionReceiptError,
         extract_receipt,
         validate_payload,
@@ -137,7 +139,7 @@ BOOTSTRAP_REVIEWED_AUTHORITY_ENTRIES = {
     b"scripts/privacy_age_admission.py": (
         b"blob",
         b"100644",
-        b"d92fd11bd6fddcd5a1847226f6bbd1b5676ae871",
+        b"dcefd34d8e33b6f4fac511ea3c998cd5cd0e0cfe",
     ),
     b"scripts/privacy_age_envelopes.py": (
         b"blob",
@@ -562,6 +564,8 @@ def _require_admission_boundary_ready(
 def _admission_paths(
     transition: ProtectedTransition,
 ) -> list[dict[str, object]]:
+    if len(transition.changed) > MAX_ADMISSION_PATHS:
+        raise IntegrityGateError("protected transition changes too many paths")
     paths: list[dict[str, object]] = []
     for path in transition.changed:
         try:
