@@ -1,6 +1,6 @@
 # Daybreak routing matrix
 
-Cases A through F and H through J concern cybersecurity-adjacent work. Case G concerns unrelated work. Return a routing disposition; do not execute it.
+Cases A through F and H through K concern cybersecurity-adjacent work. Case G concerns unrelated work. Return a routing disposition; do not execute it.
 
 ## Case A
 
