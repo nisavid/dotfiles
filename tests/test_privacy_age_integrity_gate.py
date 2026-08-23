@@ -44,32 +44,16 @@ UNTRUSTED_HEAD_EXECUTION = re.compile(
 )
 
 PROTECTED_FILES = {
-    # These are placeholders for fixture-only paths.  REAL_SOURCE_FILES below
-    # is the explicit set replaced with the reviewed repository bytes.
-    ".github/age-admission/allowed_signers": (
-        'repository-owner namespaces="nisavid/dotfiles/age-admission/v1" '
-        "ssh-ed25519 fixture\n"
-    ),
+    # These are placeholders for fixture-only paths. REAL_SOURCE_FILES below
+    # is copied directly from the reviewed repository.
     ".github/actions/privacy-boundary/action.yml": "name: boundary action\n",
-    ".github/workflows/platform-portability.yml": "name: platform\n",
-    ".github/workflows/privacy-age-integrity.yml": (
-        ADMISSION_ACTIVATION_MARKER.decode("utf-8") + "name: boundary\n"
-    ),
     ".privacy-age-envelopes.json": "{}\n",
-    "docs/ENCRYPTION.md": "# Encryption\n",
     "home/.chezmoi.toml.tmpl": "recipient = 'fixture'\n",
     "home/private_dot_local/lib/agent-equipment/agent_equipment/secrets.py": (
         "# classifier implementation\n"
     ),
     "home/private.age": "ciphertext fixture\n",
-    "scripts/admit-age-envelopes": "#!/bin/sh\n",
     "scripts/agent_equipment_public_data.py": "# policy\n",
-    "scripts/create-age-admission-receipt": "#!/bin/sh\n",
-    "scripts/run-trusted-age-admission": "#!/bin/sh\n",
-    "scripts/privacy-scan": "#!/usr/bin/env python3\n",
-    "scripts/privacy_age_admission.py": "# admission\n",
-    "scripts/privacy_age_envelopes.py": "# inventory\n",
-    "scripts/privacy_age_integrity_gate.py": "# gate\n",
 }
 REAL_SOURCE_FILES = (
     ".github/age-admission/allowed_signers",
@@ -125,6 +109,7 @@ def write_files(root: Path) -> None:
         path.write_text(contents, encoding="utf-8")
     for relative in REAL_SOURCE_FILES:
         path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes((ROOT / relative).read_bytes())
     for relative, mode in BOOTSTRAP_REQUIRED_MODES.items():
         (root / relative).chmod(mode)
@@ -350,10 +335,7 @@ class PrivacyAgeIntegrityGateTests(TestCase):
         with self.assertRaisesRegex(RuntimeError, "bootstrap owner exception"):
             self.verify(base, head, base_commit, head_commit)
 
-        (head / "scripts/admit-age-envelopes").write_text(
-            PROTECTED_FILES["scripts/admit-age-envelopes"],
-            encoding="utf-8",
-        )
+        (head / "scripts/admit-age-envelopes").write_text("#!/bin/sh\n", encoding="ascii")
         (head / "scripts/admit-age-envelopes").chmod(0o755)
         stale_head_commit = commit_all(head, "stale bootstrap candidate")
         with self.assertRaisesRegex(RuntimeError, "complete admission infrastructure"):
@@ -378,7 +360,7 @@ class PrivacyAgeIntegrityGateTests(TestCase):
                 base_commit = commit_all(base, f"pre-bootstrap {malformed}")
                 for relative, mode in BOOTSTRAP_REQUIRED_MODES.items():
                     path = head / relative
-                    path.write_text("bootstrap replacement\n", encoding="utf-8")
+                    path.write_bytes((ROOT / relative).read_bytes())
                     path.chmod(mode)
                 malformed_path = head / "scripts/create-age-admission-receipt"
                 if malformed == "mode":
