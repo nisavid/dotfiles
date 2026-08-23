@@ -358,7 +358,7 @@ class PrivacyAgeEnvelopeTests(TestCase):
         self.assertEqual((self.root / MANIFEST).read_bytes(), manifest_bytes([]))
         self.assertEqual(list(self.root.glob(f"{MANIFEST}.*")), [])
 
-    @unittest.skipUnless(hasattr(os, "mkfifo"), "descriptor passing requires POSIX")
+    @unittest.skipUnless(os.name == "posix", "descriptor passing requires POSIX")
     def test_admission_uses_a_held_identity_descriptor_after_path_replacement(self) -> None:
         candidate = self.encrypt(b"descriptor-bound fixture")
         (self.root / "candidate.age").write_bytes(candidate)
