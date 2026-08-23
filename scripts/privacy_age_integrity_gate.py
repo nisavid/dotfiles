@@ -157,7 +157,7 @@ BOOTSTRAP_REVIEWED_SUPPORT_ENTRIES = {
     b".github/workflows/privacy-age-integrity.yml": (
         b"blob",
         b"100644",
-        b"b71e24be0f8c519f02c471657cc380af25300ffe",
+        b"7881ce3c5cdb789fd861e48f46c3c82c313a21a4",
     ),
     b".github/workflows/platform-portability.yml": (
         b"blob",
