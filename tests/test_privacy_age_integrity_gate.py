@@ -240,6 +240,16 @@ class PrivacyAgeIntegrityGateTests(TestCase):
                 run("git", "hash-object", "--", os.fspath(path), cwd=ROOT),
             )
 
+    def test_bootstrap_required_modes_match_reviewed_tree(self) -> None:
+        for relative, expected_mode in BOOTSTRAP_REQUIRED_MODES.items():
+            with self.subTest(relative=relative):
+                staged = run("git", "ls-files", "--stage", "--", relative, cwd=ROOT)
+                self.assertTrue(staged, f"required path is not tracked: {relative}")
+                self.assertEqual(
+                    expected_mode,
+                    int(staged.split(maxsplit=1)[0], 8) & 0o777,
+                )
+
     def test_activation_marker_is_present_in_the_protected_workflow(self) -> None:
         workflow = WORKFLOW.read_bytes()
         self.assertIn(ADMISSION_ACTIVATION_MARKER, workflow.splitlines(keepends=True))
@@ -701,12 +711,7 @@ class PrivacyAgeIntegrityGateTests(TestCase):
                     encoding="utf-8",
                 )
                 head_commit = commit_all(head, f"changed {relative}")
-                expected = (
-                    "activation sentinel"
-                    if relative == ".github/workflows/privacy-age-integrity.yml"
-                    else r"candidate changes .* protected path"
-                )
-                with self.assertRaisesRegex(RuntimeError, expected):
+                with self.assertRaisesRegex(RuntimeError, r"candidate changes .* protected path"):
                     self.verify(base, head, base_commit, head_commit)
 
     def test_mode_and_symlink_transitions_are_rejected(self) -> None:
