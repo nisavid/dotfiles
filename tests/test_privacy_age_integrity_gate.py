@@ -587,7 +587,12 @@ class PrivacyAgeIntegrityGateTests(TestCase):
         self.assertIn('python3 -I - "$GITHUB_EVENT_PATH"', source)
         self.assertIn('privacy-age-admission-body', source)
         self.assertIn("pull request event is not an object", source)
-        self.assertRegex(source, r"os\.open\([^)]*os\.O_EXCL[^)]*0o600")
+        self.assertIn("os.O_EXCL", source)
+        self.assertIn("0o600", source)
+        self.assertRegex(
+            source,
+            r"(?s)destination,\s*os\.O_WRONLY\s*\|\s*os\.O_CREAT\s*\|\s*os\.O_EXCL\s*\|\s*no_follow,\s*0o600",
+        )
         self.assertIn("verify_filesystem_entries", source)
         self.assertIn(
             '--allowed-signers trusted-base/.github/age-admission/allowed_signers',
