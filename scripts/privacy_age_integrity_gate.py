@@ -149,7 +149,7 @@ BOOTSTRAP_REVIEWED_AUTHORITY_ENTRIES = {
     b"scripts/run-trusted-age-admission": (
         b"blob",
         b"100755",
-        b"5afe9606d20af0ec624288925950b611aadc1878",
+        b"fef9847973839e4dded51275761099a9cf2be728",
     ),
 }
 # These support files are part of this reviewed bootstrap revision, but are not
