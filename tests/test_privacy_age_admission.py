@@ -603,6 +603,17 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
             creator = base / "scripts/create-age-admission-receipt"
             environment = os.environ.copy()
             environment["AGE_TOOLING_DIRECTORY"] = os.fspath(age_tooling_directory)
+            original_signer_path = environment.get("PATH", "")
+            if sys.platform == "darwin":
+                path_override = root / "path-override"
+                path_override.mkdir()
+                fake_signer = path_override / "ssh-keygen"
+                fake_signer.write_text("#!/bin/sh\nexit 97\n", encoding="ascii")
+                fake_signer.chmod(0o755)
+                environment["PATH"] = os.pathsep.join(
+                    (os.fspath(path_override), environment.get("PATH", ""))
+                )
+
             def creator_command(identity_path: Path, output_path: Path) -> list[str]:
                 return [
                     str(creator),
@@ -635,6 +646,8 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
                 timeout=30,
             )
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            if sys.platform == "darwin":
+                environment["PATH"] = original_signer_path
             self.assertFalse(filter_sentinel.exists())
             self.assertFalse(clean_filter_sentinel.exists())
             receipt = output.read_bytes()
@@ -677,70 +690,58 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 1, "tooling inside trusted checkout")
 
-            real_ssh_keygen = shutil.which("ssh-keygen", path=environment["PATH"])
-            self.assertIsNotNone(real_ssh_keygen)
-            passthrough = (
-                "#!/bin/sh\n"
-                f"exec {shlex.quote(real_ssh_keygen)} \"$@\"\n"
-            )
+            if sys.platform != "darwin":
+                real_ssh_keygen = shutil.which("ssh-keygen", path=environment["PATH"])
+                self.assertIsNotNone(real_ssh_keygen)
+                passthrough = (
+                    "#!/bin/sh\n"
+                    f"exec {shlex.quote(real_ssh_keygen)} \"$@\"\n"
+                )
 
-            fake_tool_dir = base / ".git/fake-tools"
-            fake_tool_dir.mkdir()
-            fake_tool = fake_tool_dir / "ssh-keygen"
-            fake_tool.write_text(passthrough, encoding="ascii")
-            fake_tool.chmod(0o755)
-            untrusted_tool_environment = environment.copy()
-            untrusted_tool_environment["PATH"] = (
-                f"{fake_tool_dir}{os.pathsep}{environment['PATH']}"
-            )
-            result = subprocess.run(
-                creator_command(identity, root / "untrusted-signing-tool-receipt.txt"),
-                check=False,
-                capture_output=True,
-                text=True,
-                env=untrusted_tool_environment,
-                timeout=30,
-            )
-            self.assertEqual(result.returncode, 1, "signing tool inside trusted checkout")
+                def assert_path_signer_rejected(
+                    directory: Path,
+                    output_path: Path,
+                    label: str,
+                    *,
+                    directory_mode: int = 0o755,
+                    tool_mode: int = 0o755,
+                ) -> None:
+                    directory.mkdir()
+                    directory.chmod(directory_mode)
+                    tool = directory / "ssh-keygen"
+                    tool.write_text(passthrough, encoding="ascii")
+                    tool.chmod(tool_mode)
+                    signer_environment = environment.copy()
+                    signer_environment["PATH"] = (
+                        f"{directory}{os.pathsep}{environment['PATH']}"
+                    )
+                    signer_result = subprocess.run(
+                        creator_command(identity, output_path),
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                        env=signer_environment,
+                        timeout=30,
+                    )
+                    self.assertEqual(signer_result.returncode, 1, label)
 
-            external_fake_tool_dir = root / "fake-tools"
-            external_fake_tool_dir.mkdir()
-            external_fake_tool = external_fake_tool_dir / "ssh-keygen"
-            external_fake_tool.write_text(passthrough, encoding="ascii")
-            external_fake_tool.chmod(0o775)
-            writable_tool_environment = environment.copy()
-            writable_tool_environment["PATH"] = (
-                f"{external_fake_tool_dir}{os.pathsep}{environment['PATH']}"
-            )
-            result = subprocess.run(
-                creator_command(identity, root / "writable-signing-tool-receipt.txt"),
-                check=False,
-                capture_output=True,
-                text=True,
-                env=writable_tool_environment,
-                timeout=30,
-            )
-            self.assertEqual(result.returncode, 1, "writable signing tool")
-
-            writable_parent_tool_dir = root / "writable-parent-tools"
-            writable_parent_tool_dir.mkdir()
-            writable_parent_tool_dir.chmod(0o775)
-            writable_parent_tool = writable_parent_tool_dir / "ssh-keygen"
-            writable_parent_tool.write_text(passthrough, encoding="ascii")
-            writable_parent_tool.chmod(0o755)
-            writable_parent_environment = environment.copy()
-            writable_parent_environment["PATH"] = (
-                f"{writable_parent_tool_dir}{os.pathsep}{environment['PATH']}"
-            )
-            result = subprocess.run(
-                creator_command(identity, root / "writable-parent-receipt.txt"),
-                check=False,
-                capture_output=True,
-                text=True,
-                env=writable_parent_environment,
-                timeout=30,
-            )
-            self.assertEqual(result.returncode, 1, "writable signing-tool parent")
+                assert_path_signer_rejected(
+                    base / ".git/fake-tools",
+                    root / "untrusted-signing-tool-receipt.txt",
+                    "signing tool inside trusted checkout",
+                )
+                assert_path_signer_rejected(
+                    root / "fake-tools",
+                    root / "writable-signing-tool-receipt.txt",
+                    "writable signing tool",
+                    tool_mode=0o775,
+                )
+                assert_path_signer_rejected(
+                    root / "writable-parent-tools",
+                    root / "writable-parent-receipt.txt",
+                    "writable signing-tool parent",
+                    directory_mode=0o775,
+                )
 
             output_alias = root / "output-alias"
             output_alias.symlink_to(base, target_is_directory=True)
