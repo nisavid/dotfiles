@@ -485,13 +485,16 @@ def _require_bootstrap_head_complete(transition: ProtectedTransition) -> None:
     malformed.update(
         path
         for path, expected in BOOTSTRAP_REVIEWED_SUPPORT_ENTRIES.items()
-        if path in transition.head_tree
+        if path in transition.changed
         and (
-            transition.head_tree[path].kind,
-            transition.head_tree[path].mode,
-            transition.head_tree[path].object_id,
+            path not in transition.head_tree
+            or (
+                transition.head_tree[path].kind,
+                transition.head_tree[path].mode,
+                transition.head_tree[path].object_id,
+            )
+            != expected
         )
-        != expected
     )
     malformed.update(
         path

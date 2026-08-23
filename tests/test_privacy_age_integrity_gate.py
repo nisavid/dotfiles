@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase
+from unittest.mock import patch
 
 from scripts.privacy_age_admission import (
     ADMISSION_NAMESPACE,
@@ -177,11 +178,29 @@ class PrivacyAgeIntegrityGateTests(TestCase):
             repository=repository,
         )
 
-    def test_bootstrap_support_allowlist_matches_reviewed_tree(self) -> None:
-        self.assertTrue(BOOTSTRAP_REVIEWED_SUPPORT_ENTRIES)
+    def test_bootstrap_support_allowlist_matches_reviewed_fixture(self) -> None:
+        reviewed_fixture = {
+            b".github/workflows/privacy-age-integrity.yml": (
+                b"blob",
+                b"100644",
+                b"7881ce3c5cdb789fd861e48f46c3c82c313a21a4",
+            ),
+            b".github/workflows/platform-portability.yml": (
+                b"blob",
+                b"100644",
+                b"fea93f6a2805d1899722f806ecd11d40c6c259c6",
+            ),
+            b"docs/ENCRYPTION.md": (
+                b"blob",
+                b"100644",
+                b"b3a7085f7a00a864d51b470c19d132035f6e019f",
+            ),
+        }
+        self.assertEqual(BOOTSTRAP_REVIEWED_SUPPORT_ENTRIES, reviewed_fixture)
         for raw_path, (kind, mode, object_id) in BOOTSTRAP_REVIEWED_SUPPORT_ENTRIES.items():
             path = ROOT / os.fsdecode(raw_path)
             self.assertEqual(kind, b"blob")
+            self.assertRegex(object_id.decode("ascii"), r"\A[0-9a-f]{40}\Z")
             staged = run(
                 "git",
                 "ls-files",
@@ -195,12 +214,6 @@ class PrivacyAgeIntegrityGateTests(TestCase):
             self.assertEqual(
                 mode,
                 tracked_mode,
-            )
-            # Deliberately hash candidate bytes so a precommit run detects an
-            # unstaged reviewed-blob change before the manifest can be rebuilt.
-            self.assertEqual(
-                object_id.decode("ascii"),
-                run("git", "hash-object", "--", os.fspath(path), cwd=ROOT),
             )
 
     def test_bootstrap_signer_allowlist_matches_reviewed_tree(self) -> None:
@@ -359,6 +372,104 @@ class PrivacyAgeIntegrityGateTests(TestCase):
         incomplete_head_commit = commit_all(head, "incomplete bootstrap candidate")
         with self.assertRaisesRegex(RuntimeError, "complete admission infrastructure"):
             self.verify(base, head, base_commit, incomplete_head_commit)
+
+    def test_bootstrap_support_pins_apply_only_to_changed_paths(self) -> None:
+        cases = (
+            ("unchanged non-pinned support", "unchanged", "bootstrap owner exception"),
+            ("changed pinned support", "pinned", "bootstrap owner exception"),
+            ("changed non-pinned support", "non-pinned", "not limited"),
+            ("deleted support", "deleted", "not limited"),
+        )
+        for name, mutation, expected_error in cases:
+            with self.subTest(name=name):
+                _, base, head, _ = self.make_checkouts()
+                reviewed_support_entries = BOOTSTRAP_REVIEWED_SUPPORT_ENTRIES
+                (base / ".github/workflows/privacy-age-integrity.yml").write_text(
+                    "name: boundary\n",
+                    encoding="ascii",
+                )
+                for relative in (
+                    "scripts/admit-age-envelopes",
+                    "scripts/privacy-scan",
+                    "scripts/privacy_age_envelopes.py",
+                    "scripts/privacy_age_integrity_gate.py",
+                ):
+                    (base / relative).write_text(
+                        "legacy bootstrap seam\n",
+                        encoding="ascii",
+                    )
+                for relative in (
+                    ".github/age-admission/allowed_signers",
+                    "scripts/create-age-admission-receipt",
+                    "scripts/run-trusted-age-admission",
+                    "scripts/privacy_age_admission.py",
+                ):
+                    (base / relative).unlink()
+
+                if mutation == "unchanged":
+                    support_path = "docs/ENCRYPTION.md"
+                    expected_object = BOOTSTRAP_REVIEWED_SUPPORT_ENTRIES[
+                        os.fsencode(support_path)
+                    ][2].decode("ascii")
+                    current_object = run(
+                        "git",
+                        "hash-object",
+                        "--",
+                        support_path,
+                        cwd=head,
+                    )
+                    self.assertNotEqual(expected_object, current_object)
+                    self.assertEqual(
+                        current_object,
+                        run("git", "hash-object", "--", support_path, cwd=base),
+                    )
+                elif mutation == "pinned":
+                    support_path = ".github/workflows/platform-portability.yml"
+                    current_object = run(
+                        "git",
+                        "hash-object",
+                        "--",
+                        support_path,
+                        cwd=head,
+                    )
+                    reviewed_support_entries = dict(BOOTSTRAP_REVIEWED_SUPPORT_ENTRIES)
+                    reviewed_support_entries[os.fsencode(support_path)] = (
+                        b"blob",
+                        b"100644",
+                        current_object.encode("ascii"),
+                    )
+                    (base / support_path).write_text(
+                        "name: legacy platform workflow\n",
+                        encoding="ascii",
+                    )
+                elif mutation == "non-pinned":
+                    support_path = "docs/ENCRYPTION.md"
+                    expected_object = BOOTSTRAP_REVIEWED_SUPPORT_ENTRIES[
+                        os.fsencode(support_path)
+                    ][2].decode("ascii")
+                    self.assertNotEqual(
+                        expected_object,
+                        run("git", "hash-object", "--", support_path, cwd=head),
+                    )
+                    (base / support_path).write_text(
+                        "legacy encryption policy\n",
+                        encoding="ascii",
+                    )
+
+                base_commit = commit_all(base, f"pre-bootstrap {name}")
+                if mutation == "deleted":
+                    (head / ".github/workflows/platform-portability.yml").unlink()
+                (head / "bootstrap-fixture.txt").write_text(
+                    "unprotected bootstrap fixture\n",
+                    encoding="ascii",
+                )
+                head_commit = commit_all(head, f"bootstrap {name}")
+
+                with patch(
+                    "scripts.privacy_age_integrity_gate.BOOTSTRAP_REVIEWED_SUPPORT_ENTRIES",
+                    reviewed_support_entries,
+                ), self.assertRaisesRegex(RuntimeError, expected_error):
+                    self.verify(base, head, base_commit, head_commit)
 
     def test_bootstrap_requires_regular_entries_with_expected_modes(self) -> None:
         for malformed in ("mode", "symlink"):
