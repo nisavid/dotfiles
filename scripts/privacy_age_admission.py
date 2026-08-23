@@ -446,10 +446,25 @@ def verify_receipt_signature(
                 raise AdmissionReceiptError(
                     "admission signer configuration is unavailable"
                 ) from error
-            signer_copy.write_bytes(signer_data)
-            signature_file.write_bytes(signature)
-            os.chmod(signer_copy, 0o600)
-            os.chmod(signature_file, 0o600)
+            no_follow = getattr(os, "O_NOFOLLOW", None)
+            if no_follow is None:
+                raise AdmissionReceiptError("admission signature staging is unavailable")
+            for target, contents in (
+                (signer_copy, signer_data),
+                (signature_file, signature),
+            ):
+                descriptor = os.open(
+                    target,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | no_follow,
+                    0o600,
+                )
+                try:
+                    with os.fdopen(descriptor, "wb") as stream:
+                        descriptor = -1
+                        stream.write(contents)
+                finally:
+                    if descriptor >= 0:
+                        os.close(descriptor)
             result = subprocess.run(
                 [
                     ssh_keygen,
