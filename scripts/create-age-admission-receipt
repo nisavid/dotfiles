@@ -40,15 +40,7 @@ MAX_WORKTREE_ENTRIES = 10_000
 MAX_WORKTREE_BYTES = 16 * 1024 * 1024
 MAX_LAUNCHER_BYTES = 256 * 1024
 COMMIT_ID = re.compile(r"[0-9a-f]{40}\Z", re.ASCII)
-_MACHO_MAGICS = {
-    b"\xca\xfe\xba\xbe",
-    b"\xca\xfe\xba\xbf",
-    b"\xce\xfa\xed\xfe",
-    b"\xcf\xfa\xed\xfe",
-    b"\xfe\xed\xfa\xce",
-    b"\xfe\xed\xfa\xcf",
-}
-_MACOS_CODESIGN = Path("/usr/bin/codesign")
+_MACOS_SSH_KEYGEN = Path("/usr/bin/ssh-keygen")
 
 
 def _within(path: Path, root: Path) -> bool:
@@ -834,8 +826,12 @@ def _validated_signing_tool(
     *,
     forbidden_roots: tuple[Path, ...],
     envelope_module: types.ModuleType,
-) -> bytes:
-    raw = shutil.which("ssh-keygen")
+) -> tuple[Path, bytes]:
+    raw = (
+        os.fspath(_MACOS_SSH_KEYGEN)
+        if sys.platform == "darwin"
+        else shutil.which("ssh-keygen")
+    )
     if raw is None:
         raise ReceiptRequestError("admission signature tooling is unavailable")
     lexical = Path(os.path.abspath(raw))
@@ -847,6 +843,8 @@ def _validated_signing_tool(
         _within(path, root)
         for path in (lexical, canonical)
         for root in forbidden_roots
+    ) or sys.platform == "darwin" and (
+        lexical != _MACOS_SSH_KEYGEN or canonical != _MACOS_SSH_KEYGEN
     ):
         raise ReceiptRequestError("admission signature tooling is unavailable")
     _validate_signing_tool_path_authority(lexical, canonical)
@@ -863,6 +861,7 @@ def _validated_signing_tool(
             or info.st_mode & 0o022 != 0
             or info.st_uid not in {0, os.getuid()}
             or canonical_info.st_uid not in {0, os.getuid()}
+            or sys.platform == "darwin" and (info.st_uid != 0 or canonical_info.st_uid != 0)
         ):
             raise ReceiptRequestError("admission signature tooling is unavailable")
         chunks: list[bytes] = []
@@ -876,7 +875,7 @@ def _validated_signing_tool(
         data = b"".join(chunks)
         if len(data) > MAX_SIGNING_TOOL_BYTES:
             raise ReceiptRequestError("admission signature tooling is unavailable")
-        return data
+        return canonical, data
     except (AttributeError, ValueError, OSError) as error:
         raise ReceiptRequestError("admission signature tooling is unavailable") from error
     finally:
@@ -924,86 +923,21 @@ def _stage_signing_tool(root: Path, data: bytes) -> Path:
     return path
 
 
-def _validated_macos_codesign(forbidden_roots: tuple[Path, ...]) -> Path:
-    """Use only Apple's fixed, root-owned codesign binary on Darwin."""
-
-    lexical = _MACOS_CODESIGN
-    try:
-        canonical = lexical.resolve(strict=True)
-    except OSError as error:
-        raise ReceiptRequestError("admission signature tooling is unavailable") from error
-    if (
-        canonical != lexical
-        or any(
-            _within(candidate, root)
-            for candidate in (lexical, canonical)
-            for root in forbidden_roots
-        )
-    ):
-        raise ReceiptRequestError("admission signature tooling is unavailable")
-    _validate_signing_tool_path_authority(lexical, canonical)
-    no_follow = getattr(os, "O_NOFOLLOW", None)
-    no_block = getattr(os, "O_NONBLOCK", None)
-    if no_follow is None or no_block is None:
-        raise ReceiptRequestError("admission signature tooling is unavailable")
-    try:
-        descriptor = os.open(
-            lexical,
-            os.O_RDONLY | no_follow | no_block | getattr(os, "O_CLOEXEC", 0),
-        )
-    except OSError as error:
-        raise ReceiptRequestError("admission signature tooling is unavailable") from error
-    try:
-        info = os.fstat(descriptor)
-        if (
-            not stat.S_ISREG(info.st_mode)
-            or info.st_mode & 0o111 == 0
-            or info.st_mode & 0o022
-            or info.st_uid != 0
-        ):
-            raise ReceiptRequestError("admission signature tooling is unavailable")
-    except OSError as error:
-        raise ReceiptRequestError("admission signature tooling is unavailable") from error
-    finally:
-        os.close(descriptor)
-    return canonical
-
-
-def _authorize_staged_macos_tool(
-    path: Path,
-    data: bytes,
+def _prepare_signing_tool(
+    root: Path,
     *,
     forbidden_roots: tuple[Path, ...],
-) -> None:
-    """Ad-hoc sign staged Mach-O bytes so macOS accepts the verified copy."""
+    envelope_module: types.ModuleType,
+) -> Path:
+    """Return the only validated signer executable the caller may run."""
 
-    if sys.platform != "darwin" or data[:4] not in _MACHO_MAGICS:
-        return
-    codesign_path = _validated_macos_codesign(forbidden_roots)
-    try:
-        result = subprocess.run(
-            [
-                os.fspath(codesign_path),
-                "--force",
-                "--sign",
-                "-",
-                "--timestamp=none",
-                os.fspath(path),
-            ],
-            check=False,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            env={
-                "PATH": "/usr/bin:/bin",
-                "LANG": "C",
-                "LC_ALL": "C",
-            },
-            timeout=SIGN_TIMEOUT_SECONDS,
-        )
-    except (OSError, subprocess.TimeoutExpired) as error:
-        raise ReceiptRequestError("admission signature tooling is unavailable") from error
-    if result.returncode != 0:
-        raise ReceiptRequestError("admission signature tooling is unavailable")
+    validated_tool, tool_data = _validated_signing_tool(
+        forbidden_roots=forbidden_roots,
+        envelope_module=envelope_module,
+    )
+    if sys.platform == "darwin":
+        return validated_tool
+    return _stage_signing_tool(root, tool_data)
 
 
 def _write_private_staged_file(path: Path, data: bytes) -> None:
@@ -1054,18 +988,13 @@ def _sign_payload(
     namespace: str,
     maximum_signature_bytes: int,
 ) -> bytes:
-    tool_data = _validated_signing_tool(
-        forbidden_roots=forbidden_roots,
-        envelope_module=envelope_module,
-    )
     try:
         with tempfile.TemporaryDirectory(prefix="age-admission-sign.") as temporary:
             root = Path(temporary)
-            tool = _stage_signing_tool(root, tool_data)
-            _authorize_staged_macos_tool(
-                tool,
-                tool_data,
+            tool = _prepare_signing_tool(
+                root,
                 forbidden_roots=forbidden_roots,
+                envelope_module=envelope_module,
             )
             key = root / "signing-key"
             message = root / "payload"
