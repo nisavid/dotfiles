@@ -381,9 +381,7 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
                 capture_output=True,
                 timeout=10,
             )
-            public_key = (root / "admission-key.pub").read_text(encoding="ascii").split(
-                maxsplit=2
-            )
+            public_key = (root / "admission-key.pub").read_text(encoding="ascii").split()
             allowed.write_text(
                 f'{ADMISSION_PRINCIPAL} namespaces="{ADMISSION_NAMESPACE}" '
                 f"{public_key[0]} {public_key[1]}\n",

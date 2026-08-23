@@ -624,7 +624,7 @@ class PrivacyAgeIntegrityGateTests(TestCase):
         source = WORKFLOW.read_text(encoding="utf-8")
         matches = list(
             re.finditer(
-                r"python3 -I - [^\n]*<<'PY'\n(?P<body>.*?)\n\s+PY\n",
+                r"python3 -I - [^\n]*<<'PY'\n(?P<body>.*?)\n[ \t]+PY\n",
                 source,
                 re.DOTALL,
             )
