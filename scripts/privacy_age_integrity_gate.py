@@ -134,12 +134,12 @@ BOOTSTRAP_REVIEWED_AUTHORITY_ENTRIES = {
     b"scripts/create-age-admission-receipt": (
         b"blob",
         b"100755",
-        b"1a916fe1b9b6242b0cbdd285d24aa8baeaa25993",
+        b"ee1eccff9d1747a207c3349ec4306847e3537fa1",
     ),
     b"scripts/privacy_age_admission.py": (
         b"blob",
         b"100644",
-        b"dcefd34d8e33b6f4fac511ea3c998cd5cd0e0cfe",
+        b"28c87a5c184ab323e813148c168a0022d0642675",
     ),
     b"scripts/privacy_age_envelopes.py": (
         b"blob",
@@ -169,7 +169,7 @@ BOOTSTRAP_REVIEWED_SUPPORT_ENTRIES = {
     b"docs/ENCRYPTION.md": (
         b"blob",
         b"100644",
-        b"1248379aa71c581c67c7f9350698556dd2759c82",
+        b"b3a7085f7a00a864d51b470c19d132035f6e019f",
     ),
 }
 # This marker lives in the already protected workflow.  The legacy

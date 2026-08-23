@@ -14,12 +14,14 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
 
+from scripts import privacy_age_envelopes
 from scripts.privacy_age_admission import (
     ADMISSION_CLOCK_SKEW,
     ADMISSION_MAX_LIFETIME,
     ADMISSION_NAMESPACE,
     ADMISSION_PRINCIPAL,
     ADMISSION_VERSION,
+    _validate_executable_path_authority,
     canonical_payload_bytes,
     encode_receipt,
     extract_receipt,
@@ -101,20 +103,68 @@ class PrivacyAgeAdmissionCreatorTests(unittest.TestCase):
             ),
         )
         for cause, message in scenarios:
+            with self.subTest(cause=type(cause).__name__):
+                with (
+                    mock.patch.object(
+                        self.creator["subprocess"],
+                        "run",
+                        side_effect=cause,
+                    ),
+                    self.assertRaises(error_type) as caught,
+                ):
+                    self.creator["_probe_staged_signing_tool"](
+                        Path("/staged/ssh-keygen")
+                    )
+
+                self.assertEqual(str(caught.exception), message)
+
+    def test_signer_validation_accepts_an_authorized_symlink(self) -> None:
+        raw_tool = shutil.which("ssh-keygen")
+        self.assertIsNotNone(raw_tool)
+        canonical_tool = Path(raw_tool).resolve(strict=True)
+        with TemporaryDirectory(dir=ROOT.parent) as temporary:
+            symlink = Path(temporary) / "ssh-keygen"
+            symlink.symlink_to(canonical_tool)
+
+            self.assertEqual(
+                _validate_executable_path_authority(os.fspath(symlink)),
+                canonical_tool,
+            )
             with (
-                self.subTest(cause=type(cause).__name__),
+                mock.patch.object(self.creator["sys"], "platform", "linux"),
                 mock.patch.object(
-                    self.creator["subprocess"],
-                    "run",
-                    side_effect=cause,
+                    self.creator["shutil"],
+                    "which",
+                    return_value=os.fspath(symlink),
                 ),
-                self.assertRaises(error_type) as caught,
             ):
-                self.creator["_probe_staged_signing_tool"](
-                    Path("/staged/ssh-keygen")
+                validated_tool, tool_data = self.creator["_validated_signing_tool"](
+                    forbidden_roots=(ROOT,),
+                    envelope_module=privacy_age_envelopes,
                 )
 
-            self.assertEqual(str(caught.exception), message)
+        self.assertEqual(validated_tool, canonical_tool)
+        self.assertTrue(tool_data)
+
+    def test_verifier_rejects_a_symlink_to_a_writable_target_parent(self) -> None:
+        raw_tool = shutil.which("ssh-keygen")
+        self.assertIsNotNone(raw_tool)
+        with TemporaryDirectory(dir=ROOT.parent) as temporary:
+            root = Path(temporary)
+            writable_target_parent = root / "writable-tools"
+            writable_target_parent.mkdir(mode=0o775)
+            writable_target_parent.chmod(0o775)
+            target = writable_target_parent / "ssh-keygen"
+            shutil.copyfile(raw_tool, target)
+            target.chmod(0o755)
+            symlink = root / "ssh-keygen"
+            symlink.symlink_to(target)
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "admission signature tooling is unavailable",
+            ):
+                _validate_executable_path_authority(os.fspath(symlink))
 
 
 class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
@@ -225,6 +275,8 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
             )
 
     def test_trusted_wrapper_rejects_every_untrusted_launch_path(self) -> None:
+        # /tmp has the sticky-ancestor permissions this wrapper must accept;
+        # macOS's per-user TMPDIR would not exercise those scenarios.
         with TemporaryDirectory(dir="/tmp") as temporary:
             root = Path(temporary)
             base = root / "base"

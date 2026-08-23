@@ -106,7 +106,14 @@ grep -Fq -- \
   fail 'platform workflow does not anchor adapter schema references to the local file'
 
 age_boundary_workflow=$repo_root/.github/workflows/privacy-age-integrity.yml
-grep -Fxq '# Protected admission activation sentinel: owner-signed-age-v1' \
+admission_activation_marker=$(
+  cd "$repo_root"
+  python3 -I -c 'import sys
+sys.path.insert(0, ".")
+from scripts.privacy_age_integrity_gate import ADMISSION_ACTIVATION_MARKER
+sys.stdout.buffer.write(ADMISSION_ACTIVATION_MARKER.rstrip(b"\r\n"))'
+) || fail 'cannot derive the age admission activation marker'
+grep -Fxq -- "$admission_activation_marker" \
   "$age_boundary_workflow" ||
   fail 'age boundary is missing the admission activation sentinel'
 untrusted_head_execution_pattern='^[[:space:]]*((uses|working-directory):[[:space:]]*(\./)?untrusted-head(/|$)|(run:[[:space:]]*)?(\./)?untrusted-head/|(run:[[:space:]]*)?.*((cd|source)[[:space:]]+|\.[[:space:]]+)([^[:space:]]*/)?untrusted-head(/|[[:space:]]|$)|(run:[[:space:]]*)?.*(^|[^[:alnum:]_])(python[0-9.]*|bash|sh|zsh|ruby|perl|node|npm|npx|make)([[:space:]]|$).*untrusted-head/|(run:[[:space:]]*)?.*(&&|\|\||;)[[:space:]]*(\./)?untrusted-head/)'
