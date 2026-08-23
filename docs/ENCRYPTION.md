@@ -219,32 +219,11 @@ git -C "$BOOTSTRAP_CHECKOUT" --no-pager diff --no-ext-diff --no-textconv \
   "$BASE_COMMIT" "$HEAD_COMMIT" >"$all_paths"
 : >"$actual_paths"
 : >"$unexpected_paths"
-while IFS= read -r relative_path; do
-  case "$relative_path" in
-    .github/age-admission/allowed_signers|\
-    .github/workflows/platform-portability.yml|\
-    .github/workflows/privacy-age-integrity.yml|\
-    docs/ENCRYPTION.md|\
-    scripts/admit-age-envelopes|\
-    scripts/privacy-scan|\
-    scripts/create-age-admission-receipt|\
-    scripts/privacy_age_admission.py|\
-    scripts/privacy_age_envelopes.py|\
-    scripts/privacy_age_integrity_gate.py|\
-    scripts/run-trusted-age-admission|\
-    docs/adr/0001-owner-signed-age-admission.md|\
-    tests/platform-portability.zsh|\
-    tests/test_privacy_age_admission.py|\
-    tests/test_privacy_age_envelopes.py|\
-    tests/test_privacy_age_integrity_gate.py)
-      printf '%s\n' "$relative_path" >>"$actual_paths"
-      ;;
-    # Every unlisted path, including protected collateral, is unexpected.
-    *)
-      printf '%s\n' "$relative_path" >>"$unexpected_paths"
-      ;;
-  esac
-done <"$all_paths"
+# Compare the complete changed-path set against the same explicit allowlist
+# used for the detached manifest. Every unlisted path, including protected
+# collateral, is unexpected.
+LC_ALL=C grep -Fxf "$expected_paths" "$all_paths" >"$actual_paths" || :
+LC_ALL=C grep -Fxvf "$expected_paths" "$all_paths" >"$unexpected_paths" || :
 LC_ALL=C sort -o "$actual_paths" "$actual_paths"
 test ! -s "$unexpected_paths"
 cmp -s "$expected_paths" "$actual_paths"
@@ -337,7 +316,14 @@ git -C "$BOOTSTRAP_CHECKOUT" cat-file blob "$workflow_object" |
 signer_object=$(git -C "$BOOTSTRAP_CHECKOUT" ls-tree "$HEAD_COMMIT" -- \
   .github/age-admission/allowed_signers | awk -F '\t' 'NF == 2 { print $1 }' | awk '{ print $3 }')
 git -C "$BOOTSTRAP_CHECKOUT" cat-file blob "$signer_object" >"$bootstrap_tmp/allowed_signers"
-awk '!/^[[:space:]]*#/ && NF >= 3 { print $2, $3; count++ } END { exit count != 1 }' \
+awk '!/^[[:space:]]*#/ && NF >= 3 {
+  for (i = 2; i < NF; i++)
+    if ($i ~ /^(ssh-|ecdsa-|sk-ssh-|sk-ecdsa-)/) {
+      print $i, $(i + 1)
+      count++
+      break
+    }
+} END { exit count != 1 }' \
   "$bootstrap_tmp/allowed_signers" >"$bootstrap_tmp/allowed_signers.pub"
 test "$(ssh-keygen -lf "$bootstrap_tmp/allowed_signers.pub" -E sha256 | awk 'NR == 1 { print $2 }')" = \
   "$manifest_signer_fingerprint"

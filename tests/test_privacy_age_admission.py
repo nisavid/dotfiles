@@ -384,7 +384,8 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
                 maxsplit=2
             )
             allowed.write_text(
-                f"{ADMISSION_PRINCIPAL} {public_key[0]} {public_key[1]}\n",
+                f'{ADMISSION_PRINCIPAL} namespaces="{ADMISSION_NAMESPACE}" '
+                f"{public_key[0]} {public_key[1]}\n",
                 encoding="ascii",
             )
             # The signing command consumes a file, so create the exact signed
@@ -576,7 +577,8 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
             )
             public = (root / "signing-key.pub").read_text(encoding="ascii").split()
             (base / ".github/age-admission/allowed_signers").write_text(
-                f"{ADMISSION_PRINCIPAL} {public[0]} {public[1]}\n",
+                f'{ADMISSION_PRINCIPAL} namespaces="{ADMISSION_NAMESPACE}" '
+                f"{public[0]} {public[1]}\n",
                 encoding="ascii",
             )
             manifest = {

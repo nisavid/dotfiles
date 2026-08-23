@@ -171,7 +171,7 @@ done
   fail 'trusted age admission wrapper is not executable'
 [[ -f "$repo_root/.github/age-admission/allowed_signers" ]] ||
   fail 'age admission allowed-signers configuration is missing'
-grep -Eq '^repository-owner ssh-[a-z0-9-]+ [A-Za-z0-9+/=]+$' \
+grep -Eq '^repository-owner namespaces="nisavid/dotfiles/age-admission/v1" ssh-[a-z0-9-]+ [A-Za-z0-9+/=]+$' \
   "$repo_root/.github/age-admission/allowed_signers" ||
   fail 'age admission allowed-signers configuration lacks the owner principal'
 
