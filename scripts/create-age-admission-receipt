@@ -849,7 +849,7 @@ def _validated_signing_tool(
         raise ReceiptRequestError("admission signature tooling is unavailable")
     _validate_signing_tool_path_authority(lexical, canonical)
     try:
-        descriptor, info = envelope_module.open_regular_file_descriptor(lexical)
+        descriptor, info = envelope_module.open_regular_file_descriptor(canonical)
     except (AttributeError, ValueError, OSError) as error:
         raise ReceiptRequestError("admission signature tooling is unavailable") from error
     try:

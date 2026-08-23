@@ -73,36 +73,47 @@ def _validate_executable_path_authority(raw: str) -> Path:
         owner = os.getuid()
     except (AttributeError, OSError) as error:
         raise AdmissionReceiptError("admission signature tooling is unavailable") from error
-    current = lexical.parent
-    visited: set[Path] = set()
-    while True:
-        if current in visited:
-            raise AdmissionReceiptError("admission signature tooling is unavailable")
-        visited.add(current)
-        try:
-            info = current.lstat()
-        except OSError as error:
-            raise AdmissionReceiptError("admission signature tooling is unavailable") from error
-        if stat.S_ISLNK(info.st_mode):
-            if info.st_uid != 0:
+    for path in (lexical, canonical):
+        current = path.parent
+        visited: set[Path] = set()
+        while True:
+            if current in visited:
                 raise AdmissionReceiptError("admission signature tooling is unavailable")
+            visited.add(current)
             try:
-                current = current.resolve(strict=True)
+                info = current.lstat()
             except OSError as error:
                 raise AdmissionReceiptError(
                     "admission signature tooling is unavailable"
                 ) from error
-            if not current.is_dir():
+            if stat.S_ISLNK(info.st_mode):
+                if info.st_uid != 0:
+                    raise AdmissionReceiptError(
+                        "admission signature tooling is unavailable"
+                    )
+                try:
+                    current = current.resolve(strict=True)
+                except OSError as error:
+                    raise AdmissionReceiptError(
+                        "admission signature tooling is unavailable"
+                    ) from error
+                if not current.is_dir():
+                    raise AdmissionReceiptError(
+                        "admission signature tooling is unavailable"
+                    )
+                continue
+            if (
+                not stat.S_ISDIR(info.st_mode)
+                or info.st_mode & 0o022
+                or info.st_uid not in {0, owner}
+            ):
                 raise AdmissionReceiptError("admission signature tooling is unavailable")
-            continue
-        if not stat.S_ISDIR(info.st_mode) or info.st_mode & 0o022 or info.st_uid not in {0, owner}:
-            raise AdmissionReceiptError("admission signature tooling is unavailable")
-        parent = current.parent
-        if parent == current:
-            break
-        current = parent
+            parent = current.parent
+            if parent == current:
+                break
+            current = parent
     try:
-        descriptor, info = open_regular_file_descriptor(lexical)
+        descriptor, info = open_regular_file_descriptor(canonical)
     except (AgeEnvelopeError, OSError) as error:
         raise AdmissionReceiptError("admission signature tooling is unavailable") from error
     try:

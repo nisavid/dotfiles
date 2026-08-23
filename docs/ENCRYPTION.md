@@ -442,6 +442,11 @@ AGE_TOOLING_DIRECTORY="$AGE_TOOLING_DIRECTORY" \
 Use Python isolated mode (`-I`) for the wrapper invocation so inherited module
 search paths cannot shadow its standard-library imports.
 
+`AGE_IDENTITY` and `ADMISSION_SIGNING_KEY` must each name a regular mode-`0600`
+file outside both checkouts. `ADMISSION_RECEIPT_OUTPUT` must be a nonexistent
+pathname in an existing directory outside both checkouts; use a fresh pathname
+for every run because the creator rejects an existing path or symlink.
+
 The output is one bounded `privacy-age-admission/v1` pull-request-body marker.
 Add exactly that marker to the pull request body after the candidate head is
 published. Editing the body triggers the trusted boundary workflow. The

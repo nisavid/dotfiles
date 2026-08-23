@@ -196,6 +196,8 @@ class PrivacyAgeIntegrityGateTests(TestCase):
                 mode,
                 tracked_mode,
             )
+            # Deliberately hash candidate bytes so a precommit run detects an
+            # unstaged reviewed-blob change before the manifest can be rebuilt.
             self.assertEqual(
                 object_id.decode("ascii"),
                 run("git", "hash-object", "--", os.fspath(path), cwd=ROOT),
@@ -235,6 +237,8 @@ class PrivacyAgeIntegrityGateTests(TestCase):
             )
             self.assertTrue(staged, f"reviewed authority path is not tracked: {path}")
             self.assertEqual((kind, mode), (b"blob", staged.split(maxsplit=1)[0].encode()))
+            # Deliberately hash candidate bytes so a precommit run detects an
+            # unstaged reviewed-blob change before the manifest can be rebuilt.
             self.assertEqual(
                 object_id.decode("ascii"),
                 run("git", "hash-object", "--", os.fspath(path), cwd=ROOT),
