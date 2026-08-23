@@ -105,7 +105,8 @@ def _descriptor_target(descriptor: int) -> Path:
         if sys.platform == "darwin":
             import fcntl
 
-            raw = fcntl.fcntl(descriptor, _DARWIN_F_GETPATH, b"\0" * 1024)
+            getpath = getattr(fcntl, "F_GETPATH", _DARWIN_F_GETPATH)
+            raw = fcntl.fcntl(descriptor, getpath, b"\0" * 1024)
             target = raw.split(b"\0", 1)[0].decode("utf-8")
         else:
             target = os.readlink(f"/proc/self/fd/{descriptor}")
