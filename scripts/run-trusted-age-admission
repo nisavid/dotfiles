@@ -19,6 +19,20 @@ from pathlib import Path
 MAX_LAUNCHER_BYTES = 256 * 1024
 COMMIT_ID = re.compile(r"[0-9a-f]{40}\Z", re.ASCII)
 LAUNCHER_PATH = "scripts/create-age-admission-receipt"
+CREATOR_VALUE_OPTIONS = frozenset(
+    {
+        "--base-repository",
+        "--base-commit",
+        "--head-repository",
+        "--head-commit",
+        "--repository",
+        "--identity",
+        "--signing-key",
+        "--trusted-admitter",
+        "--output",
+        "--lifetime-seconds",
+    }
+)
 
 
 class TrustedLauncherError(ValueError):
@@ -179,24 +193,24 @@ def _read_regular(path: Path) -> tuple[bytes, os.stat_result]:
 
 
 def _value(arguments: list[str], option: str) -> str:
-    values: list[str] = []
+    values: dict[str, str] = {}
     index = 0
     while index < len(arguments):
-        value = arguments[index]
-        if value.startswith(f"{option}="):
-            raise TrustedLauncherError(
-                f"creator arguments must use a separate value for {option}"
-            )
-        if value != option:
-            index += 1
-            continue
+        name = arguments[index]
+        if name not in CREATOR_VALUE_OPTIONS:
+            raise TrustedLauncherError("creator arguments contain an unsupported option")
         if index + 1 >= len(arguments):
-            raise TrustedLauncherError(f"creator arguments must contain one {option}")
-        values.append(arguments[index + 1])
+            raise TrustedLauncherError(f"creator arguments must contain one {name}")
+        value = arguments[index + 1]
+        if not value or value.startswith("--"):
+            raise TrustedLauncherError(f"creator arguments must contain one {name}")
+        if name in values:
+            raise TrustedLauncherError(f"creator arguments must contain one {name}")
+        values[name] = value
         index += 2
-    if len(values) != 1 or not values[0]:
+    if option not in values:
         raise TrustedLauncherError(f"creator arguments must contain one {option}")
-    return values[0]
+    return values[option]
 
 
 def _launcher_source(base: Path, commit: str) -> bytes:

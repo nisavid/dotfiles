@@ -147,7 +147,7 @@ BOOTSTRAP_REVIEWED_AUTHORITY_ENTRIES = {
     b"scripts/run-trusted-age-admission": (
         b"blob",
         b"100755",
-        b"55fabfffe72b2e0a099f0effaf673380219f4889",
+        b"5afe9606d20af0ec624288925950b611aadc1878",
     ),
 }
 # These support files are part of this reviewed bootstrap revision, but are not
@@ -167,7 +167,7 @@ BOOTSTRAP_REVIEWED_SUPPORT_ENTRIES = {
     b"docs/ENCRYPTION.md": (
         b"blob",
         b"100644",
-        b"64f297f1bd17670d21c8cef32e67f7f966ad86fe",
+        b"1248379aa71c581c67c7f9350698556dd2759c82",
     ),
 }
 # This marker lives in the already protected workflow.  The legacy

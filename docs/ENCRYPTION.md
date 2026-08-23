@@ -153,6 +153,10 @@ tree_sha256<TAB>sha256<TAB><digest>
 signer_fingerprint<TAB>sha256<TAB>SHA256:<fingerprint>
 ```
 
+The detached manifest is UTF-8 text terminated by one trailing newline. A
+newline-free final record is malformed and must be regenerated before the
+preflight is rerun.
+
 Generate the path rows and the digest from the immutable reviewed head with
 `git ls-tree -r -z`; then independently review the resulting rows before
 making the file mode `0600`. Do not generate the manifest from a mutable
