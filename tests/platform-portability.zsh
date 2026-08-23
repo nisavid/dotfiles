@@ -171,7 +171,20 @@ done
   fail 'trusted age admission wrapper is not executable'
 [[ -f "$repo_root/.github/age-admission/allowed_signers" ]] ||
   fail 'age admission allowed-signers configuration is missing'
-grep -Eq '^repository-owner namespaces="nisavid/dotfiles/age-admission/v1" ssh-[a-z0-9-]+ [A-Za-z0-9+/=]+( .*)?$' \
+admission_signer_pattern=$(
+  cd "$repo_root"
+  python3 -I -c 'import re, sys
+sys.path.insert(0, ".")
+from scripts.privacy_age_admission import ADMISSION_NAMESPACE, ADMISSION_PRINCIPAL
+print(
+    "^"
+    + re.escape(ADMISSION_PRINCIPAL)
+    + " namespaces=\""
+    + re.escape(ADMISSION_NAMESPACE)
+    + "\" ssh-[a-z0-9-]+ [A-Za-z0-9+/=]+( .*)?$"
+)'
+) || fail 'cannot derive the age admission signer pattern'
+grep -Eq -- "$admission_signer_pattern" \
   "$repo_root/.github/age-admission/allowed_signers" ||
   fail 'age admission allowed-signers configuration lacks the owner principal'
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import runpy
 import shlex
 import shutil
 import subprocess
@@ -11,6 +12,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest import mock
 
 from scripts.privacy_age_admission import (
     ADMISSION_CLOCK_SKEW,
@@ -33,6 +35,7 @@ from tests.age_tooling_test_support import (
 ROOT = Path(__file__).resolve().parents[1]
 ADMITTER = ROOT / "scripts/admit-age-envelopes"
 TRUSTED_LAUNCHER = ROOT / "scripts/run-trusted-age-admission"
+RECEIPT_CREATOR = ROOT / "scripts/create-age-admission-receipt"
 
 
 def _run(*command: str, cwd: Path, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
@@ -74,6 +77,44 @@ def _commit(root: Path, message: str) -> str:
         stderr=subprocess.DEVNULL,
     )
     return _run("git", "rev-parse", "HEAD", cwd=root, capture_output=True).stdout.decode().strip()
+
+
+class PrivacyAgeAdmissionCreatorTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.creator = runpy.run_path(os.fspath(RECEIPT_CREATOR))
+
+    def test_staged_signer_probe_reports_the_failure_domain(self) -> None:
+        error_type = self.creator["ReceiptRequestError"]
+        scenarios = (
+            (
+                PermissionError("staging filesystem is mounted noexec"),
+                "staged admission signature tool is not executable from its staging directory",
+            ),
+            (
+                subprocess.TimeoutExpired(["/staged/ssh-keygen", "-V"], 1),
+                "staged admission signature tool execution probe timed out",
+            ),
+            (
+                OSError("invalid executable format"),
+                "staged admission signature tool could not be executed",
+            ),
+        )
+        for cause, message in scenarios:
+            with (
+                self.subTest(cause=type(cause).__name__),
+                mock.patch.object(
+                    self.creator["subprocess"],
+                    "run",
+                    side_effect=cause,
+                ),
+                self.assertRaises(error_type) as caught,
+            ):
+                self.creator["_probe_staged_signing_tool"](
+                    Path("/staged/ssh-keygen")
+                )
+
+            self.assertEqual(str(caught.exception), message)
 
 
 class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):

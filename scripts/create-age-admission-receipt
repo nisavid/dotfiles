@@ -923,6 +923,32 @@ def _stage_signing_tool(root: Path, data: bytes) -> Path:
     return path
 
 
+def _probe_staged_signing_tool(path: Path) -> None:
+    """Require the staged signer to be executable on its backing filesystem."""
+
+    try:
+        subprocess.run(
+            [os.fspath(path), "-V"],
+            check=False,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=SIGN_TIMEOUT_SECONDS,
+        )
+    except PermissionError as error:
+        raise ReceiptRequestError(
+            "staged admission signature tool is not executable from its staging directory"
+        ) from error
+    except subprocess.TimeoutExpired as error:
+        raise ReceiptRequestError(
+            "staged admission signature tool execution probe timed out"
+        ) from error
+    except OSError as error:
+        raise ReceiptRequestError(
+            "staged admission signature tool could not be executed"
+        ) from error
+
+
 def _prepare_signing_tool(
     root: Path,
     *,
@@ -937,7 +963,9 @@ def _prepare_signing_tool(
     )
     if sys.platform == "darwin":
         return validated_tool
-    return _stage_signing_tool(root, tool_data)
+    staged_tool = _stage_signing_tool(root, tool_data)
+    _probe_staged_signing_tool(staged_tool)
+    return staged_tool
 
 
 def _write_private_staged_file(path: Path, data: bytes) -> None:
