@@ -122,7 +122,7 @@ BOOTSTRAP_REVIEWED_AUTHORITY_ENTRIES = {
     b"scripts/admit-age-envelopes": (
         b"blob",
         b"100755",
-        b"0920208ec85d1c01f004695395eb6f413e7e6f01",
+        b"a16b9da9c51b87556df85a2d6a5165aef16ecfe3",
     ),
     b"scripts/privacy-scan": (
         b"blob",
@@ -132,7 +132,7 @@ BOOTSTRAP_REVIEWED_AUTHORITY_ENTRIES = {
     b"scripts/create-age-admission-receipt": (
         b"blob",
         b"100755",
-        b"59db480adef74bae52f74a991bb79af84c2e6e58",
+        b"dc3335b5032e2ad809609783379bdf06b75dbf09",
     ),
     b"scripts/privacy_age_admission.py": (
         b"blob",

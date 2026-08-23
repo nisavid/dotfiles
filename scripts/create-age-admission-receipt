@@ -585,6 +585,8 @@ def _load_trusted_modules(root: Path) -> dict[str, types.ModuleType]:
                 sys.modules.pop(name, None)
 
     try:
+        # Load in dependency order: the admission module imports the envelope
+        # helpers, and the integrity gate imports both under this package.
         for module_name in (
             "privacy_age_envelopes",
             "privacy_age_admission",
