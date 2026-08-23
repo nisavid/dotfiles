@@ -344,6 +344,8 @@ class PrivacyAgeEnvelopeTests(TestCase):
         result = self.run_admitter_with(identity=self.identity, check_only=True)
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, "")
         self.assertEqual((self.root / MANIFEST).read_bytes(), expected)
         self.assertEqual((self.root / MANIFEST).stat().st_ino, original_inode)
         self.assertEqual(list(self.root.glob(f"{MANIFEST}.*")), [])
@@ -395,6 +397,31 @@ class PrivacyAgeEnvelopeTests(TestCase):
                 self.identity.chmod(0o600)
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.root / MANIFEST).read_bytes(), expected)
+
+        wrong_identity, _ = self.make_identity("wrong-identity.txt")
+        wrong_descriptor = os.open(wrong_identity, flags)
+        try:
+            wrong_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ADMITTER),
+                    "--root",
+                    str(self.root),
+                    "--identity-fd",
+                    str(wrong_descriptor),
+                    "--check-only",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+                pass_fds=(wrong_descriptor,),
+                timeout=TOOL_TIMEOUT_SECONDS,
+            )
+        finally:
+            os.close(wrong_descriptor)
+        self.assertEqual(wrong_result.returncode, 1)
         self.assertEqual((self.root / MANIFEST).read_bytes(), expected)
 
     def test_admission_rejects_an_additional_postquantum_recipient(self) -> None:
