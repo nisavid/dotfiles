@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Semantic validation for agent-equipment captured-state manifests."""
+"""Semantic validation for captured state and pre-capture plan projections."""
 
 from __future__ import annotations
 
@@ -69,7 +69,6 @@ PLAN_ACTION_PAYLOAD_KEYS = frozenset(
         "operation_disposition",
         "desired_state",
         "desired_state_digest",
-        "expected_post_state_digest",
         "secret_references",
         "preconditions",
         "verification_dependencies",
@@ -184,7 +183,7 @@ def capability_set_digest(bindings: Sequence[JsonObject]) -> str:
 
 
 def plan_action_digest(action_payload: JsonObject) -> str:
-    """Digest one closed, secret-free canonical plan-action evidence payload."""
+    """Digest one closed, secret-free pre-capture plan-action payload."""
 
     if not _has_plan_action_payload_shape(action_payload):
         raise ValueError("plan action evidence must use the closed v1 payload shape")
@@ -245,7 +244,7 @@ def plan_action_set_digest(
     plan_digest: str,
     actions: Sequence[JsonObject],
 ) -> str:
-    """Digest a closed authoritative plan-action projection in canonical order."""
+    """Digest a closed pre-capture plan-action projection in canonical order."""
 
     if (
         not isinstance(candidate_identity, str)
@@ -449,7 +448,6 @@ def _has_plan_action_payload_shape(value: object) -> bool:
                 "route_digest",
                 "activation_group",
                 "desired_state_digest",
-                "expected_post_state_digest",
             )
         )
         and _has_provider_shape(provider)
@@ -1450,17 +1448,16 @@ def _validate_native_installation_route(
                 "Native remove compensation is valid only for captured absence.",
             )
         )
-    if (
-        remove_inverse
-        and resolved_forward_action is not None
-        and recovery.get("expected_pre_state_digest")
-        != resolved_forward_action.get("expected_post_state_digest")
-    ):
+    if remove_inverse and resolved_forward_action is not None:
+        # PlanActionSet v1 is intentionally only a pre-capture projection. The
+        # normalized post-state needed by this inverse guard is sealed later in
+        # PreparedActionAuthoritySet (#115); plan-only validation must fail
+        # closed until that private execution-authority seam exists.
         diagnostics.append(
             _diagnostic(
-                "NATIVE_REMOVE_INVERSE_GUARD_MISMATCH",
+                "NATIVE_REMOVE_INVERSE_PREPARED_AUTHORITY_REQUIRED",
                 f"{recovery_path}.expected_pre_state_digest",
-                "The remove inverse guard must equal the resolved forward install's normalized full expected-post-state digest.",
+                "The native remove inverse guard requires trusted prepared action authority; the pre-capture plan cannot authorize a normalized expected-post-state digest.",
             )
         )
 
@@ -1950,7 +1947,13 @@ def validate_captured_state(
     expected_candidate_identity: str,
     expected_implementation_manifest_digest: str,
 ) -> tuple[Diagnostic, ...]:
-    """Validate captured semantics against an independently validated action set."""
+    """Validate capture semantics against a pre-capture plan projection.
+
+    A plan projection alone is never a source of normalized post-state
+    authority. Native inverse routes therefore fail closed until the
+    execution-authority layer supplies its independently validated prepared
+    authority (tracked by #115).
+    """
 
     if (
         not isinstance(expected_candidate_identity, str)

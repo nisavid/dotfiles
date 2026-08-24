@@ -114,7 +114,6 @@ PLAN_ACTION_PAYLOAD = {
     "desired_state_digest": (
         "sha256:3551741a7b3b074876114f983f07b523d180ab1d82bd088875eb390d1e838ede"
     ),
-    "expected_post_state_digest": "sha256:" + "9" * 64,
     "secret_references": [],
     "preconditions": {
         "candidate_identity": CANDIDATE_IDENTITY,
@@ -154,12 +153,13 @@ PLAN_ACTION_PAYLOAD = {
         "captured_state_version": "agent-equipment-captured-state/v1",
     },
 }
+PREPARED_EXPECTED_POST_STATE_DIGEST = "sha256:" + "9" * 64
 PLAN_ACTION_DIGEST = (
-    "sha256:4848ea6909780c3c2636d5b27689bceda0a3e65e8b145b7be5d6447115615e1c"
+    "sha256:f6e7d18b1eeb2144f2e3782236461c047a4221b30bd2e86d28a349d6572e7cc1"
 )
 FORGED_ACTION_IDENTITY = "action:sha256:" + "f" * 64
 PLAN_ACTION_SET_DIGEST = (
-    "sha256:754e481a3c58351647538562742433fa334b96ed8c0f04147a4e0008812f5d54"
+    "sha256:3b66dc5d587394d2bf0e373549d03a9af57c6db9566b7e06805f0d8271b2b8b2"
 )
 EMPTY_PLAN_ACTION_SET_DIGEST = (
     "sha256:c80f8f66c4280ad58da22bcf3793b4be64a96d9641dc85e288413751e6e5416e"
@@ -386,9 +386,7 @@ def valid_document() -> dict[str, object]:
                 "recovery": {
                     "kind": "native_inverse",
                     "inverse_operation": "remove",
-                    "expected_pre_state_digest": PLAN_ACTION_PAYLOAD[
-                        "expected_post_state_digest"
-                    ],
+                    "expected_pre_state_digest": PREPARED_EXPECTED_POST_STATE_DIGEST,
                 },
             },
             {
@@ -499,16 +497,15 @@ class CapturedStateValidationTest(unittest.TestCase):
         plan_action_set = json.loads(
             PLAN_ACTION_SET_FIXTURE.read_text(encoding="utf-8")
         )
+        diagnostics = CAPTURED_STATE.validate_captured_state(
+            captured_document,
+            plan_action_set,
+            expected_candidate_identity=CANDIDATE_IDENTITY,
+            expected_implementation_manifest_digest=IMPLEMENTATION_MANIFEST_DIGEST,
+        )
         self.assertEqual(
-            CAPTURED_STATE.validate_captured_state(
-                captured_document,
-                plan_action_set,
-                expected_candidate_identity=CANDIDATE_IDENTITY,
-                expected_implementation_manifest_digest=(
-                    IMPLEMENTATION_MANIFEST_DIGEST
-                ),
-            ),
-            (),
+            [diagnostic.code for diagnostic in diagnostics],
+            ["NATIVE_REMOVE_INVERSE_PREPARED_AUTHORITY_REQUIRED"],
         )
 
     def test_public_schema_gate_distinguishes_booleans_from_integers(self) -> None:
@@ -1246,7 +1243,10 @@ class CapturedStateValidationTest(unittest.TestCase):
                 "implementation_manifest_digest"
             ],
         )
-        self.assertEqual(coordinated_under_b, ())
+        self.assertEqual(
+            [diagnostic.code for diagnostic in coordinated_under_b],
+            ["NATIVE_REMOVE_INVERSE_PREPARED_AUTHORITY_REQUIRED"],
+        )
 
         empty_a = empty_authoritative_plan_action_set()
         empty_capture = valid_document()
@@ -1360,8 +1360,12 @@ class CapturedStateValidationTest(unittest.TestCase):
             ),
         )
 
-    def test_valid_manifest_has_no_semantic_diagnostics(self) -> None:
-        self.assertEqual(validate_document(valid_document()), ())
+    def test_valid_manifest_without_prepared_authority_fails_closed(self) -> None:
+        diagnostics = validate_document(valid_document())
+        self.assertEqual(
+            [diagnostic.code for diagnostic in diagnostics],
+            ["NATIVE_REMOVE_INVERSE_PREPARED_AUTHORITY_REQUIRED"],
+        )
 
     def test_authoritative_plan_action_identities_are_unique(self) -> None:
         authority = authoritative_plan_action_set()
@@ -1851,9 +1855,13 @@ class CapturedStateValidationTest(unittest.TestCase):
             selection_document["surfaces"][0],
             selection_surface,
         ]
+        selection_diagnostics = validate_document(
+            selection_document,
+            selection_authority,
+        )
         self.assertEqual(
-            validate_document(selection_document, selection_authority),
-            (),
+            [diagnostic.code for diagnostic in selection_diagnostics],
+            ["NATIVE_REMOVE_INVERSE_PREPARED_AUTHORITY_REQUIRED"],
         )
 
         selection_capture_without_equipment = copy.deepcopy(selection_document)
@@ -1981,7 +1989,10 @@ class CapturedStateValidationTest(unittest.TestCase):
             "expected_pre_state_digest"
         ] = "sha256:" + "f" * 64
         cases.append(
-            ("NATIVE_REMOVE_INVERSE_GUARD_MISMATCH", inverse_guard_mismatch)
+            (
+                "NATIVE_REMOVE_INVERSE_PREPARED_AUTHORITY_REQUIRED",
+                inverse_guard_mismatch,
+            )
         )
 
         desired_fragment_as_inverse_guard = valid_document()
@@ -1990,7 +2001,7 @@ class CapturedStateValidationTest(unittest.TestCase):
         ] = PLAN_ACTION_PAYLOAD["desired_state_digest"]
         cases.append(
             (
-                "NATIVE_REMOVE_INVERSE_GUARD_MISMATCH",
+                "NATIVE_REMOVE_INVERSE_PREPARED_AUTHORITY_REQUIRED",
                 desired_fragment_as_inverse_guard,
             )
         )
@@ -2217,6 +2228,16 @@ class CapturedStateValidationTest(unittest.TestCase):
                     for diagnostic in validate_document(document)
                 }
                 self.assertIn(expected_code, codes)
+
+    def test_native_inverse_guard_requires_prepared_authority(self) -> None:
+        document = valid_document()
+        document["surfaces"][0]["recovery"]["expected_pre_state_digest"] = (
+            "sha256:" + "f" * 64
+        )
+        self.assertEqual(
+            [diagnostic.code for diagnostic in validate_document(document)],
+            ["NATIVE_REMOVE_INVERSE_PREPARED_AUTHORITY_REQUIRED"],
+        )
 
     def test_forward_install_requires_separate_authoritative_plan_membership(
         self,
@@ -2949,7 +2970,7 @@ class CapturedStateValidationTest(unittest.TestCase):
 
         diagnostics = validate_document(document)
         self.assertIn(
-            "NATIVE_REMOVE_INVERSE_GUARD_MISMATCH",
+            "NATIVE_REMOVE_INVERSE_PREPARED_AUTHORITY_REQUIRED",
             {diagnostic.code for diagnostic in diagnostics},
         )
         self.assertNotIn(secret_canary, repr(diagnostics))
@@ -2971,7 +2992,10 @@ class CapturedStateValidationTest(unittest.TestCase):
             )
 
         self.assertEqual(1, result.returncode)
-        self.assertIn("NATIVE_REMOVE_INVERSE_GUARD_MISMATCH", result.stderr)
+        self.assertIn(
+            "NATIVE_REMOVE_INVERSE_PREPARED_AUTHORITY_REQUIRED",
+            result.stderr,
+        )
         self.assertNotIn(secret_canary, result.stderr)
 
     def test_cli_rejects_ambiguous_or_nonstandard_json(self) -> None:

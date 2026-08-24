@@ -97,7 +97,7 @@ EXPECTED_SCHEMA_SHA256 = MappingProxyType(
         "catalog-v1.schema.json": "d0582e3343d9960ffcadbdf4afe694b9bdd6f37bdab5d381d77b91e29be8c3b6",
         "execution-authority-v1.schema.json": "30c61c9fdbbc52679bf1f18bf80cf99d7429d7efc07a8b6ccf80dde7ee4d5b48",
         "lock-v1.schema.json": "482b55f05c6d0622961f2526095975d946d651b9bf398c06e33fd04f8e5d4714",
-        "plan-action-set-v1.schema.json": "fcfede41027b76c96c20161fcecfd8fb9a8d38fa0675f3d749a094055ba0e12e",
+        "plan-action-set-v1.schema.json": "2096ece6780cedd1df10dea43a279bbb360550927ad69d871c0ad75c1ffcf504",
     }
 )
 _captured_schema_bytes = globals().pop(

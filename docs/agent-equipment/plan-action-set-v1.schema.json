@@ -316,7 +316,7 @@
         "capability_identity", "capability_digest", "manager_version_evidence_digest",
         "adapter_identity", "adapter_version", "harness", "route_identity", "route_digest",
         "provider", "equipment_identities", "controlled_equipment_identities", "activation_group", "surface_scope", "write_targets", "operation",
-        "operation_disposition", "desired_state", "desired_state_digest", "expected_post_state_digest", "secret_references",
+        "operation_disposition", "desired_state", "desired_state_digest", "secret_references",
         "preconditions", "verification_dependencies", "compensation"
       ],
       "properties": {
@@ -358,7 +358,6 @@
         "operation_disposition": {"const": "automated"},
         "desired_state": {"$ref": "#/$defs/desiredState"},
         "desired_state_digest": {"$ref": "#/$defs/digest"},
-        "expected_post_state_digest": {"$ref": "#/$defs/digest"},
         "secret_references": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/secretReference"}},
         "preconditions": {"$ref": "#/$defs/preconditions"},
         "verification_dependencies": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/verificationDependency"}},

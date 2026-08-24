@@ -1689,11 +1689,8 @@ class PlanActionSetAdmissionTest(unittest.TestCase):
             _diagnostic_codes(result),
         )
 
-    def test_original_trusted_set_digest_transitively_binds_expected_post_state(
-        self,
-    ) -> None:
+    def test_plan_projection_rejects_expected_post_state_field(self) -> None:
         plan, document = _valid_plan_and_action_set()
-        original_set_digest = str(document["action_set_digest"])
         actions = document["actions"]
         assert isinstance(actions, list)
         evidence = actions[0]
@@ -1701,18 +1698,20 @@ class PlanActionSetAdmissionTest(unittest.TestCase):
         payload = evidence["action_payload"]
         assert isinstance(payload, dict)
         payload["expected_post_state_digest"] = "sha256:" + "7" * 64
-        _reseal_digest_fields_only(document)
 
         result = admit_plan_action_set(
             canonical_json_bytes(document),
             PlanActionSetTrust(
                 validated_plan=plan,
-                expected_action_set_digest=original_set_digest,
+                expected_action_set_digest=str(document["action_set_digest"]),
             ),
         )
 
         self.assertIsInstance(result, PlanActionSetRejection)
-        self.assertIn("PLAN_ACTION_SET_DIGEST_INVALID", _diagnostic_codes(result))
+        self.assertEqual(
+            _diagnostic_codes(result),
+            ("PLAN_ACTION_SET_SCHEMA_INVALID",),
+        )
 
     def test_route_digest_must_hash_the_complete_validated_route_record(self) -> None:
         plan, document = _valid_plan_and_action_set()
