@@ -178,7 +178,7 @@ docs_required=(
   'pending transaction rolls back' \
   'completed transaction verifies' \
   'local/private catalog may be read and correlated for routing' \
-  'scrub account homes, account IDs, and derived identifiers'
+  'scrub account homes, account IDs, stable per-account labels, and derived identifiers'
 )
 
 for ((i = 1; i <= ${#docs_required}; i++)); do

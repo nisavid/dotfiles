@@ -257,6 +257,8 @@ test_model_selection() {
     'refresh must be limited to local status facts'
   assert_contains "$skill" 'This status request is distinct from the separate harmless probe required after task-work authorization' \
     'status refresh must not be confused with the task-work probe'
+  assert_contains "$skill" 'never satisfies or consumes the separate harmless-probe gate' \
+    'status refresh must not satisfy or consume task-work probe evidence'
   assert_contains "$skill" 'run that refresh automatically for each permitted account route' \
     'fresh routing information must trigger automatic per-account refresh'
   assert_contains "$skill" 'the operator does not need to authorize it' \
@@ -273,8 +275,9 @@ test_model_selection() {
     'tuple reuse must have an explicit freshness window'
   assert_contains "$skill" 'Invalidate the observation' \
     'stale route observations must be invalidated explicitly'
-  assert_contains "$skill" 'one probe per exact tuple per freshness window' \
-    'tuple probes must be bounded by the declared freshness window'
+  assert_contains "$skill" \
+    'one no-task-data status refresh and one harmless task-work probe per exact tuple per freshness window' \
+    'status refreshes and task-work probes must be separately bounded by the freshness window'
   assert_contains "$skill" 'data boundary, workspace, tool scope, or external-action scope changes' \
     'authorization and capability changes must invalidate observations'
   assert_contains "$skill" 'task-data transfer, task workspace or task-tool use, external actions, and actual delegated or executed task work separate' \
@@ -287,13 +290,18 @@ test_model_selection() {
     'local/private state may use actionable account identifiers'
   assert_contains "$skill" 'safe stable local label or direct identifier' \
     'local/private status must have a safe actionable label'
-  assert_contains "$skill" 'scrub account IDs and account-home identifiers' \
-    'external/public output must scrub account identifiers'
+  assert_contains "$skill" 'scrub account IDs, account-home identifiers, and stable per-account labels' \
+    'external/public output must scrub account identifiers and labels'
+  assert_contains "$skill" \
+    'stable per-account labels, including derived home/path names' \
+    'external/public output must scrub stable per-account labels'
+  assert_contains "$skill" 'generic non-stable marker or redacted status' \
+    'external/public output may retain only generic non-stable markers'
   assert_contains "$skill" 'Credentials, tokens, decrypted secrets, and unrelated task data remain prohibited' \
     'secret and task-data prohibitions must remain explicit'
   assert_contains "$skill" \
-    'selector, authority, data-boundary, workspace, or tool-scope change creates a new tuple eligible for one probe' \
-    'authority and capability changes must permit one new route probe'
+    'selector, authority, data-boundary, workspace, or tool-scope change creates a new tuple eligible for one new no-task-data status refresh and, separately, one new harmless task-work probe' \
+    'authority and capability changes must separately permit a refresh and an authorized task-work probe'
   assert_contains "$skill" \
     'For Daybreak-routed work in ChatGPT or Codex with an OpenAI login' \
     'OpenAI local-fallback restrictions must be scoped to Daybreak-routed work'
@@ -367,6 +375,15 @@ test_model_selection() {
     'route-evidence fixture must use a synthetic local account identifier'
   assert_contains "$evidence_fixture" 'route-alpha' \
     'route-evidence fixture must use an actionable local label'
+  assert_contains "$evidence_fixture" \
+    'must scrub the synthetic ID, home identifier, and stable label' \
+    'route-evidence fixture must scrub stable labels externally'
+  assert_contains "$evidence_fixture" \
+    'generic non-stable marker' \
+    'route-evidence fixture must name the safe external replacement'
+  assert_contains "$evidence_fixture" \
+    'both operations may occur once in the same freshness window' \
+    'route-evidence fixture must separate refresh and task-work probe limits'
   assert_contains "$routing_fixture" '## Case L' \
     'routing fixture must cover automatic no-task-data refresh'
   assert_contains "$routing_fixture" 'No task-work probe has run' \
