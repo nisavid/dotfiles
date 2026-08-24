@@ -1889,6 +1889,36 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
             (),
         )
 
+    def test_prepared_authority_rejects_native_inverse_guard_mismatch(self) -> None:
+        plan_action_set = valid_plan_action_set()
+        captured_state = valid_captured_state(plan_action_set)
+        authority_set = valid_prepared_action_authority_set(
+            plan_action_set,
+            captured_state,
+        )
+        authority = authority_set["authorities"][0]
+        authority["expected_post_state"]["manager_drift"][
+            "observation_source"
+        ] = "source:tampered"
+        authority["expected_post_state_digest"] = canonical_digest(
+            authority["expected_post_state"]
+        )
+        seal_prepared_action_authority(authority)
+        seal_prepared_action_authority_set(authority_set)
+
+        codes = {
+            diagnostic.code
+            for diagnostic in EXECUTION_AUTHORITY.validate_prepared_action_authority_set(
+                authority_set,
+                **prepared_validation_inputs(
+                    plan_action_set,
+                    captured_state,
+                    authority_set,
+                ),
+            )
+        }
+        self.assertIn("CAPTURED_STATE_AUTHORITY_INVALID", codes)
+
     def test_capture_observation_reseal_cannot_escape_apply_authority(self) -> None:
         plan_action_set = valid_plan_action_set()
         captured_state = valid_captured_state(plan_action_set)

@@ -938,7 +938,8 @@ def validate_prepared_action_authority_set(
         ),
     )
     prepared_authority_trusted = (
-        prepared_valid
+        not plan_diagnostics
+        and prepared_valid
         and capture_observations_valid
         and set(prepared_index) == set(plan_action_index)
         and all(
