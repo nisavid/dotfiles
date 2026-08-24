@@ -36,7 +36,7 @@ The current harness is OpenAI-authenticated Codex. A bounded cybersecurity subta
 
 ## Case I
 
-The current harness is OpenAI-authenticated Codex. One account-home route exposes the exact Daybreak model, its bound identity authenticates, and usage capacity remains. The task does not authorize that account, workspace, tools, probe, or external actions. No probe has run, and every other permitted Daybreak route is unavailable.
+The current harness is OpenAI-authenticated Codex. One account-home route exposes the exact Daybreak model, its bound identity authenticates, and usage capacity remains. The task does not authorize that account, workspace, tools, probe, or external actions. No task-work probe has run; a read-only no-task-data status refresh may still run automatically. Every other permitted Daybreak route is unavailable.
 
 ## Case J
 
@@ -45,3 +45,7 @@ The current harness is OpenAI-authenticated Codex, and no permitted Daybreak rou
 ## Case K
 
 The current harness is Codex with an OpenAI login but configured for a non-OpenAI inference provider. No permitted Daybreak route is genuinely runnable. Its local next-best model is available, but deferral, cross-harness delegation, and tracker mutation are unavailable.
+
+## Case L
+
+The current harness is OpenAI-authenticated Codex. A permitted account route has no current observation, and the routing decision needs fresh selector, authentication, entitlement, capacity, exact-model, and model-runnability facts. The task authorizes no task-data transfer, task workspace or task-tool use, external action, delegated work, or executed work. Run the no-task-data local status refresh automatically, record a timestamped redacted result with a stable local account label, and keep every task-work gate closed.
