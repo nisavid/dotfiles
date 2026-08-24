@@ -1867,7 +1867,13 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
                 **inputs,
             )
         }
-        self.assertIn("PREPARED_ACTION_AUTHORITY_INVALID", codes)
+        self.assertEqual(
+            codes,
+            {
+                "CAPTURED_STATE_AUTHORITY_INVALID",
+                "PREPARED_ACTION_AUTHORITY_INVALID",
+            },
+        )
 
     def test_prepared_authority_validates_native_inverse_guard(self) -> None:
         plan_action_set = valid_plan_action_set()
