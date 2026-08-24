@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from agent_equipment.canonical import canonical_json_bytes, canonical_json_sha256
-from agent_equipment.model import ValidatedPlan, freeze_json
+from agent_equipment.model import ValidatedPlan, freeze_json, thaw_json
 from agent_equipment.plan_action_set import (
     AdmittedPlanActionSet,
     PlanActionSetRejection,
@@ -28,6 +28,7 @@ from tests.agent_equipment.test_plan_action_set import (
     _legacy_projector_plan_and_action_set,
     _native_plugin_plan_and_action_set,
     _plugin_selection_plan_and_action_set,
+    _rebuild_plan_for_document,
     _reseal,
     _surface_rule_plan_and_action_set,
     _valid_plan_and_action_set,
@@ -35,6 +36,9 @@ from tests.agent_equipment.test_plan_action_set import (
 
 
 Builder = Callable[[], tuple[ValidatedPlan, dict[str, object]]]
+TargetMutation = Callable[
+    [ValidatedPlan, dict[str, object], dict[str, object]], ValidatedPlan
+]
 
 
 @dataclass(frozen=True)
@@ -86,6 +90,94 @@ def _admit(
 
 def _diagnostic_codes(result: object) -> tuple[str, ...]:
     return tuple(diagnostic.code for diagnostic in getattr(result, "diagnostics", ()))
+
+
+def _rebind_target_surface(
+    plan: ValidatedPlan,
+    document: dict[str, object],
+    target: dict[str, object],
+    *,
+    equipment_identity: str,
+) -> ValidatedPlan:
+    """Keep the mutated target and its trusted plan scope internally coherent."""
+
+    actions = document["actions"]
+    assert isinstance(actions, list)
+    payload = actions[0]["action_payload"]
+    assert isinstance(payload, dict)
+    route_identity = payload["route_identity"]
+    assert isinstance(route_identity, str)
+    surface = f"surface:{route_identity}/{equipment_identity}"
+    target["equipment_identity"] = equipment_identity
+    target["write_surface_identity"] = surface
+    payload["surface_scope"] = [surface]
+    preconditions = payload["preconditions"]
+    assert isinstance(preconditions, dict)
+    preconditions["surface_scope"] = [surface]
+    payload["equipment_identities"] = [equipment_identity]
+
+    definition = thaw_json(plan.nodes[0].definition)
+    assert isinstance(definition, dict)
+    definition["equipment_identities"] = [equipment_identity]
+    definition["surface_scope"] = [surface]
+    return _rebuild_plan_for_document(plan, document, definition)
+
+
+def _foreign_selection_owner(
+    plan: ValidatedPlan,
+    _document: dict[str, object],
+    target: dict[str, object],
+) -> ValidatedPlan:
+    locator = target["locator"]
+    assert isinstance(locator, dict)
+    locator["owner"] = "cursor"
+    return plan
+
+
+def _wrong_kind_target(
+    plan: ValidatedPlan,
+    document: dict[str, object],
+    target: dict[str, object],
+) -> ValidatedPlan:
+    target.update(
+        {
+            "surface_kind": "plugin_selection",
+            "locator": {
+                "owner": "claude",
+                "source": "settings",
+                "key_path": ["enabledPlugins", "example@fixture"],
+            },
+        }
+    )
+    return _rebind_target_surface(
+        plan,
+        document,
+        target,
+        equipment_identity="plugin:fixture/example",
+    )
+
+
+def _unrepresentable_mcp_target(
+    plan: ValidatedPlan,
+    document: dict[str, object],
+    target: dict[str, object],
+) -> ValidatedPlan:
+    target.update(
+        {
+            "surface_kind": "mcp_selection",
+            "locator": {
+                "owner": "claude",
+                "source": "settings",
+                "key_path": ["mcpServers", "context7"],
+            },
+        }
+    )
+    return _rebind_target_surface(
+        plan,
+        document,
+        target,
+        equipment_identity="mcp:fixture/context7",
+    )
 
 
 def _matrix_cases() -> tuple[MatrixCase, ...]:
@@ -248,44 +340,28 @@ class SupportedTargetMatrixTest(unittest.TestCase):
         mutations: tuple[
             str,
             Builder,
-            Callable[[dict[str, object]], None],
+            TargetMutation,
             str,
         ] = (
             (
                 "foreign-selection-owner",
                 lambda: _plugin_selection_plan_and_action_set("codex"),
-                lambda target: target["locator"].update({"owner": "cursor"}),
+                _foreign_selection_owner,
                 "PLAN_ACTION_TARGET_BINDING_INVALID",
             ),
             (
                 "wrong-kind-native-as-selection",
                 lambda: _native_plugin_plan_and_action_set("claude", "install"),
-                lambda target: target.update(
-                    {
-                        "surface_kind": "plugin_selection",
-                        "equipment_identity": "plugin:fixture/example",
-                        "locator": {
-                            "owner": "codex",
-                            "source": "config",
-                            "key_path": ["plugins", "example@fixture"],
-                        },
-                    }
+                lambda plan, document, target: _wrong_kind_target(
+                    plan, document, target
                 ),
                 "PLAN_ACTION_TARGET_BINDING_INVALID",
             ),
             (
                 "unrepresentable-native-mcp-surface",
                 lambda: _native_plugin_plan_and_action_set("claude", "install"),
-                lambda target: target.update(
-                    {
-                        "surface_kind": "mcp_selection",
-                        "equipment_identity": "mcp:fixture/context7",
-                        "locator": {
-                            "owner": "claude",
-                            "source": "settings",
-                            "key_path": ["mcpServers", "context7"],
-                        },
-                    }
+                lambda plan, document, target: _unrepresentable_mcp_target(
+                    plan, document, target
                 ),
                 "PLAN_ACTION_TARGET_BINDING_INVALID",
             ),
@@ -298,7 +374,7 @@ class SupportedTargetMatrixTest(unittest.TestCase):
                 assert isinstance(payload, dict)
                 target = payload["write_targets"][0]
                 assert isinstance(target, dict)
-                mutate(target)
+                plan = mutate(plan, document, target)
                 target["target_identity"] = "target:" + canonical_json_sha256(
                     {
                         "surface_kind": target["surface_kind"],
