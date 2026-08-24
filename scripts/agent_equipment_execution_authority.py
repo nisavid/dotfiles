@@ -987,7 +987,6 @@ def validate_prepared_action_authority_set(
                 expected_implementation_manifest_digest=(
                     expected_implementation_manifest_digest
                 ),
-                prepared_action_authority_index=None,
             )
     except (TypeError, ValueError):
         captured_state_diagnostics = (object(),)
