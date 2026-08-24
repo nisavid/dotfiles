@@ -240,14 +240,35 @@ jobs:
           uvx --from check-jsonschema==0.35.0 check-jsonschema \
             --schemafile docs/agent-equipment/plan-action-set-v1.schema.json \
             tests/fixtures/agent-equipment/schema/valid-plan-action-set.json
-          python3 scripts/agent_equipment_captured_state.py \
-            --authoritative-plan-actions \
-            tests/fixtures/agent-equipment/schema/valid-plan-action-set.json \
-            --expected-candidate-identity \
-            candidate:fixture/controller-v1 \
-            --expected-implementation-manifest-digest \
-            sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
-            tests/fixtures/agent-equipment/schema/valid-captured-state.json
+          # The fixture deliberately exercises a native remove inverse.  Until
+          # #115 supplies independently validated prepared authority, the
+          # capture validator must reject that plan-only path.
+          set +e
+          captured_state_output="$({
+            python3 scripts/agent_equipment_captured_state.py \
+              --authoritative-plan-actions \
+              tests/fixtures/agent-equipment/schema/valid-plan-action-set.json \
+              --expected-candidate-identity \
+              candidate:fixture/controller-v1 \
+              --expected-implementation-manifest-digest \
+              sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+              tests/fixtures/agent-equipment/schema/valid-captured-state.json
+          } 2>&1)"
+          captured_state_status=$?
+          set -e
+          if [[ "$captured_state_status" -ne 1 ]]; then
+            printf 'expected plan-only native inverse validation to exit 1, got %s\n%s\n' \
+              "$captured_state_status" "$captured_state_output" >&2
+            exit 1
+          fi
+          case "$captured_state_output" in
+            *NATIVE_REMOVE_INVERSE_PREPARED_AUTHORITY_REQUIRED*) ;;
+            *)
+              printf 'expected prepared-authority diagnostic was not emitted\n%s\n' \
+                "$captured_state_output" >&2
+              exit 1
+              ;;
+          esac
 
       - name: Verify private-skill transaction
         shell: bash
