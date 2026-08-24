@@ -941,6 +941,8 @@ def validate_prepared_action_authority_set(
         not plan_diagnostics
         and prepared_valid
         and capture_observations_valid
+        and captured_state_digest == expected_captured_state_digest
+        and isinstance(captured_bindings, Mapping)
         and set(prepared_index) == set(plan_action_index)
         and all(
             key in plan_action_index
