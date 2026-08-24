@@ -42,6 +42,9 @@ try:
     from agent_equipment_captured_state import (
         validate_captured_state as _validate_captured_state,
     )
+    from agent_equipment_captured_state import (
+        _validate_captured_state_with_prepared_authority,
+    )
 except ModuleNotFoundError:  # Loaded as a repo module rather than an executable.
     from scripts.agent_equipment_captured_state import (
         plan_action_digest as _plan_action_digest,
@@ -54,6 +57,9 @@ except ModuleNotFoundError:  # Loaded as a repo module rather than an executable
     )
     from scripts.agent_equipment_captured_state import (
         validate_captured_state as _validate_captured_state,
+    )
+    from scripts.agent_equipment_captured_state import (
+        _validate_captured_state_with_prepared_authority,
     )
 
 
@@ -877,35 +883,14 @@ def validate_prepared_action_authority_set(
     )
     diagnostics.extend(plan_diagnostics)
     try:
-        captured_state_diagnostics = _validate_captured_state(
-            authoritative_captured_state,
-            authoritative_plan_action_set,
-            expected_candidate_identity=expected_candidate_identity,
-            expected_implementation_manifest_digest=(
-                expected_implementation_manifest_digest
-            ),
-        )
         captured_state_digest = canonical_digest(authoritative_captured_state)
     except (TypeError, ValueError):
-        captured_state_diagnostics = (object(),)
         captured_state_digest = None
     captured_bindings = (
         authoritative_captured_state.get("bindings")
         if isinstance(authoritative_captured_state, Mapping)
         else None
     )
-    if (
-        captured_state_diagnostics
-        or captured_state_digest != expected_captured_state_digest
-        or not isinstance(captured_bindings, Mapping)
-    ):
-        diagnostics.append(
-            _diagnostic(
-                "CAPTURED_STATE_AUTHORITY_INVALID",
-                "$.authoritative_captured_state",
-                "The complete captured-state artifact is not valid for the independently trusted plan and digest.",
-            )
-        )
     capability_set_digest = (
         captured_bindings.get("capability_set_digest")
         if isinstance(captured_bindings, Mapping)
@@ -952,28 +937,66 @@ def validate_prepared_action_authority_set(
             capability_set_digest if isinstance(capability_set_digest, str) else ""
         ),
     )
-    if (
-        not prepared_valid
-        or not capture_observations_valid
-        or set(prepared_index) != set(plan_action_index)
-        or any(
-            key not in plan_action_index
-            or key not in capture_observation_index
-            or not _prepared_authority_matches_plan_action(
+    prepared_authority_trusted = (
+        prepared_valid
+        and capture_observations_valid
+        and set(prepared_index) == set(plan_action_index)
+        and all(
+            key in plan_action_index
+            and key in capture_observation_index
+            and _prepared_authority_matches_plan_action(
                 authority, plan_action_index[key]
             )
-            or authority.get("captured_pre_state")
-            != capture_observation_index[key].get("normalized_pre_state")
-            or authority.get("captured_pre_state_digest")
-            != capture_observation_index[key].get("normalized_pre_state_digest")
+            and authority.get("captured_pre_state")
+            == capture_observation_index[key].get("normalized_pre_state")
+            and authority.get("captured_pre_state_digest")
+            == capture_observation_index[key].get("normalized_pre_state_digest")
             for key, authority in prepared_index.items()
         )
-    ):
+    )
+    if not prepared_authority_trusted:
         diagnostics.append(
             _diagnostic(
                 "PREPARED_ACTION_AUTHORITY_INVALID",
                 "$.prepared_action_authority_set",
                 "The sealed pre-invocation authority set is not complete and valid for the captured plan.",
+            )
+        )
+    try:
+        if prepared_authority_trusted:
+            captured_state_diagnostics = _validate_captured_state_with_prepared_authority(
+                authoritative_captured_state,
+                authoritative_plan_action_set,
+                expected_candidate_identity=expected_candidate_identity,
+                expected_implementation_manifest_digest=(
+                    expected_implementation_manifest_digest
+                ),
+                prepared_action_authority_index=prepared_index,
+            )
+        else:
+            # Keep the pre-capture validator fail-closed whenever the complete
+            # prepared authority has not independently validated against the
+            # plan and capture artifacts.
+            captured_state_diagnostics = _validate_captured_state(
+                authoritative_captured_state,
+                authoritative_plan_action_set,
+                expected_candidate_identity=expected_candidate_identity,
+                expected_implementation_manifest_digest=(
+                    expected_implementation_manifest_digest
+                ),
+            )
+    except (TypeError, ValueError):
+        captured_state_diagnostics = (object(),)
+    if (
+        captured_state_diagnostics
+        or captured_state_digest != expected_captured_state_digest
+        or not isinstance(captured_bindings, Mapping)
+    ):
+        diagnostics.append(
+            _diagnostic(
+                "CAPTURED_STATE_AUTHORITY_INVALID",
+                "$.authoritative_captured_state",
+                "The complete captured-state artifact is not valid for the independently trusted plan and digest.",
             )
         )
     return tuple(sorted(set(diagnostics)))

@@ -1869,6 +1869,26 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
         }
         self.assertIn("PREPARED_ACTION_AUTHORITY_INVALID", codes)
 
+    def test_prepared_authority_validates_native_inverse_guard(self) -> None:
+        plan_action_set = valid_plan_action_set()
+        captured_state = valid_captured_state(plan_action_set)
+        authority_set = valid_prepared_action_authority_set(
+            plan_action_set,
+            captured_state,
+        )
+
+        self.assertEqual(
+            EXECUTION_AUTHORITY.validate_prepared_action_authority_set(
+                authority_set,
+                **prepared_validation_inputs(
+                    plan_action_set,
+                    captured_state,
+                    authority_set,
+                ),
+            ),
+            (),
+        )
+
     def test_capture_observation_reseal_cannot_escape_apply_authority(self) -> None:
         plan_action_set = valid_plan_action_set()
         captured_state = valid_captured_state(plan_action_set)
