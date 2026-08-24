@@ -176,7 +176,9 @@ docs_required=(
   'Installs and verifies every supplied skill and symlink pair.' \
   'Removed pairs are not pruned automatically.' \
   'pending transaction rolls back' \
-  'completed transaction verifies'
+  'completed transaction verifies' \
+  'local/private catalog may be read and correlated for routing' \
+  'scrub account homes, account IDs, and derived identifiers'
 )
 
 for ((i = 1; i <= ${#docs_required}; i++)); do

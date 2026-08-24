@@ -247,12 +247,50 @@ test_model_selection() {
     'Daybreak routing must give each route one unambiguous invocation surface'
   assert_contains "$skill" 'Catalog entries are route inputs, not routes by themselves.' \
     'private account bindings must not be double-counted as invocation routes'
-  assert_contains "$skill" 'Before any live probe, require the task to authorize' \
-    'task authority must precede every live Daybreak probe'
-  assert_contains "$skill" 'classify the route as unavailable without probing it' \
-    'unauthorized Daybreak routes must not be probed'
   assert_contains "$skill" 'one harmless probe containing no task data succeeds' \
     'a successful harmless probe must be part of runnable-route evidence'
+  assert_contains "$skill" 'classify the route as unavailable without probing it' \
+    'unauthorized task work must not be probed'
+  assert_contains "$skill" 'no-task-data local status refresh' \
+    'routing must distinguish a no-task-data local status refresh'
+  assert_contains "$skill" 'local status probe used solely to refresh' \
+    'refresh must be limited to local status facts'
+  assert_contains "$skill" 'This status request is distinct from the separate harmless probe required after task-work authorization' \
+    'status refresh must not be confused with the task-work probe'
+  assert_contains "$skill" 'run that refresh automatically for each permitted account route' \
+    'fresh routing information must trigger automatic per-account refresh'
+  assert_contains "$skill" 'the operator does not need to authorize it' \
+    'local status refresh must not require operator task authorization'
+  assert_contains "$skill" 'exact model exposed at that moment' \
+    'refresh evidence must resolve the exact currently exposed model'
+  assert_contains "$skill" 'exact currently exposed model' \
+    'refresh must name the exact currently exposed model'
+  assert_contains "$skill" 'timestamped, redacted result' \
+    'refresh evidence must be timestamped and redacted'
+  assert_contains "$skill" 'dated catalog observation is historical, not fresh by default' \
+    'dated catalog observations must not be treated as current'
+  assert_contains "$skill" 'declared freshness window' \
+    'tuple reuse must have an explicit freshness window'
+  assert_contains "$skill" 'Invalidate the observation' \
+    'stale route observations must be invalidated explicitly'
+  assert_contains "$skill" 'one probe per exact tuple per freshness window' \
+    'tuple probes must be bounded by the declared freshness window'
+  assert_contains "$skill" 'data boundary, workspace, tool scope, or external-action scope changes' \
+    'authorization and capability changes must invalidate observations'
+  assert_contains "$skill" 'task-data transfer, task workspace or task-tool use, external actions, and actual delegated or executed task work separate' \
+    'task-work authorization gates must remain separate from refresh'
+  assert_contains "$skill" 'must not suppress the no-task-data local status refresh' \
+    'task-work gates must not suppress local refresh'
+  assert_contains "$skill" 'local/private operational state' \
+    'local/private routing state must be an explicit classification boundary'
+  assert_contains "$skill" 'account IDs and account-home identifiers' \
+    'local/private state may use actionable account identifiers'
+  assert_contains "$skill" 'safe stable local label or direct identifier' \
+    'local/private status must have a safe actionable label'
+  assert_contains "$skill" 'scrub account IDs and account-home identifiers' \
+    'external/public output must scrub account identifiers'
+  assert_contains "$skill" 'Credentials, tokens, decrypted secrets, and unrelated task data remain prohibited' \
+    'secret and task-data prohibitions must remain explicit'
   assert_contains "$skill" \
     'selector, authority, data-boundary, workspace, or tool-scope change creates a new tuple eligible for one probe' \
     'authority and capability changes must permit one new route probe'
@@ -282,6 +320,8 @@ test_model_selection() {
     fail 'public model-selection policy must not expose account-home locations'
   ! rg -F -q -- 'CODEX_HOME=' "$skill" || \
     fail 'public model-selection policy must not expose exact Codex account bindings'
+  ! rg -F -q -- 'acct-synthetic-' "$skill" || \
+    fail 'public model-selection policy must not expose synthetic account identifiers'
 
   [[ -f "$evals" ]] || fail 'model-selection behavior evals are missing'
   [[ -f "$trigger_evals" ]] || fail 'model-selection trigger evals are missing'
@@ -295,7 +335,10 @@ test_model_selection() {
       fail "model-selection behavior eval is missing: $eval_name"
   done
   for expectation_id in \
-    cross-harness-delegation-authority openai-login-boundary probe-authority-order root-peer-boundary; do
+    automatic-local-refresh cross-harness-delegation-authority external-scrub \
+    freshness-invalidation local-account-identification refresh-probe-separation \
+    openai-login-boundary \
+    probe-authority-order root-peer-boundary; do
     jq -e --arg id "$expectation_id" 'any(.evals[].expectations[]; .id == $id)' "$evals" >/dev/null || \
       fail "model-selection behavior expectation is missing: $expectation_id"
   done
@@ -314,6 +357,22 @@ test_model_selection() {
   assert_contains "$evidence_fixture" \
     "Gamma's task authority expands to include its account, data boundary, workspace, tools, and probe" \
     'route-evidence fixture must cover authority-state re-probing'
+  assert_contains "$evidence_fixture" 'no-task-data local status refresh' \
+    'route-evidence fixture must cover automatic local status refresh'
+  assert_contains "$evidence_fixture" 'declared freshness window' \
+    'route-evidence fixture must cover explicit observation freshness'
+  assert_contains "$evidence_fixture" 'external report' \
+    'route-evidence fixture must cover public scrubbing'
+  assert_contains "$evidence_fixture" 'acct-synthetic-alpha' \
+    'route-evidence fixture must use a synthetic local account identifier'
+  assert_contains "$evidence_fixture" 'route-alpha' \
+    'route-evidence fixture must use an actionable local label'
+  assert_contains "$routing_fixture" '## Case L' \
+    'routing fixture must cover automatic no-task-data refresh'
+  assert_contains "$routing_fixture" 'No task-work probe has run' \
+    'routing fixture must distinguish status refresh from task-work probe'
+  assert_contains "$routing_fixture" 'task-data transfer, task workspace or task-tool use' \
+    'routing fixture must keep task-work authorization separate from refresh'
   jq -e '
     (map(select(.should_trigger == true)) | length) >= 4 and
     (map(select(.should_trigger == false)) | length) >= 4
