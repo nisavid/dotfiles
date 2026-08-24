@@ -169,8 +169,22 @@ _Avoid_: Observed version, configuration digest, requested content digest
 **Mutation plan**:
 A fully validated, deterministically ordered set of reconciler-owned automated
 operations derived from one authored catalog, resolved lock, and runtime
-inventory.
+inventory, before capture of the state those operations will change.
 _Avoid_: Status report, adapter command list
+
+**Plan action set**:
+The immutable, canonical pre-capture projection of every action in one mutation
+plan. It binds the plan, catalog, lock, capability, route, target, control,
+dependency, desired-state, compensation, and action/set identity, but carries
+no adapter-derived complete pre-state or expected post-state authority.
+_Avoid_: Prepared action authority set, caller-supplied action map, adapter receipt
+
+**Expected post-state**:
+The complete normalized state a validated adapter derives from the sealed
+capture, action, and adapter context. It is distinct from a desired-state
+fragment and is authoritative only in the prepared action authority and its
+downstream runtime records.
+_Avoid_: Desired-state digest, resolver estimate, caller map
 
 **Checkpoint**:
 A durable record that binds one planned mutation to its captured pre-state,
@@ -189,11 +203,12 @@ binding tuple.
 _Avoid_: Plan approval, release attestation, candidate-authored permission
 
 **Prepared action authority set**:
-The sealed, complete pre-invocation projection of every validated plan action's
-adapter-derived normalized pre-state and expected post-state. It binds the
-complete plan, capability set, sealed capture, exact controlled-component set,
-and per-action operation and compensation context before apply authority is
-issued.
+The sole authoritative, sealed, complete pre-invocation projection of every
+validated plan action's adapter-derived normalized pre-state and expected
+post-state. It is produced only after capture and adapter-context validation;
+it binds the complete plan, capability set, sealed capture, exact
+controlled-component set, and per-action operation and compensation context
+before apply authority is issued.
 _Avoid_: Caller state map, partial checkpoint prefix, post-mutation observation
 
 **Capture observation authority set**:
