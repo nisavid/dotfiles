@@ -378,8 +378,8 @@ test_model_selection() {
     fail 'public route-evidence fixture must not print account identifier forms'
   ! rg -F -q -- '/private/' "$evidence_fixture" || \
     fail 'public route-evidence fixture must not print account-home path forms'
-  assert_contains "$evidence_fixture" 'route-alpha' \
-    'route-evidence fixture must use an actionable local label'
+  assert_contains "$evidence_fixture" 'stable private label' \
+    'route-evidence fixture must classify the local label without printing it'
   assert_contains "$evidence_fixture" \
     'must scrub the local ID, home identifier, and stable label' \
     'route-evidence fixture must scrub stable labels externally'
