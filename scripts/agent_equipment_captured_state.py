@@ -1275,6 +1275,9 @@ def _validate_native_installation_route(
     surface_by_id: Mapping[str, JsonObject],
     surface_index_by_id: Mapping[str, int],
     installation_surfaces_by_route: Mapping[str, Sequence[JsonObject]],
+    prepared_action_authority_index: Mapping[
+        tuple[str, int], JsonObject
+    ] | None = None,
 ) -> list[Diagnostic]:
     restore_evidence = route["restore_evidence"]
     assert isinstance(restore_evidence, Mapping)
@@ -1449,17 +1452,37 @@ def _validate_native_installation_route(
             )
         )
     if remove_inverse and resolved_forward_action is not None:
-        # PlanActionSet v1 is intentionally only a pre-capture projection. The
-        # normalized post-state needed by this inverse guard is sealed later in
-        # PreparedActionAuthoritySet (#115); plan-only validation must fail
-        # closed until that private execution-authority seam exists.
-        diagnostics.append(
-            _diagnostic(
-                "NATIVE_REMOVE_INVERSE_PREPARED_AUTHORITY_REQUIRED",
-                f"{recovery_path}.expected_pre_state_digest",
-                "The native remove inverse guard requires trusted prepared action authority; the pre-capture plan cannot authorize a normalized expected-post-state digest.",
+        authority = None
+        if prepared_action_authority_index is not None:
+            action_identity = resolved_forward_action.get("action_identity")
+            ordinal = resolved_forward_action.get("ordinal")
+            if isinstance(action_identity, str) and type(ordinal) is int:
+                authority = prepared_action_authority_index.get(
+                    (action_identity, ordinal)
+                )
+        if authority is None:
+            # PlanActionSet v1 is intentionally only a pre-capture projection.
+            # The normalized post-state needed by this inverse guard is sealed
+            # later in PreparedActionAuthoritySet (#115); plan-only validation
+            # must fail closed until that private execution-authority seam
+            # exists.
+            diagnostics.append(
+                _diagnostic(
+                    "NATIVE_REMOVE_INVERSE_PREPARED_AUTHORITY_REQUIRED",
+                    f"{recovery_path}.expected_pre_state_digest",
+                    "The native remove inverse guard requires trusted prepared action authority; the pre-capture plan cannot authorize a normalized expected-post-state digest.",
+                )
             )
-        )
+        elif recovery.get("expected_pre_state_digest") != authority.get(
+            "expected_post_state_digest"
+        ):
+            diagnostics.append(
+                _diagnostic(
+                    "NATIVE_REMOVE_INVERSE_GUARD_MISMATCH",
+                    f"{recovery_path}.expected_pre_state_digest",
+                    "The remove inverse guard must equal the matching prepared action authority's complete normalized expected-post-state digest.",
+                )
+            )
 
     if restore_evidence.get("restore_class") != "native_rolling":
         if forward_action_reference:
@@ -1955,6 +1978,62 @@ def validate_captured_state(
     authority (tracked by #115).
     """
 
+    return _validate_captured_state(
+        document,
+        authoritative_plan_action_set,
+        expected_candidate_identity=expected_candidate_identity,
+        expected_implementation_manifest_digest=(
+            expected_implementation_manifest_digest
+        ),
+        prepared_action_authority_index=None,
+    )
+
+
+def _validate_captured_state_with_prepared_authority(
+    document: object,
+    authoritative_plan_action_set: object,
+    *,
+    expected_candidate_identity: str,
+    expected_implementation_manifest_digest: str,
+    prepared_action_authority_index: Mapping[tuple[str, int], JsonObject],
+) -> tuple[Diagnostic, ...]:
+    """Validate capture semantics with an execution-authority-owned index.
+
+    The execution-authority validator calls this only after it has validated
+    the complete sealed PreparedActionAuthoritySet and its exact plan/capture
+    membership.  Keeping this seam private prevents a caller-supplied map from
+    becoming a substitute authority for the pre-capture public validator.
+    """
+
+    return _validate_captured_state(
+        document,
+        authoritative_plan_action_set,
+        expected_candidate_identity=expected_candidate_identity,
+        expected_implementation_manifest_digest=(
+            expected_implementation_manifest_digest
+        ),
+        prepared_action_authority_index=prepared_action_authority_index,
+    )
+
+
+def _validate_captured_state(
+    document: object,
+    authoritative_plan_action_set: object,
+    *,
+    expected_candidate_identity: str,
+    expected_implementation_manifest_digest: str,
+    prepared_action_authority_index: Mapping[
+        tuple[str, int], JsonObject
+    ] | None,
+) -> tuple[Diagnostic, ...]:
+    """Validate capture semantics against a pre-capture plan projection.
+
+    A plan projection alone is never a source of normalized post-state
+    authority. Native inverse routes therefore fail closed until the
+    execution-authority layer supplies its independently validated prepared
+    authority (tracked by #115).
+    """
+
     if (
         not isinstance(expected_candidate_identity, str)
         or not expected_candidate_identity
@@ -2379,6 +2458,7 @@ def validate_captured_state(
                 surface_by_id=surface_by_id,
                 surface_index_by_id=surface_index_by_id,
                 installation_surfaces_by_route=installation_surfaces_by_route,
+                prepared_action_authority_index=prepared_action_authority_index,
             )
         )
 
