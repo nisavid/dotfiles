@@ -641,7 +641,6 @@ def plan_action_set_for_configure(plan: ValidatedPlan) -> dict[str, object]:
             "plan_digest": plan.digest,
             "provider": provider,
             "write_targets": [target],
-            "expected_post_state_digest": "sha256:" + "9" * 64,
             "preconditions": {
                 "candidate_identity": payload["candidate_identity"],
                 "implementation_manifest_digest": payload[

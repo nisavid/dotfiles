@@ -862,9 +862,11 @@ Later steps do not begin until the named evidence passes.
 - Bind a native action's route digest and exact provider target to the captured
   installation locator: manager, native plugin identity, and scope must match
   exactly. Bind a native remove inverse's `expected_pre_state_digest` exactly
-  to the action's distinct `expected_post_state_digest`, the canonical digest
-  of the complete normalized forward-post state. Keep `desired_state_digest`
-  as the target-fragment digest.
+  to the matching `PreparedActionAuthoritySet` member's
+  `expected_post_state_digest`, the canonical digest of the complete normalized
+  forward-post state. Plan-only capture validation fails closed until that
+  independently validated prepared authority is available. Keep
+  `desired_state_digest` as the target-fragment digest.
 - Cross-check observation and recovery classes. An absent mutable entry or
   selection uses absence-noop recovery; a present Claude entry or
   secret-redacted selection requires private recovery material; and a present

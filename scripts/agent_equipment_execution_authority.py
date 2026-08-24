@@ -1217,7 +1217,6 @@ def _prepared_authority_matches_plan_action(
         "operation_digest": canonical_digest(action.get("operation")),
         "compensation_operation": compensation.get("kind"),
         "surface": action.get("surface_scope"),
-        "expected_post_state_digest": action.get("expected_post_state_digest"),
     }
     controlled_identities = action.get("controlled_equipment_identities")
     return (
@@ -1327,7 +1326,6 @@ def _checkpoint_matches_plan_action(
         "route_digest": action.get("route_digest"),
         "operation_digest": canonical_digest(action.get("operation")),
         "compensation_operation": compensation.get("kind"),
-        "expected_post_state_digest": action.get("expected_post_state_digest"),
         "surface": action.get("surface_scope"),
     }
     return all(record.get(field) == value for field, value in expected.items())

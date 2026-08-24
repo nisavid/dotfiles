@@ -64,7 +64,6 @@
           "route_presence": "present"
         },
         "desired_state_digest": "sha256:3551741a7b3b074876114f983f07b523d180ab1d82bd088875eb390d1e838ede",
-        "expected_post_state_digest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
         "secret_references": [],
         "preconditions": {
           "candidate_identity": "candidate:fixture/controller-v1",
@@ -102,8 +101,8 @@
           "captured_state_version": "agent-equipment-captured-state/v1"
         }
       },
-      "action_digest": "sha256:4848ea6909780c3c2636d5b27689bceda0a3e65e8b145b7be5d6447115615e1c"
+      "action_digest": "sha256:f6e7d18b1eeb2144f2e3782236461c047a4221b30bd2e86d28a349d6572e7cc1"
     }
   ],
-  "action_set_digest": "sha256:754e481a3c58351647538562742433fa334b96ed8c0f04147a4e0008812f5d54"
+  "action_set_digest": "sha256:3b66dc5d587394d2bf0e373549d03a9af57c6db9566b7e06805f0d8271b2b8b2"
 }

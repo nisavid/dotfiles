@@ -1,4 +1,4 @@
-"""Admission of complete plan-action projections before checkpointing."""
+"""Admission of immutable pre-capture plan-action projections."""
 
 from __future__ import annotations
 
@@ -61,7 +61,12 @@ def _target_identity_payload(target: FrozenJsonObject) -> dict[str, object]:
 
 @dataclass(frozen=True, slots=True)
 class PlanActionSetTrust:
-    """Independently validated plan and expected complete projection digest."""
+    """Independently validated plan and complete pre-capture projection digest.
+
+    The trust inputs authenticate only the frozen pre-capture projection. They
+    do not authenticate captured state, an adapter-derived post-state, or any
+    later execution artifact.
+    """
 
     validated_plan: ValidatedPlan
     expected_action_set_digest: str
@@ -78,11 +83,12 @@ class PlanActionSetTrust:
 
 @dataclass(frozen=True, slots=True, init=False)
 class AdmittedPlanActionSet:
-    """One immutable projection admitted against all currently provable bindings.
+    """One immutable pre-capture projection admitted against settled bindings.
 
-    Admission does not make the plan executable. Expected post-state, physical
-    target, capture, and prepared-action authority require later production
-    seams before any checkpoint or adapter mutation is allowed.
+    Admission does not make the plan executable or establish runtime state.
+    Complete normalized pre/post-state authority belongs only to the prepared
+    action authority set produced after capture and adapter-context validation;
+    checkpoints and adapter mutation require that later authority.
     """
 
     document: FrozenJsonObject
@@ -155,7 +161,12 @@ def admit_plan_action_set(
     raw_document: bytes,
     trust: PlanActionSetTrust,
 ) -> PlanActionSetResult:
-    """Strictly admit one complete projection without granting execution authority."""
+    """Admit one complete frozen pre-capture projection.
+
+    The returned artifact proves plan/set identity, ordered membership, target
+    bindings, and plan-level consistency only. It intentionally carries no
+    complete normalized pre-state or expected post-state digest.
+    """
 
     if type(trust) is not PlanActionSetTrust:
         raise TypeError("plan-action-set admission requires typed trust")

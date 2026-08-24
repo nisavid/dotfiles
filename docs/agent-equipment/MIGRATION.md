@@ -203,10 +203,12 @@ and plan digests; capability, manager-version, adapter, and harness executor
 bindings; route identity and digest; the exact closed provider target; active
 equipment identities; distinct controlled equipment identities; activation
 group; the exact write-surface scope; operation and automated disposition;
-desired state and its target-fragment digest; the canonical full normalized
-expected-post-state digest; secret-reference names without values; complete
-compare/checkpoint preconditions; verification-only read dependencies; and
-compensation. The action's surface authority derives from the union of active
+desired state and its target-fragment digest; secret-reference names without
+values; complete compare/checkpoint preconditions; verification-only read
+dependencies; and compensation. The plan projection does not carry complete
+normalized post-state authority; that adapter-derived state and its digest are
+sealed in the matching `PreparedActionAuthoritySet`. The action's surface
+authority derives from the union of active
 and controlled equipment; disabled controlled equipment does not become active
 coverage.
 
@@ -290,9 +292,11 @@ version agrees only with `installed: true` and identical version, channel, and
 observation source, and uses non-mutating `already_desired` or `operator_owned`
 recovery. Any contradiction invalidates the capture before authorization.
 For a guarded remove inverse, `recovery.expected_pre_state_digest` equals the
-forward action's `expected_post_state_digest`, the canonical digest of the
-complete normalized forward post-state. It is distinct from
-`desired_state_digest`, which binds only the planned target fragment.
+matching `PreparedActionAuthoritySet` member's `expected_post_state_digest`,
+the canonical digest of the complete normalized forward post-state. Plan-only
+capture validation fails closed until that independently validated prepared
+authority is available. The guard is distinct from `desired_state_digest`,
+which binds only the planned target fragment.
 Compensation may run only while the complete expected post-install state still
 matches.
 
