@@ -180,7 +180,7 @@ no adapter-derived complete pre-state or expected post-state authority.
 _Avoid_: Prepared action authority set, caller-supplied action map, adapter receipt
 
 **Expected post-state**:
-The complete normalized state a validated adapter derives from the sealed
+The complete normalized state a trusted adapter derives from the sealed
 capture, action, and adapter context. It is distinct from a desired-state
 fragment and is authoritative only in the prepared action authority and its
 downstream runtime records.
