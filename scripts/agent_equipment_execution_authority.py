@@ -884,7 +884,7 @@ def validate_prepared_action_authority_set(
     diagnostics.extend(plan_diagnostics)
     try:
         captured_state_digest = canonical_digest(authoritative_captured_state)
-    except (TypeError, ValueError):
+    except (RecursionError, TypeError, ValueError):
         captured_state_digest = None
     captured_bindings = (
         authoritative_captured_state.get("bindings")

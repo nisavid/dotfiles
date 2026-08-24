@@ -1925,6 +1925,38 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
         }
         self.assertIn("CAPTURED_STATE_AUTHORITY_INVALID", codes)
 
+    def test_prepared_authority_rejects_deep_captured_state_without_raising(
+        self,
+    ) -> None:
+        plan_action_set = valid_plan_action_set()
+        captured_state = valid_captured_state(plan_action_set)
+        authority_set = valid_prepared_action_authority_set(
+            plan_action_set,
+            captured_state,
+        )
+        inputs = prepared_validation_inputs(
+            plan_action_set,
+            captured_state,
+            authority_set,
+        )
+        deep_value: object = "leaf"
+        for _ in range(sys.getrecursionlimit() + 100):
+            deep_value = [deep_value]
+        malformed_capture = dict(captured_state)
+        malformed_bindings = dict(captured_state["bindings"])
+        malformed_bindings["untrusted_nested_value"] = deep_value
+        malformed_capture["bindings"] = malformed_bindings
+        inputs["authoritative_captured_state"] = malformed_capture
+
+        codes = {
+            diagnostic.code
+            for diagnostic in EXECUTION_AUTHORITY.validate_prepared_action_authority_set(
+                authority_set,
+                **inputs,
+            )
+        }
+        self.assertIn("CAPTURED_STATE_AUTHORITY_INVALID", codes)
+
     def test_capture_observation_reseal_cannot_escape_apply_authority(self) -> None:
         plan_action_set = valid_plan_action_set()
         captured_state = valid_captured_state(plan_action_set)
@@ -4982,16 +5014,13 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
 
     def test_release_replays_every_provider_family_route_projection(self) -> None:
         manifest_substitutions = {
-            "native": ("provider_selector", "plugin_id", "foreign@fixture"),
             "standalone": ("manager_identity", None, "manager:claude"),
             "direct_mcp": ("provider_selector", "overlay_family", "cursor_json"),
         }
+        exercised_provider_families: set[str] = set()
         for provider_family, substitution in manifest_substitutions.items():
             with self.subTest(provider_family=provider_family):
-                if provider_family == "native":
-                    self.skipTest(
-                        "Deferred to dotfiles #115: prepared-authority input for native inverse validation"
-                    )
+                exercised_provider_families.add(provider_family)
                 plan_action_set = valid_provider_family_plan_action_set(provider_family)
                 captured_state = valid_captured_state(plan_action_set)
                 for schema_name, document in (
@@ -5094,6 +5123,13 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
                     "ARCHIVED_DOCUMENT_BYTES_MISMATCH",
                     captured_codes,
                 )
+        self.assertEqual(exercised_provider_families, set(manifest_substitutions))
+
+    @unittest.skip(
+        "Deferred to dotfiles #115: prepared-authority input for native inverse validation"
+    )
+    def test_release_native_provider_family_route_projection_deferred(self) -> None:
+        """Native release replay resumes when #115 supplies prepared authority."""
 
     def test_release_requires_the_exact_captured_state_route_set(self) -> None:
         archive = valid_release_archive_manifest()
