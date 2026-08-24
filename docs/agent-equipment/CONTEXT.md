@@ -309,6 +309,14 @@ candidate and execution identity, trusted launcher, authority-store
 destination, and the create-only generation contract.
 _Avoid_: Release receipt, candidate artifact index
 
+**Repository-transition admission result**:
+The trusted-base-bound result for one pull-request head's protected tree
+transition. `no_protected_paths_changed` is terminal success with no owner
+receipt; `owner_admission_verified` is success only after the exact owner
+receipt is verified. It is emitted by the repository-scoped admission App and
+is distinct from the release receipt below.
+_Avoid_: Release receipt, PlanActionSet admission, candidate-authored status
+
 **Release receipt**:
 The terminal record that an independently trusted release launcher validated
 and atomically archived one exact authorization, candidate, expected-case

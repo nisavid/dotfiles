@@ -62,6 +62,29 @@ sentinel. Keep that marker in every admitted workflow revision; the gate rejects
 an active transition that removes it, so recovery cannot silently fall back to
 the pre-bootstrap path.
 
+### Every-head admission result
+
+The repository-scoped App publishes the required `Owner-signed age admission`
+context from App ID `4695065` for every pull-request head. The trusted-base
+protected-path calculation is the discriminator, not the presence of a receipt
+in the pull-request body:
+
+- an empty protected-path set publishes terminal success with the exact
+  `no_protected_paths_changed` result and does not parse or require a receipt;
+- a nonempty set requires one exact owner-signed receipt and publishes
+  `owner_admission_verified` only after the receipt is bound to the repository,
+  base, head, complete transition, signer, and validity window;
+- checkout, classifier, repository, commit, freshness, provenance, or binding
+  uncertainty remains blocking and must never be reported as an empty set.
+
+The result vocabulary and exact-head/idempotency contract are recorded in
+[`docs/privacy-age-admission-result-v1.md`](privacy-age-admission-result-v1.md).
+The App publishes this context for opened, reopened, synchronize,
+ready-for-review, and edited pull-request events. Duplicate or out-of-order
+deliveries cannot replace a newer head's result. The trusted Actions workflow
+remains advisory evidence for the App-pinned context; it is not a substitute
+for the required App result, and branch protection is not edited dynamically.
+
 ### Owner admission receipts
 
 After the candidate commit is final, use an operator-owned wrapper copied to a

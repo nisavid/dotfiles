@@ -6,6 +6,18 @@ status: accepted
 
 The hosted privacy boundary remains fail-closed for protected source changes and executes only trusted-base code. Local identity-backed ciphertext validation therefore produces a detached SSH-signed receipt bound to the repository, base and candidate commits, protected tree entries, expiry, and nonce; the receipt travels in the pull-request body and is verified from the trusted base. This keeps the age identity and plaintext local, rejects candidate-authored authority, and avoids treating a broad branch-protection bypass as the ordinary rotation path.
 
+The repository-transition result is a separate, stable App contract documented
+in [`docs/privacy-age-admission-result-v1.md`](../privacy-age-admission-result-v1.md).
+The repository-scoped App publishes the required `Owner-signed age admission`
+context from App ID `4695065` for every pull-request head. When the trusted-base
+protected-path set is empty, it publishes terminal success with the exact
+`no_protected_paths_changed` outcome and no receipt. When the set is nonempty,
+it publishes `owner_admission_verified` only after one exact owner receipt is
+verified. Checkout, classifier, repository, commit, freshness, provenance, or
+binding uncertainty is a blocking failure and can never select the empty
+outcome. The shared Actions workflow remains advisory evidence for this App
+context, not a replacement for it.
+
 Receipt creation is launched by an operator-owned wrapper outside both
 checkouts. That wrapper compares the live creator with the raw executable blob
 from the trusted base before executing only that blob. The creator then requires

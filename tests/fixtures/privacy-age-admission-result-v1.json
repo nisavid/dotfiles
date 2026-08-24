@@ -1,0 +1,29 @@
+{
+  "version": "privacy-age-admission-result/v1",
+  "examples": [
+    {
+      "name": "ordinary-no-protected-transition",
+      "result": {
+        "version": "privacy-age-admission-result/v1",
+        "repository": "nisavid/dotfiles",
+        "base_commit": "0000000000000000000000000000000000000000",
+        "head_commit": "1111111111111111111111111111111111111111",
+        "protected_paths": [],
+        "outcome": "no_protected_paths_changed",
+        "receipt_required": false
+      }
+    },
+    {
+      "name": "protected-transition-with-owner-admission",
+      "result": {
+        "version": "privacy-age-admission-result/v1",
+        "repository": "nisavid/dotfiles",
+        "base_commit": "0000000000000000000000000000000000000000",
+        "head_commit": "2222222222222222222222222222222222222222",
+        "protected_paths": ["docs/ENCRYPTION.md"],
+        "outcome": "owner_admission_verified",
+        "receipt_required": true
+      }
+    }
+  ]
+}
