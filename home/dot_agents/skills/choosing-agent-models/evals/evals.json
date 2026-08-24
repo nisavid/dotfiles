@@ -94,7 +94,7 @@
         },
         {
           "id": "probe-tuple",
-          "text": "Probes each unchanged route tuple once, reuses it only inside its declared freshness window, and permits one new refresh after capability, authority, or freshness invalidation.",
+          "text": "Runs at most one no-task-data status refresh and one separate harmless task-work probe for each unchanged route tuple per declared freshness window; reuses each result only inside that window and permits one new status refresh and, separately, one new task-work probe after the corresponding invalidation, with task authority required for the latter.",
           "severity": "quality"
         },
         {
@@ -114,7 +114,7 @@
         },
         {
           "id": "external-scrub",
-          "text": "Scrubs account IDs and account-home identifiers, including derived home/path names, before an external or public report and retains no credentials, tokens, decrypted secrets, or task data there.",
+          "text": "Scrubs account IDs, account-home identifiers, stable per-account labels, and derived home/path names before an external or public report; any retained marker is generic and non-stable, and no credentials, tokens, decrypted secrets, or task data remain there.",
           "severity": "safety"
         }
       ]
