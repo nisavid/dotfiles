@@ -35,5 +35,196 @@
         }
       ]
     }
-  ]
+  ],
+  "structure": {
+    "entries": {
+      "pr_base": [
+        [
+          ".github/workflows/platform-portability.yml",
+          "blob",
+          "100644",
+          "715e42c5df6bbd0bb0b3a10152da416251bb6707"
+        ],
+        [
+          ".github/workflows/privacy-age-integrity.yml",
+          "blob",
+          "100644",
+          "7881ce3c5cdb789fd861e48f46c3c82c313a21a4"
+        ],
+        [
+          "docs/ENCRYPTION.md",
+          "blob",
+          "100644",
+          "69cded4d23282048570a1fad72685b496dcede17"
+        ],
+        [
+          "scripts/privacy-scan",
+          "blob",
+          "100755",
+          "612a2ae9acde883d3f2b5e92ce8cefc4fcf0d1bf"
+        ],
+        [
+          "scripts/privacy_age_integrity_gate.py",
+          "blob",
+          "100755",
+          "f7e7049d3c2dd118a8cc507614019541de12090c"
+        ]
+      ],
+      "predecessor": [
+        [
+          ".github/workflows/platform-portability.yml",
+          "blob",
+          "100644",
+          "715e42c5df6bbd0bb0b3a10152da416251bb6707"
+        ],
+        [
+          "docs/ENCRYPTION.md",
+          "blob",
+          "100644",
+          "60ebea7e2be76383d105fa648db8816e5fb6f12f"
+        ],
+        [
+          "scripts/privacy-scan",
+          "blob",
+          "100755",
+          "612a2ae9acde883d3f2b5e92ce8cefc4fcf0d1bf"
+        ],
+        [
+          "scripts/privacy_age_integrity_gate.py",
+          "blob",
+          "100755",
+          "841d6bdff90db89f6089413ec4ff014e8e60dd6b"
+        ]
+      ],
+      "target": [
+        [
+          ".github/age-admission/allowed_signers",
+          "blob",
+          "100644",
+          "3455d1413afc070001e300e622bccd5427eda72c"
+        ],
+        [
+          ".github/age-admission/privacy-scan-reviewed-findings-v1.json",
+          "blob",
+          "100644",
+          "5bc325cda6de36262a766fe89a5eb8058f5a1338"
+        ],
+        [
+          ".github/workflows/platform-portability.yml",
+          "blob",
+          "100644",
+          "4af180679741cca69f776a0c25dad58e89611fa9"
+        ],
+        [
+          ".github/workflows/privacy-age-integrity.yml",
+          "blob",
+          "100644",
+          "ac6d1610d245bac428b56504d7872b3424e4523f"
+        ],
+        [
+          "docs/ENCRYPTION.md",
+          "blob",
+          "100644",
+          "b2ec72a28224c69d1aa8e326118c0ed79a187fb4"
+        ],
+        [
+          "scripts/create-age-admission-receipt",
+          "blob",
+          "100755",
+          "ee1eccff9d1747a207c3349ec4306847e3537fa1"
+        ],
+        [
+          "scripts/privacy-scan",
+          "blob",
+          "100755",
+          "685da1a66cc6b427af4a4d99bb97ac02d02d4e6b"
+        ],
+        [
+          "scripts/privacy_age_admission.py",
+          "blob",
+          "100644",
+          "28c87a5c184ab323e813148c168a0022d0642675"
+        ],
+        [
+          "scripts/privacy_age_admission_publisher.py",
+          "blob",
+          "100644",
+          "42fc7887c8cb59625db8e103131eb089611fa90f"
+        ],
+        [
+          "scripts/privacy_age_admission_result.py",
+          "blob",
+          "100644",
+          "24c9fb25e1891340ee451a291dda93a20389701f"
+        ],
+        [
+          "scripts/privacy_age_integrity_gate.py",
+          "blob",
+          "100755",
+          "b40adb06c805811e797cd128f5ae2d607b641f9c"
+        ],
+        [
+          "scripts/privacy_age_pr_snapshot.py",
+          "blob",
+          "100644",
+          "06ff19944db5ff83ca32044fb7f0c52d10626682"
+        ],
+        [
+          "scripts/privacy_scan_review.py",
+          "blob",
+          "100644",
+          "c60312be9feeecaf8698b09f93481fb2ba8919b4"
+        ],
+        [
+          "scripts/run-trusted-age-admission",
+          "blob",
+          "100755",
+          "fef9847973839e4dded51275761099a9cf2be728"
+        ]
+      ]
+    },
+    "active_authority": [
+      ".github/age-admission/allowed_signers",
+      ".github/age-admission/privacy-scan-reviewed-findings-v1.json",
+      "scripts/create-age-admission-receipt",
+      "scripts/run-trusted-age-admission",
+      "scripts/privacy_age_admission.py",
+      "scripts/privacy_age_admission_result.py",
+      "scripts/privacy_age_pr_snapshot.py",
+      "scripts/privacy_age_admission_publisher.py",
+      "scripts/privacy_scan_review.py"
+    ],
+    "transitions": [
+      {
+        "name": "owner_receipt",
+        "base_role": "predecessor",
+        "head_role": "target",
+        "paths": [
+          ".github/age-admission/privacy-scan-reviewed-findings-v1.json",
+          ".github/workflows/platform-portability.yml",
+          "docs/ENCRYPTION.md",
+          "scripts/privacy-scan",
+          "scripts/privacy_age_integrity_gate.py",
+          "scripts/privacy_scan_review.py"
+        ]
+      },
+      {
+        "name": "app_result",
+        "base_role": "pr_base",
+        "head_role": "target",
+        "paths": [
+          ".github/age-admission/privacy-scan-reviewed-findings-v1.json",
+          ".github/workflows/platform-portability.yml",
+          ".github/workflows/privacy-age-integrity.yml",
+          "docs/ENCRYPTION.md",
+          "scripts/privacy-scan",
+          "scripts/privacy_age_admission_publisher.py",
+          "scripts/privacy_age_admission_result.py",
+          "scripts/privacy_age_integrity_gate.py",
+          "scripts/privacy_age_pr_snapshot.py",
+          "scripts/privacy_scan_review.py"
+        ]
+      }
+    ]
+  }
 }

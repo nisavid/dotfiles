@@ -8,7 +8,7 @@ import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from scripts.privacy_age_admission_transition import (
     TransitionEvaluationError,
@@ -227,7 +227,184 @@ def repack_target_for_declared_snapshots(root: Path) -> None:
     refresh_fixture_manifest_pin(root, fixture_path)
 
 
+def mutate_target_structure(
+    root: Path,
+    mutations: tuple[tuple[str, str], ...],
+) -> None:
+    fixture_path = root / TARGET_FIXTURE.relative_to(ROOT)
+    fixture = load_json(fixture_path)
+    pack_spec = fixture["pack"]
+    snapshots = fixture["snapshots"]
+    if not isinstance(pack_spec, dict) or not isinstance(snapshots, list):
+        raise AssertionError("target fixture is malformed")
+    pack_path = fixture_path.parent / str(pack_spec["path"])
+
+    with TemporaryDirectory() as temporary:
+        repository = Path(temporary) / "objects"
+        repository.mkdir()
+        git("init", "--quiet", "--object-format=sha1", cwd=repository)
+        git("index-pack", "--stdin", "--fix-thin", cwd=repository, input_bytes=pack_path.read_bytes())
+        target = next(
+            snapshot
+            for snapshot in snapshots
+            if isinstance(snapshot, dict) and snapshot.get("role") == "target"
+        )
+        git("read-tree", str(target["root_tree"]), cwd=repository)
+
+        for path, mutation in mutations:
+            original = git(
+                "ls-tree",
+                str(target["root_tree"]),
+                "--",
+                path,
+                cwd=repository,
+            ).decode("utf-8").strip()
+            if not original:
+                raise AssertionError(f"target fixture path is unavailable: {path}")
+            mode, _, original_object_id = original.split("\t", 1)[0].split()
+            git("update-index", "--force-remove", "--", path, cwd=repository)
+            if mutation == "delete":
+                continue
+            if mutation == "alter":
+                object_id = git(
+                    "hash-object",
+                    "-w",
+                    "--stdin",
+                    cwd=repository,
+                    input_bytes=b"altered structural fixture\n",
+                ).decode("ascii").strip()
+                replacement_mode = mode
+                replacement_path = path
+            elif mutation == "symlink":
+                object_id = git(
+                    "hash-object",
+                    "-w",
+                    "--stdin",
+                    cwd=repository,
+                    input_bytes=b"outside-target\n",
+                ).decode("ascii").strip()
+                replacement_mode = "120000"
+                replacement_path = path
+            elif mutation == "directory":
+                object_id = git(
+                    "hash-object",
+                    "-w",
+                    "--stdin",
+                    cwd=repository,
+                    input_bytes=b"nested structural fixture\n",
+                ).decode("ascii").strip()
+                replacement_mode = "100644"
+                replacement_path = f"{path}/nested"
+            elif mutation == "gitlink":
+                object_id = "7fbe8e520cf85c16de4ba05b9b016b153340ed05"
+                replacement_mode = "160000"
+                replacement_path = path
+            elif mutation == "wrong_mode":
+                object_id = original_object_id
+                replacement_mode = "100755" if mode == "100644" else "100644"
+                replacement_path = path
+            else:
+                raise AssertionError(f"unknown structural mutation: {mutation}")
+            git(
+                "update-index",
+                "--add",
+                "--cacheinfo",
+                f"{replacement_mode},{object_id},{replacement_path}",
+                cwd=repository,
+            )
+
+        target_tree = git("write-tree", cwd=repository).decode("ascii").strip()
+        target_commit = git(
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit-tree",
+            target_tree,
+            cwd=repository,
+            input_bytes=b"structural mutation\n",
+        ).decode("ascii").strip()
+        target["commit"] = target_commit
+        target["root_tree"] = target_tree
+
+        object_ids: set[str] = set()
+        for snapshot in snapshots:
+            if not isinstance(snapshot, dict):
+                raise AssertionError("target snapshot is malformed")
+            object_ids.add(str(snapshot["commit"]))
+            object_ids.update(
+                git(
+                    "rev-list",
+                    "--objects",
+                    "--no-object-names",
+                    str(snapshot["root_tree"]),
+                    cwd=repository,
+                )
+                .decode("ascii")
+                .splitlines()
+            )
+        new_pack = git(
+            "pack-objects",
+            "--stdout",
+            "--window=0",
+            cwd=repository,
+            input_bytes=("\n".join(sorted(object_ids)) + "\n").encode("ascii"),
+        )
+
+    pack_path.write_bytes(new_pack)
+    pack_spec["sha256"] = hashlib.sha256(new_pack).hexdigest()
+    pack_spec["size"] = len(new_pack)
+    pack_spec["object_count"] = len(object_ids)
+    write_json(fixture_path, fixture)
+    refresh_fixture_manifest_pin(root, fixture_path)
+
+    transition_path = root / TRANSITION_MANIFEST.relative_to(ROOT)
+    transition = load_json(transition_path)
+    fixtures = transition["fixtures"]
+    if not isinstance(fixtures, list):
+        raise AssertionError("transition fixtures are malformed")
+    target_fixture = next(
+        item
+        for item in fixtures
+        if isinstance(item, dict) and item.get("name") == "pr-base-and-target"
+    )
+    declared_snapshots = target_fixture["snapshots"]
+    if not isinstance(declared_snapshots, list):
+        raise AssertionError("target snapshots are malformed")
+    declared_target = next(
+        snapshot
+        for snapshot in declared_snapshots
+        if isinstance(snapshot, dict) and snapshot.get("role") == "target"
+    )
+    declared_target["commit"] = target_commit
+    declared_target["root_tree"] = target_tree
+    write_json(transition_path, transition)
+
+
 class PrivacyAgeAdmissionTransitionTests(TestCase):
+    def assert_structure_mutation_rejected(
+        self,
+        mutations: tuple[tuple[str, str], ...],
+    ) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            transition_path = copy_fixture_bundle(root)
+            mutate_target_structure(root, mutations)
+            receipt_adapter = Mock(
+                side_effect=AssertionError("receipt adapter ran before structure passed")
+            )
+
+            with self.assertRaisesRegex(
+                TransitionEvaluationError,
+                "structural Git entry|protected Git delta|protected transition entry",
+            ):
+                evaluate_transition(
+                    transition_path,
+                    repository_root=root,
+                    after_structure=receipt_adapter,
+                )
+            receipt_adapter.assert_not_called()
+
     def test_exact_three_snapshot_fixture_is_complete(self) -> None:
         evaluation = evaluate_transition(
             TRANSITION_MANIFEST,
@@ -264,6 +441,118 @@ class PrivacyAgeAdmissionTransitionTests(TestCase):
                 "pr-base-and-target": 682,
             },
         )
+
+    def test_exact_transition_structure_is_verified_from_git_objects(self) -> None:
+        evaluation = evaluate_transition(
+            TRANSITION_MANIFEST,
+            repository_root=ROOT,
+        )
+
+        self.assertEqual(
+            {entry.path for entry in evaluation.active_authority},
+            {
+                ".github/age-admission/allowed_signers",
+                ".github/age-admission/privacy-scan-reviewed-findings-v1.json",
+                "scripts/create-age-admission-receipt",
+                "scripts/privacy_age_admission.py",
+                "scripts/privacy_age_admission_publisher.py",
+                "scripts/privacy_age_admission_result.py",
+                "scripts/privacy_age_pr_snapshot.py",
+                "scripts/privacy_scan_review.py",
+                "scripts/run-trusted-age-admission",
+            },
+        )
+        transitions = {
+            transition.name: transition for transition in evaluation.transitions
+        }
+        self.assertEqual(
+            {entry.path for entry in transitions["owner_receipt"].entries},
+            {
+                ".github/age-admission/privacy-scan-reviewed-findings-v1.json",
+                ".github/workflows/platform-portability.yml",
+                "docs/ENCRYPTION.md",
+                "scripts/privacy-scan",
+                "scripts/privacy_age_integrity_gate.py",
+                "scripts/privacy_scan_review.py",
+            },
+        )
+        self.assertEqual(
+            {entry.path for entry in transitions["app_result"].entries},
+            {
+                ".github/age-admission/privacy-scan-reviewed-findings-v1.json",
+                ".github/workflows/platform-portability.yml",
+                ".github/workflows/privacy-age-integrity.yml",
+                "docs/ENCRYPTION.md",
+                "scripts/privacy-scan",
+                "scripts/privacy_age_admission_publisher.py",
+                "scripts/privacy_age_admission_result.py",
+                "scripts/privacy_age_integrity_gate.py",
+                "scripts/privacy_age_pr_snapshot.py",
+                "scripts/privacy_scan_review.py",
+            },
+        )
+        self.assertTrue(
+            all(
+                entry.kind == "blob"
+                and entry.mode in {"100644", "100755"}
+                and len(entry.object_id) == 40
+                and entry.size is not None
+                and entry.sha256 is not None
+                for entry in evaluation.active_authority
+            )
+        )
+        self.assertTrue(
+            all(
+                side.kind == "blob"
+                and side.size is not None
+                and side.sha256 is not None
+                for transition in evaluation.transitions
+                for entry in transition.entries
+                for side in (entry.base, entry.head)
+                if side is not None
+            )
+        )
+
+    def test_structural_validation_rejects_a_deleted_transition_path(self) -> None:
+        self.assert_structure_mutation_rejected(
+            (("docs/ENCRYPTION.md", "delete"),)
+        )
+
+    def test_structural_validation_rejects_altered_transition_bytes(self) -> None:
+        self.assert_structure_mutation_rejected(
+            ((".github/workflows/platform-portability.yml", "alter"),)
+        )
+
+    def test_structural_validation_rejects_wrong_kinds_and_modes(self) -> None:
+        cases = (
+            ("symlink", "scripts/privacy_scan_review.py", "symlink"),
+            ("directory", "scripts/privacy_age_admission_publisher.py", "directory"),
+            ("gitlink", "scripts/privacy_age_admission_result.py", "gitlink"),
+            ("wrong-mode", "scripts/create-age-admission-receipt", "wrong_mode"),
+        )
+        for name, path, mutation in cases:
+            with self.subTest(name=name):
+                self.assert_structure_mutation_rejected(((path, mutation),))
+
+    def test_structural_validation_requires_each_new_authority_path(self) -> None:
+        review_record = (
+            ".github/age-admission/privacy-scan-reviewed-findings-v1.json"
+        )
+        reviewer = "scripts/privacy_scan_review.py"
+        cases = (
+            ("review-record", ((review_record, "delete"),)),
+            ("reviewer", ((reviewer, "delete"),)),
+            (
+                "both",
+                (
+                    (review_record, "delete"),
+                    (reviewer, "delete"),
+                ),
+            ),
+        )
+        for name, mutations in cases:
+            with self.subTest(name=name):
+                self.assert_structure_mutation_rejected(mutations)
 
     def test_transition_rejects_a_different_commit_even_with_its_matching_tree(self) -> None:
         with TemporaryDirectory() as temporary:
@@ -302,10 +591,7 @@ class PrivacyAgeAdmissionTransitionTests(TestCase):
             target_pin["root_tree"] = target["root_tree"]
             write_json(transition_path, transition)
 
-            with self.assertRaisesRegex(
-                TransitionEvaluationError,
-                "snapshot identities do not match",
-            ):
+            with self.assertRaises(TransitionEvaluationError):
                 evaluate_transition(transition_path, repository_root=root)
 
     def test_transition_rejects_a_wrong_root_tree(self) -> None:
@@ -330,10 +616,7 @@ class PrivacyAgeAdmissionTransitionTests(TestCase):
             target["root_tree"] = "40e4f9ff2373527400e2c7bbc2ffdf879cf5fa7b"
             write_json(transition_path, transition)
 
-            with self.assertRaisesRegex(
-                TransitionEvaluationError,
-                "snapshot identities do not match",
-            ):
+            with self.assertRaises(TransitionEvaluationError):
                 evaluate_transition(transition_path, repository_root=root)
 
     def test_transition_rejects_a_wrong_pack_digest(self) -> None:

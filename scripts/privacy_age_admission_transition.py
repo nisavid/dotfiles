@@ -8,10 +8,10 @@ import json
 import os
 import re
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
-from typing import Any
+from typing import Any, Callable
 
 
 TRANSITION_SCHEMA = "privacy-age-admission-transition/v1"
@@ -42,6 +42,95 @@ _EXPECTED_FIXTURE_ROLES = {
     "active-predecessor": ("predecessor",),
     "pr-base-and-target": ("pr_base", "target"),
 }
+_EXPECTED_ACTIVE_AUTHORITY = (
+    ".github/age-admission/allowed_signers",
+    ".github/age-admission/privacy-scan-reviewed-findings-v1.json",
+    "scripts/create-age-admission-receipt",
+    "scripts/run-trusted-age-admission",
+    "scripts/privacy_age_admission.py",
+    "scripts/privacy_age_admission_result.py",
+    "scripts/privacy_age_pr_snapshot.py",
+    "scripts/privacy_age_admission_publisher.py",
+    "scripts/privacy_scan_review.py",
+)
+_EXPECTED_TRANSITIONS = {
+    "owner_receipt": (
+        "predecessor",
+        "target",
+        (
+            ".github/age-admission/privacy-scan-reviewed-findings-v1.json",
+            ".github/workflows/platform-portability.yml",
+            "docs/ENCRYPTION.md",
+            "scripts/privacy-scan",
+            "scripts/privacy_age_integrity_gate.py",
+            "scripts/privacy_scan_review.py",
+        ),
+    ),
+    "app_result": (
+        "pr_base",
+        "target",
+        (
+            ".github/age-admission/privacy-scan-reviewed-findings-v1.json",
+            ".github/workflows/platform-portability.yml",
+            ".github/workflows/privacy-age-integrity.yml",
+            "docs/ENCRYPTION.md",
+            "scripts/privacy-scan",
+            "scripts/privacy_age_admission_publisher.py",
+            "scripts/privacy_age_admission_result.py",
+            "scripts/privacy_age_integrity_gate.py",
+            "scripts/privacy_age_pr_snapshot.py",
+            "scripts/privacy_scan_review.py",
+        ),
+    ),
+}
+_EXPECTED_STRUCTURAL_ENTRY_PATHS = {
+    "pr_base": frozenset(
+        {
+            ".github/workflows/platform-portability.yml",
+            ".github/workflows/privacy-age-integrity.yml",
+            "docs/ENCRYPTION.md",
+            "scripts/privacy-scan",
+            "scripts/privacy_age_integrity_gate.py",
+        }
+    ),
+    "predecessor": frozenset(
+        {
+            ".github/workflows/platform-portability.yml",
+            "docs/ENCRYPTION.md",
+            "scripts/privacy-scan",
+            "scripts/privacy_age_integrity_gate.py",
+        }
+    ),
+    "target": frozenset(
+        set(_EXPECTED_ACTIVE_AUTHORITY)
+        | set(_EXPECTED_TRANSITIONS["owner_receipt"][2])
+        | set(_EXPECTED_TRANSITIONS["app_result"][2])
+    ),
+}
+_PROTECTED_EXACT_PATHS = frozenset(
+    {
+        ".github/age-admission/allowed_signers",
+        ".github/age-admission/privacy-scan-reviewed-findings-v1.json",
+        ".privacy-age-envelopes.json",
+        "docs/ENCRYPTION.md",
+        "home/.chezmoi.toml.tmpl",
+        "home/private_dot_local/lib/agent-equipment/agent_equipment/secrets.py",
+        "scripts/admit-age-envelopes",
+        "scripts/agent_equipment_public_data.py",
+        "scripts/create-age-admission-receipt",
+        "scripts/run-trusted-age-admission",
+        "scripts/privacy-scan",
+        "scripts/privacy_scan_review.py",
+        "scripts/privacy_age_admission.py",
+        "scripts/privacy_age_envelopes.py",
+        "scripts/privacy_age_integrity_gate.py",
+        "scripts/privacy_age_admission_result.py",
+        "scripts/privacy_age_pr_snapshot.py",
+        "scripts/privacy_age_admission_publisher.py",
+    }
+)
+_PROTECTED_OPTIONAL_PATHS = frozenset({".gitattributes", ".gitmodules"})
+_PROTECTED_PREFIXES = (".github/actions/", ".github/workflows/")
 
 
 class TransitionEvaluationError(RuntimeError):
@@ -53,6 +142,32 @@ class EvaluatedSnapshot:
     role: str
     commit: str
     root_tree: str
+    entries: tuple[EvaluatedTreeEntry, ...] = field(default=(), compare=False)
+
+
+@dataclass(frozen=True)
+class EvaluatedTreeEntry:
+    path: str
+    kind: str
+    mode: str
+    object_id: str
+    size: int | None = None
+    sha256: str | None = None
+
+
+@dataclass(frozen=True)
+class EvaluatedTransitionEntry:
+    path: str
+    base: EvaluatedTreeEntry | None
+    head: EvaluatedTreeEntry | None
+
+
+@dataclass(frozen=True)
+class EvaluatedProtectedTransition:
+    name: str
+    base_role: str
+    head_role: str
+    entries: tuple[EvaluatedTransitionEntry, ...]
 
 
 @dataclass(frozen=True)
@@ -70,6 +185,8 @@ class TransitionEvaluation:
     migration: str
     snapshots: tuple[EvaluatedSnapshot, ...]
     fixtures: tuple[EvaluatedFixture, ...]
+    active_authority: tuple[EvaluatedTreeEntry, ...]
+    transitions: tuple[EvaluatedProtectedTransition, ...]
 
 
 def _closed_object(value: Any, keys: set[str], *, label: str) -> dict[str, Any]:
@@ -110,6 +227,19 @@ def _digest(value: Any, *, label: str) -> str:
     return digest
 
 
+def _canonical_path(value: Any, *, label: str) -> str:
+    path = _string(value, label=label)
+    relative = PurePosixPath(path)
+    if (
+        relative.is_absolute()
+        or relative.as_posix() != path
+        or not relative.parts
+        or any(part in {"", ".", ".."} for part in relative.parts)
+    ):
+        raise TransitionEvaluationError(f"{label} must be a canonical repository path")
+    return path
+
+
 def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in pairs:
@@ -135,15 +265,8 @@ def _load_json_bytes(contents: bytes, *, label: str) -> dict[str, Any]:
 
 
 def _repository_path(repository_root: Path, raw: Any, *, label: str) -> Path:
-    value = _string(raw, label=label)
+    value = _canonical_path(raw, label=label)
     relative = PurePosixPath(value)
-    if (
-        relative.is_absolute()
-        or relative.as_posix() != value
-        or not relative.parts
-        or any(part in {"", ".", ".."} for part in relative.parts)
-    ):
-        raise TransitionEvaluationError(f"{label} must be a canonical repository path")
     root = repository_root.resolve(strict=True)
     try:
         resolved = root.joinpath(*relative.parts).resolve(strict=True)
@@ -208,6 +331,112 @@ def _parse_snapshot(value: Any, *, label: str) -> EvaluatedSnapshot:
         commit=_object_id(item["commit"], label=f"{label}.commit"),
         root_tree=_object_id(item["root_tree"], label=f"{label}.root_tree"),
     )
+
+
+def _parse_structural_entry(value: Any, *, label: str) -> EvaluatedTreeEntry:
+    if not isinstance(value, list) or len(value) != 4:
+        raise TransitionEvaluationError(f"{label} must be a four-field entry")
+    path = _canonical_path(value[0], label=f"{label}.path")
+    kind = _string(value[1], label=f"{label}.kind")
+    mode = _string(value[2], label=f"{label}.mode")
+    if kind != "blob" or mode not in {"100644", "100755"}:
+        raise TransitionEvaluationError(f"{label} must describe a regular blob")
+    return EvaluatedTreeEntry(
+        path=path,
+        kind=kind,
+        mode=mode,
+        object_id=_object_id(value[3], label=f"{label}.object_id"),
+    )
+
+
+def _parse_structure(
+    value: Any,
+) -> tuple[
+    dict[str, dict[str, EvaluatedTreeEntry]],
+    tuple[str, ...],
+    tuple[tuple[str, str, str, tuple[str, ...]], ...],
+]:
+    structure = _closed_object(
+        value,
+        {"entries", "active_authority", "transitions"},
+        label="transition.structure",
+    )
+    raw_entries = _closed_object(
+        structure["entries"],
+        set(_ROLE_ORDER),
+        label="transition.structure.entries",
+    )
+    entries_by_role: dict[str, dict[str, EvaluatedTreeEntry]] = {}
+    for role in _ROLE_ORDER:
+        entries: dict[str, EvaluatedTreeEntry] = {}
+        for index, raw_entry in enumerate(
+            _closed_array(
+                raw_entries[role],
+                label=f"transition.structure.entries.{role}",
+            )
+        ):
+            entry = _parse_structural_entry(
+                raw_entry,
+                label=f"transition.structure.entries.{role}[{index}]",
+            )
+            if entry.path in entries:
+                raise TransitionEvaluationError("structural entry paths must be unique")
+            entries[entry.path] = entry
+        if frozenset(entries) != _EXPECTED_STRUCTURAL_ENTRY_PATHS[role]:
+            raise TransitionEvaluationError(
+                "structural entry paths do not match the one-time migration"
+            )
+        entries_by_role[role] = entries
+
+    active_authority = tuple(
+        _canonical_path(path, label=f"transition.structure.active_authority[{index}]")
+        for index, path in enumerate(
+            _closed_array(
+                structure["active_authority"],
+                label="transition.structure.active_authority",
+            )
+        )
+    )
+    if active_authority != _EXPECTED_ACTIVE_AUTHORITY:
+        raise TransitionEvaluationError(
+            "active authority paths do not match the one-time migration"
+        )
+
+    transitions: list[tuple[str, str, str, tuple[str, ...]]] = []
+    seen_names: set[str] = set()
+    for index, raw_transition in enumerate(
+        _closed_array(
+            structure["transitions"],
+            label="transition.structure.transitions",
+        )
+    ):
+        label = f"transition.structure.transitions[{index}]"
+        transition = _closed_object(
+            raw_transition,
+            {"name", "base_role", "head_role", "paths"},
+            label=label,
+        )
+        name = _string(transition["name"], label=f"{label}.name")
+        base_role = _string(transition["base_role"], label=f"{label}.base_role")
+        head_role = _string(transition["head_role"], label=f"{label}.head_role")
+        paths = tuple(
+            _canonical_path(path, label=f"{label}.paths[{path_index}]")
+            for path_index, path in enumerate(
+                _closed_array(transition["paths"], label=f"{label}.paths")
+            )
+        )
+        expected = _EXPECTED_TRANSITIONS.get(name)
+        if name in seen_names or expected != (base_role, head_role, paths):
+            raise TransitionEvaluationError(
+                "protected transition does not match the one-time migration"
+            )
+        seen_names.add(name)
+        transitions.append((name, base_role, head_role, paths))
+    if seen_names != set(_EXPECTED_TRANSITIONS):
+        raise TransitionEvaluationError(
+            "protected transitions do not match the one-time migration"
+        )
+    return entries_by_role, active_authority, tuple(transitions)
 
 
 def _parse_pack(value: Any, *, label: str) -> dict[str, Any]:
@@ -315,12 +544,69 @@ def _indexed_objects(repository: Path) -> set[str]:
         raise TransitionEvaluationError("object fixture index is malformed") from error
 
 
+def _materialize_tree_entries(
+    repository: Path,
+    snapshot: EvaluatedSnapshot,
+    *,
+    structural_paths: frozenset[str],
+) -> tuple[EvaluatedTreeEntry, ...]:
+    raw_entries = _git(
+        "ls-tree",
+        "-r",
+        "-t",
+        "-z",
+        "--full-tree",
+        snapshot.root_tree,
+        cwd=repository,
+    )
+    entries: list[EvaluatedTreeEntry] = []
+    for index, record in enumerate(raw_entries.split(b"\0")):
+        if not record:
+            continue
+        try:
+            metadata, raw_path = record.split(b"\t", 1)
+            mode, kind, raw_object_id = metadata.split()
+            path = raw_path.decode("utf-8")
+            object_id = raw_object_id.decode("ascii")
+            mode_text = mode.decode("ascii")
+            kind_text = kind.decode("ascii")
+        except (UnicodeDecodeError, ValueError) as error:
+            raise TransitionEvaluationError(
+                f"snapshot tree entry {index} is malformed"
+            ) from error
+        size: int | None = None
+        sha256: str | None = None
+        if path in structural_paths and kind_text == "blob":
+            contents = _git("cat-file", "blob", object_id, cwd=repository)
+            git_object_id = hashlib.sha1(
+                b"blob " + str(len(contents)).encode("ascii") + b"\0" + contents
+            ).hexdigest()
+            if git_object_id != object_id:
+                raise TransitionEvaluationError(
+                    "structural blob bytes do not match their Git object ID"
+                )
+            size = len(contents)
+            sha256 = hashlib.sha256(contents).hexdigest()
+        entries.append(
+            EvaluatedTreeEntry(
+                path=path,
+                kind=kind_text,
+                mode=mode_text,
+                object_id=object_id,
+                size=size,
+                sha256=sha256,
+            )
+        )
+    return tuple(entries)
+
+
 def _evaluate_pack(
     *,
     fixture_manifest: Path,
     pack_spec: dict[str, Any],
     snapshots: tuple[EvaluatedSnapshot, ...],
-) -> tuple[str, int]:
+    structural_paths: frozenset[str],
+) -> tuple[str, int, tuple[EvaluatedSnapshot, ...]]:
     pack_path = _repository_path(
         fixture_manifest.parent,
         pack_spec["path"],
@@ -343,6 +629,7 @@ def _evaluate_pack(
             raise TransitionEvaluationError("object fixture pack count does not match")
 
         expected_objects: set[str] = set()
+        materialized_snapshots: list[EvaluatedSnapshot] = []
         for snapshot in snapshots:
             if _git("cat-file", "-t", snapshot.commit, cwd=repository).strip() != b"commit":
                 raise TransitionEvaluationError("snapshot commit object is unavailable")
@@ -369,17 +656,137 @@ def _evaluate_pack(
             except UnicodeDecodeError as error:
                 raise TransitionEvaluationError("object fixture closure is malformed") from error
             expected_objects.add(snapshot.commit)
+            materialized_snapshots.append(
+                EvaluatedSnapshot(
+                    role=snapshot.role,
+                    commit=snapshot.commit,
+                    root_tree=snapshot.root_tree,
+                    entries=_materialize_tree_entries(
+                        repository,
+                        snapshot,
+                        structural_paths=structural_paths,
+                    ),
+                )
+            )
 
         if indexed != expected_objects:
             raise TransitionEvaluationError("object fixture pack is not the exact object closure")
 
-    return pack_digest, len(indexed)
+    return pack_digest, len(indexed), tuple(materialized_snapshots)
+
+
+def _entry_identity(entry: EvaluatedTreeEntry) -> tuple[str, str, str]:
+    return (entry.kind, entry.mode, entry.object_id)
+
+
+def _is_protected(path: str) -> bool:
+    return (
+        path in _PROTECTED_EXACT_PATHS
+        or path in _PROTECTED_OPTIONAL_PATHS
+        or any(path.startswith(prefix) for prefix in _PROTECTED_PREFIXES)
+        or path.rsplit("/", 1)[-1].lower().endswith(".age")
+    )
+
+
+def _validate_structure(
+    snapshots: tuple[EvaluatedSnapshot, ...],
+    *,
+    expected_entries: dict[str, dict[str, EvaluatedTreeEntry]],
+    active_authority_paths: tuple[str, ...],
+    transition_specs: tuple[tuple[str, str, str, tuple[str, ...]], ...],
+) -> tuple[
+    tuple[EvaluatedTreeEntry, ...],
+    tuple[EvaluatedProtectedTransition, ...],
+]:
+    snapshots_by_role = {snapshot.role: snapshot for snapshot in snapshots}
+    if set(snapshots_by_role) != set(_ROLE_ORDER):
+        raise TransitionEvaluationError("transition must contain exactly three snapshots")
+    entries_by_role = {
+        role: {entry.path: entry for entry in snapshot.entries}
+        for role, snapshot in snapshots_by_role.items()
+    }
+
+    for role, expected_by_path in expected_entries.items():
+        actual_by_path = entries_by_role[role]
+        for path, expected in expected_by_path.items():
+            actual = actual_by_path.get(path)
+            if actual is None or _entry_identity(actual) != _entry_identity(expected):
+                raise TransitionEvaluationError(
+                    "structural Git entry does not match the one-time migration"
+                )
+            if actual.kind != "blob" or actual.size is None or actual.sha256 is None:
+                raise TransitionEvaluationError(
+                    "structural Git entry bytes are not a verified regular blob"
+                )
+
+    target_entries = entries_by_role["target"]
+    active_authority = tuple(target_entries[path] for path in active_authority_paths)
+    evaluated_transitions: list[EvaluatedProtectedTransition] = []
+    for name, base_role, head_role, paths in transition_specs:
+        base_entries = entries_by_role[base_role]
+        head_entries = entries_by_role[head_role]
+        changed = {
+            path
+            for path in base_entries.keys() | head_entries.keys()
+            if _is_protected(path)
+            and (
+                path not in base_entries
+                or path not in head_entries
+                or _entry_identity(base_entries[path]) != _entry_identity(head_entries[path])
+            )
+        }
+        if changed != set(paths):
+            raise TransitionEvaluationError(
+                "protected Git delta does not match the one-time migration"
+            )
+        entries: list[EvaluatedTransitionEntry] = []
+        for path in paths:
+            base = base_entries.get(path)
+            head = head_entries.get(path)
+            expected_base = expected_entries[base_role].get(path)
+            expected_head = expected_entries[head_role].get(path)
+            if (
+                (base is None) != (expected_base is None)
+                or (head is None) != (expected_head is None)
+                or (
+                    base is not None
+                    and expected_base is not None
+                    and _entry_identity(base) != _entry_identity(expected_base)
+                )
+                or (
+                    head is not None
+                    and expected_head is not None
+                    and _entry_identity(head) != _entry_identity(expected_head)
+                )
+            ):
+                raise TransitionEvaluationError(
+                    "protected transition entry does not match the one-time migration"
+                )
+            if any(
+                entry is not None
+                and (entry.kind != "blob" or entry.size is None or entry.sha256 is None)
+                for entry in (base, head)
+            ):
+                raise TransitionEvaluationError(
+                    "protected transition bytes are not verified regular blobs"
+                )
+            entries.append(EvaluatedTransitionEntry(path=path, base=base, head=head))
+        evaluated_transitions.append(
+            EvaluatedProtectedTransition(
+                name=name,
+                base_role=base_role,
+                head_role=head_role,
+                entries=tuple(entries),
+            )
+        )
+    return active_authority, tuple(evaluated_transitions)
 
 
 def evaluate_transition(
     manifest_path: Path,
     *,
     repository_root: Path,
+    after_structure: Callable[[TransitionEvaluation], None] | None = None,
 ) -> TransitionEvaluation:
     """Validate and evaluate the closed, network-free transition fixtures."""
 
@@ -392,7 +799,7 @@ def evaluate_transition(
 
     transition = _closed_object(
         _load_json_bytes(transition_path.read_bytes(), label="transition manifest"),
-        {"schema", "migration", "repository", "pull_request", "fixtures"},
+        {"schema", "migration", "repository", "pull_request", "fixtures", "structure"},
         label="transition manifest",
     )
     if transition["schema"] != TRANSITION_SCHEMA:
@@ -409,6 +816,14 @@ def evaluate_transition(
         or migration != _EXPECTED_MIGRATION
     ):
         raise TransitionEvaluationError("transition identity does not match the one-time migration")
+    expected_entries, active_authority_paths, transition_specs = _parse_structure(
+        transition["structure"]
+    )
+    structural_paths = frozenset(
+        path
+        for entries in expected_entries.values()
+        for path in entries
+    )
 
     evaluated_fixtures: list[EvaluatedFixture] = []
     all_snapshots: list[EvaluatedSnapshot] = []
@@ -440,11 +855,8 @@ def evaluate_transition(
         )
         if tuple(snapshot.role for snapshot in expected_snapshots) != _EXPECTED_FIXTURE_ROLES.get(
             name
-        ) or any(
-            (snapshot.commit, snapshot.root_tree) != _EXPECTED_SNAPSHOTS[snapshot.role]
-            for snapshot in expected_snapshots
         ):
-            raise TransitionEvaluationError("snapshot identities do not match the one-time migration")
+            raise TransitionEvaluationError("snapshot roles do not match the one-time migration")
         fixture_manifest = _repository_path(
             root,
             fixture["manifest"],
@@ -465,28 +877,48 @@ def evaluate_transition(
             fixture_bytes,
             expected_snapshots=expected_snapshots,
         )
-        pack_digest, object_count = _evaluate_pack(
+        pack_digest, object_count, materialized_snapshots = _evaluate_pack(
             fixture_manifest=fixture_manifest,
             pack_spec=pack_spec,
             snapshots=snapshots,
+            structural_paths=structural_paths,
         )
         evaluated_fixtures.append(
             EvaluatedFixture(
                 name=name,
                 pack_sha256=pack_digest,
                 object_count=object_count,
-                snapshots=snapshots,
+                snapshots=materialized_snapshots,
             )
         )
-        all_snapshots.extend(snapshots)
+        all_snapshots.extend(materialized_snapshots)
 
     roles = [snapshot.role for snapshot in all_snapshots]
     if sorted(roles) != sorted(_ROLE_ORDER):
         raise TransitionEvaluationError("transition must contain exactly three snapshot roles")
-    return TransitionEvaluation(
+    ordered_snapshots = tuple(
+        sorted(all_snapshots, key=lambda snapshot: _ROLE_ORDER[snapshot.role])
+    )
+    active_authority, evaluated_transitions = _validate_structure(
+        ordered_snapshots,
+        expected_entries=expected_entries,
+        active_authority_paths=active_authority_paths,
+        transition_specs=transition_specs,
+    )
+    if any(
+        (snapshot.commit, snapshot.root_tree) != _EXPECTED_SNAPSHOTS[snapshot.role]
+        for snapshot in ordered_snapshots
+    ):
+        raise TransitionEvaluationError("snapshot identities do not match the one-time migration")
+    evaluation = TransitionEvaluation(
         repository=repository,
         pull_request=pull_request,
         migration=migration,
-        snapshots=tuple(sorted(all_snapshots, key=lambda snapshot: _ROLE_ORDER[snapshot.role])),
+        snapshots=ordered_snapshots,
         fixtures=tuple(evaluated_fixtures),
+        active_authority=active_authority,
+        transitions=evaluated_transitions,
     )
+    if after_structure is not None:
+        after_structure(evaluation)
+    return evaluation
