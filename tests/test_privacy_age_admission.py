@@ -570,8 +570,12 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
                 capture_output=True,
             ).stdout
 
+            # The trusted fixture is an activated boundary: keep every
+            # admission-infrastructure pathname materialized so the creator
+            # exercises the same completeness check as the real base tree.
             protected = {
                 ".github/age-admission/allowed_signers": b"",
+                ".github/age-admission/privacy-scan-reviewed-findings-v1.json": b"record\n",
                 ".github/actions/privacy-boundary/action.yml": b"boundary\n",
                 ".github/workflows/privacy-age-integrity.yml": (
                     b"# Protected admission activation sentinel: owner-signed-age-v1\n"
@@ -587,9 +591,13 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
                 "scripts/create-age-admission-receipt": b"creator\n",
                 "scripts/run-trusted-age-admission": b"wrapper\n",
                 "scripts/privacy-scan": b"scan\n",
+                "scripts/privacy_scan_review.py": b"review\n",
                 "scripts/privacy_age_admission.py": b"receipt\n",
                 "scripts/privacy_age_envelopes.py": b"envelopes\n",
                 "scripts/privacy_age_integrity_gate.py": b"gate\n",
+                "scripts/privacy_age_admission_result.py": b"result\n",
+                "scripts/privacy_age_pr_snapshot.py": b"snapshot\n",
+                "scripts/privacy_age_admission_publisher.py": b"publisher\n",
             }
             for relative, contents in protected.items():
                 path = base / relative
@@ -605,9 +613,13 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
             for script_name in (
                 "create-age-admission-receipt",
                 "privacy-scan",
+                "privacy_scan_review.py",
                 "privacy_age_admission.py",
                 "privacy_age_envelopes.py",
                 "privacy_age_integrity_gate.py",
+                "privacy_age_admission_result.py",
+                "privacy_age_pr_snapshot.py",
+                "privacy_age_admission_publisher.py",
             ):
                 shutil.copy2(ROOT / "scripts" / script_name, base / "scripts" / script_name)
             (base / "scripts/admit-age-envelopes").chmod(0o755)
