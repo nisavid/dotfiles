@@ -4,7 +4,6 @@ import hashlib
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 import textwrap
@@ -123,22 +122,47 @@ REVIEW_INFRASTRUCTURE_ADDITIONS = (
 )
 
 
-def run(*command: str, cwd: Path) -> str:
+def fixture_git_environment() -> dict[str, str]:
     environment = os.environ.copy()
+    for variable in (
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_COMMON_DIR",
+        "GIT_CONFIG_COUNT",
+        "GIT_CONFIG_LOCAL",
+        "GIT_CONFIG_PARAMETERS",
+        "GIT_CONFIG_SYSTEM",
+        "GIT_DEFAULT_HASH",
+        "GIT_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_WORK_TREE",
+    ):
+        environment.pop(variable, None)
+    for variable in tuple(environment):
+        if variable.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")):
+            environment.pop(variable, None)
     environment.update(
         {
             "GIT_CONFIG_GLOBAL": os.devnull,
             "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_NO_LAZY_FETCH": "1",
+            "GIT_NO_REPLACE_OBJECTS": "1",
+            "GIT_OPTIONAL_LOCKS": "0",
             "GIT_TERMINAL_PROMPT": "0",
+            "LC_ALL": "C",
         }
     )
+    return environment
+
+
+def run(*command: str, cwd: Path) -> str:
     result = subprocess.run(
         command,
         cwd=cwd,
         check=True,
         capture_output=True,
         text=True,
-        env=environment,
+        env=fixture_git_environment(),
         timeout=10,
     )
     return result.stdout.strip()
@@ -194,15 +218,8 @@ def materialize_legacy_fixture(root: Path) -> dict[str, object]:
         raise AssertionError("legacy fixture pack digest does not match its manifest")
 
     root.mkdir()
-    run("git", "init", "--quiet", cwd=root)
-    environment = os.environ.copy()
-    environment.update(
-        {
-            "GIT_CONFIG_GLOBAL": os.devnull,
-            "GIT_CONFIG_NOSYSTEM": "1",
-            "GIT_TERMINAL_PROMPT": "0",
-        }
-    )
+    run("git", "init", "--quiet", "--object-format=sha1", cwd=root)
+    environment = fixture_git_environment()
     subprocess.run(
         ["git", "index-pack", "--stdin", "--fix-thin"],
         cwd=root,
@@ -266,48 +283,25 @@ def materialize_legacy_fixture(root: Path) -> dict[str, object]:
     return manifest
 
 
-def overlay_candidate_tree(root: Path) -> str:
-    candidate_paths = {
-        relative
-        for relative in run(
-            "git",
-            "ls-files",
-            "--cached",
-            "--others",
-            "--exclude-standard",
-            "-z",
-            cwd=ROOT,
-        ).split("\0")
-        if relative
-    }
-    base_paths = {
-        relative
-        for relative in run(
-            "git",
-            "ls-tree",
-            "-r",
-            "-z",
-            "--name-only",
-            "HEAD",
-            cwd=root,
-        ).split("\0")
-        if relative
-    }
-    for relative in sorted(base_paths - candidate_paths, reverse=True):
-        target = root / relative
-        if target.is_symlink() or target.is_file():
-            target.unlink()
-    for relative in sorted(candidate_paths):
-        source = ROOT / relative
-        target = root / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if target.is_symlink() or target.is_file():
-            target.unlink()
-        if source.is_symlink():
-            target.symlink_to(os.readlink(source))
-        elif source.is_file():
-            shutil.copy2(source, target)
-    return commit_all(root, "current candidate snapshot")
+def materialize_current_candidate(root: Path) -> tuple[str, str]:
+    reviewed_commit = run("git", "rev-parse", "HEAD^{commit}", cwd=ROOT)
+    reviewed_tree = run("git", "rev-parse", f"{reviewed_commit}^{{tree}}", cwd=ROOT)
+    run(
+        "git",
+        "clone",
+        "--quiet",
+        "--no-local",
+        "--no-checkout",
+        os.fspath(ROOT),
+        os.fspath(root),
+        cwd=root.parent,
+    )
+    run("git", "checkout", "--quiet", "--detach", reviewed_commit, cwd=root)
+    if run("git", "rev-parse", "HEAD^{commit}", cwd=root) != reviewed_commit:
+        raise AssertionError("candidate fixture commit does not match the reviewed commit")
+    if run("git", "rev-parse", "HEAD^{tree}", cwd=root) != reviewed_tree:
+        raise AssertionError("candidate fixture tree does not match the reviewed tree")
+    return reviewed_commit, reviewed_tree
 
 
 def build_payload_in_subprocess(
@@ -381,7 +375,7 @@ class PrivacyAgeIntegrityGateTests(TestCase):
         base = Path(temporary.name) / "base"
         head = Path(temporary.name) / "head"
         base.mkdir()
-        run("git", "init", "--quiet", cwd=base)
+        run("git", "init", "--quiet", "--object-format=sha1", cwd=base)
         write_files(base)
         base_commit = commit_all(base, "base")
         run(
@@ -439,20 +433,22 @@ class PrivacyAgeIntegrityGateTests(TestCase):
             path = ROOT / os.fsdecode(raw_path)
             self.assertEqual(kind, b"blob")
             self.assertRegex(object_id.decode("ascii"), r"\A[0-9a-f]{40}\Z")
-            staged = run(
+            tree_entry = run(
                 "git",
-                "ls-files",
-                "--stage",
+                "ls-tree",
+                "HEAD",
                 "--",
                 os.fspath(path.relative_to(ROOT)),
                 cwd=ROOT,
             )
-            self.assertTrue(staged, f"reviewed support path is not tracked: {path}")
-            tracked_mode = staged.split(maxsplit=1)[0].encode()
-            self.assertEqual(
-                mode,
-                tracked_mode,
-            )
+            self.assertTrue(tree_entry, f"reviewed support path is not tracked: {path}")
+            metadata, tracked_path = tree_entry.split("\t", maxsplit=1)
+            tracked_mode, tracked_kind, tracked_object_id = metadata.split()
+            self.assertEqual(tracked_path, os.fspath(path.relative_to(ROOT)))
+            self.assertEqual(mode, tracked_mode.encode())
+            self.assertEqual(kind, tracked_kind.encode())
+            if raw_path == b"docs/ENCRYPTION.md":
+                self.assertEqual(object_id, tracked_object_id.encode())
 
     def test_bootstrap_signer_allowlist_matches_reviewed_tree(self) -> None:
         path = ROOT / ".github/age-admission/allowed_signers"
@@ -525,14 +521,17 @@ class PrivacyAgeIntegrityGateTests(TestCase):
         base = Path(temporary.name) / "base"
         head = Path(temporary.name) / "head"
         manifest = materialize_legacy_fixture(base)
-        materialize_legacy_fixture(head)
         base_commit = str(manifest["snapshot"]["commit"])
         self.assertEqual(base_commit, "0e981202824a76043083039a407dd165e243d544")
         self.assertEqual(
             manifest["snapshot"]["omitted_parent"],
             "7fbe8e520cf85c16de4ba05b9b016b153340ed05",
         )
-        head_commit = overlay_candidate_tree(head)
+        head_commit, head_tree = materialize_current_candidate(head)
+        self.assertEqual(
+            head_tree,
+            run("git", "rev-parse", f"{head_commit}^{{tree}}", cwd=ROOT),
+        )
 
         predecessor = build_payload_in_subprocess(
             scripts=base / "scripts",
@@ -542,7 +541,7 @@ class PrivacyAgeIntegrityGateTests(TestCase):
             head_commit=head_commit,
         )
         current = build_payload_in_subprocess(
-            scripts=ROOT / "scripts",
+            scripts=head / "scripts",
             base=base,
             base_commit=base_commit,
             head=head,
