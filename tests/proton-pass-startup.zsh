@@ -109,8 +109,13 @@ for fast_exit_candidate in /usr/bin/true /bin/true; do
 done
 [[ -n $fast_exit ]] || fail 'a fixed true executable is required'
 fast_child_bin=$test_dir/fast-child-bin
-mkdir -p -- "$fast_child_bin"
+fast_child_home=$test_dir/fast-child-home
+mkdir -p -- "$fast_child_bin" "$fast_child_home/.config/zsh"
 cp -- "$startup_source" "$fast_child_bin/proton-pass-startup"
+cat >"$fast_child_home/.config/zsh/startup.zsh" <<'EOF'
+[[ $1 == launcher && $2 == darwin ]] || return 97
+path=( /usr/bin /bin /usr/sbin /sbin )
+EOF
 cat >"$fast_child_bin/proton-pass-ensure-ready" <<'EOF'
 #!/bin/zsh -f
 set -euo pipefail
@@ -125,7 +130,8 @@ chmod -- +x \
   "$fast_child_bin/proton-pass-ensure-ready"
 integer fast_child_run
 for (( fast_child_run = 1; fast_child_run <= 32; ++fast_child_run )); do
-  "$fast_child_bin/proton-pass-startup" >/dev/null 2>&1 ||
+  HOME=$fast_child_home \
+    "$fast_child_bin/proton-pass-startup" >/dev/null 2>&1 ||
     fail 'startup must accept an immediately ready provider child'
 done
 
