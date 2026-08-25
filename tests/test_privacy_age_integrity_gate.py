@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import textwrap
@@ -34,6 +36,8 @@ from scripts.privacy_age_integrity_gate import (
 ROOT = Path(__file__).resolve().parents[1]
 GATE = ROOT / "scripts/privacy_age_integrity_gate.py"
 WORKFLOW = ROOT / ".github/workflows/privacy-age-integrity.yml"
+LEGACY_FIXTURE_ROOT = ROOT / "tests/fixtures/privacy-age-integrity"
+LEGACY_FIXTURE_MANIFEST = LEGACY_FIXTURE_ROOT / "legacy-active-base-v1.json"
 
 UNTRUSTED_HEAD_EXECUTION = re.compile(
     r"(?mx)^\s*(?:"
@@ -173,6 +177,203 @@ def commit_all(root: Path, message: str) -> str:
     return run("git", "rev-parse", "HEAD", cwd=root)
 
 
+def materialize_legacy_fixture(root: Path) -> dict[str, object]:
+    manifest = json.loads(LEGACY_FIXTURE_MANIFEST.read_text(encoding="utf-8"))
+    if manifest.get("schema") != "privacy-age-integrity-predecessor-fixture/v1":
+        raise AssertionError("legacy fixture manifest has an unexpected schema")
+    pack_spec = manifest["pack"]
+    snapshot = manifest["snapshot"]
+    if not isinstance(pack_spec, dict) or not isinstance(snapshot, dict):
+        raise AssertionError("legacy fixture manifest is malformed")
+
+    pack = LEGACY_FIXTURE_ROOT / str(pack_spec["path"])
+    pack_bytes = pack.read_bytes()
+    if len(pack_bytes) != pack_spec["size"]:
+        raise AssertionError("legacy fixture pack size does not match its manifest")
+    if hashlib.sha256(pack_bytes).hexdigest() != pack_spec["sha256"]:
+        raise AssertionError("legacy fixture pack digest does not match its manifest")
+
+    root.mkdir()
+    run("git", "init", "--quiet", cwd=root)
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_TERMINAL_PROMPT": "0",
+        }
+    )
+    subprocess.run(
+        ["git", "index-pack", "--stdin", "--fix-thin"],
+        cwd=root,
+        input=pack_bytes,
+        check=True,
+        capture_output=True,
+        env=environment,
+        timeout=10,
+    )
+    commit = str(snapshot["commit"])
+    if snapshot["shallow_boundary"] != commit:
+        raise AssertionError("legacy fixture shallow boundary is not the commit")
+    git_dir = root / run("git", "rev-parse", "--git-dir", cwd=root)
+    (git_dir / "shallow").write_text(f"{commit}\n", encoding="ascii")
+    run("git", "checkout", "--quiet", "--detach", commit, cwd=root)
+
+    commit_data = run("git", "cat-file", "-p", commit, cwd=root)
+    parents = [
+        line.split(maxsplit=1)[1]
+        for line in commit_data.splitlines()
+        if line.startswith("parent ")
+    ]
+    if parents != [snapshot["omitted_parent"]]:
+        raise AssertionError("legacy fixture omitted parent does not match its manifest")
+    omitted_parent = subprocess.run(
+        ["git", "cat-file", "-e", f'{snapshot["omitted_parent"]}^{{commit}}'],
+        cwd=root,
+        check=False,
+        capture_output=True,
+        env=environment,
+        timeout=10,
+    )
+    if omitted_parent.returncode == 0:
+        raise AssertionError("legacy fixture unexpectedly includes parent history")
+    if run("git", "rev-parse", "HEAD^{tree}", cwd=root) != snapshot["root_tree"]:
+        raise AssertionError("legacy fixture root tree does not match its manifest")
+    gate_entry = run(
+        "git",
+        "ls-tree",
+        commit,
+        "scripts/privacy_age_integrity_gate.py",
+        cwd=root,
+    )
+    if gate_entry.split()[2] != snapshot["integrity_gate_blob"]:
+        raise AssertionError("legacy fixture gate blob does not match its manifest")
+    indexes = tuple((git_dir / "objects/pack").glob("*.idx"))
+    if len(indexes) != 1:
+        raise AssertionError("legacy fixture did not produce one object index")
+    with indexes[0].open("rb") as index:
+        indexed = subprocess.run(
+            ["git", "show-index"],
+            cwd=root,
+            stdin=index,
+            check=True,
+            capture_output=True,
+            env=environment,
+            timeout=10,
+        )
+    if len(indexed.stdout.splitlines()) != pack_spec["object_count"]:
+        raise AssertionError("legacy fixture object count does not match its manifest")
+    return manifest
+
+
+def overlay_candidate_tree(root: Path) -> str:
+    candidate_paths = {
+        relative
+        for relative in run(
+            "git",
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "-z",
+            cwd=ROOT,
+        ).split("\0")
+        if relative
+    }
+    base_paths = {
+        relative
+        for relative in run(
+            "git",
+            "ls-tree",
+            "-r",
+            "-z",
+            "--name-only",
+            "HEAD",
+            cwd=root,
+        ).split("\0")
+        if relative
+    }
+    for relative in sorted(base_paths - candidate_paths, reverse=True):
+        target = root / relative
+        if target.is_symlink() or target.is_file():
+            target.unlink()
+    for relative in sorted(candidate_paths):
+        source = ROOT / relative
+        target = root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.is_symlink() or target.is_file():
+            target.unlink()
+        if source.is_symlink():
+            target.symlink_to(os.readlink(source))
+        elif source.is_file():
+            shutil.copy2(source, target)
+    return commit_all(root, "current candidate snapshot")
+
+
+def build_payload_in_subprocess(
+    *,
+    scripts: Path,
+    base: Path,
+    base_commit: str,
+    head: Path,
+    head_commit: str,
+) -> dict[str, object]:
+    program = textwrap.dedent(
+        """
+        import json
+        import os
+        import sys
+        from datetime import datetime, timedelta, timezone
+        from pathlib import Path
+
+        sys.path.insert(0, sys.argv[1])
+        import privacy_age_integrity_gate as gate
+
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        payload = gate.build_admission_payload(
+            base_repository=Path(sys.argv[2]),
+            base_commit=sys.argv[3],
+            head_repository=Path(sys.argv[4]),
+            head_commit=sys.argv[5],
+            repository="nisavid/dotfiles",
+            issued_at=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            expires_at=(now + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            nonce="a" * 32,
+        )
+        print(json.dumps({
+            "infrastructure": sorted(
+                os.fsdecode(path) for path in gate.ADMISSION_INFRASTRUCTURE_PATHS
+            ),
+            "payload": payload,
+        }, sort_keys=True))
+        """
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-B",
+            "-c",
+            program,
+            os.fspath(scripts),
+            os.fspath(base),
+            base_commit,
+            os.fspath(head),
+            head_commit,
+        ],
+        cwd=base.parent,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    if result.returncode != 0:
+        raise AssertionError(
+            f"isolated admission payload failed with {result.returncode}: {result.stderr}"
+        )
+    return json.loads(result.stdout)
+
+
 class PrivacyAgeIntegrityGateTests(TestCase):
     def make_checkouts(self) -> tuple[TemporaryDirectory[str], Path, Path, str]:
         temporary = TemporaryDirectory()
@@ -230,7 +431,7 @@ class PrivacyAgeIntegrityGateTests(TestCase):
             b"docs/ENCRYPTION.md": (
                 b"blob",
                 b"100644",
-                b"fbb9361b2bd7e2eb7c1c9a04428ad3478ee8a125",
+                b"b2ec72a28224c69d1aa8e326118c0ed79a187fb4",
             ),
         }
         self.assertEqual(BOOTSTRAP_REVIEWED_SUPPORT_ENTRIES, reviewed_fixture)
@@ -318,104 +519,114 @@ class PrivacyAgeIntegrityGateTests(TestCase):
             {path.encode("ascii") for path in LEGACY_ADMISSION_INFRASTRUCTURE_FIXTURE_PATHS},
         )
 
-    def test_pinned_legacy_boundary_uses_the_normal_signed_migration(self) -> None:
-        temporary, base, head, _ = self.make_checkouts()
-        key = Path(temporary.name) / "legacy-migration-key"
-        subprocess.run(
-            ["/usr/bin/ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)],
-            check=True,
-            capture_output=True,
-            timeout=10,
+    def test_actual_predecessor_cannot_install_the_nine_path_boundary(self) -> None:
+        temporary = TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        base = Path(temporary.name) / "base"
+        head = Path(temporary.name) / "head"
+        manifest = materialize_legacy_fixture(base)
+        materialize_legacy_fixture(head)
+        base_commit = str(manifest["snapshot"]["commit"])
+        self.assertEqual(base_commit, "0e981202824a76043083039a407dd165e243d544")
+        self.assertEqual(
+            manifest["snapshot"]["omitted_parent"],
+            "7fbe8e520cf85c16de4ba05b9b016b153340ed05",
         )
-        public_key = Path(f"{key}.pub").read_text(encoding="ascii").split()
-        signer = (
-            f'{ADMISSION_PRINCIPAL} namespaces="{ADMISSION_NAMESPACE}" '
-            f"{public_key[0]} {public_key[1]}\n"
+        head_commit = overlay_candidate_tree(head)
+
+        predecessor = build_payload_in_subprocess(
+            scripts=base / "scripts",
+            base=base,
+            base_commit=base_commit,
+            head=head,
+            head_commit=head_commit,
         )
-        for checkout in (base, head):
-            (checkout / ".github/age-admission/allowed_signers").write_text(
-                signer,
-                encoding="ascii",
-            )
-        for relative in REVIEW_INFRASTRUCTURE_ADDITIONS:
-            (base / relative).unlink()
-        base_commit = commit_all(base, "complete legacy admission boundary")
-        head_commit = commit_all(head, "complete current admission boundary")
+        current = build_payload_in_subprocess(
+            scripts=ROOT / "scripts",
+            base=base,
+            base_commit=base_commit,
+            head=head,
+            head_commit=head_commit,
+        )
 
-        with patch.object(_gate, "LEGACY_ACTIVE_BASE_COMMIT", base_commit):
-            transition = _gate._protected_transition(
-                base_repository=base,
-                base_commit=base_commit,
-                head_repository=head,
-                head_commit=head_commit,
-            )
-            self.assertEqual(
-                transition.boundary_state,
-                _gate.AdmissionBoundaryState.ACTIVE_PREVIOUS,
-            )
-            paths = _gate._admission_paths(transition)
-            self.assertEqual(
-                [path["path"] for path in paths],
-                list(REVIEW_INFRASTRUCTURE_ADDITIONS),
-            )
+        expected_predecessor_infrastructure = [
+            ".github/age-admission/allowed_signers",
+            "scripts/create-age-admission-receipt",
+            "scripts/privacy_age_admission.py",
+            "scripts/privacy_age_admission_publisher.py",
+            "scripts/privacy_age_admission_result.py",
+            "scripts/privacy_age_pr_snapshot.py",
+            "scripts/run-trusted-age-admission",
+        ]
+        expected_review_additions = [
+            ".github/age-admission/privacy-scan-reviewed-findings-v1.json",
+            "scripts/privacy_scan_review.py",
+        ]
+        expected_predecessor_paths = [
+            ".github/workflows/platform-portability.yml",
+            "docs/ENCRYPTION.md",
+            "scripts/privacy-scan",
+            "scripts/privacy_age_integrity_gate.py",
+        ]
+        expected_current_paths = sorted(
+            expected_predecessor_paths + expected_review_additions
+        )
+        self.assertEqual(
+            predecessor["infrastructure"],
+            expected_predecessor_infrastructure,
+        )
+        self.assertEqual(
+            current["infrastructure"],
+            sorted(expected_predecessor_infrastructure + expected_review_additions),
+        )
+        self.assertEqual(
+            [entry["path"] for entry in predecessor["payload"]["paths"]],
+            expected_predecessor_paths,
+        )
+        self.assertEqual(
+            [entry["path"] for entry in current["payload"]["paths"]],
+            expected_current_paths,
+        )
 
+        predecessor_receipt = encode_receipt(
+            predecessor["payload"],
+            b"not-a-signature",
+        )
+        with patch.object(_gate, "verify_receipt_signature") as verify_signature:
             with self.assertRaisesRegex(
                 RuntimeError,
-                "without admission",
+                "admission receipt is not authorized",
             ):
                 self.verify(
                     base,
                     head,
                     base_commit,
                     head_commit,
-                    repository="nisavid/dotfiles",
-                )
-
-            now = datetime.now(timezone.utc).replace(microsecond=0)
-            payload = {
-                "base_commit": base_commit,
-                "expires_at": (now + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "head_commit": head_commit,
-                "issued_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "nonce": "c" * 32,
-                "paths": paths,
-                "repository": "nisavid/dotfiles",
-                "version": ADMISSION_VERSION,
-            }
-            message_file = Path(temporary.name) / "legacy-migration-payload"
-            message_file.write_bytes(canonical_payload_bytes(payload))
-            subprocess.run(
-                [
-                    "/usr/bin/ssh-keygen",
-                    "-Y",
-                    "sign",
-                    "-f",
-                    str(key),
-                    "-n",
-                    ADMISSION_NAMESPACE,
-                    str(message_file),
-                ],
-                check=True,
-                capture_output=True,
-                timeout=10,
-            )
-            receipt = encode_receipt(
-                payload,
-                message_file.with_suffix(".sig").read_bytes(),
-            )
-            with patch(
-                "scripts.privacy_age_admission.shutil.which",
-                return_value="/usr/bin/ssh-keygen",
-            ):
-                self.verify(
-                    base,
-                    head,
-                    base_commit,
-                    head_commit,
-                    admission_body=receipt,
+                    admission_body=predecessor_receipt,
                     allowed_signers=base / ".github/age-admission/allowed_signers",
                     repository="nisavid/dotfiles",
                 )
+        verify_signature.assert_not_called()
+
+        for relative in expected_review_additions:
+            with self.subTest(missing=relative):
+                run("git", "reset", "--hard", head_commit, cwd=head)
+                (head / relative).unlink()
+                incomplete_commit = commit_all(head, f"omit {relative}")
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "active admission infrastructure must remain complete",
+                ):
+                    _gate.build_admission_payload(
+                        base_repository=base,
+                        base_commit=base_commit,
+                        head_repository=head,
+                        head_commit=incomplete_commit,
+                        repository="nisavid/dotfiles",
+                        issued_at="2026-08-25T00:00:00Z",
+                        expires_at="2026-08-25T01:00:00Z",
+                        nonce="b" * 32,
+                    )
 
     def test_unpinned_legacy_tree_is_not_reusable(self) -> None:
         _, base, head, _ = self.make_checkouts()

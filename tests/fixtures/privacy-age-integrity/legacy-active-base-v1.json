@@ -1,0 +1,16 @@
+{
+  "schema": "privacy-age-integrity-predecessor-fixture/v1",
+  "pack": {
+    "path": "legacy-active-base-v1.pack",
+    "sha256": "e86480ad3b83eae59048249c53bf17fbac09e625a9944c493d51754de39efd1a",
+    "size": 1352699,
+    "object_count": 655
+  },
+  "snapshot": {
+    "commit": "0e981202824a76043083039a407dd165e243d544",
+    "shallow_boundary": "0e981202824a76043083039a407dd165e243d544",
+    "omitted_parent": "7fbe8e520cf85c16de4ba05b9b016b153340ed05",
+    "root_tree": "ac2898cd79618f85d527e62c83537555f360be83",
+    "integrity_gate_blob": "841d6bdff90db89f6089413ec4ff014e8e60dd6b"
+  }
+}

@@ -102,11 +102,21 @@ the pre-bootstrap path.
 
 This verifier revision recognizes commit
 `0e981202824a76043083039a407dd165e243d544` as the only active predecessor whose
-seven-path admission boundary may migrate to the current nine-path boundary.
-That one-time migration uses the normal signed-admission route, requires both
-scanner-review paths in the candidate, and is not a bootstrap exception. The
-same seven-path shape at any other commit, any mixed or malformed boundary, and
-any later deletion or downgrade remain blocking before receipt parsing.
+seven-path admission boundary precedes the current nine-path boundary. Ordinary
+predecessor admission cannot install that expansion: the predecessor binds only
+four changed protected paths, while the current verifier also requires the
+canonical reviewed-findings record and reviewer module. A predecessor-scoped
+receipt therefore cannot describe the complete transition required by the
+current boundary.
+
+The one-time transition requires a separately reviewed, immutable compute
+bundle executed outside both Git checkouts. It binds the exact predecessor,
+candidate tree, two new authority paths, complete protected delta, reviewed
+finding set, and ordinary owner-signed receipt before handing a canonical result
+to the separately deployed App bootstrap publisher. This repository revision
+does not implement or activate that external transition mechanism. The same
+seven-path shape at any other commit, any mixed or malformed boundary, and any
+later deletion or downgrade remain blocking before receipt parsing.
 
 ### Every-head admission result
 

@@ -247,7 +247,7 @@ BOOTSTRAP_REVIEWED_SUPPORT_ENTRIES = {
     b"docs/ENCRYPTION.md": (
         b"blob",
         b"100644",
-        b"fbb9361b2bd7e2eb7c1c9a04428ad3478ee8a125",
+        b"b2ec72a28224c69d1aa8e326118c0ed79a187fb4",
     ),
 }
 # This marker lives in the already protected workflow.  The legacy
