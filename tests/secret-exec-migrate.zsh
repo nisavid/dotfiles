@@ -38,6 +38,41 @@ set -e
 [[ ! -e $excluded_marker ]] ||
   fail 'migration must not invoke pass-cli outside runtime PATH'
 
+hostile_runtime=$test_dir/hostile-runtime
+hostile_relative_runtime=$hostile_runtime/relative-bin
+hostile_zsh_marker=$test_dir/hostile-zsh-ran
+installed_migrator=$test_dir/secret-exec-migrate
+cp -- "$migrator" "$installed_migrator"
+chmod +x "$installed_migrator"
+mkdir -p -- "$hostile_runtime" "$hostile_relative_runtime"
+for hostile_runtime_dir in "$hostile_runtime" "$hostile_relative_runtime"; do
+  cat >"$hostile_runtime_dir/zsh" <<'EOF'
+#!/bin/sh
+: >"$HOSTILE_ZSH_MARKER"
+exit 90
+EOF
+  chmod +x "$hostile_runtime_dir/zsh"
+done
+for hostile_runtime_prefix in '' . relative-bin; do
+  rm -f -- "$hostile_zsh_marker"
+  set +e
+  hostile_runtime_output=$(
+    cd "$hostile_runtime"
+    HOSTILE_ZSH_MARKER=$hostile_zsh_marker \
+      HOME=$excluded_home XDG_CONFIG_HOME=$excluded_config \
+      PATH=$hostile_runtime_prefix:$excluded_path \
+      "$installed_migrator" 2>&1
+  )
+  hostile_runtime_status=$?
+  set -e
+  (( hostile_runtime_status == 1 )) ||
+    fail 'direct migration execution must reach the fixed interpreter'
+  [[ $hostile_runtime_output == 'secret-exec-migrate: pass-cli is required' ]] ||
+    fail 'direct migration execution must preserve the missing-provider diagnostic'
+  [[ ! -e $hostile_zsh_marker ]] ||
+    fail 'direct migration execution must ignore a PATH-selected zsh'
+done
+
 fixture_home=$test_dir/home
 fake_bin=$test_dir/bin
 state_dir=$test_dir/proton-state
@@ -230,6 +265,31 @@ set -e
 (( exit_code != 0 )) || fail 'duplicate verification must compare secret values literally'
 mv "$test_dir/environment-pattern" "$fixture_home/.config/environment.d/10-apikeys.local.conf"
 
+hostile_python_cwd=$test_dir/hostile-python-cwd
+hostile_python_marker=$test_dir/hostile-python-ran
+mkdir -p -- "$hostile_python_cwd"
+cat >"$hostile_python_cwd/python3" <<'EOF'
+#!/bin/sh
+: >"$HOSTILE_PYTHON_MARKER"
+exit 90
+EOF
+chmod +x "$hostile_python_cwd/python3"
+set +e
+hostile_python_output=$(
+  cd "$hostile_python_cwd"
+  HOSTILE_PYTHON_MARKER=$hostile_python_marker PATH=:$PATH \
+    "$zsh_command" "$migrator" 2>&1
+)
+hostile_python_status=$?
+set -e
+(( hostile_python_status == 1 )) ||
+  fail 'migration must reject a relative plaintext encoder selection'
+[[ $hostile_python_output ==
+  'secret-exec-migrate: python3 must resolve to an absolute path through PATH' ]] ||
+  fail 'migration must report one fixed relative plaintext encoder diagnostic'
+[[ ! -e $hostile_python_marker ]] ||
+  fail 'migration must not send plaintext through a relative PATH selection'
+
 output=$(zsh "$migrator" 2>&1)
 for canary in AKIACANARY AwsSecret github-canary context7-canary firecrawl-canary greptile-canary; do
   [[ $output != *$canary* ]] || fail 'migration output must never contain canary values'
@@ -237,7 +297,10 @@ done
 [[ -e $fixture_home/.config/environment.d/10-apikeys.local.conf ]] || fail 'import must not retire plaintext without the explicit flag'
 (( $(wc -l < "$state_dir/created.log") == 5 )) || fail 'migration must create the five Proton items'
 
-output=$(zsh "$migrator" 2>&1)
+output=$(
+  cd "$fake_bin"
+  PATH=.:$PATH "$zsh_command" "$migrator" 2>&1
+)
 (( $(wc -l < "$state_dir/created.log") == 5 )) || fail 'repeated migration must not create duplicate items'
 
 profile_dir=$fixture_home/.config/secret-exec/profiles

@@ -480,6 +480,8 @@ diagnostic_matches_state() {
   [[ $diagnostic == *$'\n'"$expected" ]] || return 1
 
   local framing=${diagnostic%$'\n'"$expected"}
+  [[ -n $framing && $framing != $'\n'* && $framing != *$'\n' &&
+    $framing != *$'\n\n'* ]] || return 1
   local line
   local log_line_pattern
   case $state in
@@ -542,7 +544,12 @@ classify_session_state() {
     remove_diagnostic_file
     return 0
   fi
-  local diagnostic=$(<"$PROTON_PASS_DIAGNOSTIC_FILE")
+  local diagnostic=
+  local diagnostic_line=
+  while IFS= read -r diagnostic_line || [[ -n $diagnostic_line ]]; do
+    diagnostic+=$diagnostic_line$'\n'
+  done < "$PROTON_PASS_DIAGNOSTIC_FILE"
+  diagnostic=${diagnostic%$'\n'}
   remove_diagnostic_file
   [[ $waiter_stage == child-status ]] || return 0
   if diagnostic_matches_state \

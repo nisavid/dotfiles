@@ -314,6 +314,32 @@ if (( fd_audit_enabled )); then
     fail 'provider and final consumer must not inherit the escape diagnostic descriptor'
   cp -- "$fast_exit" "$fast_local_bin/proton-pass-ensure-ready"
 fi
+
+empty_path_output=$(
+  cd "$test_dir"
+  HOME=$fast_home XDG_CONFIG_HOME=$fast_home/.config \
+    PATH=:$fast_local_bin:$fast_target_bin:/usr/bin:/bin \
+    "$fast_local_bin/secret-exec" fast-provider -- check-fast-provider
+)
+[[ -z $empty_path_output ]] ||
+  fail 'an empty PATH component without pass-cli must preserve later provider lookup'
+
+relative_pass_cwd=$test_dir/relative-pass-cli-cwd
+relative_pass_bin=$relative_pass_cwd/relative-bin
+mkdir -p -- "$relative_pass_cwd" "$relative_pass_bin"
+cp -- "$fast_local_bin/pass-cli" "$relative_pass_cwd/pass-cli"
+cp -- "$fast_local_bin/pass-cli" "$relative_pass_bin/pass-cli"
+for relative_pass_prefix in '' . relative-bin; do
+  relative_pass_output=$(
+    cd "$relative_pass_cwd"
+    HOME=$fast_home XDG_CONFIG_HOME=$fast_home/.config \
+      PATH=$relative_pass_prefix:$fast_target_bin:/usr/bin:/bin \
+      "$fast_local_bin/secret-exec" fast-provider -- check-fast-provider
+  )
+  [[ -z $relative_pass_output ]] ||
+    fail 'secret-exec must preserve ordinary relative pass-cli PATH selections'
+done
+
 if [[ -n $status_fragment_library ]]; then
   typeset identity_loss_output identity_listing identity_controller
   integer identity_loss_status
