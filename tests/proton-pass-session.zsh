@@ -549,6 +549,12 @@ case $1 in
         'Please log in again with: pass login'
       exit 77
     fi
+    if [[ -e $FAKE_PASS_INFO_ALTERNATE_ABSENT ]]; then
+      print -u2 -rl -- \
+        '2026-08-25T07:13:16.037584Z ERROR pass-cli/src/main.rs:332: Session is some but is not logged in' \
+        'Error: This operation requires an authenticated client'
+      exit 78
+    fi
     print -u2 -rl -- \
       '2026-08-25T07:13:16.037584Z ERROR pass-cli/src/main.rs:332: Command is not logout there is no session' \
       'Error: This operation requires an authenticated client'
@@ -714,6 +720,7 @@ export FAKE_PASS_VERIFY_HANG=$test_dir/verify-hang
 export FAKE_PASS_INFO_HANG=$test_dir/info-hang
 export FAKE_PASS_INFO_TRANSIENT=$test_dir/info-transient
 export FAKE_PASS_INFO_INVALIDATED=$test_dir/info-invalidated
+export FAKE_PASS_INFO_ALTERNATE_ABSENT=$test_dir/info-alternate-absent
 export FAKE_SECRET_TOOL_LOG=$test_dir/secret-tool.log
 export FAKE_NATIVE_STORE_LOCKED=$test_dir/native-store-locked
 export FAKE_NATIVE_STORE_HANG=$test_dir/native-store-hang
@@ -1001,6 +1008,19 @@ grep -Fqx 'waiter-stage=unrecorded' "$status_file" ||
   fail 'a successful repair must record an unrecorded waiter stage'
 [[ $(grep -Ec '^waiter-stage=(record|identity|liveness-retry|child-status|retirement|unrecorded)$' "$status_file") == 1 ]] ||
   fail 'readiness status must contain one allowlisted waiter stage'
+
+rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION"
+: > "$FAKE_PASS_INFO_ALTERNATE_ABSENT"
+: > "$FAKE_PASS_LOG"
+: > "$FAKE_SECRET_TOOL_LOG"
+zsh "$ensure_ready"
+rm -f -- "$FAKE_PASS_INFO_ALTERNATE_ABSENT"
+[[ -e $FAKE_PASS_REMOTE_SESSION ]] ||
+  fail 'the alternate recognized absent diagnostic must establish readiness'
+[[ $(<"$FAKE_PASS_LOG") == $'info\ninfo\nlogin\ninfo' ]] ||
+  fail 'the alternate recognized absent diagnostic must perform one bounded repair'
+[[ $(<"$FAKE_SECRET_TOOL_LOG") == proton-bootstrap ]] ||
+  fail 'the alternate recognized absent diagnostic must use the fixed bootstrap item'
 
 : > "$FAKE_PASS_LOG"
 : > "$FAKE_SECRET_TOOL_LOG"

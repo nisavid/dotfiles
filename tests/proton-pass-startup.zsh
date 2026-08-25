@@ -571,8 +571,30 @@ bootstrap_field=PROTON_PASS_PERSONAL_ACCESS
 bootstrap_field+=_TOKEN
 (( ${+parameters[$bootstrap_field]} == 0 )) ||
   print -r -- startup-policy >>"$FAKE_GUI_BOOTSTRAP_LEAK_LOG"
-path=( "$FAKE_GUI_PATH_BIN" /usr/bin /bin /usr/sbin /sbin )
-print -r -- loaded >"$FAKE_GUI_STARTUP_POLICY_LOG"
+case $FAKE_GUI_STARTUP_POLICY_SCENARIO in
+  ready)
+    path=( "$FAKE_GUI_PATH_BIN" /usr/bin /bin /usr/sbin /sbin )
+    print -r -- loaded >"$FAKE_GUI_STARTUP_POLICY_LOG"
+    ;;
+  fail)
+    return 91
+    ;;
+  hang)
+    (
+      zmodload zsh/system
+      zmodload zsh/zselect
+      trap '' HUP TERM
+      print -r -- "$sysparams[pid]" >"$FAKE_GUI_POLICY_DESCENDANT_PID"
+      while true; do
+        zselect -t 100 2>/dev/null || true
+      done
+    ) &
+    wait
+    ;;
+  *)
+    return 92
+    ;;
+esac
 EOF
 cat >"$gui_cellar_bin/pass-cli" <<'EOF'
 #!/bin/zsh -f
@@ -599,13 +621,16 @@ fake_gui_startup_policy_log=$test_dir/gui-startup-policy.log
 fake_gui_pass_log=$test_dir/gui-pass.log
 fake_gui_bootstrap_leak_log=$test_dir/gui-bootstrap-leaks.log
 fake_gui_output=$test_dir/gui-startup.out
+fake_gui_policy_descendant_pid=$test_dir/gui-policy-descendant.pid
 set +e
 HOME=$gui_home \
   PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+  FAKE_GUI_STARTUP_POLICY_SCENARIO=ready \
   FAKE_GUI_PATH_BIN=$gui_path_bin \
   FAKE_GUI_STARTUP_POLICY_LOG=$fake_gui_startup_policy_log \
   FAKE_GUI_PASS_LOG=$fake_gui_pass_log \
   FAKE_GUI_BOOTSTRAP_LEAK_LOG=$fake_gui_bootstrap_leak_log \
+  FAKE_GUI_POLICY_DESCENDANT_PID=$fake_gui_policy_descendant_pid \
   /bin/zsh -f -c '
     function run_darwin_startup {
       local OSTYPE=darwin23.0
@@ -626,6 +651,71 @@ set -e
   fail 'macOS startup readiness must use the PATH-selected provider executable'
 [[ ! -e $fake_gui_bootstrap_leak_log ]] ||
   fail 'macOS startup must scrub the bootstrap token before shared PATH policy'
+
+set +e
+HOME=$gui_home \
+  PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+  FAKE_GUI_STARTUP_POLICY_SCENARIO=fail \
+  FAKE_GUI_PATH_BIN=$gui_path_bin \
+  FAKE_GUI_STARTUP_POLICY_LOG=$fake_gui_startup_policy_log \
+  FAKE_GUI_PASS_LOG=$fake_gui_pass_log \
+  FAKE_GUI_BOOTSTRAP_LEAK_LOG=$fake_gui_bootstrap_leak_log \
+  FAKE_GUI_POLICY_DESCENDANT_PID=$fake_gui_policy_descendant_pid \
+  /bin/zsh -f -c '
+    function run_darwin_startup {
+      local OSTYPE=darwin23.0
+      local startup_path=$1
+      set --
+      source "$startup_path"
+    }
+    run_darwin_startup "$1"
+  ' proton-pass-startup "$gui_startup_bin/proton-pass-startup" \
+    >"$fake_gui_output" 2>&1
+gui_policy_failure_status=$?
+set -e
+(( gui_policy_failure_status == 1 )) ||
+  fail 'a failed macOS PATH policy must fail startup closed'
+[[ $(<"$fake_gui_output") ==
+  'proton-pass-startup: the shared GUI PATH policy failed' ]] ||
+  fail 'a failed macOS PATH policy must report one fixed diagnostic'
+
+rm -f -- "$fake_gui_policy_descendant_pid"
+test_process_fixture_track_pid_file "$fake_gui_policy_descendant_pid"
+typeset -F gui_policy_hang_started=$EPOCHREALTIME
+set +e
+run_with_test_deadline \
+  "$fake_gui_output" 8 \
+  /usr/bin/env \
+    HOME="$gui_home" \
+    PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+    FAKE_GUI_STARTUP_POLICY_SCENARIO=hang \
+    FAKE_GUI_PATH_BIN="$gui_path_bin" \
+    FAKE_GUI_STARTUP_POLICY_LOG="$fake_gui_startup_policy_log" \
+    FAKE_GUI_PASS_LOG="$fake_gui_pass_log" \
+    FAKE_GUI_BOOTSTRAP_LEAK_LOG="$fake_gui_bootstrap_leak_log" \
+    FAKE_GUI_POLICY_DESCENDANT_PID="$fake_gui_policy_descendant_pid" \
+    /bin/zsh -f -c '
+      function run_darwin_startup {
+        local OSTYPE=darwin23.0
+        local startup_path=$1
+        set --
+        source "$startup_path"
+      }
+      run_darwin_startup "$1"
+    ' proton-pass-startup "$gui_startup_bin/proton-pass-startup"
+gui_policy_hang_status=$?
+set -e
+typeset -F gui_policy_hang_elapsed=$(( EPOCHREALTIME - gui_policy_hang_started ))
+(( gui_policy_hang_status == 1 &&
+  gui_policy_hang_elapsed >= 2.5 && gui_policy_hang_elapsed < 6.0 )) ||
+  fail 'a hanging macOS PATH policy must exhaust within its production deadline'
+[[ $(<"$fake_gui_output") ==
+  'proton-pass-startup: the shared GUI PATH policy failed' ]] ||
+  fail 'a timed-out macOS PATH policy must report one fixed diagnostic'
+gui_policy_descendant_pid=$(<"$fake_gui_policy_descendant_pid")
+! kill -0 $gui_policy_descendant_pid 2>/dev/null ||
+  fail 'a timed-out macOS PATH policy descendant must be terminated and reaped'
+test_process_fixture_untrack_pid_file "$fake_gui_policy_descendant_pid"
 
 reset_fixture
 export FAKE_STARTUP_SCENARIO=ready
