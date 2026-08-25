@@ -10,6 +10,7 @@ umask 077
 
 readonly PROTON_PASS_STARTUP_SCRIPT_DIR=${0:A:h}
 readonly PROTON_PASS_STARTUP_ATTEMPTS=2
+readonly PROTON_PASS_PATH_POLICY_TIMEOUT_SECONDS=3
 readonly PROTON_PASS_READINESS_TIMEOUT_SECONDS=25.85
 readonly PROTON_PASS_RETRY_BACKOFF_CENTISECONDS=500
 readonly PROTON_PASS_NOTIFICATION_TIMEOUT_SECONDS=2
@@ -267,6 +268,58 @@ trap 'terminate_active_child; exit 129' HUP
 trap 'terminate_active_child; exit 130' INT
 trap 'terminate_active_child; exit 143' TERM
 
+render_darwin_runtime_path() {
+  emulate -L zsh
+
+  local startup_file=$1
+  zmodload zsh/system || die 'zsh/system is required'
+  integer output_fd=0 create_attempt
+  local output_file=
+  for (( create_attempt = 1; create_attempt <= 4; ++create_attempt )); do
+    output_file=/tmp/proton-pass-startup-path.${sysparams[pid]}.$RANDOM
+    if sysopen -rw -m 600 -o creat,excl,nofollow \
+      -u output_fd "$output_file"; then
+      break
+    fi
+    output_fd=0
+  done
+  (( output_fd > 2 )) || die 'cannot create private GUI PATH transport'
+  if ! /bin/rm -- "$output_file"; then
+    exec {output_fd}>&-
+    die 'cannot unlink private GUI PATH transport'
+  fi
+
+  local path_renderer='
+set -euo pipefail
+typeset bootstrap_field=PROTON_PASS_PERSONAL_ACCESS
+bootstrap_field+=_TOKEN
+unset "$bootstrap_field"
+unset bootstrap_field
+path=( /usr/bin /bin /usr/sbin /sbin )
+source "$1" launcher darwin >/dev/null 2>&1
+[[ -n $PATH && $PATH != *$'\''\n'\''* && $PATH != *$'\''\r'\''* ]] || exit 65
+builtin print -r -- "$PATH"'
+  integer render_status=0
+  run_bounded_child "$PROTON_PASS_PATH_POLICY_TIMEOUT_SECONDS" \
+    /bin/zsh -f -c "$path_renderer" proton-pass-path "$startup_file" \
+    >&$output_fd 2>/dev/null || render_status=$?
+  if (( render_status != 0 )) || ! sysseek -u $output_fd 0; then
+    exec {output_fd}>&-
+    return 1
+  fi
+
+  local rendered_path= extra_output=
+  if ! IFS= read -r rendered_path <&$output_fd ||
+    IFS= read -r extra_output <&$output_fd || [[ -n $extra_output ]]; then
+    exec {output_fd}>&-
+    return 1
+  fi
+  exec {output_fd}>&-
+  [[ -n $rendered_path && $rendered_path != *$'\n'* &&
+    $rendered_path != *$'\r'* ]] || return 1
+  typeset -g PROTON_PASS_RENDERED_RUNTIME_PATH=$rendered_path
+}
+
 configure_runtime_path() {
   emulate -L zsh
 
@@ -275,10 +328,11 @@ configure_runtime_path() {
       [[ -n ${HOME:-} ]] || die 'HOME is required for the shared GUI PATH policy'
       local startup_file=$HOME/.config/zsh/startup.zsh
       [[ -r $startup_file ]] || die 'the shared GUI PATH policy is required'
-      path=( /usr/bin /bin /usr/sbin /sbin )
-      source "$startup_file" launcher darwin ||
+      typeset -g PROTON_PASS_RENDERED_RUNTIME_PATH=
+      render_darwin_runtime_path "$startup_file" ||
         die 'the shared GUI PATH policy failed'
-      [[ -n $PATH ]] || die 'the shared GUI PATH policy produced an empty PATH'
+      export PATH=$PROTON_PASS_RENDERED_RUNTIME_PATH
+      unset PROTON_PASS_RENDERED_RUNTIME_PATH
       ;;
   esac
 }

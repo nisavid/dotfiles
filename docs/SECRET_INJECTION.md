@@ -139,15 +139,18 @@ Aqua domain and leaves a healthy registration intact. After scrubbing the
 bootstrap token, `proton-pass-startup` resets its path to the system baseline
 and sources the shared `~/.config/zsh/startup.zsh` policy with `launcher darwin`.
 Provider readiness therefore uses the managed graphical-session `PATH` without
-depending on LaunchAgent ordering.
+depending on LaunchAgent ordering. PATH derivation runs in its own process group
+with a three-second deadline; failure, extra output, or surviving descendants
+fail startup closed.
 
 Both startup targets call `proton-pass-startup`, which uses a fixed finite
 two-attempt schedule with a five-second backoff around the shared readiness
-helper. Two 26-second attempts, the backoff, and a 2.15-second notification
-ceiling total 59.15 seconds, leaving 10.85 seconds for local setup and fixed
-error handling under the Linux service's 70-second startup ceiling. Exhaustion
-records the underlying value-free failure when available, emits a best-effort
-notification, and leaves lazy consumer recovery enabled.
+helper. On macOS, the bounded PATH-policy setup adds at most 3.1 seconds. Two
+26-second attempts, the backoff, the PATH-policy ceiling, and a 2.15-second
+notification ceiling total 62.25 seconds, leaving 7.75 seconds for remaining
+local setup and fixed error handling under the Linux service's 70-second startup
+ceiling. Exhaustion records the underlying value-free failure when available,
+emits a best-effort notification, and leaves lazy consumer recovery enabled.
 
 ### Status and locked stores
 
