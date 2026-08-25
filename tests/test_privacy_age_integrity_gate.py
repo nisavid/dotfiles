@@ -329,6 +329,7 @@ def build_payload_in_subprocess(
 ) -> dict[str, object]:
     program = textwrap.dedent(
         """
+        import base64
         import json
         import os
         import sys
@@ -336,6 +337,7 @@ def build_payload_in_subprocess(
         from pathlib import Path
 
         sys.path.insert(0, sys.argv[1])
+        import privacy_age_admission as admission
         import privacy_age_integrity_gate as gate
 
         now = datetime.now(timezone.utc).replace(microsecond=0)
@@ -346,7 +348,7 @@ def build_payload_in_subprocess(
             ),
         }
         try:
-            output["payload"] = gate.build_admission_payload(
+            payload = gate.build_admission_payload(
                 base_repository=Path(sys.argv[2]),
                 base_commit=sys.argv[3],
                 head_repository=Path(sys.argv[4]),
@@ -356,6 +358,10 @@ def build_payload_in_subprocess(
                 expires_at=(now + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 nonce="a" * 32,
             )
+            output["payload"] = payload
+            output["receipt"] = base64.b64encode(
+                admission.encode_receipt(payload, b"not-a-signature")
+            ).decode("ascii")
         except RuntimeError as error:
             output["error"] = str(error)
         print(json.dumps(output, sort_keys=True))
@@ -682,9 +688,9 @@ class PrivacyAgeIntegrityGateTests(TestCase):
             expected_current_paths,
         )
 
-        predecessor_receipt = encode_receipt(
-            predecessor["payload"],
-            b"not-a-signature",
+        predecessor_receipt = base64.b64decode(
+            str(predecessor["receipt"]),
+            validate=True,
         )
         receipt_result = verify_in_subprocess(
             scripts=head / "scripts",
