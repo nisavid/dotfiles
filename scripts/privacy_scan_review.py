@@ -380,7 +380,7 @@ def load_review_record(path: Path, *, policy_root: Path) -> ReviewRecord:
             data.decode("ascii"),
             object_pairs_hook=_reject_duplicate_keys,
         )
-    except (UnicodeError, json.JSONDecodeError, RecursionError) as error:
+    except (UnicodeError, ValueError, RecursionError) as error:
         raise ReviewRecordError("owner-review record is not valid JSON") from error
     canonical = canonical_json_bytes(document)
     if data not in {canonical, canonical + b"\n"}:

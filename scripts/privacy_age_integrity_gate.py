@@ -180,7 +180,7 @@ BOOTSTRAP_REVIEWED_AUTHORITY_ENTRIES = {
     b"scripts/privacy-scan": (
         b"blob",
         b"100755",
-        b"1838d712c46ffa002dc7ddd587f0da12bcbcb3e4",
+        b"685da1a66cc6b427af4a4d99bb97ac02d02d4e6b",
     ),
     b"scripts/create-age-admission-receipt": (
         b"blob",
@@ -222,12 +222,12 @@ BOOTSTRAP_REVIEWED_AUTHORITY_ENTRIES = {
     b"scripts/privacy_scan_review.py": (
         b"blob",
         b"100644",
-        b"e7a6e531ecbe0a442148dc1b40c55f1994f60576",
+        b"c60312be9feeecaf8698b09f93481fb2ba8919b4",
     ),
     b".github/age-admission/privacy-scan-reviewed-findings-v1.json": (
         b"blob",
         b"100644",
-        b"ab9159c4a06b11227464895c2aa9679567a7f84f",
+        b"5bc325cda6de36262a766fe89a5eb8058f5a1338",
     ),
 }
 # These support files are part of this reviewed bootstrap revision, but are not

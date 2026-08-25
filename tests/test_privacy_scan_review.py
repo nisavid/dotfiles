@@ -276,6 +276,138 @@ class PrivacyScanReviewTests(TestCase):
         self.assertNotIn(candidate_value, diagnostic)
         self.assertNotIn(os.fspath(root), diagnostic)
 
+    def test_reviewer_normalizes_under_limit_json_integer_parser_failure(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as directory:
+            fixture_root = Path(directory)
+            candidate_root = fixture_root / "private-candidate-root"
+            candidate_root.mkdir()
+            candidate_value = "private-candidate-marker"
+            (candidate_root / "clean.txt").write_text(candidate_value, encoding="utf-8")
+            overlong_integer = "9" * 5_000
+            record_path = fixture_root / "private-review-record.json"
+            record_path.write_text(
+                f'{{"record_id":{overlong_integer}}}',
+                encoding="ascii",
+            )
+            self.assertLess(
+                record_path.stat().st_size,
+                _review.MAX_REVIEW_RECORD_BYTES,
+            )
+
+            result = _run_scan(candidate_root, record_path)
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(
+            result.stderr,
+            "privacy scan failed: owner review record invalid\n",
+        )
+        self.assertEqual(result.stdout, "")
+        diagnostic = result.stdout + result.stderr
+        self.assertNotIn("Traceback", diagnostic)
+        self.assertNotIn(overlong_integer, diagnostic)
+        self.assertNotIn(candidate_value, diagnostic)
+        self.assertNotIn(os.fspath(SCANNER), diagnostic)
+        self.assertNotIn(os.fspath(Path(sys.executable).parent), diagnostic)
+        self.assertNotIn(os.fspath(record_path), diagnostic)
+        self.assertNotIn(os.fspath(fixture_root), diagnostic)
+
+    def test_load_review_record_normalizes_json_integer_parser_failure(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as directory:
+            record_path = Path(directory) / "review-record.json"
+            record_path.write_text(
+                '{"record_id":' + "9" * 5_000 + "}",
+                encoding="ascii",
+            )
+
+            with self.assertRaisesRegex(
+                ReviewRecordError,
+                "owner-review record is not valid JSON",
+            ):
+                load_review_record(record_path, policy_root=ROOT)
+
+    def test_structured_json_parser_refusal_fails_at_the_resource_boundary(
+        self,
+    ) -> None:
+        candidate_value = "private-candidate-value"
+        document = (
+            f'{{"\\u0074oken":"{candidate_value}","count":'
+            + "9" * 5_000
+            + "}"
+        )
+
+        with self.assertRaises(_scanner.PublicScanResourceLimitError):
+            _scanner.structured_document_contains_credential(
+                Path("candidate.json"),
+                document,
+            )
+
+    def test_scanner_normalizes_candidate_json_integer_parser_refusal(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            candidate_value = "private-candidate-value"
+            overlong_integer = "9" * 5_000
+            (root / "candidate.json").write_text(
+                f'{{"\\u0074oken":"{candidate_value}","count":{overlong_integer}}}',
+                encoding="ascii",
+            )
+
+            result = _run_scan(root, None)
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(
+            result.stderr,
+            _scanner.RESOURCE_LIMIT_DIAGNOSTIC + "\n",
+        )
+        self.assertEqual(result.stdout, "")
+        diagnostic = result.stdout + result.stderr
+        self.assertNotIn("Traceback", diagnostic)
+        self.assertNotIn(overlong_integer, diagnostic)
+        self.assertNotIn(candidate_value, diagnostic)
+        self.assertNotIn(os.fspath(SCANNER), diagnostic)
+        self.assertNotIn(os.fspath(Path(sys.executable).parent), diagnostic)
+        self.assertNotIn(os.fspath(root), diagnostic)
+
+    def test_public_scan_precedes_review_of_the_same_refused_json(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            candidate_value = "private-candidate-value"
+            overlong_integer = "9" * 5_000
+            record_path = root / "review-record.json"
+            record_path.write_text(
+                f'{{"\\u0074oken":"{candidate_value}","count":{overlong_integer}}}',
+                encoding="ascii",
+            )
+
+            result = _run_scan(root, record_path)
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(
+            result.stderr,
+            _scanner.RESOURCE_LIMIT_DIAGNOSTIC + "\n",
+        )
+        self.assertEqual(result.stdout, "")
+        diagnostic = result.stdout + result.stderr
+        self.assertNotIn("Traceback", diagnostic)
+        self.assertNotIn(overlong_integer, diagnostic)
+        self.assertNotIn(candidate_value, diagnostic)
+        self.assertNotIn(os.fspath(SCANNER), diagnostic)
+        self.assertNotIn(os.fspath(Path(sys.executable).parent), diagnostic)
+        self.assertNotIn(os.fspath(root), diagnostic)
+
+    def test_malformed_json_retains_the_ordinary_fallback(self) -> None:
+        self.assertFalse(
+            _scanner.structured_document_contains_credential(
+                Path("candidate.json"),
+                '{"\\u0074oken":',
+            )
+        )
+
     def test_scanner_reports_only_the_sanitized_oversized_policy_diagnostic(
         self,
     ) -> None:
