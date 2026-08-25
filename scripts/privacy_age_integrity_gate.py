@@ -30,6 +30,16 @@ try:
         verify_receipt_signature,
     )
     from .privacy_age_envelopes import AgeEnvelopeError, read_regular_file
+    from .privacy_age_admission_result import (
+        AdmissionResultError,
+        body_digest,
+        canonical_json_bytes,
+        make_result,
+        make_state,
+        parse_canonical_json,
+        validate_state,
+        validate_snapshot,
+    )
 except ImportError:  # pragma: no cover - direct script execution
     from privacy_age_admission import (
         ADMISSION_VERSION,
@@ -41,6 +51,16 @@ except ImportError:  # pragma: no cover - direct script execution
         verify_receipt_signature,
     )
     from privacy_age_envelopes import AgeEnvelopeError, read_regular_file
+    from privacy_age_admission_result import (
+        AdmissionResultError,
+        body_digest,
+        canonical_json_bytes,
+        make_result,
+        make_state,
+        parse_canonical_json,
+        validate_state,
+        validate_snapshot,
+    )
 
 COMMIT_ID = re.compile(r"[0-9a-f]{40}\Z", re.ASCII)
 MAX_GIT_TREE_BYTES = 8 * 1024 * 1024
@@ -65,6 +85,9 @@ PROTECTED_EXACT_PATHS = frozenset(
         b"scripts/privacy_age_admission.py",
         b"scripts/privacy_age_envelopes.py",
         b"scripts/privacy_age_integrity_gate.py",
+        b"scripts/privacy_age_admission_result.py",
+        b"scripts/privacy_age_pr_snapshot.py",
+        b"scripts/privacy_age_admission_publisher.py",
     }
 )
 ADMISSION_INFRASTRUCTURE_PATHS = frozenset(
@@ -73,6 +96,9 @@ ADMISSION_INFRASTRUCTURE_PATHS = frozenset(
         b"scripts/create-age-admission-receipt",
         b"scripts/run-trusted-age-admission",
         b"scripts/privacy_age_admission.py",
+        b"scripts/privacy_age_admission_result.py",
+        b"scripts/privacy_age_pr_snapshot.py",
+        b"scripts/privacy_age_admission_publisher.py",
     }
 )
 # A pre-bootstrap base already has the legacy gate, workflow, and envelope
@@ -97,6 +123,9 @@ BOOTSTRAP_REQUIRED_ENTRIES = {
     b"scripts/privacy_age_admission.py": (b"blob", b"100644"),
     b"scripts/privacy_age_envelopes.py": (b"blob", b"100644"),
     b"scripts/privacy_age_integrity_gate.py": (b"blob", b"100755"),
+    b"scripts/privacy_age_admission_result.py": (b"blob", b"100644"),
+    b"scripts/privacy_age_pr_snapshot.py": (b"blob", b"100644"),
+    b"scripts/privacy_age_admission_publisher.py": (b"blob", b"100644"),
     # The scanner's classifier is inherited unchanged during bootstrap; keep
     # its mode invariant here without making an unchanged base blob a stale
     # bootstrap replacement.
@@ -151,6 +180,23 @@ BOOTSTRAP_REVIEWED_AUTHORITY_ENTRIES = {
         b"100755",
         b"fef9847973839e4dded51275761099a9cf2be728",
     ),
+    # These result/snapshot/publication modules are trusted-base authority;
+    # their reviewed blobs must be replaced together during bootstrap.
+    b"scripts/privacy_age_admission_result.py": (
+        b"blob",
+        b"100644",
+        b"24c9fb25e1891340ee451a291dda93a20389701f",
+    ),
+    b"scripts/privacy_age_pr_snapshot.py": (
+        b"blob",
+        b"100644",
+        b"06ff19944db5ff83ca32044fb7f0c52d10626682",
+    ),
+    b"scripts/privacy_age_admission_publisher.py": (
+        b"blob",
+        b"100644",
+        b"42fc7887c8cb59625db8e103131eb089611fa90f",
+    ),
 }
 # These support files are part of this reviewed bootstrap revision, but are not
 # admission authority. Permit only their exact reviewed Git blobs; every other
@@ -159,7 +205,7 @@ BOOTSTRAP_REVIEWED_SUPPORT_ENTRIES = {
     b".github/workflows/privacy-age-integrity.yml": (
         b"blob",
         b"100644",
-        b"7881ce3c5cdb789fd861e48f46c3c82c313a21a4",
+        b"ac6d1610d245bac428b56504d7872b3424e4523f",
     ),
     b".github/workflows/platform-portability.yml": (
         b"blob",
@@ -169,7 +215,7 @@ BOOTSTRAP_REVIEWED_SUPPORT_ENTRIES = {
     b"docs/ENCRYPTION.md": (
         b"blob",
         b"100644",
-        b"b3a7085f7a00a864d51b470c19d132035f6e019f",
+        b"60ebea7e2be76383d105fa648db8816e5fb6f12f",
     ),
 }
 # This marker lives in the already protected workflow.  The legacy
@@ -676,12 +722,80 @@ def verify_integrity_boundary(
 ) -> None:
     """Reject every unadmitted protected transition between exact checkouts."""
 
+    if repository is None:
+        transition = _protected_transition(
+            base_repository=base_repository,
+            base_commit=base_commit,
+            head_repository=head_repository,
+            head_commit=head_commit,
+        )
+        _require_admission_boundary_ready(
+            transition,
+            require_bootstrap=bool(transition.changed),
+        )
+        if transition.changed:
+            _verify_admission(
+                transition,
+                admission_body=admission_body,
+                allowed_signers=allowed_signers,
+                repository=repository,
+            )
+        return
+    evaluate_integrity_boundary(
+        base_repository=base_repository,
+        base_commit=base_commit,
+        head_repository=head_repository,
+        head_commit=head_commit,
+        admission_body=admission_body,
+        allowed_signers=allowed_signers,
+        repository=repository,
+    )
+
+
+def evaluate_integrity_boundary(
+    *,
+    base_repository: Path,
+    base_commit: str,
+    head_repository: Path,
+    head_commit: str,
+    admission_body: bytes | None = None,
+    allowed_signers: Path | None = None,
+    repository: str | None = None,
+) -> dict[str, object]:
+    """Return the closed App result after enforcing the exact boundary.
+
+    The transition is classified before admission-body parsing. Consequently,
+    an empty protected set produces terminal success without calling the
+    receipt parser; all uncertainty remains a blocking exception.
+    """
+
+    if repository is None:
+        raise IntegrityGateError("repository identity is required for a result")
     transition = _protected_transition(
         base_repository=base_repository,
         base_commit=base_commit,
         head_repository=head_repository,
         head_commit=head_commit,
     )
+    return _evaluate_transition(
+        transition,
+        base_commit=base_commit,
+        head_commit=head_commit,
+        admission_body=admission_body,
+        allowed_signers=allowed_signers,
+        repository=repository,
+    )
+
+
+def _evaluate_transition(
+    transition: ProtectedTransition,
+    *,
+    base_commit: str,
+    head_commit: str,
+    admission_body: bytes | None,
+    allowed_signers: Path | None,
+    repository: str,
+) -> dict[str, object]:
     _require_admission_boundary_ready(
         transition,
         require_bootstrap=bool(transition.changed),
@@ -693,6 +807,60 @@ def verify_integrity_boundary(
             allowed_signers=allowed_signers,
             repository=repository,
         )
+    try:
+        paths = [path.decode("ascii") for path in transition.changed]
+        return make_result(
+            repository=repository,
+            base_commit=base_commit,
+            head_commit=head_commit,
+            protected_paths=paths,
+        )
+    except (UnicodeDecodeError, AdmissionResultError) as error:
+        raise IntegrityGateError("admission result could not be formed") from error
+
+
+def _write_result_file(path: Path, document: dict[str, object]) -> None:
+    data = canonical_json_bytes(document) + b"\n"
+    no_follow = getattr(os, "O_NOFOLLOW", 0)
+    if not no_follow:
+        raise IntegrityGateError("safe result output is unavailable")
+    try:
+        descriptor = os.open(
+            path,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | no_follow,
+            0o600,
+        )
+    except OSError as error:
+        raise IntegrityGateError("result output is unavailable") from error
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "wb") as handle:
+            descriptor = -1
+            handle.write(data)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def _read_snapshot_state(path: Path) -> dict[str, object]:
+    try:
+        document = parse_canonical_json(
+            read_regular_file(path, maximum=MAX_ADMISSION_BODY_BYTES)
+        )
+    except (AgeEnvelopeError, OSError, UnicodeError, ValueError, RecursionError) as error:
+        raise IntegrityGateError("live snapshot state is unavailable") from error
+    if not isinstance(document, dict):
+        raise IntegrityGateError("live snapshot state is invalid")
+    if document.get("state") == "failed":
+        try:
+            return validate_state(document)
+        except AdmissionResultError as error:
+            raise IntegrityGateError("live snapshot state is invalid") from error
+    try:
+        validate_snapshot(document)
+    except AdmissionResultError as error:
+        raise IntegrityGateError("live snapshot state is invalid") from error
+    return validate_snapshot(document).as_dict()
 
 
 def build_admission_payload(
@@ -744,29 +912,114 @@ def main() -> int:
     parser.add_argument("--admission-body", type=Path)
     parser.add_argument("--allowed-signers", type=Path)
     parser.add_argument("--repository")
+    parser.add_argument("--result-file", type=Path)
+    parser.add_argument("--state-file", type=Path)
+    parser.add_argument("--snapshot-file", type=Path)
     arguments = parser.parse_args()
+    snapshot_document: dict[str, object] | None = None
     try:
-        try:
-            admission_body = (
-                read_regular_file(
-                    arguments.admission_body,
-                    maximum=MAX_ADMISSION_BODY_BYTES,
-                )
-                if arguments.admission_body is not None
-                else None
+        result_mode = any(
+            value is not None
+            for value in (
+                arguments.result_file,
+                arguments.state_file,
+                arguments.snapshot_file,
             )
-        except (AgeEnvelopeError, OSError) as error:
-            raise IntegrityGateError("admission body is unavailable") from error
-        verify_integrity_boundary(
+        )
+        if not result_mode:
+            try:
+                admission_body = (
+                    read_regular_file(
+                        arguments.admission_body,
+                        maximum=MAX_ADMISSION_BODY_BYTES,
+                    )
+                    if arguments.admission_body is not None
+                    else None
+                )
+            except (AgeEnvelopeError, OSError) as error:
+                raise IntegrityGateError("admission body is unavailable") from error
+            verify_integrity_boundary(
+                base_repository=arguments.base_repository,
+                base_commit=arguments.base_commit,
+                head_repository=arguments.head_repository,
+                head_commit=arguments.head_commit,
+                admission_body=admission_body,
+                allowed_signers=arguments.allowed_signers,
+                repository=arguments.repository,
+            )
+            print("privacy age integrity boundary verified")
+            return 0
+        if arguments.repository is None:
+            raise IntegrityGateError("repository identity is required")
+        if arguments.snapshot_file is not None:
+            snapshot_state = _read_snapshot_state(arguments.snapshot_file)
+            if snapshot_state.get("state") == "failed":
+                if arguments.state_file is not None:
+                    _write_result_file(arguments.state_file, snapshot_state)
+                return 1
+            snapshot_document = snapshot_state
+            snapshot = validate_snapshot(snapshot_state)
+            if (
+                snapshot.repository != arguments.repository
+                or snapshot.base_ref != "main"
+                or snapshot.base_commit != arguments.base_commit
+                or snapshot.head_commit != arguments.head_commit
+                or snapshot.state != "open"
+            ):
+                raise IntegrityGateError("live snapshot does not match verifier inputs")
+
+        # Inspect the transition before opening the pull-request body. The
+        # empty outcome must not depend on receipt bytes or invoke its parser.
+        transition = _protected_transition(
             base_repository=arguments.base_repository,
             base_commit=arguments.base_commit,
             head_repository=arguments.head_repository,
+            head_commit=arguments.head_commit,
+        )
+        admission_body = None
+        if transition.changed and arguments.admission_body is not None:
+            try:
+                admission_body = read_regular_file(
+                    arguments.admission_body,
+                    maximum=MAX_ADMISSION_BODY_BYTES,
+                )
+            except (AgeEnvelopeError, OSError) as error:
+                raise IntegrityGateError("admission body is unavailable") from error
+            if snapshot_document is not None:
+                snapshot = validate_snapshot(snapshot_document)
+                if body_digest(admission_body) != snapshot.body_sha256:
+                    raise IntegrityGateError(
+                        "admission body changed after the live snapshot"
+                    )
+        result = _evaluate_transition(
+            transition,
+            base_commit=arguments.base_commit,
             head_commit=arguments.head_commit,
             admission_body=admission_body,
             allowed_signers=arguments.allowed_signers,
             repository=arguments.repository,
         )
-    except IntegrityGateError as error:
+        if arguments.result_file is not None:
+            _write_result_file(arguments.result_file, result)
+        if arguments.state_file is not None:
+            if snapshot_document is None:
+                raise IntegrityGateError("result state lacks a live snapshot")
+            _write_result_file(
+                arguments.state_file,
+                make_state(snapshot=snapshot_document, result=result),
+            )
+    except (IntegrityGateError, AdmissionResultError) as error:
+        if arguments.state_file is not None:
+            try:
+                _write_result_file(
+                    arguments.state_file,
+                    make_state(
+                        snapshot=snapshot_document,
+                        error_code="verifier_failed",
+                    ),
+                )
+            except (IntegrityGateError, AdmissionResultError):
+                pass
         print(f"privacy age integrity gate failed: {error}", file=sys.stderr)
         return 1
     print("privacy age integrity boundary verified")

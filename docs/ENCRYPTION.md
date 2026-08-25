@@ -84,6 +84,27 @@ ready-for-review, and edited pull-request events. Duplicate or out-of-order
 deliveries cannot replace a newer head's result. The trusted Actions workflow
 remains advisory evidence for the App-pinned context; it is not a substitute
 for the required App result, and branch protection is not edited dynamically.
+A default-branch push does not identify a pull request; the App/event layer
+must re-evaluate every open pull request targeting `main` against the new base
+before an existing result is treated as current. The workflow does not
+enumerate pull requests from a push payload or publish without its trusted
+verifier handoff, so bounded enumeration, this reconciliation, and its live
+delivery proof remain deployment gates. The installation proof must show the
+App receives default-branch push and pull-request events with only the read
+permissions needed for that coordinator; it remains separate from the
+publisher job's short-lived `checks:write` token.
+The coordinator must also prevent an old same-head success from surviving a
+body edit, retarget, reopen, base advance, cancellation, duplicate create, or
+accepted-write response loss. Per-PR serialization, event-time invalidation,
+and compensating failure reconciliation require separate source and live proof;
+`external_id` is audit metadata, not a lock.
+The Checks API also caps per-ref history; `filter=all` and Link pagination do
+not by themselves prove that older duplicates are visible. The installation
+lane must prove the history bound or separately review a suite-by-suite
+reconciliation path before activation.
+For fork heads, a Checks API response can lack a pull-request association;
+the installation lane must prove the exact PR-visible App context rather than
+inferring delivery from an accepted HTTP response.
 
 ### Owner admission receipts
 
@@ -100,287 +121,18 @@ defense-in-depth; the external wrapper is the independent launcher trust root:
 
 For an ordinary transition, materialize the wrapper from the already trusted
 base commit into an operator-owned mode-`0755` location and verify that copy
-before use. During the one-time bootstrap, use a separately reviewed external
-copy of the bootstrap wrapper; the pre-bootstrap base cannot supply it yet.
-In either case, verify the external file is a regular mode-`0755` file and
-compare its SHA-256 with the reviewed wrapper source before invoking it.
-Use a freshly created, private mode-`0700` wrapper directory; the launcher also
-rejects any group/world-writable or foreign-owned ancestor at invocation time.
+before use. Verify the external file is a regular mode-`0755` file and compare
+its SHA-256 with the reviewed wrapper source before invoking it. Use a freshly
+created, private mode-`0700` wrapper directory; the launcher also rejects any
+group/world-writable or foreign-owned ancestor at invocation time.
 
-For the one-time bootstrap, freeze concurrent `main` merges, set
-`BOOTSTRAP_ADMISSION=1`, and run this preflight against the refreshed live
-base. A nonzero result is a hard stop; do not authorize the bootstrap exception.
-
-```zsh
-set -euo pipefail
-: "${TRUSTED_MAIN_CHECKOUT:?set TRUSTED_MAIN_CHECKOUT to the trusted checkout}"
-: "${BASE_COMMIT:?set BASE_COMMIT to the refreshed trusted base commit}"
-test "${BOOTSTRAP_ADMISSION:-0}" = 1
-test "$(git -C "$TRUSTED_MAIN_CHECKOUT" rev-parse --verify HEAD)" = "$BASE_COMMIT"
-git -C "$TRUSTED_MAIN_CHECKOUT" rev-parse --verify "${BASE_COMMIT}^{commit}" >/dev/null
-origin_url=$(git -C "$TRUSTED_MAIN_CHECKOUT" remote get-url origin)
-case "$origin_url" in
-  git'@'github.com:nisavid/dotfiles.git|https://github.com/nisavid/dotfiles.git) ;;
-  *)
-    printf 'origin is not nisavid/dotfiles: %s\n' "$origin_url" >&2
-    exit 1
-    ;;
-esac
-remote_base=$(git -C "$TRUSTED_MAIN_CHECKOUT" ls-remote --exit-code origin refs/heads/main | awk '{ print $1 }')
-test "$remote_base" = "$BASE_COMMIT"
-git -C "$TRUSTED_MAIN_CHECKOUT" cat-file -e \
-  "${BASE_COMMIT}:.github/workflows/privacy-age-integrity.yml"
-if git -C "$TRUSTED_MAIN_CHECKOUT" cat-file blob \
-  "${BASE_COMMIT}:.github/workflows/privacy-age-integrity.yml" | grep -Fqx \
-  '# Protected admission activation sentinel: owner-signed-age-v1'; then
-  printf 'activation sentinel is already present in the trusted base\n' >&2
-  exit 1
-fi
-for bootstrap_path in \
-  .github/age-admission/allowed_signers \
-  scripts/create-age-admission-receipt \
-  scripts/run-trusted-age-admission \
-  scripts/privacy_age_admission.py; do
-  if git -C "$TRUSTED_MAIN_CHECKOUT" cat-file -e "${BASE_COMMIT}:$bootstrap_path" 2>/dev/null; then
-    printf 'bootstrap path already exists in the trusted base: %s\n' "$bootstrap_path" >&2
-    exit 1
-  fi
-done
-```
-
-Before changing any protection rule, run this independent bootstrap-tree check
-from a separately reviewed copy of the candidate branch. The old `main`
-workflow cannot run the new candidate gate yet, so this owner-side check is a
-required part of the one-time exception. It compares the complete protected
-diff, object kinds and modes, the reviewed signer blob and fingerprint, and the
-activation marker. Keep only the final digest and fingerprint in the operator
-ledger; the command never prints file contents.
-
-Run it only after the pull request exists and refresh the pull-request API (or
-the public pull ref) immediately beforehand. The candidate checkout and the
-pull-request head must be the same immutable commit; a locally reviewed commit
-that is not the live pull-request head is not eligible for the exception.
-
-Supply `REVIEWED_BOOTSTRAP_MANIFEST` as a newly created, mode-`0600` file
-outside both checkouts. Populate it from an independent review of the
-immutable pull-request head, not from the candidate document. Use one tab-
-separated `path`, `mode`, `kind`, `object-id` row for each expected path, plus
-`tree_sha256` and `signer_fingerprint` metadata rows. The check below compares
-the candidate to that detached manifest and fails if the reviewed digest is
-not supplied.
-
-Its shape is:
-
-```text
-path<TAB>mode<TAB>kind<TAB>object-id
-tree_sha256<TAB>sha256<TAB><digest>
-signer_fingerprint<TAB>sha256<TAB>SHA256:<fingerprint>
-```
-
-The detached manifest is UTF-8 text terminated by one trailing newline. A
-newline-free final record is malformed and must be regenerated before the
-preflight is rerun.
-
-Generate the path rows and the digest from the immutable reviewed head with
-`git ls-tree -r -z`; then independently review the resulting rows before
-making the file mode `0600`. Do not generate the manifest from a mutable
-checkout or from this document.
-
-```zsh
-set -euo pipefail
-: "${TRUSTED_MAIN_CHECKOUT:?set TRUSTED_MAIN_CHECKOUT to the trusted checkout}"
-: "${BOOTSTRAP_CHECKOUT:?set BOOTSTRAP_CHECKOUT to the candidate checkout}"
-: "${BASE_COMMIT:?set BASE_COMMIT to the refreshed live main commit}"
-: "${HEAD_COMMIT:?set HEAD_COMMIT to the reviewed bootstrap commit}"
-: "${BOOTSTRAP_PR_NUMBER:?set BOOTSTRAP_PR_NUMBER to the bootstrap pull request number}"
-: "${BOOTSTRAP_PR_HEAD_OWNER:?set BOOTSTRAP_PR_HEAD_OWNER to the reviewed head owner}"
-: "${BOOTSTRAP_PR_HEAD_BRANCH:?set BOOTSTRAP_PR_HEAD_BRANCH to the reviewed head branch}"
-[[ "$BOOTSTRAP_PR_NUMBER" =~ ^[0-9]+$ ]]
-test "$(git -C "$TRUSTED_MAIN_CHECKOUT" rev-parse --verify HEAD)" = "$BASE_COMMIT"
-test "$(git -C "$BOOTSTRAP_CHECKOUT" rev-parse --verify HEAD)" = "$HEAD_COMMIT"
-git -C "$BOOTSTRAP_CHECKOUT" merge-base --is-ancestor "$BASE_COMMIT" "$HEAD_COMMIT"
-pr_api_path="repos/nisavid/dotfiles/pulls/${BOOTSTRAP_PR_NUMBER}"
-pr_snapshot=$(gh api --repo nisavid/dotfiles "$pr_api_path" --jq \
-  '[.state, .base.ref, .base.sha, .head.repo.full_name, .head.user.login, .head.ref, .head.sha] | @tsv')
-IFS=$'\t' read -r pr_state pr_base_ref pr_base_sha pr_head_repo \
-  pr_head_owner pr_head_branch pr_head_sha <<<"$pr_snapshot"
-test "$pr_state" = open
-test "$pr_base_ref" = main
-test "$pr_base_sha" = "$BASE_COMMIT"
-test "$pr_head_repo" = nisavid/dotfiles
-test "$pr_head_owner" = "$BOOTSTRAP_PR_HEAD_OWNER"
-test "$pr_head_branch" = "$BOOTSTRAP_PR_HEAD_BRANCH"
-test "$pr_head_sha" = "$HEAD_COMMIT"
-pr_head=$(git -C "$TRUSTED_MAIN_CHECKOUT" ls-remote --exit-code origin \
-  "refs/pull/${BOOTSTRAP_PR_NUMBER}/head" | awk '{ print $1 }')
-test "$pr_head" = "$HEAD_COMMIT"
-trusted_root=$(cd -P -- "$TRUSTED_MAIN_CHECKOUT" && pwd)
-bootstrap_root=$(cd -P -- "$BOOTSTRAP_CHECKOUT" && pwd)
-
-bootstrap_tmp=$(mktemp -d "${TMPDIR:-/tmp}/age-bootstrap-check.XXXXXX")
-trap 'rm -rf -- "$bootstrap_tmp"' EXIT HUP INT TERM
-expected_paths="$bootstrap_tmp/expected"
-actual_paths="$bootstrap_tmp/actual"
-all_paths="$bootstrap_tmp/all"
-unexpected_paths="$bootstrap_tmp/unexpected"
-cat >"$expected_paths" <<'EOF'
-.github/age-admission/allowed_signers
-.github/workflows/platform-portability.yml
-.github/workflows/privacy-age-integrity.yml
-docs/ENCRYPTION.md
-scripts/admit-age-envelopes
-scripts/privacy-scan
-scripts/create-age-admission-receipt
-scripts/privacy_age_admission.py
-scripts/privacy_age_envelopes.py
-scripts/privacy_age_integrity_gate.py
-scripts/run-trusted-age-admission
-docs/adr/0001-owner-signed-age-admission.md
-tests/platform-portability.zsh
-tests/test_privacy_age_admission.py
-tests/test_privacy_age_envelopes.py
-tests/test_privacy_age_integrity_gate.py
-EOF
-LC_ALL=C sort -o "$expected_paths" "$expected_paths"
-git -C "$BOOTSTRAP_CHECKOUT" --no-pager diff --no-ext-diff --no-textconv \
-  --name-only --no-renames \
-  "$BASE_COMMIT" "$HEAD_COMMIT" >"$all_paths"
-: >"$actual_paths"
-: >"$unexpected_paths"
-# Compare the complete changed-path set against the same explicit allowlist
-# used for the detached manifest. Every unlisted path, including protected
-# collateral, is unexpected.
-LC_ALL=C grep -Fxf "$expected_paths" "$all_paths" >"$actual_paths" || :
-LC_ALL=C grep -Fxvf "$expected_paths" "$all_paths" >"$unexpected_paths" || :
-LC_ALL=C sort -o "$actual_paths" "$actual_paths"
-test ! -s "$unexpected_paths"
-cmp -s "$expected_paths" "$actual_paths"
-: "${REVIEWED_BOOTSTRAP_MANIFEST:?set REVIEWED_BOOTSTRAP_MANIFEST to the detached reviewed manifest}"
-manifest_parent=$(cd -P -- "$(dirname -- "$REVIEWED_BOOTSTRAP_MANIFEST")" && pwd)
-manifest_path="$manifest_parent/$(basename -- "$REVIEWED_BOOTSTRAP_MANIFEST")"
-test -f "$manifest_path"
-test ! -L "$manifest_path"
-manifest_mode=$(stat -c '%a' "$manifest_path" 2>/dev/null ||
-  stat -f '%Lp' "$manifest_path")
-manifest_uid=$(stat -c '%u' "$manifest_path" 2>/dev/null ||
-  stat -f '%u' "$manifest_path")
-manifest_size=$(stat -c '%s' "$manifest_path" 2>/dev/null ||
-  stat -f '%z' "$manifest_path")
-test "$manifest_mode" = 600
-test "$manifest_uid" = "$(id -u)"
-test "$manifest_size" -le 65536
-manifest_parent_mode=$(stat -c '%a' "$manifest_parent" 2>/dev/null ||
-  stat -f '%Lp' "$manifest_parent")
-manifest_parent_uid=$(stat -c '%u' "$manifest_parent" 2>/dev/null ||
-  stat -f '%u' "$manifest_parent")
-test "$manifest_parent_mode" = 700
-test "$manifest_parent_uid" = "$(id -u)"
-case "$manifest_path" in
-  "$trusted_root"/*|"$bootstrap_root"/*)
-    printf 'bootstrap manifest must be outside both checkouts\n' >&2
-    exit 1
-    ;;
-esac
-manifest_paths="$bootstrap_tmp/manifest-paths"
-manifest_sorted="$bootstrap_tmp/manifest-sorted"
-manifest_tree_digest=
-manifest_signer_fingerprint=
-: >"$manifest_paths"
-while IFS=$'\t' read -r manifest_entry_path mode kind object extra; do
-  [[ -z "$manifest_entry_path" || "$manifest_entry_path" == \#* ]] && continue
-  case "$manifest_entry_path" in
-    tree_sha256)
-      test -z "$manifest_tree_digest"
-      test "$mode" = sha256
-      test -n "$kind"
-      test -z "$object"
-      manifest_tree_digest=$kind
-      ;;
-    signer_fingerprint)
-      test -z "$manifest_signer_fingerprint"
-      test "$mode" = sha256
-      test -n "$kind"
-      test -z "$object"
-      manifest_signer_fingerprint=$kind
-      ;;
-    *)
-      test -z "$extra"
-      [[ "$mode" =~ ^100(644|755)$ ]]
-      test "$kind" = blob
-      [[ "$object" =~ ^[0-9a-f]{40}$ ]]
-      printf '%s\n' "$manifest_entry_path" >>"$manifest_paths"
-      metadata=$(git -C "$BOOTSTRAP_CHECKOUT" ls-tree "$HEAD_COMMIT" -- "$manifest_entry_path" |
-        awk -F '\t' 'NF == 2 { print $1 }')
-      read -r actual_mode actual_kind actual_object <<EOF
-$metadata
-EOF
-      test "$actual_mode" = "$mode"
-      test "$actual_kind" = "$kind"
-      test "$actual_object" = "$object"
-      ;;
-  esac
-done <"$manifest_path"
-test -n "$manifest_tree_digest"
-test -n "$manifest_signer_fingerprint"
-LC_ALL=C sort "$manifest_paths" >"$manifest_sorted"
-test -z "$(uniq -d "$manifest_sorted")"
-cmp -s "$expected_paths" "$manifest_sorted"
-
-for bootstrap_path in \
-  .github/age-admission/allowed_signers \
-  scripts/create-age-admission-receipt \
-  scripts/run-trusted-age-admission \
-  scripts/privacy_age_admission.py; do
-  if git -C "$TRUSTED_MAIN_CHECKOUT" ls-tree -r --name-only "$BASE_COMMIT" -- "$bootstrap_path" |
-    grep -Fqx "$bootstrap_path"; then
-    printf 'bootstrap path already exists in trusted base: %s\n' "$bootstrap_path" >&2
-    exit 1
-  fi
-done
-workflow_object=$(git -C "$BOOTSTRAP_CHECKOUT" ls-tree "$HEAD_COMMIT" -- \
-  .github/workflows/privacy-age-integrity.yml | awk -F '\t' 'NF == 2 { print $1 }' | awk '{ print $3 }')
-git -C "$BOOTSTRAP_CHECKOUT" cat-file blob "$workflow_object" |
-  grep -Fqx '# Protected admission activation sentinel: owner-signed-age-v1'
-signer_object=$(git -C "$BOOTSTRAP_CHECKOUT" ls-tree "$HEAD_COMMIT" -- \
-  .github/age-admission/allowed_signers | awk -F '\t' 'NF == 2 { print $1 }' | awk '{ print $3 }')
-git -C "$BOOTSTRAP_CHECKOUT" cat-file blob "$signer_object" >"$bootstrap_tmp/allowed_signers"
-awk '!/^[[:space:]]*#/ && NF >= 3 {
-  for (i = 2; i < NF; i++)
-    if ($i ~ /^(ssh-|ecdsa-|sk-ssh-|sk-ecdsa-)/) {
-      print $i, $(i + 1)
-      count++
-      break
-    }
-} END { exit count != 1 }' \
-  "$bootstrap_tmp/allowed_signers" >"$bootstrap_tmp/allowed_signers.pub"
-test "$(ssh-keygen -lf "$bootstrap_tmp/allowed_signers.pub" -E sha256 | awk 'NR == 1 { print $2 }')" = \
-  "$manifest_signer_fingerprint"
-tree_digest=$(git -C "$BOOTSTRAP_CHECKOUT" ls-tree -r -z "$HEAD_COMMIT" -- \
-  .github/age-admission/allowed_signers \
-  .github/workflows/platform-portability.yml \
-  .github/workflows/privacy-age-integrity.yml \
-  docs/ENCRYPTION.md \
-  scripts/admit-age-envelopes \
-  scripts/privacy-scan \
-  scripts/create-age-admission-receipt \
-  scripts/privacy_age_admission.py \
-  scripts/privacy_age_envelopes.py \
-  scripts/privacy_age_integrity_gate.py \
-  scripts/run-trusted-age-admission \
-  docs/adr/0001-owner-signed-age-admission.md \
-  tests/platform-portability.zsh \
-  tests/test_privacy_age_admission.py \
-  tests/test_privacy_age_envelopes.py \
-  tests/test_privacy_age_integrity_gate.py |
-  if command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 | awk '{ print $1 }'
-  else
-    sha256sum | awk '{ print $1 }'
-  fi)
-test "$tree_digest" = "$manifest_tree_digest"
-printf 'bootstrap-tree=%s signer-fingerprint=%s\n' \
-  "$tree_digest" "$manifest_signer_fingerprint"
-```
+The initial bootstrap is not an owner-side receipt or manual helper operation.
+It is supplied by the separately reviewed immutable event-driven publisher
+described below. Do not set a bootstrap exception flag, publish a check manually,
+edit branch protection, or mint a receipt for an unprotected transition. The
+publisher and its protected environment remain operator-owned deployment gates;
+until they are approved and live, this workflow is advisory and no production
+activation is claimed.
 
 For a materialized wrapper, create and validate the operator-owned directory
 without mutating an existing path, then establish the copy and its reviewed
@@ -492,53 +244,25 @@ owner-admitted protected transition. Never send the age identity, signing
 private key, decrypted catalog, or decrypted diagnostics to hosted CI. The
 receipt contains no plaintext identifiers.
 
-The first bootstrap of this boundary is a one-time exception: the trusted
-base predates the signer and verifier paths, so it cannot verify a v1 receipt.
-Freeze other `main` merges while the exception is open and, immediately before
-the break-glass action, verify from the live base commit that none of the four
-new admission pathnames already exists. A pre-seeded placeholder would be
-trusted by the legacy pre-bootstrap gate, so the owner must compare the exact
-bootstrap tree and branch-protection preimage before authorizing this one
-transition. The current protection rule does not require this workflow's
-context, so keep `main` owner-frozen throughout the preflight and exception;
-the sentinel is a defense against accidental activation, not an automated
-replacement for that freeze.
-Create the bootstrap branch from `main` and open its pull request targeting
-`main`. The branch must contain and replace every new admission infrastructure
-path before the exception is used: the signer, external launcher wrapper,
-creator, admission module, legacy admitter, envelope helper, privacy scanner,
-trusted gate, and boundary workflow. It must retain the trusted classifier
-unchanged because the scanner imports that base-owned helper. Keep its review
-and required checks visible. Classic GitHub branch
-protection has no per-pull-request, branch-scoped bypass; if the owner
-authorizes this exception, record the exact live protection-rule preimage,
-freeze concurrent `main` merges, apply only the temporary narrowly scoped rule
-change needed for this named pull request, and restore the preimage immediately
-after the merge. Never push directly to `main`, disable unrelated protections,
-or reuse the exception for ordinary changes. Re-enable the protection
-immediately, verify that `main` contains the signer and verifier paths, and
-record the exact Checks API `name` emitted by the job — currently
-`Verify trusted base against candidate data` (the UI may render it with the
-workflow name prefixed). Read that name from a fresh check run. Do not treat
-that Actions job name as the final authenticated admission requirement; verify
-the dedicated App-pinned context described below through the live
-branch-protection API before creating a receipt for the next protected pull
-request.
-
-The protection preimage is an operator-owned break-glass artifact, not a value
-to infer from this document. Immediately before any temporary rule edit, read
-the live `main` protection through the GitHub API, save the exact response and
-its SHA-256 outside both checkouts, pause auto-merge, and verify that no other
-merge actor is proceeding. Re-read the rule and the named pull request after
-the freeze; if either digest or head SHA changed, stop. Apply only the
-pre-authorized narrow change, merge the named pull request, restore the saved
-protection fields immediately using an explicitly allowlisted update payload
-derived from the preimage (never replay read-only GET fields verbatim), and
-compare a fresh post-restore response to the preimage before releasing the
-freeze. Repeat the one-snapshot pull-request binding and public head-ref check
-immediately before the protection API update; the earlier manifest result is
-not reusable after any state change. A failed or ambiguous restore is an
-incident gate: do not continue with another merge or live apply.
+The initial bootstrap is a separate, immutable event-driven publisher. The
+production workflow cannot evaluate the pull request that introduces it while
+the App-pinned context is already required. The bootstrap publisher must run
+the independently reviewed trusted-base verifier, publish the same App-owned
+`Owner-signed age admission` context, and remain available through the rollback
+window. It is a separate operator-owned deployment gate, not a helper embedded
+in this repository's pull-request body flow.
+Do not publish a check manually, mint a receipt merely to make an unprotected
+transition green, push directly to `main`, edit branch protection dynamically,
+or substitute an Actions check for the App context. The exact App source,
+immutable bootstrap revision, protected environment, installation permissions,
+and live delivery proof must be supplied through the operator deployment lane
+before this workflow is activated in production. Until then, the Actions result
+is advisory and the App-pinned context remains the required boundary.
+Manual helper publication is forbidden.
+The same deployment lane owns a tested App-key rotation, revocation, emergency,
+and rollback procedure. It must name the immutable publisher retained through
+the rollback window and surface any inability to publish as a fail-closed
+outage, never as permission to write a manual check or edit protection.
 
 The Actions job name is not a provenance boundary: GitHub keys a required
 check by its job name and the shared Actions app, without binding it to the

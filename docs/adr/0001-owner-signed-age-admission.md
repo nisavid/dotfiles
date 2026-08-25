@@ -37,16 +37,16 @@ GitHub does not reevaluate a successful check when wall time advances, so the
 owner must trigger a fresh trusted run immediately before merging; the signed
 receipt's expiry is not, by itself, a merge-time revocation mechanism.
 
-The initial bootstrap is necessarily exceptional because the pre-bootstrap
-trusted base cannot know the v1 receipt format, signer, or external launcher
-wrapper. Classic GitHub branch protection has no per-pull-request,
-branch-scoped bypass. If the owner authorizes this exception, record the exact
-live protection-rule preimage, freeze concurrent `main` merges, apply only the
-temporary narrowly scoped rule change needed for the named pull request, and
-restore the preimage immediately after the merge. Keep the pull request and
-required checks visible; never push directly to `main` or disable unrelated
-protections. The verifier reports the pre-bootstrap state explicitly and never
-treats a pre-bootstrap base as admitted.
+The initial bootstrap is a separately reviewed immutable event-driven publisher,
+not a manual exception or a dynamic protection edit. The production workflow
+cannot evaluate its own implementation pull request while the App context is
+already required, so the bootstrap publisher must use the same trusted-base
+verifier/result contract and remain available through the rollback window.
+Manual check publication, receipt minting for an unprotected transition, direct
+pushes, and temporary branch-protection bypasses are forbidden. The verifier
+reports the pre-bootstrap state explicitly and never treats a pre-bootstrap
+base as admitted; App source, protected-environment approval, installation
+permissions, and live delivery proof remain separate operator gates.
 
 The Actions job name is not an independent provenance root: GitHub identifies
 required checks by job name and the shared Actions app, not by the trusted

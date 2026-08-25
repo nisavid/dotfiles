@@ -139,11 +139,24 @@ grep -Fq 'require_trusted_executable' "$age_boundary_workflow" ||
 grep -Fq 'PRIVACY_REPOSITORY: ${{ github.repository }}' \
   "$age_boundary_workflow" ||
   fail 'age boundary does not bind the repository identity'
-grep -Fq 'python3 -I - "$GITHUB_EVENT_PATH"' "$age_boundary_workflow" ||
-  fail 'age boundary does not extract the pull-request body from the trusted event'
-grep -Fq -- '--admission-body "$RUNNER_TEMP/privacy-age-admission-body"' \
+grep -Fq 'trusted-tools/scripts/privacy_age_pr_snapshot.py' "$age_boundary_workflow" ||
+  fail 'age boundary does not reread the live pull-request binding'
+grep -Fq -- '--body-output "$RUNNER_TEMP/privacy-age-verify/body"' \
+  "$age_boundary_workflow" ||
+  fail 'age boundary does not materialize the live pull-request body'
+grep -Fq -- '--admission-body "$RUNNER_TEMP/privacy-age-verify/body"' \
   "$age_boundary_workflow" ||
   fail 'age boundary does not pass the bounded admission body'
+grep -Fq -- '--snapshot-file "$RUNNER_TEMP/privacy-age-verify/snapshot.json"' \
+  "$age_boundary_workflow" ||
+  fail 'age boundary does not bind verifier inputs to the live snapshot'
+grep -Fq 'if: ${{ !cancelled() && always() }}' "$age_boundary_workflow" ||
+  fail 'age boundary does not retain a cancellation-safe completion edge'
+grep -Fq 'actions/create-github-app-token@064492a9a1762067169d50c792a7dc02bc3d1254' \
+  "$age_boundary_workflow" ||
+  fail 'age boundary does not pin its App token action'
+grep -Fq 'permission-checks: write' "$age_boundary_workflow" ||
+  fail 'age boundary does not constrain the App token to Checks write access'
 grep -Fq -- \
   '--allowed-signers trusted-base/.github/age-admission/allowed_signers' \
   "$age_boundary_workflow" ||
@@ -152,11 +165,10 @@ grep -Fq -- '--repository "$PRIVACY_REPOSITORY"' "$age_boundary_workflow" ||
   fail 'age boundary does not bind admission to the repository'
 grep -Fq 'python3 -I trusted-base/scripts/privacy-scan' "$age_boundary_workflow" ||
   fail 'age boundary does not execute the trusted privacy scanner'
-grep -Fq 'REVIEWED_BOOTSTRAP_MANIFEST' "$repo_root/docs/ENCRYPTION.md" ||
-  fail 'bootstrap runbook does not require a detached reviewed manifest'
-grep -Fq 'test "$tree_digest" = "$manifest_tree_digest"' \
-  "$repo_root/docs/ENCRYPTION.md" ||
-  fail 'bootstrap runbook does not enforce the reviewed tree digest'
+grep -Fq 'separate, immutable event-driven publisher' "$repo_root/docs/ENCRYPTION.md" ||
+  fail 'bootstrap policy does not require a separate immutable publisher'
+grep -Fq 'Manual helper publication' "$repo_root/docs/ENCRYPTION.md" ||
+  fail 'bootstrap policy does not forbid manual publication'
 grep -Fq 'AGE_TOOLING_DIRECTORY: ${{ runner.temp }}/age-bin' "$age_boundary_workflow" ||
   fail 'age boundary does not bind scanning to the checksum-verified parser directory'
 ! grep -Eq \

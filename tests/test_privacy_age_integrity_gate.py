@@ -25,8 +25,10 @@ from scripts.privacy_age_integrity_gate import (
     BOOTSTRAP_REVIEWED_AUTHORITY_ENTRIES,
     BOOTSTRAP_REVIEWED_SIGNER_ENTRY,
     BOOTSTRAP_REVIEWED_SUPPORT_ENTRIES,
+    evaluate_integrity_boundary,
     verify_integrity_boundary,
 )
+from scripts.privacy_age_admission_result import body_digest, make_snapshot
 
 ROOT = Path(__file__).resolve().parents[1]
 GATE = ROOT / "scripts/privacy_age_integrity_gate.py"
@@ -65,6 +67,9 @@ REAL_SOURCE_FILES = (
     "scripts/privacy_age_envelopes.py",
     "scripts/run-trusted-age-admission",
     "scripts/privacy_age_integrity_gate.py",
+    "scripts/privacy_age_admission_result.py",
+    "scripts/privacy_age_pr_snapshot.py",
+    "scripts/privacy_age_admission_publisher.py",
     ".github/workflows/platform-portability.yml",
     ".github/workflows/privacy-age-integrity.yml",
     "docs/ENCRYPTION.md",
@@ -79,7 +84,19 @@ BOOTSTRAP_REQUIRED_MODES = {
     "scripts/privacy_age_admission.py": 0o644,
     "scripts/privacy_age_envelopes.py": 0o644,
     "scripts/privacy_age_integrity_gate.py": 0o755,
+    "scripts/privacy_age_admission_result.py": 0o644,
+    "scripts/privacy_age_pr_snapshot.py": 0o644,
+    "scripts/privacy_age_admission_publisher.py": 0o644,
 }
+ADMISSION_INFRASTRUCTURE_FIXTURE_PATHS = (
+    ".github/age-admission/allowed_signers",
+    "scripts/create-age-admission-receipt",
+    "scripts/run-trusted-age-admission",
+    "scripts/privacy_age_admission.py",
+    "scripts/privacy_age_admission_result.py",
+    "scripts/privacy_age_pr_snapshot.py",
+    "scripts/privacy_age_admission_publisher.py",
+)
 
 
 def run(*command: str, cwd: Path) -> str:
@@ -183,7 +200,7 @@ class PrivacyAgeIntegrityGateTests(TestCase):
             b".github/workflows/privacy-age-integrity.yml": (
                 b"blob",
                 b"100644",
-                b"7881ce3c5cdb789fd861e48f46c3c82c313a21a4",
+                b"ac6d1610d245bac428b56504d7872b3424e4523f",
             ),
             b".github/workflows/platform-portability.yml": (
                 b"blob",
@@ -193,7 +210,7 @@ class PrivacyAgeIntegrityGateTests(TestCase):
             b"docs/ENCRYPTION.md": (
                 b"blob",
                 b"100644",
-                b"b3a7085f7a00a864d51b470c19d132035f6e019f",
+                b"60ebea7e2be76383d105fa648db8816e5fb6f12f",
             ),
         }
         self.assertEqual(BOOTSTRAP_REVIEWED_SUPPORT_ENTRIES, reviewed_fixture)
@@ -273,12 +290,7 @@ class PrivacyAgeIntegrityGateTests(TestCase):
 
     def test_prebootstrap_preseeded_infrastructure_does_not_activate_the_gate(self) -> None:
         _, base, head, _ = self.make_checkouts()
-        for relative in (
-            ".github/age-admission/allowed_signers",
-            "scripts/create-age-admission-receipt",
-            "scripts/run-trusted-age-admission",
-            "scripts/privacy_age_admission.py",
-        ):
+        for relative in ADMISSION_INFRASTRUCTURE_FIXTURE_PATHS:
             (base / relative).write_text("attacker-controlled placeholder\n", encoding="ascii")
         (base / ".github/workflows/privacy-age-integrity.yml").write_text(
             "name: boundary\n",
@@ -345,14 +357,13 @@ class PrivacyAgeIntegrityGateTests(TestCase):
             "scripts/privacy_age_integrity_gate.py",
         ):
             (base / relative).write_text("legacy bootstrap seam\n", encoding="ascii")
-        for relative in (
-            ".github/age-admission/allowed_signers",
-            "scripts/create-age-admission-receipt",
-            "scripts/run-trusted-age-admission",
-            "scripts/privacy_age_admission.py",
-        ):
+        for relative in ADMISSION_INFRASTRUCTURE_FIXTURE_PATHS:
             (base / relative).unlink()
         base_commit = commit_all(base, "pre-bootstrap base")
+        for relative, mode in BOOTSTRAP_REQUIRED_MODES.items():
+            path = head / relative
+            path.write_bytes((ROOT / relative).read_bytes())
+            path.chmod(mode)
         (head / "bootstrap-fixture.txt").write_text(
             "unprotected bootstrap fixture\n",
             encoding="ascii",
@@ -383,7 +394,16 @@ class PrivacyAgeIntegrityGateTests(TestCase):
         for name, mutation, expected_error in cases:
             with self.subTest(name=name):
                 _, base, head, _ = self.make_checkouts()
-                reviewed_support_entries = BOOTSTRAP_REVIEWED_SUPPORT_ENTRIES
+                reviewed_support_entries = dict(BOOTSTRAP_REVIEWED_SUPPORT_ENTRIES)
+                # These cases deliberately exercise a historical reviewed
+                # support pin so the test can distinguish unchanged collateral
+                # from a changed, non-pinned support blob. Production pins use
+                # the current reviewed bootstrap revision above.
+                reviewed_support_entries[b"docs/ENCRYPTION.md"] = (
+                    b"blob",
+                    b"100644",
+                    b"0" * 40,
+                )
                 (base / ".github/workflows/privacy-age-integrity.yml").write_text(
                     "name: boundary\n",
                     encoding="ascii",
@@ -398,17 +418,16 @@ class PrivacyAgeIntegrityGateTests(TestCase):
                         "legacy bootstrap seam\n",
                         encoding="ascii",
                     )
-                for relative in (
-                    ".github/age-admission/allowed_signers",
-                    "scripts/create-age-admission-receipt",
-                    "scripts/run-trusted-age-admission",
-                    "scripts/privacy_age_admission.py",
-                ):
+                for relative in ADMISSION_INFRASTRUCTURE_FIXTURE_PATHS:
                     (base / relative).unlink()
+                for relative, mode in BOOTSTRAP_REQUIRED_MODES.items():
+                    path = head / relative
+                    path.write_bytes((ROOT / relative).read_bytes())
+                    path.chmod(mode)
 
                 if mutation == "unchanged":
                     support_path = "docs/ENCRYPTION.md"
-                    expected_object = BOOTSTRAP_REVIEWED_SUPPORT_ENTRIES[
+                    expected_object = reviewed_support_entries[
                         os.fsencode(support_path)
                     ][2].decode("ascii")
                     current_object = run(
@@ -444,7 +463,7 @@ class PrivacyAgeIntegrityGateTests(TestCase):
                     )
                 elif mutation == "non-pinned":
                     support_path = "docs/ENCRYPTION.md"
-                    expected_object = BOOTSTRAP_REVIEWED_SUPPORT_ENTRIES[
+                    expected_object = reviewed_support_entries[
                         os.fsencode(support_path)
                     ][2].decode("ascii")
                     self.assertNotEqual(
@@ -475,12 +494,7 @@ class PrivacyAgeIntegrityGateTests(TestCase):
         for malformed in ("mode", "symlink"):
             with self.subTest(malformed=malformed):
                 _, base, head, _ = self.make_checkouts()
-                for relative in (
-                    ".github/age-admission/allowed_signers",
-                    "scripts/create-age-admission-receipt",
-                    "scripts/run-trusted-age-admission",
-                    "scripts/privacy_age_admission.py",
-                ):
+                for relative in ADMISSION_INFRASTRUCTURE_FIXTURE_PATHS:
                     (base / relative).unlink()
                 base_commit = commit_all(base, f"pre-bootstrap {malformed}")
                 for relative, mode in BOOTSTRAP_REQUIRED_MODES.items():
@@ -499,12 +513,7 @@ class PrivacyAgeIntegrityGateTests(TestCase):
 
     def test_bootstrap_rejects_collateral_protected_changes(self) -> None:
         _, base, head, _ = self.make_checkouts()
-        for relative in (
-            ".github/age-admission/allowed_signers",
-            "scripts/create-age-admission-receipt",
-            "scripts/run-trusted-age-admission",
-            "scripts/privacy_age_admission.py",
-        ):
+        for relative in ADMISSION_INFRASTRUCTURE_FIXTURE_PATHS:
             (base / relative).unlink()
         base_commit = commit_all(base, "pre-bootstrap collateral base")
         for relative, mode in BOOTSTRAP_REQUIRED_MODES.items():
@@ -688,6 +697,35 @@ class PrivacyAgeIntegrityGateTests(TestCase):
 
         self.verify(base, head, base_commit, head_commit)
 
+    def test_result_mode_empty_transition_never_reads_or_parses_receipt(self) -> None:
+        temporary, base, head, base_commit = self.make_checkouts()
+        (head / "unprotected.txt").write_text("candidate data\n", encoding="utf-8")
+        head_commit = commit_all(head, "unprotected change")
+        snapshot = make_snapshot(
+            repository="nisavid/dotfiles",
+            pull_request=166,
+            state="open",
+            base_ref="main",
+            base_commit=base_commit,
+            head_repository="nisavid/dotfiles",
+            head_commit=head_commit,
+            body_sha256=body_digest(b"not a receipt"),
+        )
+        with patch(
+            "scripts.privacy_age_integrity_gate._verify_admission",
+            side_effect=AssertionError("receipt parser was reached"),
+        ):
+            result = evaluate_integrity_boundary(
+                base_repository=base,
+                base_commit=base_commit,
+                head_repository=head,
+                head_commit=head_commit,
+                admission_body=b"not a receipt",
+                repository="nisavid/dotfiles",
+            )
+        self.assertEqual(result["outcome"], "no_protected_paths_changed")
+        self.assertFalse(result["receipt_required"])
+
     def test_workflow_executables_start_in_isolated_mode(self) -> None:
         for executable in (GATE, ROOT / "scripts/privacy-scan"):
             with self.subTest(executable=os.fspath(executable)):
@@ -716,31 +754,42 @@ class PrivacyAgeIntegrityGateTests(TestCase):
         )
         self.assertIn("      - edited\n", source)
         self.assertIn(
-            "PRIVACY_BASE_REF: ${{ github.event.pull_request.base.ref }}", source
+            "PRIVACY_BASE_REF: ${{ needs.begin.outputs.base_ref }}", source
         )
         self.assertIn('test "$PRIVACY_BASE_REF" = "main"', source)
         self.assertIn("allow-unsafe-pr-checkout: true", source)
         self.assertIn(
             "python3 -I trusted-base/scripts/privacy_age_integrity_gate.py", source
         )
-        self.assertIn('PRIVACY_REPOSITORY: ${{ github.repository }}', source)
-        self.assertIn('python3 -I - "$GITHUB_EVENT_PATH"', source)
-        self.assertIn('privacy-age-admission-body', source)
-        self.assertIn("pull request event is not an object", source)
-        self.assertIn("os.O_EXCL", source)
-        self.assertIn("0o600", source)
-        self.assertRegex(
-            source,
-            r"(?s)destination,\s*os\.O_WRONLY\s*\|\s*os\.O_CREAT\s*\|\s*os\.O_EXCL\s*\|\s*no_follow,\s*0o600",
-        )
+        self.assertIn('PRIVACY_REPOSITORY: ${{ needs.begin.outputs.repository }}', source)
+        self.assertIn("trusted-tools/scripts/privacy_age_pr_snapshot.py", source)
+        self.assertIn("trusted_tools_sha", source)
+        self.assertIn("ref: ${{ github.sha }}", source)
+        self.assertIn('test "$trusted_sha" = "$GITHUB_SHA"', source)
+        self.assertIn('test "$(git -C trusted-tools rev-parse --verify HEAD)" = "$TRUSTED_TOOLS_SHA"', source)
+        self.assertIn("needs.begin.outputs.trusted_tools_sha || github.sha", source)
+        self.assertIn("FALLBACK_TRUSTED_SHA", source)
+        for line in source.splitlines():
+            if line.strip().startswith("uses:"):
+                self.assertRegex(line.strip(), r"uses:\s+[^\s@]+@[0-9a-f]{40}\Z")
+        self.assertIn('--body-output "$RUNNER_TEMP/privacy-age-verify/body"', source)
+        self.assertNotIn('python3 -I - "$GITHUB_EVENT_PATH"', source)
         self.assertIn("verify_filesystem_entries", source)
         self.assertIn(
             '--allowed-signers trusted-base/.github/age-admission/allowed_signers',
             source,
         )
-        self.assertIn('--admission-body "$RUNNER_TEMP/privacy-age-admission-body"', source)
+        self.assertIn('--admission-body "$RUNNER_TEMP/privacy-age-verify/body"', source)
+        self.assertIn('--snapshot-file "$RUNNER_TEMP/privacy-age-verify/snapshot.json"', source)
+        self.assertIn('--state-file "$RUNNER_TEMP/privacy-age-verify/state.json"', source)
         self.assertIn('--repository "$PRIVACY_REPOSITORY"', source)
         self.assertIn("python3 -I trusted-base/scripts/privacy-scan", source)
+        self.assertIn("snapshot_b64", source)
+        self.assertIn("state_b64", source)
+        self.assertIn("if: ${{ !cancelled() && always() }}", source)
+        self.assertIn("actions/create-github-app-token@064492a9a1762067169d50c792a7dc02bc3d1254", source)
+        self.assertIn("permission-checks: write", source)
+        self.assertIn("PRIVACY_AGE_ADMISSION_APP_PRIVATE_KEY", source)
         self.assertNotIn("python3 untrusted-head/", source)
         untrusted_lines = tuple(
             line.strip() for line in source.splitlines() if "untrusted-head" in line
@@ -780,7 +829,7 @@ class PrivacyAgeIntegrityGateTests(TestCase):
         self.assertEqual(
             len(matches),
             2,
-            "expected the event extractor and checkout verifier heredocs",
+            "expected checkout and handoff verifier heredocs",
         )
         for match in matches:
             compile(textwrap.dedent(match.group("body")), str(WORKFLOW), "exec")

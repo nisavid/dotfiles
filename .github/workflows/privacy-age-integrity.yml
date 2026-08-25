@@ -18,21 +18,131 @@ concurrency:
 
 permissions:
   contents: read
+  pull-requests: read
 
 env:
   AGE_VERSION: "1.3.1"
 
 jobs:
+  begin:
+    outputs:
+      snapshot_b64: ${{ steps.snapshot.outputs.snapshot_b64 }}
+      snapshot_sha256: ${{ steps.snapshot.outputs.snapshot_sha256 }}
+      repository: ${{ steps.snapshot.outputs.repository }}
+      pull_request: ${{ steps.snapshot.outputs.pull_request }}
+      base_ref: ${{ steps.snapshot.outputs.base_ref }}
+      base_sha: ${{ steps.snapshot.outputs.base_sha }}
+      head_repository: ${{ steps.snapshot.outputs.head_repository }}
+      head_sha: ${{ steps.snapshot.outputs.head_sha }}
+      body_sha256: ${{ steps.snapshot.outputs.body_sha256 }}
+      trusted_tools_sha: ${{ steps.trusted-revision.outputs.sha }}
+    name: Begin live pull-request binding
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out the trusted default-branch tools
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.sha }}
+          path: trusted-tools
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Bind the trusted tool revision
+        id: trusted-revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          trusted_sha="$(git -C trusted-tools rev-parse --verify HEAD)"
+          [[ "$trusted_sha" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${GITHUB_SHA:-}" =~ ^[0-9a-f]{40}$ ]]
+          test "$trusted_sha" = "$GITHUB_SHA"
+          printf 'sha=%s\n' "$trusted_sha" >>"$GITHUB_OUTPUT"
+
+      - name: Select Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+
+      - name: Read the live pull-request snapshot
+        id: snapshot
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PRIVACY_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/privacy-age-begin"
+          python3 -I trusted-tools/scripts/privacy_age_pr_snapshot.py \
+            --event "$GITHUB_EVENT_PATH" \
+            --output "$RUNNER_TEMP/privacy-age-begin/snapshot.json" \
+            --repository "$PRIVACY_REPOSITORY"
+          snapshot="$RUNNER_TEMP/privacy-age-begin/snapshot.json"
+          snapshot_b64="$(base64 --wrap=0 "$snapshot")"
+          snapshot_sha256="$(sha256sum "$snapshot" | awk '{print $1}')"
+          printf 'snapshot_b64=%s\n' "$snapshot_b64" >>"$GITHUB_OUTPUT"
+          printf 'snapshot_sha256=sha256:%s\n' "$snapshot_sha256" >>"$GITHUB_OUTPUT"
+          printf 'repository=%s\n' "$(jq -r .repository "$snapshot")" >>"$GITHUB_OUTPUT"
+          printf 'pull_request=%s\n' "$(jq -r .pull_request "$snapshot")" >>"$GITHUB_OUTPUT"
+          printf 'base_ref=%s\n' "$(jq -r .base_ref "$snapshot")" >>"$GITHUB_OUTPUT"
+          printf 'base_sha=%s\n' "$(jq -r .base_commit "$snapshot")" >>"$GITHUB_OUTPUT"
+          printf 'head_repository=%s\n' "$(jq -r .head_repository "$snapshot")" >>"$GITHUB_OUTPUT"
+          printf 'head_sha=%s\n' "$(jq -r .head_commit "$snapshot")" >>"$GITHUB_OUTPUT"
+          printf 'body_sha256=%s\n' "$(jq -r .body_sha256 "$snapshot")" >>"$GITHUB_OUTPUT"
+          test "$(jq -r .base_ref "$snapshot")" = "main"
+          test "$(jq -r .state "$snapshot")" = "open"
+
   verify:
+    outputs:
+      state_b64: ${{ steps.state.outputs.state_b64 }}
+      state_sha256: ${{ steps.state.outputs.state_sha256 }}
     name: Verify trusted base against candidate data
+    needs: begin
+    if: ${{ !cancelled() && needs.begin.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
+      - name: Check out the trusted default-branch tools
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ needs.begin.outputs.trusted_tools_sha || github.sha }}
+          path: trusted-tools
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Select Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+
+      - name: Re-read the live binding and current pull-request body
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PRIVACY_REPOSITORY: ${{ needs.begin.outputs.repository }}
+          TRUSTED_TOOLS_SHA: ${{ needs.begin.outputs.trusted_tools_sha }}
+          BEGIN_SNAPSHOT_B64: ${{ needs.begin.outputs.snapshot_b64 }}
+          BEGIN_SNAPSHOT_SHA256: ${{ needs.begin.outputs.snapshot_sha256 }}
+        run: |
+          set -euo pipefail
+          test "$(git -C trusted-tools rev-parse --verify HEAD)" = "$TRUSTED_TOOLS_SHA"
+          mkdir -p "$RUNNER_TEMP/privacy-age-verify"
+          printf '%s' "$BEGIN_SNAPSHOT_B64" | base64 --decode >"$RUNNER_TEMP/privacy-age-verify/begin.json"
+          test "sha256:$(sha256sum "$RUNNER_TEMP/privacy-age-verify/begin.json" | awk '{print $1}')" = "$BEGIN_SNAPSHOT_SHA256"
+          python3 -I trusted-tools/scripts/privacy_age_pr_snapshot.py \
+            --event "$GITHUB_EVENT_PATH" \
+            --output "$RUNNER_TEMP/privacy-age-verify/snapshot.json" \
+            --body-output "$RUNNER_TEMP/privacy-age-verify/body" \
+            --repository "$PRIVACY_REPOSITORY"
+          cmp -s \
+            "$RUNNER_TEMP/privacy-age-verify/begin.json" \
+            "$RUNNER_TEMP/privacy-age-verify/snapshot.json"
+
       - name: Check out the exact trusted base
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: ${{ github.repository }}
-          ref: ${{ github.event.pull_request.base.sha }}
+          ref: ${{ needs.begin.outputs.base_sha }}
           path: trusted-base
           fetch-depth: 1
           persist-credentials: false
@@ -40,17 +150,12 @@ jobs:
       - name: Check out the exact untrusted candidate as data
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          repository: ${{ github.event.pull_request.head.repo.full_name }}
-          ref: ${{ github.event.pull_request.head.sha }}
+          repository: ${{ needs.begin.outputs.head_repository }}
+          ref: ${{ needs.begin.outputs.head_sha }}
           path: untrusted-head
           fetch-depth: 1
           persist-credentials: false
           allow-unsafe-pr-checkout: true
-
-      - name: Select Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
-        with:
-          python-version: "3.12"
 
       - name: Install the pinned age parser
         shell: bash
@@ -74,8 +179,8 @@ jobs:
       - name: Verify checkout bytes match Git objects
         shell: bash
         env:
-          PRIVACY_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PRIVACY_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PRIVACY_BASE_SHA: ${{ needs.begin.outputs.base_sha }}
+          PRIVACY_HEAD_SHA: ${{ needs.begin.outputs.head_sha }}
         run: |
           set -euo pipefail
           # Keep this verifier self-contained and before any trusted-base
@@ -371,10 +476,10 @@ jobs:
         shell: bash
         env:
           AGE_TOOLING_DIRECTORY: ${{ runner.temp }}/age-bin
-          PRIVACY_BASE_REF: ${{ github.event.pull_request.base.ref }}
-          PRIVACY_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PRIVACY_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PRIVACY_REPOSITORY: ${{ github.repository }}
+          PRIVACY_BASE_REF: ${{ needs.begin.outputs.base_ref }}
+          PRIVACY_BASE_SHA: ${{ needs.begin.outputs.base_sha }}
+          PRIVACY_HEAD_SHA: ${{ needs.begin.outputs.head_sha }}
+          PRIVACY_REPOSITORY: ${{ needs.begin.outputs.repository }}
         run: |
           set -euo pipefail
           test "$PRIVACY_BASE_REF" = "main"
@@ -383,46 +488,144 @@ jobs:
           test "$(git -C trusted-base rev-parse HEAD)" = "$PRIVACY_BASE_SHA"
           test "$(git -C untrusted-head rev-parse HEAD)" = "$PRIVACY_HEAD_SHA"
           test "$("$AGE_TOOLING_DIRECTORY/age-inspect" --version)" = "v${AGE_VERSION}"
-          python3 -I - "$GITHUB_EVENT_PATH" "$RUNNER_TEMP/privacy-age-admission-body" <<'PY'
-          import json
-          import os
-          import sys
-          from pathlib import Path
-
-          event = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-          pull_request = event.get("pull_request")
-          if not isinstance(pull_request, dict):
-              raise SystemExit("pull request event is not an object")
-          body = pull_request.get("body")
-          if body is None:
-              body = ""
-          elif not isinstance(body, str):
-              raise SystemExit("pull request body is not text")
-          destination = Path(sys.argv[2])
-          no_follow = getattr(os, "O_NOFOLLOW", 0)
-          if not no_follow:
-              raise SystemExit("safe admission-body creation is unavailable")
-          descriptor = os.open(
-              destination,
-              os.O_WRONLY | os.O_CREAT | os.O_EXCL | no_follow,
-              0o600,
-          )
-          try:
-              with os.fdopen(descriptor, "wb") as handle:
-                  descriptor = -1
-                  handle.write(body.encode("utf-8"))
-          finally:
-              if descriptor >= 0:
-                  os.close(descriptor)
-          PY
+          # Candidate files are data for the trusted scanner only. The scanner
+          # runs before the verifier and neither imports nor executes them.
+          python3 -I trusted-base/scripts/privacy-scan \
+            --root "$GITHUB_WORKSPACE/untrusted-head" \
+            --require-age-manifest
           python3 -I trusted-base/scripts/privacy_age_integrity_gate.py \
             --base-repository trusted-base \
             --base-commit "$PRIVACY_BASE_SHA" \
             --head-repository untrusted-head \
             --head-commit "$PRIVACY_HEAD_SHA" \
-            --admission-body "$RUNNER_TEMP/privacy-age-admission-body" \
+            --admission-body "$RUNNER_TEMP/privacy-age-verify/body" \
             --allowed-signers trusted-base/.github/age-admission/allowed_signers \
+            --snapshot-file "$RUNNER_TEMP/privacy-age-verify/snapshot.json" \
+            --result-file "$RUNNER_TEMP/privacy-age-verify/result.json" \
+            --state-file "$RUNNER_TEMP/privacy-age-verify/state.json" \
             --repository "$PRIVACY_REPOSITORY"
-          python3 -I trusted-base/scripts/privacy-scan \
-            --root "$GITHUB_WORKSPACE/untrusted-head" \
-            --require-age-manifest
+
+      - name: Expose verifier state to completion
+        id: state
+        if: ${{ !cancelled() && (success() || failure()) }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          state="$RUNNER_TEMP/privacy-age-verify/state.json"
+          if [[ -s "$state" ]]; then
+            printf 'state_b64=%s\n' "$(base64 --wrap=0 "$state")" >>"$GITHUB_OUTPUT"
+            printf 'state_sha256=sha256:%s\n' "$(sha256sum "$state" | awk '{print $1}')" >>"$GITHUB_OUTPUT"
+          else
+            printf 'state_b64=\n' >>"$GITHUB_OUTPUT"
+            printf 'state_sha256=\n' >>"$GITHUB_OUTPUT"
+          fi
+
+  publish:
+    name: Complete App admission publication
+    needs: [begin, verify]
+    # This is the completion state-machine edge. It publishes a blocking
+    # failure when begin/verify failed, but never runs after cancellation.
+    if: ${{ !cancelled() && always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: privacy-age-admission-publisher
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Check out the trusted publisher source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ${{ github.repository }}
+          # The publisher source is always trusted default-branch code. Event
+          # values only identify the repository and pull request; the
+          # publisher rereads the live PR before every decision and write.
+          ref: ${{ needs.begin.outputs.trusted_tools_sha || github.sha }}
+          path: trusted-base
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Select Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+
+      - name: Materialize the authenticated verifier handoff
+        shell: bash
+        env:
+          STATE_B64: ${{ needs.verify.outputs.state_b64 }}
+          STATE_SHA256: ${{ needs.verify.outputs.state_sha256 }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/privacy-age-publish"
+          state="$RUNNER_TEMP/privacy-age-publish/state.json"
+          if [[ -n "${STATE_B64:-}" ]]; then
+            python3 -I - "$state" "$STATE_B64" "$STATE_SHA256" <<'PY'
+            import base64
+            import binascii
+            import hashlib
+            import os
+            import sys
+
+            destination, encoded, expected_digest = sys.argv[1:]
+            try:
+                data = base64.b64decode(encoded, validate=True)
+            except (ValueError, binascii.Error) as error:
+                raise SystemExit("invalid verifier handoff encoding") from error
+            if len(data) > 256 * 1024:
+                raise SystemExit("verifier handoff is oversized")
+            if "sha256:" + hashlib.sha256(data).hexdigest() != expected_digest:
+                raise SystemExit("verifier handoff digest mismatch")
+            no_follow = getattr(os, "O_NOFOLLOW", 0)
+            if not no_follow:
+                raise SystemExit("safe verifier handoff is unavailable")
+            descriptor = os.open(
+                destination,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | no_follow,
+                0o600,
+            )
+            try:
+                os.fchmod(descriptor, 0o600)
+                with os.fdopen(descriptor, "wb") as handle:
+                    descriptor = -1
+                    handle.write(data)
+            finally:
+                if descriptor >= 0:
+                    os.close(descriptor)
+            PY
+          fi
+
+      # The App key is available only in this protected, admin-owned
+      # environment. Compute jobs receive no secret and no installation token.
+      - name: Mint a short-lived App installation token
+        id: app-token
+        uses: actions/create-github-app-token@064492a9a1762067169d50c792a7dc02bc3d1254
+        with:
+          app-id: 4695065
+          private-key: ${{ secrets.PRIVACY_AGE_ADMISSION_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: dotfiles
+          permission-checks: write
+
+      - name: Publish the App-owned admission context
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_APP_INSTALLATION_TOKEN: ${{ steps.app-token.outputs.token }}
+          PRIVACY_REPOSITORY: ${{ github.repository }}
+          TRUSTED_TOOLS_SHA: ${{ needs.begin.outputs.trusted_tools_sha }}
+          FALLBACK_TRUSTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          trusted_sha="$(git -C trusted-base rev-parse --verify HEAD)"
+          [[ "$trusted_sha" =~ ^[0-9a-f]{40}$ ]]
+          if [[ -n "${TRUSTED_TOOLS_SHA:-}" ]]; then
+            test "$trusted_sha" = "$TRUSTED_TOOLS_SHA"
+          else
+            [[ "$FALLBACK_TRUSTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+            test "$trusted_sha" = "$FALLBACK_TRUSTED_SHA"
+          fi
+          python3 -I trusted-base/scripts/privacy_age_admission_publisher.py \
+            --event "$GITHUB_EVENT_PATH" \
+            --state-file "$RUNNER_TEMP/privacy-age-publish/state.json" \
+            --repository "$PRIVACY_REPOSITORY"
