@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_root=${0:A:h:h}
 migrator=$repo_root/home/private_dot_local/bin/executable_secret-exec-migrate
+zsh_command=${commands[zsh]}
 
 fail() {
   print -u2 -r -- "$1"
@@ -27,7 +28,7 @@ chmod +x "$excluded_home/.local/bin/pass-cli"
 set +e
 excluded_output=$(EXCLUDED_PASS_CLI_MARKER=$excluded_marker \
   HOME=$excluded_home XDG_CONFIG_HOME=$excluded_config \
-  PATH=$excluded_path /usr/bin/zsh "$migrator" 2>&1)
+  PATH=$excluded_path "$zsh_command" "$migrator" 2>&1)
 excluded_status=$?
 set -e
 (( excluded_status != 0 )) ||
