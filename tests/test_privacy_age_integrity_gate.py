@@ -216,7 +216,7 @@ class PrivacyAgeIntegrityGateTests(TestCase):
             b"docs/ENCRYPTION.md": (
                 b"blob",
                 b"100644",
-                b"60ebea7e2be76383d105fa648db8816e5fb6f12f",
+                b"52899fa98f3980821aeeff489acca79627ebc603",
             ),
         }
         self.assertEqual(BOOTSTRAP_REVIEWED_SUPPORT_ENTRIES, reviewed_fixture)

@@ -167,7 +167,7 @@ BOOTSTRAP_REVIEWED_AUTHORITY_ENTRIES = {
     b"scripts/privacy-scan": (
         b"blob",
         b"100755",
-        b"bcb6b77c06d9e6e9c468b34546f14ffbda2e7384",
+        b"e88474ed0c41548cb9cd4f75f8fe6fe0e0e56c67",
     ),
     b"scripts/create-age-admission-receipt": (
         b"blob",
@@ -209,12 +209,12 @@ BOOTSTRAP_REVIEWED_AUTHORITY_ENTRIES = {
     b"scripts/privacy_scan_review.py": (
         b"blob",
         b"100644",
-        b"07e28f22ee151eee7d5c27eeba31ed0d38fc93a0",
+        b"85da083e61e98b73e7e66d070d465d0e9803a5d7",
     ),
     b".github/age-admission/privacy-scan-reviewed-findings-v1.json": (
         b"blob",
         b"100644",
-        b"1af80410f53f4b823223c93521aab9974f0c1d62",
+        b"eea5ffcb969856c5afd16a023629eed042fffec6",
     ),
 }
 # These support files are part of this reviewed bootstrap revision, but are not
@@ -234,7 +234,7 @@ BOOTSTRAP_REVIEWED_SUPPORT_ENTRIES = {
     b"docs/ENCRYPTION.md": (
         b"blob",
         b"100644",
-        b"60ebea7e2be76383d105fa648db8816e5fb6f12f",
+        b"52899fa98f3980821aeeff489acca79627ebc603",
     ),
 }
 # This marker lives in the already protected workflow.  The legacy

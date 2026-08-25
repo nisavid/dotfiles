@@ -44,14 +44,28 @@ record is considered when the candidate reproduces a reviewed finding key;
 clean or unrelated candidates are scanned normally and cannot inherit a
 disposition for findings they did not produce. This is a versioned owner-review
 record, not a path or rule allowlist. Each entry names the scanner rule and one
-closed semantic category, then binds the canonical repository path, regular-file
-mode, Git blob, and complete file-byte SHA-256. The scanner recomputes the
-complete finding set and fails closed on any missing, new, changed, duplicated,
-stale, or mis-categorized entry. The record is read from the trusted-base
-checkout; a candidate-authored copy is never consulted. The record's
-`reviewed_commit` names the candidate source under review as provenance; its
+closed owner-attested semantic category, then binds the canonical repository
+path, regular-file mode, Git blob, and complete file-byte SHA-256. The scanner
+rejects unknown categories and a mismatch between `category` and
+`evidence.kind`; it does not derive or prove the owner's semantic attestation.
+The scanner recomputes the complete finding set and fails closed on any missing,
+new, changed, duplicated, or partially stale applicable record. The record is
+read from the trusted-base checkout; a candidate-authored copy is never
+consulted. An explicit `--review-record` path is diagnostic only: the scanner
+validates it against the complete finding set, reports every finding, and never
+uses it for suppression. A nonempty explicit record with no current key is
+stale and fails. A valid auto-discovered record with no current-key intersection
+is irrelevant, so a clean candidate passes and unrelated findings remain
+ordinary failures. Any partial intersection makes the auto-discovered record
+applicable and requires exact equality with the complete finding set. The
+record's `reviewed_commit` names the candidate source under review as provenance; its
 policy-file hashes independently bind the trusted scanner policy that consumes
 it. Changes to the record or scanner remain inside the owner-admission boundary.
+
+Update this coupled boundary in dependency order: finish the trusted scanner and
+policy-file bytes first; recompute the record's `policy.files` digests and entry
+identities second; then update the integrity gate's exact Git blob pins for the
+changed scanner, record, documentation, and corresponding test fixtures.
 
 ### Ciphertext admission
 
