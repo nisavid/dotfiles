@@ -59,6 +59,10 @@ grep -Fq \
   "python3 -m unittest discover -s tests/agent_equipment -t . -p 'test_*.py'" \
   "$workflow" ||
   fail 'platform workflow does not discover production agent-equipment tests'
+grep -Fq \
+  'python3 -m unittest tests/test_privacy_scan_review.py' \
+  "$workflow" ||
+  fail 'platform workflow does not run privacy review contract tests'
 expected_pyrefly_type_gate=$(
   print -rl -- \
     '          uvx --from pyrefly==1.2.0 pyrefly check \' \

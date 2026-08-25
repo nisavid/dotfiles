@@ -175,6 +175,7 @@ jobs:
           zsh -f tests/container-runtime-bindings.zsh
           zsh -f tests/privacy-scan.zsh
           python3 scripts/privacy-scan --root . --require-age-manifest
+          python3 -m unittest tests/test_privacy_scan_review.py
           zsh -f tests/identity-bindings.zsh
           zsh -f tests/secret-exec.zsh
           zsh -f tests/secret-command-shims.zsh

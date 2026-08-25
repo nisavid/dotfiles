@@ -3,10 +3,12 @@ from __future__ import annotations
 import hashlib
 import importlib.machinery
 import importlib.util
+import io
 import json
 import os
 import subprocess
 import sys
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase
@@ -47,6 +49,7 @@ POLICY_FILES = (
     "scripts/agent_equipment_public_data.py",
     "home/private_dot_local/lib/agent-equipment/agent_equipment/secrets.py",
 )
+SCANNER_RUNTIME_FILES = POLICY_FILES + ("scripts/privacy_age_envelopes.py",)
 TRUSTED_REVIEW_RECORD = (
     ROOT / ".github/age-admission/privacy-scan-reviewed-findings-v1.json"
 )
@@ -144,13 +147,15 @@ def _write_policy_fixture(root: Path, *, large_file_bytes: int) -> None:
 def _run_scan(
     root: Path,
     record: Path | None,
+    *,
+    scanner: Path = SCANNER,
 ) -> subprocess.CompletedProcess[str]:
     environment = os.environ.copy()
     environment["PYTHONDONTWRITEBYTECODE"] = "1"
     command = [
         sys.executable,
         "-I",
-        os.fspath(SCANNER),
+        os.fspath(scanner),
         "--root",
         os.fspath(root),
     ]
@@ -164,6 +169,13 @@ def _run_scan(
         env=environment,
         timeout=60,
     )
+
+
+def _copy_scanner_runtime(policy_root: Path) -> None:
+    for relative in SCANNER_RUNTIME_FILES:
+        target = policy_root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes((ROOT / relative).read_bytes())
 
 
 def _copy_default_reviewed_candidate(root: Path) -> None:
@@ -230,6 +242,149 @@ class PrivacyScanReviewTests(TestCase):
                 "owner-review record file is oversized",
             ):
                 load_review_record(record_path, policy_root=ROOT)
+
+    def test_scanner_reports_only_the_sanitized_oversized_record_diagnostic(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            candidate_value = _generated_provider_token()
+            source = root / "client.py"
+            source.write_text(
+                f'Client(token="{candidate_value}")\n',
+                encoding="utf-8",
+            )
+            findings = (("client.py", 1, "provider-token"),)
+            record_path = _record(root, findings)
+            _resize_canonical_record(
+                record_path,
+                _review.MAX_REVIEW_RECORD_BYTES + 1,
+            )
+
+            result = _run_scan(root, record_path)
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(
+            result.stderr,
+            "owner-review record file is oversized\n",
+        )
+        self.assertEqual(
+            result.stdout,
+            "client.py:1: [provider-token] review required\n",
+        )
+        diagnostic = result.stdout + result.stderr
+        self.assertNotIn(candidate_value, diagnostic)
+        self.assertNotIn(os.fspath(root), diagnostic)
+
+    def test_scanner_reports_only_the_sanitized_oversized_policy_diagnostic(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as directory:
+            fixture_root = Path(directory)
+            candidate_root = fixture_root / "private-candidate-root"
+            candidate_root.mkdir()
+            candidate_value = _generated_provider_token()
+            (candidate_root / "client.py").write_text(
+                f'Client(token="{candidate_value}")\n',
+                encoding="utf-8",
+            )
+            findings = (("client.py", 1, "provider-token"),)
+            policy_root = fixture_root / "private-policy-root"
+            _copy_scanner_runtime(policy_root)
+            oversized_policy = (
+                policy_root
+                / "home/private_dot_local/lib/agent-equipment/agent_equipment/secrets.py"
+            )
+            policy_bytes = oversized_policy.read_bytes()
+            target_size = _review.MAX_PUBLIC_FILE_BYTES + 1
+            self.assertLess(len(policy_bytes), target_size)
+            oversized_policy.write_bytes(
+                policy_bytes
+                + b"\n#"
+                + b"x" * (target_size - len(policy_bytes) - 2)
+            )
+            record_path = _record(
+                candidate_root,
+                findings,
+                policy_root=policy_root,
+            )
+
+            result = _run_scan(
+                candidate_root,
+                record_path,
+                scanner=policy_root / "scripts/privacy-scan",
+            )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(
+            result.stderr,
+            "owner-review policy file is oversized\n",
+        )
+        self.assertEqual(
+            result.stdout,
+            "client.py:1: [provider-token] review required\n",
+        )
+        diagnostic = result.stdout + result.stderr
+        self.assertNotIn(candidate_value, diagnostic)
+        self.assertNotIn(os.fspath(candidate_root), diagnostic)
+        self.assertNotIn(os.fspath(policy_root), diagnostic)
+
+    def test_scanner_reports_only_the_sanitized_oversized_finding_diagnostic(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            candidate_value = _generated_provider_token()
+            source = root / "client.py"
+            source.write_text(
+                f'Client(token="{candidate_value}")\n',
+                encoding="utf-8",
+            )
+            findings = (("client.py", 1, "provider-token"),)
+            record_path = _record(root, findings)
+            real_validate = _scanner.validate_reviewed_findings
+
+            def grow_then_validate(*args: object, **kwargs: object) -> object:
+                source_bytes = source.read_bytes()
+                target_size = _review.MAX_PUBLIC_FILE_BYTES + 1
+                source.write_bytes(
+                    source_bytes + b"#" * (target_size - len(source_bytes))
+                )
+                return real_validate(*args, **kwargs)
+
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            argv = [
+                os.fspath(SCANNER),
+                "--root",
+                os.fspath(root),
+                "--review-record",
+                os.fspath(record_path),
+            ]
+            with (
+                patch.object(sys, "argv", argv),
+                patch.object(
+                    _scanner,
+                    "validate_reviewed_findings",
+                    side_effect=grow_then_validate,
+                ),
+                redirect_stdout(stdout),
+                redirect_stderr(stderr),
+            ):
+                returncode = _scanner.main()
+
+        self.assertEqual(returncode, 1)
+        self.assertEqual(
+            stderr.getvalue(),
+            "owner-review finding file is oversized\n",
+        )
+        self.assertEqual(
+            stdout.getvalue(),
+            "client.py:1: [provider-token] review required\n",
+        )
+        diagnostic = stdout.getvalue() + stderr.getvalue()
+        self.assertNotIn(candidate_value, diagnostic)
+        self.assertNotIn(os.fspath(root), diagnostic)
 
     def test_explicit_record_is_diagnostic_for_the_complete_finding_set(self) -> None:
         with TemporaryDirectory() as directory:
@@ -340,14 +495,30 @@ class PrivacyScanReviewTests(TestCase):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             source = root / "client.py"
-            source.write_text(_runtime_canary_source(), encoding="utf-8")
+            candidate_value = _generated_provider_token()
+            source.write_text(
+                f'Client(token="{candidate_value}")\n',
+                encoding="utf-8",
+            )
             record = _record(root, (("client.py", 1, "provider-token"),))
-            source.write_text(_runtime_canary_source() + "# changed\n", encoding="utf-8")
+            source.write_text(
+                f'Client(token="{candidate_value}")\n# changed\n',
+                encoding="utf-8",
+            )
             result = _run_scan(root, record)
 
         self.assertEqual(result.returncode, 1)
-        self.assertIn("owner review record invalid", result.stderr)
-        self.assertIn("client.py:1: [provider-token] review required", result.stdout)
+        self.assertEqual(
+            result.stderr,
+            "privacy scan failed: owner review record invalid\n",
+        )
+        self.assertEqual(
+            result.stdout,
+            "client.py:1: [provider-token] review required\n",
+        )
+        diagnostic = result.stdout + result.stderr
+        self.assertNotIn(candidate_value, diagnostic)
+        self.assertNotIn(os.fspath(root), diagnostic)
 
     def test_file_mode_and_bytes_are_bound_to_the_same_descriptor(self) -> None:
         with TemporaryDirectory() as directory:
