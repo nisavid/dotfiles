@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 SCANNER = ROOT / "scripts/privacy-scan"
@@ -19,8 +20,12 @@ from privacy_scan_review import (  # noqa: E402
     OWNER_REVIEWER,
     POLICY_VERSION,
     RECORD_VERSION,
+    ReviewRecordError,
     canonical_json_bytes,
+    load_review_record,
+    validate_reviewed_findings,
 )
+import privacy_scan_review as _review  # noqa: E402
 
 _scanner_loader = importlib.machinery.SourceFileLoader(
     "privacy_scan_impl",
@@ -42,12 +47,19 @@ POLICY_FILES = (
     "scripts/agent_equipment_public_data.py",
     "home/private_dot_local/lib/agent-equipment/agent_equipment/secrets.py",
 )
+TRUSTED_REVIEW_RECORD = (
+    ROOT / ".github/age-admission/privacy-scan-reviewed-findings-v1.json"
+)
+
+
 def _sha256(data: bytes) -> str:
     return "sha256:" + hashlib.sha256(data).hexdigest()
 
 
 def _git_blob_sha1(data: bytes) -> str:
-    return hashlib.sha1(f"blob {len(data)}\0".encode() + data).hexdigest()
+    return hashlib.sha1(  # noqa: S324 -- Git object identity requires SHA-1.
+        f"blob {len(data)}\0".encode() + data
+    ).hexdigest()
 
 
 def _policy() -> dict[str, object]:
@@ -124,6 +136,18 @@ def _run_scan(
     )
 
 
+def _copy_default_reviewed_candidate(root: Path) -> None:
+    document = json.loads(TRUSTED_REVIEW_RECORD.read_text(encoding="ascii"))
+    reviewed_paths = sorted(
+        {entry["path"] for entry in document["entries"]}
+    )
+    for relative in reviewed_paths:
+        target = root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes((ROOT / relative).read_bytes())
+        target.chmod(0o644)
+
+
 def _runtime_canary_source() -> str:
     # Build the inert finding only inside the temporary fixture.  No token-like
     # value is stored in this repository's source tree.
@@ -144,58 +168,93 @@ def _generated_bearer_header(token: str) -> str:
 
 
 class PrivacyScanReviewTests(TestCase):
-    def test_exact_content_bound_record_admits_the_complete_finding_set(self) -> None:
+    def test_explicit_record_is_diagnostic_for_the_complete_finding_set(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "client.py").write_text(_runtime_canary_source(), encoding="utf-8")
             findings = (("client.py", 1, "provider-token"),)
             result = _run_scan(root, _record(root, findings))
 
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout, "")
-        self.assertIn("accepted 1 owner-reviewed finding", result.stderr)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("explicit record is non-authoritative", result.stderr)
+        self.assertIn("client.py:1: [provider-token] review required", result.stdout)
 
     def test_default_record_admits_unchanged_reviewed_findings(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / ".github/age-admission").mkdir(parents=True)
-            (root / ".github/age-admission/privacy-scan-reviewed-findings-v1.json").write_text(
-                '{"entries":[]}\n',
-                encoding="ascii",
-            )
-            (root / ".github/workflows").mkdir(parents=True)
-            (root / "scripts").mkdir()
-            (root / "tests").mkdir()
-            (root / ".github/workflows/privacy-age-integrity.yml").write_bytes(
-                (ROOT / ".github/workflows/privacy-age-integrity.yml").read_bytes()
-            )
-            (root / "scripts/privacy_age_admission_publisher.py").write_bytes(
-                (ROOT / "scripts/privacy_age_admission_publisher.py").read_bytes()
-            )
-            (root / "scripts/privacy_age_pr_snapshot.py").write_bytes(
-                (ROOT / "scripts/privacy_age_pr_snapshot.py").read_bytes()
-            )
-            (root / "tests/test_privacy_age_admission_app.py").write_bytes(
-                (ROOT / "tests/test_privacy_age_admission_app.py").read_bytes()
-            )
+            _copy_default_reviewed_candidate(root)
             result = _run_scan(root, None)
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("accepted 5 owner-reviewed finding", result.stderr)
+        expected_count = len(
+            json.loads(TRUSTED_REVIEW_RECORD.read_text(encoding="ascii"))["entries"]
+        )
+        self.assertIn(
+            f"accepted {expected_count} owner-reviewed finding",
+            result.stderr,
+        )
+
+    def test_explicit_trusted_record_is_diagnostic_only(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            _copy_default_reviewed_candidate(root)
+            result = _run_scan(root, TRUSTED_REVIEW_RECORD)
+
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("explicit record is non-authoritative", result.stderr)
+        self.assertIn("review required", result.stdout)
 
     def test_default_record_does_not_block_an_unrelated_clean_candidate(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / ".github/age-admission").mkdir(parents=True)
-            (root / ".github/age-admission/privacy-scan-reviewed-findings-v1.json").write_text(
-                "{}\n",
-                encoding="ascii",
-            )
             (root / "clean.py").write_text("print('clean')\n", encoding="utf-8")
             result = _run_scan(root, None)
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "")
+
+    def test_default_record_leaves_an_unrelated_finding_unresolved(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "client.py").write_text(_runtime_canary_source(), encoding="utf-8")
+            result = _run_scan(root, None)
+
+        self.assertEqual(result.returncode, 1)
+        self.assertNotIn("owner review record invalid", result.stderr)
+        self.assertIn("client.py:1: [provider-token] review required", result.stdout)
+
+    def test_default_record_partial_intersection_fails_closed(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "scripts/privacy_age_pr_snapshot.py"
+            target.parent.mkdir(parents=True)
+            target.write_bytes((ROOT / "scripts/privacy_age_pr_snapshot.py").read_bytes())
+            target.chmod(0o644)
+            result = _run_scan(root, None)
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("owner review record invalid", result.stderr)
+        self.assertIn(
+            "scripts/privacy_age_pr_snapshot.py:83: [provider-token] review required",
+            result.stdout,
+        )
+
+    def test_candidate_authored_default_record_cannot_suppress_findings(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "client.py"
+            source.write_text(_runtime_canary_source(), encoding="utf-8")
+            candidate_record = _record(root, (("client.py", 1, "provider-token"),))
+            candidate_default = (
+                root / ".github/age-admission/privacy-scan-reviewed-findings-v1.json"
+            )
+            candidate_default.parent.mkdir(parents=True)
+            candidate_record.replace(candidate_default)
+            result = _run_scan(root, None)
+
+        self.assertEqual(result.returncode, 1)
+        self.assertNotIn("accepted 1 owner-reviewed finding", result.stderr)
+        self.assertIn("client.py:1: [provider-token] review required", result.stdout)
 
     def test_changed_file_bytes_fail_the_same_record(self) -> None:
         with TemporaryDirectory() as directory:
@@ -208,6 +267,38 @@ class PrivacyScanReviewTests(TestCase):
 
         self.assertEqual(result.returncode, 1)
         self.assertIn("owner review record invalid", result.stderr)
+        self.assertIn("client.py:1: [provider-token] review required", result.stdout)
+
+    def test_file_mode_and_bytes_are_bound_to_the_same_descriptor(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "client.py"
+            source.write_text(_runtime_canary_source(), encoding="utf-8")
+            source.chmod(0o644)
+            record_path = _record(root, (("client.py", 1, "provider-token"),))
+            record = load_review_record(record_path, policy_root=ROOT)
+            source.chmod(0o600)
+            replacement = root / "replacement.py"
+            replacement.write_text("print('replacement')\n", encoding="utf-8")
+            replacement.chmod(0o644)
+            real_open = os.open
+
+            def open_then_replace(path: os.PathLike[str] | str, flags: int) -> int:
+                descriptor = real_open(path, flags)
+                if Path(path).resolve() == source.resolve():
+                    os.replace(replacement, source)
+                return descriptor
+
+            with patch.object(_review.os, "open", side_effect=open_then_replace):
+                with self.assertRaisesRegex(
+                    ReviewRecordError,
+                    "owner-review finding file mode changed",
+                ):
+                    validate_reviewed_findings(
+                        (("client.py", 1, "provider-token"),),
+                        root=root,
+                        record=record,
+                    )
 
     def test_new_finding_cannot_hide_behind_an_old_record(self) -> None:
         with TemporaryDirectory() as directory:
@@ -261,7 +352,24 @@ class PrivacyScanReviewTests(TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("owner review record invalid", result.stderr)
 
-    def test_literal_provider_tokens_still_fail_without_a_review_record(self) -> None:
+    def test_unknown_owner_attestation_category_fails_closed(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "client.py"
+            source.write_text(_runtime_canary_source(), encoding="utf-8")
+            record = _record(root, (("client.py", 1, "provider-token"),))
+            document = json.loads(record.read_text(encoding="ascii"))
+            document["entries"][0]["category"] = "unknown_owner_attestation"
+            document["entries"][0]["evidence"]["kind"] = (
+                "unknown_owner_attestation"
+            )
+            record.write_bytes(canonical_json_bytes(document))
+            result = _run_scan(root, record)
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("owner review record invalid", result.stderr)
+
+    def test_sensitive_file_text_rules_detect_literal_provider_tokens(self) -> None:
         token = _generated_provider_token()
         sources = {
             "workflow.yml": f"token: {token}\n",
@@ -277,7 +385,7 @@ class PrivacyScanReviewTests(TestCase):
             for relative, source in sources.items():
                 syntax = _scanner.serialized_syntax(relative)
                 line_syntax = "line-invariants" if syntax is not None else None
-                for line_number, line in enumerate(source.splitlines(), start=1):
+                for _line_number, line in enumerate(source.splitlines(), start=1):
                     findings.extend(
                         _scanner.sensitive_file_text_rules(
                             relative,

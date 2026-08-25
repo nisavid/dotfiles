@@ -573,7 +573,10 @@ def _main() -> int:
     parser.add_argument(
         "--review-record",
         type=Path,
-        help="trusted-base owner-review record for the complete finding set",
+        help=(
+            "diagnostically validate a caller-selected owner-review record "
+            "without suppressing findings"
+        ),
     )
     arguments = parser.parse_args()
     try:
@@ -585,7 +588,7 @@ def _main() -> int:
         print("privacy scan failed", file=sys.stderr)
         return 1
     review_record = arguments.review_record
-    auto_review_record = review_record is None
+    authoritative_review_record = review_record is None
     if review_record is None:
         trusted_record = (
             Path(__file__).resolve().parent.parent / DEFAULT_REVIEW_RECORD
@@ -756,7 +759,7 @@ def _main() -> int:
                 review_record,
                 policy_root=Path(__file__).resolve().parent.parent,
             )
-            if auto_review_record and not (
+            if authoritative_review_record and not (
                 {entry.key for entry in record.entries}
                 & set(remaining_findings)
             ):
@@ -765,21 +768,33 @@ def _main() -> int:
                 # unrelated candidates remain ordinary scans; they cannot
                 # inherit a disposition for findings they did not produce.
                 record = None
-            if record is None:
-                reviewed = set()
-            else:
-                reviewed = set(
+            matched = set()
+            if record is not None:
+                matched = set(
                     validate_reviewed_findings(
                         remaining_findings,
                         root=root,
                         record=record,
                     )
                 )
+            if authoritative_review_record:
+                reviewed = matched
+            else:
+                reviewed = set()
+                if matched:
+                    print(
+                        "privacy scan inspected "
+                        f"{len(matched)} owner-reviewed finding(s); "
+                        "explicit record is non-authoritative",
+                        file=sys.stderr,
+                    )
         except ReviewRecordError:
             print(
                 "privacy scan failed: owner review record invalid",
                 file=sys.stderr,
             )
+            for relative, line_number, rule in sorted(remaining_findings):
+                print(f"{relative}:{line_number}: [{rule}] review required")
             return 1
         remaining_findings = tuple(
             finding for finding in remaining_findings if finding not in reviewed

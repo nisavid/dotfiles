@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Validate trusted-base owner dispositions for deterministic privacy findings.
 
-The reviewed record is deliberately separate from the candidate checkout.  A
-trusted caller supplies the record path, and this module binds each disposition
-to the scanner rule, a closed semantic category, a canonical repository path,
-the file mode, and the complete file bytes.  It is an admission record, not a
-general scanner allowlist.
+The reviewed record is deliberately separate from the candidate checkout. This
+module validates records supplied by callers and binds each disposition to the
+scanner rule, a closed owner-attested semantic category, a canonical repository
+path, the file mode, and the complete file bytes. Only canonical trusted-base
+discovery grants admission; an arbitrary caller-selected record is diagnostic.
 """
 
 from __future__ import annotations
@@ -139,7 +139,7 @@ def _canonical_path(value: object, *, label: str) -> str:
     return path
 
 
-def _secure_read(path: Path) -> bytes:
+def _secure_read(path: Path) -> tuple[bytes, int]:
     no_follow = getattr(os, "O_NOFOLLOW", None)
     nonblocking = getattr(os, "O_NONBLOCK", None)
     if no_follow is None or nonblocking is None:
@@ -161,7 +161,7 @@ def _secure_read(path: Path) -> bytes:
             data.extend(chunk)
         if len(data) > MAX_RECORD_BYTES:
             raise ReviewRecordError("owner-review record file is oversized")
-        return bytes(data)
+        return bytes(data), stat.S_IMODE(info.st_mode)
     except OSError as error:
         raise ReviewRecordError("owner-review record file is unreadable") from error
     finally:
@@ -205,7 +205,7 @@ def _validate_policy(document: object, *, policy_root: Path) -> tuple[str, dict[
     for relative, digest in files.items():
         canonical = _canonical_path(relative, label="policy file path")
         expected = _string(digest, label=f"policy digest {canonical}", pattern=SHA256)
-        data = _secure_read(_safe_policy_path(policy_root, canonical))
+        data, _mode = _secure_read(_safe_policy_path(policy_root, canonical))
         if _sha256(data) != expected:
             raise ReviewRecordError("owner-review policy content changed")
         validated[canonical] = expected
@@ -298,9 +298,9 @@ def _validate_entry(value: object) -> ReviewedFinding:
 
 
 def load_review_record(path: Path, *, policy_root: Path) -> ReviewRecord:
-    """Load and validate a canonical trusted-base record."""
+    """Load and validate canonical record bytes and policy bindings."""
 
-    data = _secure_read(path)
+    data, _mode = _secure_read(path)
     try:
         document = json.loads(
             data.decode("ascii"),
@@ -370,8 +370,8 @@ def validate_reviewed_findings(
             raise ReviewRecordError("owner-review finding path is unavailable") from error
         if candidate.is_symlink() or not candidate.is_file():
             raise ReviewRecordError("owner-review finding is not a regular file")
-        data = _secure_read(candidate)
-        actual_mode = f"100{stat.S_IMODE(candidate.stat().st_mode):03o}"
+        data, descriptor_mode = _secure_read(candidate)
+        actual_mode = f"100{descriptor_mode:03o}"
         if actual_mode != entry.mode:
             raise ReviewRecordError("owner-review finding file mode changed")
         if _sha256(data) != entry.content_sha256:
