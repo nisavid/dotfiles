@@ -1020,6 +1020,7 @@ class PrivacyAgeIntegrityGateTests(TestCase):
             cwd=base,
             check=True,
             capture_output=True,
+            env=fixture_git_environment(),
             timeout=10,
         ).stdout
         head_bytes = subprocess.run(
@@ -1027,6 +1028,7 @@ class PrivacyAgeIntegrityGateTests(TestCase):
             cwd=head,
             check=True,
             capture_output=True,
+            env=fixture_git_environment(),
             timeout=10,
         ).stdout
         now = datetime.now(timezone.utc).replace(microsecond=0)
