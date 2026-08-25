@@ -12,6 +12,7 @@ from tempfile import TemporaryDirectory
 from unittest import TestCase
 from unittest.mock import patch
 
+import scripts.privacy_age_integrity_gate as _gate
 from scripts.privacy_age_admission import (
     ADMISSION_NAMESPACE,
     ADMISSION_PRINCIPAL,
@@ -19,6 +20,7 @@ from scripts.privacy_age_admission import (
     canonical_payload_bytes,
     encode_receipt,
 )
+from scripts.privacy_age_admission_result import body_digest, make_snapshot
 from scripts.privacy_age_integrity_gate import (
     ACTIVE_REQUIRED_PATHS,
     ADMISSION_ACTIVATION_MARKER,
@@ -28,7 +30,6 @@ from scripts.privacy_age_integrity_gate import (
     evaluate_integrity_boundary,
     verify_integrity_boundary,
 )
-from scripts.privacy_age_admission_result import body_digest, make_snapshot
 
 ROOT = Path(__file__).resolve().parents[1]
 GATE = ROOT / "scripts/privacy_age_integrity_gate.py"
@@ -102,6 +103,19 @@ ADMISSION_INFRASTRUCTURE_FIXTURE_PATHS = (
     "scripts/privacy_age_admission_result.py",
     "scripts/privacy_age_pr_snapshot.py",
     "scripts/privacy_age_admission_publisher.py",
+)
+LEGACY_ADMISSION_INFRASTRUCTURE_FIXTURE_PATHS = tuple(
+    relative
+    for relative in ADMISSION_INFRASTRUCTURE_FIXTURE_PATHS
+    if relative
+    not in {
+        ".github/age-admission/privacy-scan-reviewed-findings-v1.json",
+        "scripts/privacy_scan_review.py",
+    }
+)
+REVIEW_INFRASTRUCTURE_ADDITIONS = (
+    ".github/age-admission/privacy-scan-reviewed-findings-v1.json",
+    "scripts/privacy_scan_review.py",
 )
 
 
@@ -216,7 +230,7 @@ class PrivacyAgeIntegrityGateTests(TestCase):
             b"docs/ENCRYPTION.md": (
                 b"blob",
                 b"100644",
-                b"52899fa98f3980821aeeff489acca79627ebc603",
+                b"fbb9361b2bd7e2eb7c1c9a04428ad3478ee8a125",
             ),
         }
         self.assertEqual(BOOTSTRAP_REVIEWED_SUPPORT_ENTRIES, reviewed_fixture)
@@ -294,6 +308,228 @@ class PrivacyAgeIntegrityGateTests(TestCase):
         workflow = WORKFLOW.read_bytes()
         self.assertIn(ADMISSION_ACTIVATION_MARKER, workflow.splitlines(keepends=True))
 
+    def test_legacy_active_base_pin_matches_the_reviewed_predecessor(self) -> None:
+        self.assertEqual(
+            _gate.LEGACY_ACTIVE_BASE_COMMIT,
+            "0e981202824a76043083039a407dd165e243d544",
+        )
+        self.assertEqual(
+            set(_gate.LEGACY_ADMISSION_INFRASTRUCTURE_ENTRIES),
+            {path.encode("ascii") for path in LEGACY_ADMISSION_INFRASTRUCTURE_FIXTURE_PATHS},
+        )
+
+    def test_pinned_legacy_boundary_uses_the_normal_signed_migration(self) -> None:
+        temporary, base, head, _ = self.make_checkouts()
+        key = Path(temporary.name) / "legacy-migration-key"
+        subprocess.run(
+            ["/usr/bin/ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)],
+            check=True,
+            capture_output=True,
+            timeout=10,
+        )
+        public_key = Path(f"{key}.pub").read_text(encoding="ascii").split()
+        signer = (
+            f'{ADMISSION_PRINCIPAL} namespaces="{ADMISSION_NAMESPACE}" '
+            f"{public_key[0]} {public_key[1]}\n"
+        )
+        for checkout in (base, head):
+            (checkout / ".github/age-admission/allowed_signers").write_text(
+                signer,
+                encoding="ascii",
+            )
+        for relative in REVIEW_INFRASTRUCTURE_ADDITIONS:
+            (base / relative).unlink()
+        base_commit = commit_all(base, "complete legacy admission boundary")
+        head_commit = commit_all(head, "complete current admission boundary")
+
+        with patch.object(_gate, "LEGACY_ACTIVE_BASE_COMMIT", base_commit):
+            transition = _gate._protected_transition(
+                base_repository=base,
+                base_commit=base_commit,
+                head_repository=head,
+                head_commit=head_commit,
+            )
+            self.assertEqual(
+                transition.boundary_state,
+                _gate.AdmissionBoundaryState.ACTIVE_PREVIOUS,
+            )
+            paths = _gate._admission_paths(transition)
+            self.assertEqual(
+                [path["path"] for path in paths],
+                list(REVIEW_INFRASTRUCTURE_ADDITIONS),
+            )
+
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "without admission",
+            ):
+                self.verify(
+                    base,
+                    head,
+                    base_commit,
+                    head_commit,
+                    repository="nisavid/dotfiles",
+                )
+
+            now = datetime.now(timezone.utc).replace(microsecond=0)
+            payload = {
+                "base_commit": base_commit,
+                "expires_at": (now + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "head_commit": head_commit,
+                "issued_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "nonce": "c" * 32,
+                "paths": paths,
+                "repository": "nisavid/dotfiles",
+                "version": ADMISSION_VERSION,
+            }
+            message_file = Path(temporary.name) / "legacy-migration-payload"
+            message_file.write_bytes(canonical_payload_bytes(payload))
+            subprocess.run(
+                [
+                    "/usr/bin/ssh-keygen",
+                    "-Y",
+                    "sign",
+                    "-f",
+                    str(key),
+                    "-n",
+                    ADMISSION_NAMESPACE,
+                    str(message_file),
+                ],
+                check=True,
+                capture_output=True,
+                timeout=10,
+            )
+            receipt = encode_receipt(
+                payload,
+                message_file.with_suffix(".sig").read_bytes(),
+            )
+            with patch(
+                "scripts.privacy_age_admission.shutil.which",
+                return_value="/usr/bin/ssh-keygen",
+            ):
+                self.verify(
+                    base,
+                    head,
+                    base_commit,
+                    head_commit,
+                    admission_body=receipt,
+                    allowed_signers=base / ".github/age-admission/allowed_signers",
+                    repository="nisavid/dotfiles",
+                )
+
+    def test_unpinned_legacy_tree_is_not_reusable(self) -> None:
+        _, base, head, _ = self.make_checkouts()
+        for relative in REVIEW_INFRASTRUCTURE_ADDITIONS:
+            (base / relative).unlink()
+        base_commit = commit_all(base, "unrecognized legacy-shaped boundary")
+        head_commit = run("git", "rev-parse", "HEAD", cwd=head)
+
+        with self.assertRaisesRegex(RuntimeError, "invalid admission boundary"):
+            self.verify(base, head, base_commit, head_commit)
+
+    def test_partial_malformed_and_marker_inconsistent_bases_are_rejected(self) -> None:
+        def seven_minus_one(root: Path) -> None:
+            (root / ".github/age-admission/allowed_signers").unlink()
+
+        def seven_plus_one_new(root: Path) -> None:
+            relative = REVIEW_INFRASTRUCTURE_ADDITIONS[0]
+            target = root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes((ROOT / relative).read_bytes())
+
+        def nine_minus_one(root: Path) -> None:
+            for relative in REVIEW_INFRASTRUCTURE_ADDITIONS:
+                target = root / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes((ROOT / relative).read_bytes())
+            (root / "scripts/privacy_age_admission_result.py").unlink()
+
+        def wrong_mode(root: Path) -> None:
+            (root / "scripts/privacy_age_admission_result.py").chmod(0o755)
+
+        def wrong_kind(root: Path) -> None:
+            target = root / "scripts/privacy_age_admission_result.py"
+            target.unlink()
+            target.mkdir()
+            (target / "nested").write_text("not a blob\n", encoding="ascii")
+
+        def symlink(root: Path) -> None:
+            target = root / "scripts/privacy_age_admission_result.py"
+            target.unlink()
+            target.symlink_to("privacy_age_admission.py")
+
+        def marker_mismatch(root: Path) -> None:
+            (root / ".github/workflows/privacy-age-integrity.yml").write_text(
+                "name: boundary\n",
+                encoding="ascii",
+            )
+
+        mutations = {
+            "seven-minus-one": seven_minus_one,
+            "seven-plus-one-new": seven_plus_one_new,
+            "nine-minus-one": nine_minus_one,
+            "wrong-mode": wrong_mode,
+            "wrong-kind": wrong_kind,
+            "symlink": symlink,
+            "marker-mismatch": marker_mismatch,
+        }
+        for label, mutate in mutations.items():
+            with self.subTest(label=label):
+                _, base, head, _ = self.make_checkouts()
+                for relative in REVIEW_INFRASTRUCTURE_ADDITIONS:
+                    (base / relative).unlink()
+                mutate(base)
+                base_commit = commit_all(base, label)
+                head_commit = run("git", "rev-parse", "HEAD", cwd=head)
+                with (
+                    patch.object(_gate, "LEGACY_ACTIVE_BASE_COMMIT", base_commit),
+                    patch.object(
+                        _gate,
+                        "_verify_admission",
+                        side_effect=AssertionError("receipt parser was reached"),
+                    ),
+                    self.assertRaisesRegex(RuntimeError, "invalid admission boundary"),
+                ):
+                    self.verify(
+                        base,
+                        head,
+                        base_commit,
+                        head_commit,
+                        admission_body=b"not a receipt",
+                        repository="nisavid/dotfiles",
+                    )
+
+    def test_current_boundary_cannot_delete_review_infrastructure(self) -> None:
+        for deleted in (
+            REVIEW_INFRASTRUCTURE_ADDITIONS[:1],
+            REVIEW_INFRASTRUCTURE_ADDITIONS[1:],
+            REVIEW_INFRASTRUCTURE_ADDITIONS,
+        ):
+            with self.subTest(deleted=deleted):
+                _, base, head, base_commit = self.make_checkouts()
+                for relative in deleted:
+                    (head / relative).unlink()
+                head_commit = commit_all(head, "delete review infrastructure")
+                with (
+                    patch.object(
+                        _gate,
+                        "_verify_admission",
+                        side_effect=AssertionError("receipt parser was reached"),
+                    ),
+                    self.assertRaisesRegex(
+                        RuntimeError,
+                        "active admission infrastructure must remain complete",
+                    ),
+                ):
+                    self.verify(
+                        base,
+                        head,
+                        base_commit,
+                        head_commit,
+                        admission_body=b"not a receipt",
+                        repository="nisavid/dotfiles",
+                    )
+
     def test_prebootstrap_preseeded_infrastructure_does_not_activate_the_gate(self) -> None:
         _, base, head, _ = self.make_checkouts()
         for relative in ADMISSION_INFRASTRUCTURE_FIXTURE_PATHS:
@@ -308,7 +544,7 @@ class PrivacyAgeIntegrityGateTests(TestCase):
 
         with self.assertRaisesRegex(
             RuntimeError,
-            "bootstrap candidate is not limited to admission infrastructure",
+            "invalid admission boundary",
         ):
             self.verify(base, head, base_commit, head_commit)
 
@@ -502,6 +738,10 @@ class PrivacyAgeIntegrityGateTests(TestCase):
                 _, base, head, _ = self.make_checkouts()
                 for relative in ADMISSION_INFRASTRUCTURE_FIXTURE_PATHS:
                     (base / relative).unlink()
+                (base / ".github/workflows/privacy-age-integrity.yml").write_text(
+                    "name: boundary\n",
+                    encoding="ascii",
+                )
                 base_commit = commit_all(base, f"pre-bootstrap {malformed}")
                 for relative, mode in BOOTSTRAP_REQUIRED_MODES.items():
                     path = head / relative
@@ -521,6 +761,10 @@ class PrivacyAgeIntegrityGateTests(TestCase):
         _, base, head, _ = self.make_checkouts()
         for relative in ADMISSION_INFRASTRUCTURE_FIXTURE_PATHS:
             (base / relative).unlink()
+        (base / ".github/workflows/privacy-age-integrity.yml").write_text(
+            "name: boundary\n",
+            encoding="ascii",
+        )
         base_commit = commit_all(base, "pre-bootstrap collateral base")
         for relative, mode in BOOTSTRAP_REQUIRED_MODES.items():
             path = head / relative

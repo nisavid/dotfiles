@@ -10,6 +10,7 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 
 # Isolated Python omits the script directory from `sys.path`. Re-add only this
@@ -29,7 +30,6 @@ try:
         validate_payload,
         verify_receipt_signature,
     )
-    from .privacy_age_envelopes import AgeEnvelopeError, read_regular_file
     from .privacy_age_admission_result import (
         AdmissionResultError,
         body_digest,
@@ -37,9 +37,10 @@ try:
         make_result,
         make_state,
         parse_canonical_json,
-        validate_state,
         validate_snapshot,
+        validate_state,
     )
+    from .privacy_age_envelopes import AgeEnvelopeError, read_regular_file
 except ImportError:  # pragma: no cover - direct script execution
     from privacy_age_admission import (
         ADMISSION_VERSION,
@@ -50,7 +51,6 @@ except ImportError:  # pragma: no cover - direct script execution
         validate_payload,
         verify_receipt_signature,
     )
-    from privacy_age_envelopes import AgeEnvelopeError, read_regular_file
     from privacy_age_admission_result import (
         AdmissionResultError,
         body_digest,
@@ -58,9 +58,10 @@ except ImportError:  # pragma: no cover - direct script execution
         make_result,
         make_state,
         parse_canonical_json,
-        validate_state,
         validate_snapshot,
+        validate_state,
     )
+    from privacy_age_envelopes import AgeEnvelopeError, read_regular_file
 
 COMMIT_ID = re.compile(r"[0-9a-f]{40}\Z", re.ASCII)
 MAX_GIT_TREE_BYTES = 8 * 1024 * 1024
@@ -92,17 +93,22 @@ PROTECTED_EXACT_PATHS = frozenset(
         b"scripts/privacy_age_admission_publisher.py",
     }
 )
-ADMISSION_INFRASTRUCTURE_PATHS = frozenset(
+LEGACY_ACTIVE_BASE_COMMIT = "0e981202824a76043083039a407dd165e243d544"
+LEGACY_ADMISSION_INFRASTRUCTURE_PATHS = frozenset(
     {
         b".github/age-admission/allowed_signers",
         b"scripts/create-age-admission-receipt",
         b"scripts/run-trusted-age-admission",
         b"scripts/privacy_age_admission.py",
-        b"scripts/privacy_scan_review.py",
-        b".github/age-admission/privacy-scan-reviewed-findings-v1.json",
         b"scripts/privacy_age_admission_result.py",
         b"scripts/privacy_age_pr_snapshot.py",
         b"scripts/privacy_age_admission_publisher.py",
+    }
+)
+ADMISSION_INFRASTRUCTURE_PATHS = LEGACY_ADMISSION_INFRASTRUCTURE_PATHS | frozenset(
+    {
+        b"scripts/privacy_scan_review.py",
+        b".github/age-admission/privacy-scan-reviewed-findings-v1.json",
     }
 )
 # A pre-bootstrap base already has the legacy gate, workflow, and envelope
@@ -140,6 +146,13 @@ BOOTSTRAP_REQUIRED_ENTRIES = {
     # bootstrap replacement.
     b"scripts/agent_equipment_public_data.py": (b"blob", b"100644"),
 }
+LEGACY_ADMISSION_INFRASTRUCTURE_ENTRIES = {
+    path: BOOTSTRAP_REQUIRED_ENTRIES[path]
+    for path in LEGACY_ADMISSION_INFRASTRUCTURE_PATHS
+}
+ADMISSION_INFRASTRUCTURE_ENTRIES = {
+    path: BOOTSTRAP_REQUIRED_ENTRIES[path] for path in ADMISSION_INFRASTRUCTURE_PATHS
+}
 # Once activated, every trusted verifier, scanner, parser, launcher, and the
 # protected workflow remains a required regular entry. A signed receipt may
 # authorize its content change, but it cannot silently remove a seam and leave
@@ -167,7 +180,7 @@ BOOTSTRAP_REVIEWED_AUTHORITY_ENTRIES = {
     b"scripts/privacy-scan": (
         b"blob",
         b"100755",
-        b"e88474ed0c41548cb9cd4f75f8fe6fe0e0e56c67",
+        b"e924bb92aae4c97626aa47ef385627bc4f7c8637",
     ),
     b"scripts/create-age-admission-receipt": (
         b"blob",
@@ -209,12 +222,12 @@ BOOTSTRAP_REVIEWED_AUTHORITY_ENTRIES = {
     b"scripts/privacy_scan_review.py": (
         b"blob",
         b"100644",
-        b"965b96291de02c167dacfa46b9cdf1a9ee6d0266",
+        b"554ebdbc5269b74122ba29730215d621e31f404d",
     ),
     b".github/age-admission/privacy-scan-reviewed-findings-v1.json": (
         b"blob",
         b"100644",
-        b"b764cfbba043329b145ec4eeea5930fc81d46373",
+        b"9e92be25c33b2451e7f4de71c1ef890c200c130b",
     ),
 }
 # These support files are part of this reviewed bootstrap revision, but are not
@@ -234,7 +247,7 @@ BOOTSTRAP_REVIEWED_SUPPORT_ENTRIES = {
     b"docs/ENCRYPTION.md": (
         b"blob",
         b"100644",
-        b"52899fa98f3980821aeeff489acca79627ebc603",
+        b"fbb9361b2bd7e2eb7c1c9a04428ad3478ee8a125",
     ),
 }
 # This marker lives in the already protected workflow.  The legacy
@@ -252,6 +265,14 @@ PROTECTED_PREFIXES = (b".github/actions/", b".github/workflows/")
 
 class IntegrityGateError(RuntimeError):
     """The exact base/head comparison could not establish the boundary."""
+
+
+class AdmissionBoundaryState(str, Enum):
+    """Closed trusted-base generations understood by this verifier revision."""
+
+    PRE_BOOTSTRAP = "pre_bootstrap"
+    ACTIVE_PREVIOUS = "active_previous"
+    ACTIVE_CURRENT = "active_current"
 
 
 @dataclass(frozen=True)
@@ -272,8 +293,7 @@ class ProtectedTransition:
     base_tree: dict[bytes, TreeEntry]
     head_tree: dict[bytes, TreeEntry]
     changed: tuple[bytes, ...]
-    infrastructure_present: frozenset[bytes]
-    activation_present: bool
+    boundary_state: AdmissionBoundaryState
 
 
 def _git(
@@ -457,6 +477,53 @@ def _tree_side(
     return {"kind": kind, "mode": mode, "sha256": digest}
 
 
+def _boundary_entries_match(
+    tree: dict[bytes, TreeEntry],
+    expected: dict[bytes, tuple[bytes, bytes]],
+) -> bool:
+    return all(
+        path in tree and (tree[path].kind, tree[path].mode) == identity
+        for path, identity in expected.items()
+    )
+
+
+def _classify_admission_boundary(
+    *,
+    base: Path,
+    base_commit: str,
+    base_tree: dict[bytes, TreeEntry],
+) -> AdmissionBoundaryState:
+    """Recognize only the pre-bootstrap, pinned predecessor, or current boundary."""
+
+    infrastructure_present = frozenset(
+        ADMISSION_INFRASTRUCTURE_PATHS & base_tree.keys()
+    )
+    marker_present = _has_activation_sentinel(base, base_tree)
+    if not infrastructure_present:
+        if marker_present:
+            raise IntegrityGateError("trusted base has an invalid admission boundary")
+        return AdmissionBoundaryState.PRE_BOOTSTRAP
+    if infrastructure_present == LEGACY_ADMISSION_INFRASTRUCTURE_PATHS:
+        if (
+            base_commit != LEGACY_ACTIVE_BASE_COMMIT
+            or not marker_present
+            or not _boundary_entries_match(
+                base_tree,
+                LEGACY_ADMISSION_INFRASTRUCTURE_ENTRIES,
+            )
+        ):
+            raise IntegrityGateError("trusted base has an invalid admission boundary")
+        return AdmissionBoundaryState.ACTIVE_PREVIOUS
+    if infrastructure_present == ADMISSION_INFRASTRUCTURE_PATHS:
+        if not marker_present or not _boundary_entries_match(
+            base_tree,
+            ADMISSION_INFRASTRUCTURE_ENTRIES,
+        ):
+            raise IntegrityGateError("trusted base has an invalid admission boundary")
+        return AdmissionBoundaryState.ACTIVE_CURRENT
+    raise IntegrityGateError("trusted base has an invalid admission boundary")
+
+
 def _protected_transition(
     *,
     base_repository: Path,
@@ -476,14 +543,10 @@ def _protected_transition(
     )
     if missing_base_paths:
         raise IntegrityGateError("trusted base is missing a protected path")
-    infrastructure_present = frozenset(
-        ADMISSION_INFRASTRUCTURE_PATHS & base_tree.keys()
-    )
-    if infrastructure_present and infrastructure_present != ADMISSION_INFRASTRUCTURE_PATHS:
-        raise IntegrityGateError("trusted base has an incomplete admission boundary")
-    activation_present = (
-        infrastructure_present == ADMISSION_INFRASTRUCTURE_PATHS
-        and _has_activation_sentinel(base, base_tree)
+    boundary_state = _classify_admission_boundary(
+        base=base,
+        base_commit=base_commit,
+        base_tree=base_tree,
     )
 
     protected_paths = {
@@ -502,8 +565,7 @@ def _protected_transition(
         base_tree=base_tree,
         head_tree=head_tree,
         changed=changed,
-        infrastructure_present=infrastructure_present,
-        activation_present=activation_present,
+        boundary_state=boundary_state,
     )
 
 
@@ -623,11 +685,14 @@ def _require_admission_boundary_ready(
 ) -> None:
     """Share active-boundary and one-time bootstrap ordering across callers."""
 
-    if transition.activation_present:
+    if transition.boundary_state in {
+        AdmissionBoundaryState.ACTIVE_PREVIOUS,
+        AdmissionBoundaryState.ACTIVE_CURRENT,
+    }:
         _require_active_head_complete(transition)
-    if require_bootstrap and (
-        transition.infrastructure_present != ADMISSION_INFRASTRUCTURE_PATHS
-        or not transition.activation_present
+    if (
+        require_bootstrap
+        and transition.boundary_state is AdmissionBoundaryState.PRE_BOOTSTRAP
     ):
         _require_bootstrap_head_complete(transition)
         raise IntegrityGateError(
