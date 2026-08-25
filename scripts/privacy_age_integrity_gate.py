@@ -209,12 +209,12 @@ BOOTSTRAP_REVIEWED_AUTHORITY_ENTRIES = {
     b"scripts/privacy_scan_review.py": (
         b"blob",
         b"100644",
-        b"85da083e61e98b73e7e66d070d465d0e9803a5d7",
+        b"965b96291de02c167dacfa46b9cdf1a9ee6d0266",
     ),
     b".github/age-admission/privacy-scan-reviewed-findings-v1.json": (
         b"blob",
         b"100644",
-        b"eea5ffcb969856c5afd16a023629eed042fffec6",
+        b"b764cfbba043329b145ec4eeea5930fc81d46373",
     ),
 }
 # These support files are part of this reviewed bootstrap revision, but are not

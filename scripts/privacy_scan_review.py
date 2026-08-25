@@ -15,9 +15,10 @@ import json
 import os
 import re
 import stat
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any
 
 RECORD_VERSION = "privacy-scan-reviewed-findings/v1"
 POLICY_VERSION = "privacy-scan-policy/v1"
@@ -189,7 +190,9 @@ def _sha256(data: bytes) -> str:
 
 def _git_blob_sha1(data: bytes) -> str:
     header = f"blob {len(data)}\0".encode("ascii")
-    return hashlib.sha1(header + data).hexdigest()
+    return hashlib.sha1(  # noqa: S324 -- Git object identity requires SHA-1.
+        header + data
+    ).hexdigest()
 
 
 def _validate_policy(document: object, *, policy_root: Path) -> tuple[str, dict[str, str]]:
