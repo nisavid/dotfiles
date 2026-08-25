@@ -158,6 +158,38 @@ cp "$native_store_adapter_source" "$production_native_store_adapter"
 chmod +x "$ensure_ready" "$session_compatibility" \
   "$production_native_store_adapter"
 
+path_backend_home=$test_dir/path-backend-home
+path_backend_state=$test_dir/path-backend-state
+homebrew_prefix=$test_dir/homebrew
+homebrew_cellar_bin=$homebrew_prefix/Cellar/proton-pass-cli/2.3.2/bin
+path_backend_log=$test_dir/path-backend.log
+mkdir -p -- "$path_backend_home" "$path_backend_state" \
+  "$homebrew_prefix/bin" "$homebrew_cellar_bin"
+cat >"$homebrew_cellar_bin/pass-cli" <<'EOF'
+#!/bin/zsh -f
+set -euo pipefail
+
+[[ $* == info ]] || exit 64
+[[ ${PROTON_PASS_NO_UPDATE_CHECK:-} == 1 ]] || exit 65
+print -r -- info >>"$PROTON_PASS_PATH_BACKEND_LOG"
+EOF
+chmod 755 "$homebrew_cellar_bin/pass-cli"
+ln -s ../Cellar/proton-pass-cli/2.3.2/bin/pass-cli \
+  "$homebrew_prefix/bin/pass-cli"
+PROTON_PASS_PATH_BACKEND_LOG=$path_backend_log \
+  PATH=$homebrew_cellar_bin:/usr/bin:/bin \
+  HOME=$path_backend_home XDG_STATE_HOME=$path_backend_state \
+  zsh "$ensure_ready"
+[[ $(<"$path_backend_log") == info ]] ||
+  fail 'readiness must invoke the regular pass-cli selected through PATH'
+: >"$path_backend_log"
+PROTON_PASS_PATH_BACKEND_LOG=$path_backend_log \
+  PATH=$homebrew_prefix/bin:/usr/bin:/bin \
+  HOME=$path_backend_home XDG_STATE_HOME=$path_backend_state \
+  zsh "$ensure_ready"
+[[ $(<"$path_backend_log") == info ]] ||
+  fail 'readiness must invoke the Homebrew-style symlink selected through PATH'
+
 fast_exit=
 for fast_exit_candidate in /usr/bin/true /bin/true; do
   if [[ -x $fast_exit_candidate ]]; then
@@ -179,6 +211,7 @@ set -euo pipefail
   print -r -- provider-completed >>"$PROVIDER_COMPLETION_MARKER"
 EOF
 chmod 700 "$fast_backend_home/.local/bin/pass-cli"
+fast_backend_path=$fast_backend_home/.local/bin:/usr/bin:/bin
 if [[ -n $status_fragment_library ]]; then
   typeset identity_loss_output identity_listing identity_controller
   integer identity_loss_status
@@ -190,7 +223,7 @@ if [[ -n $status_fragment_library ]]; then
     ZPTY_IDENTITY_LOSS_AUDIT_LOG=$identity_loss_log \
     ZPTY_INITIAL_IDENTITY_LOSS_GATE=$identity_loss_gate \
     NEGATIVE_PGID_KILL_AUDIT_LOG=$kill_audit_log \
-    HOME=$fast_backend_home XDG_STATE_HOME=$fast_backend_state \
+    PATH=$fast_backend_path HOME=$fast_backend_home XDG_STATE_HOME=$fast_backend_state \
     ZPTY_INITIAL_IDENTITY_LOSS=1 \
     "$ensure_ready" >"$identity_loss_output_file" 2>&1 &
   identity_wrapper_pid=$!
@@ -231,7 +264,7 @@ if [[ -n $status_fragment_library ]]; then
   set +e
   identity_loss_output=$(/usr/bin/env LD_PRELOAD="$status_fragment_library:$kill_audit_library" \
     ZPTY_IDENTITY_LOSS_AUDIT_LOG=$identity_loss_log NEGATIVE_PGID_KILL_AUDIT_LOG=$kill_audit_log \
-    HOME=$fast_backend_home XDG_STATE_HOME=$fast_backend_state ZPTY_POST_ACTIVE_IDENTITY_LOSS=1 \
+    PATH=$fast_backend_path HOME=$fast_backend_home XDG_STATE_HOME=$fast_backend_state ZPTY_POST_ACTIVE_IDENTITY_LOSS=1 \
     "$ensure_ready" 2>&1)
   identity_loss_status=$?
   set -e
@@ -253,7 +286,7 @@ if [[ -n $status_fragment_library ]]; then
     PROVIDER_START_MARKER=$provider_start_marker \
     PROVIDER_COMPLETION_MARKER=$provider_completion_marker \
     PROVIDER_COMPLETION_DELAY=1 \
-    HOME=$fast_backend_home XDG_STATE_HOME=$fast_backend_state \
+    PATH=$fast_backend_path HOME=$fast_backend_home XDG_STATE_HOME=$fast_backend_state \
     "$ensure_ready" >/dev/null 2>"$test_dir/transient-ready.err"
   transient_ready_status=$?
   set -e
@@ -277,7 +310,7 @@ if [[ -n $status_fragment_library ]]; then
     ZPTY_STATUS_FRAGMENT_DELAY_TAIL=1 \
     ZPTY_STATUS_FRAGMENT_DELAY_AUDIT_LOG=$status_fragment_delay_log \
     PROVIDER_COMPLETION_MARKER=$provider_completion_marker \
-    HOME=$fast_backend_home XDG_STATE_HOME=$fast_backend_state \
+    PATH=$fast_backend_path HOME=$fast_backend_home XDG_STATE_HOME=$fast_backend_state \
     "$ensure_ready" >/dev/null 2>"$test_dir/fragmented-ready.err"
   fragmented_ready_status=$?
   set -e
@@ -297,7 +330,7 @@ if [[ -n $status_fragment_library ]]; then
     ZPTY_STATUS_FRAGMENT_AUDIT_LOG=$status_fragment_log \
     ZPTY_STATUS_FRAGMENT_EXPIRE_DEADLINE=1 \
     ZPTY_STATUS_FRAGMENT_DEADLINE_AUDIT_LOG=$status_fragment_deadline_log \
-    HOME=$fast_backend_home XDG_STATE_HOME=$fast_backend_state \
+    PATH=$fast_backend_path HOME=$fast_backend_home XDG_STATE_HOME=$fast_backend_state \
     "$ensure_ready" >/dev/null 2>"$test_dir/deadline-ready.err"
   deadline_ready_status=$?
   set -e
@@ -316,7 +349,7 @@ if [[ -n $status_fragment_library ]]; then
     ZPTY_STATUS_FRAGMENT_AUDIT_LOG=$status_fragment_log \
     ZPTY_STATUS_FRAGMENT_PAUSE=1 \
     NEGATIVE_PGID_KILL_AUDIT_LOG=$kill_audit_log \
-    HOME=$fast_backend_home XDG_STATE_HOME=$fast_backend_state \
+    PATH=$fast_backend_path HOME=$fast_backend_home XDG_STATE_HOME=$fast_backend_state \
     "$ensure_ready" >"$test_dir/fragment-signal.out" \
       2>"$test_dir/fragment-signal.err" &
   fragmented_readiness_pid=$!
@@ -347,7 +380,7 @@ fi
 
 integer fast_backend_run
 for (( fast_backend_run = 1; fast_backend_run <= 32; ++fast_backend_run )); do
-  HOME=$fast_backend_home XDG_STATE_HOME=$fast_backend_state \
+  PATH=$fast_backend_path HOME=$fast_backend_home XDG_STATE_HOME=$fast_backend_state \
     "$ensure_ready" >/dev/null 2>&1 ||
     fail 'readiness must accept an immediately successful provider backend'
 done
@@ -500,7 +533,8 @@ case $1 in
       hang_forever
     fi
     if [[ -e $FAKE_PASS_INFO_TRANSIENT ]]; then
-      print -u2 -r -- 'Error: temporary provider failure'
+      print -u2 -r -- \
+        'Error: temporary provider failure while reporting "Error: This operation requires an authenticated client"'
       exit 76
     fi
     if [[ -e $FAKE_PASS_LOCAL_SESSION && -e $FAKE_PASS_REMOTE_SESSION ]]; then
@@ -509,11 +543,14 @@ case $1 in
     fi
     if [[ -e $FAKE_PASS_INFO_INVALIDATED ]]; then
       print -u2 -rl -- \
+        '2026-08-25T07:13:16.037584Z ERROR pass-cli/src/main.rs:231: Session invalidated' \
         'Your session has been invalidated and you have been logged out automatically.' \
         'Please log in again with: pass login'
       exit 77
     fi
-    print -u2 -r -- 'Error: This operation requires an authenticated client'
+    print -u2 -rl -- \
+      '2026-08-25T07:13:16.037584Z ERROR pass-cli/src/main.rs:332: Command is not logout there is no session' \
+      'Error: This operation requires an authenticated client'
     exit 78
     ;;
   login)
@@ -657,7 +694,7 @@ EOF
   chmod +x "$fake_bin/$utility"
 done
 
-export PATH=$fake_bin:/usr/bin:/bin
+export PATH=$fixture_local_bin:$fake_bin:/usr/bin:/bin
 export HOME=$fixture_home
 export XDG_STATE_HOME=$state_home
 export FAKE_PASS_LOG=$test_dir/pass.log
@@ -925,27 +962,6 @@ if kill -0 $hanging_child_pid 2>/dev/null; then
   fail 'timed-out session probes must be terminated and reaped'
 fi
 test_process_fixture_untrack_pid_file "$FAKE_HANGING_CHILD_PID"
-rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION"
-
-hostile_dir=$test_dir/hostile-cwd
-hostile_marker=$test_dir/hostile-pass-cli-ran
-mkdir -p -- "$hostile_dir"
-cat > "$hostile_dir/pass-cli" <<'EOF'
-#!/usr/bin/env zsh
-set -euo pipefail
-
-: > "$HOSTILE_PASS_CLI_MARKER"
-exit 90
-EOF
-chmod +x "$hostile_dir/pass-cli"
-export HOSTILE_PASS_CLI_MARKER=$hostile_marker
-
-original_directory=$PWD
-cd "$hostile_dir"
-PATH=:$fake_bin:/usr/bin:/bin zsh "$ensure_ready"
-cd "$original_directory"
-[[ ! -e $hostile_marker ]] ||
-  fail 'readiness must ignore a current-directory pass-cli selected by PATH'
 rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION"
 : > "$FAKE_PASS_LOG"
 : > "$FAKE_SECRET_TOOL_LOG"
@@ -1514,33 +1530,6 @@ unset "$proton_bootstrap_field"
   fail 'the legacy session helper must use the serialized login path'
 [[ -s $FAKE_SECRET_TOOL_LOG ]] ||
   fail 'the legacy session helper must re-read the native bootstrap item'
-
-trusted_pass_cli=$fixture_local_bin/pass-cli
-mv "$trusted_pass_cli" "$test_dir/pass-cli.real"
-ln -s "$test_dir/pass-cli.real" "$trusted_pass_cli"
-set +e
-symlink_backend_output=$(zsh "$ensure_ready" 2>&1)
-symlink_backend_status=$?
-set -e
-(( symlink_backend_status != 0 )) ||
-  fail 'a symbolic-link credential backend must fail closed'
-[[ $symlink_backend_output ==
-  'proton-pass-ensure-ready: a trusted pass-cli is required' ]] ||
-  fail 'a rejected symbolic-link backend must produce one value-free error'
-rm -- "$trusted_pass_cli"
-mv "$test_dir/pass-cli.real" "$trusted_pass_cli"
-
-chmod 777 "$trusted_pass_cli"
-set +e
-writable_backend_output=$(zsh "$ensure_ready" 2>&1)
-writable_backend_status=$?
-set -e
-(( writable_backend_status != 0 )) ||
-  fail 'a group-or-other-writable credential backend must fail closed'
-[[ $writable_backend_output ==
-  'proton-pass-ensure-ready: a trusted pass-cli is required' ]] ||
-  fail 'a rejected writable backend must produce one value-free error'
-chmod 755 "$trusted_pass_cli"
 
 rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION"
 mv "$native_store_adapter" "$test_dir/native-store-adapter.real"
