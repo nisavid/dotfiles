@@ -41,6 +41,11 @@ from privacy_age_envelopes import (
     load_manifest,
     read_regular_file,
 )
+from privacy_scan_review import (
+    ReviewRecordError,
+    load_review_record,
+    validate_reviewed_findings,
+)
 
 ALLOWED_EMAILS = {"ivan@nisavid.io"}
 ALLOWED_EMAIL_DOMAINS = {"example.com", "example.invalid"}
@@ -60,6 +65,9 @@ MAX_DENYLIST_TERMS = 10_000
 RESOURCE_LIMIT_DIAGNOSTIC = "privacy scan failed: scan resource limits exceeded"
 AGE_NATIVE_MAGIC = b"age-encryption.org/v1\n"
 AGE_ARMORED_MAGIC = b"-----BEGIN AGE ENCRYPTED FILE-----"
+DEFAULT_REVIEW_RECORD = (
+    ".github/age-admission/privacy-scan-reviewed-findings-v1.json"
+)
 
 EMAIL = re.compile(r"(?i)\b[A-Z0-9._%+-]+@([A-Z0-9.-]+\.[A-Z]{2,})\b")
 HOME_PATH = re.compile(
@@ -562,6 +570,11 @@ def _main() -> int:
         action="store_true",
         help="require the canonical age inventory even when it is empty",
     )
+    parser.add_argument(
+        "--review-record",
+        type=Path,
+        help="trusted-base owner-review record for the complete finding set",
+    )
     arguments = parser.parse_args()
     try:
         root = arguments.root.resolve(strict=True)
@@ -571,6 +584,14 @@ def _main() -> int:
     if not root.is_dir():
         print("privacy scan failed", file=sys.stderr)
         return 1
+    review_record = arguments.review_record
+    auto_review_record = review_record is None
+    if review_record is None:
+        trusted_record = (
+            Path(__file__).resolve().parent.parent / DEFAULT_REVIEW_RECORD
+        )
+        if trusted_record.is_file():
+            review_record = trusted_record
     try:
         denylist = ExactSubstringMatcher(exact_terms(arguments.denylist))
     except PublicScanResourceLimitError:
@@ -728,9 +749,50 @@ def _main() -> int:
             if not age_shaped and structured_document_contains_credential(path, text):
                 findings.append((public_relative, 0, "provider-token"))
 
-    for relative, line_number, rule in sorted(findings):
+    remaining_findings = tuple(findings)
+    if review_record is not None:
+        try:
+            record = load_review_record(
+                review_record,
+                policy_root=Path(__file__).resolve().parent.parent,
+            )
+            if auto_review_record and not (
+                {entry.key for entry in record.entries}
+                & set(remaining_findings)
+            ):
+                # A durable trusted record is relevant only when this scan
+                # reproduces at least one reviewed finding key.  Clean or
+                # unrelated candidates remain ordinary scans; they cannot
+                # inherit a disposition for findings they did not produce.
+                record = None
+            if record is None:
+                reviewed = set()
+            else:
+                reviewed = set(
+                    validate_reviewed_findings(
+                        remaining_findings,
+                        root=root,
+                        record=record,
+                    )
+                )
+        except ReviewRecordError:
+            print(
+                "privacy scan failed: owner review record invalid",
+                file=sys.stderr,
+            )
+            return 1
+        remaining_findings = tuple(
+            finding for finding in remaining_findings if finding not in reviewed
+        )
+        if reviewed:
+            print(
+                f"privacy scan accepted {len(reviewed)} owner-reviewed finding(s)",
+                file=sys.stderr,
+            )
+
+    for relative, line_number, rule in sorted(remaining_findings):
         print(f"{relative}:{line_number}: [{rule}] review required")
-    return 1 if findings else 0
+    return 1 if remaining_findings else 0
 
 
 def main() -> int:

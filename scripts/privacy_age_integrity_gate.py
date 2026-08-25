@@ -73,6 +73,7 @@ MAX_GIT_OBJECT_BYTES = 16 * 1024 * 1024
 PROTECTED_EXACT_PATHS = frozenset(
     {
         b".github/age-admission/allowed_signers",
+        b".github/age-admission/privacy-scan-reviewed-findings-v1.json",
         b".privacy-age-envelopes.json",
         b"docs/ENCRYPTION.md",
         b"home/.chezmoi.toml.tmpl",
@@ -82,6 +83,7 @@ PROTECTED_EXACT_PATHS = frozenset(
         b"scripts/create-age-admission-receipt",
         b"scripts/run-trusted-age-admission",
         b"scripts/privacy-scan",
+        b"scripts/privacy_scan_review.py",
         b"scripts/privacy_age_admission.py",
         b"scripts/privacy_age_envelopes.py",
         b"scripts/privacy_age_integrity_gate.py",
@@ -96,6 +98,8 @@ ADMISSION_INFRASTRUCTURE_PATHS = frozenset(
         b"scripts/create-age-admission-receipt",
         b"scripts/run-trusted-age-admission",
         b"scripts/privacy_age_admission.py",
+        b"scripts/privacy_scan_review.py",
+        b".github/age-admission/privacy-scan-reviewed-findings-v1.json",
         b"scripts/privacy_age_admission_result.py",
         b"scripts/privacy_age_pr_snapshot.py",
         b"scripts/privacy_age_admission_publisher.py",
@@ -126,6 +130,11 @@ BOOTSTRAP_REQUIRED_ENTRIES = {
     b"scripts/privacy_age_admission_result.py": (b"blob", b"100644"),
     b"scripts/privacy_age_pr_snapshot.py": (b"blob", b"100644"),
     b"scripts/privacy_age_admission_publisher.py": (b"blob", b"100644"),
+    b"scripts/privacy_scan_review.py": (b"blob", b"100644"),
+    b".github/age-admission/privacy-scan-reviewed-findings-v1.json": (
+        b"blob",
+        b"100644",
+    ),
     # The scanner's classifier is inherited unchanged during bootstrap; keep
     # its mode invariant here without making an unchanged base blob a stale
     # bootstrap replacement.
@@ -158,7 +167,7 @@ BOOTSTRAP_REVIEWED_AUTHORITY_ENTRIES = {
     b"scripts/privacy-scan": (
         b"blob",
         b"100755",
-        b"612a2ae9acde883d3f2b5e92ce8cefc4fcf0d1bf",
+        b"bcb6b77c06d9e6e9c468b34546f14ffbda2e7384",
     ),
     b"scripts/create-age-admission-receipt": (
         b"blob",
@@ -196,6 +205,16 @@ BOOTSTRAP_REVIEWED_AUTHORITY_ENTRIES = {
         b"blob",
         b"100644",
         b"42fc7887c8cb59625db8e103131eb089611fa90f",
+    ),
+    b"scripts/privacy_scan_review.py": (
+        b"blob",
+        b"100644",
+        b"07e28f22ee151eee7d5c27eeba31ed0d38fc93a0",
+    ),
+    b".github/age-admission/privacy-scan-reviewed-findings-v1.json": (
+        b"blob",
+        b"100644",
+        b"1af80410f53f4b823223c93521aab9974f0c1d62",
     ),
 }
 # These support files are part of this reviewed bootstrap revision, but are not

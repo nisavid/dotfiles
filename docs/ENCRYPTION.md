@@ -37,6 +37,22 @@ chezmoi decrypt home/.private-privacy-denylist.txt.age |
 The scanner reports only a path, line, and rule. It never echoes the matched
 value.
 
+The trusted-base scanner discovers
+`.github/age-admission/privacy-scan-reviewed-findings-v1.json` relative to its
+own checkout (or accepts an explicit `--review-record` path). The discovered
+record is considered when the candidate reproduces a reviewed finding key;
+clean or unrelated candidates are scanned normally and cannot inherit a
+disposition for findings they did not produce. This is a versioned owner-review
+record, not a path or rule allowlist. Each entry names the scanner rule and one
+closed semantic category, then binds the canonical repository path, regular-file
+mode, Git blob, and complete file-byte SHA-256. The scanner recomputes the
+complete finding set and fails closed on any missing, new, changed, duplicated,
+stale, or mis-categorized entry. The record is read from the trusted-base
+checkout; a candidate-authored copy is never consulted. The record's
+`reviewed_commit` names the candidate source under review as provenance; its
+policy-file hashes independently bind the trusted scanner policy that consumes
+it. Changes to the record or scanner remain inside the owner-admission boundary.
+
 ### Ciphertext admission
 
 The root `.privacy-age-envelopes.json` is the closed, canonical inventory of

@@ -29,6 +29,7 @@ cp \
   "$scanner" \
   "$repo_root/scripts/agent_equipment_public_data.py" \
   "$repo_root/scripts/privacy_age_envelopes.py" \
+  "$repo_root/scripts/privacy_scan_review.py" \
   "$isolated_tool"
 cp \
   "$repo_root/home/private_dot_local/lib/agent-equipment/agent_equipment/secrets.py" \
