@@ -267,6 +267,22 @@ trap 'terminate_active_child; exit 129' HUP
 trap 'terminate_active_child; exit 130' INT
 trap 'terminate_active_child; exit 143' TERM
 
+configure_runtime_path() {
+  emulate -L zsh
+
+  case $OSTYPE in
+    darwin*)
+      [[ -n ${HOME:-} ]] || die 'HOME is required for the shared GUI PATH policy'
+      local startup_file=$HOME/.config/zsh/startup.zsh
+      [[ -r $startup_file ]] || die 'the shared GUI PATH policy is required'
+      path=( /usr/bin /bin /usr/sbin /sbin )
+      source "$startup_file" launcher darwin ||
+        die 'the shared GUI PATH policy failed'
+      [[ -n $PATH ]] || die 'the shared GUI PATH policy produced an empty PATH'
+      ;;
+  esac
+}
+
 resolve_readiness_adapter() {
   emulate -L zsh
 
@@ -312,6 +328,8 @@ main() {
   setopt local_options err_return no_unset pipe_fail
 
   (( $# == 0 )) || die 'this operation takes no arguments'
+
+  configure_runtime_path
 
   local readiness_adapter
   readiness_adapter=$(resolve_readiness_adapter)

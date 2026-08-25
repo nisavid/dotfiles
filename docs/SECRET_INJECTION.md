@@ -48,11 +48,12 @@ Those entrypoints and the native-store adapter use the fixed `/bin/zsh -f`
 interpreter, so neither `PATH` nor zsh startup files can run code ahead of that
 scrub.
 
-Each bridge process invokes `pass-cli` as an ordinary command through its
-runtime `PATH`. The bridge does not encode package-manager preferences, fixed
-candidate paths, executable-path overrides, or a separate symbolic-link
-policy; package-managed entrypoints such as Homebrew's normal `bin/pass-cli`
-symlink therefore work when that entrypoint is selected by `PATH`.
+`proton-pass-ensure-ready`, `secret-exec`, and `secret-exec-migrate` invoke
+`pass-cli` as an ordinary command through their runtime `PATH`. They do not
+encode package-manager preferences, fixed candidate paths, executable-path
+overrides, or a separate symbolic-link policy; package-managed entrypoints such
+as Homebrew's normal `bin/pass-cli` symlink therefore work when that entrypoint
+is selected by `PATH`.
 Native-store access does not use `PATH` and crosses the verified fixed sibling
 `~/.local/bin/secret-exec-native-store`; it alone selects
 `/usr/bin/secret-tool` on Linux or `/usr/bin/security` on macOS. The parent
@@ -113,9 +114,10 @@ readiness without starting a second repair. The takeover path and the extended
 concurrent-wait path each remain below the 26-second per-call startup budget,
 including cleanup and bounded polling overhead. The helper logs out only when
 the provider reports the complete recognized invalidated-session diagnostic.
-Structured provider logging lines may frame a complete recognized absent or
-invalidated diagnostic; arbitrary prefixes, suffixes, and diagnostic fragments
-remain unclassified. The forced local cleanup must succeed before login.
+The corresponding `pass-cli` main-command error record may frame a complete
+recognized absent or invalidated diagnostic. Other structured logs, arbitrary
+prefixes or suffixes, and diagnostic fragments remain unclassified. The forced
+local cleanup must succeed before login.
 Platform selection uses zsh's `OSTYPE`, so no external platform probe runs
 ahead of the first bounded info call. Unknown provider failures never read the
 bootstrap item or mutate local authentication state, preserving a potentially
@@ -133,7 +135,11 @@ not unlock KWallet, enable lingering, or use a systemd restart loop.
 macOS installs the `io.nisavid.secret-exec-provider-ready` per-user LaunchAgent
 for Aqua sessions. It runs once at GUI login and has no `KeepAlive` or periodic
 polling. The activation hook registers a missing agent in the current user's
-Aqua domain and leaves a healthy registration intact.
+Aqua domain and leaves a healthy registration intact. After scrubbing the
+bootstrap token, `proton-pass-startup` resets its path to the system baseline
+and sources the shared `~/.config/zsh/startup.zsh` policy with `launcher darwin`.
+Provider readiness therefore uses the managed graphical-session `PATH` without
+depending on LaunchAgent ordering.
 
 Both startup targets call `proton-pass-startup`, which uses a fixed finite
 two-attempt schedule with a five-second backoff around the shared readiness

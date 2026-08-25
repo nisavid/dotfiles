@@ -533,8 +533,9 @@ case $1 in
       hang_forever
     fi
     if [[ -e $FAKE_PASS_INFO_TRANSIENT ]]; then
-      print -u2 -r -- \
-        'Error: temporary provider failure while reporting "Error: This operation requires an authenticated client"'
+      print -u2 -rl -- \
+        '2026-08-25T07:13:16.037584Z ERROR pass-cli/src/features/keyring.rs:203: Keyring unavailable' \
+        'Error: This operation requires an authenticated client'
       exit 76
     fi
     if [[ -e $FAKE_PASS_LOCAL_SESSION && -e $FAKE_PASS_REMOTE_SESSION ]]; then
