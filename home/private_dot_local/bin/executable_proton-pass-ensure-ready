@@ -391,7 +391,7 @@ resolve_trusted_command() {
   die "a trusted $name is required"
 }
 
-resolve_pass_cli() {
+select_pass_cli_command() {
   emulate -L zsh
 
   command -v pass-cli >/dev/null 2>&1 || die 'pass-cli is required'
@@ -470,17 +470,29 @@ session_ready() {
     "$backend" info
 }
 
-diagnostic_matches() {
+diagnostic_matches_state() {
   emulate -L zsh
 
   local diagnostic=$1
   local expected=$2
+  local state=$3
   [[ $diagnostic == "$expected" ]] && return 0
   [[ $diagnostic == *$'\n'"$expected" ]] || return 1
 
   local framing=${diagnostic%$'\n'"$expected"}
   local line
-  local log_line_pattern='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z[[:space:]]+(TRACE|DEBUG|INFO|WARN|ERROR)[[:space:]]+[^[:space:]]+:[0-9]+:[[:space:]].+$'
+  local log_line_pattern
+  case $state in
+    absent)
+      log_line_pattern='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z ERROR pass-cli/src/main\.rs:[0-9]+: (Command is not logout there is no session|Session is some but is not logged in)$'
+      ;;
+    invalidated)
+      log_line_pattern='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z ERROR pass-cli/src/main\.rs:[0-9]+: Session invalidated$'
+      ;;
+    *)
+      return 1
+      ;;
+  esac
   for line in "${(f)framing}"; do
     [[ $line =~ $log_line_pattern ]] || return 1
   done
@@ -533,9 +545,11 @@ classify_session_state() {
   local diagnostic=$(<"$PROTON_PASS_DIAGNOSTIC_FILE")
   remove_diagnostic_file
   [[ $waiter_stage == child-status ]] || return 0
-  if diagnostic_matches "$diagnostic" "$PROTON_PASS_ABSENT_DIAGNOSTIC"; then
+  if diagnostic_matches_state \
+    "$diagnostic" "$PROTON_PASS_ABSENT_DIAGNOSTIC" absent; then
     typeset -g PROTON_PASS_SESSION_STATE=absent
-  elif diagnostic_matches "$diagnostic" "$PROTON_PASS_INVALIDATED_DIAGNOSTIC"; then
+  elif diagnostic_matches_state \
+    "$diagnostic" "$PROTON_PASS_INVALIDATED_DIAGNOSTIC" invalidated; then
     typeset -g PROTON_PASS_SESSION_STATE=invalidated
   fi
 }
@@ -559,7 +573,7 @@ main() {
   esac
 
   local backend
-  backend=$(resolve_pass_cli)
+  backend=$(select_pass_cli_command)
   if session_ready "$backend"; then
     write_status ready existing-session unrecorded
     return 0

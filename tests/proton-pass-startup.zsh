@@ -553,6 +553,80 @@ bootstrap_field=PROTON_PASS_PERSONAL_ACCESS
 bootstrap_field+=_TOKEN
 typeset -gx "$bootstrap_field=synthetic-bootstrap-marker"
 
+gui_home=$test_dir/gui-home
+gui_startup_bin=$test_dir/gui-startup-bin
+gui_cellar_bin=$test_dir/gui-homebrew/Cellar/proton-pass-cli/2.3.2/bin
+gui_path_bin=$test_dir/gui-homebrew/bin
+mkdir -p -- \
+  "$gui_home/.config/zsh" \
+  "$gui_startup_bin" \
+  "$gui_cellar_bin" \
+  "$gui_path_bin"
+cp -- "$startup_source" "$gui_startup_bin/proton-pass-startup"
+ln -s -- "$gui_cellar_bin/pass-cli" "$gui_path_bin/pass-cli"
+
+cat >"$gui_home/.config/zsh/startup.zsh" <<'EOF'
+[[ $1 == launcher && $2 == darwin ]] || return 97
+bootstrap_field=PROTON_PASS_PERSONAL_ACCESS
+bootstrap_field+=_TOKEN
+(( ${+parameters[$bootstrap_field]} == 0 )) ||
+  print -r -- startup-policy >>"$FAKE_GUI_BOOTSTRAP_LEAK_LOG"
+path=( "$FAKE_GUI_PATH_BIN" /usr/bin /bin /usr/sbin /sbin )
+print -r -- loaded >"$FAKE_GUI_STARTUP_POLICY_LOG"
+EOF
+cat >"$gui_cellar_bin/pass-cli" <<'EOF'
+#!/bin/zsh -f
+set -euo pipefail
+[[ $1 == info ]] || exit 64
+print -r -- info >>"$FAKE_GUI_PASS_LOG"
+EOF
+cat >"$gui_startup_bin/proton-pass-ensure-ready" <<'EOF'
+#!/bin/zsh -f
+set -euo pipefail
+bootstrap_field=PROTON_PASS_PERSONAL_ACCESS
+bootstrap_field+=_TOKEN
+(( ${+parameters[$bootstrap_field]} == 0 )) ||
+  print -r -- readiness >>"$FAKE_GUI_BOOTSTRAP_LEAK_LOG"
+[[ $(command -v pass-cli) == "$FAKE_GUI_PATH_BIN/pass-cli" ]] || exit 75
+pass-cli info >/dev/null 2>&1
+EOF
+chmod -- +x \
+  "$gui_startup_bin/proton-pass-startup" \
+  "$gui_startup_bin/proton-pass-ensure-ready" \
+  "$gui_cellar_bin/pass-cli"
+
+fake_gui_startup_policy_log=$test_dir/gui-startup-policy.log
+fake_gui_pass_log=$test_dir/gui-pass.log
+fake_gui_bootstrap_leak_log=$test_dir/gui-bootstrap-leaks.log
+fake_gui_output=$test_dir/gui-startup.out
+set +e
+HOME=$gui_home \
+  PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+  FAKE_GUI_PATH_BIN=$gui_path_bin \
+  FAKE_GUI_STARTUP_POLICY_LOG=$fake_gui_startup_policy_log \
+  FAKE_GUI_PASS_LOG=$fake_gui_pass_log \
+  FAKE_GUI_BOOTSTRAP_LEAK_LOG=$fake_gui_bootstrap_leak_log \
+  /bin/zsh -f -c '
+    function run_darwin_startup {
+      local OSTYPE=darwin23.0
+      local startup_path=$1
+      set --
+      source "$startup_path"
+    }
+    run_darwin_startup "$1"
+  ' proton-pass-startup "$gui_startup_bin/proton-pass-startup" \
+    >"$fake_gui_output" 2>&1
+gui_startup_status=$?
+set -e
+(( gui_startup_status == 0 )) ||
+  fail "macOS startup must establish the shared GUI PATH before provider readiness: $(<"$fake_gui_output")"
+[[ $(<"$fake_gui_startup_policy_log") == loaded ]] ||
+  fail 'macOS startup must invoke the shared launcher PATH policy'
+[[ $(<"$fake_gui_pass_log") == info ]] ||
+  fail 'macOS startup readiness must use the PATH-selected provider executable'
+[[ ! -e $fake_gui_bootstrap_leak_log ]] ||
+  fail 'macOS startup must scrub the bootstrap token before shared PATH policy'
+
 reset_fixture
 export FAKE_STARTUP_SCENARIO=ready
 set +e
