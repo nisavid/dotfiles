@@ -76,6 +76,13 @@ reset_fixture() {
 }
 
 test_dir=$(mktemp -d "${TMPDIR:-/tmp}/proton-pass-startup.XXXXXX")
+startup_home=$test_dir/startup-home
+mkdir -p -- "$startup_home/.config/zsh"
+cat >"$startup_home/.config/zsh/startup.zsh" <<'EOF'
+[[ $1 == launcher && $2 == darwin ]] || return 97
+path=( /usr/bin /bin /usr/sbin /sbin )
+EOF
+export HOME=$startup_home
 test_process_fixture_init "$test_dir" || fail 'could not initialize process-fixture cleanup'
 trap test_process_fixture_cleanup EXIT
 trap 'exit 129' HUP
@@ -109,13 +116,8 @@ for fast_exit_candidate in /usr/bin/true /bin/true; do
 done
 [[ -n $fast_exit ]] || fail 'a fixed true executable is required'
 fast_child_bin=$test_dir/fast-child-bin
-fast_child_home=$test_dir/fast-child-home
-mkdir -p -- "$fast_child_bin" "$fast_child_home/.config/zsh"
+mkdir -p -- "$fast_child_bin"
 cp -- "$startup_source" "$fast_child_bin/proton-pass-startup"
-cat >"$fast_child_home/.config/zsh/startup.zsh" <<'EOF'
-[[ $1 == launcher && $2 == darwin ]] || return 97
-path=( /usr/bin /bin /usr/sbin /sbin )
-EOF
 cat >"$fast_child_bin/proton-pass-ensure-ready" <<'EOF'
 #!/bin/zsh -f
 set -euo pipefail
@@ -130,8 +132,7 @@ chmod -- +x \
   "$fast_child_bin/proton-pass-ensure-ready"
 integer fast_child_run
 for (( fast_child_run = 1; fast_child_run <= 32; ++fast_child_run )); do
-  HOME=$fast_child_home \
-    "$fast_child_bin/proton-pass-startup" >/dev/null 2>&1 ||
+  "$fast_child_bin/proton-pass-startup" >/dev/null 2>&1 ||
     fail 'startup must accept an immediately ready provider child'
 done
 
