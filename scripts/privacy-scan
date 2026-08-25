@@ -45,6 +45,7 @@ from privacy_scan_review import (
     MAX_PUBLIC_FILE_BYTES,
     ReviewRecordError,
     load_review_record,
+    review_record_public_diagnostic,
     validate_reviewed_findings,
 )
 
@@ -797,9 +798,11 @@ def _main() -> int:
                         "explicit record is non-authoritative",
                         file=sys.stderr,
                     )
-        except ReviewRecordError:
+        except ReviewRecordError as error:
+            public_diagnostic = review_record_public_diagnostic(error)
             print(
-                "privacy scan failed: owner review record invalid",
+                public_diagnostic
+                or "privacy scan failed: owner review record invalid",
                 file=sys.stderr,
             )
             for relative, line_number, rule in sorted(remaining_findings):

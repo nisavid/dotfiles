@@ -16,6 +16,7 @@ import re
 import stat
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -44,8 +45,58 @@ REVIEW_CATEGORIES = frozenset(
 )
 
 
+class ReviewArtifactRole(Enum):
+    """Closed artifact roles that may carry a sanitized public diagnostic."""
+
+    RECORD = "record"
+    POLICY = "policy"
+    FINDING = "finding"
+
+
+class ReviewRecordErrorCode(Enum):
+    """Closed error codes that may cross the public scanner boundary."""
+
+    ARTIFACT_OVERSIZED = "artifact-oversized"
+
+
+_OVERSIZED_PUBLIC_DIAGNOSTICS = {
+    ReviewArtifactRole.RECORD: "owner-review record file is oversized",
+    ReviewArtifactRole.POLICY: "owner-review policy file is oversized",
+    ReviewArtifactRole.FINDING: "owner-review finding file is oversized",
+}
+
+
 class ReviewRecordError(RuntimeError):
     """The trusted owner-review record cannot establish an exact disposition."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: ReviewRecordErrorCode | None = None,
+        artifact_role: ReviewArtifactRole | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.artifact_role = artifact_role
+
+    @classmethod
+    def oversized_artifact(cls, artifact_role: ReviewArtifactRole) -> ReviewRecordError:
+        """Create the only error allowed to expose an artifact role publicly."""
+
+        return cls(
+            _OVERSIZED_PUBLIC_DIAGNOSTICS[artifact_role],
+            code=ReviewRecordErrorCode.ARTIFACT_OVERSIZED,
+            artifact_role=artifact_role,
+        )
+
+
+def review_record_public_diagnostic(error: ReviewRecordError) -> str | None:
+    """Return an allowlisted public diagnostic for a structured review error."""
+
+    if error.code is not ReviewRecordErrorCode.ARTIFACT_OVERSIZED:
+        return None
+    return _OVERSIZED_PUBLIC_DIAGNOSTICS.get(error.artifact_role)
 
 
 Finding = tuple[str, int, str]
@@ -143,7 +194,7 @@ def _secure_read(
     path: Path,
     *,
     maximum: int,
-    artifact_role: str,
+    artifact_role: ReviewArtifactRole,
 ) -> tuple[bytes, int]:
     no_follow = getattr(os, "O_NOFOLLOW", None)
     nonblocking = getattr(os, "O_NONBLOCK", None)
@@ -154,18 +205,16 @@ def _secure_read(
         descriptor = os.open(path, flags)
     except OSError as error:
         raise ReviewRecordError(
-            f"owner-review {artifact_role} file is unavailable"
+            f"owner-review {artifact_role.value} file is unavailable"
         ) from error
     try:
         info = os.fstat(descriptor)
         if not stat.S_ISREG(info.st_mode):
             raise ReviewRecordError(
-                f"owner-review {artifact_role} file is not a regular file"
+                f"owner-review {artifact_role.value} file is not a regular file"
             )
         if info.st_size > maximum:
-            raise ReviewRecordError(
-                f"owner-review {artifact_role} file is oversized"
-            )
+            raise ReviewRecordError.oversized_artifact(artifact_role)
         data = bytearray()
         while len(data) <= maximum:
             chunk = os.read(descriptor, min(64 * 1024, maximum + 1 - len(data)))
@@ -173,13 +222,11 @@ def _secure_read(
                 break
             data.extend(chunk)
         if len(data) > maximum:
-            raise ReviewRecordError(
-                f"owner-review {artifact_role} file is oversized"
-            )
+            raise ReviewRecordError.oversized_artifact(artifact_role)
         return bytes(data), stat.S_IMODE(info.st_mode)
     except OSError as error:
         raise ReviewRecordError(
-            f"owner-review {artifact_role} file is unreadable"
+            f"owner-review {artifact_role.value} file is unreadable"
         ) from error
     finally:
         os.close(descriptor)
@@ -227,7 +274,7 @@ def _validate_policy(document: object, *, policy_root: Path) -> tuple[str, dict[
         data, _mode = _secure_read(
             _safe_policy_path(policy_root, canonical),
             maximum=MAX_PUBLIC_FILE_BYTES,
-            artifact_role="policy",
+            artifact_role=ReviewArtifactRole.POLICY,
         )
         if _sha256(data) != expected:
             raise ReviewRecordError("owner-review policy content changed")
@@ -326,7 +373,7 @@ def load_review_record(path: Path, *, policy_root: Path) -> ReviewRecord:
     data, _mode = _secure_read(
         path,
         maximum=MAX_REVIEW_RECORD_BYTES,
-        artifact_role="record",
+        artifact_role=ReviewArtifactRole.RECORD,
     )
     try:
         document = json.loads(
@@ -400,7 +447,7 @@ def validate_reviewed_findings(
         data, descriptor_mode = _secure_read(
             candidate,
             maximum=MAX_PUBLIC_FILE_BYTES,
-            artifact_role="finding",
+            artifact_role=ReviewArtifactRole.FINDING,
         )
         actual_mode = f"100{descriptor_mode:03o}"
         if actual_mode != entry.mode:
