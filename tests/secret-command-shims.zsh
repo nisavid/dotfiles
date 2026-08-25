@@ -113,7 +113,7 @@ ln -s "$zsh_path" "$runtime_bin/zsh"
 export HOME=$fixture_home
 export XDG_CONFIG_HOME=$fixture_home/.config
 export XDG_STATE_HOME=$test_dir/state
-export PATH=$shim_dir:$real_bin:$backend_bin:/usr/bin:/bin
+export PATH=$shim_dir:$real_bin:$backend_bin:$fixture_home/.local/bin:/usr/bin:/bin
 export FAKE_PASS_LOG=$test_dir/pass.log
 export MEMBER_TOKEN=inherited-member
 export UNRELATED_SECRET=inherited-unrelated
@@ -128,9 +128,9 @@ output=$(tool-b 'argument with spaces')
 
 original_directory=$PWD
 cd "$cwd_target"
-PATH=$shim_dir::$real_bin:$backend_bin:/usr/bin:/bin
+PATH=$shim_dir::$real_bin:$backend_bin:$fixture_home/.local/bin:/usr/bin:/bin
 output=$(tool-a 'argument with spaces')
-PATH=$shim_dir:$real_bin:$backend_bin:/usr/bin:/bin
+PATH=$shim_dir:$real_bin:$backend_bin:$fixture_home/.local/bin:/usr/bin:/bin
 cd "$original_directory"
 [[ $output == cwd-ok ]] || fail 'an empty PATH component must resolve the current directory'
 

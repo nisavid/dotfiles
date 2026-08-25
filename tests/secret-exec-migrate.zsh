@@ -11,6 +11,32 @@ fail() {
 
 test_dir=$(mktemp -d "${TMPDIR:-/tmp}/secret-exec-migrate.XXXXXX")
 trap 'rm -rf -- "$test_dir"' EXIT
+excluded_home=$test_dir/excluded-home
+excluded_config=$excluded_home/.config
+excluded_marker=$test_dir/excluded-pass-cli-ran
+excluded_path=$test_dir/excluded-path
+mkdir -p -- "$excluded_home/.local/bin" \
+  "$excluded_config/secret-exec/profiles" "$excluded_path"
+chmod 700 "$excluded_config/secret-exec/profiles"
+cat >"$excluded_home/.local/bin/pass-cli" <<'EOF'
+#!/usr/bin/env zsh
+: > "$EXCLUDED_PASS_CLI_MARKER"
+exit 90
+EOF
+chmod +x "$excluded_home/.local/bin/pass-cli"
+set +e
+excluded_output=$(EXCLUDED_PASS_CLI_MARKER=$excluded_marker \
+  HOME=$excluded_home XDG_CONFIG_HOME=$excluded_config \
+  PATH=$excluded_path /usr/bin/zsh "$migrator" 2>&1)
+excluded_status=$?
+set -e
+(( excluded_status != 0 )) ||
+  fail 'migration must require pass-cli on its runtime PATH'
+[[ $excluded_output == 'secret-exec-migrate: pass-cli is required' ]] ||
+  fail 'migration must not select a fixed pass-cli path outside runtime PATH'
+[[ ! -e $excluded_marker ]] ||
+  fail 'migration must not invoke pass-cli outside runtime PATH'
+
 fixture_home=$test_dir/home
 fake_bin=$test_dir/bin
 state_dir=$test_dir/proton-state

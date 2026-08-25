@@ -48,17 +48,19 @@ Those entrypoints and the native-store adapter use the fixed `/bin/zsh -f`
 interpreter, so neither `PATH` nor zsh startup files can run code ahead of that
 scrub.
 
-Credential backends do not use `PATH`. Pass CLI selection is limited to the
-regular, non-symlinked `~/.local/bin/pass-cli` and
-`/opt/homebrew/bin/pass-cli` installation paths used on Linux and macOS.
-Native-store access crosses the verified fixed sibling
+Each bridge process invokes `pass-cli` as an ordinary command through its
+runtime `PATH`. The bridge does not encode package-manager preferences, fixed
+candidate paths, executable-path overrides, or a separate symbolic-link
+policy; package-managed entrypoints such as Homebrew's normal `bin/pass-cli`
+symlink therefore work when that entrypoint is selected by `PATH`.
+Native-store access does not use `PATH` and crosses the verified fixed sibling
 `~/.local/bin/secret-exec-native-store`; it alone selects
 `/usr/bin/secret-tool` on Linux or `/usr/bin/security` on macOS. The parent
 validates the adapter before every use, and the adapter applies the same checks
-to the system command. Each selected executable must be regular, non-symlinked,
-executable, owned by root or the current user, and not writable by its group or
-other users. Readiness status housekeeping also uses fixed system utility paths
-instead of ambient `PATH` resolution.
+to the system command. Each native-store executable must be regular,
+non-symlinked, executable, owned by root or the current user, and not writable
+by its group or other users. Readiness status housekeeping also uses fixed
+system utility paths instead of ambient `PATH` resolution.
 
 When repair is needed, the helper serializes callers and classifies a second
 bounded readiness check from a private diagnostic file. A positively identified
@@ -110,12 +112,14 @@ repair still in progress can wait another thirteen seconds, then rechecks
 readiness without starting a second repair. The takeover path and the extended
 concurrent-wait path each remain below the 26-second per-call startup budget,
 including cleanup and bounded polling overhead. The helper logs out only when
-the provider reports its exact invalidated-session diagnostic, and requires the
-forced local cleanup to succeed before login. Platform selection uses zsh's
-`OSTYPE`, so no external platform probe runs ahead of the first bounded info
-call. Unknown provider failures never read the bootstrap item or mutate local
-authentication state, preserving a potentially usable session during a network
-failure.
+the provider reports the complete recognized invalidated-session diagnostic.
+Structured provider logging lines may frame a complete recognized absent or
+invalidated diagnostic; arbitrary prefixes, suffixes, and diagnostic fragments
+remain unclassified. The forced local cleanup must succeed before login.
+Platform selection uses zsh's `OSTYPE`, so no external platform probe runs
+ahead of the first bounded info call. Unknown provider failures never read the
+bootstrap item or mutate local authentication state, preserving a potentially
+usable session during a network failure.
 
 ### Graphical-session startup
 

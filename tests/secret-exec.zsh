@@ -289,7 +289,7 @@ fd_audit_log=$test_dir/escape-fd-audit.log
 typeset -a fd_audit_environment=(
   HOME=$fast_home
   XDG_CONFIG_HOME=$fast_home/.config
-  PATH=$fast_target_bin:/usr/bin:/bin
+  PATH=$fast_local_bin:$fast_target_bin:/usr/bin:/bin
 )
 integer fd_audit_enabled=0
 if [[ $OSTYPE == linux* && -d /proc/$$/fd ]]; then
@@ -323,7 +323,7 @@ if [[ -n $status_fragment_library ]]; then
   /usr/bin/env LD_PRELOAD="$status_fragment_library:$kill_audit_library" \
     ZPTY_IDENTITY_LOSS_AUDIT_LOG=$identity_loss_log ZPTY_INITIAL_IDENTITY_LOSS_GATE=$identity_loss_gate \
     NEGATIVE_PGID_KILL_AUDIT_LOG=$kill_audit_log HOME=$fast_home \
-    XDG_CONFIG_HOME=$fast_home/.config PATH=$fast_target_bin:/usr/bin:/bin \
+    XDG_CONFIG_HOME=$fast_home/.config PATH=$fast_local_bin:$fast_target_bin:/usr/bin:/bin \
     ZPTY_INITIAL_IDENTITY_LOSS=1 "$fast_local_bin/secret-exec" \
     fast-provider -- check-fast-provider >"$identity_loss_output_file" 2>&1 &
   identity_wrapper_pid=$!
@@ -366,7 +366,7 @@ if [[ -n $status_fragment_library ]]; then
   set +e
   identity_loss_output=$(/usr/bin/env LD_PRELOAD="$status_fragment_library:$kill_audit_library" \
     ZPTY_IDENTITY_LOSS_AUDIT_LOG=$identity_loss_log NEGATIVE_PGID_KILL_AUDIT_LOG=$kill_audit_log \
-    HOME=$fast_home XDG_CONFIG_HOME=$fast_home/.config PATH=$fast_target_bin:/usr/bin:/bin \
+    HOME=$fast_home XDG_CONFIG_HOME=$fast_home/.config PATH=$fast_local_bin:$fast_target_bin:/usr/bin:/bin \
     ZPTY_POST_ACTIVE_IDENTITY_LOSS=1 "$fast_local_bin/secret-exec" fast-provider -- check-fast-provider 2>&1)
   identity_loss_status=$?
   set -e
@@ -388,7 +388,7 @@ if [[ -n $status_fragment_library ]]; then
     PROVIDER_COMPLETION_MARKER=$provider_completion_marker \
     PROVIDER_COMPLETION_DELAY=1 \
     HOME=$fast_home XDG_CONFIG_HOME=$fast_home/.config \
-    PATH=$fast_target_bin:/usr/bin:/bin \
+    PATH=$fast_local_bin:$fast_target_bin:/usr/bin:/bin \
     /usr/bin/setsid "$fast_local_bin/secret-exec" \
       fast-provider -- check-fast-provider \
       >/dev/null 2>"$test_dir/transient-secret-exec.err"
@@ -415,7 +415,7 @@ if [[ -n $status_fragment_library ]]; then
     ZPTY_STATUS_FRAGMENT_DELAY_AUDIT_LOG=$status_fragment_delay_log \
     PROVIDER_COMPLETION_MARKER=$provider_completion_marker \
     HOME=$fast_home XDG_CONFIG_HOME=$fast_home/.config \
-    PATH=$fast_target_bin:/usr/bin:/bin \
+    PATH=$fast_local_bin:$fast_target_bin:/usr/bin:/bin \
     /usr/bin/setsid "$fast_local_bin/secret-exec" \
       fast-provider -- check-fast-provider \
       >/dev/null 2>"$test_dir/fragmented-secret-exec.err"
@@ -439,7 +439,7 @@ if [[ -n $status_fragment_library ]]; then
       ZPTY_STATUS_FRAGMENT_EXPIRE_DEADLINE=1 \
       ZPTY_STATUS_FRAGMENT_DEADLINE_AUDIT_LOG=$status_fragment_deadline_log \
       HOME=$fast_home XDG_CONFIG_HOME=$fast_home/.config \
-      PATH=$fast_target_bin:/usr/bin:/bin \
+      PATH=$fast_local_bin:$fast_target_bin:/usr/bin:/bin \
       "$fast_local_bin/secret-exec" fast-provider -- check-fast-provider 2>&1
   )
   deadline_status=$?
@@ -463,7 +463,7 @@ if [[ -n $status_fragment_library ]]; then
     ZPTY_STATUS_FRAGMENT_PAUSE=1 \
     NEGATIVE_PGID_KILL_AUDIT_LOG=$kill_audit_log \
     HOME=$fast_home XDG_CONFIG_HOME=$fast_home/.config \
-    PATH=$fast_target_bin:/usr/bin:/bin \
+    PATH=$fast_local_bin:$fast_target_bin:/usr/bin:/bin \
     /usr/bin/setsid "$fast_local_bin/secret-exec" \
       fast-provider -- check-fast-provider \
       >"$test_dir/fragment-signal.out" \
@@ -497,7 +497,7 @@ fi
 integer fast_provider_run
 for (( fast_provider_run = 1; fast_provider_run <= 32; ++fast_provider_run )); do
   HOME=$fast_home XDG_CONFIG_HOME=$fast_home/.config \
-    PATH=$fast_target_bin:/usr/bin:/bin \
+    PATH=$fast_local_bin:$fast_target_bin:/usr/bin:/bin \
     "$fast_local_bin/secret-exec" fast-provider -- check-fast-provider ||
     fail 'the launcher must accept an immediately successful provider child'
 done
@@ -538,7 +538,10 @@ print -r -- "$proton_bootstrap_field=secret-service://" > \
   "$profile_dir/proton-session.env"
 chmod 600 "$profile_dir"/*.env
 
-cat > "$fixture_local_bin/pass-cli" <<'EOF'
+homebrew_prefix=$test_dir/homebrew
+homebrew_cellar_bin=$homebrew_prefix/Cellar/proton-pass-cli/2.3.2/bin
+mkdir -p -- "$homebrew_prefix/bin" "$homebrew_cellar_bin"
+cat > "$homebrew_cellar_bin/pass-cli" <<'EOF'
 #!/usr/bin/env zsh
 set -euo pipefail
 
@@ -633,7 +636,9 @@ case $1 in
     ;;
 esac
 EOF
-chmod +x "$fixture_local_bin/pass-cli"
+chmod +x "$homebrew_cellar_bin/pass-cli"
+ln -s ../Cellar/proton-pass-cli/2.3.2/bin/pass-cli \
+  "$homebrew_prefix/bin/pass-cli"
 
 cat > "$native_store_adapter" <<'EOF'
 #!/bin/zsh -f
@@ -740,7 +745,7 @@ chmod +x "$fake_bin/mark-target"
 export HOME=$fixture_home
 export XDG_CONFIG_HOME=$fixture_home/.config
 export XDG_STATE_HOME=$test_dir/state
-export PATH=$fake_bin:/usr/bin:/bin
+export PATH=$homebrew_prefix/bin:$fake_bin:/usr/bin:/bin
 export FAKE_PASS_LOG=$test_dir/pass-requests.log
 export FAKE_PASS_SESSION=$test_dir/provider-session
 export FAKE_PASS_SESSION_LOG=$test_dir/provider-session.log
@@ -883,26 +888,6 @@ rm -f -- "$FAKE_PASS_ITEM_DESCENDANT"
   fail 'a timed-out pass item process group must leave no surviving descendant'
 [[ ! -s $kill_audit_log ]] ||
   fail "secret resolution cleanup must never signal a numeric process group after observing it absent: $(<$kill_audit_log)"
-
-hostile_dir=$test_dir/hostile-cwd
-hostile_pass_marker=$test_dir/hostile-pass-cli-ran
-mkdir -p -- "$hostile_dir"
-cat > "$hostile_dir/pass-cli" <<'EOF'
-#!/usr/bin/env zsh
-set -euo pipefail
-
-: > "$HOSTILE_PASS_CLI_MARKER"
-exit 90
-EOF
-chmod +x "$hostile_dir/pass-cli"
-export HOSTILE_PASS_CLI_MARKER=$hostile_pass_marker
-original_directory=$PWD
-cd "$hostile_dir"
-output=$(PATH=:$fake_bin:/usr/bin:/bin zsh "$launcher" context7 -- \
-  check-context 'argument with spaces')
-cd "$original_directory"
-[[ $output == target-ok && ! -e $hostile_pass_marker ]] ||
-  fail 'the launcher must ignore a current-directory pass-cli selected by PATH'
 
 mv "$profile_dir/proton-session.env" "$test_dir/proton-session.env"
 output=$(zsh "$launcher" context7 -- check-context 'argument with spaces')
@@ -1063,6 +1048,9 @@ EOF
 chmod +x "$fake_bin/check-secret-service"
 
 : > "$FAKE_SECRET_TOOL_LOG"
+hostile_dir=$test_dir/hostile-cwd
+mkdir -p -- "$hostile_dir"
+original_directory=$PWD
 hostile_secret_marker=$test_dir/hostile-secret-tool-ran
 cat > "$hostile_dir/secret-tool" <<'EOF'
 #!/usr/bin/env zsh
