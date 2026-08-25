@@ -190,6 +190,35 @@ PROTON_PASS_PATH_BACKEND_LOG=$path_backend_log \
 [[ $(<"$path_backend_log") == info ]] ||
   fail 'readiness must invoke the Homebrew-style symlink selected through PATH'
 
+: >"$path_backend_log"
+(
+  cd "$path_backend_home"
+  PROTON_PASS_PATH_BACKEND_LOG=$path_backend_log \
+    PATH=:$homebrew_prefix/bin:/usr/bin:/bin \
+    HOME=$path_backend_home XDG_STATE_HOME=$path_backend_state \
+    "$ensure_ready"
+)
+[[ $(<"$path_backend_log") == info ]] ||
+  fail 'an empty PATH component without pass-cli must preserve later ordinary lookup'
+
+relative_path_cwd=$test_dir/relative-pass-cli-cwd
+relative_path_bin=$relative_path_cwd/relative-bin
+mkdir -p -- "$relative_path_cwd" "$relative_path_bin"
+cp -- "$homebrew_cellar_bin/pass-cli" "$relative_path_cwd/pass-cli"
+cp -- "$homebrew_cellar_bin/pass-cli" "$relative_path_bin/pass-cli"
+: >"$path_backend_log"
+for relative_path_prefix in '' . relative-bin; do
+  (
+    cd "$relative_path_cwd"
+    PROTON_PASS_PATH_BACKEND_LOG=$path_backend_log \
+      PATH=$relative_path_prefix:/usr/bin:/bin \
+      HOME=$path_backend_home XDG_STATE_HOME=$path_backend_state \
+      "$ensure_ready"
+  )
+done
+[[ $(grep -Fxc info "$path_backend_log") == 3 ]] ||
+  fail 'readiness must preserve ordinary relative pass-cli PATH selections'
+
 fast_exit=
 for fast_exit_candidate in /usr/bin/true /bin/true; do
   if [[ -x $fast_exit_candidate ]]; then
@@ -538,6 +567,67 @@ case $1 in
         'Error: This operation requires an authenticated client'
       exit 76
     fi
+    if [[ -e $FAKE_PASS_INFO_MALFORMED_FRAMING ]]; then
+      case $(<"$FAKE_PASS_INFO_MALFORMED_FRAMING") in
+        blank-absent)
+          print -u2 -rl -- \
+            '' \
+            'Error: This operation requires an authenticated client'
+          ;;
+        embedded-absent)
+          print -u2 -rl -- \
+            '2026-08-25T07:13:16.037584Z ERROR pass-cli/src/main.rs:332: Command is not logout there is no session' \
+            '' \
+            'Error: This operation requires an authenticated client'
+          ;;
+        trailing-absent)
+          print -u2 -rl -- \
+            'Error: This operation requires an authenticated client' \
+            ''
+          ;;
+        blank-invalidated)
+          print -u2 -rl -- \
+            '' \
+            'Your session has been invalidated and you have been logged out automatically.' \
+            'Please log in again with: pass login'
+          ;;
+        embedded-invalidated)
+          print -u2 -rl -- \
+            '2026-08-25T07:13:16.037584Z ERROR pass-cli/src/main.rs:231: Session invalidated' \
+            '' \
+            'Your session has been invalidated and you have been logged out automatically.' \
+            'Please log in again with: pass login'
+          ;;
+        trailing-invalidated)
+          print -u2 -rl -- \
+            'Your session has been invalidated and you have been logged out automatically.' \
+            'Please log in again with: pass login' \
+            ''
+          ;;
+        *) exit 64 ;;
+      esac
+      exit 78
+    fi
+    if [[ -e $FAKE_PASS_INFO_MULTI_RECORD && ! -e $FAKE_PASS_REMOTE_SESSION ]]; then
+      case $(<"$FAKE_PASS_INFO_MULTI_RECORD") in
+        absent)
+          print -u2 -rl -- \
+            '2026-08-25T07:13:16.037584Z ERROR pass-cli/src/main.rs:332: Command is not logout there is no session' \
+            '2026-08-25T07:13:16.037585Z ERROR pass-cli/src/main.rs:333: Session is some but is not logged in' \
+            'Error: This operation requires an authenticated client'
+          exit 78
+          ;;
+        invalidated)
+          print -u2 -rl -- \
+            '2026-08-25T07:13:16.037584Z ERROR pass-cli/src/main.rs:231: Session invalidated' \
+            '2026-08-25T07:13:16.037585Z ERROR pass-cli/src/main.rs:232: Session invalidated' \
+            'Your session has been invalidated and you have been logged out automatically.' \
+            'Please log in again with: pass login'
+          exit 77
+          ;;
+        *) exit 64 ;;
+      esac
+    fi
     if [[ -e $FAKE_PASS_LOCAL_SESSION && -e $FAKE_PASS_REMOTE_SESSION ]]; then
       print -r -- 'account-metadata-canary'
       exit 0
@@ -719,6 +809,8 @@ export FAKE_PASS_SKIP_REMOTE_SESSION=$test_dir/skip-remote-session
 export FAKE_PASS_VERIFY_HANG=$test_dir/verify-hang
 export FAKE_PASS_INFO_HANG=$test_dir/info-hang
 export FAKE_PASS_INFO_TRANSIENT=$test_dir/info-transient
+export FAKE_PASS_INFO_MALFORMED_FRAMING=$test_dir/info-malformed-framing
+export FAKE_PASS_INFO_MULTI_RECORD=$test_dir/info-multi-record
 export FAKE_PASS_INFO_INVALIDATED=$test_dir/info-invalidated
 export FAKE_PASS_INFO_ALTERNATE_ABSENT=$test_dir/info-alternate-absent
 export FAKE_SECRET_TOOL_LOG=$test_dir/secret-tool.log
@@ -1032,6 +1124,45 @@ zsh "$ensure_ready"
 grep -Fqx 'reason=existing-session' "$status_file" ||
   fail 'an existing session must record its value-free reason'
 
+for malformed_framing in \
+  blank-absent embedded-absent trailing-absent \
+  blank-invalidated embedded-invalidated trailing-invalidated; do
+  print -r -- "$malformed_framing" >"$FAKE_PASS_INFO_MALFORMED_FRAMING"
+  : >"$FAKE_PASS_LOG"
+  : >"$FAKE_SECRET_TOOL_LOG"
+  set +e
+  malformed_framing_output=$(zsh "$ensure_ready" 2>&1)
+  malformed_framing_status=$?
+  set -e
+  (( malformed_framing_status != 0 )) ||
+    fail "the $malformed_framing diagnostic must remain unclassified"
+  [[ $malformed_framing_output ==
+    'proton-pass-ensure-ready: provider-session readiness could not be classified' ]] ||
+    fail "the $malformed_framing diagnostic must report one fixed error"
+  [[ -e $FAKE_PASS_LOCAL_SESSION && -e $FAKE_PASS_REMOTE_SESSION ]] ||
+    fail "the $malformed_framing diagnostic must preserve the existing session"
+  [[ $(<"$FAKE_PASS_LOG") == $'info\ninfo' ]] ||
+    fail "the $malformed_framing diagnostic must not mutate provider authentication"
+  [[ ! -s $FAKE_SECRET_TOOL_LOG ]] ||
+    fail "the $malformed_framing diagnostic must not read the bootstrap item"
+  grep -Fqx 'reason=session-state-unknown' "$status_file" ||
+    fail "the $malformed_framing diagnostic must record the unknown state"
+done
+rm -f -- "$FAKE_PASS_INFO_MALFORMED_FRAMING"
+
+rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION"
+print -r -- absent >"$FAKE_PASS_INFO_MULTI_RECORD"
+: >"$FAKE_PASS_LOG"
+: >"$FAKE_SECRET_TOOL_LOG"
+zsh "$ensure_ready"
+rm -f -- "$FAKE_PASS_INFO_MULTI_RECORD"
+[[ -e $FAKE_PASS_REMOTE_SESSION ]] ||
+  fail 'multiple recognized absent records must establish readiness'
+[[ $(<"$FAKE_PASS_LOG") == $'info\ninfo\nlogin\ninfo' ]] ||
+  fail 'multiple recognized absent records must perform one bounded repair'
+[[ $(<"$FAKE_SECRET_TOOL_LOG") == proton-bootstrap ]] ||
+  fail 'multiple recognized absent records must use the fixed bootstrap item'
+
 touch -- "$FAKE_PASS_INFO_TRANSIENT"
 : > "$FAKE_PASS_LOG"
 : > "$FAKE_SECRET_TOOL_LOG"
@@ -1054,6 +1185,20 @@ rm -f -- "$FAKE_PASS_INFO_TRANSIENT"
 probe_artifacts=( "$state_home/secret-exec"/.proton-pass-session-probe.*(N) )
 (( ! ${#probe_artifacts} )) ||
   fail 'a classified readiness check must remove its private diagnostic file'
+
+rm -f -- "$FAKE_PASS_REMOTE_SESSION"
+: >"$FAKE_PASS_REQUIRE_LOGOUT"
+print -r -- invalidated >"$FAKE_PASS_INFO_MULTI_RECORD"
+: >"$FAKE_PASS_LOG"
+: >"$FAKE_SECRET_TOOL_LOG"
+zsh "$ensure_ready"
+rm -f -- "$FAKE_PASS_INFO_MULTI_RECORD"
+[[ -e $FAKE_PASS_REMOTE_SESSION ]] ||
+  fail 'multiple recognized invalidated records must establish readiness'
+[[ $(<"$FAKE_PASS_LOG") == $'info\ninfo\nlogout --force\nlogin\ninfo' ]] ||
+  fail 'multiple recognized invalidated records must perform cleanup and repair'
+[[ $(<"$FAKE_SECRET_TOOL_LOG") == proton-bootstrap ]] ||
+  fail 'multiple recognized invalidated records must use the fixed bootstrap item'
 
 rm -f -- "$FAKE_PASS_REMOTE_SESSION"
 : > "$FAKE_PASS_REQUIRE_LOGOUT"

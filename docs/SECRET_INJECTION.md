@@ -114,10 +114,11 @@ readiness without starting a second repair. The takeover path and the extended
 concurrent-wait path each remain below the 26-second per-call startup budget,
 including cleanup and bounded polling overhead. The helper logs out only when
 the provider reports the complete recognized invalidated-session diagnostic.
-The corresponding `pass-cli` main-command error record may frame a complete
-recognized absent or invalidated diagnostic. Other structured logs, arbitrary
-prefixes or suffixes, and diagnostic fragments remain unclassified. The forced
-local cleanup must succeed before login.
+One or more non-empty corresponding `pass-cli` main-command error records may
+frame a complete recognized absent or invalidated diagnostic. Empty framing,
+blank records, other structured logs, arbitrary prefixes or suffixes, and
+diagnostic fragments remain unclassified. The forced local cleanup must succeed
+before login.
 Platform selection uses zsh's `OSTYPE`, so no external platform probe runs
 ahead of the first bounded info call. Unknown provider failures never read the
 bootstrap item or mutate local authentication state, preserving a potentially
@@ -207,7 +208,10 @@ user configuration.
 The migration helper imports supported legacy plaintext sources without
 placing values in arguments or temporary files. It verifies that duplicate
 sources agree, refuses to overwrite a different existing value, and is
-idempotent.
+idempotent. Its installed entrypoint uses `/bin/zsh -f`. Commands that directly
+encode, inspect, or retire plaintext are selected through runtime `PATH` before
+use and must resolve to absolute paths; migration invokes those selected paths
+directly.
 
 Run import first:
 
