@@ -330,6 +330,11 @@ def structured_document_contains_credential(path: Path, text: str) -> bool:
             return False
     except (UnicodeError, json.JSONDecodeError, tomllib.TOMLDecodeError):
         return False
+    except ValueError as error:
+        # A size-admitted structured document can still exceed the runtime's
+        # bounded integer conversion.  Do not fall back to text-only scanning:
+        # escaped credential-field names require the structural pass.
+        raise PublicScanResourceLimitError from error
     return contains_literal_credential(document)
 
 
