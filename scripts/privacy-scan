@@ -42,6 +42,7 @@ from privacy_age_envelopes import (
     read_regular_file,
 )
 from privacy_scan_review import (
+    MAX_PUBLIC_FILE_BYTES,
     ReviewRecordError,
     load_review_record,
     validate_reviewed_findings,
@@ -54,7 +55,6 @@ AGE_INVENTORY_SKIPPED_DIRECTORIES = {".git"}
 AGE_INSPECT_TIMEOUT_SECONDS = 5
 MAX_AGE_INSPECTION_BYTES = 1024 * 1024
 EXPECTED_AGE_RECIPIENT_STANZAS = 1
-MAX_PUBLIC_FILE_BYTES = 4 * 1024 * 1024
 MAX_PUBLIC_SOURCE_ENTRIES = 10_000
 MAX_PUBLIC_SOURCE_PATH_BYTES = 8 * 1024 * 1024
 MAX_PUBLIC_SOURCE_CONTENT_BYTES = 16 * 1024 * 1024
@@ -753,8 +753,17 @@ def _main() -> int:
                 findings.append((public_relative, 0, "provider-token"))
 
     remaining_findings = tuple(findings)
-    if review_record is not None:
+    contains_oversized_public_file = any(
+        rule == "oversized-public-file"
+        for _relative, _line_number, rule in remaining_findings
+    )
+    # Oversized files are outside the reviewable domain.  Preserve their
+    # primary scanner finding instead of letting any record reinterpret it.
+    if review_record is not None and not contains_oversized_public_file:
         try:
+            # policy_root is this trusted scanner checkout.  The record pins
+            # this file and privacy_scan_review.py, so either edit requires the
+            # coupled record and integrity-gate identities to be regenerated.
             record = load_review_record(
                 review_record,
                 policy_root=Path(__file__).resolve().parent.parent,

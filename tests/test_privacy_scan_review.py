@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SCANNER = ROOT / "scripts/privacy-scan"
 sys.path.insert(0, os.fspath(ROOT / "scripts"))
 
+import privacy_scan_review as _review  # noqa: E402
 from privacy_scan_review import (  # noqa: E402
     OWNER_REVIEWER,
     POLICY_VERSION,
@@ -25,7 +26,6 @@ from privacy_scan_review import (  # noqa: E402
     load_review_record,
     validate_reviewed_findings,
 )
-import privacy_scan_review as _review  # noqa: E402
 
 _scanner_loader = importlib.machinery.SourceFileLoader(
     "privacy_scan_impl",
@@ -50,6 +50,13 @@ POLICY_FILES = (
 TRUSTED_REVIEW_RECORD = (
     ROOT / ".github/age-admission/privacy-scan-reviewed-findings-v1.json"
 )
+TRUSTED_FINDING_KEYS = (
+    (".github/workflows/privacy-age-integrity.yml", 0, "provider-token"),
+    ("scripts/privacy_age_admission_publisher.py", 163, "provider-token"),
+    ("scripts/privacy_age_pr_snapshot.py", 83, "provider-token"),
+    ("tests/test_privacy_age_admission_app.py", 444, "provider-token"),
+    ("tests/test_privacy_age_admission_app.py", 479, "provider-token"),
+)
 
 
 def _sha256(data: bytes) -> str:
@@ -62,11 +69,11 @@ def _git_blob_sha1(data: bytes) -> str:
     ).hexdigest()
 
 
-def _policy() -> dict[str, object]:
+def _policy(policy_root: Path = ROOT) -> dict[str, object]:
     return {
         "version": POLICY_VERSION,
         "files": {
-            relative: _sha256((ROOT / relative).read_bytes())
+            relative: _sha256((policy_root / relative).read_bytes())
             for relative in POLICY_FILES
         },
     }
@@ -77,6 +84,7 @@ def _record(
     findings: tuple[tuple[str, int, str], ...],
     *,
     category: str = "mocked_test_canary",
+    policy_root: Path = ROOT,
 ) -> Path:
     entries = []
     for relative, line, rule in findings:
@@ -101,7 +109,7 @@ def _record(
     entries.sort(key=lambda entry: (entry["path"], entry["line"], entry["rule"]))
     document = {
         "entries": entries,
-        "policy": _policy(),
+        "policy": _policy(policy_root),
         "record_id": "fixture-owner-review-v1",
         "reviewed_commit": "0" * 40,
         "reviewer": OWNER_REVIEWER,
@@ -110,6 +118,27 @@ def _record(
     path = root / "review-record.json"
     path.write_bytes(canonical_json_bytes(document))
     return path
+
+
+def _resize_canonical_record(path: Path, target_bytes: int) -> None:
+    document = json.loads(path.read_text(encoding="ascii"))
+    document["record_id"] = "x"
+    baseline = canonical_json_bytes(document)
+    assert len(baseline) <= target_bytes
+    document["record_id"] = "x" * (1 + target_bytes - len(baseline))
+    data = canonical_json_bytes(document)
+    assert len(data) == target_bytes
+    path.write_bytes(data)
+
+
+def _write_policy_fixture(root: Path, *, large_file_bytes: int) -> None:
+    for relative in POLICY_FILES:
+        target = root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        data = b"policy\n"
+        if relative == "scripts/agent_equipment_public_data.py":
+            data += b"#" * (large_file_bytes - len(data))
+        target.write_bytes(data)
 
 
 def _run_scan(
@@ -169,6 +198,39 @@ def _generated_bearer_header(token: str) -> str:
 
 
 class PrivacyScanReviewTests(TestCase):
+    def test_scanner_and_reviewer_share_the_public_file_size_limit(self) -> None:
+        self.assertEqual(_review.MAX_PUBLIC_FILE_BYTES, 4 * 1024 * 1024)
+        self.assertIs(
+            _scanner.MAX_PUBLIC_FILE_BYTES,
+            _review.MAX_PUBLIC_FILE_BYTES,
+        )
+
+    def test_review_record_uses_its_compact_inclusive_size_limit(self) -> None:
+        maximum = 512 * 1024
+        self.assertEqual(_review.MAX_REVIEW_RECORD_BYTES, maximum)
+
+        for size in (maximum - 1, maximum):
+            with self.subTest(size=size), TemporaryDirectory() as directory:
+                root = Path(directory)
+                record_path = _record(root, ())
+                _resize_canonical_record(record_path, size)
+
+                record = load_review_record(record_path, policy_root=ROOT)
+
+                self.assertEqual(record_path.stat().st_size, size)
+                self.assertTrue(record.record_id)
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            record_path = _record(root, ())
+            _resize_canonical_record(record_path, maximum + 1)
+
+            with self.assertRaisesRegex(
+                ReviewRecordError,
+                "owner-review record file is oversized",
+            ):
+                load_review_record(record_path, policy_root=ROOT)
+
     def test_explicit_record_is_diagnostic_for_the_complete_finding_set(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -187,12 +249,23 @@ class PrivacyScanReviewTests(TestCase):
             result = _run_scan(root, None)
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        expected_count = len(
-            json.loads(TRUSTED_REVIEW_RECORD.read_text(encoding="ascii"))["entries"]
-        )
         self.assertIn(
-            f"accepted {expected_count} owner-reviewed finding",
+            f"accepted {len(TRUSTED_FINDING_KEYS)} owner-reviewed finding",
             result.stderr,
+        )
+
+    def test_review_fixture_produces_the_exact_reviewed_finding_keys(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            _copy_default_reviewed_candidate(root)
+            diagnostic = _run_scan(root, TRUSTED_REVIEW_RECORD)
+
+        self.assertEqual(
+            diagnostic.stdout.splitlines(),
+            [
+                f"{path}:{line}: [{rule}] review required"
+                for path, line, rule in TRUSTED_FINDING_KEYS
+            ],
         )
 
     def test_explicit_trusted_record_is_diagnostic_only(self) -> None:
@@ -203,7 +276,13 @@ class PrivacyScanReviewTests(TestCase):
 
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertIn("explicit record is non-authoritative", result.stderr)
-        self.assertIn("review required", result.stdout)
+        self.assertEqual(
+            result.stdout.splitlines(),
+            [
+                f"{path}:{line}: [{rule}] review required"
+                for path, line, rule in TRUSTED_FINDING_KEYS
+            ],
+        )
 
     def test_default_record_does_not_block_an_unrelated_clean_candidate(self) -> None:
         with TemporaryDirectory() as directory:
@@ -283,23 +362,115 @@ class PrivacyScanReviewTests(TestCase):
             replacement.write_text("print('replacement')\n", encoding="utf-8")
             replacement.chmod(0o644)
             real_open = os.open
+            replacement_observed = False
 
             def open_then_replace(path: os.PathLike[str] | str, flags: int) -> int:
+                nonlocal replacement_observed
                 descriptor = real_open(path, flags)
                 if Path(path).resolve() == source.resolve():
                     os.replace(replacement, source)
+                    replacement_observed = True
                 return descriptor
 
-            with patch.object(_review.os, "open", side_effect=open_then_replace):
-                with self.assertRaisesRegex(
+            with (
+                self.assertRaisesRegex(
                     ReviewRecordError,
                     "owner-review finding file mode changed",
-                ):
-                    validate_reviewed_findings(
-                        (("client.py", 1, "provider-token"),),
-                        root=root,
-                        record=record,
-                    )
+                ),
+                patch.object(_review.os, "open", side_effect=open_then_replace),
+            ):
+                validate_reviewed_findings(
+                    (("client.py", 1, "provider-token"),),
+                    root=root,
+                    record=record,
+                )
+
+            self.assertTrue(replacement_observed)
+
+    def test_reviewed_candidates_use_the_inclusive_public_file_size_limit(self) -> None:
+        source_prefix = _runtime_canary_source().encode()
+        for size in (
+            512 * 1024 + 1,
+            4 * 1024 * 1024 - 1,
+            4 * 1024 * 1024,
+        ):
+            with self.subTest(size=size), TemporaryDirectory() as directory:
+                root = Path(directory)
+                source = root / "client.py"
+                source.write_bytes(
+                    source_prefix + b"#" * (size - len(source_prefix))
+                )
+                findings = (("client.py", 1, "provider-token"),)
+                record_path = _record(root, findings)
+                record = load_review_record(record_path, policy_root=ROOT)
+
+                scanner_data, scanner_finding = _scanner.read_public_file(source)
+                validated = validate_reviewed_findings(
+                    findings,
+                    root=root,
+                    record=record,
+                )
+
+                self.assertIsNone(scanner_finding)
+                self.assertEqual(len(scanner_data or b""), size)
+                self.assertEqual(validated, findings)
+
+    def test_policy_files_use_the_inclusive_public_file_size_limit(self) -> None:
+        maximum = 4 * 1024 * 1024
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy_root = root / "policy"
+            _write_policy_fixture(policy_root, large_file_bytes=maximum)
+            record_path = _record(root, (), policy_root=policy_root)
+
+            record = load_review_record(record_path, policy_root=policy_root)
+
+            self.assertEqual(set(record.policy_files), set(POLICY_FILES))
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy_root = root / "policy"
+            _write_policy_fixture(policy_root, large_file_bytes=maximum + 1)
+            record_path = _record(root, (), policy_root=policy_root)
+
+            with self.assertRaisesRegex(
+                ReviewRecordError,
+                "owner-review policy file is oversized",
+            ):
+                load_review_record(record_path, policy_root=policy_root)
+
+    def test_oversized_public_file_cannot_be_owner_dispositioned(self) -> None:
+        maximum = 4 * 1024 * 1024
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "client.py"
+            source_prefix = _runtime_canary_source().encode()
+            source.write_bytes(
+                source_prefix + b"#" * (maximum + 1 - len(source_prefix))
+            )
+            findings = (("client.py", 1, "provider-token"),)
+            record_path = _record(root, findings)
+            record = load_review_record(record_path, policy_root=ROOT)
+
+            with self.assertRaisesRegex(
+                ReviewRecordError,
+                "owner-review finding file is oversized",
+            ):
+                validate_reviewed_findings(
+                    findings,
+                    root=root,
+                    record=record,
+                )
+
+            result = _run_scan(root, record_path)
+
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertNotIn("owner review record invalid", result.stderr)
+        self.assertNotIn("owner-reviewed finding", result.stderr)
+        self.assertEqual(
+            result.stdout,
+            "client.py:0: [oversized-public-file] review required\n",
+        )
 
     def test_new_finding_cannot_hide_behind_an_old_record(self) -> None:
         with TemporaryDirectory() as directory:
@@ -382,12 +553,12 @@ class PrivacyScanReviewTests(TestCase):
             for relative, source in sources.items():
                 (root / relative).write_text(source, encoding="utf-8")
             denylist = _scanner.ExactSubstringMatcher(())
-            findings = []
+            rules_by_path: dict[str, list[str]] = {}
             for relative, source in sources.items():
                 syntax = _scanner.serialized_syntax(relative)
                 line_syntax = "line-invariants" if syntax is not None else None
                 for _line_number, line in enumerate(source.splitlines(), start=1):
-                    findings.extend(
+                    rules_by_path.setdefault(relative, []).extend(
                         _scanner.sensitive_file_text_rules(
                             relative,
                             line,
@@ -398,10 +569,10 @@ class PrivacyScanReviewTests(TestCase):
                     )
 
         self.assertEqual(
-            findings,
-            [
-                "provider-token",
-                "provider-token",
-                "provider-token",
-            ],
+            rules_by_path,
+            {
+                "workflow.yml": ["provider-token"],
+                "publisher.py": ["provider-token"],
+                "test.py": ["provider-token"],
+            },
         )

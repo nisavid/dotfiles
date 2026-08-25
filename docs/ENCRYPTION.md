@@ -48,6 +48,14 @@ closed owner-attested semantic category, then binds the canonical repository
 path, regular-file mode, Git blob, and complete file-byte SHA-256. The scanner
 rejects unknown categories and a mismatch between `category` and
 `evidence.kind`; it does not derive or prove the owner's semantic attestation.
+Every review-record path component is restricted to ASCII letters, digits,
+periods, underscores, and hyphens; components containing spaces or unsupported
+punctuation are not valid review identities even when another admission payload
+accepts them.
+Scanner reads, reviewed finding files, and bound policy files share an inclusive
+4 MiB per-file limit. The compact JSON review record has a separate inclusive
+512 KiB limit. A public file above 4 MiB remains an `oversized-public-file`
+finding and cannot be owner-dispositioned.
 The scanner recomputes the complete finding set and fails closed on any missing,
 new, changed, duplicated, or partially stale applicable record. The record is
 read from the trusted-base checkout; a candidate-authored copy is never
@@ -91,6 +99,14 @@ The workflow contains the legacy-protected `owner-signed-age-v1` activation
 sentinel. Keep that marker in every admitted workflow revision; the gate rejects
 an active transition that removes it, so recovery cannot silently fall back to
 the pre-bootstrap path.
+
+This verifier revision recognizes commit
+`0e981202824a76043083039a407dd165e243d544` as the only active predecessor whose
+seven-path admission boundary may migrate to the current nine-path boundary.
+That one-time migration uses the normal signed-admission route, requires both
+scanner-review paths in the candidate, and is not a bootstrap exception. The
+same seven-path shape at any other commit, any mixed or malformed boundary, and
+any later deletion or downgrade remain blocking before receipt parsing.
 
 ### Every-head admission result
 

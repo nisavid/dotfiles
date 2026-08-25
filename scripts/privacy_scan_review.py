@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Validate trusted-base owner dispositions for deterministic privacy findings.
 
 The reviewed record is deliberately separate from the candidate checkout. This
@@ -23,7 +22,8 @@ from typing import Any
 RECORD_VERSION = "privacy-scan-reviewed-findings/v1"
 POLICY_VERSION = "privacy-scan-policy/v1"
 OWNER_REVIEWER = "ivan@nisavid.io"
-MAX_RECORD_BYTES = 512 * 1024
+MAX_PUBLIC_FILE_BYTES = 4 * 1024 * 1024
+MAX_REVIEW_RECORD_BYTES = 512 * 1024
 MAX_ENTRIES = 256
 MAX_POLICY_FILES = 16
 MAX_EVIDENCE_CLAIMS = 16
@@ -130,9 +130,8 @@ def _integer(value: object, *, label: str, minimum: int = 0) -> int:
 def _canonical_path(value: object, *, label: str) -> str:
     path = _string(value, label=label)
     if (
-        path.startswith("/")
+        path.startswith(("/", "redacted-path:"))
         or "\\" in path
-        or path.startswith("redacted-path:")
         or any(component in {"", ".", ".."} for component in path.split("/"))
         or any(PATH_COMPONENT.fullmatch(component) is None for component in path.split("/"))
     ):
@@ -140,7 +139,12 @@ def _canonical_path(value: object, *, label: str) -> str:
     return path
 
 
-def _secure_read(path: Path) -> tuple[bytes, int]:
+def _secure_read(
+    path: Path,
+    *,
+    maximum: int,
+    artifact_role: str,
+) -> tuple[bytes, int]:
     no_follow = getattr(os, "O_NOFOLLOW", None)
     nonblocking = getattr(os, "O_NONBLOCK", None)
     if no_follow is None or nonblocking is None:
@@ -149,22 +153,34 @@ def _secure_read(path: Path) -> tuple[bytes, int]:
     try:
         descriptor = os.open(path, flags)
     except OSError as error:
-        raise ReviewRecordError("owner-review record file is unavailable") from error
+        raise ReviewRecordError(
+            f"owner-review {artifact_role} file is unavailable"
+        ) from error
     try:
         info = os.fstat(descriptor)
-        if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_RECORD_BYTES:
-            raise ReviewRecordError("owner-review record file is invalid")
+        if not stat.S_ISREG(info.st_mode):
+            raise ReviewRecordError(
+                f"owner-review {artifact_role} file is not a regular file"
+            )
+        if info.st_size > maximum:
+            raise ReviewRecordError(
+                f"owner-review {artifact_role} file is oversized"
+            )
         data = bytearray()
-        while len(data) <= MAX_RECORD_BYTES:
-            chunk = os.read(descriptor, min(64 * 1024, MAX_RECORD_BYTES + 1 - len(data)))
+        while len(data) <= maximum:
+            chunk = os.read(descriptor, min(64 * 1024, maximum + 1 - len(data)))
             if not chunk:
                 break
             data.extend(chunk)
-        if len(data) > MAX_RECORD_BYTES:
-            raise ReviewRecordError("owner-review record file is oversized")
+        if len(data) > maximum:
+            raise ReviewRecordError(
+                f"owner-review {artifact_role} file is oversized"
+            )
         return bytes(data), stat.S_IMODE(info.st_mode)
     except OSError as error:
-        raise ReviewRecordError("owner-review record file is unreadable") from error
+        raise ReviewRecordError(
+            f"owner-review {artifact_role} file is unreadable"
+        ) from error
     finally:
         os.close(descriptor)
 
@@ -208,7 +224,11 @@ def _validate_policy(document: object, *, policy_root: Path) -> tuple[str, dict[
     for relative, digest in files.items():
         canonical = _canonical_path(relative, label="policy file path")
         expected = _string(digest, label=f"policy digest {canonical}", pattern=SHA256)
-        data, _mode = _secure_read(_safe_policy_path(policy_root, canonical))
+        data, _mode = _secure_read(
+            _safe_policy_path(policy_root, canonical),
+            maximum=MAX_PUBLIC_FILE_BYTES,
+            artifact_role="policy",
+        )
         if _sha256(data) != expected:
             raise ReviewRecordError("owner-review policy content changed")
         validated[canonical] = expected
@@ -303,7 +323,11 @@ def _validate_entry(value: object) -> ReviewedFinding:
 def load_review_record(path: Path, *, policy_root: Path) -> ReviewRecord:
     """Load and validate canonical record bytes and policy bindings."""
 
-    data, _mode = _secure_read(path)
+    data, _mode = _secure_read(
+        path,
+        maximum=MAX_REVIEW_RECORD_BYTES,
+        artifact_role="record",
+    )
     try:
         document = json.loads(
             data.decode("ascii"),
@@ -373,7 +397,11 @@ def validate_reviewed_findings(
             raise ReviewRecordError("owner-review finding path is unavailable") from error
         if candidate.is_symlink() or not candidate.is_file():
             raise ReviewRecordError("owner-review finding is not a regular file")
-        data, descriptor_mode = _secure_read(candidate)
+        data, descriptor_mode = _secure_read(
+            candidate,
+            maximum=MAX_PUBLIC_FILE_BYTES,
+            artifact_role="finding",
+        )
         actual_mode = f"100{descriptor_mode:03o}"
         if actual_mode != entry.mode:
             raise ReviewRecordError("owner-review finding file mode changed")
