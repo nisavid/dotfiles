@@ -60,8 +60,10 @@ PROTECTED_FILES = {
 }
 REAL_SOURCE_FILES = (
     ".github/age-admission/allowed_signers",
+    ".github/age-admission/privacy-scan-reviewed-findings-v1.json",
     "scripts/admit-age-envelopes",
     "scripts/privacy-scan",
+    "scripts/privacy_scan_review.py",
     "scripts/create-age-admission-receipt",
     "scripts/privacy_age_admission.py",
     "scripts/privacy_age_envelopes.py",
@@ -79,6 +81,8 @@ BOOTSTRAP_REQUIRED_MODES = {
     ".github/workflows/privacy-age-integrity.yml": 0o644,
     "scripts/admit-age-envelopes": 0o755,
     "scripts/privacy-scan": 0o755,
+    "scripts/privacy_scan_review.py": 0o644,
+    ".github/age-admission/privacy-scan-reviewed-findings-v1.json": 0o644,
     "scripts/create-age-admission-receipt": 0o755,
     "scripts/run-trusted-age-admission": 0o755,
     "scripts/privacy_age_admission.py": 0o644,
@@ -90,9 +94,11 @@ BOOTSTRAP_REQUIRED_MODES = {
 }
 ADMISSION_INFRASTRUCTURE_FIXTURE_PATHS = (
     ".github/age-admission/allowed_signers",
+    ".github/age-admission/privacy-scan-reviewed-findings-v1.json",
     "scripts/create-age-admission-receipt",
     "scripts/run-trusted-age-admission",
     "scripts/privacy_age_admission.py",
+    "scripts/privacy_scan_review.py",
     "scripts/privacy_age_admission_result.py",
     "scripts/privacy_age_pr_snapshot.py",
     "scripts/privacy_age_admission_publisher.py",
@@ -872,6 +878,12 @@ class PrivacyAgeIntegrityGateTests(TestCase):
             "changed scanner": lambda root: (root / "scripts/privacy-scan").write_text(
                 "changed\n", encoding="utf-8"
             ),
+            "changed scanner review policy": lambda root: (
+                root / "scripts/privacy_scan_review.py"
+            ).write_text("changed\n", encoding="utf-8"),
+            "changed scanner review record": lambda root: (
+                root / ".github/age-admission/privacy-scan-reviewed-findings-v1.json"
+            ).write_text("changed\n", encoding="utf-8"),
             "changed parser": lambda root: (
                 root / "scripts/privacy_age_envelopes.py"
             ).write_text("changed\n", encoding="utf-8"),
@@ -912,21 +924,43 @@ class PrivacyAgeIntegrityGateTests(TestCase):
                     self.verify(base, head, base_commit, head_commit)
 
     def test_mode_and_symlink_transitions_are_rejected(self) -> None:
-        _, base, head, base_commit = self.make_checkouts()
-        scanner = head / "scripts/privacy-scan"
-        scanner.chmod(0o644)
-        head_commit = commit_all(head, "mode")
-        with self.assertRaisesRegex(
-            RuntimeError,
-            "active admission infrastructure must remain complete",
+        for relative in (
+            "scripts/privacy-scan",
+            "scripts/privacy_scan_review.py",
+            ".github/age-admission/privacy-scan-reviewed-findings-v1.json",
         ):
-            self.verify(base, head, base_commit, head_commit)
+            with self.subTest(mode=relative):
+                _, base, head, base_commit = self.make_checkouts()
+                expected_mode = BOOTSTRAP_REQUIRED_MODES[relative]
+                (head / relative).chmod(0o644 if expected_mode == 0o755 else 0o755)
+                head_commit = commit_all(head, f"mode {relative}")
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "active admission infrastructure must remain complete",
+                ):
+                    self.verify(base, head, base_commit, head_commit)
+
+        for relative in (
+            "scripts/privacy_scan_review.py",
+            ".github/age-admission/privacy-scan-reviewed-findings-v1.json",
+        ):
+            with self.subTest(symlink=relative):
+                _, base, head, base_commit = self.make_checkouts()
+                path = head / relative
+                path.unlink()
+                path.symlink_to("../missing")
+                head_commit = commit_all(head, f"symlink {relative}")
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "active admission infrastructure must remain complete",
+                ):
+                    self.verify(base, head, base_commit, head_commit)
 
         _, base, head, base_commit = self.make_checkouts()
         age_path = head / "home/private.age"
         age_path.unlink()
         age_path.symlink_to("elsewhere")
-        head_commit = commit_all(head, "symlink")
+        head_commit = commit_all(head, "symlink ciphertext")
         with self.assertRaisesRegex(RuntimeError, r"candidate changes .* protected path"):
             self.verify(base, head, base_commit, head_commit)
 
