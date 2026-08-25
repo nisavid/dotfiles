@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -283,24 +284,38 @@ def materialize_legacy_fixture(root: Path) -> dict[str, object]:
     return manifest
 
 
-def materialize_current_candidate(root: Path) -> tuple[str, str]:
-    reviewed_commit = run("git", "rev-parse", "HEAD^{commit}", cwd=ROOT)
-    reviewed_tree = run("git", "rev-parse", f"{reviewed_commit}^{{tree}}", cwd=ROOT)
+def materialize_exact_commit(
+    *,
+    source: Path,
+    commit: str,
+    root: Path,
+) -> str:
+    expected_tree = run("git", "rev-parse", f"{commit}^{{tree}}", cwd=source)
     run(
         "git",
         "clone",
         "--quiet",
         "--no-local",
         "--no-checkout",
-        os.fspath(ROOT),
+        os.fspath(source),
         os.fspath(root),
         cwd=root.parent,
     )
-    run("git", "checkout", "--quiet", "--detach", reviewed_commit, cwd=root)
-    if run("git", "rev-parse", "HEAD^{commit}", cwd=root) != reviewed_commit:
-        raise AssertionError("candidate fixture commit does not match the reviewed commit")
-    if run("git", "rev-parse", "HEAD^{tree}", cwd=root) != reviewed_tree:
-        raise AssertionError("candidate fixture tree does not match the reviewed tree")
+    run("git", "checkout", "--quiet", "--detach", commit, cwd=root)
+    if run("git", "rev-parse", "HEAD^{commit}", cwd=root) != commit:
+        raise AssertionError("exact fixture commit does not match the requested commit")
+    if run("git", "rev-parse", "HEAD^{tree}", cwd=root) != expected_tree:
+        raise AssertionError("exact fixture tree does not match the requested tree")
+    return expected_tree
+
+
+def materialize_current_candidate(root: Path) -> tuple[str, str]:
+    reviewed_commit = run("git", "rev-parse", "HEAD^{commit}", cwd=ROOT)
+    reviewed_tree = materialize_exact_commit(
+        source=ROOT,
+        commit=reviewed_commit,
+        root=root,
+    )
     return reviewed_commit, reviewed_tree
 
 
@@ -324,22 +339,26 @@ def build_payload_in_subprocess(
         import privacy_age_integrity_gate as gate
 
         now = datetime.now(timezone.utc).replace(microsecond=0)
-        payload = gate.build_admission_payload(
-            base_repository=Path(sys.argv[2]),
-            base_commit=sys.argv[3],
-            head_repository=Path(sys.argv[4]),
-            head_commit=sys.argv[5],
-            repository="nisavid/dotfiles",
-            issued_at=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            expires_at=(now + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            nonce="a" * 32,
-        )
-        print(json.dumps({
+        output = {
+            "error": None,
             "infrastructure": sorted(
                 os.fsdecode(path) for path in gate.ADMISSION_INFRASTRUCTURE_PATHS
             ),
-            "payload": payload,
-        }, sort_keys=True))
+        }
+        try:
+            output["payload"] = gate.build_admission_payload(
+                base_repository=Path(sys.argv[2]),
+                base_commit=sys.argv[3],
+                head_repository=Path(sys.argv[4]),
+                head_commit=sys.argv[5],
+                repository="nisavid/dotfiles",
+                issued_at=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                expires_at=(now + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                nonce="a" * 32,
+            )
+        except RuntimeError as error:
+            output["error"] = str(error)
+        print(json.dumps(output, sort_keys=True))
         """
     )
     result = subprocess.run(
@@ -364,6 +383,80 @@ def build_payload_in_subprocess(
     if result.returncode != 0:
         raise AssertionError(
             f"isolated admission payload failed with {result.returncode}: {result.stderr}"
+        )
+    return json.loads(result.stdout)
+
+
+def verify_in_subprocess(
+    *,
+    scripts: Path,
+    base: Path,
+    base_commit: str,
+    head: Path,
+    head_commit: str,
+    admission_body: bytes,
+    allowed_signers: Path,
+) -> dict[str, object]:
+    program = textwrap.dedent(
+        """
+        import base64
+        import json
+        import sys
+        from pathlib import Path
+
+        sys.path.insert(0, sys.argv[1])
+        import privacy_age_integrity_gate as gate
+
+        signature_calls = []
+        def unexpected_signature_verification(*_args, **_kwargs):
+            signature_calls.append(True)
+            raise AssertionError("signature verification ran before payload authorization")
+
+        gate.verify_receipt_signature = unexpected_signature_verification
+        error_text = None
+        try:
+            gate.verify_integrity_boundary(
+                base_repository=Path(sys.argv[2]),
+                base_commit=sys.argv[3],
+                head_repository=Path(sys.argv[4]),
+                head_commit=sys.argv[5],
+                admission_body=base64.b64decode(sys.argv[6], validate=True),
+                allowed_signers=Path(sys.argv[7]),
+                repository="nisavid/dotfiles",
+            )
+        except RuntimeError as error:
+            error_text = str(error)
+        print(json.dumps({
+            "error": error_text,
+            "signature_called": bool(signature_calls),
+        }, sort_keys=True))
+        """
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-B",
+            "-c",
+            program,
+            os.fspath(scripts),
+            os.fspath(base),
+            base_commit,
+            os.fspath(head),
+            head_commit,
+            base64.b64encode(admission_body).decode("ascii"),
+            os.fspath(allowed_signers),
+        ],
+        cwd=base.parent,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    if result.returncode != 0:
+        raise AssertionError(
+            f"isolated admission verification failed with {result.returncode}: "
+            f"{result.stderr}"
         )
     return json.loads(result.stdout)
 
@@ -547,6 +640,8 @@ class PrivacyAgeIntegrityGateTests(TestCase):
             head=head,
             head_commit=head_commit,
         )
+        self.assertIsNone(predecessor["error"])
+        self.assertIsNone(current["error"])
 
         expected_predecessor_infrastructure = [
             ".github/age-admission/allowed_signers",
@@ -591,41 +686,52 @@ class PrivacyAgeIntegrityGateTests(TestCase):
             predecessor["payload"],
             b"not-a-signature",
         )
-        with patch.object(_gate, "verify_receipt_signature") as verify_signature:
-            with self.assertRaisesRegex(
-                RuntimeError,
-                "admission receipt is not authorized",
-            ):
-                self.verify(
-                    base,
-                    head,
-                    base_commit,
-                    head_commit,
-                    admission_body=predecessor_receipt,
-                    allowed_signers=base / ".github/age-admission/allowed_signers",
-                    repository="nisavid/dotfiles",
-                )
-        verify_signature.assert_not_called()
+        receipt_result = verify_in_subprocess(
+            scripts=head / "scripts",
+            base=base,
+            base_commit=base_commit,
+            head=head,
+            head_commit=head_commit,
+            admission_body=predecessor_receipt,
+            allowed_signers=base / ".github/age-admission/allowed_signers",
+        )
+        self.assertRegex(
+            str(receipt_result["error"]),
+            "admission receipt is not authorized",
+        )
+        self.assertFalse(receipt_result["signature_called"])
 
-        for relative in expected_review_additions:
-            with self.subTest(missing=relative):
+        missing_path_cases = [
+            (expected_review_additions[0],),
+            (expected_review_additions[1],),
+            tuple(expected_review_additions),
+        ]
+        for ordinal, missing_paths in enumerate(missing_path_cases):
+            with self.subTest(missing=missing_paths):
                 run("git", "reset", "--hard", head_commit, cwd=head)
-                (head / relative).unlink()
-                incomplete_commit = commit_all(head, f"omit {relative}")
-                with self.assertRaisesRegex(
-                    RuntimeError,
+                for relative in missing_paths:
+                    (head / relative).unlink()
+                incomplete_commit = commit_all(
+                    head,
+                    f"omit {' and '.join(missing_paths)}",
+                )
+                isolated_head = Path(temporary.name) / f"incomplete-head-{ordinal}"
+                materialize_exact_commit(
+                    source=head,
+                    commit=incomplete_commit,
+                    root=isolated_head,
+                )
+                incomplete_result = build_payload_in_subprocess(
+                    scripts=isolated_head / "scripts",
+                    base=base,
+                    base_commit=base_commit,
+                    head=isolated_head,
+                    head_commit=incomplete_commit,
+                )
+                self.assertRegex(
+                    str(incomplete_result["error"]),
                     "active admission infrastructure must remain complete",
-                ):
-                    _gate.build_admission_payload(
-                        base_repository=base,
-                        base_commit=base_commit,
-                        head_repository=head,
-                        head_commit=incomplete_commit,
-                        repository="nisavid/dotfiles",
-                        issued_at="2026-08-25T00:00:00Z",
-                        expires_at="2026-08-25T01:00:00Z",
-                        nonce="b" * 32,
-                    )
+                )
 
     def test_unpinned_legacy_tree_is_not_reusable(self) -> None:
         _, base, head, _ = self.make_checkouts()
