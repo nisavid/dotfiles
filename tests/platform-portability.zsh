@@ -116,7 +116,7 @@ grep -Fq -- \
 age_boundary_workflow=$repo_root/.github/workflows/privacy-age-integrity.yml
 admission_activation_marker=$(
   cd "$repo_root"
-  python3 -I -c 'import sys
+  python3 -I -B -c 'import sys
 sys.path.insert(0, ".")
 from scripts.privacy_age_integrity_gate import ADMISSION_ACTIVATION_MARKER
 sys.stdout.buffer.write(ADMISSION_ACTIVATION_MARKER.rstrip(b"\r\n"))'
@@ -200,7 +200,7 @@ done
   fail 'age admission allowed-signers configuration is missing'
 admission_signer_pattern=$(
   cd "$repo_root"
-  python3 -I -c 'import re, sys
+  python3 -I -B -c 'import re, sys
 sys.path.insert(0, ".")
 from scripts.privacy_age_admission import ADMISSION_NAMESPACE, ADMISSION_PRINCIPAL
 print(
