@@ -133,6 +133,7 @@ def _run_scan(
         capture_output=True,
         text=True,
         env=environment,
+        timeout=60,
     )
 
 
@@ -163,7 +164,7 @@ def _generated_provider_token() -> str:
 def _generated_bearer_header(token: str) -> str:
     # Keep the credential-shaped fixture out of this repository while testing
     # the scanner against the complete runtime header in a temporary file.
-    prefix = bytes.fromhex("417574686f72697a74696f6e3a2042656172657220").decode()
+    prefix = bytes.fromhex("417574686f72697a6174696f6e3a2042656172657220").decode()
     return prefix + token
 
 
@@ -373,7 +374,7 @@ class PrivacyScanReviewTests(TestCase):
         token = _generated_provider_token()
         sources = {
             "workflow.yml": f"token: {token}\n",
-            "publisher.py": f"{_generated_bearer_header(token)}\n",
+            "publisher.py": f"{_generated_bearer_header('checks')}\n",
             "test.py": f'Client(token="{token}")\n',
         }
         with TemporaryDirectory() as directory:
