@@ -34,7 +34,7 @@ permissions:
 jobs:
   validate-inputs:
     name: Validate immutable inputs
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     steps:
       - name: Require exact commit and content identities
@@ -174,7 +174,7 @@ jobs:
   wsl2-target:
     name: wsl2-bubblewrap
     needs: validate-inputs
-    runs-on: windows-2025
+    runs-on: blacksmith-4vcpu-windows-2025
     timeout-minutes: 45
     steps:
       - name: Check out exact dotfiles deployment source
@@ -366,7 +366,7 @@ jobs:
   combine:
     name: Combine exact target proofs
     needs: [unix-target, wsl2-target]
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 10
     steps:
       - name: Check out exact dotfiles deployment source
