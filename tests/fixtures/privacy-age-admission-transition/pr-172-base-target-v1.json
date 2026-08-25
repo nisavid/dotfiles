@@ -1,0 +1,21 @@
+{
+  "schema": "privacy-age-admission-transition-object-fixture/v1",
+  "pack": {
+    "path": "pr-172-base-target-v1.pack",
+    "sha256": "b95cc87e4b295b44c06cc50668a98c32fa3dd375b7f8f3b9a0a6d86086dc62f8",
+    "size": 2745171,
+    "object_count": 682
+  },
+  "snapshots": [
+    {
+      "role": "pr_base",
+      "commit": "7fbe8e520cf85c16de4ba05b9b016b153340ed05",
+      "root_tree": "40e4f9ff2373527400e2c7bbc2ffdf879cf5fa7b"
+    },
+    {
+      "role": "target",
+      "commit": "d2c15543baddd922b2ce1f087ea38ada29f323fd",
+      "root_tree": "d902f2ae6c53e53ce0983a95415727f3a5b11e9b"
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+{
+  "schema": "privacy-age-admission-transition/v1",
+  "migration": "one-time-transition-pr-172-v1",
+  "repository": "nisavid/dotfiles",
+  "pull_request": 172,
+  "fixtures": [
+    {
+      "name": "active-predecessor",
+      "manifest": "tests/fixtures/privacy-age-integrity/legacy-active-base-v1.json",
+      "manifest_sha256": "84a9d4de02df6562727aa57da911e93ef5cf800ed10aa0467eab963b114a014c",
+      "manifest_size": 593,
+      "snapshots": [
+        {
+          "role": "predecessor",
+          "commit": "0e981202824a76043083039a407dd165e243d544",
+          "root_tree": "ac2898cd79618f85d527e62c83537555f360be83"
+        }
+      ]
+    },
+    {
+      "name": "pr-base-and-target",
+      "manifest": "tests/fixtures/privacy-age-admission-transition/pr-172-base-target-v1.json",
+      "manifest_sha256": "080c35afd44cddf70ef08efbc3eb628dcdaacd9de1f91c048fc5d411103a6556",
+      "manifest_size": 595,
+      "snapshots": [
+        {
+          "role": "pr_base",
+          "commit": "7fbe8e520cf85c16de4ba05b9b016b153340ed05",
+          "root_tree": "40e4f9ff2373527400e2c7bbc2ffdf879cf5fa7b"
+        },
+        {
+          "role": "target",
+          "commit": "d2c15543baddd922b2ce1f087ea38ada29f323fd",
+          "root_tree": "d902f2ae6c53e53ce0983a95415727f3a5b11e9b"
+        }
+      ]
+    }
+  ]
+}
