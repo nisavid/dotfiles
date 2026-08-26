@@ -522,6 +522,8 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
             "$TOKEN",
             "${TOKEN}",
             "${{ secrets.TOKEN }}",
+            "api-key:hindsight-openai",
+            "provider-policy:member-api",
             "secret_profile:context7",
             "secret_reference:API_KEY",
             "reference:context7",
@@ -536,6 +538,7 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
                 shell_fixture_source = f"print -r -- '{field}={reference}'"
                 with self.subTest(field=field, reference=reference):
                     self.assertFalse(contains_literal_credential(document))
+                    self.assertFalse(string_looks_like_credential(reference))
                     self.assertFalse(string_looks_like_credential(serialized))
                     self.assertFalse(string_looks_like_credential(shell_fixture_source))
 
@@ -575,6 +578,8 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
             "${{ " + github_token + " }}",
             "${{ secrets." + github_token + " }}",
             "reference:" + github_token,
+            "api-key:" + openai_key,
+            "provider-policy:" + github_token,
             "secret_reference:" + aws_access_key,
             "secret_profile:" + aws_session_token,
             "reference:" + openai_key,
@@ -592,6 +597,8 @@ class AgentEquipmentPublicDataTest(unittest.TestCase):
         documents = (
             f"{field}=pass://vault/item/password{field.upper()}={literal}",
             f"{field}=pass://vault/item/password-{field.upper()}={literal}",
+            f"{field}=api-key:hindsight-openai/{literal}",
+            f"{field}=provider-policy:member-api/{literal}",
             f"{field}=reference:context7/{field.upper()}={literal}",
         )
 
