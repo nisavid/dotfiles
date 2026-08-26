@@ -44,11 +44,16 @@ class ChezmoiSourceOwnershipTests(unittest.TestCase):
 
         ciphertext = (
             SOURCE / ".private-hindsight.toml.age"
-        ).read_text(encoding="utf-8")
+        ).read_bytes()
         self.assertTrue(
-            ciphertext.startswith("-----BEGIN AGE ENCRYPTED FILE-----\n")
+            ciphertext.startswith(
+                (
+                    b"age-encryption.org/v1\n",
+                    b"-----BEGIN AGE ENCRYPTED FILE-----\n",
+                )
+            )
         )
-        self.assertNotIn("[hindsight]", ciphertext)
+        self.assertNotIn(b"[hindsight]", ciphertext)
 
         consumers = [
             path

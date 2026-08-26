@@ -83,13 +83,59 @@ root = Path(sys.argv[1])
 inventory = json.loads((root / "private_inventory.json").read_text())
 installation = json.loads((root / "private_installation.json").read_text())
 policy = json.loads((root / "private_provider-runtime-policy.json").read_text())
+sitecustomize = (root / "sitecustomize.py").read_text()
 
 assert inventory["machine"]["id"] == "fixture-consumer"
 assert inventory["banks"][0]["id"] == "fixture-bank"
 assert installation["consumer_id"] == "fixture-consumer"
-assert installation["services"][0]["label"].startswith("io.example.fixture.")
-assert policy["failover_order"] == ["member-a", "member-b", "member-local"]
-assert all("fixture" in member["id"] or member["id"].startswith("member-") for member in policy["members"])
+assert [service["service_id"] for service in installation["services"]] == [
+    "stack",
+    "hook-authority",
+]
+stack = installation["services"][0]
+hook_authority = installation["services"][1]
+assert stack["label"].startswith("io.example.fixture.")
+assert hook_authority["label"].startswith("io.example.fixture.")
+assert hook_authority["credentials"] == []
+assert hook_authority["environment"]["HINDSIGHT_EMBED_POLL_SECONDS"] == "1"
+environment = stack["environment"]
+assert environment["HINDSIGHT_API_AUDIT_LOG_ENABLED"] == "true"
+assert environment["HINDSIGHT_API_AUDIT_LOG_RETENTION_DAYS"] == "7"
+assert environment["HINDSIGHT_API_LLM_TRACE_ENABLED"] == "true"
+assert environment["HINDSIGHT_API_LLM_TRACE_RETENTION_DAYS"] == "7"
+assert environment["HINDSIGHT_API_EMBEDDINGS_PROVIDER"] == "openai"
+assert environment["HINDSIGHT_API_EMBEDDINGS_OPENAI_MODEL"] == "text-embedding-3-small"
+assert (
+    environment["HINDSIGHT_API_EMBEDDINGS_OPENAI_API_KEY"]
+    == "provider-policy:openai-luna"
+)
+assert "sk-" not in environment["HINDSIGHT_API_EMBEDDINGS_OPENAI_API_KEY"]
+assert environment["HINDSIGHT_API_HTTP_PROFILE_ID"] == "fixture-profile"
+assert environment["HINDSIGHT_CODEX_TERMINAL_AUTH_COOLDOWN_SECONDS"] == "300"
+assert environment["HINDSIGHT_EMBEDDING_FAILOVER_ORDER"] == (
+    "work-codex,personal-codex,alt1-codex,alt2-codex"
+)
+assert environment["HINDSIGHT_EMBED_PROVIDER_PRESET_ID"] == "hatchery"
+assert environment["HINDSIGHT_EMBED_PROVIDER_PRESET_LABEL"] == "Hatchery"
+assert environment["HINDSIGHT_EMBED_API_VERSION"] == policy["hindsight_version"]
+assert [check["environment"] for check in installation["health_checks"]] == [
+    environment
+]
+assert policy["failover_order"] == [
+    "member-a",
+    "member-b",
+    "member-local",
+    "openai-luna",
+]
+assert [member["id"] for member in policy["members"]] == [
+    "member-a",
+    "member-b",
+    "member-local",
+    "openai-luna",
+]
+assert "api-key:hindsight-openai" in sitecustomize
+assert ".local/state/hindsight-control-plane/.hindsight-openai.env" in sitecustomize
+assert "HINDSIGHT_OPENAI_API_KEY=sk-" not in sitecustomize
 PY
 
 [[ "$(sed -n 's/^releaseCommit = //p' "$repo_root/home/.chezmoidata/hindsight.toml" | wc -l | tr -d ' ')" == 1 ]]

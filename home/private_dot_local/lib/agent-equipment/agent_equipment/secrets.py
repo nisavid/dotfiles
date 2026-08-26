@@ -173,7 +173,7 @@ _PRIVATE_KEY_MARKER = re.compile(
     r"SECRET-KEY-"
 )
 _OPAQUE_SECRET_REFERENCE = re.compile(
-    r"(?i)(?:secret[_-]?(?:profile|reference)|reference):"
+    r"(?i)(?:api-key|provider-policy|secret[_-]?(?:profile|reference)|reference):"
     r"[A-Za-z][A-Za-z0-9_.-]*\Z"
 )
 _SECRET_PROVIDER_REFERENCE = re.compile(
@@ -4359,6 +4359,8 @@ def string_looks_like_credential(
         or _PROVIDER_TOKEN.search(candidate) is not None
     ):
         return True
+    if _reference_value_is_safe(candidate):
+        return False
     if syntax == "line-invariants":
         return _direct_context_contains_literal_credential(
             candidate
