@@ -194,9 +194,13 @@ alternate spellings of a sealed artifact.
 `plan-action-set-v1.schema.json` defines a separate, closed, secret-free
 projection emitted only after the resolver validates the complete plan. It
 contains every automated action from that plan, across install, configure,
-enable, disable, remove, restore, and native-update suppression. The plan
-validator owns exact membership and supplies the artifact independently; it
-must not derive the artifact from captured state or route references.
+enable, disable, remove, and restore where the settled target matrix has an
+exact physical projection. Unsupported native operations, including native
+update suppression, fail closed at projection; they do not produce a partial
+artifact. `project_plan_action_set` consumes only the complete `ValidatedPlan`
+and emits the complete immutable set or diagnostics only. It accepts no caller
+target map and derives no authority from captured state or route references.
+Separate admission still requires the independently trusted set digest.
 
 Each projected payload preserves action identity and ordinal; catalog, lock,
 and plan digests; capability, manager-version, adapter, and harness executor
@@ -270,6 +274,15 @@ captured action reference maps that dependency to one canonical surface record.
 Route, equipment identity, canonical target locator, and skill basename all
 match. The canonical surface remains `forbidden` and verification-only; it
 never enters an action's write scope.
+
+Derive each canonical skill `dependency_identity` as `dependency:` followed by
+the canonical JSON SHA-256 digest of exactly `relationship` set to
+`canonical_skill_projection`, the validated `write_surface_identity`, the
+validated skill `equipment_identity`, and `target_locator` set to the canonical
+JSON object `{"path":"~/.agents/skills/<validated basename>"}`. Admission
+independently recomputes that identity. The identity is a semantic consistency
+coordinate; it does not grant admission, mutation, provenance, or runtime
+authority by itself.
 
 This captured-state validator does not establish that its second input came
 from the authoritative complete plan. The caller must first validate the plan

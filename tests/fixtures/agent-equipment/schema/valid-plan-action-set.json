@@ -88,7 +88,7 @@
         "verification_dependencies": [
           {
             "relationship": "canonical_skill_projection",
-            "dependency_identity": "dependency:fixture/canonical-skill",
+            "dependency_identity": "dependency:sha256:f98610a9d8667d99025d3f9a9f7ca9b713bf1501ece8ea045e907b692089470a",
             "write_surface_identity": "surface:route:fixture/claude-plugin/skill:fixture/example",
             "equipment_identity": "skill:fixture/example",
             "target_locator": {
@@ -101,8 +101,8 @@
           "captured_state_version": "agent-equipment-captured-state/v1"
         }
       },
-      "action_digest": "sha256:f6e7d18b1eeb2144f2e3782236461c047a4221b30bd2e86d28a349d6572e7cc1"
+      "action_digest": "sha256:d48c614b5501c80b1d84a8471f720d06b67ad94a9bf21e370dde34b13f47d544"
     }
   ],
-  "action_set_digest": "sha256:3b66dc5d587394d2bf0e373549d03a9af57c6db9566b7e06805f0d8271b2b8b2"
+  "action_set_digest": "sha256:46f3c64254f367f91263450f3bd30c64eea2797d8744beeee205883cf2fe5aa9"
 }
