@@ -39,14 +39,14 @@ def skill_entries(config: str) -> list[dict[str, object]]:
     return entries
 
 
-def modifier_python() -> str:
+def modifier_python(*, darwin: bool = False) -> str:
     source = TEMPLATE.read_text(encoding="utf-8")
     start = source.index("import os, sys, base64, tomlkit")
     end = source.index("\nPYEOF", start)
     code = source[start:end]
     return code.replace(
         'if {{ if eq .chezmoi.os "darwin" }}True{{ else }}False{{ end }} else []',
-        "if False else []",
+        f"if {darwin} else []",
     )
 
 
@@ -72,7 +72,7 @@ class DynamicSkillDisableModifierTests(unittest.TestCase):
         path.write_text(f"# {skill}\n", encoding="utf-8")
         return path
 
-    def apply(self, config: str) -> str:
+    def apply(self, config: str, *, darwin: bool = False) -> str:
         environment = os.environ | {
             "HOMEDIR": str(self.home),
             "EDITOR_TARGET": "cursor",
@@ -88,7 +88,7 @@ class DynamicSkillDisableModifierTests(unittest.TestCase):
                 "tomlkit",
                 "python3",
                 "-c",
-                modifier_python(),
+                modifier_python(darwin=darwin),
             ],
             input=config,
             text=True,
@@ -156,7 +156,7 @@ class DynamicSkillDisableModifierTests(unittest.TestCase):
         self.assertTrue(cross_host_paths.isdisjoint(paths))
         self.assertIn(str(current), paths)
 
-    def test_removes_retired_serena_configuration(self) -> None:
+    def test_removes_retired_serena_mcp_and_keeps_memory_root(self) -> None:
         self.work = base64.b64encode(
             b'writable_roots = [".serena/memories"]\nprojects = []\n'
         ).decode()
@@ -175,8 +175,34 @@ class DynamicSkillDisableModifierTests(unittest.TestCase):
         self.assertNotIn("serena", parsed["mcp_servers"])
         self.assertEqual(
             parsed["sandbox_workspace_write"]["writable_roots"],
-            ["/tmp/keep"],
+            ["/tmp/keep", str(self.home / ".serena/memories")],
         )
+
+    def test_adds_approved_darwin_writable_roots(self) -> None:
+        expected = {
+            ".local/share/chezmoi.wt",
+            ".config/docker/buildx",
+            ".config/containers/podman/machine",
+            ".local/share/containers",
+            ".vite-plus",
+            "node_modules/.vite-temp",
+            ".local/share/mise",
+            "Library/pnpm",
+            ".config/.wrangler/logs",
+            ".config/mastic",
+            ".local/share/mastic",
+            ".pg0/instances",
+            ".config/mlxctl",
+            ".local/share/mlxctl",
+            "Library/Logs/mlxctl",
+            "Library/Logs/mlxd",
+            ".serena/memories",
+        }
+
+        parsed = tomllib.loads(self.apply("", darwin=True))
+        roots = set(parsed["sandbox_workspace_write"]["writable_roots"])
+
+        self.assertTrue({str(self.home / path) for path in expected} <= roots)
 
 
 if __name__ == "__main__":
