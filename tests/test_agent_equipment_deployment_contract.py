@@ -2119,11 +2119,11 @@ class AgentEquipmentDeploymentContractTests(unittest.TestCase):
         # fixture. Regenerate both when that fixture changes.
         self.assertEqual(
             authorization["authorization_identity"],
-            "apply-authorization:sha256:c0b73058fa4caaf2b8d79faf8cf0fdebd1dfbe379ad96ed9badfbeb7697fc2a5",
+            "apply-authorization:sha256:4118c098b30e223802070b2bb36b0c89179220e148e6290445605961f2b0d765",
         )
         self.assertEqual(
             trusted_digest,
-            "sha256:a98ec4b2b640f05458ff04a816bd326ad703a653cd93caf90916b20d81745d73",
+            "sha256:f793ed183f8d0e3a2b064c817cb74347000719088dd050da795d33f0e2f11764",
         )
 
         diagnostics = EXECUTION_AUTHORITY.validate_apply_authorization(
