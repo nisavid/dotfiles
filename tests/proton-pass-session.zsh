@@ -550,6 +550,46 @@ spawn_resistant_descendant() {
     zselect -t 1 || true
   done
 }
+plain_main_record() {
+  print -r -- "$1 ERROR pass-cli/src/main.rs:$2: $3"
+}
+ansi_main_record() {
+  local timestamp=$1
+  local line_number=$2
+  local message=$3
+  local record=$'\e[2m'"$timestamp"$'\e[0m '
+  record+=$'\e[31mERROR\e[0m '
+  record+=$'\e[2mpass-cli/src/main.rs\e[0m'
+  record+=$'\e[2m:\e[0m\e[2m'"$line_number"$'\e[0m: '"$message"
+  print -r -- "$record"
+}
+print_nul_terminated_record() {
+  print -u2 -nr -- "$1"$'\0\n'
+}
+fixture_timestamp='2026-08-25T07:13:16.037584Z'
+alternate_timestamp='2026-08-25T07:13:16.037585Z'
+absent_message='Command is not logout there is no session'
+alternate_absent_message='Session is some but is not logged in'
+invalidated_message='Session invalidated'
+absent_diagnostic='Error: This operation requires an authenticated client'
+invalidated_diagnostic='Your session has been invalidated and you have been logged out automatically.'
+invalidated_guidance='Please log in again with: pass login'
+plain_absent_record=$(plain_main_record "$fixture_timestamp" 332 "$absent_message")
+plain_alternate_absent_record=$(
+  plain_main_record "$alternate_timestamp" 333 "$alternate_absent_message"
+)
+plain_invalidated_record=$(plain_main_record "$fixture_timestamp" 231 "$invalidated_message")
+plain_second_invalidated_record=$(
+  plain_main_record "$alternate_timestamp" 232 "$invalidated_message"
+)
+ansi_absent_record=$(ansi_main_record "$fixture_timestamp" 332 "$absent_message")
+ansi_alternate_absent_record=$(
+  ansi_main_record "$alternate_timestamp" 333 "$alternate_absent_message"
+)
+ansi_invalidated_record=$(ansi_main_record "$fixture_timestamp" 231 "$invalidated_message")
+ansi_second_invalidated_record=$(
+  ansi_main_record "$alternate_timestamp" 232 "$invalidated_message"
+)
 case $1 in
   info)
     (( $# == 1 )) || exit 64
@@ -570,39 +610,113 @@ case $1 in
     if [[ -e $FAKE_PASS_INFO_MALFORMED_FRAMING ]]; then
       case $(<"$FAKE_PASS_INFO_MALFORMED_FRAMING") in
         blank-absent)
-          print -u2 -rl -- \
-            '' \
-            'Error: This operation requires an authenticated client'
+          print -u2 -rl -- '' "$absent_diagnostic"
           ;;
         embedded-absent)
-          print -u2 -rl -- \
-            '2026-08-25T07:13:16.037584Z ERROR pass-cli/src/main.rs:332: Command is not logout there is no session' \
-            '' \
-            'Error: This operation requires an authenticated client'
+          print -u2 -rl -- "$plain_absent_record" '' "$absent_diagnostic"
           ;;
         trailing-absent)
+          print -u2 -rl -- "$absent_diagnostic" ''
+          ;;
+        styled-terminal-absent)
           print -u2 -rl -- \
-            'Error: This operation requires an authenticated client' \
-            ''
+            "$plain_absent_record" \
+            $'\e[31m'"$absent_diagnostic"$'\e[0m'
+          ;;
+        unsupported-sgr-absent)
+          print -u2 -rl -- \
+            $'\e[1m'"$plain_absent_record"$'\e[0m' \
+            "$absent_diagnostic"
+          ;;
+        non-sgr-csi-absent)
+          print -u2 -rl -- \
+            $'\e[31K'"$plain_absent_record" \
+            "$absent_diagnostic"
+          ;;
+        ansi-only-absent)
+          print -u2 -rl -- $'\e[2m\e[0m' "$absent_diagnostic"
+          ;;
+        misplaced-sgr-absent)
+          misplaced_absent_record=$(ansi_main_record \
+            "$fixture_timestamp" 332 \
+            $'Command is not logout there is no \e[2msession\e[0m')
+          print -u2 -rl -- \
+            "$misplaced_absent_record" "$absent_diagnostic"
+          ;;
+        trailing-sgr-absent)
+          print -u2 -rl -- \
+            "$ansi_absent_record"$'\e[0m' "$absent_diagnostic"
+          ;;
+        mixed-absent)
+          print -u2 -rl -- \
+            "$plain_absent_record" "$ansi_alternate_absent_record" \
+            "$absent_diagnostic"
+          ;;
+        nul-plain-absent)
+          print_nul_terminated_record "$plain_absent_record"
+          print -u2 -r -- "$absent_diagnostic"
+          ;;
+        nul-ansi-absent)
+          print_nul_terminated_record "$ansi_absent_record"
+          print -u2 -r -- "$absent_diagnostic"
           ;;
         blank-invalidated)
-          print -u2 -rl -- \
-            '' \
-            'Your session has been invalidated and you have been logged out automatically.' \
-            'Please log in again with: pass login'
+          print -u2 -rl -- '' "$invalidated_diagnostic" "$invalidated_guidance"
           ;;
         embedded-invalidated)
           print -u2 -rl -- \
-            '2026-08-25T07:13:16.037584Z ERROR pass-cli/src/main.rs:231: Session invalidated' \
-            '' \
-            'Your session has been invalidated and you have been logged out automatically.' \
-            'Please log in again with: pass login'
+            "$plain_invalidated_record" '' \
+            "$invalidated_diagnostic" "$invalidated_guidance"
           ;;
         trailing-invalidated)
           print -u2 -rl -- \
-            'Your session has been invalidated and you have been logged out automatically.' \
-            'Please log in again with: pass login' \
-            ''
+            "$invalidated_diagnostic" "$invalidated_guidance" ''
+          ;;
+        styled-terminal-invalidated)
+          print -u2 -rl -- \
+            "$plain_invalidated_record" \
+            $'\e[31m'"$invalidated_diagnostic"$'\e[0m' \
+            "$invalidated_guidance"
+          ;;
+        unsupported-sgr-invalidated)
+          print -u2 -rl -- \
+            $'\e[1m'"$plain_invalidated_record"$'\e[0m' \
+            "$invalidated_diagnostic" "$invalidated_guidance"
+          ;;
+        non-sgr-csi-invalidated)
+          print -u2 -rl -- \
+            $'\e[31K'"$plain_invalidated_record" \
+            "$invalidated_diagnostic" "$invalidated_guidance"
+          ;;
+        ansi-only-invalidated)
+          print -u2 -rl -- \
+            $'\e[2m\e[0m' \
+            "$invalidated_diagnostic" "$invalidated_guidance"
+          ;;
+        misplaced-sgr-invalidated)
+          misplaced_invalidated_record=$(ansi_main_record \
+            "$fixture_timestamp" 231 $'Session \e[2minvalidated\e[0m')
+          print -u2 -rl -- \
+            "$misplaced_invalidated_record" \
+            "$invalidated_diagnostic" "$invalidated_guidance"
+          ;;
+        trailing-sgr-invalidated)
+          print -u2 -rl -- \
+            "$ansi_invalidated_record"$'\e[0m' \
+            "$invalidated_diagnostic" "$invalidated_guidance"
+          ;;
+        mixed-invalidated)
+          print -u2 -rl -- \
+            "$plain_invalidated_record" "$ansi_second_invalidated_record" \
+            "$invalidated_diagnostic" "$invalidated_guidance"
+          ;;
+        nul-plain-invalidated)
+          print_nul_terminated_record "$plain_invalidated_record"
+          print -u2 -rl -- "$invalidated_diagnostic" "$invalidated_guidance"
+          ;;
+        nul-ansi-invalidated)
+          print_nul_terminated_record "$ansi_invalidated_record"
+          print -u2 -rl -- "$invalidated_diagnostic" "$invalidated_guidance"
           ;;
         *) exit 64 ;;
       esac
@@ -612,17 +726,14 @@ case $1 in
       case $(<"$FAKE_PASS_INFO_MULTI_RECORD") in
         absent)
           print -u2 -rl -- \
-            '2026-08-25T07:13:16.037584Z ERROR pass-cli/src/main.rs:332: Command is not logout there is no session' \
-            '2026-08-25T07:13:16.037585Z ERROR pass-cli/src/main.rs:333: Session is some but is not logged in' \
-            'Error: This operation requires an authenticated client'
+            "$ansi_absent_record" "$ansi_alternate_absent_record" \
+            "$absent_diagnostic"
           exit 78
           ;;
         invalidated)
           print -u2 -rl -- \
-            '2026-08-25T07:13:16.037584Z ERROR pass-cli/src/main.rs:231: Session invalidated' \
-            '2026-08-25T07:13:16.037585Z ERROR pass-cli/src/main.rs:232: Session invalidated' \
-            'Your session has been invalidated and you have been logged out automatically.' \
-            'Please log in again with: pass login'
+            "$plain_invalidated_record" "$plain_second_invalidated_record" \
+            "$invalidated_diagnostic" "$invalidated_guidance"
           exit 77
           ;;
         *) exit 64 ;;
@@ -634,20 +745,19 @@ case $1 in
     fi
     if [[ -e $FAKE_PASS_INFO_INVALIDATED ]]; then
       print -u2 -rl -- \
-        '2026-08-25T07:13:16.037584Z ERROR pass-cli/src/main.rs:231: Session invalidated' \
-        'Your session has been invalidated and you have been logged out automatically.' \
-        'Please log in again with: pass login'
+        "$ansi_invalidated_record" \
+        "$invalidated_diagnostic" "$invalidated_guidance"
       exit 77
     fi
     if [[ -e $FAKE_PASS_INFO_ALTERNATE_ABSENT ]]; then
       print -u2 -rl -- \
-        '2026-08-25T07:13:16.037584Z ERROR pass-cli/src/main.rs:332: Session is some but is not logged in' \
-        'Error: This operation requires an authenticated client'
+        "$(plain_main_record \
+          "$fixture_timestamp" 332 "$alternate_absent_message")" \
+        "$absent_diagnostic"
       exit 78
     fi
     print -u2 -rl -- \
-      '2026-08-25T07:13:16.037584Z ERROR pass-cli/src/main.rs:332: Command is not logout there is no session' \
-      'Error: This operation requires an authenticated client'
+      "$ansi_absent_record" "$absent_diagnostic"
     exit 78
     ;;
   login)
@@ -1126,7 +1236,14 @@ grep -Fqx 'reason=existing-session' "$status_file" ||
 
 for malformed_framing in \
   blank-absent embedded-absent trailing-absent \
-  blank-invalidated embedded-invalidated trailing-invalidated; do
+  styled-terminal-absent unsupported-sgr-absent non-sgr-csi-absent \
+  ansi-only-absent misplaced-sgr-absent trailing-sgr-absent mixed-absent \
+  nul-plain-absent nul-ansi-absent \
+  blank-invalidated embedded-invalidated trailing-invalidated \
+  styled-terminal-invalidated unsupported-sgr-invalidated \
+  non-sgr-csi-invalidated ansi-only-invalidated \
+  misplaced-sgr-invalidated trailing-sgr-invalidated mixed-invalidated \
+  nul-plain-invalidated nul-ansi-invalidated; do
   print -r -- "$malformed_framing" >"$FAKE_PASS_INFO_MALFORMED_FRAMING"
   : >"$FAKE_PASS_LOG"
   : >"$FAKE_SECRET_TOOL_LOG"

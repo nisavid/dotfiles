@@ -115,10 +115,14 @@ concurrent-wait path each remain below the 26-second per-call startup budget,
 including cleanup and bounded polling overhead. The helper logs out only when
 the provider reports the complete recognized invalidated-session diagnostic.
 One or more non-empty corresponding `pass-cli` main-command error records may
-frame a complete recognized absent or invalidated diagnostic. Empty framing,
-blank records, other structured logs, arbitrary prefixes or suffixes, and
-diagnostic fragments remain unclassified. The forced local cleanup must succeed
-before login.
+frame a complete recognized absent or invalidated diagnostic. Every framing
+record must be either plain or use the canonical reset, dim, and red SGR
+decoration emitted by the supported CLI around its timestamp, severity, source
+path, separator, and line number. A diagnostic cannot mix the two forms. The
+recognized terminal diagnostic remains byte-exact and unstyled. Empty framing,
+blank records, other controls or structured logs, arbitrary prefixes or
+suffixes, and diagnostic fragments remain unclassified. The forced local
+cleanup must succeed before login.
 Platform selection uses zsh's `OSTYPE`, so no external platform probe runs
 ahead of the first bounded info call. Unknown provider failures never read the
 bootstrap item or mutate local authentication state, preserving a potentially
