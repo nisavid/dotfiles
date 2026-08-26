@@ -560,7 +560,13 @@ ansi_main_record() {
   local record=$'\e[2m'"$timestamp"$'\e[0m '
   record+=$'\e[31mERROR\e[0m '
   record+=$'\e[2mpass-cli/src/main.rs\e[0m'
-  record+=$'\e[2m:\e[0m\e[2m'"$line_number"$'\e[0m: '"$message"
+  record+=$'\e[2m:\e[0m\e[2m'"${line_number}:"$'\e[0m '"$message"
+  print -r -- "$record"
+}
+ansi_split_line_colon_record() {
+  local line_number=$2
+  local record=$(ansi_main_record "$@")
+  record=${record/"${line_number}:"$'\e[0m '/"$line_number"$'\e[0m: '}
   print -r -- "$record"
 }
 print_nul_terminated_record() {
@@ -647,6 +653,12 @@ case $1 in
           print -u2 -rl -- \
             "$ansi_absent_record"$'\e[0m' "$absent_diagnostic"
           ;;
+        split-line-colon-sgr-absent)
+          print -u2 -rl -- \
+            "$(ansi_split_line_colon_record \
+              "$fixture_timestamp" 332 "$absent_message")" \
+            "$absent_diagnostic"
+          ;;
         mixed-absent)
           print -u2 -rl -- \
             "$plain_absent_record" "$ansi_alternate_absent_record" \
@@ -703,6 +715,12 @@ case $1 in
         trailing-sgr-invalidated)
           print -u2 -rl -- \
             "$ansi_invalidated_record"$'\e[0m' \
+            "$invalidated_diagnostic" "$invalidated_guidance"
+          ;;
+        split-line-colon-sgr-invalidated)
+          print -u2 -rl -- \
+            "$(ansi_split_line_colon_record \
+              "$fixture_timestamp" 231 "$invalidated_message")" \
             "$invalidated_diagnostic" "$invalidated_guidance"
           ;;
         mixed-invalidated)
@@ -1237,12 +1255,14 @@ grep -Fqx 'reason=existing-session' "$status_file" ||
 for malformed_framing in \
   blank-absent embedded-absent trailing-absent \
   styled-terminal-absent unsupported-sgr-absent non-sgr-csi-absent \
-  ansi-only-absent misplaced-sgr-absent trailing-sgr-absent mixed-absent \
+  ansi-only-absent misplaced-sgr-absent trailing-sgr-absent \
+  split-line-colon-sgr-absent mixed-absent \
   nul-plain-absent nul-ansi-absent \
   blank-invalidated embedded-invalidated trailing-invalidated \
   styled-terminal-invalidated unsupported-sgr-invalidated \
   non-sgr-csi-invalidated ansi-only-invalidated \
-  misplaced-sgr-invalidated trailing-sgr-invalidated mixed-invalidated \
+  misplaced-sgr-invalidated trailing-sgr-invalidated \
+  split-line-colon-sgr-invalidated mixed-invalidated \
   nul-plain-invalidated nul-ansi-invalidated; do
   print -r -- "$malformed_framing" >"$FAKE_PASS_INFO_MALFORMED_FRAMING"
   : >"$FAKE_PASS_LOG"
