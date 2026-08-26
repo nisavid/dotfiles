@@ -508,7 +508,7 @@ diagnostic_matches_state() {
   ansi_log_line_pattern="^${dim_pattern}${timestamp_pattern}${reset_pattern} "
   ansi_log_line_pattern+="${red_pattern}ERROR${reset_pattern} "
   ansi_log_line_pattern+="${dim_pattern}${source_pattern}${reset_pattern}"
-  ansi_log_line_pattern+="${dim_pattern}:${reset_pattern}${dim_pattern}[0-9]+${reset_pattern}: "
+  ansi_log_line_pattern+="${dim_pattern}:${reset_pattern}${dim_pattern}[0-9]+:${reset_pattern} "
   ansi_log_line_pattern+="${state_message_pattern}\$"
 
   local framing_mode=

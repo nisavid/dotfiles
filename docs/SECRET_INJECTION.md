@@ -118,9 +118,9 @@ One or more non-empty corresponding `pass-cli` main-command error records may
 frame a complete recognized absent or invalidated diagnostic. Every framing
 record must be either plain or use the canonical reset, dim, and red SGR
 decoration emitted by the supported CLI around its timestamp, severity, source
-path, separator, and line number. A diagnostic cannot mix the two forms. The
-recognized terminal diagnostic remains byte-exact and unstyled. Empty framing,
-blank records, other controls or structured logs, arbitrary prefixes or
+path, separator, and colon-terminated line number. A diagnostic cannot mix the
+two forms. The recognized terminal diagnostic remains byte-exact and unstyled.
+Empty framing, blank records, other controls or structured logs, arbitrary prefixes or
 suffixes, and diagnostic fragments remain unclassified. The forced local
 cleanup must succeed before login.
 Platform selection uses zsh's `OSTYPE`, so no external platform probe runs
