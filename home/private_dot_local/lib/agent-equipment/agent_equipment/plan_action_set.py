@@ -135,10 +135,53 @@ class AdmittedPlanActionSet:
             type(self.action_set_digest) is not str
             or _DIGEST.fullmatch(self.action_set_digest) is None
             or self.document.get("action_set_digest") != self.action_set_digest
-            or _canonical_action_set_digest(self.document)
-            != self.action_set_digest
+            or _canonical_action_set_digest(self.document) != self.action_set_digest
         ):
             raise ValueError("admitted plan-action-set digest is invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectedPlanActionSet:
+    """One immutable resolver-produced pre-capture action projection.
+
+    Projection is not independent admission or runtime authority.  A caller
+    must still obtain the expected set digest through its trusted channel and
+    invoke :func:`admit_plan_action_set` before using the artifact downstream.
+    """
+
+    document: FrozenJsonObject
+    canonical_bytes: bytes
+    action_set_digest: str
+
+    def __post_init__(self) -> None:
+        if type(self.document) is not FrozenJsonObject:
+            raise TypeError("projected plan-action set must be frozen JSON")
+        if type(self.canonical_bytes) is not bytes:
+            raise TypeError("projected plan-action set bytes must be immutable")
+        if self.canonical_bytes != canonical_json_bytes(self.document):
+            raise ValueError("projected plan-action set bytes must be canonical")
+        if (
+            type(self.action_set_digest) is not str
+            or _DIGEST.fullmatch(self.action_set_digest) is None
+            or self.document.get("action_set_digest") != self.action_set_digest
+            or _canonical_action_set_digest(self.document) != self.action_set_digest
+        ):
+            raise ValueError("projected plan-action-set digest is invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class PlanActionSetProjectionRejection:
+    """A closed diagnostics-only refusal to project one validated plan."""
+
+    diagnostics: tuple[Diagnostic, ...]
+
+    def __post_init__(self) -> None:
+        if not self.diagnostics or any(
+            type(diagnostic) is not Diagnostic for diagnostic in self.diagnostics
+        ):
+            raise ValueError(
+                "plan-action-set projection rejection requires typed diagnostics"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,6 +198,464 @@ class PlanActionSetRejection:
 
 
 PlanActionSetResult: TypeAlias = AdmittedPlanActionSet | PlanActionSetRejection
+PlanActionSetProjectionResult: TypeAlias = (
+    ProjectedPlanActionSet | PlanActionSetProjectionRejection
+)
+
+
+def project_plan_action_set(
+    validated_plan: ValidatedPlan,
+) -> PlanActionSetProjectionResult:
+    """Atomically project every representable mutation in one validated plan.
+
+    The internal admission pass is only a fail-closed consistency check.  It
+    does not provide the independently trusted set digest required by public
+    admission and does not make the result executable.
+    """
+
+    if type(validated_plan) is not ValidatedPlan:
+        raise TypeError("plan-action projection requires one validated plan")
+
+    actions: list[FrozenJsonObject] = []
+    for node in validated_plan.nodes:
+        if node.kind != "mutation":
+            continue
+        projected = _project_action(validated_plan, node)
+        if isinstance(projected, PlanActionSetProjectionRejection):
+            return projected
+        actions.append(projected)
+
+    preimage = validated_plan.preimage
+    document_without_digest = {
+        "schema_version": "agent-equipment-plan-action-set/v1",
+        "candidate_identity": preimage.get("candidate_identity"),
+        "implementation_manifest_digest": preimage.get(
+            "implementation_manifest_digest"
+        ),
+        "plan_digest": validated_plan.digest,
+        "actions": tuple(actions),
+    }
+    action_set_digest = canonical_json_sha256(document_without_digest)
+    document = freeze_json(
+        document_without_digest | {"action_set_digest": action_set_digest}
+    )
+    if not isinstance(document, FrozenJsonObject):
+        return _projection_rejection(
+            "PLAN_ACTION_SET_PROJECTION_INVALID",
+            "The validated plan could not be projected atomically.",
+        )
+    canonical_bytes = canonical_json_bytes(document)
+    internally_validated = admit_plan_action_set(
+        canonical_bytes,
+        PlanActionSetTrust(
+            validated_plan=validated_plan,
+            expected_action_set_digest=action_set_digest,
+        ),
+    )
+    if isinstance(internally_validated, PlanActionSetRejection):
+        return PlanActionSetProjectionRejection(internally_validated.diagnostics)
+    return ProjectedPlanActionSet(
+        document=internally_validated.document,
+        canonical_bytes=internally_validated.canonical_bytes,
+        action_set_digest=internally_validated.action_set_digest,
+    )
+
+
+def _project_action(
+    validated_plan: ValidatedPlan,
+    node: PlanNode,
+) -> FrozenJsonObject | PlanActionSetProjectionRejection:
+    definition = node.definition
+    route = definition.get("route_record")
+    provider = route.get("provider") if isinstance(route, FrozenJsonObject) else None
+    harness = definition.get("harness")
+    operation = definition.get("operation")
+    route_identity = definition.get("route_identity")
+    if (
+        not isinstance(route, FrozenJsonObject)
+        or not isinstance(provider, FrozenJsonObject)
+        or type(harness) is not str
+        or type(operation) is not str
+        or type(route_identity) is not str
+    ):
+        return _projection_action_rejection(
+            definition,
+            "PLAN_ACTION_SET_MEMBERSHIP_INVALID",
+            "A validated mutation has no complete projection binding.",
+        )
+
+    bindings = _project_write_bindings(definition, provider)
+    if isinstance(bindings, PlanActionSetProjectionRejection):
+        return bindings
+    targets, verification_dependencies = bindings
+    payload = thaw_json(definition)
+    if type(payload) is not dict:
+        return _projection_action_rejection(
+            definition,
+            "PLAN_ACTION_SET_MEMBERSHIP_INVALID",
+            "A validated mutation has no complete projection binding.",
+        )
+    payload.pop("route_record", None)
+    payload.update(
+        {
+            "action_identity": node.identity,
+            "ordinal": node.ordinal,
+            "plan_digest": validated_plan.digest,
+            "provider": thaw_json(provider),
+            "write_targets": [thaw_json(target) for target in targets],
+            "preconditions": _projection_preconditions(
+                definition,
+                validated_plan.digest,
+                route,
+            ),
+            "verification_dependencies": [
+                thaw_json(dependency) for dependency in verification_dependencies
+            ],
+            "compensation": {
+                "kind": "restore_captured_pre_state",
+                "captured_state_version": "agent-equipment-captured-state/v1",
+            },
+        }
+    )
+    frozen_payload = freeze_json(payload)
+    if not isinstance(frozen_payload, FrozenJsonObject):
+        return _projection_action_rejection(
+            definition,
+            "PLAN_ACTION_SET_MEMBERSHIP_INVALID",
+            "A validated mutation has no complete projection binding.",
+        )
+    evidence = freeze_json(
+        {
+            "action_payload": frozen_payload,
+            "action_digest": canonical_json_sha256(frozen_payload),
+        }
+    )
+    if not isinstance(evidence, FrozenJsonObject):
+        return _projection_action_rejection(
+            definition,
+            "PLAN_ACTION_SET_PROJECTION_INVALID",
+            "The validated plan could not be projected atomically.",
+        )
+    return evidence
+
+
+def _project_write_bindings(
+    definition: FrozenJsonObject,
+    provider: FrozenJsonObject,
+) -> (
+    tuple[tuple[FrozenJsonObject, ...], tuple[FrozenJsonObject, ...]]
+    | PlanActionSetProjectionRejection
+):
+    harness = definition.get("harness")
+    operation = definition.get("operation")
+    route_identity = definition.get("route_identity")
+    active = definition.get("equipment_identities")
+    controlled = definition.get("controlled_equipment_identities")
+    surface_scope = definition.get("surface_scope")
+    if (
+        type(harness) is not str
+        or type(operation) is not str
+        or type(route_identity) is not str
+        or not isinstance(active, tuple)
+        or not isinstance(controlled, tuple)
+        or not isinstance(surface_scope, tuple)
+        or any(type(identity) is not str for identity in (*active, *controlled))
+    ):
+        return _unsupported_projection(definition)
+    surface_rule = _surface_rule_for_plan_authority(definition)
+    if surface_rule is None:
+        return _unsupported_projection(definition)
+    authoritative = tuple(sorted(set(active) | set(controlled)))
+    if not authoritative:
+        return _unsupported_projection(definition)
+
+    target_specs: list[tuple[str, str | None, FrozenJsonObject, str]] = []
+    provider_kind = provider.get("kind")
+    if provider_kind == "direct_mcp":
+        mcp_identities = tuple(
+            identity
+            for identity in authoritative
+            if isinstance(identity, str) and identity.startswith("mcp:")
+        )
+        if (
+            operation not in {"configure", "enable", "disable", "remove", "restore"}
+            or len(mcp_identities) != 1
+            or len(authoritative) != 1
+        ):
+            return _unsupported_projection(definition)
+        locator = _expected_selection_locator(
+            kind="mcp_selection",
+            harness=harness,
+            operation=operation,
+            provider=provider,
+        )
+        if locator is None:
+            return _unsupported_projection(definition)
+        equipment_identity = mcp_identities[0]
+        target_specs.append(
+            ("mcp_selection", equipment_identity, locator, equipment_identity)
+        )
+    elif provider_kind == "standalone_skill":
+        if operation == "configure":
+            return _projection_action_rejection(
+                definition,
+                "PLAN_ACTION_TARGET_AUTHORITY_UNAVAILABLE",
+                "Legacy projector locator authority is not yet specified.",
+            )
+        if harness != "claude" or operation not in {"install", "remove", "restore"}:
+            return _unsupported_projection(definition)
+        skill_identities = tuple(
+            identity
+            for identity in authoritative
+            if isinstance(identity, str) and identity.startswith("skill:")
+        )
+        if len(skill_identities) != len(authoritative):
+            return _unsupported_projection(definition)
+        for identity in skill_identities:
+            locator = _skill_locator("claude", identity)
+            if locator is None:
+                return _unsupported_projection(definition)
+            target_specs.append(("claude_skill_entry", identity, locator, identity))
+    elif provider_kind == "native_plugin":
+        manager = provider.get("manager")
+        plugin_id = provider.get("plugin_id")
+        scope = provider.get("scope")
+        plugin_identities = tuple(
+            identity
+            for identity in authoritative
+            if isinstance(identity, str) and identity.startswith("plugin:")
+        )
+        skill_identities = tuple(
+            identity
+            for identity in authoritative
+            if isinstance(identity, str) and identity.startswith("skill:")
+        )
+        if (
+            manager not in {"claude", "codex"}
+            or harness != manager
+            or type(plugin_id) is not str
+            or type(scope) is not str
+        ):
+            return _unsupported_projection(definition)
+        if operation == "configure":
+            if manager != "codex" or len(plugin_identities) != 1:
+                return _unsupported_projection(definition)
+            equipment_identity = plugin_identities[0]
+            locator = _expected_selection_locator(
+                kind="plugin_selection",
+                harness=harness,
+                operation=operation,
+                provider=provider,
+            )
+            if locator is None:
+                return _unsupported_projection(definition)
+            target_specs.append(
+                ("plugin_selection", equipment_identity, locator, equipment_identity)
+            )
+        elif operation in {"install", "enable", "disable"}:
+            if len(plugin_identities) > 1:
+                return _unsupported_projection(definition)
+            route_wide = surface_rule == "route_identity"
+            if route_wide:
+                if len(plugin_identities) != 1:
+                    return _unsupported_projection(definition)
+                projected_skill_identities: tuple[str, ...] = ()
+            else:
+                if operation != "install" and len(plugin_identities) != 1:
+                    return _unsupported_projection(definition)
+                if (
+                    operation == "install"
+                    and not plugin_identities
+                    and not skill_identities
+                ):
+                    return _unsupported_projection(definition)
+                if operation != "install" and skill_identities:
+                    return _unsupported_projection(definition)
+                if manager != "claude" and skill_identities:
+                    return _unsupported_projection(definition)
+                represented = set(plugin_identities) | set(skill_identities)
+                if represented != set(authoritative):
+                    return _unsupported_projection(definition)
+                projected_skill_identities = skill_identities
+            if plugin_identities:
+                equipment_identity = plugin_identities[0]
+                locator = freeze_json(
+                    {
+                        "manager": manager,
+                        "native_identity": plugin_id,
+                        "scope": scope,
+                    }
+                )
+                if not isinstance(locator, FrozenJsonObject):
+                    return _unsupported_projection(definition)
+                target_specs.append(
+                    (
+                        "plugin_installation"
+                        if operation == "install"
+                        else "plugin_enablement",
+                        None,
+                        locator,
+                        equipment_identity,
+                    )
+                )
+            for identity in projected_skill_identities:
+                locator = _skill_locator("claude", identity)
+                if locator is None:
+                    return _unsupported_projection(definition)
+                target_specs.append(("claude_skill_entry", identity, locator, identity))
+        else:
+            return _unsupported_projection(definition)
+    else:
+        return _unsupported_projection(definition)
+
+    targets: list[FrozenJsonObject] = []
+    dependencies: list[FrozenJsonObject] = []
+    for surface_kind, equipment_identity, locator, surface_equipment in target_specs:
+        write_surface_identity = _surface_for_rule(
+            surface_rule,
+            route_identity,
+            surface_equipment,
+        )
+        target_payload: dict[str, object] = {
+            "surface_kind": surface_kind,
+            "locator": locator,
+        }
+        if equipment_identity is not None:
+            target_payload["equipment_identity"] = equipment_identity
+        target_identity = "target:" + canonical_json_sha256(target_payload)
+        target = freeze_json(
+            {
+                "target_identity": target_identity,
+                "write_surface_identity": write_surface_identity,
+                **target_payload,
+            }
+        )
+        if not isinstance(target, FrozenJsonObject):
+            return _unsupported_projection(definition)
+        targets.append(target)
+        if surface_kind == "claude_skill_entry":
+            if type(equipment_identity) is not str:
+                return _unsupported_projection(definition)
+            canonical_locator = _skill_locator("agents", equipment_identity)
+            if canonical_locator is None:
+                return _unsupported_projection(definition)
+            dependency_payload = {
+                "relationship": "canonical_skill_projection",
+                "write_surface_identity": write_surface_identity,
+                "equipment_identity": equipment_identity,
+                "target_locator": canonical_locator,
+            }
+            dependency_identity = _canonical_skill_dependency_identity(
+                relationship=dependency_payload["relationship"],
+                write_surface_identity=dependency_payload["write_surface_identity"],
+                equipment_identity=dependency_payload["equipment_identity"],
+                target_locator=canonical_locator,
+            )
+            if dependency_identity is None:
+                return _unsupported_projection(definition)
+            dependency = freeze_json(
+                {
+                    "dependency_identity": dependency_identity,
+                    **dependency_payload,
+                }
+            )
+            if not isinstance(dependency, FrozenJsonObject):
+                return _unsupported_projection(definition)
+            dependencies.append(dependency)
+
+    targets.sort(key=lambda target: str(target.get("target_identity")))
+    dependencies.sort(key=canonical_json_bytes)
+    target_surfaces = tuple(
+        sorted(str(target.get("write_surface_identity")) for target in targets)
+    )
+    if (
+        not targets
+        or len(target_surfaces) != len(set(target_surfaces))
+        or target_surfaces != surface_scope
+    ):
+        return _unsupported_projection(definition)
+    return tuple(targets), tuple(dependencies)
+
+
+def _skill_locator(
+    owner: str,
+    equipment_identity: str,
+) -> FrozenJsonObject | None:
+    basename = equipment_identity.rsplit("/", 1)[-1]
+    if not basename or basename in {".", ".."} or "/" in basename or "\\" in basename:
+        return None
+    root = {"claude": "~/.claude/skills", "agents": "~/.agents/skills"}.get(owner)
+    if root is None:
+        return None
+    locator = freeze_json({"path": f"{root}/{basename}"})
+    return locator if isinstance(locator, FrozenJsonObject) else None
+
+
+def _unsupported_projection(
+    definition: FrozenJsonObject,
+) -> PlanActionSetProjectionRejection:
+    return _projection_action_rejection(
+        definition,
+        "PLAN_ACTION_TARGET_BINDING_INVALID",
+        "A validated mutation has no supported physical target projection.",
+    )
+
+
+def _projection_preconditions(
+    definition: FrozenJsonObject,
+    plan_digest: str,
+    route: FrozenJsonObject,
+) -> dict[str, object]:
+    return {
+        "candidate_identity": definition.get("candidate_identity"),
+        "implementation_manifest_digest": definition.get(
+            "implementation_manifest_digest"
+        ),
+        "catalog_digest": definition.get("catalog_digest"),
+        "lock_digest": definition.get("lock_digest"),
+        "plan_digest": plan_digest,
+        "route_digest": definition.get("route_digest"),
+        "capability_digest": definition.get("capability_digest"),
+        "manager_version_evidence_digest": definition.get(
+            "manager_version_evidence_digest"
+        ),
+        "adapter_identity": definition.get("adapter_identity"),
+        "adapter_version": definition.get("adapter_version"),
+        "control_owner": route.get("control_owner"),
+        "activation_group": definition.get("activation_group"),
+        "surface_scope": definition.get("surface_scope"),
+        "prepared_checkpoint_required": True,
+        "compare_before_mutate": True,
+    }
+
+
+def _projection_action_rejection(
+    definition: FrozenJsonObject,
+    code: str,
+    message: str,
+) -> PlanActionSetProjectionRejection:
+    harness = definition.get("harness")
+    route_identity = definition.get("route_identity")
+    return PlanActionSetProjectionRejection(
+        (
+            Diagnostic(
+                code,
+                message,
+                harness=harness if type(harness) is str else None,
+                route_identity=(
+                    route_identity if type(route_identity) is str else None
+                ),
+                evidence_source="plan-action-set",
+            ),
+        )
+    )
+
+
+def _projection_rejection(
+    code: str,
+    message: str,
+) -> PlanActionSetProjectionRejection:
+    return PlanActionSetProjectionRejection((_diagnostic(code, message),))
 
 
 def admit_plan_action_set(
@@ -170,10 +671,7 @@ def admit_plan_action_set(
 
     if type(trust) is not PlanActionSetTrust:
         raise TypeError("plan-action-set admission requires typed trust")
-    if (
-        type(raw_document) is not bytes
-        or len(raw_document) > MAX_PLAN_ACTION_SET_BYTES
-    ):
+    if type(raw_document) is not bytes or len(raw_document) > MAX_PLAN_ACTION_SET_BYTES:
         return _rejection(
             "PLAN_ACTION_SET_BYTES_INVALID",
             "The plan-action set is not one bounded raw byte stream.",
@@ -251,9 +749,7 @@ def _semantic_diagnostics(
         "catalog_digest",
         "lock_digest",
     )
-    expected_plan_tuple = {
-        field: preimage.get(field) for field in plan_tuple_fields
-    }
+    expected_plan_tuple = {field: preimage.get(field) for field in plan_tuple_fields}
     mutation_nodes = tuple(node for node in plan.nodes if node.kind == "mutation")
     if any(
         node.definition.get(field) != value
@@ -279,12 +775,8 @@ def _semantic_diagnostics(
         ordinal = payload.get("ordinal")
         if type(identity) is str and type(ordinal) is int:
             coordinates.append((ordinal, identity))
-        if (
-            payload.get("plan_digest") != plan.digest
-            or any(
-                payload.get(field) != value
-                for field, value in expected_plan_tuple.items()
-            )
+        if payload.get("plan_digest") != plan.digest or any(
+            payload.get(field) != value for field, value in expected_plan_tuple.items()
         ):
             diagnostics.append(
                 _action_diagnostic(
@@ -371,7 +863,9 @@ def _semantic_diagnostics(
     expected_coordinates = tuple(
         (node.ordinal, node.identity) for node in mutation_nodes
     )
-    if tuple(coordinates) != expected_coordinates or len(actions) != len(mutation_nodes):
+    if tuple(coordinates) != expected_coordinates or len(actions) != len(
+        mutation_nodes
+    ):
         diagnostics.append(
             _diagnostic(
                 "PLAN_ACTION_SET_MEMBERSHIP_INVALID",
@@ -473,7 +967,9 @@ def _desired_state_matches_route(
     if operation == "configure":
         provider = route.get("provider")
         controls = route.get("component_controls")
-        if not isinstance(provider, FrozenJsonObject) or not isinstance(controls, tuple):
+        if not isinstance(provider, FrozenJsonObject) or not isinstance(
+            controls, tuple
+        ):
             return False
         typed_controls: list[FrozenJsonObject] = []
         for control in controls:
@@ -537,14 +1033,11 @@ def _surface_rule_for_plan_authority(
             if type(identity) is not str:
                 return None
             destination.append(identity)
-    if (
-        active != tuple(sorted(set(active_identities)))
-        or controlled != tuple(sorted(set(controlled_identities)))
+    if active != tuple(sorted(set(active_identities))) or controlled != tuple(
+        sorted(set(controlled_identities))
     ):
         return None
-    identities = tuple(
-        sorted(set(active_identities) | set(controlled_identities))
-    )
+    identities = tuple(sorted(set(active_identities) | set(controlled_identities)))
     if not identities:
         return None
     expected_scopes = {
@@ -576,9 +1069,7 @@ def _preconditions_match(
     route = definition.get("route_record")
     expected = {
         "candidate_identity": payload.get("candidate_identity"),
-        "implementation_manifest_digest": payload.get(
-            "implementation_manifest_digest"
-        ),
+        "implementation_manifest_digest": payload.get("implementation_manifest_digest"),
         "catalog_digest": payload.get("catalog_digest"),
         "lock_digest": payload.get("lock_digest"),
         "plan_digest": payload.get("plan_digest"),
@@ -711,8 +1202,7 @@ def _target_matches_plan_authority(
         return False
     if type(equipment) is str and (
         equipment not in authoritative_equipment
-        or surface
-        != _surface_for_rule(surface_rule, route_identity, equipment)
+        or surface != _surface_for_rule(surface_rule, route_identity, equipment)
     ):
         return False
 
@@ -753,9 +1243,7 @@ def _target_matches_plan_authority(
             )
             and len(plugin_equipment) == 1
             and surface
-            == _surface_for_rule(
-                surface_rule, route_identity, plugin_equipment[0]
-            )
+            == _surface_for_rule(surface_rule, route_identity, plugin_equipment[0])
         )
     if kind == "claude_skill_entry":
         path = locator.get("path")
@@ -771,15 +1259,11 @@ def _target_matches_plan_authority(
             and type(equipment) is str
             and equipment.startswith("skill:")
             and type(path) is str
-            and path.removeprefix("~/.claude/skills/")
-            == equipment.rsplit("/", 1)[-1]
+            and path.removeprefix("~/.claude/skills/") == equipment.rsplit("/", 1)[-1]
         )
     if kind in {"mcp_selection", "plugin_selection"}:
         expected_prefix = "mcp:" if kind == "mcp_selection" else "plugin:"
-        if (
-            type(equipment) is not str
-            or not equipment.startswith(expected_prefix)
-        ):
+        if type(equipment) is not str or not equipment.startswith(expected_prefix):
             return False
         expected_locator = _expected_selection_locator(
             kind=kind,
@@ -938,11 +1422,18 @@ def _verification_dependencies_match(payload: FrozenJsonObject) -> bool:
         if (
             not isinstance(target, FrozenJsonObject)
             or target.get("surface_kind") != "claude_skill_entry"
-            or target.get("equipment_identity")
-            != dependency.get("equipment_identity")
+            or target.get("equipment_identity") != dependency.get("equipment_identity")
             or not isinstance(target_locator, FrozenJsonObject)
             or not isinstance(dependency_locator, FrozenJsonObject)
         ):
+            return False
+        expected_dependency_identity = _canonical_skill_dependency_identity(
+            relationship=dependency.get("relationship"),
+            write_surface_identity=surface,
+            equipment_identity=dependency.get("equipment_identity"),
+            target_locator=dependency_locator,
+        )
+        if dependency_identity != expected_dependency_identity:
             return False
         write_path = target_locator.get("path")
         dependency_path = dependency_locator.get("path")
@@ -956,6 +1447,30 @@ def _verification_dependencies_match(payload: FrozenJsonObject) -> bool:
     return (
         claimed_surfaces == claude_target_surfaces
         and canonical_dependencies == sorted(set(canonical_dependencies))
+    )
+
+
+def _canonical_skill_dependency_identity(
+    *,
+    relationship: object,
+    write_surface_identity: object,
+    equipment_identity: object,
+    target_locator: object,
+) -> str | None:
+    if (
+        relationship != "canonical_skill_projection"
+        or type(write_surface_identity) is not str
+        or type(equipment_identity) is not str
+        or not isinstance(target_locator, FrozenJsonObject)
+    ):
+        return None
+    return "dependency:" + canonical_json_sha256(
+        {
+            "relationship": relationship,
+            "write_surface_identity": write_surface_identity,
+            "equipment_identity": equipment_identity,
+            "target_locator": target_locator,
+        }
     )
 
 
@@ -1009,9 +1524,7 @@ def _action_diagnostic(
             equipment_identity if type(equipment_identity) is str else None
         ),
         harness=harness if type(harness) is str else None,
-        route_identity=(
-            route_identity if type(route_identity) is str else None
-        ),
+        route_identity=(route_identity if type(route_identity) is str else None),
         evidence_source="plan-action-set",
     )
 

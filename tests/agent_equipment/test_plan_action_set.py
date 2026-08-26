@@ -28,6 +28,9 @@ ROOT = Path(__file__).resolve().parents[2]
 PLAN_ACTION_SET_FIXTURE = (
     ROOT / "tests/fixtures/agent-equipment/schema/valid-plan-action-set.json"
 )
+CAPTURED_STATE_FIXTURE = (
+    ROOT / "tests/fixtures/agent-equipment/schema/valid-captured-state.json"
+)
 
 
 def _valid_plan_and_action_set() -> tuple[ValidatedPlan, dict[str, object]]:
@@ -50,9 +53,7 @@ def _valid_plan_and_action_set() -> tuple[ValidatedPlan, dict[str, object]]:
     mutation_definition = freeze_json(
         {
             "candidate_identity": payload["candidate_identity"],
-            "implementation_manifest_digest": payload[
-                "implementation_manifest_digest"
-            ],
+            "implementation_manifest_digest": payload["implementation_manifest_digest"],
             "catalog_digest": payload["catalog_digest"],
             "lock_digest": payload["lock_digest"],
             "capability_identity": payload["capability_identity"],
@@ -268,8 +269,20 @@ def _replace_target(target: dict[str, object], **changes: object) -> None:
     }
     if "equipment_identity" in target:
         identity_payload["equipment_identity"] = target.get("equipment_identity")
-    target["target_identity"] = "target:" + canonical_json_sha256(
-        identity_payload
+    target["target_identity"] = "target:" + canonical_json_sha256(identity_payload)
+
+
+def _replace_canonical_skill_dependency(
+    dependency: dict[str, object], **changes: object
+) -> None:
+    dependency.update(changes)
+    dependency["dependency_identity"] = "dependency:" + canonical_json_sha256(
+        {
+            "relationship": dependency.get("relationship"),
+            "write_surface_identity": dependency.get("write_surface_identity"),
+            "equipment_identity": dependency.get("equipment_identity"),
+            "target_locator": dependency.get("target_locator"),
+        }
     )
 
 
@@ -434,7 +447,10 @@ def _claude_skill_plan_and_action_set(
     assert isinstance(dependencies, list) and len(dependencies) == 1
     dependency = dependencies[0]
     assert isinstance(dependency, dict)
-    dependency["write_surface_identity"] = surface
+    _replace_canonical_skill_dependency(
+        dependency,
+        write_surface_identity=surface,
+    )
     route_record = {
         "provider": provider,
         "control_owner": "reconciler_owned",
@@ -605,8 +621,11 @@ def _surface_rule_plan_and_action_set(
         assert isinstance(dependency, dict)
         equipment = dependency.get("equipment_identity")
         assert isinstance(equipment, str)
-        dependency["write_surface_identity"] = next(
-            surface for surface in surfaces if surface.endswith(f"/{equipment}")
+        _replace_canonical_skill_dependency(
+            dependency,
+            write_surface_identity=next(
+                surface for surface in surfaces if surface.endswith(f"/{equipment}")
+            ),
         )
     targets.sort(key=lambda target: str(target["target_identity"]))
     surfaces.sort()
@@ -985,6 +1004,38 @@ def _plan_with_foreign_top_tuple(
 
 
 class PlanActionSetAdmissionTest(unittest.TestCase):
+    def test_checked_in_fixtures_bind_their_exact_action_and_set_digests(
+        self,
+    ) -> None:
+        action_set = json.loads(PLAN_ACTION_SET_FIXTURE.read_text(encoding="utf-8"))
+        captured_state = json.loads(CAPTURED_STATE_FIXTURE.read_text(encoding="utf-8"))
+        actions = action_set["actions"]
+        self.assertEqual(len(actions), 1)
+        action = actions[0]
+        payload = action["action_payload"]
+        expected_action_digest = plan_action_digest(payload)
+        self.assertEqual(action["action_digest"], expected_action_digest)
+        expected_set_digest = plan_action_set_digest(
+            action_set["candidate_identity"],
+            action_set["implementation_manifest_digest"],
+            action_set["plan_digest"],
+            actions,
+        )
+        self.assertEqual(action_set["action_set_digest"], expected_set_digest)
+        self.assertEqual(
+            captured_state["bindings"]["plan_action_set_digest"],
+            expected_set_digest,
+        )
+        captured_action = captured_state["provider_routes"][0]["planned_actions"][0]
+        self.assertEqual(captured_action["action_identity"], payload["action_identity"])
+        self.assertEqual(captured_action["action_digest"], expected_action_digest)
+        self.assertEqual(
+            captured_action["verification_dependency_bindings"][0][
+                "dependency_identity"
+            ],
+            payload["verification_dependencies"][0]["dependency_identity"],
+        )
+
     def test_complete_projection_is_admitted_as_one_immutable_typed_artifact(
         self,
     ) -> None:
@@ -1032,7 +1083,9 @@ class PlanActionSetAdmissionTest(unittest.TestCase):
             ),
         )
 
-        self.assertIn("PLAN_ACTION_VERIFICATION_DEPENDENCY_INVALID", _diagnostic_codes(result))
+        self.assertIn(
+            "PLAN_ACTION_VERIFICATION_DEPENDENCY_INVALID", _diagnostic_codes(result)
+        )
 
     def test_canonical_skill_dependency_identities_must_be_unique(self) -> None:
         plan, document = _valid_plan_and_action_set()
@@ -1056,9 +1109,7 @@ class PlanActionSetAdmissionTest(unittest.TestCase):
             )
         )
         assert isinstance(second_target, dict)
-        second_surface = (
-            "surface:route:fixture/claude-plugin/skill:fixture/other"
-        )
+        second_surface = "surface:route:fixture/claude-plugin/skill:fixture/other"
         _replace_target(
             second_target,
             write_surface_identity=second_surface,
@@ -1113,6 +1164,62 @@ class PlanActionSetAdmissionTest(unittest.TestCase):
             "PLAN_ACTION_VERIFICATION_DEPENDENCY_INVALID",
             _diagnostic_codes(result),
         )
+
+    def test_canonical_skill_dependency_identity_is_recomputed(self) -> None:
+        plan, document = _valid_plan_and_action_set()
+        actions = document["actions"]
+        assert isinstance(actions, list)
+        payload = actions[0]["action_payload"]
+        assert isinstance(payload, dict)
+        dependencies = payload["verification_dependencies"]
+        assert isinstance(dependencies, list) and len(dependencies) == 1
+        dependency = dependencies[0]
+        assert isinstance(dependency, dict)
+        dependency["dependency_identity"] = "dependency:sha256:" + "0" * 64
+        _reseal(document)
+
+        result = admit_plan_action_set(
+            canonical_json_bytes(document),
+            PlanActionSetTrust(
+                validated_plan=plan,
+                expected_action_set_digest=str(document["action_set_digest"]),
+            ),
+        )
+
+        self.assertIsInstance(result, PlanActionSetRejection)
+        self.assertIn(
+            "PLAN_ACTION_VERIFICATION_DEPENDENCY_INVALID",
+            _diagnostic_codes(result),
+        )
+
+    def test_direct_constructor_cannot_bypass_canonical_dependency_identity(
+        self,
+    ) -> None:
+        plan, document = _valid_plan_and_action_set()
+        actions = document["actions"]
+        assert isinstance(actions, list)
+        payload = actions[0]["action_payload"]
+        assert isinstance(payload, dict)
+        dependencies = payload["verification_dependencies"]
+        assert isinstance(dependencies, list) and len(dependencies) == 1
+        dependency = dependencies[0]
+        assert isinstance(dependency, dict)
+        dependency["dependency_identity"] = "dependency:arbitrary-label"
+        _reseal(document)
+        frozen = freeze_json(document)
+        assert isinstance(frozen, type(freeze_json({})))
+        digest = str(document["action_set_digest"])
+
+        with self.assertRaises(ValueError):
+            AdmittedPlanActionSet(
+                document=frozen,
+                canonical_bytes=canonical_json_bytes(frozen),
+                action_set_digest=digest,
+                trust=PlanActionSetTrust(
+                    validated_plan=plan,
+                    expected_action_set_digest=digest,
+                ),
+            )
 
     def test_reordered_actions_change_the_canonical_set_digest_and_fail_membership(
         self,
@@ -1275,6 +1382,7 @@ class PlanActionSetAdmissionTest(unittest.TestCase):
         self,
     ) -> None:
         plan, original = _valid_plan_and_action_set()
+        trusted_set_digest = str(original["action_set_digest"])
         document = deepcopy(original)
         actions = document["actions"]
         assert isinstance(actions, list)
@@ -1287,16 +1395,23 @@ class PlanActionSetAdmissionTest(unittest.TestCase):
         assert isinstance(preconditions, dict)
         preconditions["route_digest"] = payload["route_digest"]
         _reseal(document)
+        self.assertNotEqual(document["action_set_digest"], trusted_set_digest)
 
         result = admit_plan_action_set(
             canonical_json_bytes(document),
             PlanActionSetTrust(
                 validated_plan=plan,
-                expected_action_set_digest=str(document["action_set_digest"]),
+                expected_action_set_digest=trusted_set_digest,
             ),
         )
 
-        self.assertIn("PLAN_ACTION_SET_MEMBERSHIP_INVALID", _diagnostic_codes(result))
+        self.assertEqual(
+            _diagnostic_codes(result),
+            (
+                "PLAN_ACTION_SET_DIGEST_INVALID",
+                "PLAN_ACTION_SET_MEMBERSHIP_INVALID",
+            ),
+        )
 
     def test_missing_or_extra_actions_cannot_change_complete_membership(self) -> None:
         plan, original = _valid_plan_and_action_set()
@@ -1326,9 +1441,7 @@ class PlanActionSetAdmissionTest(unittest.TestCase):
                     canonical_json_bytes(document),
                     PlanActionSetTrust(
                         validated_plan=plan,
-                        expected_action_set_digest=str(
-                            document["action_set_digest"]
-                        ),
+                        expected_action_set_digest=str(document["action_set_digest"]),
                     ),
                 )
                 self.assertIn(
@@ -1779,14 +1892,10 @@ class PlanActionSetAdmissionTest(unittest.TestCase):
         for harness in ("claude", "codex", "cursor"):
             for operation in supported_operations:
                 with self.subTest(harness=harness, operation=operation):
-                    plan, document = _direct_mcp_plan_and_action_set(
-                        harness, operation
-                    )
+                    plan, document = _direct_mcp_plan_and_action_set(harness, operation)
                     trust = PlanActionSetTrust(
                         validated_plan=plan,
-                        expected_action_set_digest=str(
-                            document["action_set_digest"]
-                        ),
+                        expected_action_set_digest=str(document["action_set_digest"]),
                     )
                     valid_result = admit_plan_action_set(
                         canonical_json_bytes(document), trust
@@ -1891,9 +2000,7 @@ class PlanActionSetAdmissionTest(unittest.TestCase):
 
         for disposition in ("operator_action", "unavailable"):
             with self.subTest(disposition=disposition):
-                plan, document = _native_plugin_plan_and_action_set(
-                    "claude", "install"
-                )
+                plan, document = _native_plugin_plan_and_action_set("claude", "install")
                 original_digest = str(document["action_set_digest"])
                 actions = document["actions"]
                 assert isinstance(actions, list)
@@ -1964,9 +2071,7 @@ class PlanActionSetAdmissionTest(unittest.TestCase):
                     expected_action_set_digest=str(document["action_set_digest"]),
                 )
 
-                result = admit_plan_action_set(
-                    canonical_json_bytes(document), trust
-                )
+                result = admit_plan_action_set(canonical_json_bytes(document), trust)
 
                 self.assertIsInstance(result, PlanActionSetRejection)
                 self.assertIn(
@@ -2010,9 +2115,7 @@ class PlanActionSetAdmissionTest(unittest.TestCase):
         }
         for case, controls in invalid_controls.items():
             with self.subTest(case=case):
-                invalid_plan, invalid_document = _plan_with_component_controls(
-                    controls
-                )
+                invalid_plan, invalid_document = _plan_with_component_controls(controls)
                 fixed_trust = PlanActionSetTrust(
                     validated_plan=invalid_plan,
                     expected_action_set_digest=str(
@@ -2196,9 +2299,7 @@ class PlanActionSetAdmissionTest(unittest.TestCase):
                     validated_plan=plan,
                     expected_action_set_digest=str(document["action_set_digest"]),
                 )
-                result = admit_plan_action_set(
-                    canonical_json_bytes(document), trust
-                )
+                result = admit_plan_action_set(canonical_json_bytes(document), trust)
                 self.assertIsInstance(result, AdmittedPlanActionSet)
 
             with self.subTest(rule=rule, disposition="arbitrary-intermediate"):

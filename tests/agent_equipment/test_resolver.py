@@ -4,7 +4,7 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 
-from agent_equipment.canonical import canonical_json_bytes, canonical_json_sha256
+from agent_equipment.canonical import canonical_json_sha256
 from agent_equipment.inventory import (
     admit_capability_discovery,
     admit_runtime_inventory,
@@ -17,16 +17,17 @@ from agent_equipment.model import (
     FrozenJsonObject,
     RuntimeInventory,
     RuntimeObservation,
-    ValidatedPlan,
     _runtime_inventory_digest,
     freeze_json,
     thaw_json,
 )
 from agent_equipment.plan_action_set import (
     AdmittedPlanActionSet,
-    PlanActionSetRejection,
+    PlanActionSetProjectionRejection,
     PlanActionSetTrust,
+    ProjectedPlanActionSet,
     admit_plan_action_set,
+    project_plan_action_set,
 )
 from agent_equipment.resolver import (
     _action_operations,
@@ -41,11 +42,6 @@ from agent_equipment.resolver import (
     resolve,
 )
 from agent_equipment.validator import load_catalog_lock
-from scripts.agent_equipment_captured_state import (
-    plan_action_digest,
-    plan_action_identity,
-    plan_action_set_digest,
-)
 
 ROOT = Path(__file__).resolve().parents[2]
 CATALOG_PATH = ROOT / "home/dot_config/agent-equipment/catalog-v1.json"
@@ -64,6 +60,23 @@ OBSERVED_MATT_REVISION = "84fdeffd12f2ee307994d1eb6feb48173b6e0502"
 OBSERVED_MATT_CONTENT_DIGEST = (
     "sha256:1b3a5b293a2d0e04748c64f6c86af0ed104a7619de68f7e2cdadc6b42b9a0d41"
 )
+
+# Fixed review inputs: admission tests must never derive these from the
+# projector's document, canonical bytes, or claimed digest.
+TRUSTED_REAL_RESOLVER_ACTION_SET_DIGESTS = {
+    "direct-claude": (
+        "sha256:144f5168aceeffdfff754bb5b06b717e29b305768021dd7eda1ab89d3d1ffd68"
+    ),
+    "direct-codex": (
+        "sha256:a7560f80b59bbfd8c8dce8cba9cf34e5cf4c5bac4a36e420404e675445c3ccf1"
+    ),
+    "direct-cursor": (
+        "sha256:a92a0051c28189326d20ac2322c2e873d6c446d063d7c3794308af64c435b32b"
+    ),
+    "controlled-codex": (
+        "sha256:3233eee8b70760718e3d83ab523c373fed4468dd08090915caa413b0d1ef6d1d"
+    ),
+}
 
 
 def mutation_support(mode: str) -> dict[str, object]:
@@ -523,9 +536,7 @@ def converged_inventory_with_configuration_drift(
         normalized = document["result"]["normalized_state"]
         assert isinstance(normalized, dict)
         normalized.update(thaw_json(_active_state_target(group, matrix)))
-        inventory = with_normalized_state(
-            inventory, group.route_identity, normalized
-        )
+        inventory = with_normalized_state(inventory, group.route_identity, normalized)
     for group in _retirement_route_groups(validated):
         observation = next(
             item
@@ -537,9 +548,7 @@ def converged_inventory_with_configuration_drift(
         assert isinstance(document, dict)
         normalized = document["result"]["normalized_state"]
         assert isinstance(normalized, dict)
-        normalized.update(
-            {"route_presence": "absent", "enablement": "not_applicable"}
-        )
+        normalized.update({"route_presence": "absent", "enablement": "not_applicable"})
         restore = group.route.get("restore")
         assert isinstance(restore, FrozenJsonObject)
         if restore.get("class") == "native_rolling":
@@ -551,9 +560,7 @@ def converged_inventory_with_configuration_drift(
             )
         else:
             normalized["immutable_content"] = {"status": "route_absent"}
-        inventory = with_normalized_state(
-            inventory, group.route_identity, normalized
-        )
+        inventory = with_normalized_state(inventory, group.route_identity, normalized)
     observation = next(
         item for item in inventory.observations if item.route_identity == route_identity
     )
@@ -563,134 +570,6 @@ def converged_inventory_with_configuration_drift(
     assert isinstance(normalized, dict)
     normalized["configuration"] = {"status": "unknown"}
     return with_normalized_state(inventory, route_identity, normalized), capabilities
-
-
-def plan_action_set_for_configure(plan: ValidatedPlan) -> dict[str, object]:
-    """Supply the strict action projection for one actual resolver mutation."""
-
-    mutations = tuple(node for node in plan.nodes if node.kind == "mutation")
-    assert len(mutations) == 1
-    node = mutations[0]
-    payload = thaw_json(node.definition)
-    assert isinstance(payload, dict)
-    route_record = payload.pop("route_record", None)
-    assert isinstance(route_record, dict)
-    provider = route_record.get("provider")
-    assert isinstance(provider, dict)
-    surface_scope = payload.get("surface_scope")
-    equipment = payload.get("equipment_identities")
-    controlled = payload.get("controlled_equipment_identities")
-    assert isinstance(surface_scope, list) and surface_scope
-    assert isinstance(equipment, list)
-    assert isinstance(controlled, list)
-    provider_kind = provider.get("kind")
-    if provider_kind == "direct_mcp":
-        assert len(equipment) == 1
-        target_equipment = equipment[0]
-        surface_kind = "mcp_selection"
-        source, root = {
-            "claude": ("settings", "mcpServers"),
-            "codex": ("config", "mcp_servers"),
-            "cursor": ("config", "mcpServers"),
-        }[str(payload["harness"])]
-        locator = {
-            "owner": payload["harness"],
-            "source": source,
-            "key_path": [root, provider["server_name"]],
-        }
-    else:
-        assert provider_kind == "native_plugin" and payload["harness"] == "codex"
-        plugin_identities = sorted(
-            identity
-            for identity in {*equipment, *controlled}
-            if isinstance(identity, str) and identity.startswith("plugin:")
-        )
-        assert len(plugin_identities) == 1
-        target_equipment = plugin_identities[0]
-        surface_kind = "plugin_selection"
-        locator = {
-            "owner": "codex",
-            "source": "config",
-            "key_path": ["plugins", provider["plugin_id"]],
-        }
-    route_surface = f"surface:{payload['route_identity']}"
-    target_surface = (
-        route_surface
-        if route_surface in surface_scope
-        else next(
-            surface
-            for surface in surface_scope
-            if surface.endswith(f"/{target_equipment}")
-        )
-    )
-    target_identity_payload = {
-        "surface_kind": surface_kind,
-        "equipment_identity": target_equipment,
-        "locator": locator,
-    }
-    target = {
-        "target_identity": "target:"
-        + canonical_json_sha256(target_identity_payload),
-        "write_surface_identity": target_surface,
-        **target_identity_payload,
-    }
-    payload.update(
-        {
-            "action_identity": node.identity,
-            "ordinal": node.ordinal,
-            "plan_digest": plan.digest,
-            "provider": provider,
-            "write_targets": [target],
-            "preconditions": {
-                "candidate_identity": payload["candidate_identity"],
-                "implementation_manifest_digest": payload[
-                    "implementation_manifest_digest"
-                ],
-                "catalog_digest": payload["catalog_digest"],
-                "lock_digest": payload["lock_digest"],
-                "plan_digest": plan.digest,
-                "route_digest": payload["route_digest"],
-                "capability_digest": payload["capability_digest"],
-                "manager_version_evidence_digest": payload[
-                    "manager_version_evidence_digest"
-                ],
-                "adapter_identity": payload["adapter_identity"],
-                "adapter_version": payload["adapter_version"],
-                "control_owner": route_record["control_owner"],
-                "activation_group": payload["activation_group"],
-                "surface_scope": surface_scope,
-                "prepared_checkpoint_required": True,
-                "compare_before_mutate": True,
-            },
-            "verification_dependencies": [],
-            "compensation": {
-                "kind": "restore_captured_pre_state",
-                "captured_state_version": "agent-equipment-captured-state/v1",
-            },
-        }
-    )
-    assert plan_action_identity(payload) == node.identity
-    evidence = {
-        "action_payload": payload,
-        "action_digest": plan_action_digest(payload),
-    }
-    actions = [evidence]
-    document = {
-        "schema_version": "agent-equipment-plan-action-set/v1",
-        "candidate_identity": payload["candidate_identity"],
-        "implementation_manifest_digest": payload[
-            "implementation_manifest_digest"
-        ],
-        "plan_digest": plan.digest,
-        "actions": actions,
-    }
-    document["action_set_digest"] = plan_action_set_digest(
-        str(payload["candidate_identity"]),
-        str(payload["implementation_manifest_digest"]),
-        plan.digest,
-        actions,
-    )
-    return document
 
 
 class ResolverMatrixTest(unittest.TestCase):
@@ -1458,6 +1337,31 @@ class ResolverMatrixTest(unittest.TestCase):
         self.assertEqual(resolution.diagnostics, ())
         self.assertIsNotNone(resolution.candidate_plan)
         self.assertIs(resolution.mutation_plan, resolution.candidate_plan)
+
+    def test_complete_apply_plan_rejects_atomically_when_any_node_is_unrepresentable(
+        self,
+    ) -> None:
+        inventory, capabilities = runtime_inventory(self.validated)
+        resolution = resolve(
+            "apply",
+            self.validated.catalog,
+            self.validated.lock,
+            inventory,
+            capabilities,
+        )
+        plan = resolution.mutation_plan
+        self.assertEqual(resolution.diagnostics, ())
+        self.assertIsNotNone(plan)
+        assert plan is not None
+
+        result = project_plan_action_set(plan)
+
+        self.assertIsInstance(result, PlanActionSetProjectionRejection)
+        assert isinstance(result, PlanActionSetProjectionRejection)
+        self.assertTrue(result.diagnostics)
+        self.assertFalse(hasattr(result, "document"))
+        self.assertFalse(hasattr(result, "canonical_bytes"))
+        self.assertFalse(hasattr(result, "action_set_digest"))
 
     def test_missing_runtime_observation_returns_no_candidate_or_mutation_plan(
         self,
@@ -2690,30 +2594,53 @@ class ResolverMatrixTest(unittest.TestCase):
                 plan = resolution.candidate_plan
                 self.assertIsNotNone(plan)
                 assert plan is not None
-                document = plan_action_set_for_configure(plan)
-                action = document["actions"][0]["action_payload"]
+                projected = project_plan_action_set(plan)
+                self.assertIsInstance(projected, ProjectedPlanActionSet)
+                assert isinstance(projected, ProjectedPlanActionSet)
+                actions = projected.document.get("actions")
+                assert isinstance(actions, tuple) and len(actions) == 1
+                action = actions[0].get("action_payload")
+                assert isinstance(action, FrozenJsonObject)
                 self.assertEqual(
-                    action["desired_state"],
-                    {
-                        "configuration": {
-                            "status": "desired",
-                            "digest": canonical_json_sha256(
-                                {
-                                    "provider": action["provider"],
-                                    "component_controls": [],
-                                }
-                            ),
+                    action.get("desired_state"),
+                    freeze_json(
+                        {
+                            "configuration": {
+                                "status": "desired",
+                                "digest": canonical_json_sha256(
+                                    {
+                                        "provider": action.get("provider"),
+                                        "component_controls": [],
+                                    }
+                                ),
+                            }
                         }
-                    },
+                    ),
                 )
-                expected_digest = document["action_set_digest"]
-                assert isinstance(expected_digest, str)
+                expected_digest = canonical_json_sha256(
+                    {
+                        "schema_version": projected.document.get("schema_version"),
+                        "candidate_identity": projected.document.get(
+                            "candidate_identity"
+                        ),
+                        "implementation_manifest_digest": projected.document.get(
+                            "implementation_manifest_digest"
+                        ),
+                        "plan_digest": projected.document.get("plan_digest"),
+                        "actions": actions,
+                    }
+                )
+                self.assertEqual(expected_digest, projected.action_set_digest)
+                trusted_set_digest = TRUSTED_REAL_RESOLVER_ACTION_SET_DIGESTS[
+                    f"direct-{harness}"
+                ]
+                self.assertEqual(projected.action_set_digest, trusted_set_digest)
 
                 admitted = admit_plan_action_set(
-                    canonical_json_bytes(document),
+                    projected.canonical_bytes,
                     PlanActionSetTrust(
                         validated_plan=plan,
-                        expected_action_set_digest=expected_digest,
+                        expected_action_set_digest=trusted_set_digest,
                     ),
                 )
 
@@ -2762,15 +2689,33 @@ class ResolverMatrixTest(unittest.TestCase):
                 ),
             },
         )
-        document = plan_action_set_for_configure(plan)
-        expected_digest = document["action_set_digest"]
-        assert isinstance(expected_digest, str)
+        projected = project_plan_action_set(plan)
+        self.assertIsInstance(projected, ProjectedPlanActionSet)
+        assert isinstance(projected, ProjectedPlanActionSet)
+        actions = projected.document.get("actions")
+        assert isinstance(actions, tuple)
+        expected_digest = canonical_json_sha256(
+            {
+                "schema_version": projected.document.get("schema_version"),
+                "candidate_identity": projected.document.get("candidate_identity"),
+                "implementation_manifest_digest": projected.document.get(
+                    "implementation_manifest_digest"
+                ),
+                "plan_digest": projected.document.get("plan_digest"),
+                "actions": actions,
+            }
+        )
+        self.assertEqual(expected_digest, projected.action_set_digest)
+        trusted_set_digest = TRUSTED_REAL_RESOLVER_ACTION_SET_DIGESTS[
+            "controlled-codex"
+        ]
+        self.assertEqual(projected.action_set_digest, trusted_set_digest)
 
         admitted = admit_plan_action_set(
-            canonical_json_bytes(document),
+            projected.canonical_bytes,
             PlanActionSetTrust(
                 validated_plan=plan,
-                expected_action_set_digest=expected_digest,
+                expected_action_set_digest=trusted_set_digest,
             ),
         )
 
@@ -2817,22 +2762,12 @@ class ResolverMatrixTest(unittest.TestCase):
         plan = resolution.candidate_plan
         self.assertIsNotNone(plan)
         assert plan is not None
-        document = plan_action_set_for_configure(plan)
-        expected_digest = document["action_set_digest"]
-        assert isinstance(expected_digest, str)
+        rejected = project_plan_action_set(plan)
 
-        rejected = admit_plan_action_set(
-            canonical_json_bytes(document),
-            PlanActionSetTrust(
-                validated_plan=plan,
-                expected_action_set_digest=expected_digest,
-            ),
-        )
-
-        self.assertIsInstance(rejected, PlanActionSetRejection)
-        assert isinstance(rejected, PlanActionSetRejection)
+        self.assertIsInstance(rejected, PlanActionSetProjectionRejection)
+        assert isinstance(rejected, PlanActionSetProjectionRejection)
         self.assertIn(
-            "PLAN_ACTION_TARGET_SCOPE_INVALID",
+            "PLAN_ACTION_TARGET_BINDING_INVALID",
             tuple(diagnostic.code for diagnostic in rejected.diagnostics),
         )
 
