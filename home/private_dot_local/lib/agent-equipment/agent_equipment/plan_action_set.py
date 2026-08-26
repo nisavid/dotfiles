@@ -59,6 +59,10 @@ def _target_identity_payload(target: FrozenJsonObject) -> dict[str, object]:
     return payload
 
 
+def _target_identity_sort_key(target: FrozenJsonObject) -> str:
+    return str(target.get("target_identity"))
+
+
 @dataclass(frozen=True, slots=True)
 class PlanActionSetTrust:
     """Independently validated plan and complete pre-capture projection digest.
@@ -359,13 +363,17 @@ def _project_write_bindings(
         or not isinstance(active, tuple)
         or not isinstance(controlled, tuple)
         or not isinstance(surface_scope, tuple)
-        or any(type(identity) is not str for identity in (*active, *controlled))
     ):
         return _unsupported_projection(definition)
+    authoritative_identities: set[str] = set()
+    for identity in (*active, *controlled):
+        if type(identity) is not str:
+            return _unsupported_projection(definition)
+        authoritative_identities.add(identity)
     surface_rule = _surface_rule_for_plan_authority(definition)
     if surface_rule is None:
         return _unsupported_projection(definition)
-    authoritative = tuple(sorted(set(active) | set(controlled)))
+    authoritative = tuple(sorted(authoritative_identities))
     if not authoritative:
         return _unsupported_projection(definition)
 
@@ -563,7 +571,7 @@ def _project_write_bindings(
                 return _unsupported_projection(definition)
             dependencies.append(dependency)
 
-    targets.sort(key=lambda target: str(target.get("target_identity")))
+    targets.sort(key=_target_identity_sort_key)
     dependencies.sort(key=canonical_json_bytes)
     target_surfaces = tuple(
         sorted(str(target.get("write_surface_identity")) for target in targets)
