@@ -483,20 +483,46 @@ diagnostic_matches_state() {
   [[ -n $framing && $framing != $'\n'* && $framing != *$'\n' &&
     $framing != *$'\n\n'* ]] || return 1
   local line
+  local timestamp_pattern='[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z'
+  local source_pattern='pass-cli/src/main\.rs'
+  local state_message_pattern
   local log_line_pattern
+  local ansi_log_line_pattern
   case $state in
     absent)
-      log_line_pattern='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z ERROR pass-cli/src/main\.rs:[0-9]+: (Command is not logout there is no session|Session is some but is not logged in)$'
+      state_message_pattern='(Command is not logout there is no session|'
+      state_message_pattern+='Session is some but is not logged in)'
       ;;
     invalidated)
-      log_line_pattern='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z ERROR pass-cli/src/main\.rs:[0-9]+: Session invalidated$'
+      state_message_pattern='Session invalidated'
       ;;
     *)
       return 1
       ;;
   esac
+
+  log_line_pattern="^${timestamp_pattern} ERROR ${source_pattern}:[0-9]+: ${state_message_pattern}\$"
+  local dim_pattern=$'\e\\[2m'
+  local red_pattern=$'\e\\[31m'
+  local reset_pattern=$'\e\\[0m'
+  ansi_log_line_pattern="^${dim_pattern}${timestamp_pattern}${reset_pattern} "
+  ansi_log_line_pattern+="${red_pattern}ERROR${reset_pattern} "
+  ansi_log_line_pattern+="${dim_pattern}${source_pattern}${reset_pattern}"
+  ansi_log_line_pattern+="${dim_pattern}:${reset_pattern}${dim_pattern}[0-9]+${reset_pattern}: "
+  ansi_log_line_pattern+="${state_message_pattern}\$"
+
+  local framing_mode=
   for line in "${(f)framing}"; do
-    [[ $line =~ $log_line_pattern ]] || return 1
+    [[ $line != *$'\0'* ]] || return 1
+    if [[ $line =~ $log_line_pattern ]]; then
+      [[ $framing_mode != ansi ]] || return 1
+      framing_mode=plain
+    elif [[ $line =~ $ansi_log_line_pattern ]]; then
+      [[ $framing_mode != plain ]] || return 1
+      framing_mode=ansi
+    else
+      return 1
+    fi
   done
 }
 
