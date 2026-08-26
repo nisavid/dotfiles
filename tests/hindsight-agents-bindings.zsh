@@ -107,7 +107,7 @@ assert environment["HINDSIGHT_API_EMBEDDINGS_PROVIDER"] == "openai"
 assert environment["HINDSIGHT_API_EMBEDDINGS_OPENAI_MODEL"] == "text-embedding-3-small"
 assert (
     environment["HINDSIGHT_API_EMBEDDINGS_OPENAI_API_KEY"]
-    == "provider-policy:member-api"
+    == "provider-policy:openai-luna"
 )
 assert "sk-" not in environment["HINDSIGHT_API_EMBEDDINGS_OPENAI_API_KEY"]
 assert environment["HINDSIGHT_API_HTTP_PROFILE_ID"] == "fixture-profile"
@@ -125,11 +125,16 @@ assert policy["failover_order"] == [
     "member-a",
     "member-b",
     "member-local",
-    "member-api",
+    "openai-luna",
 ]
-assert all("fixture" in member["id"] or member["id"].startswith("member-") for member in policy["members"])
+assert [member["id"] for member in policy["members"]] == [
+    "member-a",
+    "member-b",
+    "member-local",
+    "openai-luna",
+]
 assert "api-key:hindsight-openai" in sitecustomize
-assert ".fixture/secrets/hindsight-openai.env" in sitecustomize
+assert ".local/state/hindsight-control-plane/.hindsight-openai.env" in sitecustomize
 assert "HINDSIGHT_OPENAI_API_KEY=sk-" not in sitecustomize
 PY
 

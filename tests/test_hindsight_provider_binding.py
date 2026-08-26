@@ -194,9 +194,9 @@ class HindsightProviderBindingTest(unittest.TestCase):
                 {
                     "auth_mode": "chatgpt",
                     "tokens": {
-                        "access_token": "disk-access",
-                        "refresh_token": "disk-refresh",
-                        "account_id": "disk-account",
+                        "access_token": "__DISK_ACCESS_TOKEN__",
+                        "refresh_token": "__DISK_REFRESH_TOKEN__",
+                        "account_id": "__DISK_ACCOUNT_ID__",
                     },
                 }
             )
@@ -210,9 +210,9 @@ class HindsightProviderBindingTest(unittest.TestCase):
             refresh_calls = 0
 
             def __init__(self) -> None:
-                self.access_token = "stale-access"
-                self.refresh_token = "stale-refresh"
-                self.account_id = "stale-account"
+                self.access_token = "__STALE_ACCESS_TOKEN__"
+                self.refresh_token = "__STALE_REFRESH_TOKEN__"
+                self.account_id = "__STALE_ACCOUNT_ID__"
                 self._auth_file = auth_file
 
             def refresh_tokens(self, reason="", *, force=False):
@@ -235,9 +235,9 @@ class HindsightProviderBindingTest(unittest.TestCase):
         manager.refresh_tokens(reason="reactive", force=True)
 
         self.assertEqual(Manager.refresh_calls, 0)
-        self.assertEqual(manager.access_token, "disk-access")
-        self.assertEqual(manager.refresh_token, "disk-refresh")
-        self.assertEqual(manager.account_id, "disk-account")
+        self.assertEqual(manager.access_token, "__DISK_ACCESS_TOKEN__")
+        self.assertEqual(manager.refresh_token, "__DISK_REFRESH_TOKEN__")
+        self.assertEqual(manager.account_id, "__DISK_ACCOUNT_ID__")
 
     def test_lock_timeout_adopts_another_process_refresh(self) -> None:
         auth_file = self.root / "codex-contention" / "auth.json"
@@ -247,8 +247,8 @@ class HindsightProviderBindingTest(unittest.TestCase):
                 {
                     "auth_mode": "chatgpt",
                     "tokens": {
-                        "access_token": "fresh-access",
-                        "refresh_token": "fresh-refresh",
+                        "access_token": "__FRESH_ACCESS_TOKEN__",
+                        "refresh_token": "__FRESH_REFRESH_TOKEN__",
                     },
                 }
             )
@@ -262,8 +262,8 @@ class HindsightProviderBindingTest(unittest.TestCase):
             refresh_calls = 0
 
             def __init__(self) -> None:
-                self.access_token = "stale-access"
-                self.refresh_token = "stale-refresh"
+                self.access_token = "__STALE_ACCESS_TOKEN__"
+                self.refresh_token = "__STALE_REFRESH_TOKEN__"
                 self.account_id = None
                 self._auth_file = auth_file
 
@@ -292,8 +292,8 @@ class HindsightProviderBindingTest(unittest.TestCase):
             manager.refresh_tokens(reason="reactive", force=True)
 
         self.assertEqual(Manager.refresh_calls, 0)
-        self.assertEqual(manager.access_token, "fresh-access")
-        self.assertEqual(manager.refresh_token, "fresh-refresh")
+        self.assertEqual(manager.access_token, "__FRESH_ACCESS_TOKEN__")
+        self.assertEqual(manager.refresh_token, "__FRESH_REFRESH_TOKEN__")
 
     def test_terminal_refresh_failure_enters_cooldown(self) -> None:
         auth_file = self.root / "codex-cooldown" / "auth.json"
@@ -303,8 +303,8 @@ class HindsightProviderBindingTest(unittest.TestCase):
                 {
                     "auth_mode": "chatgpt",
                     "tokens": {
-                        "access_token": "same-access",
-                        "refresh_token": "same-refresh",
+                        "access_token": "__SAME_ACCESS_TOKEN__",
+                        "refresh_token": "__SAME_REFRESH_TOKEN__",
                     },
                 }
             )
@@ -318,8 +318,8 @@ class HindsightProviderBindingTest(unittest.TestCase):
             refresh_calls = 0
 
             def __init__(self) -> None:
-                self.access_token = "same-access"
-                self.refresh_token = "same-refresh"
+                self.access_token = "__SAME_ACCESS_TOKEN__"
+                self.refresh_token = "__SAME_REFRESH_TOKEN__"
                 self.account_id = None
                 self._auth_file = auth_file
 
@@ -357,16 +357,16 @@ class HindsightProviderBindingTest(unittest.TestCase):
                 {
                     "auth_mode": "chatgpt",
                     "tokens": {
-                        "access_token": "reauthorized-access",
-                        "refresh_token": "reauthorized-refresh",
+                        "access_token": "__REAUTHORIZED_ACCESS_TOKEN__",
+                        "refresh_token": "__REAUTHORIZED_REFRESH_TOKEN__",
                     },
                 }
             )
         )
         auth_file.chmod(0o600)
         self.assertTrue(Manager._hindsight_auth_available(manager))
-        self.assertEqual(manager.access_token, "reauthorized-access")
-        self.assertEqual(manager.refresh_token, "reauthorized-refresh")
+        self.assertEqual(manager.access_token, "__REAUTHORIZED_ACCESS_TOKEN__")
+        self.assertEqual(manager.refresh_token, "__REAUTHORIZED_REFRESH_TOKEN__")
 
     def test_arbitrary_403_does_not_rotate_codex_credentials(self) -> None:
         class Response:
@@ -577,7 +577,7 @@ class HindsightProviderBindingTest(unittest.TestCase):
 
         class Client:
             def __init__(self):
-                self.api_key = "initial"
+                self.api_key = "__INITIAL_TOKEN__"
 
         class Manager:
             cooldown_homes = set()
@@ -585,7 +585,7 @@ class HindsightProviderBindingTest(unittest.TestCase):
             def __init__(self, home):
                 self.home = home
                 self._auth_file = Path(home) / "auth.json"
-                self.access_token = "initial"
+                self.access_token = "__INITIAL_TOKEN__"
                 self.refresh_calls = 0
 
             @staticmethod
@@ -603,7 +603,7 @@ class HindsightProviderBindingTest(unittest.TestCase):
             def __init__(self, *, codex_home=None):
                 self.home = codex_home
                 self._auth_manager = Manager(codex_home)
-                self.api_key = "initial"
+                self.api_key = "__INITIAL_TOKEN__"
                 self._client = Client()
                 self.calls = 0
                 self._dimension = 1536
@@ -761,59 +761,49 @@ class HindsightProviderBindingTest(unittest.TestCase):
                 {},
             )
 
-    def test_embeddings_injection_accepts_only_the_managed_marker(self) -> None:
-        marker = "provider-policy:openai-luna"
-        resolver = mock.Mock(return_value="sk-synthetic")
+    def test_openai_embeddings_are_prepared_by_the_provider_adapter(self) -> None:
+        policy_marker = "provider-policy:openai-luna"
         environment = {
-            "HINDSIGHT_API_EMBEDDINGS_OPENAI_API_KEY": marker,
+            "HINDSIGHT_API_EMBEDDINGS_PROVIDER": "openai",
+            "HINDSIGHT_API_EMBEDDINGS_OPENAI_API_KEY": policy_marker,
         }
+        events: list[tuple[str, object]] = []
 
-        MODULE._inject_embeddings_api_key(
+        class Adapter:
+            def prepare_openai_embeddings(self, selected) -> None:
+                events.append(("prepare", selected))
+
+            def install(self) -> None:
+                events.append(("install", None))
+
+        MODULE._activate_provider_policy(
+            Adapter(),
             environment,
-            provider="openai",
-            marker=marker,
-            locator="api-key:hindsight-openai",
-            resolver=resolver,
+            embeddings_provider="openai",
         )
 
         self.assertEqual(
-            environment["HINDSIGHT_API_EMBEDDINGS_OPENAI_API_KEY"],
-            "sk-synthetic",
+            events,
+            [("prepare", environment), ("install", None)],
         )
-        resolver.assert_called_once_with("api-key:hindsight-openai")
 
-        with self.assertRaisesRegex(RuntimeError, "conflicts"):
-            MODULE._inject_embeddings_api_key(
-                {
-                    "HINDSIGHT_API_EMBEDDINGS_OPENAI_API_KEY": (
-                        "sk-unmanaged"
-                    )
-                },
-                provider="openai",
-                marker=marker,
-                locator="api-key:hindsight-openai",
-                resolver=resolver,
+    def test_embedding_preparation_failure_prevents_adapter_install(self) -> None:
+        install = mock.Mock()
+
+        class Adapter:
+            def prepare_openai_embeddings(self, _environment) -> None:
+                raise RuntimeError("synthetic preparation failure")
+
+            def install(self) -> None:
+                install()
+
+        with self.assertRaisesRegex(RuntimeError, "preparation failure"):
+            MODULE._activate_provider_policy(
+                Adapter(),
+                {},
+                embeddings_provider="openai",
             )
-
-        for unmanaged in (None, ""):
-            with self.subTest(unmanaged=unmanaged):
-                unmanaged_environment = {}
-                if unmanaged is not None:
-                    unmanaged_environment[
-                        "HINDSIGHT_API_EMBEDDINGS_OPENAI_API_KEY"
-                    ] = unmanaged
-                unmanaged_resolver = mock.Mock(
-                    return_value="sk-synthetic"
-                )
-                with self.assertRaisesRegex(RuntimeError, "conflicts"):
-                    MODULE._inject_embeddings_api_key(
-                        unmanaged_environment,
-                        provider="openai",
-                        marker=marker,
-                        locator="api-key:hindsight-openai",
-                        resolver=unmanaged_resolver,
-                    )
-                unmanaged_resolver.assert_not_called()
+        install.assert_not_called()
 
     def test_rejects_writable_or_symlinked_oauth_home_ancestry(self) -> None:
         self.root.chmod(0o750)

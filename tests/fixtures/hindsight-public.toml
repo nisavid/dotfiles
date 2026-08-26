@@ -3,7 +3,6 @@ publicFixture = true
 releaseCommit = "8c3c9a4835cf73c96cf9bf5c5dd1b0b024023031"
 releaseVersion = "2026.07.23+8c3c9a4"
 apiPort = 11002
-apiKeyFilesJson = '{"api-key:hindsight-openai":".fixture/secrets/hindsight-openai.env"}'
 archetypeId = "fixture-consumer"
 authRefreshCodexHome = ".fixture/auth/b"
 allowedPlacementsJson = '["local"]'
@@ -19,8 +18,6 @@ cursorExecutable = ".fixture/bin/harness-c"
 dataClass = "fixture-data"
 dataPlaneLocator = "fixture:data-plane"
 dataRoot = ".fixture/data"
-embeddingsApiKeyLocator = "api-key:hindsight-openai"
-embeddingsApiKeyMarker = "provider-policy:member-api"
 embeddingsModel = "text-embedding-3-small"
 embeddingsProvider = "openai"
 installRoot = ".fixture/install"
@@ -47,7 +44,7 @@ providerPolicyJson = '''{
   "schema_version": 3,
   "hindsight_version": "fixture",
   "default_usage_limit_cooldown_seconds": 1,
-  "failover_order": ["member-a", "member-b", "member-local", "member-api"],
+  "failover_order": ["member-a", "member-b", "member-local", "openai-luna"],
   "members": [
     {
       "id": "member-a",
@@ -122,12 +119,12 @@ providerPolicyJson = '''{
       "quota_cooldown": false
     },
     {
-      "id": "member-api",
+      "id": "openai-luna",
       "identity": {
         "provider": "openai-responses",
         "model": "gpt-5.6-luna",
         "base_url": "",
-        "credential_marker": "provider-policy:member-api"
+        "credential_marker": "provider-policy:openai-luna"
       },
       "credential": {
         "mode": "api-key",

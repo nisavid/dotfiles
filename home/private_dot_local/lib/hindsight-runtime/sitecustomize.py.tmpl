@@ -36,8 +36,11 @@ _RELEASE_VERSION = re.compile(r"^[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}$")
 _CODEX_AUTH_FILE_CONTEXT: contextvars.ContextVar[Path | None] = (
     contextvars.ContextVar("hindsight_codex_auth_file", default=None)
 )
-_API_KEY_FILES = json.loads({{ $hindsight.apiKeyFilesJson | quote }})
-_EMBEDDINGS_API_KEY_LOCATOR = {{ $hindsight.embeddingsApiKeyLocator | quote }}
+_CREDENTIAL_FILES = {
+    "api-key:hindsight-openai": (
+        ".local/state/hindsight-control-plane/.hindsight-openai.env"
+    )
+}
 _API_KEY_CACHE: dict[str, str] = {}
 
 
@@ -199,7 +202,7 @@ def _parse_api_key_file(payload: bytes) -> str:
     except UnicodeDecodeError:
         raise RuntimeError("Hindsight API key file is invalid") from None
     match = re.fullmatch(
-        r"HINDSIGHT_OPENAI_API_KEY=([!-~]{1,8192})\n?",
+        r"HINDSIGHT_OPENAI_API_KEY" r"=([!-~]{1,8192})\n?",
         content,
     )
     if match is None:
@@ -244,21 +247,15 @@ def _resolve_api_key(
     return resolved
 
 
-def _inject_embeddings_api_key(
+def _activate_provider_policy(
+    adapter: Any,
     environment: MutableMapping[str, str],
     *,
-    provider: str,
-    marker: str,
-    locator: str,
-    resolver: Callable[[str], str],
+    embeddings_provider: str,
 ) -> None:
-    if provider != "openai":
-        return
-    variable = "HINDSIGHT_API_EMBEDDINGS_OPENAI_API_KEY"
-    current = environment.get(variable)
-    if current != marker:
-        raise RuntimeError("Hindsight embeddings API key conflicts with policy")
-    environment[variable] = resolver(locator)
+    if embeddings_provider == "openai":
+        adapter.prepare_openai_embeddings(environment)
+    adapter.install()
 
 
 def _resolve_active_release(install_root: Path) -> Path:
@@ -1052,16 +1049,16 @@ def _install_codex_embeddings_runtime(
                     refresh = getattr(manager, "refresh_tokens", None)
                     if definitive_auth_failure and callable(refresh):
                         failed_token = getattr(candidate, "api_key", None)
-                        access_token = getattr(
+                        credential_value = getattr(
                             manager,
                             "access_token",
                             None,
                         )
                         try:
                             if (
-                                not isinstance(access_token, str)
-                                or not access_token
-                                or access_token == failed_token
+                                not isinstance(credential_value, str)
+                                or not credential_value
+                                or credential_value == failed_token
                             ):
                                 refresh(
                                     reason=(
@@ -1070,20 +1067,20 @@ def _install_codex_embeddings_runtime(
                                     ),
                                     force=True,
                                 )
-                            access_token = getattr(
+                            credential_value = getattr(
                                 manager,
                                 "access_token",
                                 None,
                             )
                             if (
-                                isinstance(access_token, str)
-                                and access_token
-                                and access_token != failed_token
+                                isinstance(credential_value, str)
+                                and credential_value
+                                and credential_value != failed_token
                             ):
-                                candidate.api_key = access_token
+                                setattr(candidate, "api_key", credential_value)
                                 client = getattr(candidate, "_client", None)
                                 if client is not None:
-                                    client.api_key = access_token
+                                    setattr(client, "api_key", credential_value)
                                 return candidate.encode(texts)
                         except Exception as retry_error:
                             error = retry_error
@@ -1183,43 +1180,24 @@ if importlib.util.find_spec("hindsight_api") is not None:
         def resolve_credential(locator: str) -> str:
             if locator in oauth_homes:
                 return resolve_oauth_home(locator)
-            if locator in _API_KEY_FILES:
+            if locator in _CREDENTIAL_FILES:
                 return _resolve_api_key(
                     home,
                     locator,
-                    _API_KEY_FILES,
+                    _CREDENTIAL_FILES,
                     _API_KEY_CACHE,
                 )
             raise RuntimeError("unknown Hindsight credential locator")
 
-        if embeddings_provider == "openai":
-            embeddings_members = tuple(
-                member
-                for member in policy.members
-                if member.credential_mode == "api-key"
-                and member.credential_locator == _EMBEDDINGS_API_KEY_LOCATOR
-            )
-            if len(embeddings_members) != 1:
-                raise RuntimeError(
-                    "Hindsight embeddings API-key policy binding is invalid"
-                )
-            embeddings_marker = embeddings_members[0].identity.credential_marker
-            if embeddings_marker is None:
-                raise RuntimeError(
-                    "Hindsight embeddings API-key marker is absent"
-                )
-            _inject_embeddings_api_key(
-                os.environ,
-                provider=embeddings_provider,
-                marker=embeddings_marker,
-                locator=_EMBEDDINGS_API_KEY_LOCATOR,
-                resolver=resolve_credential,
-            )
-
-        HindsightProviderAdapter(
+        provider_adapter = HindsightProviderAdapter(
             policy,
             credential_resolver=resolve_credential,
-        ).install()
+        )
+        _activate_provider_policy(
+            provider_adapter,
+            os.environ,
+            embeddings_provider=embeddings_provider,
+        )
         from hindsight_api.engine.providers import codex_auth
         from hindsight_api.engine.providers.codex_llm import CodexLLM
 
