@@ -100,8 +100,9 @@ required=(
   'An en dash joins numeric ranges'
   'Inline lists take the Oxford comma.'
   'Punctuation respects the unity of a quoted phrase rather than intruding into it'
-  'In review replies, do not restate the comment'
+  "In review replies, do not restate the comment, justify the reviewer's suggestion, or import unrelated decisions."
   'If agreeing and proceeding, say little.'
+  'Loanwords keep their accents'
   'Before communicating to another audience, consider what they need to understand or accomplish'
   'the context and language you confidently share, and the nearest common ground'
   'Build from that ground with only the orientation needed.'
