@@ -6,19 +6,19 @@ Ledger items use `pr-review-orchestration` categories and record reviewer, URL, 
 
 Lead with severity-ordered findings. Each finding needs file:line, impact, current-head evidence, and the smallest author-owned remedy. If no finding survives, say so and name residual gaps such as skipped tests, unavailable deployment context, generated code not inspected, or unchanged prior threads.
 
-GitHub comments should include exact text and location. Keep them terse, direct, and thread-scoped. Avoid CLI instructions, implementation essays, praise, or unrelated context.
+GitHub comments should include exact text and location. Keep them terse, direct, and thread-scoped. Avoid CLI instructions, implementation essays, freestanding praise, or unrelated context.
 
 ## Comment Voice
 
-A comment is a reviewer continuing the conversation, so open with the finding itself—or, when part of the change is genuinely right, with that ("The blocking wait makes sense here—I don't want to put the per-request polling back on the runner path"). Name what you personally verified and what remains unchecked: "I couldn't find a production caller using the direct form, but `--processor` is still an extension point."
+The global Writing register applies; this section adds the thread shape. A comment continues the conversation on the author's work, so open with the finding itself or with what the change genuinely gets right ("The blocking wait makes sense here. I don't want to put the per-request polling back on the runner path."). Name what you verified and what remains unchecked: "I couldn't find a production caller using the direct form, but `--processor` is still an extension point."
 
-A confidently raised issue has three ingredients: the armed footgun stated as a plain declarative, the smallest remedy asked as one question that leaves the author agency, and the reason that remedy disarms the specific failure. Arrange them differently per comment—identical arrangement across a batch reads as machine output. One approved shape:
+A confidently raised issue names the failure plainly with its concrete consequence, asks for the smallest remedy as a question the author can decline, and says why that remedy closes the specific failure path, in whatever order and proportion the content wants. One shape among many:
 
-> `numRows: null` means "unknown," but `?? 0` persists it as "empty." Could we leave `size` unset in that case and only construct a `BigInt` for an actual count? The schema already gives us an unknown state; preserving it here avoids handing downstream code a confidently wrong zero.
+> `numRows: null` means "unknown", but `?? 0` persists it as "empty". Could we leave `size` unset in that case and only construct a `BigInt` for an actual count? The schema already gives us an unknown state; preserving it here avoids handing downstream code a confidently wrong zero.
 
-An ask sits between a command and a plea: an opinionated declarative ("I think we can remove the follower fanout") or a single question—one ask per comment. Prefer a vivid concrete consequence ("a transient request failure stays a request failure") to a hedge. Thread register is the shortest phrasing that still sounds like speech: fragments are fine ("`retry: false` here?"); compression the reader must decode is not. Headings on findings name the acceptable outcome ("Keep direct processor calls cancellable, or document the exception"), not an abstract noun.
+One ask per comment, and say plainly what kind of change it asks for and whether behavior visibly changes. Label a non-blocking aside as one ("Nit: `onClick` is typed as `() => void`; `if (onClick)` is enough."). Fragments that read as speech are welcome ("`retry: false` here?"). The one heading a comment earns is a finding title naming the acceptable outcome ("Keep direct processor calls cancellable, or document the exception"), optionally severity-tagged (**[P2]**); everything else stays paragraphs.
 
-A review summary that restates the inline comments is redundant; give a verdict, the blocking findings, and residual gaps.
+A review summary gives the verdict, the blocking findings, and residual gaps; the inline comments are already visible. A re-review verdict opens with what the new head resolved, then the remainder. When reversing a posted position, say so and give the reason.
 
 Separate review confidence from merge readiness. A clean review does not prove the PR is mergeable.
 

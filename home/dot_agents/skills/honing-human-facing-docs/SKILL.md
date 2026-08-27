@@ -49,7 +49,7 @@ Start with people and their objectives, not the repository tree.
 4. Audit fragile claims: names, commands, paths, links, status, service behavior, upstream references, generated artifacts, and "latest" language.
 5. Make a relocation map before cutting detail. Classify each displaced fact as user-facing, maintainer-facing, duplicated, obsolete, or scoutable.
 6. Rewrite from the reader journey outward: README first, docs index second, then linked pages that must satisfy the README's promises.
-7. Preserve precision while shortening. Cleaner prose must not erase constraints, caveats, verified status, or exact commands readers need. In normative docs, promote implications a reader would otherwise have to derive into direct rules in the owning section, and lead a dense, load-bearing statement with a relatable example or follow it with a concrete unpacking.
+7. Preserve precision while shortening. Cleaner prose must not erase constraints, caveats, verified status, or exact commands readers need. In normative docs, turn implications into explicit rules in the owning section rather than leaving the reader to derive them; where the Diataxis type demands austerity, state the rule there and link its unpacking.
 8. Keep maintainer process and agent policy out of the README except for a brief discoverability pointer when useful.
 9. Request review for broad refreshes, README rewrites, or docs that change package/user expectations; also run available link or formatting checks.
 
