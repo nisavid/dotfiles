@@ -7,13 +7,13 @@ Read this reference while drafting the prose and review path around the required
 Write for an unfamiliar, skeptical, time-constrained peer deciding whether the exact pushed change deserves approval. Lead with the resulting behavior and why it matters, not the author's effort or implementation chronology. Answer each concern where it naturally arises:
 
 - what concrete problem it solves, why the change is needed, and what outcome it creates;
-- for a fix, the concrete prior failure: what could happen, in which realistic scenario, and at what severity—hypothetical, accidental, or exploitable, with threat surface and blast radius when security is implicated—calibrated honestly in both directions rather than left to the reader's imagination;
+- for a fix, what used to go wrong: the realistic scenario, how bad it could get, and whether the failure was hypothetical, accidental, or exploitable (naming threat surface and blast radius when security is implicated), with severity stated honestly, neither inflated nor waved off;
 - what is in scope, what remains unchanged, and what belongs to later work;
 - where review should start and whether any generated or mechanical surface can be de-emphasized based on regeneration or verification evidence;
 - which contracts, risks, or non-obvious choices deserve scrutiny and why the resulting shape is maintainable; and
 - which observed evidence supports the claims and which work remains open.
 
-Do not turn these questions into a mandatory section inventory. A tiny change may answer them in one sentence; a large change may need a review map, explicit boundaries, or a temporal comparison. Open a dense analysis or classification section with one plain sentence that carries its whole verdict, and let bullets and tables descend from it. Use warm, direct peer-engineer language. Prefer falsifiable technical claims to superlatives, reassurance, salesmanship, or condescension. Do not generalize away materially distinct affected contexts, callers, or environments supplied by verified source when they establish the need or scope.
+Do not turn these questions into a mandatory section inventory. A tiny change may answer them in one sentence; a large change may need a review map, explicit boundaries, or a temporal comparison. Use warm, direct peer-engineer language. Prefer falsifiable technical claims to superlatives, reassurance, salesmanship, or condescension. Do not generalize away materially distinct affected contexts, callers, or environments supplied by verified source when they establish the need or scope.
 
 Write the title as the smallest concrete line that names the primary reviewer-visible behavior or outcome and follows the repository's title convention. Preserve a required stack index or still-current scope prefix. Do not promote author effort, urgency, implementation inventory, or impact beyond the exact pushed diff.
 

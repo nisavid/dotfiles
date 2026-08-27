@@ -22,7 +22,7 @@ Accept a PR URL, number, branch, repository, base/head pair, or checkout plus fo
 
 Focus context sets priority, not exclusion. Re-reviews include prior Ivan-owned or agent-owned threads plus other reviewer threads needed for current risk.
 
-Authority defaults to draft review in chat. When posting for Ivan, write terse reviewer prose; use first person only where natural.
+Authority defaults to draft review in chat. When posting for Ivan, write terse reviewer prose that owns its judgments and evidence in his first person.
 
 ## Workflow
 
