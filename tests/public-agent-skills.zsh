@@ -218,6 +218,7 @@ test_pr_publication() {
 test_model_selection() {
   local skill_dir="$repo_dir/home/dot_agents/skills/choosing-agent-models"
   local skill="$skill_dir/SKILL.md"
+  local delegation_skill="$repo_dir/home/dot_agents/skills/delegating-cross-agent-work/SKILL.md"
   local evals="$skill_dir/evals/evals.json"
   local routing_fixture="$skill_dir/evals/fixtures/daybreak-routing-matrix.md"
   local evidence_fixture="$skill_dir/evals/fixtures/daybreak-route-evidence.md"
@@ -324,6 +325,17 @@ test_model_selection() {
     'cross-harness invocation must preserve the root-only peer-task boundary'
   assert_contains "$skill" 'this skill does not perform those actions' \
     'model selection must return workflow dispositions without mutating tasks or trackers'
+  assert_contains "$skill" \
+    'During an already authorized no-task-data refresh, you may inspect route metadata exposed for unrelated tasks, including advertised model availability; this does not authorize reading task data.' \
+    'route inspection must distinguish metadata observation from task-data access'
+  assert_contains "$skill" \
+    'Do not use an unrelated task as an execution or authorization route for current-task work' \
+    'unrelated tasks must remain ineligible execution and authorization routes'
+  assert_contains "$delegation_skill" \
+    'Route-metadata inspection does not make that task eligible or authorize executing with its model or under its account, entitlement, permissions, or context.' \
+    'delegation policy must mirror the unrelated-task execution boundary'
+  ! rg -F -q -- 'reuse an unrelated task to obtain' "$skill" "$delegation_skill" || \
+    fail 'unrelated-task policy must not use the ambiguous obtain wording'
   ! rg -F -q -- '.codex/.auth/' "$skill" || \
     fail 'public model-selection policy must not expose account-home locations'
   ! rg -F -q -- 'CODEX_HOME=' "$skill" || \
@@ -346,7 +358,7 @@ test_model_selection() {
     automatic-local-refresh cross-harness-delegation-authority external-scrub \
     freshness-invalidation local-account-identification refresh-probe-separation \
     openai-login-boundary \
-    probe-authority-order root-peer-boundary; do
+    probe-authority-order root-peer-boundary unrelated-task-observation-boundary; do
     jq -e --arg id "$expectation_id" 'any(.evals[].expectations[]; .id == $id)' "$evals" >/dev/null || \
       fail "model-selection behavior expectation is missing: $expectation_id"
   done
@@ -389,6 +401,9 @@ test_model_selection() {
   assert_contains "$evidence_fixture" \
     'both operations may occur once in the same freshness window' \
     'route-evidence fixture must separate refresh and task-work probe limits'
+  assert_contains "$evidence_fixture" \
+    'route metadata exposed for an unrelated existing task' \
+    'route-evidence fixture must cover metadata observation without task reuse'
   assert_contains "$routing_fixture" '## Case L' \
     'routing fixture must cover automatic no-task-data refresh'
   assert_contains "$routing_fixture" 'No task-work probe has run' \
