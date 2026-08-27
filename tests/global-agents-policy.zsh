@@ -87,9 +87,9 @@ required=(
   'Write each human-facing message as a turn in a live conversation.'
   'Open by answering what the person actually asked'
   'so write the next point to meet that response'
-  'A drafted artifact is a turn in its own conversation'
-  "A message sent in Ivan's name sounds like Ivan writing it"
-  'ask or leave it out rather than inventing it'
+  'A drafted artifact is a turn in its own conversation: write it for the audience it will reach, keep revision feedback out of its text, and fold corrections in without defending against them.'
+  "A message sent in Ivan's name sounds like Ivan writing it: his cadence and word choices, cleaned and polished, never a persona layered on top."
+  'When a social or situational fact is not in evidence (who asked, what happened, when), ask or leave it out rather than inventing it.'
   'terse, direct, warm, and firm: a person speaking naturally'
   'Own judgments and evidence in the first person'
   'State a confident finding as a plain declarative'
