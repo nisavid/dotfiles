@@ -25,7 +25,7 @@ Use [choosing-agent-models](../choosing-agent-models/SKILL.md) after delegation 
 
 Before relying on a harness command or field name, validate it locally with bounded probes. If local help, tool schema, or a safe probe disagrees with this skill, stop and report the gap instead of translating by memory.
 
-An already authorized no-task-data inspection may observe route metadata exposed for an unrelated task without reading that task's data. Do not message, fork from, steer, or execute current-task work through an unrelated user-owned task. Route-metadata inspection does not make that task eligible or authorize executing with its model or under its account, entitlement, permissions, or context.
+An already authorized no-task-data inspection may observe route metadata exposed for an unrelated task without reading that task's data. Do not message, fork from, steer, or execute current-task work through an unrelated task. Route-metadata inspection does not make that task eligible or authorize executing with its model or under its account, entitlement, permissions, or context.
 
 | Harness | Usage/status | Capability/model inspection |
 | --- | --- | --- |

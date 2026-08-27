@@ -329,8 +329,14 @@ test_model_selection() {
     'During an already authorized no-task-data refresh, you may inspect route metadata exposed for unrelated tasks, including advertised model availability; this does not authorize reading task data.' \
     'route inspection must distinguish metadata observation from task-data access'
   assert_contains "$skill" \
+    'An existing task is eligible only when delegation created it for the current source task and bounded purpose, or the operator identified it as a same-purpose companion.' \
+    'existing-task eligibility must name delegation origin and operator identification'
+  assert_contains "$skill" \
     'Do not use an unrelated task as an execution or authorization route for current-task work' \
     'unrelated tasks must remain ineligible execution and authorization routes'
+  assert_contains "$delegation_skill" \
+    'Do not message, fork from, steer, or execute current-task work through an unrelated task.' \
+    'delegation policy must forbid acting through any unrelated task'
   assert_contains "$delegation_skill" \
     'Route-metadata inspection does not make that task eligible or authorize executing with its model or under its account, entitlement, permissions, or context.' \
     'delegation policy must mirror the unrelated-task execution boundary'
@@ -404,6 +410,12 @@ test_model_selection() {
   assert_contains "$evidence_fixture" \
     'route metadata exposed for an unrelated existing task' \
     'route-evidence fixture must cover metadata observation without task reuse'
+  assert_contains "$evidence_fixture" \
+    "without reading that task's data" \
+    'route-evidence fixture must deny task-data access during metadata observation'
+  assert_contains "$evidence_fixture" \
+    'not an execution or authorization route for the current work' \
+    'route-evidence fixture must deny execution and authorization reuse'
   assert_contains "$routing_fixture" '## Case L' \
     'routing fixture must cover automatic no-task-data refresh'
   assert_contains "$routing_fixture" 'No task-work probe has run' \
