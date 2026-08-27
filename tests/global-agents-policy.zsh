@@ -87,6 +87,9 @@ required=(
   'Write each human-facing message as a turn in a live conversation.'
   'Open by answering what the person actually asked'
   'so write the next point to meet that response'
+  'A drafted artifact is a turn in its own conversation'
+  "A message sent in Ivan's name sounds like Ivan writing it"
+  'ask or leave it out rather than inventing it'
   'terse, direct, warm, and firm: a person speaking naturally'
   'Own judgments and evidence in the first person'
   'State a confident finding as a plain declarative'
