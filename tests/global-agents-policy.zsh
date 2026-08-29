@@ -104,6 +104,7 @@ required=(
   'Check each fact before phrasing it fluently'
   'Terseness serves natural flow, never compression'
   'Make each term self-explanatory where it stands or explain it locally'
+  'Pair each dense, load-bearing statement with a concrete instance.'
   'An em dash is unspaced and earns its place'
   'An en dash joins numeric ranges'
   'Inline lists take the Oxford comma.'
