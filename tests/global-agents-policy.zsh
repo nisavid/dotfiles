@@ -141,6 +141,10 @@ required=(
   'Publication requires separate authorization.'
   'Only refresh local `main` when the operation depends on it.'
   'Before every payload-bearing new invocation, follow-up, resume, retry, or capacity fallback, use `choosing-agent-models`; preserve same-task identity, and stop rather than silently substituting a model after failure.'
+  'this standing permission authorizes launching the installed `codex app-server` against each catalog-selected permitted account home from an OS temporary working directory'
+  'It does not authorize reading credential files directly, refreshing tokens, creating a task or turn, transferring task data, using a task workspace or task tools, changing login or configuration, delegating, executing task work, or running the separate harmless task-work probe.'
+  'record the route as status-unverified or status-denied; do not report Daybreak absent or unavailable from that result.'
+  'Keep the permitted-route inventory incomplete until that route has a fresh supported result.'
 )
 
 for ((i = 1; i <= ${#required}; i++)); do

@@ -223,6 +223,7 @@ test_model_selection() {
   local evals="$skill_dir/evals/evals.json"
   local routing_fixture="$skill_dir/evals/fixtures/daybreak-routing-matrix.md"
   local evidence_fixture="$skill_dir/evals/fixtures/daybreak-route-evidence.md"
+  local preflight_fixture="$skill_dir/evals/fixtures/routing-preflight-status-boundary.md"
   local transition_fixture="$skill_dir/evals/fixtures/model-transition-lifecycle.md"
   local trigger_evals="$skill_dir/evals/trigger-evals.json"
   local link="$repo_dir/home/dot_claude/skills/symlink_choosing-agent-models"
@@ -299,6 +300,22 @@ test_model_selection() {
     'fresh routing information must trigger automatic per-account refresh'
   assert_contains "$skill" 'the operator does not need to authorize it' \
     'local status refresh must not require operator task authorization'
+  assert_contains "$skill" 'installed `codex app-server`' \
+    'Codex route status must use the installed supported interface'
+  assert_contains "$skill" '`account/read` with `refreshToken: false`, `model/list`, and `account/rateLimits/read`' \
+    'Codex route status must allow only the supported metadata requests'
+  assert_contains "$skill" 'Do not read `auth.json` or another credential file directly' \
+    'route status must not implement direct credential reads'
+  assert_contains "$skill" 'status-unverified or status-denied' \
+    'status interface failures must remain distinguishable from model absence'
+  assert_contains "$skill" 'do not prove that Daybreak is absent or unavailable' \
+    'status denial must not be translated into Daybreak unavailability'
+  assert_contains "$skill" \
+    'Keep the permitted-route inventory incomplete until that route has a fresh supported result.' \
+    'status denial must preserve incomplete route inventory'
+  assert_contains "$skill" \
+    'keep incomplete inventory, status-unverified or status-denied, genuine model absence, exhausted capacity, failed harmless probe, and missing task-work authority as distinct states.' \
+    'routing decisions must preserve the complete failure taxonomy'
   assert_contains "$skill" 'exact model exposed at that moment' \
     'refresh evidence must resolve the exact currently exposed model'
   assert_contains "$skill" 'exact currently exposed model' \
@@ -392,7 +409,9 @@ test_model_selection() {
     all(.evals[]; (.fixture_paths | type) == "array" and (.fixture_paths | length) > 0) and
     all(.evals[]; .prompt | contains("Do not use tools"))
   ' "$evals" >/dev/null || fail 'model-selection behavior evals do not cover the Daybreak routing contract'
-  for eval_name in daybreak-route-evidence daybreak-routing-matrix model-transition-lifecycle; do
+  for eval_name in \
+    daybreak-route-evidence daybreak-routing-matrix \
+    model-transition-lifecycle routing-preflight-status-boundary; do
     jq -e --arg name "$eval_name" 'any(.evals[]; .name == $name)' "$evals" >/dev/null || \
       fail "model-selection behavior eval is missing: $eval_name"
   done
@@ -412,7 +431,8 @@ test_model_selection() {
     capacity-preserves-floor \
     terra-luna-rejection sticky-operator-selection operator-policy-conflict \
     exact-selector-transition explicit-reclassification eligible-fallback \
-    mixed-role-floor; do
+    mixed-role-floor supported-status-interface status-denial-not-absence \
+    pre-dispatch-status-order preflight-failure-taxonomy; do
     jq -e --arg id "$expectation_id" 'any(.evals[].expectations[]; .id == $id)' "$evals" >/dev/null || \
       fail "model-selection behavior expectation is missing: $expectation_id"
   done
@@ -470,6 +490,25 @@ test_model_selection() {
     'routing fixture must distinguish status refresh from task-work probe'
   assert_contains "$routing_fixture" 'task-data transfer, task workspace or task-tool use' \
     'routing fixture must keep task-work authorization separate from refresh'
+  assert_contains "$preflight_fixture" \
+    'native and current-account selectors expose no Daybreak model' \
+    'routing preflight fixture must require inventory beyond the ambient account'
+  assert_contains "$preflight_fixture" \
+    'installed `codex app-server` status interface' \
+    'routing preflight fixture must exercise the supported status path'
+  assert_contains "$preflight_fixture" \
+    'No substantive task payload has been sent.' \
+    'routing preflight fixture must enforce selection before dispatch'
+  assert_contains "$preflight_fixture" 'status-denied' \
+    'routing preflight fixture must represent denied status access'
+  assert_contains "$preflight_fixture" 'incomplete inventory' \
+    'routing preflight fixture must preserve incomplete inventory as its own state'
+  assert_contains "$preflight_fixture" 'genuine model absence' \
+    'routing preflight fixture must distinguish confirmed model absence'
+  assert_contains "$preflight_fixture" 'capacity exhaustion' \
+    'routing preflight fixture must distinguish exhausted capacity'
+  assert_contains "$preflight_fixture" 'missing task-work authority' \
+    'routing preflight fixture must distinguish missing execution authority'
   assert_contains "$transition_fixture" 'proposes Terra High in the same task' \
     'transition fixture must cover the observed capacity-to-Terra trap'
   assert_contains "$transition_fixture" 'proposes Luna High in the same task' \
