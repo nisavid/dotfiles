@@ -50,7 +50,7 @@ Read the applicable sub-skill before acting. Do not copy a weaker local substitu
    - Before diagnosing a blocked merge as missing approval, branch policy, last-pusher approval, or bot-review state, refresh thread-aware PR state. If GitHub says the PR is blocked while checks are green and the head is mergeable, unresolved conversations are a first-class blocker to check, not an afterthought.
    - When `pr-review-orchestration` classifies an unresolved review thread as fixed, already fixed, stale, outdated, duplicate, or otherwise handled with evidence, resolve it yourself as part of merge closeout. Do not ask for separate confirmation just because resolving the thread satisfies a branch-policy gate; ask only when the thread needs a human decision or repo policy reserves resolution for another owner.
    - Request or rerun external review when local readiness and authority gates pass, applying `pr-review-orchestration`'s progress audit and any explicit operator or repository limits.
-   - When CodeRabbit is the expected external reviewer and its latest check or comment says the review was skipped, do not treat that as a completed external review cycle. If local readiness gates pass and current authority covers the request, comment on the PR to request CodeRabbit explicitly, normally with `@coderabbit-ai review`. If the diff is already clean and the only remaining branch-protection gate is CodeRabbit approval, request that explicitly with `@coderabbit-ai approve pls`.
+   - When CodeRabbit is the expected external reviewer and its latest check or comment says the review was skipped, do not treat that as a completed external review cycle. First verify that local readiness, current authority, and any explicit operator or repository limits permit the request. Then request review with a PR comment, normally `@coderabbit-ai review`; when the diff is already clean and CodeRabbit approval is the only remaining branch-protection gate, request approval with `@coderabbit-ai approve pls` instead.
 6. Merge only when the ownership and readiness gates pass.
    - Required checks are successful or explicitly accepted under repo policy.
    - Required approvals are present or not required.
@@ -85,7 +85,7 @@ Finish with the PR URL, merge result or blocker, exact verification evidence, re
 | Explaining a blocked green PR as approval or ruleset trouble before checking conversations | Run `pr_review_state.py --summary --json` or equivalent GraphQL review-thread state, then resolve or report unresolved threads first. |
 | Assuming full autonomy from "get this merged" | Read repo and workflow policy first; autonomy is scoped by those instructions. |
 | Skipping repo-local closeout rules | Apply local merge method, review policy, deploy guidance, and branch cleanup rules. |
-| Treating a skipped CodeRabbit check as final review evidence | Comment on the PR to request CodeRabbit explicitly when readiness and authority gates pass. |
+| Treating a skipped CodeRabbit check as final review evidence | Request CodeRabbit only when readiness, current authority, and explicit operator or repository limits permit the request. |
 | Re-running review to diagnose a blocked merge | Read thread-aware PR state and branch protection first. |
 | Continuing past a human-owned decision | Report evidence and the decision owner instead of deciding by implication. |
 | Applying this to any PR-related request | Use this wrapper only when merge closeout is the goal. |
