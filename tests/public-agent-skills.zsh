@@ -226,6 +226,7 @@ test_model_selection() {
   local preflight_fixture="$skill_dir/evals/fixtures/routing-preflight-status-boundary.md"
   local transition_fixture="$skill_dir/evals/fixtures/model-transition-lifecycle.md"
   local trigger_evals="$skill_dir/evals/trigger-evals.json"
+  local transition_contract_test="$repo_dir/tests/test_model_transition_contract.py"
   local link="$repo_dir/home/dot_claude/skills/symlink_choosing-agent-models"
   local delegation_link="$repo_dir/home/dot_claude/skills/symlink_delegating-cross-agent-work"
 
@@ -239,6 +240,9 @@ test_model_selection() {
   assert_contains "$skill" \
     'Capacity changes route availability only.' \
     'capacity failure must not lower the model-selection floor'
+  assert_contains "$transition_contract_test" \
+    'test_additive_lower_tier_authorizations_are_rejected' \
+    'the public gate must include contradiction-sensitive Terra and Luna mutation tests'
   assert_contains "$skill" \
     'Revalidating an existing task before a payload-bearing follow-up, resume, retry, or capacity fallback.' \
     'the selector trigger contract must include existing-task transitions'

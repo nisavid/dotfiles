@@ -289,6 +289,16 @@ PREFLIGHT_FORBIDDEN_CLAUSES = (
     "refresh local account authentication",
 )
 
+TRANSITION_TIER_REFERENCES = {
+    "selector": (
+        "Model Transition Authorization",
+        (
+            "It never lowers those floors or authorizes Terra, Luna, or another otherwise ineligible selection.",
+        ),
+    ),
+    "delegation": ("Payload-Bearing Transition Gate", ()),
+}
+
 
 def parse_cases(text: str) -> dict[str, str]:
     parts = re.split(r"^## Case ([A-H])\s*$", text, flags=re.MULTILINE)
@@ -334,6 +344,42 @@ def parse_expectation(text: str) -> tuple[str, tuple[str, ...]]:
     if match is None:
         raise AssertionError(f"unscoped lifecycle expectation: {text}")
     return match.group(2), tuple(match.group(1).split(","))
+
+
+def markdown_section(text: str, heading: str) -> str:
+    match = re.search(
+        rf"^## {re.escape(heading)}\s*$\n(?P<body>.*?)(?=^## |\Z)",
+        text,
+        flags=re.MULTILINE | re.DOTALL,
+    )
+    if match is None:
+        raise AssertionError(f"missing policy section: {heading}")
+    return match.group("body")
+
+
+def policy_sentences(text: str, heading: str) -> tuple[str, ...]:
+    section = " ".join(markdown_section(text, heading).split())
+    return tuple(
+        sentence
+        for sentence in re.split(r"(?<=[.!?])\s+", section)
+        if sentence
+    )
+
+
+def assert_transition_policy_exclusive(documents: dict[str, str]) -> None:
+    """Reject additive Terra or Luna permissions in transition policy sections."""
+
+    for document, (heading, expected) in TRANSITION_TIER_REFERENCES.items():
+        actual = tuple(
+            sentence
+            for sentence in policy_sentences(documents[document], heading)
+            if re.search(r"\b(?:Terra|Luna)\b", sentence)
+        )
+        if actual != expected:
+            raise AssertionError(
+                "contradictory lower-tier authorization in "
+                f"{document} {heading}: {actual!r}"
+            )
 
 
 class ParserIntegrityTests(unittest.TestCase):
@@ -412,6 +458,45 @@ class ModelTransitionContractTests(unittest.TestCase):
             with self.subTest(case=case):
                 for document, clause in clauses:
                     self.assertIn(clause, self.documents[document])
+
+    def test_transition_policy_is_mutually_exclusive(self) -> None:
+        assert_transition_policy_exclusive(self.documents)
+
+    def test_additive_lower_tier_authorizations_are_rejected(self) -> None:
+        mutations = (
+            (
+                "A",
+                "selector",
+                "Capacity changes route availability only. It never lowers those floors or authorizes Terra, Luna, or another otherwise ineligible selection.",
+                "When the preserved Daybreak route is out of capacity, Terra High may continue the existing security-sensitive task without reclassification.",
+            ),
+            (
+                "B",
+                "delegation",
+                "A retry refreshes route evidence and repeats the gate; a capacity failure changes availability but does not reclassify the work or authorize a lower selection.",
+                "When the preserved hard-to-reverse route is out of capacity, Luna High may retry the existing task without reclassification.",
+            ),
+            (
+                "E",
+                "selector",
+                "If the operator selection conflicts with a mandatory security route or is unavailable, report the conflict and stop rather than changing either requirement silently.",
+                "When an operator requests local continuation while Daybreak is unavailable, Terra High may resume the existing security-hardening task.",
+            ),
+        )
+        for case, document, anchor, addition in mutations:
+            with self.subTest(case=case, document=document):
+                self.assertEqual(self.documents[document].count(anchor), 1)
+                mutated = dict(self.documents)
+                mutated[document] = mutated[document].replace(
+                    anchor,
+                    f"{anchor}\n\n{addition}",
+                    1,
+                )
+                with self.assertRaisesRegex(
+                    AssertionError,
+                    "contradictory lower-tier authorization",
+                ):
+                    assert_transition_policy_exclusive(mutated)
 
 
 class RoutingPreflightContractTests(unittest.TestCase):
