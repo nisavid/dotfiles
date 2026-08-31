@@ -234,10 +234,13 @@ PREFLIGHT_POLICY_CLAUSES = {
 
 def parse_cases(text: str) -> dict[str, str]:
     parts = re.split(r"^## Case ([A-H])\s*$", text, flags=re.MULTILINE)
-    return {
-        parts[index]: parts[index + 1].strip()
-        for index in range(1, len(parts), 2)
-    }
+    cases = {}
+    for index in range(1, len(parts), 2):
+        case = parts[index]
+        if case in cases:
+            raise AssertionError(f"duplicate lifecycle fixture case: {case}")
+        cases[case] = parts[index + 1].strip()
+    return cases
 
 
 def parse_dispositions(text: str) -> dict[str, str]:
@@ -250,16 +253,22 @@ def parse_dispositions(text: str) -> dict[str, str]:
         match = re.fullmatch(r"Case ([A-Z]): (.+)", part)
         if match is None:
             raise AssertionError(f"malformed lifecycle disposition: {part}")
-        dispositions[match.group(1)] = match.group(2)
+        case, disposition = match.groups()
+        if case in dispositions:
+            raise AssertionError(f"duplicate lifecycle disposition: {case}")
+        dispositions[case] = disposition
     return dispositions
 
 
 def parse_preflight_cases(text: str) -> dict[str, str]:
     parts = re.split(r"^## Case ([A-E])\s*$", text, flags=re.MULTILINE)
-    return {
-        parts[index]: parts[index + 1].strip()
-        for index in range(1, len(parts), 2)
-    }
+    cases = {}
+    for index in range(1, len(parts), 2):
+        case = parts[index]
+        if case in cases:
+            raise AssertionError(f"duplicate preflight fixture case: {case}")
+        cases[case] = parts[index + 1].strip()
+    return cases
 
 
 def parse_expectation(text: str) -> tuple[str, tuple[str, ...]]:
@@ -267,6 +276,26 @@ def parse_expectation(text: str) -> tuple[str, tuple[str, ...]]:
     if match is None:
         raise AssertionError(f"unscoped lifecycle expectation: {text}")
     return match.group(2), tuple(match.group(1).split(","))
+
+
+class ParserIntegrityTests(unittest.TestCase):
+    def test_duplicate_lifecycle_dispositions_are_rejected(self) -> None:
+        with self.assertRaisesRegex(
+            AssertionError, "duplicate lifecycle disposition: A"
+        ):
+            parse_dispositions("Case A: first. Case A: second.")
+
+    def test_duplicate_lifecycle_fixture_cases_are_rejected(self) -> None:
+        with self.assertRaisesRegex(
+            AssertionError, "duplicate lifecycle fixture case: A"
+        ):
+            parse_cases("## Case A\nfirst\n## Case A\nsecond")
+
+    def test_duplicate_preflight_fixture_cases_are_rejected(self) -> None:
+        with self.assertRaisesRegex(
+            AssertionError, "duplicate preflight fixture case: A"
+        ):
+            parse_preflight_cases("## Case A\nfirst\n## Case A\nsecond")
 
 
 class ModelTransitionContractTests(unittest.TestCase):
