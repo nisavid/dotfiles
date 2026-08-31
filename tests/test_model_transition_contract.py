@@ -362,13 +362,17 @@ def parse_expectation(text: str) -> tuple[str, tuple[str, ...]]:
 
 
 def assert_transition_policy_exclusive(documents: dict[str, str]) -> None:
-    """Reject unreviewed Terra or Luna policy anywhere in the actuator chain."""
+    """Reject unreviewed lower-tier policy anywhere in the actuator chain."""
 
     for document, expected in TRANSITION_TIER_REFERENCE_LINES.items():
         actual = tuple(
             line.strip()
             for line in documents[document].splitlines()
-            if re.search(r"\b(?:Terra|Luna)\b", line, flags=re.IGNORECASE)
+            if re.search(
+                r"\b(?:Terra|Luna|Grok\s+4[.]5)\b",
+                line,
+                flags=re.IGNORECASE,
+            )
         )
         if actual != expected:
             raise AssertionError(
@@ -519,6 +523,12 @@ class ModelTransitionContractTests(unittest.TestCase):
                 "global",
                 "## Delegation",
                 "When the preserved Daybreak route is unavailable, Terra High may continue the existing security-sensitive task without reclassification.",
+            ),
+            (
+                "A-global-concrete-model",
+                "global",
+                "## Delegation",
+                "When the preserved Daybreak route is unavailable, Grok 4.5 at high may continue the existing security-sensitive or hard-to-reverse task without reclassification.",
             ),
         )
         for case, document, anchor, addition in mutations:
