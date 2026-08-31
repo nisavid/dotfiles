@@ -4,7 +4,7 @@
     {
       "id": 1,
       "name": "review-progress-and-authority",
-      "prompt": "Using the supplied repository fixture, handle the request: \"Drive these PRs through review and merge. Handle scoped fixes and reviewer requests as needed.\" Do not use tools or change external state. Write the next actions, any stop conditions, and a concise status for each PR.",
+      "prompt": "Using the supplied repository fixture, handle the request: \"Drive these PRs through review and merge. Handle scoped fixes and reviewer requests as needed.\" Do not use tools or change external state. Write an ordered action trace for each PR, naming the evidence each action checks and any stop conditions, followed by a concise final status for each PR.",
       "fixture_paths": [
         "evals/fixtures/review-progress-and-authority.md"
       ],
