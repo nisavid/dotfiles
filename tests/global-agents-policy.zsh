@@ -140,6 +140,7 @@ required=(
   'Present four or more captures as a local site-shaped collection.'
   'Publication requires separate authorization.'
   'Only refresh local `main` when the operation depends on it.'
+  'Before every payload-bearing new invocation, follow-up, resume, retry, or capacity fallback, use `choosing-agent-models`; preserve same-task identity, and stop rather than silently substituting a model after failure.'
 )
 
 for ((i = 1; i <= ${#required}; i++)); do

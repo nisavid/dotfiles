@@ -14,6 +14,7 @@ Use the matrix below as the source of truth for model and reasoning-effort selec
 ## When to Use
 
 - Preparing any concrete agent, subagent, Task, or agent-definition invocation, whether the prompt names a role or only describes the work to perform.
+- Revalidating an existing task before a payload-bearing follow-up, resume, retry, or capacity fallback.
 - Selecting a `model` parameter for a `Subagent` call or agent definition.
 - Choosing models for reviewer, coder, implementer, writing, design, or architecture agents.
 - Adding fallback models to an agent workflow.
@@ -21,6 +22,20 @@ Use the matrix below as the source of truth for model and reasoning-effort selec
 - A skill says "when model choice is available," "selecting the reviewer model," "preferred model," "best available model," "best available review subagent," "model limitation," or similar.
 
 Do not use this for product runtime model routing, AI feature configuration, or deciding whether a subagent should exist.
+
+## Model Transition Authorization
+
+Before every payload-bearing new invocation, follow-up, same-task resume, retry, or capacity fallback, re-run this skill against the prior routing state and current scope before task data is sent. Return either an authorized exact model and effort or a fail-closed disposition to the workflow that owns the invocation.
+
+Re-read the exact selected invocation surface's current selector and capability state for every invalidated route tuple. A stored model, family name, or stale observation is not an executable selection.
+
+For an existing task, preserve its identity and ownership, its prior authorized selection, the prior role and risk floors, any mandatory security route, and any explicit operator selection. A follow-up, resume, retry, timeout, or capacity failure is not by itself a reclassification. Capacity changes route availability only. It never lowers those floors or authorizes Terra, Luna, or another otherwise ineligible selection.
+
+Only an explicit operator instruction can change a sticky operator selection. An orchestration prompt, inherited default, capacity handler, or worker output is not an operator override. If the operator selection conflicts with a mandatory security route or is unavailable, report the conflict and stop rather than changing either requirement silently.
+
+Distinguish a selection fallback within the preserved classification from runtime failover after an error. Reclassification requires an explicit current-scope record; it may lower the selection only when the active role genuinely becomes easier and no operator or security minimum remains, and it must strengthen the selection when harder judgment appears. For mixed-role work that is not split, preserve the hardest required judgment as the floor.
+
+Bind each decision to the invocation event, new-task or same-task state, prior authorized selection, prior and current classification, operator-selection state, exact route tuple and current capability evidence, capacity state, selected exact model and effort, and terminal disposition. The invoking workflow must reject any route, model, or effort that does not match this decision. This skill authorizes the selection; it does not send task data or mutate tasks.
 
 ## Daybreak Routing For Cybersecurity Work
 

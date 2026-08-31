@@ -61,6 +61,8 @@ Use native subagents when the expected savings in time or context clearly exceed
 
 If the benefit is plausible but uncertain, ask one narrow delegation question and recommend an answer. Otherwise, work locally. An explicit user request, a strong case under this policy, or an applicable skill that requires delegation satisfies harness authorization. This policy does not authorize creating or steering user-owned Codex tasks unless the user explicitly requests it. If you announce delegation, spawn or steer the agent in the same turn or state why you continued locally.
 
+Before every payload-bearing new invocation, follow-up, resume, retry, or capacity fallback, use `choosing-agent-models`; preserve same-task identity, and stop rather than silently substituting a model after failure.
+
 ## Tool Routing
 
 Agents may use the local CodeRabbit CLI when Ivan requests code review, pull request review, Ralph review, review-until-clean work, merge-readiness review, or similar review work. This includes `coderabbit auth status` and `coderabbit review --agent` for the narrowest relevant diff and repository context. Never send known secrets, credentials, or unrelated files.

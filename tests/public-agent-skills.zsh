@@ -218,14 +218,49 @@ test_pr_publication() {
 test_model_selection() {
   local skill_dir="$repo_dir/home/dot_agents/skills/choosing-agent-models"
   local skill="$skill_dir/SKILL.md"
-  local delegation_skill="$repo_dir/home/dot_agents/skills/delegating-cross-agent-work/SKILL.md"
+  local delegation_skill_dir="$repo_dir/home/dot_agents/skills/delegating-cross-agent-work"
+  local delegation_skill="$delegation_skill_dir/SKILL.md"
   local evals="$skill_dir/evals/evals.json"
   local routing_fixture="$skill_dir/evals/fixtures/daybreak-routing-matrix.md"
   local evidence_fixture="$skill_dir/evals/fixtures/daybreak-route-evidence.md"
+  local transition_fixture="$skill_dir/evals/fixtures/model-transition-lifecycle.md"
   local trigger_evals="$skill_dir/evals/trigger-evals.json"
   local link="$repo_dir/home/dot_claude/skills/symlink_choosing-agent-models"
+  local delegation_link="$repo_dir/home/dot_claude/skills/symlink_delegating-cross-agent-work"
 
   assert_skill_frontmatter "$skill" choosing-agent-models
+  assert_skill_frontmatter "$delegation_skill" delegating-cross-agent-work
+  assert_contains "$skill" '## Model Transition Authorization' \
+    'model selection must own authorization for every payload-bearing transition'
+  assert_contains "$skill" \
+    'Before every payload-bearing new invocation, follow-up, same-task resume, retry, or capacity fallback' \
+    'model selection must rerun across the complete invocation lifecycle'
+  assert_contains "$skill" \
+    'Capacity changes route availability only.' \
+    'capacity failure must not lower the model-selection floor'
+  assert_contains "$skill" \
+    'Revalidating an existing task before a payload-bearing follow-up, resume, retry, or capacity fallback.' \
+    'the selector trigger contract must include existing-task transitions'
+  assert_contains "$skill" \
+    "Re-read the exact selected invocation surface's current selector and capability state for every invalidated route tuple." \
+    'every invalidated transition must resolve the exact current selector state'
+  assert_contains "$skill" 'prior authorized selection' \
+    'model selection must carry prior selection state across continuations'
+  assert_contains "$skill" 'exact route tuple and current capability evidence' \
+    'model selection must bind the exact current route tuple'
+  assert_contains "$delegation_skill" '## Payload-Bearing Transition Gate' \
+    'delegation must own the payload-bearing lifecycle gate'
+  assert_contains "$delegation_skill" \
+    'Before every payload-bearing new invocation, follow-up, resume, retry, or capacity fallback' \
+    'delegation must invoke model selection for every payload-bearing transition'
+  assert_contains "$delegation_skill" \
+    'Keep a same-task continuation in the existing task' \
+    'delegation must preserve same-task identity across continuation'
+  assert_contains "$delegation_skill" 'prior authorized selection' \
+    'delegation must carry prior selection state into the transition gate'
+  assert_contains "$delegation_skill" \
+    'Do not send task data until the transition is authorized.' \
+    'delegation must fail closed before payload transfer'
   assert_contains "$skill" '## Daybreak Routing For Cybersecurity Work' \
     'model-selection skill must own the public Daybreak routing policy'
   assert_contains "$skill" \
@@ -356,7 +391,7 @@ test_model_selection() {
     all(.evals[]; (.fixture_paths | type) == "array" and (.fixture_paths | length) > 0) and
     all(.evals[]; .prompt | contains("Do not use tools"))
   ' "$evals" >/dev/null || fail 'model-selection behavior evals do not cover the Daybreak routing contract'
-  for eval_name in daybreak-route-evidence daybreak-routing-matrix; do
+  for eval_name in daybreak-route-evidence daybreak-routing-matrix model-transition-lifecycle; do
     jq -e --arg name "$eval_name" 'any(.evals[]; .name == $name)' "$evals" >/dev/null || \
       fail "model-selection behavior eval is missing: $eval_name"
   done
@@ -364,7 +399,12 @@ test_model_selection() {
     automatic-local-refresh cross-harness-delegation-authority external-scrub \
     freshness-invalidation local-account-identification refresh-probe-separation \
     openai-login-boundary \
-    probe-authority-order root-peer-boundary unrelated-task-observation-boundary; do
+    probe-authority-order root-peer-boundary unrelated-task-observation-boundary \
+    every-payload-transition same-task-continuity prior-selection-state \
+    capacity-preserves-floor \
+    terra-luna-rejection sticky-operator-selection operator-policy-conflict \
+    exact-selector-transition explicit-reclassification eligible-fallback \
+    mixed-role-floor; do
     jq -e --arg id "$expectation_id" 'any(.evals[].expectations[]; .id == $id)' "$evals" >/dev/null || \
       fail "model-selection behavior expectation is missing: $expectation_id"
   done
@@ -422,12 +462,46 @@ test_model_selection() {
     'routing fixture must distinguish status refresh from task-work probe'
   assert_contains "$routing_fixture" 'task-data transfer, task workspace or task-tool use' \
     'routing fixture must keep task-work authorization separate from refresh'
+  assert_contains "$transition_fixture" 'proposes Terra High in the same task' \
+    'transition fixture must cover the observed capacity-to-Terra trap'
+  assert_contains "$transition_fixture" 'proposes Luna High in the same task' \
+    'transition fixture must cover the equivalent capacity-to-Luna trap'
+  assert_contains "$transition_fixture" \
+    'Continue the work in the same task without creating a replacement claimant.' \
+    'transition fixture must cover eligible same-task recovery'
+  assert_contains "$transition_fixture" 'The operator now explicitly selects a different exact model' \
+    'transition fixture must cover an explicit eligible operator override'
+  assert_contains "$transition_fixture" \
+    'operator instruction conflicts with the mandatory security route' \
+    'transition fixture must cover an operator and security-policy conflict'
+  assert_contains "$transition_fixture" 'A new current-scope record separates' \
+    'transition fixture must require explicit reclassification'
+  assert_contains "$transition_fixture" \
+    'fallback that remains eligible for the preserved classification and authorized topology' \
+    'transition fixture must distinguish eligible selection fallback from runtime failover'
+  assert_contains "$transition_fixture" 'Carry its prior authorized selection into the new decision.' \
+    'transition fixture must carry the prior selection into same-task recovery'
+  assert_contains "$transition_fixture" 'Use the hardest required judgment as the selection floor.' \
+    'transition fixture must cover mixed-role preservation'
   jq -e '
     (map(select(.should_trigger == true)) | length) >= 4 and
     (map(select(.should_trigger == false)) | length) >= 4
   ' "$trigger_evals" >/dev/null || fail 'model-selection trigger evals need positive and negative coverage'
+  jq -e '
+    any(.[];
+      .should_trigger == true and
+      (.query | contains("Resume this existing security task after capacity returns"))
+    )
+  ' "$trigger_evals" >/dev/null || fail 'model-selection trigger evals must cover same-task resume'
+  jq -e '
+    any(.[];
+      .should_trigger == true and
+      (.query | contains("operator explicitly changed the model"))
+    )
+  ' "$trigger_evals" >/dev/null || fail 'model-selection trigger evals must cover explicit operator transitions'
 
   assert_symlink_source "$link" '../../.agents/skills/choosing-agent-models'
+  assert_symlink_source "$delegation_link" '../../.agents/skills/delegating-cross-agent-work'
 }
 
 typeset -a projection_targets
@@ -464,6 +538,8 @@ case "${1:-all}" in
     projection_targets=(
       "$HOME/.agents/skills/choosing-agent-models"
       "$HOME/.claude/skills/choosing-agent-models"
+      "$HOME/.agents/skills/delegating-cross-agent-work"
+      "$HOME/.claude/skills/delegating-cross-agent-work"
     )
     ;;
   all)
@@ -485,6 +561,8 @@ case "${1:-all}" in
       "$HOME/.claude/skills/graphite"
       "$HOME/.agents/skills/choosing-agent-models"
       "$HOME/.claude/skills/choosing-agent-models"
+      "$HOME/.agents/skills/delegating-cross-agent-work"
+      "$HOME/.claude/skills/delegating-cross-agent-work"
     )
     ;;
   *)
@@ -501,7 +579,7 @@ mkdir -p -- "$isolated_source/dot_agents/skills" "$isolated_source/dot_claude/sk
 for skill in \
   checkpointing-and-publishing-git-work context7-mcp graphite \
   publishing-reviewable-prs writing-reviewable-pr-descriptions \
-  choosing-agent-models; do
+  choosing-agent-models delegating-cross-agent-work; do
   cp -R -- \
     "$repo_dir/home/dot_agents/skills/$skill" \
     "$isolated_source/dot_agents/skills/$skill"
@@ -510,7 +588,7 @@ done
 for link in \
   checkpointing-and-publishing-git-work context7-mcp graphite \
   publishing-reviewable-prs writing-reviewable-pr-descriptions \
-  choosing-agent-models; do
+  choosing-agent-models delegating-cross-agent-work; do
   cp -- \
     "$repo_dir/home/dot_claude/skills/symlink_$link" \
     "$isolated_source/dot_claude/skills/symlink_$link"
@@ -536,7 +614,7 @@ done
 for skill in \
   checkpointing-and-publishing-git-work context7-mcp graphite \
   publishing-reviewable-prs writing-reviewable-pr-descriptions \
-  choosing-agent-models; do
+  choosing-agent-models delegating-cross-agent-work; do
   canonical="$isolated_home/.agents/skills/$skill"
   link="$isolated_home/.claude/skills/$skill"
   if [[ -e "$canonical" || -e "$link" || -L "$link" ]]; then
