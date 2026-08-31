@@ -386,6 +386,7 @@ test_model_selection() {
 
   [[ -f "$evals" ]] || fail 'model-selection behavior evals are missing'
   [[ -f "$trigger_evals" ]] || fail 'model-selection trigger evals are missing'
+  python3 "$repo_dir/tests/test_model_transition_contract.py"
   jq -e '
     .skill_name == "choosing-agent-models" and
     all(.evals[]; (.fixture_paths | type) == "array" and (.fixture_paths | length) > 0) and
