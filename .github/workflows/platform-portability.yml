@@ -154,7 +154,6 @@ jobs:
             tests/identity-bindings.zsh \
             tests/platform-portability.zsh \
             tests/private-skill-transaction.zsh \
-            tests/public-agent-skills.zsh \
             tests/privacy-scan.zsh \
             tests/proton-pass-session.zsh \
             tests/proton-pass-startup-bindings.zsh \
@@ -172,7 +171,6 @@ jobs:
         run: |
           set -euo pipefail
           zsh -f tests/claude-skill-sync.zsh
-          zsh -f tests/public-agent-skills.zsh
           zsh -f tests/platform-portability.zsh
           zsh -f tests/container-runtime-bindings.zsh
           zsh -f tests/privacy-scan.zsh

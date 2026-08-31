@@ -5,7 +5,7 @@ repo_root=${0:A:h:h}
 source_root="$repo_root/home"
 template="$source_root/dot_codex/private_AGENTS.md.tmpl"
 encryption_doc="$repo_root/docs/ENCRYPTION.md"
-platform_workflow="$repo_root/.github/workflows/platform-portability.yml"
+transition_contract_test="$repo_root/tests/test_model_transition_contract.py"
 rendered=$(mktemp "${TMPDIR:-/tmp}/global-agents-policy.XXXXXX")
 target_state=$(mktemp "${TMPDIR:-/tmp}/global-agents-state.XXXXXX")
 git_policy=$(mktemp "${TMPDIR:-/tmp}/global-agents-git-policy.XXXXXX")
@@ -31,9 +31,7 @@ mode_of() {
 }
 
 [[ -f "$template" ]] || fail "private source template is missing"
-[[ -f "$platform_workflow" ]] || fail "platform workflow is missing"
-grep -Fqx -- '          zsh -f tests/public-agent-skills.zsh' "$platform_workflow" || \
-  fail "platform workflow does not enforce the public agent-skill contract"
+[[ -f "$transition_contract_test" ]] || fail "model-transition contract test is missing"
 [[ ! -e "$source_root/dot_codex/AGENTS.md.tmpl" ]] || fail "public-mode source template still exists"
 [[ $(mode_of "$template") == 644 ]] || fail "source template mode must be 0644"
 [[ $(chezmoi -S "$source_root" target-path "$template") == "$HOME/.codex/AGENTS.md" ]] ||
@@ -236,5 +234,7 @@ done
 
 ! grep -Fq -- 'Installs the complete skill and symlink set' "$encryption_doc" || \
   fail "encryption documentation claims authoritative complete-set installation"
+
+python3 "$transition_contract_test"
 
 print -- 'global AGENTS policy: ok'
