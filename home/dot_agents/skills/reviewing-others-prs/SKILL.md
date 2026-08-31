@@ -10,7 +10,7 @@ Review, not repair. Inspect the live PR, run paired Thermos review, and return h
 ## Routing
 
 - Use `thermos` for independent correctness/risk and maintainability/code-health passes before synthesis.
-- Use `pr-review-orchestration` for live PR state, thread state, ledgers, checks, external-review budgets, and closeout gates.
+- Use `pr-review-orchestration` for live PR state, thread state, ledgers, checks, external-review iteration, and closeout gates.
 - Apply `resuming-reviewed-prs` comment discipline for existing reviews: inventory threads, comments, reviews, checks, requested changes, and stale/outdated items before disposition.
 - Use `receiving-code-review` before accepting, rejecting, answering, or resolving prior reviewer feedback.
 - Use `resolving-workflow-ownership` before GitHub actuation or branch mutation.

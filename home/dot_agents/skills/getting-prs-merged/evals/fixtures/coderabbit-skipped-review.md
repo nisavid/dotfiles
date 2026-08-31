@@ -28,7 +28,7 @@ Mock review history:
 Expected behavior focus:
 
 - Do not treat the skipped CodeRabbit check as completed review evidence.
-- Confirm local readiness gates and external-review budget before requesting another CodeRabbit action.
+- Confirm local readiness, current review authority, and any explicit operator or repository limits before requesting another CodeRabbit action.
 - Comment on the PR to request CodeRabbit explicitly, normally with `@coderabbit-ai review`.
 - If review evidence is already clean and the only remaining gate is CodeRabbit approval, request approval explicitly with `@coderabbit-ai approve pls`.
 - Refresh PR state after CodeRabbit responds, then merge only when review and branch-protection gates pass.

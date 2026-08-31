@@ -1,4 +1,4 @@
-# Scenario: External Review Budget
+# Scenario: Stalled External Review
 
 User request: "Drive this PR to merge. It already had two completed bot review cycles, and the latest review has one stale-looking unresolved thread."
 
@@ -15,21 +15,14 @@ Mock repository state:
 
 Mock local policy:
 
-- `AGENTS.md`: external review cycles are limited by `pr-review-orchestration`.
+- `AGENTS.md`: review requests are agent-owned after local readiness gates pass. No time, cost, or review-count limit was specified.
 - `AGENTS.md`: stale review threads may be resolved by the agent only with refreshed evidence.
 - `AGENTS.md`: merge actuation is agent-owned after all gates pass.
 
 Mock review history:
 
 - Completed external review cycles: 2
+- Both cycles reviewed the same revision, produced no new findings, and left the same unresolved thread in place.
 - Latest bot result: no new findings
 - Thread state before refresh: one unresolved thread appears stale
 - Thread state after refresh: thread is outdated and points at superseded code
-
-Expected behavior focus:
-
-- Do not immediately request a third external review.
-- Run the loop-breaker sweep from `pr-review-orchestration`.
-- Refresh thread-aware state before classifying the unresolved thread as stale.
-- Resolve the stale thread only after evidence.
-- Merge only after refreshed blockers are clear.

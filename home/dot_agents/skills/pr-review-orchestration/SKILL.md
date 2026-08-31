@@ -60,13 +60,17 @@ Before external review, record these in the ledger or final summary:
 
 If local fixes exist after review, push them and refresh PR state before requesting another external review.
 
-## External Review Budget
+## External Review Iteration
+
+Continue authorized review and revision until the task's required review and readiness gates pass. A completed-review count does not require new approval. Apply any explicit operator or repository time, cost, or iteration limit.
 
 A completed external review cycle means the service accepted the current diff and produced a terminal result: approved, changes requested, commented with findings, or no findings.
 
 Pending, authentication-blocked, policy-blocked, unavailable, rate-limited before review creation, timed-out-before-submission, or still-processing attempts are not completed cycles. Record the exact status or error.
 
-After two completed external review cycles on the same PR, run a loop-breaker sweep before another external review. The sweep must reread the user/spec decision, refresh thread-aware PR state, audit unresolved/stale/duplicate threads, audit the local diff/head/checks, derive ownership gates with `resolving-workflow-ownership`, and record the next blocker or clearance. Ask for explicit user approval before spending another cycle.
+When review repeats without progress, audit the loop before another request. Examples include the same unresolved finding returning, repeated requests on unchanged code without new evidence, or fixes that leave the accepted requirement unsatisfied. Reread the user/spec decision, refresh thread-aware PR state, audit unresolved/stale/duplicate threads and the local diff/head/checks, and derive ownership gates with `resolving-workflow-ownership`.
+
+Record and perform the next useful authorized action. The audit itself is not an approval checkpoint. Escalate when progress depends on a missing decision or authority, an exhausted explicit budget, or an unavailable control surface. Keep valid findings and required review, verification, and merge gates open until their evidence satisfies them.
 
 ## Review Item Handling
 
@@ -139,7 +143,7 @@ Do not infer the remaining blocker from `mergeStateStatus`, `reviewDecision`, st
 
 ## Ralph Review Interaction
 
-When Ralph review is requested for PR review, bot-review, comment-resolution, or merge-readiness work, each Ralph cycle runs this state machine once. Do not nest extra external-review loops inside a Ralph cycle unless the budget gates allow it.
+When Ralph review is requested for PR review, bot-review, comment-resolution, or merge-readiness work, each Ralph cycle runs this state machine once. Apply the External Review Iteration policy within that cycle; keep one review loop active.
 
 ## Common Mistakes
 
