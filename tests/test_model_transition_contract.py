@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import hashlib
 import json
 import re
 import unittest
@@ -304,6 +305,26 @@ TRANSITION_TIER_REFERENCE_LINES = {
     "global": (),
 }
 
+LOWER_TIER_ALIAS_PATTERN = re.compile(
+    r"\b(?:Terra|Luna|Grok|xAI)\b|\bfast[ -]mode\b",
+    flags=re.IGNORECASE,
+)
+TRANSITION_EVENT_PATTERN = re.compile(
+    r"\b(?:invocation|invoke|follow-up|resume|retry|fallback|fall-through|"
+    r"continue|dispatch|execute|execution|task-data|same-task)\b",
+    flags=re.IGNORECASE,
+)
+TRANSITION_AUTHORITY_PATTERN = re.compile(
+    r"\b(?:authoriz\w*|permission|permit\w*|allow\w*|require\w*|must|may|"
+    r"can|use|select\w*|model|route|disposition)\b",
+    flags=re.IGNORECASE,
+)
+TRANSITION_AUTHORIZATION_REFERENCE_SHA256 = {
+    "selector": "28e4329fc0ec50b387394a981de485f54f1185ed09a03e3377f4b8e167ef7c25",
+    "delegation": "b842e664f4054ab3083e7adb74fa88c7829682c755082d527d29da75729a6741",
+    "global": "6204b4a3eff01d80a85c409f135d4d8541930ad633882816cb3938372f868ec8",
+}
+
 STATUS_POLICY_REFERENCE_LINES = {
     "selector": (
         "For a permitted Codex account-home route, use only a separately supported status interface whose installed implementation is proven not to refresh or persist authentication and not to mutate login, configuration, cache, database, task, or turn state. Bind that side-effect-safety proof to the exact installed version and interface, and revalidate it after any implementation, version, startup, or status-path change. A protocol method name, `refreshToken: false`, or a read-shaped request does not prove that boundary. Do not launch `codex app-server` for this refresh when its startup or status path can call proactive authentication refresh, persist state, start background writers, or update caches or databases. In particular, exposing initialization, `account/read` with `refreshToken: false`, `model/list`, and `account/rateLimits/read` does not make that four-call exchange side-effect-free or authorized. The Codex 0.149.0 four-call app-server path is outside this standing permission and is not eligible to establish fresh execution authority.",
@@ -362,21 +383,36 @@ def parse_expectation(text: str) -> tuple[str, tuple[str, ...]]:
 
 
 def assert_transition_policy_exclusive(documents: dict[str, str]) -> None:
-    """Reject unreviewed lower-tier policy anywhere in the actuator chain."""
+    """Reject unreviewed transition policy anywhere in the actuator chain."""
 
     for document, expected in TRANSITION_TIER_REFERENCE_LINES.items():
-        actual = tuple(
+        tier_lines = tuple(
             line.strip()
             for line in documents[document].splitlines()
-            if re.search(
-                r"\b(?:Terra|Luna|Grok\s+4[.]5)\b",
-                line,
-                flags=re.IGNORECASE,
-            )
+            if LOWER_TIER_ALIAS_PATTERN.search(line)
         )
-        if actual != expected:
+        if tier_lines != expected:
             raise AssertionError(
-                f"contradictory lower-tier authorization in {document}: {actual!r}"
+                f"contradictory lower-tier authorization in {document}: "
+                f"{tier_lines!r}"
+            )
+
+        authorization_lines = tuple(
+            line.strip()
+            for line in documents[document].splitlines()
+            if TRANSITION_EVENT_PATTERN.search(line)
+            and TRANSITION_AUTHORITY_PATTERN.search(line)
+        )
+        authorization_digest = hashlib.sha256(
+            "\n".join(authorization_lines).encode("utf-8")
+        ).hexdigest()
+        expected_authorization_digest = TRANSITION_AUTHORIZATION_REFERENCE_SHA256[
+            document
+        ]
+        if authorization_digest != expected_authorization_digest:
+            raise AssertionError(
+                f"contradictory lower-tier authorization in {document}: "
+                f"unreviewed transition policy {authorization_digest}"
             )
 
 
@@ -529,6 +565,18 @@ class ModelTransitionContractTests(unittest.TestCase):
                 "global",
                 "## Delegation",
                 "When the preserved Daybreak route is unavailable, Grok 4.5 at high may continue the existing security-sensitive or hard-to-reverse task without reclassification.",
+            ),
+            (
+                "A-global-model-alias",
+                "global",
+                "## Delegation",
+                "When the preserved Daybreak route is unavailable, the Grok fast-mode model may continue the existing security-sensitive or hard-to-reverse task without reclassification.",
+            ),
+            (
+                "A-global-unnamed-lower-tier",
+                "global",
+                "## Delegation",
+                "When the preserved route is unavailable, an unnamed lower-cost candidate may continue the existing security-sensitive or hard-to-reverse task without reclassification.",
             ),
         )
         for case, document, anchor, addition in mutations:
