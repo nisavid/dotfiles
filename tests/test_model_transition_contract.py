@@ -309,20 +309,10 @@ LOWER_TIER_ALIAS_PATTERN = re.compile(
     r"\b(?:Terra|Luna|Grok|xAI)\b|\bfast[ -]mode\b",
     flags=re.IGNORECASE,
 )
-TRANSITION_EVENT_PATTERN = re.compile(
-    r"\b(?:invocation|invoke|follow-up|resume|retry|fallback|fall-through|"
-    r"continue|dispatch|execute|execution|task-data|same-task)\b",
-    flags=re.IGNORECASE,
-)
-TRANSITION_AUTHORITY_PATTERN = re.compile(
-    r"\b(?:authoriz\w*|permission|permit\w*|allow\w*|require\w*|must|may|"
-    r"can|use|select\w*|model|route|disposition)\b",
-    flags=re.IGNORECASE,
-)
-TRANSITION_AUTHORIZATION_REFERENCE_SHA256 = {
-    "selector": "28e4329fc0ec50b387394a981de485f54f1185ed09a03e3377f4b8e167ef7c25",
-    "delegation": "b842e664f4054ab3083e7adb74fa88c7829682c755082d527d29da75729a6741",
-    "global": "6204b4a3eff01d80a85c409f135d4d8541930ad633882816cb3938372f868ec8",
+ACTUATOR_CHAIN_DOCUMENT_SHA256 = {
+    "selector": "28f2d15bd54c2ee289fbf7681e4ab074adad109ccc41529883a5be1a9ebd2d65",
+    "delegation": "7a0f8ab35f91587b1f1f1f4294b6563ad3faa43b87524acbab593549551064ee",
+    "global": "05730fcfdbb956740dd9f933739ad2e8b7eca7d73c4d97dcd3cca22f3b1614e2",
 }
 
 STATUS_POLICY_REFERENCE_LINES = {
@@ -382,6 +372,22 @@ def parse_expectation(text: str) -> tuple[str, tuple[str, ...]]:
     return match.group(2), tuple(match.group(1).split(","))
 
 
+def assert_actuator_chain_documents_unchanged(
+    documents: dict[str, str], *, error: str
+) -> None:
+    """Reject any unreviewed policy change anywhere in the actuator chain."""
+
+    for document, expected_digest in ACTUATOR_CHAIN_DOCUMENT_SHA256.items():
+        document_digest = hashlib.sha256(
+            documents[document].encode("utf-8")
+        ).hexdigest()
+        if document_digest != expected_digest:
+            raise AssertionError(
+                f"{error} in {document}: "
+                f"unreviewed actuator-chain policy {document_digest}"
+            )
+
+
 def assert_transition_policy_exclusive(documents: dict[str, str]) -> None:
     """Reject unreviewed transition policy anywhere in the actuator chain."""
 
@@ -397,23 +403,10 @@ def assert_transition_policy_exclusive(documents: dict[str, str]) -> None:
                 f"{tier_lines!r}"
             )
 
-        authorization_lines = tuple(
-            line.strip()
-            for line in documents[document].splitlines()
-            if TRANSITION_EVENT_PATTERN.search(line)
-            and TRANSITION_AUTHORITY_PATTERN.search(line)
-        )
-        authorization_digest = hashlib.sha256(
-            "\n".join(authorization_lines).encode("utf-8")
-        ).hexdigest()
-        expected_authorization_digest = TRANSITION_AUTHORIZATION_REFERENCE_SHA256[
-            document
-        ]
-        if authorization_digest != expected_authorization_digest:
-            raise AssertionError(
-                f"contradictory lower-tier authorization in {document}: "
-                f"unreviewed transition policy {authorization_digest}"
-            )
+    assert_actuator_chain_documents_unchanged(
+        documents,
+        error="contradictory lower-tier authorization",
+    )
 
 
 def assert_status_policy_exclusive(documents: dict[str, str]) -> None:
@@ -439,6 +432,11 @@ def assert_status_policy_exclusive(documents: dict[str, str]) -> None:
     for clause in PREFLIGHT_FORBIDDEN_CLAUSES:
         if clause in combined:
             raise AssertionError("contradictory standing status authorization")
+
+    assert_actuator_chain_documents_unchanged(
+        documents,
+        error="contradictory standing status authorization",
+    )
 
 
 class ParserIntegrityTests(unittest.TestCase):
@@ -578,6 +576,24 @@ class ModelTransitionContractTests(unittest.TestCase):
                 "## Delegation",
                 "When the preserved route is unavailable, an unnamed lower-cost candidate may continue the existing security-sensitive or hard-to-reverse task without reclassification.",
             ),
+            (
+                "A-global-soft-wrapped-authorization",
+                "global",
+                "## Delegation",
+                "When the preserved route is unavailable, an unnamed lower-cost candidate may\ncontinue the existing security-sensitive or hard-to-reverse task without reclassification.",
+            ),
+            (
+                "A-global-lifecycle-synonym",
+                "global",
+                "## Delegation",
+                "When the preserved route is unavailable, an unnamed lower-cost candidate may proceed with the existing security-sensitive or hard-to-reverse task without reclassification.",
+            ),
+            (
+                "A-global-oblique-authorization",
+                "global",
+                "## Delegation",
+                "An unnamed bargain-tier engine is cleared to carry the existing security-sensitive task onward.",
+            ),
         )
         for case, document, anchor, addition in mutations:
             with self.subTest(case=case, document=document):
@@ -667,6 +683,20 @@ class RoutingPreflightContractTests(unittest.TestCase):
             f"{anchor}\n\n{addition}",
             1,
         )
+        with self.assertRaisesRegex(
+            AssertionError,
+            "contradictory standing status authorization",
+        ):
+            assert_status_policy_exclusive(mutated)
+
+    def test_semantic_four_call_status_authorizations_are_rejected(self) -> None:
+        addition = (
+            "Initialization followed by account/read with refreshToken false, "
+            "model/list, and account/rateLimits/read may proceed automatically "
+            "whenever route metadata is stale."
+        )
+        mutated = dict(self.documents)
+        mutated["global"] = f'{mutated["global"]}\n\n{addition}'
         with self.assertRaisesRegex(
             AssertionError,
             "contradictory standing status authorization",
