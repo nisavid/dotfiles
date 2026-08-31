@@ -304,16 +304,22 @@ test_model_selection() {
     'local status refresh must refresh observations rather than authentication state'
   assert_contains "$skill" 'separately supported status interface whose installed implementation is proven' \
     'Codex route status must use a proven side-effect-free interface'
+  assert_contains "$skill" 'Bind that side-effect-safety proof to the exact installed version and interface' \
+    'side-effect-safety evidence must be version-bound'
   assert_contains "$skill" 'A protocol method name, `refreshToken: false`, or a read-shaped request does not prove that boundary.' \
     'read-shaped Codex requests must not be treated as proof of a side-effect-free boundary'
   assert_contains "$skill" 'initialization, `account/read` with `refreshToken: false`, `model/list`, and `account/rateLimits/read` does not make that four-call exchange side-effect-free or authorized.' \
     'the Codex 0.149.0 four-call path must remain outside standing authorization'
+  assert_contains "$skill" 'The Codex 0.149.0 four-call app-server path is outside this standing permission and is not eligible to establish fresh execution authority.' \
+    'the unsafe app-server path must not establish execution authority'
   assert_contains "$skill" 'Do not read `auth.json` or another credential file directly' \
     'route status must not implement direct credential reads'
-  assert_contains "$skill" 'status-unverified or status-denied' \
-    'status interface failures must remain distinguishable from model absence'
-  assert_contains "$skill" 'do not prove that Daybreak is absent or unavailable' \
-    'status denial must not be translated into Daybreak unavailability'
+  assert_contains "$skill" 'record the route as status-unverified. If an eligible status refresh is refused, record the route as status-denied.' \
+    'status unverification and refresh denial must remain distinct'
+  assert_contains "$skill" 'prove none of genuine model absence, Daybreak unavailability, exhausted capacity, missing task-work authority, or execution authority.' \
+    'unverified or denied status must not be relabeled as another gate outcome'
+  assert_contains "$skill" 'Before substantive dispatch, require authenticated, version-bound side-effect-safety evidence and complete task, plan, and actuation bindings for the current invocation.' \
+    'dispatch must bind safe status evidence to task, plan, and actuation'
   assert_contains "$skill" \
     'Keep the permitted-route inventory incomplete until that route has a fresh supported result.' \
     'status denial must preserve incomplete route inventory'
@@ -507,6 +513,9 @@ test_model_selection() {
   assert_contains "$preflight_fixture" \
     '`AuthManager::auth()`' \
     'routing preflight fixture must bind the proactive refresh regression'
+  assert_contains "$preflight_fixture" \
+    'not eligible to establish fresh execution authority' \
+    'routing preflight fixture must keep the unsafe app-server path outside execution authority'
   assert_contains "$preflight_fixture" \
     'No substantive task payload has been sent.' \
     'routing preflight fixture must enforce selection before dispatch'
