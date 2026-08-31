@@ -5,6 +5,7 @@ import json
 import re
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -309,6 +310,43 @@ LOWER_TIER_ALIAS_PATTERN = re.compile(
     r"\b(?:Terra|Luna|Grok|xAI)\b|\bfast[ -]mode\b",
     flags=re.IGNORECASE,
 )
+LOWER_TIER_SUBJECT_PATTERN = re.compile(
+    r"\b(?:Terra|Luna|Grok|xAI)\b|\bfast[ -]mode\b|"
+    r"\b(?:lower[ -](?:tier|cost)|bargain[ -]tier)\b",
+    flags=re.IGNORECASE,
+)
+PROTECTED_CONTINUATION_SCOPE_PATTERN = re.compile(
+    r"\b(?:same|existing|preserved|current|prior)\b.{0,100}"
+    r"\b(?:task|work|route|classification|selection)\b|"
+    r"\b(?:cybersecurity|security(?:[ -](?:sensitive|hardening|adjacent))?)\b"
+    r".{0,100}\b(?:task|work|route|classification)\b|"
+    r"\bhard[ -]to[ -]reverse\b|\bmandatory security route\b",
+    flags=re.IGNORECASE,
+)
+POSITIVE_CONTINUATION_AUTHORITY_PATTERN = re.compile(
+    r"\b(?:may|can|shall|should)\s+"
+    r"(?:continue|resume|retry|proceed|carry|execute|perform|handle|dispatch|invoke)\b|"
+    r"\bis\s+(?:allowed|authorized|cleared|eligible)\s+to\s+"
+    r"(?:continue|resume|retry|proceed|carry|execute|perform|handle|dispatch|invoke)\b|"
+    r"\b(?:use|select|invoke|dispatch)\s+(?:an?\s+|the\s+)?"
+    r"(?:Terra|Luna|Grok|xAI|fast[ -]mode|lower[ -](?:tier|cost)|bargain[ -]tier)\b|"
+    r"\b(?:fall[ -]through|fallback)\s+(?:to|on)\s+(?:an?\s+|the\s+)?"
+    r"(?:Terra|Luna|Grok|xAI|fast[ -]mode|lower[ -](?:tier|cost)|bargain[ -]tier)\b",
+    flags=re.IGNORECASE,
+)
+UNSAFE_STATUS_EXCHANGE_MARKERS = (
+    re.compile(r"\binitialization\b", flags=re.IGNORECASE),
+    re.compile(r"\baccount/read\b", flags=re.IGNORECASE),
+    re.compile(r"\bmodel/list\b", flags=re.IGNORECASE),
+    re.compile(r"\baccount/rateLimits/read\b", flags=re.IGNORECASE),
+)
+POSITIVE_STATUS_AUTHORITY_PATTERN = re.compile(
+    r"\b(?:may|can|shall|should)\s+"
+    r"(?:run|start|proceed|execute|refresh|inspect|continue)\b|"
+    r"\bis\s+(?:allowed|authorized|approved|permitted|eligible)\s+to\b|"
+    r"^(?:run|launch|use)\b",
+    flags=re.IGNORECASE,
+)
 ACTUATOR_CHAIN_DOCUMENT_SHA256 = {
     "selector": "28f2d15bd54c2ee289fbf7681e4ab074adad109ccc41529883a5be1a9ebd2d65",
     "delegation": "7a0f8ab35f91587b1f1f1f4294b6563ad3faa43b87524acbab593549551064ee",
@@ -388,8 +426,56 @@ def assert_actuator_chain_documents_unchanged(
             )
 
 
+def assert_no_ineligible_lower_tier_continuation(
+    documents: dict[str, str],
+) -> None:
+    """Reject a positive lower-tier transition for preserved protected work."""
+
+    for document, text in documents.items():
+        normalized = re.sub(r"\s+", " ", text)
+        for statement in re.split(r"(?<=[.!?])\s+", normalized):
+            if (
+                LOWER_TIER_SUBJECT_PATTERN.search(statement)
+                and PROTECTED_CONTINUATION_SCOPE_PATTERN.search(statement)
+                and POSITIVE_CONTINUATION_AUTHORITY_PATTERN.search(statement)
+            ):
+                raise AssertionError(
+                    "contradictory lower-tier authorization "
+                    f"in {document}: protected continuation"
+                )
+
+
+def assert_no_stateful_status_authorization(documents: dict[str, str]) -> None:
+    """Reject positive authority for the known stateful status surfaces."""
+
+    for document, text in documents.items():
+        normalized = re.sub(r"\s+", " ", text)
+        for statement in re.split(r"(?<=[.!?])\s+", normalized):
+            four_call_exchange = all(
+                marker.search(statement) for marker in UNSAFE_STATUS_EXCHANGE_MARKERS
+            )
+            app_server_surface = (
+                re.search(r"\bapp-server\b", statement, flags=re.IGNORECASE)
+                and re.search(
+                    r"\b(?:Codex|0\.149\.0|four[ -]call)\b",
+                    statement,
+                    flags=re.IGNORECASE,
+                )
+            )
+            if (
+                (four_call_exchange or app_server_surface)
+                and POSITIVE_STATUS_AUTHORITY_PATTERN.search(statement)
+            ):
+                raise AssertionError(
+                    "contradictory standing status authorization "
+                    f"in {document}: stateful status surface"
+                )
+
+
 def assert_transition_policy_exclusive(documents: dict[str, str]) -> None:
     """Reject unreviewed transition policy anywhere in the actuator chain."""
+
+    assert_no_ineligible_lower_tier_continuation(documents)
 
     for document, expected in TRANSITION_TIER_REFERENCE_LINES.items():
         tier_lines = tuple(
@@ -411,6 +497,8 @@ def assert_transition_policy_exclusive(documents: dict[str, str]) -> None:
 
 def assert_status_policy_exclusive(documents: dict[str, str]) -> None:
     """Reject unreviewed app-server or standing-status policy."""
+
+    assert_no_stateful_status_authorization(documents)
 
     for document, expected in STATUS_POLICY_REFERENCE_LINES.items():
         actual = tuple(
@@ -610,6 +698,44 @@ class ModelTransitionContractTests(unittest.TestCase):
                 ):
                     assert_transition_policy_exclusive(mutated)
 
+    def test_synchronized_baselines_cannot_authorize_protected_fallback(self) -> None:
+        addition = (
+            "When the preferred Daybreak route is unavailable, Terra High may "
+            "continue the same cybersecurity task without reclassification."
+        )
+        mutated = dict(self.documents)
+        mutated["global"] = f'{mutated["global"]}\n\n{addition}'
+        synchronized_references = {
+            document: tuple(
+                line.strip()
+                for line in text.splitlines()
+                if LOWER_TIER_ALIAS_PATTERN.search(line)
+            )
+            for document, text in mutated.items()
+        }
+        synchronized_digests = {
+            document: hashlib.sha256(text.encode("utf-8")).hexdigest()
+            for document, text in mutated.items()
+        }
+
+        with (
+            mock.patch.dict(
+                TRANSITION_TIER_REFERENCE_LINES,
+                synchronized_references,
+                clear=True,
+            ),
+            mock.patch.dict(
+                ACTUATOR_CHAIN_DOCUMENT_SHA256,
+                synchronized_digests,
+                clear=True,
+            ),
+            self.assertRaisesRegex(
+                AssertionError,
+                "contradictory lower-tier authorization",
+            ),
+        ):
+            assert_transition_policy_exclusive(mutated)
+
 
 class RoutingPreflightContractTests(unittest.TestCase):
     @classmethod
@@ -697,9 +823,38 @@ class RoutingPreflightContractTests(unittest.TestCase):
         )
         mutated = dict(self.documents)
         mutated["global"] = f'{mutated["global"]}\n\n{addition}'
-        with self.assertRaisesRegex(
-            AssertionError,
-            "contradictory standing status authorization",
+        synchronized_references = {
+            document: tuple(
+                line.strip()
+                for line in text.splitlines()
+                if re.search(
+                    r"(?:app-server|standing permission)",
+                    line,
+                    flags=re.IGNORECASE,
+                )
+            )
+            for document, text in mutated.items()
+        }
+        synchronized_digests = {
+            document: hashlib.sha256(text.encode("utf-8")).hexdigest()
+            for document, text in mutated.items()
+        }
+
+        with (
+            mock.patch.dict(
+                STATUS_POLICY_REFERENCE_LINES,
+                synchronized_references,
+                clear=True,
+            ),
+            mock.patch.dict(
+                ACTUATOR_CHAIN_DOCUMENT_SHA256,
+                synchronized_digests,
+                clear=True,
+            ),
+            self.assertRaisesRegex(
+                AssertionError,
+                "contradictory standing status authorization",
+            ),
         ):
             assert_status_policy_exclusive(mutated)
 
