@@ -289,14 +289,18 @@ PREFLIGHT_FORBIDDEN_CLAUSES = (
     "refresh local account authentication",
 )
 
-TRANSITION_TIER_REFERENCES = {
+TRANSITION_TIER_REFERENCE_LINES = {
     "selector": (
-        "Model Transition Authorization",
-        (
-            "It never lowers those floors or authorizes Terra, Luna, or another otherwise ineligible selection.",
-        ),
+        "For an existing task, preserve its identity and ownership, its prior authorized selection, the prior role and risk floors, any mandatory security route, and any explicit operator selection. A follow-up, resume, retry, timeout, or capacity failure is not by itself a reclassification. Capacity changes route availability only. It never lowers those floors or authorizes Terra, Luna, or another otherwise ineligible selection.",
+        "3. For coding, use the very-hard or hard row when its criteria apply. Otherwise use Terra or Luna only when the complete criteria and exclusions describe the delegated task; use the low-complexity or typical coding row for the remaining coding work.",
+        "4. For other work, use Terra or Luna only when the complete criteria and exclusions apply. If no row applies, report that the matrix has no selection instead of borrowing a neighboring row.",
+        "| Terra work: stronger cognition can materially improve quality or efficiency, but a suboptimal result remains easy to review, discard, or repair; examples include scoped implementation, recoverable debugging, focused code review, and test design against a settled contract | Grok 4.5 at `high` with fast mode | GPT 5.6 Terra at `high` |",
+        "| Luna work: the task benefits from language understanding but does not require meaningful judgment or high intelligence; examples include exact-format extraction, classification against an explicit rubric, mechanical follow-ups, status monitoring, and tightly specified clerical edits | Grok 4.5 at `low` with fast mode | GPT 5.6 Luna at `high` |",
+        "Terra work excludes tasks that control a hard-to-reverse decision and tasks that need only bounded semantic clerical work. Luna work excludes any choice that can redirect scope, architecture, diagnosis, integration, publication, or another hard-to-recover part of the effort. More Luna reasoning effort does not make it a substitute for Terra or Sol judgment. When delegated work changes character, reclassify it and select a new model before continuing.",
+        "- Code review, exploratory codebase research, CI or log investigation, shell or test running, browser QA, issue triage, and PR triage use the coding row matching their difficulty and risk unless a more specific row applies. Use the Terra or Luna row only when its criteria are fully met.",
+        "| Treating Luna as a cheaper Terra or Sol | Use Luna only when the task requires no meaningful judgment and cannot redirect consequential work. |",
     ),
-    "delegation": ("Payload-Bearing Transition Gate", ()),
+    "delegation": (),
 }
 
 
@@ -346,39 +350,18 @@ def parse_expectation(text: str) -> tuple[str, tuple[str, ...]]:
     return match.group(2), tuple(match.group(1).split(","))
 
 
-def markdown_section(text: str, heading: str) -> str:
-    match = re.search(
-        rf"^## {re.escape(heading)}\s*$\n(?P<body>.*?)(?=^## |\Z)",
-        text,
-        flags=re.MULTILINE | re.DOTALL,
-    )
-    if match is None:
-        raise AssertionError(f"missing policy section: {heading}")
-    return match.group("body")
-
-
-def policy_sentences(text: str, heading: str) -> tuple[str, ...]:
-    section = " ".join(markdown_section(text, heading).split())
-    return tuple(
-        sentence
-        for sentence in re.split(r"(?<=[.!?])\s+", section)
-        if sentence
-    )
-
-
 def assert_transition_policy_exclusive(documents: dict[str, str]) -> None:
-    """Reject additive Terra or Luna permissions in transition policy sections."""
+    """Reject unreviewed Terra or Luna policy anywhere in the actuator chain."""
 
-    for document, (heading, expected) in TRANSITION_TIER_REFERENCES.items():
+    for document, expected in TRANSITION_TIER_REFERENCE_LINES.items():
         actual = tuple(
-            sentence
-            for sentence in policy_sentences(documents[document], heading)
-            if re.search(r"\b(?:Terra|Luna)\b", sentence)
+            line.strip()
+            for line in documents[document].splitlines()
+            if re.search(r"\b(?:Terra|Luna)\b", line, flags=re.IGNORECASE)
         )
         if actual != expected:
             raise AssertionError(
-                "contradictory lower-tier authorization in "
-                f"{document} {heading}: {actual!r}"
+                f"contradictory lower-tier authorization in {document}: {actual!r}"
             )
 
 
@@ -481,6 +464,18 @@ class ModelTransitionContractTests(unittest.TestCase):
                 "selector",
                 "If the operator selection conflicts with a mandatory security route or is unavailable, report the conflict and stop rather than changing either requirement silently.",
                 "When an operator requests local continuation while Daybreak is unavailable, Terra High may resume the existing security-hardening task.",
+            ),
+            (
+                "A-daybreak-section",
+                "selector",
+                "## Daybreak Routing For Cybersecurity Work",
+                "When the preserved Daybreak route is out of capacity, Terra High may continue the existing security-sensitive task without reclassification.",
+            ),
+            (
+                "B-fallback-section",
+                "selector",
+                "## Fallback Rules",
+                "When the preferred route is unavailable, Luna High may retry the existing hard-to-reverse task without reclassification.",
             ),
         )
         for case, document, anchor, addition in mutations:
