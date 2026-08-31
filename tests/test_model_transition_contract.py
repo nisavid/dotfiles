@@ -304,6 +304,16 @@ TRANSITION_TIER_REFERENCE_LINES = {
     "global": (),
 }
 
+STATUS_POLICY_REFERENCE_LINES = {
+    "selector": (
+        "For a permitted Codex account-home route, use only a separately supported status interface whose installed implementation is proven not to refresh or persist authentication and not to mutate login, configuration, cache, database, task, or turn state. Bind that side-effect-safety proof to the exact installed version and interface, and revalidate it after any implementation, version, startup, or status-path change. A protocol method name, `refreshToken: false`, or a read-shaped request does not prove that boundary. Do not launch `codex app-server` for this refresh when its startup or status path can call proactive authentication refresh, persist state, start background writers, or update caches or databases. In particular, exposing initialization, `account/read` with `refreshToken: false`, `model/list`, and `account/rateLimits/read` does not make that four-call exchange side-effect-free or authorized. The Codex 0.149.0 four-call app-server path is outside this standing permission and is not eligible to establish fresh execution authority.",
+    ),
+    "delegation": (),
+    "global": (
+        "When `choosing-agent-models` needs fresh route metadata, this standing permission covers only a separately supported status-only interface whose installed implementation is proven not to refresh or persist authentication and not to mutate login, configuration, cache, database, task, or turn state. Bind that side-effect-safety evidence to the exact installed version and interface, and revalidate it after any implementation, version, startup, or status-path change. A protocol method name, `refreshToken: false`, or a read-shaped RPC is not proof of that boundary. Do not launch `codex app-server` for this refresh when its status path can call proactive authentication refresh or persist state. The Codex 0.149.0 four-call app-server path is outside this standing permission and is not eligible to establish fresh execution authority. Direct credential-file reads, credential injection, token refresh, task or turn creation, task-data transfer, task workspace or task tools, login or configuration mutation, delegation, task execution, and the separate harmless task-work probe remain outside this permission. If no proven side-effect-free status path exists or it cannot start safely, record the route as status-unverified. If an eligible status refresh is refused, record the route as status-denied. Either state keeps the permitted-route inventory incomplete and proves none of genuine model absence, Daybreak unavailability, exhausted capacity, missing task-work authority, or execution authority. Before substantive dispatch, require authenticated, version-bound side-effect-safety evidence and complete task, plan, and actuation bindings for the current invocation.",
+    ),
+}
+
 
 def parse_cases(text: str) -> dict[str, str]:
     parts = re.split(r"^## Case ([A-H])\s*$", text, flags=re.MULTILINE)
@@ -364,6 +374,31 @@ def assert_transition_policy_exclusive(documents: dict[str, str]) -> None:
             raise AssertionError(
                 f"contradictory lower-tier authorization in {document}: {actual!r}"
             )
+
+
+def assert_status_policy_exclusive(documents: dict[str, str]) -> None:
+    """Reject unreviewed app-server or standing-status policy."""
+
+    for document, expected in STATUS_POLICY_REFERENCE_LINES.items():
+        actual = tuple(
+            line.strip()
+            for line in documents[document].splitlines()
+            if re.search(
+                r"(?:app-server|standing permission)",
+                line,
+                flags=re.IGNORECASE,
+            )
+        )
+        if actual != expected:
+            raise AssertionError(
+                f"contradictory standing status authorization in {document}: "
+                f"{actual!r}"
+            )
+
+    combined = "\n".join(documents.values())
+    for clause in PREFLIGHT_FORBIDDEN_CLAUSES:
+        if clause in combined:
+            raise AssertionError("contradictory standing status authorization")
 
 
 class ParserIntegrityTests(unittest.TestCase):
@@ -521,6 +556,7 @@ class RoutingPreflightContractTests(unittest.TestCase):
         )
         cls.documents = {
             "selector": SELECTOR_PATH.read_text(encoding="utf-8"),
+            "delegation": DELEGATION_PATH.read_text(encoding="utf-8"),
             "global": GLOBAL_POLICY_PATH.read_text(encoding="utf-8"),
         }
 
@@ -554,9 +590,30 @@ class RoutingPreflightContractTests(unittest.TestCase):
                     self.assertIn(clause, self.documents[document])
 
     def test_state_mutating_app_server_approval_is_removed(self) -> None:
-        combined = "\n".join(self.documents.values())
-        for clause in PREFLIGHT_FORBIDDEN_CLAUSES:
-            self.assertNotIn(clause, combined)
+        assert_status_policy_exclusive(self.documents)
+
+    def test_paraphrased_app_server_authorizations_are_rejected(self) -> None:
+        anchor = (
+            "The Codex 0.149.0 four-call app-server path is outside this "
+            "standing permission and is not eligible to establish fresh execution "
+            "authority."
+        )
+        addition = (
+            "The four-call codex app-server exchange may run automatically under "
+            "this standing permission whenever route metadata is stale."
+        )
+        self.assertEqual(self.documents["global"].count(anchor), 1)
+        mutated = dict(self.documents)
+        mutated["global"] = mutated["global"].replace(
+            anchor,
+            f"{anchor}\n\n{addition}",
+            1,
+        )
+        with self.assertRaisesRegex(
+            AssertionError,
+            "contradictory standing status authorization",
+        ):
+            assert_status_policy_exclusive(mutated)
 
 
 if __name__ == "__main__":

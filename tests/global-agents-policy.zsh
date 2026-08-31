@@ -156,6 +156,11 @@ for ((i = 1; i <= ${#required}; i++)); do
   grep -Fq -- "$required[$i]" "$rendered" || fail "missing required clause $i"
 done
 
+status_policy_reference='When `choosing-agent-models` needs fresh route metadata, this standing permission covers only a separately supported status-only interface whose installed implementation is proven not to refresh or persist authentication and not to mutate login, configuration, cache, database, task, or turn state. Bind that side-effect-safety evidence to the exact installed version and interface, and revalidate it after any implementation, version, startup, or status-path change. A protocol method name, `refreshToken: false`, or a read-shaped RPC is not proof of that boundary. Do not launch `codex app-server` for this refresh when its status path can call proactive authentication refresh or persist state. The Codex 0.149.0 four-call app-server path is outside this standing permission and is not eligible to establish fresh execution authority. Direct credential-file reads, credential injection, token refresh, task or turn creation, task-data transfer, task workspace or task tools, login or configuration mutation, delegation, task execution, and the separate harmless task-work probe remain outside this permission. If no proven side-effect-free status path exists or it cannot start safely, record the route as status-unverified. If an eligible status refresh is refused, record the route as status-denied. Either state keeps the permitted-route inventory incomplete and proves none of genuine model absence, Daybreak unavailability, exhausted capacity, missing task-work authority, or execution authority. Before substantive dispatch, require authenticated, version-bound side-effect-safety evidence and complete task, plan, and actuation bindings for the current invocation.'
+status_policy_lines=$(grep -Ei -- '(app-server|standing permission)' "$rendered")
+[[ $status_policy_lines == $status_policy_reference ]] || \
+  fail 'global policy has unreviewed app-server or standing-status policy'
+
 ! grep -Fq -- 'this standing permission authorizes launching the installed `codex app-server`' "$rendered" || \
   fail 'global policy must not authorize the state-mutating app-server status path'
 

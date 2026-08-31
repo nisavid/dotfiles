@@ -243,6 +243,9 @@ test_model_selection() {
   assert_contains "$transition_contract_test" \
     'test_additive_lower_tier_authorizations_are_rejected' \
     'the public gate must include contradiction-sensitive Terra and Luna mutation tests'
+  assert_contains "$transition_contract_test" \
+    'test_paraphrased_app_server_authorizations_are_rejected' \
+    'the public gate must include contradiction-sensitive standing-status mutation tests'
   assert_contains "$skill" \
     'Revalidating an existing task before a payload-bearing follow-up, resume, retry, or capacity fallback.' \
     'the selector trigger contract must include existing-task transitions'
