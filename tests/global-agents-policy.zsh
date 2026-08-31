@@ -141,8 +141,10 @@ required=(
   'Publication requires separate authorization.'
   'Only refresh local `main` when the operation depends on it.'
   'Before every payload-bearing new invocation, follow-up, resume, retry, or capacity fallback, use `choosing-agent-models`; preserve same-task identity, and stop rather than silently substituting a model after failure.'
-  'this standing permission authorizes launching the installed `codex app-server` against each catalog-selected permitted account home from an OS temporary working directory'
-  'It does not authorize reading credential files directly, refreshing tokens, creating a task or turn, transferring task data, using a task workspace or task tools, changing login or configuration, delegating, executing task work, or running the separate harmless task-work probe.'
+  'this standing permission covers only a separately supported status-only interface whose installed implementation is proven not to refresh or persist authentication and not to mutate login, configuration, cache, database, task, or turn state.'
+  'A protocol method name, `refreshToken: false`, or a read-shaped RPC is not proof of that boundary.'
+  'Do not launch `codex app-server` for this refresh when its status path can call proactive authentication refresh or persist state.'
+  'Direct credential-file reads, credential injection, token refresh, task or turn creation, task-data transfer, task workspace or task tools, login or configuration mutation, delegation, task execution, and the separate harmless task-work probe remain outside this permission.'
   'record the route as status-unverified or status-denied; do not report Daybreak absent or unavailable from that result.'
   'Keep the permitted-route inventory incomplete until that route has a fresh supported result.'
 )
@@ -150,6 +152,9 @@ required=(
 for ((i = 1; i <= ${#required}; i++)); do
   grep -Fq -- "$required[$i]" "$rendered" || fail "missing required clause $i"
 done
+
+! grep -Fq -- 'this standing permission authorizes launching the installed `codex app-server`' "$rendered" || \
+  fail 'global policy must not authorize the state-mutating app-server status path'
 
 development_line=$(grep -n '^## Development Work$' "$rendered" | cut -d: -f1)
 git_policy_line=$(grep -n '^## Git Checkpoints And Publication$' "$rendered" | cut -d: -f1)

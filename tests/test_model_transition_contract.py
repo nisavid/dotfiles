@@ -163,45 +163,66 @@ POLICY_CLAUSES = {
 }
 
 PREFLIGHT_EXPECTED_DISPOSITIONS = {
-    "A": "run the supported metadata-only refresh before dispatch, then require the separate authorized harmless probe.",
-    "B": "record status-denied or status-unverified and incomplete inventory; do not report Daybreak unavailable or dispatch.",
-    "C": "record genuine model absence for only the refreshed route, then finish the permitted-route inventory.",
-    "D": "record capacity exhaustion separately and apply only a policy-permitted no-capacity disposition.",
-    "E": "record missing task-work authority separately; do not probe or dispatch.",
+    "A": "run the proven side-effect-free metadata refresh before dispatch, then require the separate authorized harmless probe.",
+    "B": "reject the state-mutating app-server path, record status-unverified and incomplete inventory, and do not dispatch.",
+    "C": "record status-denied or status-unverified and incomplete inventory; do not report Daybreak unavailable or dispatch.",
+    "D": "record genuine model absence for only the refreshed route, then finish the permitted-route inventory.",
+    "E": "record unknown capacity and unproven runnability separately; do not report the route unavailable or dispatch.",
+    "F": "record capacity exhaustion separately and apply only a policy-permitted no-capacity disposition.",
+    "G": "record missing task-work authority separately; do not probe or dispatch.",
+    "H": "record the failed harmless probe as capability-unproven separately; do not dispatch.",
 }
 
 PREFLIGHT_EXPECTED_EXPECTATIONS = {
-    "supported-status-interface": "Uses only the installed supported Codex status interface for the metadata-only refresh and rejects direct credential-file access or an ad hoc credential-reading script.",
+    "supported-status-interface": "Uses only a separately supported status interface whose installed implementation is proven not to refresh or persist authentication or mutate login, configuration, cache, database, task, or turn state.",
+    "unsafe-status-interface-fails-closed": "Rejects the Codex 0.149.0 four-call app-server path under the standing approval because read-shaped RPCs and refreshToken false do not prevent proactive authentication refresh and persistence.",
     "status-denial-not-absence": "Keeps denied or unavailable status access as status-unverified or status-denied with incomplete inventory, never as proof that Daybreak is absent or unavailable.",
     "pre-dispatch-status-order": "Completes required route status, task-work authorization, and the separate harmless probe before sending any substantive task payload.",
-    "preflight-failure-taxonomy": "Distinguishes incomplete inventory, status denial, genuine model absence, exhausted capacity, and missing task-work authority in decisions and reports.",
+    "preflight-failure-taxonomy": "Distinguishes incomplete inventory, status denial, genuine model absence, unknown capacity, exhausted capacity, failed harmless probe, and missing task-work authority in decisions and reports.",
     "preflight-redaction": "Keeps actionable account identifiers local and transmits only redacted, non-stable route evidence.",
 }
 
 PREFLIGHT_FIXTURE_MARKERS = {
     "A": (
-        "installed `codex app-server` status interface",
-        "without reading a credential file directly",
+        "separately supported side-effect-free status interface",
+        "proven not to refresh or persist authentication",
         "separate harmless task-work probe",
     ),
-    "B": ("status-denied", "incomplete inventory", "Daybreak unavailable"),
-    "C": ("genuine model absence", "remaining permitted-route inventory"),
-    "D": ("capacity exhaustion", "do not send task data"),
-    "E": ("missing task-work authority", "do not run the harmless probe"),
+    "B": (
+        "Codex 0.149.0",
+        "`AuthManager::auth()`",
+        "status-unverified",
+    ),
+    "C": ("status-denied", "incomplete inventory", "Daybreak unavailable"),
+    "D": ("genuine model absence", "remaining permitted-route inventory"),
+    "E": ("capacity is unknown", "runnability remains unproven"),
+    "F": ("capacity exhaustion", "do not send task data"),
+    "G": ("missing task-work authority", "do not run the harmless probe"),
+    "H": ("harmless task-work probe fails", "capability-unproven"),
 }
 
 PREFLIGHT_POLICY_CLAUSES = {
     "A": (
         (
             "global",
-            "this standing permission authorizes launching the installed `codex app-server`",
+            "this standing permission covers only a separately supported status-only interface",
         ),
         (
             "selector",
-            "use the installed `codex app-server` as the supported status interface",
+            "use only a separately supported status interface whose installed implementation is proven",
         ),
     ),
     "B": (
+        (
+            "global",
+            "Do not launch `codex app-server` for this refresh when its status path can call proactive authentication refresh or persist state.",
+        ),
+        (
+            "selector",
+            "A protocol method name, `refreshToken: false`, or a read-shaped request does not prove that boundary.",
+        ),
+    ),
+    "C": (
         (
             "global",
             "record the route as status-unverified or status-denied",
@@ -211,25 +232,43 @@ PREFLIGHT_POLICY_CLAUSES = {
             "Those outcomes do not prove that Daybreak is absent or unavailable",
         ),
     ),
-    "C": (
+    "D": (
         (
             "selector",
             "the exact currently exposed model",
         ),
     ),
-    "D": (
+    "E": (
+        (
+            "selector",
+            "unknown capacity",
+        ),
+    ),
+    "F": (
         (
             "selector",
             "Select deferral until capacity returns when a Daybreak route exists and exhausted capacity is the blocker",
         ),
     ),
-    "E": (
+    "G": (
         (
             "selector",
             "classify the route as unavailable without probing it; the automatic local refresh remains permitted",
         ),
     ),
+    "H": (
+        (
+            "selector",
+            "failed harmless probe",
+        ),
+    ),
 }
+
+PREFLIGHT_FORBIDDEN_CLAUSES = (
+    "this standing permission authorizes launching the installed `codex app-server`",
+    "use the installed `codex app-server` as the supported status interface",
+    "refresh local account authentication",
+)
 
 
 def parse_cases(text: str) -> dict[str, str]:
@@ -261,7 +300,7 @@ def parse_dispositions(text: str) -> dict[str, str]:
 
 
 def parse_preflight_cases(text: str) -> dict[str, str]:
-    parts = re.split(r"^## Case ([A-E])\s*$", text, flags=re.MULTILINE)
+    parts = re.split(r"^## Case ([A-H])\s*$", text, flags=re.MULTILINE)
     cases = {}
     for index in range(1, len(parts), 2):
         case = parts[index]
@@ -406,6 +445,11 @@ class RoutingPreflightContractTests(unittest.TestCase):
             with self.subTest(case=case):
                 for document, clause in clauses:
                     self.assertIn(clause, self.documents[document])
+
+    def test_state_mutating_app_server_approval_is_removed(self) -> None:
+        combined = "\n".join(self.documents.values())
+        for clause in PREFLIGHT_FORBIDDEN_CLAUSES:
+            self.assertNotIn(clause, combined)
 
 
 if __name__ == "__main__":

@@ -300,10 +300,14 @@ test_model_selection() {
     'fresh routing information must trigger automatic per-account refresh'
   assert_contains "$skill" 'the operator does not need to authorize it' \
     'local status refresh must not require operator task authorization'
-  assert_contains "$skill" 'installed `codex app-server`' \
-    'Codex route status must use the installed supported interface'
-  assert_contains "$skill" '`account/read` with `refreshToken: false`, `model/list`, and `account/rateLimits/read`' \
-    'Codex route status must allow only the supported metadata requests'
+  assert_contains "$skill" 'refresh observations of local account authentication' \
+    'local status refresh must refresh observations rather than authentication state'
+  assert_contains "$skill" 'separately supported status interface whose installed implementation is proven' \
+    'Codex route status must use a proven side-effect-free interface'
+  assert_contains "$skill" 'A protocol method name, `refreshToken: false`, or a read-shaped request does not prove that boundary.' \
+    'read-shaped Codex requests must not be treated as proof of a side-effect-free boundary'
+  assert_contains "$skill" 'initialization, `account/read` with `refreshToken: false`, `model/list`, and `account/rateLimits/read` does not make that four-call exchange side-effect-free or authorized.' \
+    'the Codex 0.149.0 four-call path must remain outside standing authorization'
   assert_contains "$skill" 'Do not read `auth.json` or another credential file directly' \
     'route status must not implement direct credential reads'
   assert_contains "$skill" 'status-unverified or status-denied' \
@@ -314,7 +318,7 @@ test_model_selection() {
     'Keep the permitted-route inventory incomplete until that route has a fresh supported result.' \
     'status denial must preserve incomplete route inventory'
   assert_contains "$skill" \
-    'keep incomplete inventory, status-unverified or status-denied, genuine model absence, exhausted capacity, failed harmless probe, and missing task-work authority as distinct states.' \
+    'keep incomplete inventory, status-unverified or status-denied, genuine model absence, unknown capacity, exhausted capacity, failed harmless probe or otherwise unproven runnability, and missing task-work authority as distinct states.' \
     'routing decisions must preserve the complete failure taxonomy'
   assert_contains "$skill" 'exact model exposed at that moment' \
     'refresh evidence must resolve the exact currently exposed model'
@@ -431,7 +435,8 @@ test_model_selection() {
     capacity-preserves-floor \
     terra-luna-rejection sticky-operator-selection operator-policy-conflict \
     exact-selector-transition explicit-reclassification eligible-fallback \
-    mixed-role-floor supported-status-interface status-denial-not-absence \
+    mixed-role-floor supported-status-interface unsafe-status-interface-fails-closed \
+    status-denial-not-absence \
     pre-dispatch-status-order preflight-failure-taxonomy; do
     jq -e --arg id "$expectation_id" 'any(.evals[].expectations[]; .id == $id)' "$evals" >/dev/null || \
       fail "model-selection behavior expectation is missing: $expectation_id"
@@ -494,8 +499,14 @@ test_model_selection() {
     'native and current-account selectors expose no Daybreak model' \
     'routing preflight fixture must require inventory beyond the ambient account'
   assert_contains "$preflight_fixture" \
-    'installed `codex app-server` status interface' \
-    'routing preflight fixture must exercise the supported status path'
+    'separately supported side-effect-free status interface' \
+    'routing preflight fixture must exercise only a proven side-effect-free status path'
+  assert_contains "$preflight_fixture" \
+    'Codex 0.149.0' \
+    'routing preflight fixture must reject the installed state-mutating app-server path'
+  assert_contains "$preflight_fixture" \
+    '`AuthManager::auth()`' \
+    'routing preflight fixture must bind the proactive refresh regression'
   assert_contains "$preflight_fixture" \
     'No substantive task payload has been sent.' \
     'routing preflight fixture must enforce selection before dispatch'
@@ -507,8 +518,12 @@ test_model_selection() {
     'routing preflight fixture must distinguish confirmed model absence'
   assert_contains "$preflight_fixture" 'capacity exhaustion' \
     'routing preflight fixture must distinguish exhausted capacity'
+  assert_contains "$preflight_fixture" 'capacity is unknown' \
+    'routing preflight fixture must distinguish unknown capacity'
   assert_contains "$preflight_fixture" 'missing task-work authority' \
     'routing preflight fixture must distinguish missing execution authority'
+  assert_contains "$preflight_fixture" 'capability-unproven' \
+    'routing preflight fixture must distinguish a failed harmless probe'
   assert_contains "$transition_fixture" 'proposes Terra High in the same task' \
     'transition fixture must cover the observed capacity-to-Terra trap'
   assert_contains "$transition_fixture" 'proposes Luna High in the same task' \
