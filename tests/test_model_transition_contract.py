@@ -301,6 +301,7 @@ TRANSITION_TIER_REFERENCE_LINES = {
         "| Treating Luna as a cheaper Terra or Sol | Use Luna only when the task requires no meaningful judgment and cannot redirect consequential work. |",
     ),
     "delegation": (),
+    "global": (),
 }
 
 
@@ -401,6 +402,7 @@ class ModelTransitionContractTests(unittest.TestCase):
         cls.documents = {
             "selector": SELECTOR_PATH.read_text(encoding="utf-8"),
             "delegation": DELEGATION_PATH.read_text(encoding="utf-8"),
+            "global": GLOBAL_POLICY_PATH.read_text(encoding="utf-8"),
         }
 
     def test_case_dispositions_are_executable_oracles(self) -> None:
@@ -476,6 +478,12 @@ class ModelTransitionContractTests(unittest.TestCase):
                 "selector",
                 "## Fallback Rules",
                 "When the preferred route is unavailable, Luna High may retry the existing hard-to-reverse task without reclassification.",
+            ),
+            (
+                "A-global-policy",
+                "global",
+                "## Delegation",
+                "When the preserved Daybreak route is unavailable, Terra High may continue the existing security-sensitive task without reclassification.",
             ),
         )
         for case, document, anchor, addition in mutations:
