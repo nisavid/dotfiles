@@ -24,7 +24,7 @@ Track each claim/seam across cycles. After correction, activate when the tracked
 
 For code, other durable artifacts, or ambiguous findings, read [references/review-criteria.md](references/review-criteria.md).
 
-For every PR, including ambiguous findings, run `pr-review-orchestration` once per cycle under its external-review budget gates.
+For every PR, including ambiguous findings, run `pr-review-orchestration` once per cycle under its external-review iteration policy.
 
 ## Pushback
 

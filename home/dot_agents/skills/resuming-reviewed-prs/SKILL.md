@@ -13,7 +13,7 @@ Core principle: make the PR easier to approve without hiding new behavior. Keep 
 
 ## Required Routing
 
-- Use `pr-review-orchestration` for PR state, review-thread state, ledgers, external-review budgets, and merge-readiness gates.
+- Use `pr-review-orchestration` for PR state, review-thread state, ledgers, external-review iteration, and merge-readiness gates.
 - Use `publishing-reviewable-prs` whenever refreshed commits, verification, scope, stack state, or review decisions require a PR title/body update.
 - Use `receiving-code-review` before accepting or rejecting reviewer feedback.
 - Use `ralph-review-until-clean` when fixes and judgments need review.
