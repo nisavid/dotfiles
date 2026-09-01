@@ -43,12 +43,13 @@ the full nuance of the preference it enforces, or it over-applies:
 Under strong style rules, `claude-opus-5` invented details it was not given:
 unverified test outcomes stated as fact, motives, and self-committed
 concessions. Blind-judged fidelity dropped roughly 9.0 → 7.75 (0–10) until an
-explicit evidence guard was added ("never assert a test outcome you didn't
-run; write 'should fail', not 'fails'"). The primary mitigation is grounding,
-not guards: supply the load-bearing detail and leave the rest legitimately
-discoverable with tools. An under-grounded drafting task reads to the model as
-a rhetoric exercise, and it supplies rhetorical (invented) observations to
-match. Guards remain a useful backstop.
+explicit evidence guard was added ("never assert a test outcome you didn't run;
+write 'should fail', not 'fails'"). The primary mitigation is grounding, not
+guards: supply the load-bearing detail and leave the rest legitimately
+discoverable with tools. The working hypothesis for the mechanism, not
+something these runs measured: an under-grounded drafting task reads to the
+model as a rhetoric exercise, so it supplies rhetorical (invented) observations
+to match. Guards remain a useful backstop.
 
 ## Implication for authoring Claude-facing writing policy
 
