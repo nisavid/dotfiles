@@ -83,7 +83,7 @@ destination, not a published standard.
 | [RFC 9162](https://www.rfc-editor.org/rfc/rfc9162.html) | Experimental | Certificate Transparency v2 Merkle tree, inclusion proofs, consistency proofs, monitoring, and split-view caveats. It is the only currently registered RFC 9942 VDS. |
 | [RFC 9921](https://www.rfc-editor.org/rfc/rfc9921.html) | Proposed Standard, February 2026 | RFC 3161 timestamp headers for COSE, with distinct completed-signature and payload-first semantics. |
 | [RFC 9964](https://www.rfc-editor.org/rfc/rfc9964.html) | Proposed Standard, May 2026 | Pure ML-DSA COSE and JOSE algorithms; not a classical-plus-PQ hybrid. |
-| [RFC 9995](https://www.rfc-editor.org/rfc/rfc9995.html) | Proposed Standard, July 2026 | COSE Hash Envelope; the clean standards bridge to an exact OpenPGP object. |
+| [RFC 9995](https://www.rfc-editor.org/rfc/rfc9995.html) | Proposed Standard, July 2026 | COSE Hash Envelope; a generic COSE mechanism that binds a payload digest to its required hash-algorithm identifier and optional preimage media type and locator. This profile applies it to the exact JCS bytes of one `signature-envelope/v1`; the OpenPGP byte mapping and independent RFC 9980/#209 verification remain profile requirements. |
 | [SCRAPI-11](https://datatracker.ietf.org/doc/draft-ietf-scitt-scrapi/) | Active SCITT WG Internet-Draft; intended Proposed Standard; in the RFC Editor queue awaiting a first editor | HTTP key discovery, registration, and receipt resolution. It is not yet an RFC. |
 | [CCF receipt profile-04](https://datatracker.ietf.org/doc/draft-ietf-scitt-receipts-ccf-profile/) | Active SCITT WG Internet-Draft; intended Proposed Standard; IETF Last Call through 2026-09-07 | CCF-specific inclusion receipt and requested VDS identifier 2. It is not yet an RFC or registered VDS. |
 | [SCITT software use cases-03](https://datatracker.ietf.org/doc/draft-ietf-scitt-software-use-cases/) | Expired and archived Internet-Draft since 2024 | Historical WG input, not a current protocol or profile. |
@@ -328,7 +328,7 @@ not a qualified split-view solution.
 | CWT RFC 8392 and CWT Claims in COSE Headers RFC 9597 | Protected `iss` and `sub` identity claims. | Directly adopt. Specify stable URI-shaped issuer/subject semantics and key binding; do not substitute local OpenPGP fingerprint meaning implicitly. |
 | COSE `typ` RFC 9596 and X.509 headers RFC 9360 | Type domain separation and conditional certificate carriage. | Require `typ` in the local profile. Use RFC 9360 only for an X.509 issuer profile; a bare `kid` still needs an out-of-band key-discovery and trust contract. |
 | RFC 9942 plus RFC 9162 | Receipt, VDS, inclusion, and consistency proof shapes. | Directly adopt for SCITT evidence. Treat SHA-256 as the registered proof-tree algorithm, never the authoritative #209 content identity. |
-| RFC 9995 | Standard COSE signature over a payload digest, with protected hash algorithm, preimage content type, and optional location. | Directly adopt as the bridge. Use SHA-512 over exact frozen `signature-envelope/v1` JCS bytes and bind its media type; keep byte length in the authoritative #209 descriptor and cross-check it against the recovered preimage. Omit locator authority. RFC 9995 forbids ordinary COSE `content_type` label 3 in a Hash Envelope and uses `preimage-content-type` label 259 instead. |
+| RFC 9995 | Standard COSE envelope whose payload is a digest, with a required protected hash-algorithm identifier and optional protected preimage content type and location. | Directly adopt for this profile's exact-preimage binding. Use SHA-512 over exact frozen `signature-envelope/v1` JCS bytes and bind its media type; keep byte length in the authoritative #209 descriptor and cross-check it against the recovered preimage. Omit locator authority. RFC 9995 forbids ordinary COSE `content_type` label 3 in a Hash Envelope and uses `preimage-content-type` label 259 instead. |
 | RFC 9921 and RFC 3161 | Two COSE timestamp orderings. | Complementary. `3161-ctt` timestamps the CBOR-encoded completed COSE signature field; `3161-ttc` timestamps the payload before COSE signing and is not evidence that the signature already existed. Keep #203's RFC 3161 token over completed OpenPGP signature bytes as separate authority evidence. |
 | RFC 9964 | Pure ML-DSA signatures for a SCITT statement issuer or TS receipt issuer. | Reusable when implementations and services support it, but not a replacement for RFC 9980 hybrid authority. End-to-end PQ claims must cover issuer, receipt/checkpoint, witness, retained evidence, and renewal—not only the inner release signature. |
 | RFC 9162 monitoring model | Full-log inspection, root consistency, and split-view caveats. | Reuse as a threat and test model. Do not call CT itself a generic release log or claim that a lone receipt is witnessed. |
@@ -648,8 +648,9 @@ The claim must name its scope rather than say only “SCITT conformant.” Retai
 - explicit evidence that underlying OpenPGP validation is mandatory and cannot
   be skipped through RFC 9943's receipt-only RP option;
 - exact mapping from SCITT evidence failure to the four generic outcomes; and
-- separate claims for RFC 9943 object support, RFC 9942/VDS verification,
-  RFC 9995 bridging, SCRAPI client behavior, and any service behavior.
+- separate claims for RFC 9943 object support, RFC 9942/VDS verification, RFC
+  9995 Hash Envelope support, this profile's exact-preimage binding, SCRAPI
+  client behavior, and any service behavior.
 
 ### Before adopting or requiring a service
 
