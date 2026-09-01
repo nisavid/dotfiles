@@ -131,7 +131,7 @@ None can substitute for another. No SCITT or release receipt grants a Fitting Gr
 
 ## External evidence
 
-SCITT enters only through #209's typed external-evidence boundary. The reserved profile uses RFC 9943 terms and media types, RFC 9942 receipts, and an RFC 9995 SHA-512 bridge over the exact `signature-envelope/v1` bytes. The verifier independently rechecks the underlying OpenPGP release graph.
+SCITT enters only through #209's typed external-evidence boundary. The reserved profile uses RFC 9943 terms and media types, RFC 9942 receipts, and an RFC 9995 SHA-512 Hash Envelope over the exact JCS bytes of one `signature-envelope/v1`. The profile defines the OpenPGP byte mapping, and the verifier independently rechecks the underlying RFC 9980/#209 release graph.
 
 A valid SCITT statement or receipt cannot select current state, repair invalid authority, clear withdrawal or quarantine, authorize Base Loadout validation, mutate an archive, or issue any Base Loadout release receipt. Missing required SCITT evidence can make a later profile `indeterminate`; invalid optional evidence is only a diagnostic note. Production service selection, trust, monitoring, witnessing, and qualification remain later generic work.
 
