@@ -108,6 +108,7 @@ required=(
   'An em dash is unspaced and earns its place'
   'An en dash joins numeric ranges'
   'Inline lists take the Oxford comma.'
+  'Prefer squash merging when several merge methods are available.'
   'Punctuation respects the unity of a quoted phrase rather than intruding into it'
   "In review replies, do not restate the comment, justify the reviewer's suggestion, or import unrelated decisions."
   'If agreeing and proceeding, say little.'
@@ -173,6 +174,7 @@ for phrase in $procedural; do
 done
 
 forbidden=(
+  'Prefer rebase merging when several merge methods are available.'
   'ivan/impeccable'
   'ivan/setup-local'
   'ivan/local-runtime-policy-docs'
