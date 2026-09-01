@@ -1,0 +1,1367 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>Release trust documentation architecture: disposable prototype</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --canvas: oklch(0.985 0.006 225);
+      --surface: oklch(1 0 0);
+      --surface-quiet: oklch(0.955 0.012 225);
+      --ink: oklch(0.22 0.03 235);
+      --muted: oklch(0.46 0.028 235);
+      --line: oklch(0.84 0.018 225);
+      --accent: oklch(0.49 0.115 215);
+      --accent-soft: oklch(0.92 0.035 215);
+      --tutorial: oklch(0.52 0.12 155);
+      --howto: oklch(0.5 0.13 230);
+      --reference: oklch(0.49 0.14 285);
+      --explanation: oklch(0.55 0.13 65);
+      --warning: oklch(0.52 0.13 55);
+      --warning-soft: oklch(0.94 0.04 70);
+      --danger: oklch(0.47 0.16 25);
+      --danger-soft: oklch(0.94 0.035 25);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      background: var(--canvas);
+      color: var(--ink);
+      line-height: 1.5;
+    }
+
+    button, select, input, code, pre { font: inherit; }
+
+    button, select {
+      border: 1px solid var(--line);
+      border-radius: 0.55rem;
+      background: var(--surface);
+      color: var(--ink);
+    }
+
+    button {
+      padding: 0.62rem 0.75rem;
+      cursor: pointer;
+      font-weight: 720;
+      text-align: left;
+    }
+
+    button:hover { border-color: var(--accent); background: var(--accent-soft); }
+    button:focus-visible, select:focus-visible, a:focus-visible {
+      outline: 3px solid oklch(0.49 0.115 215 / 0.3);
+      outline-offset: 2px;
+    }
+
+    code {
+      padding: 0.08rem 0.28rem;
+      border-radius: 0.3rem;
+      background: var(--surface-quiet);
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 0.92em;
+    }
+
+    pre {
+      overflow: auto;
+      margin: 0;
+      padding: 0.9rem;
+      border-radius: 0.55rem;
+      background: oklch(0.19 0.025 235);
+      color: oklch(0.95 0.008 225);
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 0.76rem;
+      line-height: 1.55;
+      white-space: pre-wrap;
+    }
+
+    a { color: var(--accent); }
+
+    h1, h2, h3, h4, p { margin-top: 0; }
+    h1, h2, h3 { text-wrap: balance; }
+    p, li { text-wrap: pretty; }
+
+    h1 {
+      margin-bottom: 0.35rem;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: clamp(1.8rem, 4vw, 3rem);
+      line-height: 1.05;
+    }
+
+    h2 {
+      margin-bottom: 0.75rem;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: clamp(1.35rem, 3vw, 2rem);
+    }
+
+    h3 { margin-bottom: 0.45rem; font-size: 1.05rem; }
+    h4 { margin-bottom: 0.35rem; font-size: 0.9rem; }
+
+    header {
+      border-bottom: 1px solid var(--line);
+      background: var(--surface);
+    }
+
+    .header-inner,
+    main {
+      width: min(1240px, calc(100% - 2rem));
+      margin: 0 auto;
+    }
+
+    .header-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1.5rem;
+      padding: 1.2rem 0;
+    }
+
+    .kicker {
+      margin-bottom: 0.25rem;
+      color: var(--accent);
+      font-size: 0.74rem;
+      font-weight: 850;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    .lede { max-width: 78ch; margin-bottom: 0; color: var(--muted); }
+
+    .badge,
+    .type-badge,
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      width: max-content;
+      padding: 0.3rem 0.58rem;
+      border-radius: 999px;
+      font-size: 0.72rem;
+      font-weight: 820;
+      letter-spacing: 0.035em;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+
+    .badge {
+      border: 1px solid var(--accent);
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+
+    main { padding: 2rem 0 5rem; }
+    section { margin-bottom: 2.5rem; scroll-margin-top: 1rem; }
+
+    .panel,
+    .intro,
+    .route-card,
+    .page-detail,
+    .gate,
+    .template-card {
+      border: 1px solid var(--line);
+      border-radius: 0.9rem;
+      background: var(--surface);
+    }
+
+    .intro,
+    .panel,
+    .page-detail { padding: clamp(1rem, 3vw, 1.5rem); }
+
+    .safety {
+      margin-top: 1rem;
+      padding: 0.85rem 1rem;
+      border: 1px solid var(--warning);
+      border-radius: 0.55rem;
+      background: var(--warning-soft);
+    }
+
+    .safety strong { display: block; margin-bottom: 0.15rem; }
+
+    .route-grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 0.75rem;
+    }
+
+    .route-card {
+      display: flex;
+      min-height: 12rem;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 0.9rem;
+      border-top: 4px solid var(--accent);
+    }
+
+    .route-card p { margin-bottom: 0.6rem; color: var(--muted); font-size: 0.88rem; }
+    .route-card button { width: 100%; }
+
+    .workspace {
+      display: grid;
+      grid-template-columns: minmax(280px, 0.72fr) minmax(0, 1.28fr);
+      gap: 1rem;
+      align-items: start;
+    }
+
+    .state-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0.65rem;
+    }
+
+    .state-cell {
+      padding: 0.72rem;
+      border-top: 2px solid var(--line);
+      background: var(--surface-quiet);
+    }
+
+    .state-cell span {
+      display: block;
+      margin-top: 0.2rem;
+      color: var(--muted);
+      font-size: 0.83rem;
+      overflow-wrap: anywhere;
+    }
+
+    .page-detail { min-height: 23rem; }
+
+    .detail-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 1rem;
+      margin-bottom: 1rem;
+    }
+
+    .detail-head p { margin-bottom: 0; color: var(--muted); }
+
+    .detail-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0.75rem;
+    }
+
+    .detail-grid div {
+      padding: 0.72rem;
+      border-top: 1px solid var(--line);
+    }
+
+    .detail-grid dt {
+      margin-bottom: 0.18rem;
+      color: var(--muted);
+      font-size: 0.72rem;
+      font-weight: 820;
+      letter-spacing: 0.045em;
+      text-transform: uppercase;
+    }
+
+    .detail-grid dd { margin: 0; font-size: 0.88rem; }
+
+    .type-badge { color: white; }
+    .type-tutorial { background: var(--tutorial); }
+    .type-howto { background: var(--howto); }
+    .type-reference { background: var(--reference); }
+    .type-explanation { background: var(--explanation); color: var(--ink); }
+
+    .status-badge { background: var(--surface-quiet); color: var(--muted); }
+    .status-deferred { background: var(--warning-soft); color: var(--warning); }
+
+    .button-row,
+    .filter-row,
+    .link-list,
+    .tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+    }
+
+    .button-row button[aria-pressed="true"],
+    .filter-row button[aria-pressed="true"],
+    .tabs button[aria-selected="true"] {
+      border-color: var(--accent);
+      background: var(--accent);
+      color: white;
+    }
+
+    .filter-group { margin-top: 1rem; }
+    .filter-group h3 { margin-bottom: 0.5rem; }
+
+    .link-list { margin-top: 0.6rem; }
+    .link-list button { width: auto; font-size: 0.78rem; }
+
+    details {
+      margin-top: 0.9rem;
+      padding-top: 0.75rem;
+      border-top: 1px solid var(--line);
+    }
+
+    summary { cursor: pointer; font-weight: 760; }
+
+    .walkthrough {
+      min-height: 14rem;
+      padding: 1rem;
+      border: 1px solid var(--line);
+      border-radius: 0.8rem;
+      background: var(--surface);
+    }
+
+    .steps {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      gap: 0.55rem;
+      margin-top: 1rem;
+    }
+
+    .step-complete { border-color: var(--accent); background: var(--accent-soft); }
+    button:disabled { cursor: not-allowed; opacity: 0.42; }
+
+    .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 0.75rem; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--surface);
+      font-size: 0.84rem;
+    }
+
+    th, td {
+      padding: 0.72rem;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: var(--surface-quiet);
+      font-size: 0.7rem;
+      letter-spacing: 0.045em;
+      text-transform: uppercase;
+    }
+
+    tr:last-child td { border-bottom: 0; }
+    tbody tr[data-page-id] { cursor: pointer; }
+    tbody tr[data-page-id]:hover { background: var(--accent-soft); }
+
+    .small { color: var(--muted); font-size: 0.82rem; }
+
+    .model-grid,
+    .gate-grid,
+    .template-grid,
+    .edge-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 0.75rem;
+    }
+
+    .model-card,
+    .gate,
+    .template-card,
+    .edge-card {
+      padding: 0.9rem;
+      border-top: 3px solid var(--accent);
+      background: var(--surface);
+    }
+
+    .model-card p,
+    .gate p,
+    .template-card p,
+    .edge-card p { margin-bottom: 0; color: var(--muted); font-size: 0.86rem; }
+
+    .template-card pre { margin-top: 0.7rem; max-height: 25rem; }
+
+    .source-list {
+      display: grid;
+      gap: 0.55rem;
+      padding: 0;
+      list-style: none;
+    }
+
+    .source-list li {
+      padding: 0.75rem;
+      border-left: 3px solid var(--line);
+      background: var(--surface);
+    }
+
+    .source-list strong { display: block; }
+
+    .verdict {
+      padding: 1rem;
+      border-left: 5px solid var(--accent);
+      background: var(--accent-soft);
+    }
+
+    .verdict p:last-child { margin-bottom: 0; }
+
+    @media (max-width: 1050px) {
+      .route-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .model-grid, .gate-grid, .template-grid, .edge-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+
+    @media (max-width: 760px) {
+      .header-inner { align-items: flex-start; flex-direction: column; }
+      .route-grid, .workspace, .model-grid, .gate-grid, .template-grid, .edge-grid { grid-template-columns: 1fr; }
+      .route-card { min-height: auto; }
+    }
+
+    @media (max-width: 520px) {
+      .state-grid, .detail-grid { grid-template-columns: 1fr; }
+      .header-inner, main { width: min(100% - 1rem, 1240px); }
+      th, td { padding: 0.55rem; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="header-inner">
+      <div>
+        <p class="kicker">Issue #211 · logic prototype</p>
+        <h1>Public documentation architecture</h1>
+        <p class="lede">A goal-first map for learning, adopting, operating, integrating, auditing, and recovering the release-trust system without mixing documentation modes or authority boundaries.</p>
+      </div>
+      <span class="badge">Disposable architecture only</span>
+    </div>
+  </header>
+
+  <main>
+    <section class="intro" aria-labelledby="question-title">
+      <h2 id="question-title">Question this prototype answers</h2>
+      <p>Can one page catalog route eight audiences through the complete release lifecycle by immediate goal, keep every page in one primary Diataxis mode, and put the owning contract, authority boundary, version applicability, next step, and recovery route where each reader needs them?</p>
+      <div class="safety">
+        <strong>This file is an information-architecture model, not a documentation site or security control.</strong>
+        It opens locally, keeps all state in memory, and makes no automatic network request. It contains no production configuration, credentials, keys, host data, provider resource, trust anchor, or executable cryptography. Page titles, metadata fields, paths, and command references are prototype candidates, not compatibility or support promises.
+      </div>
+    </section>
+
+    <section aria-labelledby="routes-title">
+      <h2 id="routes-title">Start with the reader’s goal</h2>
+      <p class="small">Diataxis type remains visible, but it never becomes the only navigation. A reader chooses what they need to accomplish or understand first.</p>
+      <div class="route-grid" id="route-cards"></div>
+    </section>
+
+    <section aria-labelledby="workspace-title">
+      <h2 id="workspace-title">Drive the routing model</h2>
+      <div class="workspace">
+        <div class="panel">
+          <div class="state-grid">
+            <article class="state-cell"><strong>Goal route</strong><span id="state-route"></span></article>
+            <article class="state-cell"><strong>Audience</strong><span id="state-audience"></span></article>
+            <article class="state-cell"><strong>Current page</strong><span id="state-page"></span></article>
+            <article class="state-cell"><strong>Immediate need</strong><span id="state-need"></span></article>
+            <article class="state-cell"><strong>Path depth</strong><span id="state-depth"></span></article>
+            <article class="state-cell"><strong>Catalog audit</strong><span id="state-audit"></span></article>
+          </div>
+
+          <div class="filter-group">
+            <h3>Change audience</h3>
+            <div class="button-row" id="audience-buttons"></div>
+          </div>
+
+          <div class="filter-group">
+            <h3>Change goal</h3>
+            <div class="button-row" id="route-buttons"></div>
+          </div>
+
+          <details>
+            <summary>Inspect complete in-memory routing state</summary>
+            <pre id="state-json"></pre>
+          </details>
+        </div>
+
+        <article class="page-detail" aria-live="polite">
+          <div class="detail-head">
+            <div>
+              <span class="type-badge" id="detail-type"></span>
+              <h3 id="detail-title"></h3>
+              <p><strong>Expected reader result:</strong> <span id="detail-job"></span></p>
+            </div>
+            <span class="status-badge" id="detail-status"></span>
+          </div>
+          <dl class="detail-grid">
+            <div><dt>Reader</dt><dd id="detail-audiences"></dd></div>
+            <div><dt>Lifecycle</dt><dd id="detail-lifecycle"></dd></div>
+            <div><dt>Owning source</dt><dd id="detail-source"></dd></div>
+            <div><dt>Content owner</dt><dd id="detail-owner"></dd></div>
+            <div><dt>Version applicability</dt><dd id="detail-applies"></dd></div>
+            <div><dt>Safety and authority boundary</dt><dd id="detail-boundary"></dd></div>
+          </dl>
+          <div class="filter-group">
+            <h4>Prerequisites</h4>
+            <div class="link-list" id="detail-prerequisites"></div>
+          </div>
+          <div class="filter-group">
+            <h4>Next pages</h4>
+            <div class="link-list" id="detail-next"></div>
+          </div>
+          <div class="filter-group">
+            <h4>Failure or recovery</h4>
+            <div class="link-list" id="detail-recovery"></div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section aria-labelledby="walkthrough-title">
+      <h2 id="walkthrough-title">Exercise the high-risk paths</h2>
+      <p class="small">Each walkthrough resets the routing state. Its buttons are real catalog edges, so missing or misplaced pages become visible.</p>
+      <div class="tabs" id="scenario-tabs" role="tablist"></div>
+      <div class="walkthrough" role="tabpanel">
+        <h3 id="scenario-title"></h3>
+        <p id="scenario-description"></p>
+        <div class="steps" id="scenario-steps"></div>
+      </div>
+    </section>
+
+    <section aria-labelledby="inventory-title">
+      <h2 id="inventory-title">Page inventory</h2>
+      <p class="small">This is a catalog of page jobs and boundaries, not the pages themselves. Select a row to inspect its metadata and links above.</p>
+      <div class="filter-row" id="type-filters"></div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Primary mode</th>
+              <th>Page job</th>
+              <th>Goal route</th>
+              <th>Audience</th>
+              <th>Build disposition</th>
+            </tr>
+          </thead>
+          <tbody id="inventory-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section aria-labelledby="ownership-title">
+      <h2 id="ownership-title">Ownership and versioning model</h2>
+      <p class="small">“Owning page” means the canonical documentation home for a fact or workflow. It never grants cryptographic or operational authority.</p>
+      <div class="model-grid">
+        <article class="model-card">
+          <h3>Normative reference</h3>
+          <p>The public core owns schemas, lifecycle rules, invariants, error classes, extension rules, and adapter interfaces. Reference mirrors their exact versions and is generated where the source permits. A prose edit cannot redefine them.</p>
+        </article>
+        <article class="model-card">
+          <h3>Tutorials and how-to guides</h3>
+          <p>Documentation maintainers own reader flow. Each page names the exact contract, profile, fixture corpus, adapter, and qualification record it applies to. Before 1.0, no page invents a compatibility window, release cadence, backport, or support promise.</p>
+        </article>
+        <article class="model-card">
+          <h3>Profiles and adapters</h3>
+          <p>A policy-profile publisher owns public profile meaning. An adapter owner owns provider-specific configuration. Qualification evidence binds exact versions and environments; ownership, conformance, qualification, and support remain separate.</p>
+        </article>
+        <article class="model-card">
+          <h3>Private adoption</h3>
+          <p>The adopter owns deployment bindings, real resource identifiers, secret references, host procedures, ceremonies, and acceptance evidence in its own repository. Public docs provide value-free templates and boundaries, never those values.</p>
+        </article>
+        <article class="model-card">
+          <h3>Consumers</h3>
+          <p>The generic project documents verification and the independent-admission interface. Each protected consumer owns its stricter acceptance, archive, receipt, installation, and updater gates. Generic success never becomes consumer authority.</p>
+        </article>
+        <article class="model-card">
+          <h3>Immutable documentation bundles</h3>
+          <p>Each public-core release can carry an immutable documentation bundle tied to its source revision and contract inventory. A presentation alias may route humans to a selected bundle, but every page displays exact applicability and archived bundles make no current-support claim.</p>
+        </article>
+      </div>
+    </section>
+
+    <section aria-labelledby="graph-title">
+      <h2 id="graph-title">Required navigation graph</h2>
+      <p class="small">These edges are release gates. Writers may add useful links, but they may not remove the path that owns a safety decision.</p>
+      <div class="edge-grid">
+        <article class="edge-card">
+          <h3>Verification failure</h3>
+          <p><code>verify</code> → error reference → trust, revocation, or freshness explanation → incident triage. A rejected or indeterminate result never links to a bypass.</p>
+        </article>
+        <article class="edge-card">
+          <h3>Rotation fork</h3>
+          <p>Every rotation page branches before action: normal lifecycle → rotate; factor-only loss → replace factor; suspected exposure → freeze, preserve evidence, and enter compromise response.</p>
+        </article>
+        <article class="edge-card">
+          <h3>Ceremony and provisioning</h3>
+          <p>Before an irreversible step, link to the active profile, custody reference, evidence requirements, and recovery rehearsal. The guide stops at any separately controlled authority boundary.</p>
+        </article>
+        <article class="edge-card">
+          <h3>Publication gates</h3>
+          <p>At each gate, link to schema, DNS/cache rules, monitoring, higher-generation rollback, and emergency response. An ambiguous effect routes to reconciliation, never blind retry or provider fallback.</p>
+        </article>
+        <article class="edge-card">
+          <h3>Platform convergence</h3>
+          <p>Linux and macOS installation remain separate how-to guides. Both converge on the same semantic qualification reference and shared verify, publish, and recovery workflows.</p>
+        </article>
+        <article class="edge-card">
+          <h3>Provider separation</h3>
+          <p>The Cloudflare tutorial stays branch-free and fixture-only. Vercel, GitHub, WKD, keyservers, alternate custody, and later providers enter through reference or focused adapter guides.</p>
+        </article>
+        <article class="edge-card">
+          <h3>Independent consumer admission</h3>
+          <p>Generic verification links to the consumer profile and its separate admission guide. Historical attribution never links directly to execution, installation, or promotion.</p>
+        </article>
+        <article class="edge-card">
+          <h3>Incident precedence</h3>
+          <p>Availability loss, infrastructure compromise, suspected signer exposure, and confirmed compromise remain distinct. The most restrictive applicable signed state wins; docs cannot restore positive authority.</p>
+        </article>
+        <article class="edge-card">
+          <h3>Security reporting</h3>
+          <p>Public reporting routes to the security policy before reproduction. Maintainer handling links triage, remediation, disclosure, qualification status, and independent fix verification without asking for secrets or live-system testing.</p>
+        </article>
+      </div>
+    </section>
+
+    <section aria-labelledby="templates-title">
+      <h2 id="templates-title">Reusable page templates</h2>
+      <p class="small">The metadata shape is a prototype input to the later documentation build. It records the checks the architecture needs without choosing a site generator.</p>
+      <div class="template-grid">
+        <article class="template-card">
+          <h3>Tutorial</h3>
+          <p>One disposable path, exact observations, no alternatives, and no production authority.</p>
+          <pre>doc_id: T-...
+mode: tutorial
+audiences: [...]
+applies_to:
+  contracts: [exact versions]
+  fixture_corpus: exact version
+authority_boundary: fixture only
+prerequisites: [...]
+expected_outcome: visible result
+next: [...]
+recovery: [...]
+
+# Learn one complete path
+## Start from the fixture
+## Perform one exact step
+## Observe the result
+## Finish and clean up</pre>
+        </article>
+        <article class="template-card">
+          <h3>How-to guide</h3>
+          <p>One real goal for a competent reader, with the safety branch before authority or mutation.</p>
+          <pre>doc_id: H-...
+mode: how-to
+audiences: [...]
+applies_to: [exact versions]
+owner: workflow owner
+authority_boundary: explicit role and stop
+prerequisites: [...]
+expected_outcome: named state
+next: [...]
+recovery: [...]
+
+# Achieve one result
+## Choose the safe branch
+## Prepare exact inputs
+## Perform and verify
+## Reconcile or recover</pre>
+        </article>
+        <article class="template-card">
+          <h3>Reference</h3>
+          <p>Neutral lookup that mirrors one product, schema, interface, state machine, or registry.</p>
+          <pre>doc_id: R-...
+mode: reference
+audiences: [...]
+applies_to: [exact versions]
+normative_source: schema or contract
+generated_from: optional exact source
+authority_boundary: descriptive only
+
+# Named interface or object
+## Syntax or fields
+## Invariants and permissions
+## Outcomes and errors
+## Version and qualification status</pre>
+        </article>
+        <article class="template-card">
+          <h3>Explanation</h3>
+          <p>One bounded concept, its relationships and tradeoffs, with tasks and lookup moved to adjacent pages.</p>
+          <pre>doc_id: E-...
+mode: explanation
+audiences: [...]
+applies_to: conceptual contract revision
+owner: domain or security owner
+authority_boundary: no operational steps
+
+# Understand one concept
+## The concepts it separates
+## Why the boundary exists
+## Tradeoffs and residual risk
+## Related tasks and reference</pre>
+        </article>
+      </div>
+    </section>
+
+    <section aria-labelledby="examples-title">
+      <h2 id="examples-title">Executable examples and link checks</h2>
+      <div class="model-grid">
+        <article class="model-card">
+          <h3>Example contract</h3>
+          <p>Each executable block names an example ID, exact contract and profile versions, fixture case, expected stdout envelope, exit class, effect class, and created files. Illustrative snippets are labeled non-executable.</p>
+        </article>
+        <article class="model-card">
+          <h3>Fixture-only execution</h3>
+          <p>Examples run later in an isolated, network-disabled, credential-free temporary environment against the structurally rejected fixture profile. They use synthetic <code>.invalid</code> names and public canary bytes only.</p>
+        </article>
+        <article class="model-card">
+          <h3>One source for expected results</h3>
+          <p>Documentation imports requests, outputs, diagnostics, and negative cases from the conformance corpus. It does not copy and quietly fork them. Randomized signatures are checked semantically, not as regenerated byte-for-byte fixtures.</p>
+        </article>
+        <article class="model-card">
+          <h3>Generated reference</h3>
+          <p>Schema fields, CLI options, machine results, error codes, capabilities, and compatibility rows derive from their versioned sources where possible. Handwritten framing links to generated facts instead of duplicating them.</p>
+        </article>
+        <article class="model-card">
+          <h3>Graph validation</h3>
+          <p>A route manifest checks unique page IDs, valid internal targets, reachable goal starts, prerequisites, next and recovery edges, audience coverage, and required security paths. Anchor and local asset checks run on the built bundle.</p>
+        </article>
+        <article class="model-card">
+          <h3>#213 boundary</h3>
+          <p>This architecture defines the metadata and outcomes documentation needs. The separate conformance ticket owns the runner, manifest syntax, fixture execution, determinism rules, and CI integration. This prototype does not start that work.</p>
+        </article>
+      </div>
+    </section>
+
+    <section aria-labelledby="gates-title">
+      <h2 id="gates-title">Documentation release gates</h2>
+      <div class="gate-grid">
+        <article class="gate">
+          <h3>Diataxis and reader fit</h3>
+          <p>Each page has one primary mode, audience, immediate need, and bounded job. Off-mode material has a named destination. Goal landing pages orient rather than expose a file list.</p>
+        </article>
+        <article class="gate">
+          <h3>Source and version</h3>
+          <p>Every fragile fact names its owning contract and exact applicability. Generated reference matches its source. Unresolved CLI, schema, package, path, provider, or support claims remain visibly deferred.</p>
+        </article>
+        <article class="gate">
+          <h3>Authority and privacy</h3>
+          <p>Security review confirms that docs neither create authority nor soften a failed gate. Public artifacts contain no deployment binding, credential, factor handle, provider locator, recovery layout, private hostname, or production trust value.</p>
+        </article>
+        <article class="gate">
+          <h3>Examples</h3>
+          <p>Every executable example uses an exact disposable fixture, expected result, and effect assertion. No example needs network, hardware, provider access, production keys, or a mutable trust store.</p>
+        </article>
+        <article class="gate">
+          <h3>Links and lifecycle coverage</h3>
+          <p>Internal targets, anchors, next and recovery links pass. Required verification, rotation, ceremony, publication, platform, consumer, incident, and vulnerability-reporting paths are reachable from goal navigation.</p>
+        </article>
+        <article class="gate">
+          <h3>Qualification and review</h3>
+          <p>Commands and platform/provider procedures cite current qualification evidence. Authority-boundary changes require the owning contract, ADR, threat-model review, conformance change, and maintainer approval before docs describe them as accepted.</p>
+        </article>
+        <article class="gate">
+          <h3>Bundle integrity</h3>
+          <p>The built documentation bundle records source revision, contract inventory, example results, generated-reference inputs, route-manifest digest, link result, privacy result, and reviewer disposition.</p>
+        </article>
+        <article class="gate">
+          <h3>Emergency carveout</h3>
+          <p>An authorized freeze or withdrawal never waits for presentation or documentation readiness. An emergency docs update may explain accepted state; it cannot bypass independent verification or grant positive authority.</p>
+        </article>
+        <article class="gate">
+          <h3>Pre-1.0 honesty</h3>
+          <p>No page promises a cadence, backport, compatibility window, advance notice, deprecation window, platform term, remediation deadline, or support level that the project has not explicitly adopted.</p>
+        </article>
+      </div>
+    </section>
+
+    <section aria-labelledby="coverage-title">
+      <h2 id="coverage-title">Audience and lifecycle coverage</h2>
+      <p class="small">The owning page is the canonical documentation entry for the scenario. Reference and recovery pages keep lookup and failure handling out of the task flow.</p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Lifecycle scenario</th>
+              <th>Primary audience</th>
+              <th>Owning page</th>
+              <th>Authority or fact reference</th>
+              <th>Failure or recovery</th>
+            </tr>
+          </thead>
+          <tbody id="coverage-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section aria-labelledby="frontier-title">
+      <h2 id="frontier-title">Later documentation build frontier</h2>
+      <div class="verdict">
+        <p><strong>The architecture is ready; the full page set is not.</strong></p>
+        <p>The next documentation build may create goal landing pages, shared metadata, templates, the route manifest, and contract-derived reference once the public repository shape and exact interfaces exist. Full tutorials and operational guides wait for their exact package names, CLI and schema versions, qualified adapters and platforms, stable fixture corpus, and the separately owned executable-example contract.</p>
+        <p>The minimal-adapter tutorial remains deferred unless one fixture-backed path can stay branch-free. No site publication, production adoption, provider provisioning, or conformance implementation belongs to this prototype.</p>
+      </div>
+    </section>
+
+    <section aria-labelledby="sources-title">
+      <h2 id="sources-title">Accepted sources this architecture preserves</h2>
+      <ul class="source-list">
+        <li><strong>#215 · Threat and authority model</strong>Positive authority, TCB, human-presence, incident-class, recovery, privacy, history, and residual-risk rules.</li>
+        <li><strong>#207 · Public core and adopter boundary</strong>Core, adapter, policy profile, deployment binding, qualification, support, governance, compatibility, and public/private ownership.</li>
+        <li><strong>#209 · Manifest and independent admission</strong>Object families, lifecycle, archives, fixtures, four verification outcomes, and the pure admission boundary.</li>
+        <li><strong>#210 · Client trust state</strong>Bootstrap, refresh, retained state, current/offline/historical verification, exits, packaging, and manual rebootstrap.</li>
+        <li><strong>#212 · Base Loadout consumer profile</strong>Exact two-artifact scope, accepted-current gate, candidate-independent validation, and separate archive, receipt, installation, and updater authority.</li>
+        <li><strong>#204 · Publication plane</strong>Canonical Cloudflare trust origin, non-authoritative site and mirrors, DNS/cache rules, promotion, monitoring, recovery, and provider exit.</li>
+        <li><strong>#216 · Operator surface</strong>Immutable intent, explicit stages, guided execution, candidate CLI, typed handoffs, effect classes, and reconciliation.</li>
+        <li><strong>#219 · Initial local unwrap qualification</strong>Qualified UV-gated local unwrap only, exact artifact lock, platform-specific qualification, and no exact-intent FIDO claim.</li>
+      </ul>
+    </section>
+  </main>
+
+  <script>
+    const DocumentationModel = (() => {
+      const audiences = Object.freeze({
+        learner: "Learner",
+        adopter: "Adopter",
+        operator: "Operator",
+        releaseManager: "Release manager",
+        verifierIntegrator: "Verifier integrator",
+        contributor: "Contributor",
+        securityReviewer: "Security reviewer",
+        incidentResponder: "Incident responder"
+      });
+
+      const modes = Object.freeze({
+        tutorial: { label: "Tutorial", need: "Action while acquiring skill" },
+        howto: { label: "How-to", need: "Action while applying skill" },
+        reference: { label: "Reference", need: "Facts while applying skill" },
+        explanation: { label: "Explanation", need: "Understanding while acquiring context" }
+      });
+
+      const routes = Object.freeze({
+        verify: {
+          label: "Verify a release",
+          summary: "Learn the fixture path, install a qualified verifier, and distinguish current, offline, historical, rejected, and indeterminate results.",
+          start: "T-VERIFY-DISPOSABLE"
+        },
+        adopt: {
+          label: "Adopt and deploy",
+          summary: "Choose a public profile, bind it privately, bootstrap continuity, qualify platforms, and provision without importing one adopter’s secrets.",
+          start: "T-ADOPT-SAMPLE"
+        },
+        operate: {
+          label: "Operate",
+          summary: "Prepare, authorize, publish, monitor, rotate, withdraw, restore, and respond through explicit authority and recovery boundaries.",
+          start: "H-SIGN-PUBLISH"
+        },
+        integrate: {
+          label: "Integrate and develop",
+          summary: "Build adapters and consumers, requalify dependencies, evolve contracts, contribute, and release the public core.",
+          start: "H-CONTRIBUTOR-ENV"
+        },
+        security: {
+          label: "Understand and review security",
+          summary: "Study the threat model, authority lattice, custody, continuity, residual risks, vulnerability process, and incident consequences.",
+          start: "E-THREAT-RATIONALE"
+        }
+      });
+
+      const page = (id, mode, title, routesForPage, pageAudiences, lifecycle, owner, source, applies, boundary, job, next, recovery, prerequisites, status) => ({
+        id,
+        mode,
+        title,
+        routes: routesForPage,
+        audiences: pageAudiences,
+        lifecycle,
+        owner,
+        source,
+        applies,
+        boundary,
+        job,
+        next: next || [],
+        recovery: recovery || [],
+        prerequisites: prerequisites || [],
+        status: status || "architecture-ready"
+      });
+
+      const pages = Object.freeze([
+        page("T-VERIFY-DISPOSABLE", "tutorial", "Verify a disposable sample release", ["verify"], ["learner", "adopter"], ["verify-current"], "Documentation", "Verifier contract and fixture corpus (#209, #210)", "Fixture profile v1 and one exact future corpus revision", "Secret-free, network-free, structurally non-production fixture.", "Teach one branch-free path from supplied fixture bytes to a visible accepted-current result.", ["H-VERIFY-CURRENT", "E-CURRENT-HISTORICAL"], ["R-ERROR-CATALOG"], ["R-VERIFICATION-RESULTS"], "fixture-shaped"),
+        page("T-PUBLISH-CLOUDFLARE-DISPOSABLE", "tutorial", "Publish a first disposable release through the Cloudflare reference deployment", ["adopt", "operate"], ["learner", "releaseManager"], ["first-release"], "Documentation and Cloudflare adapter", "Publication and operator contracts (#204, #216)", "Fixture profile plus exact qualified Cloudflare reference-adapter revision", "Disposable resources or emulator only; never a production domain, key, credential, or release.", "Teach one branch-free prepare-to-external-verification path using the reference profile.", ["H-SIGN-PUBLISH", "R-PUBLICATION-RULES"], ["H-ROLL-BACK-RELEASE", "H-TRIAGE-INCIDENT"], ["H-CONFIGURE-PROFILE", "R-EVIDENCE-BUNDLE"], "defer-until-qualified-adapter"),
+        page("T-ADOPT-SAMPLE", "tutorial", "Adopt the system for a sample project", ["adopt"], ["learner", "adopter"], ["adoption"], "Documentation", "Public-core boundary (#207)", "Fixture profile and exact public-core revision", "Public sample values only; no production authority or private deployment binding.", "Teach a sample adopter to select a profile, create a value-free binding stub, and verify the fixture.", ["H-CONFIGURE-PROFILE", "T-VERIFY-DISPOSABLE"], ["R-ERROR-CATALOG"], ["E-IDENTITY-SEPARATION"], "fixture-shaped"),
+        page("T-BUILD-MINIMAL-ADAPTER", "tutorial", "Build a minimal provider adapter", ["integrate"], ["contributor"], ["adapter-development"], "Adapter interface owner and Documentation", "Adapter boundary (#207)", "One stable interface version and one fixture-backed conformance path", "Secret-free fake only; no provider account, credential, mutation, or support claim.", "Teach one reliable adapter path only if the interface and executable fixture stay branch-free.", ["H-REQUALIFY", "R-ADAPTER-INTERFACES"], ["R-ERROR-CATALOG"], ["H-CONTRIBUTOR-ENV"], "defer-until-interface-and-213"),
+
+        page("H-INSTALL-LINUX", "howto", "Install and qualify the runtime on Linux", ["verify", "adopt"], ["adopter", "operator", "verifierIntegrator"], ["installation"], "Linux package and qualification owners", "Packaging boundary (#210)", "Exact package, core, verifier, platform, and qualification versions", "Installation may change only the selected disposable or authorized host; it never changes trust anchors implicitly.", "Install exact Linux artifacts, verify their provenance, and run the named qualification checks.", ["H-VERIFY-CURRENT"], ["R-ERROR-CATALOG"], ["R-SUPPORT-QUALIFICATION"], "defer-until-packaging"),
+        page("H-INSTALL-MACOS", "howto", "Install and qualify the runtime on macOS", ["verify", "adopt"], ["adopter", "operator", "verifierIntegrator"], ["installation"], "macOS package and qualification owners", "Packaging boundary (#210)", "Exact package, core, verifier, platform, and qualification versions", "Installation may change only the selected disposable or authorized host; it never changes trust anchors implicitly.", "Install exact macOS artifacts, verify their provenance, and run the named qualification checks.", ["H-VERIFY-CURRENT"], ["R-ERROR-CATALOG"], ["R-SUPPORT-QUALIFICATION"], "defer-until-packaging"),
+        page("H-CONFIGURE-PROFILE", "howto", "Configure an adopter profile and canonical publication domain", ["adopt"], ["adopter", "operator"], ["adoption"], "Profile publisher and adopter", "Profile and publication contracts (#207, #204)", "Exact profile, core, contract, and adapter versions", "Public profile selection is separate from private resource IDs, secret references, and live domain mutation.", "Select a compatible public policy profile and prepare a private binding without resolving secrets.", ["H-BOOTSTRAP-IDENTITY", "H-PROVISION-HOST"], ["H-TRIAGE-INCIDENT"], ["R-PROFILES-BINDINGS", "R-PUBLICATION-RULES"], "defer-until-profile-schema"),
+        page("H-BOOTSTRAP-IDENTITY", "howto", "Bootstrap a certifying identity and establish continuity", ["adopt", "security"], ["adopter", "operator", "securityReviewer"], ["bootstrap"], "Identity owner", "Threat, topology, and client contracts (#215, #206, #210)", "Exact crypto, policy, root-transition, and bootstrap profiles", "Explicit human presence and two independent channels are required; certifying and recovery secrets remain offline.", "Establish the paired fingerprint and canonical hostname, record exact profiles, and verify continuity evidence.", ["H-ENROLL-INITIAL-FACTOR", "H-PROVISION-HOST"], ["H-RESPOND-ROOT-COMPROMISE"], ["R-THREAT-AUTHORITY", "R-CUSTODY", "H-MONITOR-REHEARSE", "R-EVIDENCE-BUNDLE"], "defer-until-ceremony-contract"),
+        page("H-PROVISION-HOST", "howto", "Provision an authorized operator host", ["adopt", "operate"], ["adopter", "operator"], ["host-lifecycle"], "Adopter", "Operator and custody contracts (#216, #208)", "Exact host, platform, profile, adapter, and qualification record", "Host authorization is explicit and local to the adopter; provisioning cannot create signer or root authority.", "Bind one qualified host to its permitted roles and verify the value-free acceptance evidence.", ["H-SIGN-PUBLISH"], ["H-REMOVE-HOST", "H-RESPOND-SIGNER-HOST"], ["R-PROFILES-BINDINGS", "R-CUSTODY", "H-MONITOR-REHEARSE", "R-EVIDENCE-BUNDLE"], "defer-until-host-profile"),
+        page("H-REMOVE-HOST", "howto", "Remove an authorized operator host", ["adopt", "operate"], ["adopter", "operator", "incidentResponder"], ["host-lifecycle"], "Adopter", "Operator and incident contracts (#216, #215)", "Exact host binding and profile revision", "Removal is subtractive for that binding and cannot stand in for signer freeze, rotation, or revocation after exposure.", "Remove one host binding, verify loss of access, and preserve the required evidence.", ["H-MONITOR-REHEARSE"], ["H-RESPOND-SIGNER-HOST"], ["R-EVIDENCE-BUNDLE"], "defer-until-host-profile"),
+        page("H-SIGN-PUBLISH", "howto", "Sign and publish a release", ["operate"], ["operator", "releaseManager"], ["routine-release"], "Operator workflow and publication adapter owners", "Manifest, publication, and operator contracts (#209, #204, #216)", "Exact contracts, CLI, profile, adapters, signer grant, and qualification records", "Two separately authorized signer operations consume exact immutable intent; ambiguous writes stop for reconciliation.", "Prepare, inspect, authorize, sign, archive, conditionally promote, read back, and independently verify one release.", ["H-VERIFY-CURRENT", "H-MONITOR-REHEARSE"], ["H-WITHDRAW-RELEASE", "H-ROLL-BACK-RELEASE", "H-TRIAGE-INCIDENT"], ["R-PROTOCOL-SCHEMAS", "R-PUBLICATION-RULES", "R-CUSTODY", "R-EVIDENCE-BUNDLE"], "defer-until-cli-and-adapters"),
+        page("H-WITHDRAW-RELEASE", "howto", "Withdraw a release", ["operate", "security"], ["operator", "releaseManager", "incidentResponder"], ["release-lifecycle", "incident-response"], "Authorized release or status operator", "Manifest lifecycle contract (#209)", "Exact release-state, signer grant, policy, and operator-interface versions", "Withdrawal is terminal for one manifest identity and uses permitted subtractive authority; it never restores or expands authority.", "Publish a higher signed transition that bars one exact manifest and independently verify the result.", ["H-VERIFY-CURRENT"], ["H-TRIAGE-INCIDENT"], ["R-LIFECYCLE-PERMISSIONS", "R-EVIDENCE-BUNDLE"], "defer-until-cli"),
+        page("H-ROLL-BACK-RELEASE", "howto", "Return to a previous release through higher re-selection", ["operate"], ["operator", "releaseManager"], ["release-lifecycle"], "Release operator", "Manifest lifecycle contract (#209)", "Exact release-state, policy, operator-interface, and target-manifest versions", "Rollback is a fresh higher positive transition. Pointer rewind and restoration of a withdrawn manifest are prohibited.", "Re-select an eligible historical release at a higher generation and verify current state.", ["H-VERIFY-CURRENT"], ["H-TRIAGE-INCIDENT"], ["R-LIFECYCLE-PERMISSIONS", "R-PUBLICATION-RULES"], "defer-until-cli"),
+        page("H-VERIFY-CURRENT", "howto", "Verify a current release online", ["verify", "operate"], ["adopter", "operator", "verifierIntegrator"], ["verify-current"], "Verifier owner", "Independent-admission and client contracts (#209, #210)", "Exact verifier, trust-context, profile, manifest, and state versions", "Verification is credential-free and side-effect-free; refresh is a separate state acquisition operation.", "Refresh authenticated trust state, then evaluate exact supplied bytes for accepted-current, rejected, or indeterminate.", ["R-VERIFICATION-RESULTS"], ["R-ERROR-CATALOG", "H-TRIAGE-INCIDENT"], ["R-PROTOCOL-SCHEMAS"], "defer-until-verifier"),
+        page("H-VERIFY-OFFLINE", "howto", "Verify with retained state offline", ["verify"], ["adopter", "operator", "verifierIntegrator"], ["verify-offline"], "Verifier owner", "Client contract (#210)", "Exact verifier, retained-state, profile, and signed freshness versions", "Offline current acceptance exists only while complete retained state remains unexpired and non-conflicting.", "Evaluate exact release bytes against accepted retained state without network access.", ["R-VERIFICATION-RESULTS"], ["R-ERROR-CATALOG"], ["E-CURRENT-HISTORICAL", "E-FRESHNESS-HISTORY"], "defer-until-verifier"),
+        page("H-VERIFY-HISTORICAL", "howto", "Verify historical attribution", ["verify", "security"], ["verifierIntegrator", "securityReviewer", "incidentResponder"], ["verify-historical"], "Verifier owner", "Independent-admission and client contracts (#209, #210)", "Exact historical profile, archive closure, evaluation time, and compromise evidence", "Attributed-historical never means current, safe to execute, reinstallable, or promotable.", "Evaluate one exact manifest and envelope against complete archived state at an explicit time.", ["R-EVIDENCE-BUNDLE"], ["R-ERROR-CATALOG", "H-TRIAGE-INCIDENT"], ["E-CURRENT-HISTORICAL", "E-FRESHNESS-HISTORY"], "defer-until-verifier"),
+        page("H-ENROLL-INITIAL-FACTOR", "howto", "Enroll an initial FIDO factor", ["adopt", "operate"], ["adopter", "operator"], ["factor-lifecycle"], "Adopter custody owner", "Custody and local-unwrap contracts (#208, #219)", "Exact custody, plugin artifact, platform, device, firmware, and qualification record", "Enrollment requires human presence. The initial local profile proves UV-gated unwrap, not exact-intent approval.", "Enroll one qualified factor, verify recovery independence, and record only value-free evidence.", ["H-MANAGE-BACKUP-FACTOR"], ["H-REPLACE-LOST-FACTOR", "H-TRIAGE-INCIDENT"], ["R-CUSTODY", "H-MONITOR-REHEARSE", "R-EVIDENCE-BUNDLE"], "defer-until-hardware-qualification"),
+        page("H-MANAGE-BACKUP-FACTOR", "howto", "Add or remove a backup factor", ["operate"], ["operator"], ["factor-lifecycle"], "Adopter custody owner", "Custody contract (#208)", "Exact custody revision, factor profile, device, and qualification records", "Factor changes do not create signer authority; removal after suspected joint exposure follows incident response instead.", "Advance one custody revision, prove retained access and recovery, and retire the selected factor.", ["H-MONITOR-REHEARSE"], ["H-REPLACE-LOST-FACTOR", "H-RESPOND-SIGNER-HOST"], ["R-CUSTODY", "R-EVIDENCE-BUNDLE"], "defer-until-custody-interface"),
+        page("H-REPLACE-LOST-FACTOR", "howto", "Replace a lost, reset, or unavailable factor", ["operate"], ["operator", "incidentResponder"], ["factor-lifecycle", "availability-loss"], "Adopter custody owner", "Threat and custody contracts (#215, #208)", "Exact custody revision, factor profile, recovery method, and qualification records", "Factor-only loss permits replacement without signer rotation only when signing-material exposure is not plausible.", "Classify factor-only loss, authorize one replacement path, advance custody state, and verify recovery.", ["H-MONITOR-REHEARSE"], ["H-RESPOND-SIGNER-HOST"], ["H-TRIAGE-INCIDENT", "R-CUSTODY"], "defer-until-custody-interface"),
+        page("H-ROTATE-SIGNER", "howto", "Rotate a healthy release signer", ["operate"], ["operator", "releaseManager"], ["signer-lifecycle"], "Identity owner and release operator", "Authority topology and custody contracts (#206, #208)", "Exact root, grant, signer, custody, policy, and overlap profiles", "Normal rotation requires certifying-identity authorization and must not be used for a suspected compromise.", "Authorize a pending successor, prove custody and overlap, activate it, and retire the predecessor.", ["H-RETIRE-SIGNER"], ["H-REVOKE-COMPROMISED-SIGNER"], ["R-LIFECYCLE-PERMISSIONS", "R-CUSTODY"], "defer-until-ceremony-contract"),
+        page("H-RETIRE-SIGNER", "howto", "Retire a release signer", ["operate"], ["operator", "releaseManager"], ["signer-lifecycle"], "Identity owner or permitted signer", "Threat and topology contracts (#215, #206)", "Exact grant, authority-state, signer, and policy versions", "Retirement blocks future signing but preserves bounded historical attribution; it is not revocation.", "Publish retirement at a higher authority generation and verify that no new release is authorized.", ["H-VERIFY-HISTORICAL"], ["H-REVOKE-COMPROMISED-SIGNER"], ["R-LIFECYCLE-PERMISSIONS"], "defer-until-ceremony-contract"),
+        page("H-RECOVER-SIGNER", "howto", "Recover a release signer after availability loss", ["operate"], ["operator", "incidentResponder"], ["signer-recovery"], "Recovery operator", "Threat and custody contracts (#215, #208)", "Exact custody, recovery, signer, policy, and qualification records", "One-shot offline recovery may recover or rewrap the same signer; it cannot replace the root, add authority, or weaken policy.", "Use the highest consistent custody revision for one authorized recovery operation and verify restored custody.", ["H-MONITOR-REHEARSE"], ["H-REVOKE-COMPROMISED-SIGNER"], ["H-TRIAGE-INCIDENT", "R-CUSTODY", "R-EVIDENCE-BUNDLE"], "defer-until-recovery-ceremony"),
+        page("H-REVOKE-COMPROMISED-SIGNER", "howto", "Revoke and replace a compromised release signer", ["operate", "security"], ["operator", "releaseManager", "incidentResponder"], ["signer-compromise"], "Identity owner and incident responder", "Threat and manifest contracts (#215, #209)", "Exact root, revocation, authority-state, incident, and recovery profiles", "Confirmed compromise requires terminal revocation and rotation where continuity permits; only the certifying identity restores positive authority.", "Freeze scope, preserve evidence, publish revocation and cutoff state, replace authority, and independently verify recovery.", ["H-VERIFY-HISTORICAL"], ["H-RESPOND-ROOT-COMPROMISE"], ["H-TRIAGE-INCIDENT", "R-THREAT-AUTHORITY", "R-EVIDENCE-BUNDLE"], "defer-until-incident-runbook"),
+        page("H-TRIAGE-INCIDENT", "howto", "Classify a release-trust incident", ["operate", "security"], ["operator", "securityReviewer", "incidentResponder"], ["incident-response"], "Security owner", "Threat model (#215)", "Exact security policy, threat-model revision, and current signed state", "Triage preserves evidence and applies the most restrictive safe state; uncertainty never becomes permission.", "Separate availability loss, infrastructure compromise, suspected signer exposure, and confirmed compromise before choosing a runbook.", ["H-RESPOND-SIGNER-HOST", "H-RESPOND-PUBLICATION", "H-RESPOND-ROOT-COMPROMISE"], ["R-ERROR-CATALOG"], ["R-THREAT-AUTHORITY", "R-EVIDENCE-BUNDLE"], "architecture-ready"),
+        page("H-RESPOND-SIGNER-HOST", "howto", "Respond to signer or signing-host exposure", ["operate", "security"], ["operator", "incidentResponder"], ["incident-response", "signer-compromise"], "Security owner and identity owner", "Threat model (#215)", "Exact incident policy, signer, host, authority-state, and evidence versions", "Suspected exposure freezes scope; unresolved uncertainty rotates. Confirmed exposure revokes. Host removal alone is insufficient.", "Bound the exposure window, freeze, preserve evidence, decide suspected versus confirmed, and enter the matching rotation path.", ["H-REVOKE-COMPROMISED-SIGNER"], ["H-RESPOND-ROOT-COMPROMISE"], ["H-TRIAGE-INCIDENT", "R-EVIDENCE-BUNDLE"], "defer-until-incident-runbook"),
+        page("H-RESPOND-PUBLICATION", "howto", "Respond to provider, DNS, or publication compromise", ["operate", "security"], ["operator", "releaseManager", "incidentResponder"], ["incident-response", "publication-recovery"], "Publication owner and incident responder", "Threat and publication contracts (#215, #204)", "Exact publication profile, provider adapter, signed state, DNS, and incident policy", "Provider or DNS control alone creates no signer authority. Repair never rewinds signed state or weakens verification.", "Freeze promotion, verify signed state independently, move or restore the serving plane, and preserve continuity evidence.", ["H-RESTORE-PUBLICATION"], ["H-RESPOND-ROOT-COMPROMISE"], ["H-TRIAGE-INCIDENT", "R-PUBLICATION-RULES", "R-EVIDENCE-BUNDLE"], "defer-until-incident-runbook"),
+        page("H-RESPOND-ROOT-COMPROMISE", "howto", "Respond to certifying-identity compromise", ["operate", "security"], ["securityReviewer", "incidentResponder"], ["incident-response", "root-compromise"], "Identity owner and security owner", "Threat and client contracts (#215, #210)", "Exact trusted checkpoint, root, recovery, transition, and manual-rebootstrap profiles", "Certifying-root compromise ends automatic continuity after the last independently trusted checkpoint. Future trust requires an authorized recovery route or manual rebootstrap.", "Contain the authority domain, preserve the last trusted checkpoint, publish permitted restrictive state, and direct clients to explicit rebootstrap when required.", ["H-VERIFY-HISTORICAL"], ["R-SECURITY-POLICY"], ["H-TRIAGE-INCIDENT", "R-EVIDENCE-BUNDLE"], "defer-until-incident-runbook"),
+        page("H-RESTORE-PUBLICATION", "howto", "Restore canonical publication from backups", ["operate"], ["operator", "releaseManager", "incidentResponder"], ["publication-recovery"], "Publication owner", "Publication contract (#204)", "Exact publication profile, signed archive, infrastructure declaration, DNS export, and adapter qualification", "Restoration serves exact retained signed bytes and never lowers the current generation or lets provider state select authority.", "Restore immutable objects and serving code, reconcile the signed pointer, verify from independent networks, and resume monitoring.", ["H-MONITOR-REHEARSE"], ["H-RESPOND-PUBLICATION"], ["R-PUBLICATION-RULES", "R-EVIDENCE-BUNDLE"], "defer-until-adapter-qualification"),
+        page("H-RESTORE-VERIFIER", "howto", "Restore local verifier state from backups", ["verify", "operate"], ["operator", "verifierIntegrator", "incidentResponder"], ["verifier-recovery"], "Verifier owner and adopter", "Client contract (#210)", "Exact verifier, anchor, retained-state, backup, and platform profile", "Restoration cannot delete fork evidence, lower a highest-seen value, choose a new anchor, or imitate manual rebootstrap.", "Restore one complete protected transaction, verify integrity and high-water state, and refresh without overwriting conflicts.", ["H-VERIFY-CURRENT"], ["H-RESPOND-ROOT-COMPROMISE"], ["R-VERIFICATION-RESULTS", "R-EVIDENCE-BUNDLE"], "defer-until-verifier"),
+        page("H-MONITOR-REHEARSE", "howto", "Monitor freshness and rehearse recovery", ["operate", "adopt"], ["adopter", "operator", "releaseManager"], ["monitoring", "recovery-rehearsal"], "Adopter and publication owner", "Publication and threat contracts (#204, #215)", "Exact profile, signed freshness policy, adapters, alert route, backup inventory, and qualification record", "Monitoring can alert, stop promotion, or quarantine a hint. It cannot repair state, change DNS, suppress signed restrictions, or alter policy.", "Check freshness and availability, exercise restore and provider-exit paths, and record value-free evidence.", ["H-SIGN-PUBLISH"], ["H-TRIAGE-INCIDENT"], ["R-PUBLICATION-RULES", "R-EVIDENCE-BUNDLE"], "defer-until-adapters"),
+        page("H-REQUALIFY", "howto", "Requalify Sequoia or an adapter after dependency changes", ["integrate", "operate"], ["contributor", "securityReviewer", "operator"], ["dependency-change"], "Implementation or adapter owner and independent reviewer", "Qualification contract (#207)", "Exact before-and-after implementation, dependency, platform, profile, fixture, suite, and artifact versions", "A changed security boundary suspends current qualification until affected checks pass; a passing build alone is insufficient.", "Identify invalidation triggers, run the affected positive and failure-path matrix, and issue a new immutable qualification record.", ["R-SUPPORT-QUALIFICATION"], ["H-TRIAGE-INCIDENT"], ["R-CRYPTO-COMPAT", "R-EVIDENCE-BUNDLE"], "defer-until-suites"),
+        page("H-ADD-GITHUB-MIRROR", "howto", "Add GitHub Releases as an immutable mirror", ["integrate", "operate"], ["operator", "releaseManager", "contributor"], ["optional-integration"], "GitHub mirror adapter owner and adopter", "Publication contract (#204)", "Exact mirror adapter, publication profile, release, and qualification record", "GitHub is a retrieval mirror, not release authority or canonical state. Signed manifests and digests remain authoritative.", "Stage, digest-check, publish, read back, monitor, and remove mirror hints without changing canonical trust.", ["H-SIGN-PUBLISH"], ["H-RESPOND-PUBLICATION"], ["R-ADAPTER-INTERFACES", "R-PUBLICATION-RULES"], "defer-until-adapter"),
+        page("H-ADD-CUSTODY-PROVIDER", "howto", "Add an optional custody provider", ["integrate", "adopt"], ["adopter", "operator", "securityReviewer"], ["optional-integration"], "Custody adapter owner and adopter", "Core and custody contracts (#207, #208)", "Exact custody interface, adapter, profile, dependency, platform, and qualification versions", "Provider access to ciphertext or account state cannot create signing authority; secret resolution stays operation-local.", "Qualify one provider seam, map only opaque references in the private binding, and verify recovery independence.", ["H-ENROLL-INITIAL-FACTOR"], ["H-TRIAGE-INCIDENT"], ["R-CUSTODY", "R-ADAPTER-INTERFACES"], "defer-until-adapter"),
+        page("H-ADD-PLATFORM-PRODUCT", "howto", "Add a platform, product, or identity scope", ["integrate", "adopt"], ["adopter", "contributor", "releaseManager"], ["optional-integration"], "Profile publisher and adopter", "Core and manifest contracts (#207, #209)", "Exact policy profile, selector registry, grant scope, artifacts, and qualification records", "New scopes require authenticated policy and grant changes; copying bytes across scope never preserves release identity automatically.", "Extend a profile with one exact scope, qualify artifact selection, and verify cross-scope substitution failures.", ["H-SIGN-PUBLISH"], ["R-ERROR-CATALOG"], ["R-PROFILES-BINDINGS", "R-PROTOCOL-SCHEMAS"], "defer-until-profile-registry"),
+        page("H-ADD-LATER-SAL", "howto", "Add a later Sal deployment", ["integrate", "adopt"], ["adopter", "contributor", "securityReviewer"], ["optional-integration"], "Sal adopter and profile owner", "Public-core boundary (#207)", "Future exact Sal profile, private binding, adapters, qualification, and consumer policy", "Sal remains inert until a separately authorized adoption task defines and verifies its own private boundary.", "Apply the generic adoption path to an explicitly authorized Sal profile without importing another adopter’s bindings.", ["H-INTEGRATE-CONSUMER"], ["H-TRIAGE-INCIDENT"], ["R-PROFILES-BINDINGS", "E-AUTHORITY-SEPARATION"], "defer-until-separate-adoption"),
+        page("H-INTEGRATE-CONSUMER", "howto", "Integrate an independent admission consumer", ["integrate", "verify"], ["verifierIntegrator", "contributor", "securityReviewer"], ["consumer-integration"], "Consumer owner", "Independent-admission and public-core contracts (#209, #207)", "Exact core, admission, consumer-profile, verifier, artifact, and trust-context versions", "The consumer binds its own immutable policy and exact acted-on bytes. Generic verification cannot approve execution or installation.", "Construct an exact admission request, evaluate it side-effect-free, and pass only the result and bytes into separate consumer gates.", ["R-VERIFICATION-RESULTS"], ["R-ERROR-CATALOG", "H-TRIAGE-INCIDENT"], ["E-AUTHORITY-SEPARATION", "R-PROTOCOL-SCHEMAS"], "defer-until-consumer-facade"),
+        page("H-INTEGRATE-BASE-LOADOUT", "howto", "Integrate the Base Loadout release-authority consumer profile", ["integrate", "verify"], ["verifierIntegrator", "contributor", "securityReviewer"], ["consumer-integration"], "Base Loadout consumer owner", "Accepted Base Loadout profile (#212)", "Exact io.nisavid.base-loadout.release-authority/v1 profile, generic verifier, installer, artifact, trust-context, and consumer-gate versions", "Only accepted-current exact bytes may reach Base Loadout’s separate tuple validation, archive, receipt, installation, and updater gates. This page performs none of those protected actions.", "Bind the exact two-artifact scope and hand accepted-current bytes to the candidate-independent protected boundary without treating result JSON as authority.", ["R-VERIFICATION-RESULTS"], ["R-ERROR-CATALOG", "H-TRIAGE-INCIDENT"], ["H-INTEGRATE-CONSUMER", "E-AUTHORITY-SEPARATION", "R-EVIDENCE-BUNDLE"], "defer-until-consumer-implementation"),
+        page("H-CONTRIBUTOR-ENV", "howto", "Set up a contributor environment and run the complete suites", ["integrate"], ["contributor"], ["contribution"], "Project maintainers", "Public-core governance (#207)", "Exact source revision, toolchain, dependency lock, suites, fixture corpus, and platform", "Contributor setup uses public fixtures and no production binding, credential, signer, provider, or trust store.", "Create a reproducible development environment and run conformance, documentation, compatibility, and security checks.", ["H-EVOLVE-CONTRACT"], ["R-ERROR-CATALOG"], ["R-LAYOUT", "R-VERSION-DEPRECATION"], "defer-until-public-repository"),
+        page("H-EVOLVE-CONTRACT", "howto", "Evolve a schema, protocol field, adapter, or CLI contract", ["integrate", "security"], ["contributor", "securityReviewer"], ["contract-evolution"], "Owning contract maintainer", "Public-core governance (#207)", "Exact old and proposed contracts, migration, conformance corpus, and compatibility evidence", "Unknown security-relevant meaning fails closed. Normative or authority changes require an ADR, threat-model review, conformance change, compatibility analysis, and approval.", "Classify the change, preserve old immutable bytes, define deterministic migration, update negative cases, and publish compatibility evidence.", ["H-CUT-CORE-RELEASE"], ["H-TRIAGE-INCIDENT"], ["R-VERSION-DEPRECATION", "R-PROTOCOL-SCHEMAS", "R-THREAT-AUTHORITY"], "defer-until-public-repository"),
+        page("H-CUT-CORE-RELEASE", "howto", "Cut, deprecate, or retire a public-core release", ["integrate", "operate"], ["releaseManager", "contributor", "securityReviewer"], ["core-release-lifecycle"], "Project maintainers", "Public-core governance (#207)", "Exact source, package, contracts, migration, conformance, qualification, dependency, and security-review inventory", "Published releases remain immutable. Deprecation or retirement changes prospective status, not history, and makes no unadopted support promise.", "Build and verify one release record, publish immutable artifacts, or issue a later status transition with migration guidance.", ["R-VERSION-DEPRECATION"], ["H-HANDLE-VULNERABILITY"], ["R-SUPPORT-QUALIFICATION", "R-EVIDENCE-BUNDLE"], "defer-until-public-repository"),
+        page("H-REPORT-VULNERABILITY", "howto", "Report a security vulnerability", ["security", "integrate"], ["contributor", "securityReviewer"], ["security-reporting"], "Security maintainers", "Public-core governance (#207)", "Current published security policy", "Use the private reporting route. Do not submit secrets or test live deployments.", "Send the minimum reproducible public-fixture evidence through the published private channel.", ["R-SECURITY-POLICY"], ["H-TRIAGE-INCIDENT"], [], "defer-until-security-policy"),
+        page("H-HANDLE-VULNERABILITY", "howto", "Triage, remediate, disclose, and verify a vulnerability", ["security", "integrate"], ["securityReviewer", "contributor", "releaseManager"], ["security-response"], "Security maintainers", "Public-core governance and threat model (#207, #215)", "Exact advisory, affected versions, threat-model revision, fix, suites, qualification status, and disclosure policy", "Emergency review may shorten but never weaken authority or verification gates. Remediation commitments follow published support policy only.", "Validate impact, contain affected qualification, fix against the owning contract, verify independently, publish the advisory, and update status.", ["H-CUT-CORE-RELEASE"], ["H-TRIAGE-INCIDENT"], ["R-SECURITY-POLICY", "R-SUPPORT-QUALIFICATION"], "defer-until-security-policy"),
+
+        page("R-THREAT-AUTHORITY", "reference", "Threat, authority, TCB, invariants, and residual-risk reference", ["security", "operate", "integrate"], ["securityReviewer", "incidentResponder", "contributor"], ["all-lifecycle"], "Security maintainers", "Normative threat model (#215)", "Exact threat-model and policy revision", "Describes authority; it grants none. The accepted contract remains the source of truth.", "Provide neutral lookup for assets, adversaries, TCB, roles, powers, precedence, incident classes, privacy, retention, and residual risks.", ["E-THREAT-RATIONALE"], ["H-TRIAGE-INCIDENT"], [], "contract-derived"),
+        page("R-CLI-CONFIG", "reference", "CLI, configuration, environment, exits, and machine results", ["operate", "verify", "integrate"], ["operator", "verifierIntegrator", "contributor"], ["all-lifecycle"], "Core CLI and verifier owners", "Operator and client contracts (#216, #210)", "Exact interface, command, config, profile, and result-envelope versions", "Unknown commands, fields, flags, or required semantics fail closed. Human prompts never use stdout.", "Describe exact commands, options, inputs, outputs, prompts, effect classes, diagnostics, and exit classes.", ["R-ERROR-CATALOG"], ["H-TRIAGE-INCIDENT"], [], "defer-until-cli"),
+        page("R-LAYOUT", "reference", "Repository, package, artifact, and directory layout", ["integrate", "adopt"], ["contributor", "adopter"], ["all-lifecycle"], "Project maintainers", "Public-core boundary (#207)", "Exact repository and package release", "Public layout excludes adopter-private bindings and secret-bearing material.", "Mirror the final repository, distribution, fixture, generated-reference, qualification, and documentation layout.", ["H-CONTRIBUTOR-ENV"], ["R-ERROR-CATALOG"], [], "defer-until-public-repository"),
+        page("R-PROTOCOL-SCHEMAS", "reference", "Certificate, manifest, trust-state, DNS, evidence, and adapter schemas", ["verify", "operate", "integrate"], ["verifierIntegrator", "contributor", "securityReviewer"], ["all-lifecycle"], "Core contract owners", "Manifest, client, and publication contracts (#209, #210, #204)", "Exact schema-family, media-type, crypto, policy, and extension versions", "Generated descriptions mirror normative schemas and canonical bytes; examples cannot add fields or authority.", "Describe every field, constraint, sort rule, digest, signature binding, extension rule, and object relationship.", ["R-LIFECYCLE-PERMISSIONS"], ["R-ERROR-CATALOG"], [], "contract-derived"),
+        page("R-LIFECYCLE-PERMISSIONS", "reference", "Lifecycle state machines and permission matrix", ["operate", "verify", "security"], ["operator", "releaseManager", "securityReviewer", "incidentResponder"], ["all-lifecycle"], "Core contract and security owners", "Threat and manifest contracts (#215, #209)", "Exact authority-state, release-state, grant, root-transition, and policy versions", "The most restrictive applicable state wins. The matrix never turns role possession into positive authority.", "Describe valid states, transitions, role powers, preconditions, terminal states, precedence, and prohibited restoration.", ["E-CONTINUITY"], ["H-TRIAGE-INCIDENT"], [], "contract-derived"),
+        page("R-CRYPTO-COMPAT", "reference", "Algorithms, profiles, capabilities, and compatibility registry", ["verify", "integrate", "security"], ["verifierIntegrator", "contributor", "securityReviewer"], ["all-lifecycle"], "Core crypto-profile owner", "Manifest and qualification contracts (#209, #207)", "Exact crypto, contract, implementation, platform, and qualification versions", "No negotiation, silent fallback, partial composite success, or inferred support.", "List accepted algorithms, profile IDs, capability descriptors, implementation support, compatibility, and invalidation triggers.", ["H-REQUALIFY"], ["R-ERROR-CATALOG"], [], "defer-until-registry"),
+        page("R-ADAPTER-INTERFACES", "reference", "Custody, authorization, publication, hosting, and verifier-distribution interfaces", ["integrate", "adopt", "operate"], ["contributor", "adopter", "operator"], ["all-lifecycle"], "Core adapter-interface owners", "Public-core and operator contracts (#207, #216)", "Exact role-specific interface and capability-schema versions", "Adapters receive narrow inputs, cannot choose authority, and cannot silently downgrade or fall through after an indeterminate effect.", "Describe each seam, method, capability, input, output, error, effect class, readback rule, and qualification hook.", ["T-BUILD-MINIMAL-ADAPTER"], ["H-TRIAGE-INCIDENT"], [], "defer-until-interfaces"),
+        page("R-PUBLICATION-RULES", "reference", "URL, DNS, redirect, TLS, cache, freshness, and mirror rules", ["operate", "adopt", "verify"], ["operator", "releaseManager", "verifierIntegrator"], ["publication"], "Publication profile and adapter owners", "Publication and client contracts (#204, #210)", "Exact publication, DNSSEC, origin, cache, mirror, and client profiles", "The canonical origin is authoritative only through signed state and the pinned trust model; Vercel and mirrors cannot select current state.", "Describe the machine namespace, methods, media types, cache policy, freshness, redirects, TLS, DNS transitions, mirrors, monitoring, and exit.", ["H-SIGN-PUBLISH"], ["H-RESPOND-PUBLICATION"], [], "contract-derived"),
+        page("R-SUPPORT-QUALIFICATION", "reference", "Support matrix and qualification status", ["adopt", "operate", "integrate"], ["adopter", "operator", "contributor", "securityReviewer"], ["all-lifecycle"], "Project and implementation owners", "Public-core boundary (#207)", "Exact component, platform, dependency, profile, adapter, fixture, evidence, review, and status versions", "Ownership, conformance, qualification, and support are separate. A catalog listing does not imply endorsement.", "List current exact environments, evidence, limitations, invalidation triggers, prospective status, and explicit support commitments.", ["H-REQUALIFY"], ["H-TRIAGE-INCIDENT"], [], "defer-until-qualification-records"),
+        page("R-ERROR-CATALOG", "reference", "Error and diagnostic catalog", ["verify", "operate", "integrate", "security"], ["adopter", "operator", "verifierIntegrator", "contributor", "incidentResponder"], ["failure-handling"], "Owning interface maintainers", "Manifest, client, and operator contracts (#209, #210, #216)", "Exact interface and closed diagnostic-code versions", "Rejected and indeterminate remain distinct; every entry names effect, safe next action, and incident threshold without a bypass.", "Describe each closed code, category, result precedence, effect class, likely cause, evidence to preserve, next check, and recovery link.", ["E-FRESHNESS-HISTORY"], ["H-TRIAGE-INCIDENT"], [], "defer-until-diagnostics"),
+        page("R-EVIDENCE-BUNDLE", "reference", "Evidence bundle, archive completeness, and receipts", ["verify", "operate", "integrate", "security"], ["operator", "releaseManager", "verifierIntegrator", "securityReviewer", "incidentResponder"], ["all-lifecycle"], "Core contract and workflow owners", "Manifest and publication contracts (#209, #204)", "Exact evidence-index, archive-index, completeness, receipt, profile, and policy versions", "Evidence may satisfy installed requirements but cannot repair invalid bytes, authority, rollback, freeze, or withdrawal. Public bundles stay value-free.", "Describe evidence types, phases, subjects, archive closure, receipts, completeness, retention, privacy, and non-authoritative locators.", ["H-VERIFY-HISTORICAL"], ["H-TRIAGE-INCIDENT"], [], "contract-derived"),
+        page("R-VERSION-DEPRECATION", "reference", "Versioning, migration, deprecation, and retirement", ["integrate", "adopt"], ["contributor", "releaseManager", "adopter"], ["contract-evolution", "core-release-lifecycle"], "Project and contract owners", "Public-core boundary (#207)", "Exact core, serialized contract, adapter-interface, adapter, profile, and qualification versions", "Before 1.0, interfaces are experimental and no cadence, window, backport, or support term is inferred.", "Describe independent version axes, writer and reader behavior, locks, migrations, immutable releases, status records, and adopted compatibility commitments.", ["H-EVOLVE-CONTRACT", "H-CUT-CORE-RELEASE"], ["R-ERROR-CATALOG"], [], "contract-derived"),
+        page("R-CUSTODY", "reference", "Custody, FIDO authorization, recovery, and plaintext boundaries", ["adopt", "operate", "security"], ["adopter", "operator", "securityReviewer", "incidentResponder"], ["factor-lifecycle", "signer-lifecycle", "recovery"], "Custody profile and adapter owners", "Custody and local-unwrap contracts (#208, #219)", "Exact custody, factor, recovery, plugin, artifact, platform, device, firmware, and qualification versions", "FIDO user verification gates unwrap; it does not prove exact release intent in the first local profile. Process-memory exposure remains explicit.", "Describe revisions, envelopes, secret slots, factor metadata, recovery roles, one-shot workers, qualification, evidence, and forbidden logging.", ["H-ENROLL-INITIAL-FACTOR"], ["H-RESPOND-SIGNER-HOST"], [], "contract-derived"),
+        page("R-PROFILES-BINDINGS", "reference", "Policy profiles, deployment bindings, locks, and secret slots", ["adopt", "integrate"], ["adopter", "operator", "contributor"], ["adoption"], "Core profile owner, profile publisher, and adopter", "Public-core boundary (#207)", "Exact profile meta-schema, selected profile, interface ranges, lock, and qualification record", "Profiles are public and may narrow policy. Bindings are private and supply values but never generic semantics or expanded authority.", "Describe flattened profile identity, versions, digests, capabilities, abstract slots, private mapping, locks, acceptance evidence, and fork rules.", ["H-CONFIGURE-PROFILE"], ["R-ERROR-CATALOG"], [], "contract-derived"),
+        page("R-VERIFICATION-RESULTS", "reference", "Trust context, retained state, and verification results", ["verify", "integrate"], ["adopter", "operator", "verifierIntegrator", "securityReviewer"], ["verification"], "Verifier owner", "Client and admission contracts (#210, #209)", "Exact trust-context, retained-state, request, result, verifier, profile, and diagnostic versions", "The four outcomes carry no generic allowed, safe, or may-execute Boolean. Reset cannot erase observed conflict.", "Describe bootstrap and refresh dispositions, retained fields, time floor, fork evidence, current and historical modes, outcomes, exits, and machine envelopes.", ["H-VERIFY-CURRENT"], ["R-ERROR-CATALOG", "H-TRIAGE-INCIDENT"], [], "contract-derived"),
+        page("R-SECURITY-POLICY", "reference", "Security reporting and supported-version policy", ["security", "integrate"], ["contributor", "securityReviewer", "releaseManager"], ["security-reporting"], "Security maintainers", "Public-core governance (#207)", "Exact published policy revision", "Reports use the private channel and contain no secret or live-deployment test. Response and support promises are only those explicitly published.", "Describe reporting channel, scope, safe research, evidence handling, disclosure, acknowledgments, supported versions, and response commitments.", ["H-REPORT-VULNERABILITY"], ["H-HANDLE-VULNERABILITY"], [], "defer-until-security-policy"),
+
+        page("E-IDENTITY-SEPARATION", "explanation", "Stable identity, factors, signers, and products are separate concepts", ["security", "adopt"], ["learner", "adopter", "securityReviewer"], ["bootstrap"], "Domain and security owners", "Threat and public-core contracts (#215, #207)", "Current conceptual contract revision", "Explains relationships only; ceremony steps and field lookup live elsewhere.", "Explain why identity continuity, possession, delegated signing, and product namespace must not collapse into one object.", ["E-CERTIFY-ONLY"], ["H-TRIAGE-INCIDENT"], [], "contract-derived"),
+        page("E-CERTIFY-ONLY", "explanation", "Why the primary is certify-only and operations use subkeys", ["security", "adopt"], ["adopter", "operator", "securityReviewer"], ["bootstrap", "signer-lifecycle"], "Security owner", "Threat and authority-topology contracts (#215, #206)", "Current conceptual contract revision", "No ceremony or packet field instructions; links to task and reference pages.", "Explain how an offline continuity root constrains routine release and subtractive authority.", ["E-CONTINUITY"], ["H-RESPOND-ROOT-COMPROMISE"], ["E-IDENTITY-SEPARATION"], "contract-derived"),
+        page("E-FIDO-CUSTODY", "explanation", "FIDO authorization is not signing-key custody", ["security", "adopt", "operate"], ["adopter", "operator", "securityReviewer"], ["factor-lifecycle"], "Security and custody owners", "Threat and local-unwrap contracts (#215, #219)", "Current conceptual contract revision", "Does not claim exact-intent authorization, independent display, or absent process-memory exposure.", "Explain user verification, PRF-gated unwrap, encrypted custody, intent display, one-shot signing, and their distinct failure domains.", ["E-CUSTODY-TRADEOFFS"], ["H-RESPOND-SIGNER-HOST"], ["R-CUSTODY"], "contract-derived"),
+        page("E-HYBRID-PQ", "explanation", "RFC 9580/9980 hybrid post-quantum security", ["security", "verify"], ["learner", "verifierIntegrator", "securityReviewer"], ["all-lifecycle"], "Crypto-profile owner", "Manifest protocol (#209)", "Exact crypto-profile and standards revision", "Explains accepted profile properties and limits without teaching custom cryptography.", "Explain composite signatures, both-component verification, SHA-512 binding, algorithm agility boundaries, and remaining assumptions.", ["R-CRYPTO-COMPAT"], ["R-ERROR-CATALOG"], [], "contract-derived"),
+        page("E-CONTINUITY", "explanation", "Trust continuity through rotation, revocation, recovery, and identity transition", ["security", "operate", "verify"], ["operator", "verifierIntegrator", "securityReviewer", "incidentResponder"], ["signer-lifecycle", "root-transition"], "Security owner", "Threat, topology, and client contracts (#215, #206, #210)", "Current conceptual contract revision", "Automatic continuity follows predecessor authorization only; missing continuity routes to explicit rebootstrap.", "Explain non-transitive succession, bounded overlap, historical meaning, compromise cutoffs, root transition, and rebootstrap.", ["R-LIFECYCLE-PERMISSIONS"], ["H-RESPOND-ROOT-COMPROMISE"], [], "contract-derived"),
+        page("E-FRESHNESS-HISTORY", "explanation", "Freshness, rollback, freeze, equivocation, and historical verification", ["security", "verify", "operate"], ["operator", "verifierIntegrator", "securityReviewer", "incidentResponder"], ["verification", "incident-response"], "Security and verifier owners", "Threat, manifest, and client contracts (#215, #209, #210)", "Current conceptual contract revision", "Never turns stale, missing, conflicting, or historical evidence into current acceptance.", "Explain monotonic heads, signed expiry, time floors, split views, restrictive precedence, current acceptance, and historical attribution.", ["R-VERIFICATION-RESULTS"], ["H-TRIAGE-INCIDENT"], [], "contract-derived"),
+        page("E-PUBLICATION-PLANES", "explanation", "Canonical publication, mirrors, and the main site serve different purposes", ["security", "adopt", "operate"], ["adopter", "operator", "releaseManager", "securityReviewer"], ["publication"], "Publication and security owners", "Publication contract (#204)", "Current conceptual contract revision", "No provider, presentation site, mirror, or redirect becomes trust authority.", "Explain why Cloudflare serves the canonical machine route while Vercel presents docs and GitHub mirrors exact immutable bytes.", ["R-PUBLICATION-RULES"], ["H-RESPOND-PUBLICATION"], [], "contract-derived"),
+        page("E-CUSTODY-TRADEOFFS", "explanation", "Custody, offline recovery, compromise, and failure-domain tradeoffs", ["security", "adopt", "operate"], ["adopter", "operator", "securityReviewer", "incidentResponder"], ["recovery", "incident-response"], "Security and custody owners", "Threat and custody contracts (#215, #208)", "Current conceptual contract revision", "No recovery shortcut may weaken an authorization or verification gate.", "Explain factor-only, envelope-only, host, joint-factor, plaintext, recovery-root, and provider failure domains and their consequences.", ["R-CUSTODY"], ["H-TRIAGE-INCIDENT"], [], "contract-derived"),
+        page("E-AUTHORITY-SEPARATION", "explanation", "Source review, operator authority, and consumer admission remain separate", ["security", "integrate", "operate"], ["contributor", "releaseManager", "verifierIntegrator", "securityReviewer"], ["routine-release", "consumer-integration"], "Security and consumer owners", "Threat, public-core, and admission contracts (#215, #207, #209)", "Current conceptual contract revision", "CI, tags, provenance, provider state, verification results, and docs may supply evidence but cannot create release or consumer authority.", "Explain the handoffs among source review, exact human authorization, signing, publication, generic verification, and protected-consumer acceptance.", ["H-INTEGRATE-CONSUMER"], ["H-TRIAGE-INCIDENT"], [], "contract-derived"),
+        page("E-THREAT-RATIONALE", "explanation", "Why the common path is intentionally constrained", ["security", "verify", "adopt", "operate"], ["learner", "adopter", "operator", "securityReviewer"], ["all-lifecycle"], "Security owner", "Threat model (#215)", "Current conceptual contract revision", "Explains constraints and residual risk; it neither grants an exception nor replaces normative reference.", "Connect the authority lattice, human presence, fail-closed outcomes, archives, independent verification, and accepted first-use split-view risk.", ["R-THREAT-AUTHORITY"], ["H-TRIAGE-INCIDENT"], [], "contract-derived"),
+        page("E-CURRENT-HISTORICAL", "explanation", "Current acceptance and historical attribution answer different questions", ["verify", "security"], ["learner", "adopter", "verifierIntegrator", "securityReviewer"], ["verification"], "Verifier and security owners", "Manifest and client contracts (#209, #210)", "Current conceptual contract revision", "Historical attribution never asserts safety, currentness, reinstallability, or promotion eligibility.", "Explain how mode, time, freshness, archives, compromise evidence, and intended action change the verifier’s answer.", ["H-VERIFY-HISTORICAL", "R-VERIFICATION-RESULTS"], ["R-ERROR-CATALOG"], [], "contract-derived")
+      ]);
+
+      const pageMap = new Map(pages.map(item => [item.id, item]));
+
+      const scenarios = Object.freeze([
+        {
+          id: "verification-failure",
+          title: "Verification failure",
+          description: "A current check does not succeed. Follow facts, explanation, and incident routing without inventing a bypass.",
+          audience: "verifierIntegrator",
+          route: "verify",
+          steps: ["H-VERIFY-CURRENT", "R-ERROR-CATALOG", "E-FRESHNESS-HISTORY", "H-TRIAGE-INCIDENT"]
+        },
+        {
+          id: "rotation-branch",
+          title: "Rotation branch",
+          description: "Choose the path before acting: healthy lifecycle, factor-only loss, or plausible signer exposure.",
+          audience: "operator",
+          route: "operate",
+          steps: ["H-ROTATE-SIGNER", "H-REPLACE-LOST-FACTOR", "H-RESPOND-SIGNER-HOST", "H-REVOKE-COMPROMISED-SIGNER"]
+        },
+        {
+          id: "publication-gates",
+          title: "Publication gates",
+          description: "Move from exact intent to schema, serving rules, monitoring, higher-generation rollback, and incident response.",
+          audience: "releaseManager",
+          route: "operate",
+          steps: ["H-SIGN-PUBLISH", "R-PROTOCOL-SCHEMAS", "R-PUBLICATION-RULES", "H-MONITOR-REHEARSE", "H-ROLL-BACK-RELEASE", "H-TRIAGE-INCIDENT"]
+        },
+        {
+          id: "ceremony-boundary",
+          title: "Ceremony boundary",
+          description: "A provisioning guide gathers profile, custody, rehearsal, and evidence context before an irreversible step.",
+          audience: "adopter",
+          route: "adopt",
+          steps: ["H-CONFIGURE-PROFILE", "R-PROFILES-BINDINGS", "R-CUSTODY", "H-MONITOR-REHEARSE", "R-EVIDENCE-BUNDLE", "H-PROVISION-HOST"]
+        },
+        {
+          id: "platform-convergence",
+          title: "Platform convergence",
+          description: "Platform-specific installation converges into one qualification model and one shared semantic verification flow.",
+          audience: "adopter",
+          route: "verify",
+          steps: ["H-INSTALL-LINUX", "R-SUPPORT-QUALIFICATION", "H-INSTALL-MACOS", "H-VERIFY-CURRENT", "R-VERIFICATION-RESULTS"]
+        },
+        {
+          id: "consumer-boundary",
+          title: "Consumer admission",
+          description: "Generic verification ends before a protected consumer’s own acceptance, archive, receipt, installation, and updater gates.",
+          audience: "verifierIntegrator",
+          route: "integrate",
+          steps: ["E-AUTHORITY-SEPARATION", "H-INTEGRATE-CONSUMER", "H-INTEGRATE-BASE-LOADOUT", "R-VERIFICATION-RESULTS", "R-EVIDENCE-BUNDLE"]
+        }
+      ]);
+
+      const coverage = Object.freeze([
+        ["Learn first verification", "learner", "T-VERIFY-DISPOSABLE", "R-VERIFICATION-RESULTS", "R-ERROR-CATALOG"],
+        ["Adopt a sample project", "adopter", "T-ADOPT-SAMPLE", "R-PROFILES-BINDINGS", "H-TRIAGE-INCIDENT"],
+        ["Install and qualify Linux", "adopter", "H-INSTALL-LINUX", "R-SUPPORT-QUALIFICATION", "R-ERROR-CATALOG"],
+        ["Install and qualify macOS", "adopter", "H-INSTALL-MACOS", "R-SUPPORT-QUALIFICATION", "R-ERROR-CATALOG"],
+        ["Bootstrap continuity", "adopter", "H-BOOTSTRAP-IDENTITY", "R-THREAT-AUTHORITY", "H-RESPOND-ROOT-COMPROMISE"],
+        ["Provision or remove a host", "operator", "H-PROVISION-HOST", "R-CUSTODY", "H-RESPOND-SIGNER-HOST"],
+        ["Publish a routine release", "releaseManager", "H-SIGN-PUBLISH", "R-PUBLICATION-RULES", "H-ROLL-BACK-RELEASE"],
+        ["Verify current state", "verifierIntegrator", "H-VERIFY-CURRENT", "R-VERIFICATION-RESULTS", "R-ERROR-CATALOG"],
+        ["Verify offline", "verifierIntegrator", "H-VERIFY-OFFLINE", "R-VERIFICATION-RESULTS", "R-ERROR-CATALOG"],
+        ["Verify historical attribution", "securityReviewer", "H-VERIFY-HISTORICAL", "R-EVIDENCE-BUNDLE", "H-TRIAGE-INCIDENT"],
+        ["Replace a factor after availability loss", "operator", "H-REPLACE-LOST-FACTOR", "R-CUSTODY", "H-RESPOND-SIGNER-HOST"],
+        ["Rotate or retire a healthy signer", "releaseManager", "H-ROTATE-SIGNER", "R-LIFECYCLE-PERMISSIONS", "H-REVOKE-COMPROMISED-SIGNER"],
+        ["Respond to signer exposure", "incidentResponder", "H-RESPOND-SIGNER-HOST", "R-THREAT-AUTHORITY", "H-REVOKE-COMPROMISED-SIGNER"],
+        ["Recover publication", "incidentResponder", "H-RESTORE-PUBLICATION", "R-PUBLICATION-RULES", "H-RESPOND-PUBLICATION"],
+        ["Recover verifier state", "verifierIntegrator", "H-RESTORE-VERIFIER", "R-VERIFICATION-RESULTS", "H-RESPOND-ROOT-COMPROMISE"],
+        ["Monitor and rehearse recovery", "operator", "H-MONITOR-REHEARSE", "R-EVIDENCE-BUNDLE", "H-TRIAGE-INCIDENT"],
+        ["Requalify a dependency or adapter", "contributor", "H-REQUALIFY", "R-SUPPORT-QUALIFICATION", "H-TRIAGE-INCIDENT"],
+        ["Integrate a protected consumer", "verifierIntegrator", "H-INTEGRATE-CONSUMER", "R-PROTOCOL-SCHEMAS", "R-ERROR-CATALOG"],
+        ["Integrate Base Loadout", "verifierIntegrator", "H-INTEGRATE-BASE-LOADOUT", "R-VERIFICATION-RESULTS", "R-EVIDENCE-BUNDLE"],
+        ["Evolve a public contract", "contributor", "H-EVOLVE-CONTRACT", "R-VERSION-DEPRECATION", "H-TRIAGE-INCIDENT"],
+        ["Release the public core", "releaseManager", "H-CUT-CORE-RELEASE", "R-SUPPORT-QUALIFICATION", "H-HANDLE-VULNERABILITY"],
+        ["Report a vulnerability", "contributor", "H-REPORT-VULNERABILITY", "R-SECURITY-POLICY", "H-TRIAGE-INCIDENT"],
+        ["Handle a vulnerability", "securityReviewer", "H-HANDLE-VULNERABILITY", "R-THREAT-AUTHORITY", "H-TRIAGE-INCIDENT"]
+      ]);
+
+      function auditCatalog() {
+        const errors = [];
+        const ids = new Set();
+        pages.forEach(item => {
+          if (ids.has(item.id)) errors.push("duplicate page ID " + item.id);
+          ids.add(item.id);
+          if (!modes[item.mode]) errors.push(item.id + " has unknown mode");
+          if (!item.routes.length || item.routes.some(routeId => !routes[routeId])) errors.push(item.id + " has invalid route");
+          if (!item.audiences.length || item.audiences.some(audienceId => !audiences[audienceId])) errors.push(item.id + " has invalid audience");
+          ["next", "recovery", "prerequisites"].forEach(kind => {
+            item[kind].forEach(target => {
+              if (!pageMap.has(target)) errors.push(item.id + " has missing " + kind + " target " + target);
+            });
+          });
+        });
+        Object.values(routes).forEach(route => {
+          if (!pageMap.has(route.start)) errors.push("route start missing " + route.start);
+        });
+        scenarios.forEach(scenario => {
+          scenario.steps.forEach(target => {
+            if (!pageMap.has(target)) errors.push("scenario target missing " + target);
+          });
+        });
+        coverage.forEach(row => {
+          [row[2], row[3], row[4]].forEach(target => {
+            if (!pageMap.has(target)) errors.push("coverage target missing " + target);
+          });
+        });
+        return Object.freeze({
+          pageCount: pages.length,
+          routeCount: Object.keys(routes).length,
+          scenarioCount: scenarios.length,
+          errors
+        });
+      }
+
+      const audit = auditCatalog();
+
+      function initialState() {
+        return {
+          route: "verify",
+          audience: "learner",
+          page: routes.verify.start,
+          history: [routes.verify.start],
+          lastAction: "Opened the learner verification route",
+          inventoryMode: "all"
+        };
+      }
+
+      function transition(source, action) {
+        const state = {
+          route: source.route,
+          audience: source.audience,
+          page: source.page,
+          history: source.history.slice(),
+          lastAction: source.lastAction,
+          inventoryMode: source.inventoryMode
+        };
+
+        if (action.type === "RESET") return initialState();
+
+        if (action.type === "SELECT_ROUTE" && routes[action.route]) {
+          state.route = action.route;
+          const preferred = pageMap.get(routes[action.route].start);
+          const audienceMatch = pages.find(item => item.routes.includes(action.route) && item.audiences.includes(state.audience));
+          state.page = preferred.audiences.includes(state.audience) || !audienceMatch ? preferred.id : audienceMatch.id;
+          state.history.push(state.page);
+          state.lastAction = "Selected goal route: " + routes[action.route].label;
+          return state;
+        }
+
+        if (action.type === "SELECT_AUDIENCE" && audiences[action.audience]) {
+          state.audience = action.audience;
+          const current = pageMap.get(state.page);
+          if (!current.audiences.includes(action.audience)) {
+            const candidate = pages.find(item => item.routes.includes(state.route) && item.audiences.includes(action.audience));
+            if (candidate) {
+              state.page = candidate.id;
+              state.history.push(candidate.id);
+            }
+          }
+          state.lastAction = "Selected audience: " + audiences[action.audience];
+          return state;
+        }
+
+        if (action.type === "OPEN_PAGE" && pageMap.has(action.page)) {
+          const target = pageMap.get(action.page);
+          state.page = target.id;
+          if (!target.routes.includes(state.route)) state.route = target.routes[0];
+          state.history.push(target.id);
+          state.lastAction = "Opened " + target.id;
+          return state;
+        }
+
+        if (action.type === "FILTER_MODE" && (action.mode === "all" || modes[action.mode])) {
+          state.inventoryMode = action.mode;
+          state.lastAction = "Filtered inventory: " + (action.mode === "all" ? "all modes" : modes[action.mode].label);
+          return state;
+        }
+
+        state.lastAction = "Ignored an invalid prototype action";
+        return state;
+      }
+
+      return Object.freeze({
+        audiences,
+        modes,
+        routes,
+        pages,
+        pageMap,
+        scenarios,
+        coverage,
+        audit,
+        initialState,
+        transition
+      });
+    })();
+
+    let model = DocumentationModel.initialState();
+    let activeScenario = 0;
+    let scenarioStep = 0;
+
+    function makeButton(label, onClick, options) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = label;
+      button.addEventListener("click", onClick);
+      if (options && options.pressed !== undefined) button.setAttribute("aria-pressed", String(options.pressed));
+      if (options && options.selected !== undefined) button.setAttribute("aria-selected", String(options.selected));
+      if (options && options.disabled) button.disabled = true;
+      if (options && options.className) button.className = options.className;
+      return button;
+    }
+
+    function humanList(values, labels) {
+      return values.map(value => labels[value] || value).join(", ");
+    }
+
+    function renderLinkButtons(holderId, ids) {
+      const holder = document.getElementById(holderId);
+      holder.replaceChildren();
+      if (!ids.length) {
+        const empty = document.createElement("span");
+        empty.className = "small";
+        empty.textContent = "None inside this page job.";
+        holder.appendChild(empty);
+        return;
+      }
+      ids.forEach(id => {
+        const target = DocumentationModel.pageMap.get(id);
+        holder.appendChild(makeButton(id + " · " + target.title, () => dispatch({ type: "OPEN_PAGE", page: id })));
+      });
+    }
+
+    function renderRouteCards() {
+      const holder = document.getElementById("route-cards");
+      holder.replaceChildren();
+      Object.entries(DocumentationModel.routes).forEach(([id, route]) => {
+        const card = document.createElement("article");
+        card.className = "route-card";
+        const content = document.createElement("div");
+        const title = document.createElement("h3");
+        title.textContent = route.label;
+        const summary = document.createElement("p");
+        summary.textContent = route.summary;
+        content.append(title, summary);
+        const button = makeButton("Open with " + route.start, () => dispatch({ type: "SELECT_ROUTE", route: id }));
+        card.append(content, button);
+        holder.appendChild(card);
+      });
+    }
+
+    function renderSelectors() {
+      const audienceHolder = document.getElementById("audience-buttons");
+      audienceHolder.replaceChildren();
+      Object.entries(DocumentationModel.audiences).forEach(([id, label]) => {
+        audienceHolder.appendChild(makeButton(label, () => dispatch({ type: "SELECT_AUDIENCE", audience: id }), { pressed: model.audience === id }));
+      });
+
+      const routeHolder = document.getElementById("route-buttons");
+      routeHolder.replaceChildren();
+      Object.entries(DocumentationModel.routes).forEach(([id, route]) => {
+        routeHolder.appendChild(makeButton(route.label, () => dispatch({ type: "SELECT_ROUTE", route: id }), { pressed: model.route === id }));
+      });
+
+      const typeHolder = document.getElementById("type-filters");
+      typeHolder.replaceChildren();
+      typeHolder.appendChild(makeButton("All modes", () => dispatch({ type: "FILTER_MODE", mode: "all" }), { pressed: model.inventoryMode === "all" }));
+      Object.entries(DocumentationModel.modes).forEach(([id, mode]) => {
+        typeHolder.appendChild(makeButton(mode.label, () => dispatch({ type: "FILTER_MODE", mode: id }), { pressed: model.inventoryMode === id }));
+      });
+    }
+
+    function renderState() {
+      const current = DocumentationModel.pageMap.get(model.page);
+      document.getElementById("state-route").textContent = DocumentationModel.routes[model.route].label;
+      document.getElementById("state-audience").textContent = DocumentationModel.audiences[model.audience];
+      document.getElementById("state-page").textContent = current.id + " · " + current.title;
+      document.getElementById("state-need").textContent = DocumentationModel.modes[current.mode].need;
+      document.getElementById("state-depth").textContent = model.history.length + " pages visited; " + model.lastAction;
+      document.getElementById("state-audit").textContent = DocumentationModel.audit.errors.length === 0
+        ? DocumentationModel.audit.pageCount + " pages, " + DocumentationModel.audit.routeCount + " routes, no broken model links"
+        : DocumentationModel.audit.errors.length + " model errors";
+      document.getElementById("state-json").textContent = JSON.stringify({
+        routing: model,
+        selectedPage: current,
+        catalogAudit: DocumentationModel.audit
+      }, null, 2);
+
+      const type = document.getElementById("detail-type");
+      type.textContent = DocumentationModel.modes[current.mode].label;
+      type.className = "type-badge type-" + current.mode;
+      document.getElementById("detail-title").textContent = current.id + " · " + current.title;
+      document.getElementById("detail-job").textContent = current.job;
+      const status = document.getElementById("detail-status");
+      status.textContent = current.status.replaceAll("-", " ");
+      status.className = "status-badge" + (current.status.startsWith("defer") ? " status-deferred" : "");
+      document.getElementById("detail-audiences").textContent = humanList(current.audiences, DocumentationModel.audiences);
+      document.getElementById("detail-lifecycle").textContent = current.lifecycle.join(", ");
+      document.getElementById("detail-source").textContent = current.source;
+      document.getElementById("detail-owner").textContent = current.owner;
+      document.getElementById("detail-applies").textContent = current.applies;
+      document.getElementById("detail-boundary").textContent = current.boundary;
+      renderLinkButtons("detail-prerequisites", current.prerequisites);
+      renderLinkButtons("detail-next", current.next);
+      renderLinkButtons("detail-recovery", current.recovery);
+    }
+
+    function renderInventory() {
+      const holder = document.getElementById("inventory-body");
+      holder.replaceChildren();
+      DocumentationModel.pages
+        .filter(item => model.inventoryMode === "all" || item.mode === model.inventoryMode)
+        .forEach(item => {
+          const row = document.createElement("tr");
+          row.dataset.pageId = item.id;
+          row.tabIndex = 0;
+          const values = [
+            item.id,
+            DocumentationModel.modes[item.mode].label,
+            item.title,
+            item.routes.map(route => DocumentationModel.routes[route].label).join(", "),
+            humanList(item.audiences, DocumentationModel.audiences),
+            item.status.replaceAll("-", " ")
+          ];
+          values.forEach(value => {
+            const cell = document.createElement("td");
+            cell.textContent = value;
+            row.appendChild(cell);
+          });
+          const open = () => dispatch({ type: "OPEN_PAGE", page: item.id });
+          row.addEventListener("click", open);
+          row.addEventListener("keydown", event => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              open();
+            }
+          });
+          holder.appendChild(row);
+        });
+    }
+
+    function renderCoverage() {
+      const holder = document.getElementById("coverage-body");
+      holder.replaceChildren();
+      DocumentationModel.coverage.forEach(entry => {
+        const row = document.createElement("tr");
+        const values = [
+          entry[0],
+          DocumentationModel.audiences[entry[1]],
+          entry[2] + " · " + DocumentationModel.pageMap.get(entry[2]).title,
+          entry[3] + " · " + DocumentationModel.pageMap.get(entry[3]).title,
+          entry[4] + " · " + DocumentationModel.pageMap.get(entry[4]).title
+        ];
+        values.forEach(value => {
+          const cell = document.createElement("td");
+          cell.textContent = value;
+          row.appendChild(cell);
+        });
+        holder.appendChild(row);
+      });
+    }
+
+    function renderScenarios() {
+      const tabs = document.getElementById("scenario-tabs");
+      tabs.replaceChildren();
+      DocumentationModel.scenarios.forEach((scenario, index) => {
+        const button = makeButton(scenario.title, () => selectScenario(index), { selected: activeScenario === index });
+        button.role = "tab";
+        tabs.appendChild(button);
+      });
+
+      const scenario = DocumentationModel.scenarios[activeScenario];
+      document.getElementById("scenario-title").textContent = scenario.title;
+      document.getElementById("scenario-description").textContent = scenario.description;
+      const steps = document.getElementById("scenario-steps");
+      steps.replaceChildren();
+      scenario.steps.forEach((pageId, index) => {
+        const target = DocumentationModel.pageMap.get(pageId);
+        const button = makeButton((index + 1) + ". " + target.title, () => {
+          dispatch({ type: "OPEN_PAGE", page: pageId });
+          if (index === scenarioStep) scenarioStep += 1;
+          renderScenarios();
+        }, {
+          disabled: index > scenarioStep,
+          className: index < scenarioStep ? "step-complete" : ""
+        });
+        steps.appendChild(button);
+      });
+    }
+
+    function selectScenario(index) {
+      activeScenario = index;
+      scenarioStep = 0;
+      const scenario = DocumentationModel.scenarios[index];
+      model = DocumentationModel.initialState();
+      model = DocumentationModel.transition(model, { type: "SELECT_AUDIENCE", audience: scenario.audience });
+      model = DocumentationModel.transition(model, { type: "SELECT_ROUTE", route: scenario.route });
+      render();
+    }
+
+    function dispatch(action) {
+      model = DocumentationModel.transition(model, action);
+      render();
+    }
+
+    function render() {
+      renderSelectors();
+      renderState();
+      renderInventory();
+      renderScenarios();
+    }
+
+    renderRouteCards();
+    renderCoverage();
+    selectScenario(0);
+  </script>
+</body>
+</html>
