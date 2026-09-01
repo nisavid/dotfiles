@@ -64,7 +64,7 @@ Blinding key: {"batch": {"X": "rules_v2", "Y": "rules_v2_ex"}, "parking": {"X": 
 
 Fact brief:
 
-```
+```text
 Verified facts, all confirmed by you the reviewer (do not invent beyond these):
 - The PR adds a Redis cache in front of the feature-flag loader (src/flags/loader.ts). Cache entries use a 300-second TTL.
 - The flags service already publishes invalidation events on the 'flags.changed' channel; the new cache does not subscribe to them. You verified this by reading the subscriber registry: nothing subscribes.
@@ -158,7 +158,7 @@ Could we drop the key assertion and cover those two instead? Then the test fails
 
 Fact brief:
 
-```
+```text
 Verified facts (do not invent beyond these):
 - The provider webhook exists and fires on first settlement attempt, but you tested retried settlements in the sandbox and the webhook does not fire on retries; their docs confirm retries are webhook-silent.
 - Roughly 2% of settlements in the last 90 days were retries (you queried the ledger).
@@ -196,7 +196,7 @@ So the loop stays, but as reconciliation rather than the primary path, and at 10
 
 Fact brief:
 
-```
+```text
 Verified facts (do not invent beyond these):
 - PR #88 mixes two things: a bump of the protobuf toolchain (needed) and a refactor of the codegen config layout (your experiment).
 - You have decided the refactor approach is wrong in its current form; you prototyped it quickly and no longer stand behind the layout.
@@ -245,7 +245,7 @@ Leaving this open as a reference for the parts I want to keep in mind. When I ha
 
 Fact brief:
 
-```
+```text
 Verified facts, all confirmed by you the reviewer (do not invent beyond these):
 - The PR adds a Redis cache in front of the feature-flag loader (src/flags/loader.ts). Cache entries use a 300-second TTL.
 - The flags service already publishes invalidation events on the 'flags.changed' channel; the new cache does not subscribe to them. You verified this by reading the subscriber registry: nothing subscribes.
@@ -307,7 +307,7 @@ This asserts the literal key `flags:v2:<tenant>:<name>`, which pins a private fo
 
 Fact brief:
 
-```
+```text
 Verified facts (do not invent beyond these):
 - PR #88 mixes two things: a bump of the protobuf toolchain (needed) and a refactor of the codegen config layout (your experiment).
 - You have decided the refactor approach is wrong in its current form; you prototyped it quickly and no longer stand behind the layout.
