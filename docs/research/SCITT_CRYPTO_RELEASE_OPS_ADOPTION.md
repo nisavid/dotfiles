@@ -145,10 +145,11 @@ not specify all-components-required hybrid verification or downgrade handling.
 ### Required wire shape
 
 A conforming SCITT Signed Statement is COSE_Sign1. Its protected header carries
-the CWT Claims parameter 15 with `iss` claim 1 and `sub` claim 2. It carries
-`kid` if neither `x5t` nor `x5chain` identifies the verification key; X.509 use
-requires the RFC 9360 certificate headers and path validation. RFC 9943
-registers:
+the CWT Claims parameter 15 with `iss` claim 1 and `sub` claim 2. That protected
+header carries `kid` when neither `x5t` nor `x5chain` is present there; an
+`x5chain` carried only in the unprotected header does not satisfy this
+condition. X.509 use requires the RFC 9360 certificate headers and path
+validation. RFC 9943 registers:
 
 - `application/scitt-statement+cose`, file extension `.scitt`;
 - `application/scitt-receipt+cose`, file extension `.receipt`; and
@@ -559,15 +560,22 @@ consumer side effect?
    media type, byte length, and SHA-512 digest. Keep the length in the
    authoritative fixture descriptor; RFC 9995 itself does not define a
    preimage-length header. Use only fixture authority and synthetic content.
-3. Create an RFC 9995 COSE Hash Envelope whose inline payload is that raw
-   SHA-512 digest. Protect the hash algorithm label 258, preimage content type
-   label 259, SCITT `typ`, CWT `iss` and `sub`, algorithm, and key identifier.
-   Omit payload location from the authoritative fixture. Use a fresh disposable
-   SCITT evidence key, not either RFC 9980 component key.
-4. Register the Signed Statement in a disposable TS or build a frozen
-   `RFC9162_SHA256` receipt vector. Store the Signed Statement and SCITT receipt
-   separately as `.scitt` and `.receipt`; optionally publish a derived
-   Transparent Statement whose changing bytes never become release identity.
+3. Create one tag-18 COSE_Sign1 that is both the RFC 9995 Hash Envelope and this
+   profile's RFC 9943 Signed Statement; do not nest it in another COSE object.
+   Its inline payload is the raw SHA-512 digest. Its protected header contains
+   `alg` label 1, `kid` label 4, `typ` label 16 set to
+   `application/scitt-statement+cose`, CWT Claims label 15 with `iss` claim 1
+   and `sub` claim 2, `payload-hash-alg` label 258 set to `SHA-512` (-44), and
+   `preimage-content-type` label 259 set to the frozen
+   `signature-envelope/v1` media type. Label 3 is absent as RFC 9995 requires,
+   payload-location label 260 is absent, and the unprotected header is empty
+   before registration. Use a fresh disposable SCITT evidence key, not either
+   RFC 9980 component key.
+4. Register that same COSE_Sign1 as the Signed Statement in a disposable TS, or
+   build a frozen `RFC9162_SHA256` receipt vector. Store the Signed Statement
+   and SCITT receipt separately as `.scitt` and `.receipt`; optionally publish
+   a derived Transparent Statement whose changing bytes never become release
+   identity.
 5. Verify in this order: exact CBOR/profile; trusted TS key and VDS inclusion;
    SCITT statement-issuer signature; RFC 9995 fields; SHA-512 and media-type
    binding; byte length and equality against the frozen #209 descriptor and
@@ -608,10 +616,13 @@ The prototype succeeds only when:
 
 - at least two independently implemented verifiers agree on every frozen byte,
   reconstructed root, signature result, and expected failure;
-- the SCITT layer never changes the underlying #209 result except that a profile-
-  required missing, stale, conflicting, unsupported, or unknowable evidence
-  dependency may make an otherwise supportable result `indeterminate`, while a
-  conclusive cryptographic or profile violation rejects;
+- the SCITT layer never rewrites the independently computed #209 result. When
+  the installed profile requires SCITT evidence and that result would otherwise
+  permit profile acceptance, a missing, stale, conflicting, unsupported, or
+  unknowable required dependency makes the combined evaluation `indeterminate`,
+  while a conclusive cryptographic or profile violation in required evidence
+  makes it `rejected`. Absent or invalid optional evidence remains a diagnostic
+  note and never changes the underlying #209 result;
 - exact subject bytes remain identical through index, archive, and diagnostic
   output;
 - no fixture authority, locator, or key can be accepted by a production profile;
