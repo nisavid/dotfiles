@@ -2,8 +2,8 @@
 
 Research note. Observed 2026-08-31 on `claude-opus-5` at high reasoning effort,
 drafting GitHub PR review comments in two rounds of blinded
-multi-condition comparisons (round one: three conditions; round two: two; drafts scored blind by Claude Fable 5 judge panels on
-AI-writing tells, register match, and factual fidelity). This is a dev-side
+multi-condition comparisons (round one: three conditions; round two: two;
+drafts scored blind by Claude Fable 5 judge panels on AI-writing tells, register match, and factual fidelity). This is a dev-side
 note for instruction authors; it deploys nowhere. Scale: nine drafts over six
 blind judge passes in round one, four drafts over four passes in round two;
 scores are 0-10, averaged per condition across judge passes. Sanitized run
