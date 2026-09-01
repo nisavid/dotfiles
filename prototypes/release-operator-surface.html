@@ -1,0 +1,966 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>Release operator surface: disposable prototype</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --canvas: oklch(1 0 0);
+      --surface: oklch(0.965 0.006 230);
+      --ink: oklch(0.22 0.025 230);
+      --muted: oklch(0.43 0.025 230);
+      --line: oklch(0.84 0.01 230);
+      --accent: oklch(0.55 0.105 230);
+      --accent-soft: oklch(0.93 0.025 230);
+      --warning: oklch(0.5 0.13 60);
+      --warning-soft: oklch(0.94 0.035 70);
+      --danger: oklch(0.48 0.16 25);
+      --danger-soft: oklch(0.94 0.035 20);
+      --terminal: oklch(0.13 0.015 230);
+      --terminal-raised: oklch(0.18 0.02 230);
+      --terminal-line: oklch(0.31 0.025 230);
+      --terminal-ink: oklch(0.94 0.01 230);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--canvas);
+      color: var(--ink);
+      line-height: 1.5;
+    }
+
+    button, code, pre { font: inherit; }
+
+    code {
+      padding: 0.08rem 0.3rem;
+      border-radius: 0.3rem;
+      background: var(--surface);
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 0.92em;
+    }
+
+    header {
+      border-bottom: 1px solid var(--line);
+      background: var(--canvas);
+    }
+
+    .header-inner,
+    main {
+      width: min(1180px, calc(100% - 2rem));
+      margin: 0 auto;
+    }
+
+    .header-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      padding: 1rem 0;
+    }
+
+    .kicker {
+      margin: 0 0 0.25rem;
+      color: var(--accent);
+      font-size: 0.75rem;
+      font-weight: 800;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    h1, h2, h3, p { margin-top: 0; }
+    h1, h2, h3 { text-wrap: balance; }
+    p { text-wrap: pretty; }
+
+    h1 {
+      margin-bottom: 0;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: clamp(1.65rem, 4vw, 2.55rem);
+      line-height: 1.08;
+    }
+
+    h2 {
+      margin-bottom: 0.7rem;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: clamp(1.35rem, 3vw, 1.9rem);
+    }
+
+    h3 {
+      margin-bottom: 0.45rem;
+      font-size: 1rem;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.4rem 0.7rem;
+      border: 1px solid var(--accent);
+      border-radius: 999px;
+      color: var(--accent);
+      background: var(--accent-soft);
+      font-size: 0.76rem;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+
+    main { padding: 2rem 0 4rem; }
+
+    section { margin-bottom: 2rem; }
+
+    .intro,
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 1rem;
+      background: var(--canvas);
+    }
+
+    .intro { padding: clamp(1.2rem, 3vw, 2rem); }
+
+    .question {
+      max-width: 80ch;
+      margin-bottom: 1rem;
+      font-size: 1.05rem;
+    }
+
+    .safety {
+      padding: 0.9rem 1rem;
+      border: 1px solid var(--warning);
+      border-radius: 0.45rem;
+      background: var(--warning-soft);
+    }
+
+    .safety strong { display: block; margin-bottom: 0.2rem; }
+
+    .comparison-wrap { overflow-x: auto; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      border: 1px solid var(--line);
+      background: var(--canvas);
+    }
+
+    th, td {
+      padding: 0.85rem;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: var(--surface);
+      font-size: 0.78rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    tr:last-child td { border-bottom: 0; }
+
+    tr.recommended td { background: var(--accent-soft); }
+
+    .boundary-grid,
+    .state-grid,
+    .command-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 0.8rem;
+    }
+
+    .boundary,
+    .state-card,
+    .command-card {
+      padding: 0.9rem;
+      border: 1px solid var(--line);
+      border-radius: 0.7rem;
+      background: var(--canvas);
+    }
+
+    .boundary,
+    .command-card {
+      border-width: 2px 0 0;
+      border-radius: 0;
+      background: transparent;
+    }
+
+    .boundary p,
+    .state-card p,
+    .command-card p { margin-bottom: 0; color: var(--muted); }
+
+    .workspace {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(360px, 0.92fr);
+      gap: 1rem;
+      align-items: start;
+    }
+
+    .panel { padding: 1rem; }
+
+    .state-card .value {
+      display: block;
+      margin-top: 0.2rem;
+      color: var(--ink);
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 0.82rem;
+      overflow-wrap: anywhere;
+    }
+
+    .state-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+    .terminal {
+      position: sticky;
+      top: 1rem;
+      overflow: hidden;
+      border: 1px solid var(--terminal-line);
+      border-radius: 0.8rem;
+      background: var(--terminal);
+      color: var(--terminal-ink);
+    }
+
+    .terminal-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      padding: 0.65rem 0.8rem;
+      border-bottom: 1px solid var(--terminal-line);
+      background: var(--terminal-raised);
+      font-size: 0.78rem;
+    }
+
+    .terminal-body { padding: 0.9rem; }
+
+    .stream-label {
+      margin: 0.8rem 0 0.25rem;
+      color: oklch(0.74 0.025 230);
+      font-size: 0.7rem;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .command-line,
+    .prompt-line,
+    .stdout,
+    .stderr {
+      margin: 0;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 0.78rem;
+    }
+
+    .command-line::before { content: "$ "; color: oklch(0.78 0.11 175); }
+    .prompt-line { color: oklch(0.84 0.1 80); }
+    .stderr { color: oklch(0.78 0.12 25); }
+
+    .exit {
+      min-width: 2rem;
+      padding: 0.15rem 0.45rem;
+      border-radius: 999px;
+      text-align: center;
+      background: oklch(0.34 0.05 175);
+      color: oklch(0.93 0.035 175);
+      font-weight: 800;
+    }
+
+    .exit.error { background: oklch(0.32 0.09 25); color: oklch(0.93 0.035 20); }
+
+    .action-groups {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 0.8rem;
+    }
+
+    .action-group {
+      padding: 0.9rem;
+      border-top: 2px solid var(--accent);
+      background: transparent;
+    }
+
+    .button-stack { display: grid; gap: 0.5rem; }
+
+    button {
+      width: 100%;
+      padding: 0.65rem 0.75rem;
+      border: 1px solid var(--line);
+      border-radius: 0.55rem;
+      background: var(--canvas);
+      color: var(--ink);
+      cursor: pointer;
+      text-align: left;
+      font-weight: 700;
+    }
+
+    button:hover { border-color: var(--accent); background: var(--accent-soft); }
+    button:focus-visible { outline: 3px solid oklch(0.55 0.105 230 / 0.32); outline-offset: 2px; }
+    button.danger:hover { border-color: var(--danger); background: var(--danger-soft); }
+    button:disabled { cursor: not-allowed; opacity: 0.45; }
+
+    .tabs {
+      display: flex;
+      gap: 0.45rem;
+      margin-bottom: 0.8rem;
+      overflow-x: auto;
+    }
+
+    .tabs button {
+      width: auto;
+      min-width: max-content;
+      border-radius: 999px;
+      text-align: center;
+    }
+
+    .tabs button[aria-selected="true"] {
+      border-color: var(--accent);
+      background: var(--accent);
+      color: oklch(1 0 0);
+    }
+
+    .walkthrough {
+      padding: 1rem;
+      border: 1px solid var(--line);
+      border-radius: 0.8rem;
+      background: var(--canvas);
+    }
+
+    .steps {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      gap: 0.5rem;
+      margin-top: 1rem;
+    }
+
+    .step-complete { border-color: var(--accent); background: var(--accent-soft); }
+
+    details {
+      margin-top: 0.9rem;
+      border-top: 1px solid var(--line);
+      padding-top: 0.8rem;
+    }
+
+    summary { cursor: pointer; font-weight: 750; }
+
+    .state-json {
+      max-height: 25rem;
+      overflow: auto;
+      padding: 0.8rem;
+      border-radius: 0.5rem;
+      background: var(--surface);
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 0.75rem;
+      white-space: pre-wrap;
+    }
+
+    .fine-print { color: var(--muted); font-size: 0.86rem; }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      padding: 0;
+      list-style: none;
+    }
+
+    .legend li {
+      padding: 0.35rem 0.55rem;
+      border-radius: 999px;
+      background: var(--surface);
+      font-size: 0.78rem;
+    }
+
+    @media (max-width: 900px) {
+      .workspace { grid-template-columns: 1fr; }
+      .terminal { position: static; }
+      .boundary-grid, .command-grid, .action-groups { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 560px) {
+      .header-inner { align-items: flex-start; flex-direction: column; }
+      .state-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="header-inner">
+      <div>
+        <p class="kicker">Issue #216 · logic prototype</p>
+        <h1>Minimal release operator surface</h1>
+      </div>
+      <span class="badge">Disposable fixture only</span>
+    </div>
+  </header>
+
+  <main>
+    <section class="intro">
+      <h2>Question this prototype answers</h2>
+      <p class="question">Can one compact command model keep the ordinary release path short while making authority, immutable inputs, cancellation, concurrency, partial effects, and recovery visible at every stage?</p>
+      <div class="safety">
+        <strong>This page cannot sign or publish anything.</strong>
+        It uses deterministic in-memory state, synthetic <code>.invalid</code> identifiers, and public fixture digests. It performs no network requests, persistence, cryptography, provider access, secret resolution, authenticator interaction, host inspection, or production verification. Command names and object shapes are prototype candidates, not compatibility promises.
+      </div>
+    </section>
+
+    <section aria-labelledby="comparison-title">
+      <h2 id="comparison-title">Two compact designs, plus the working synthesis</h2>
+      <div class="comparison-wrap">
+        <table>
+          <thead>
+            <tr><th>Design</th><th>Common path</th><th>Authority and state</th><th>Failure behavior</th><th>Verdict</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>A · Explicit stage verbs</strong><br><code>prepare</code>, <code>inspect</code>, <code>sign</code>, <code>publish</code></td>
+              <td>Longer, but every step composes in automation.</td>
+              <td>Each command names exact input and output objects.</td>
+              <td>Cancellation and partial effects have an obvious owner.</td>
+              <td>Safe and inspectable; too much object plumbing for routine use.</td>
+            </tr>
+            <tr>
+              <td><strong>B · Guided release session</strong><br><code>release run</code></td>
+              <td>One memorable command and one guided review.</td>
+              <td>Session state can obscure which bytes and authority moved.</td>
+              <td>Resume, races, and ambiguous writes become session magic.</td>
+              <td>Pleasant happy path; weak audit and recovery boundaries.</td>
+            </tr>
+            <tr class="recommended">
+              <td><strong>Working synthesis · Immutable intent + staged execution</strong><br><code>release execute --intent …</code></td>
+              <td>One guided view over the same explicit stages.</td>
+              <td>A content-addressed intent binds profile, manifest, signer, expected head, and operation ID.</td>
+              <td>The guide stops on cancellation, conflict, or possible effect and points to the exact inspect or reconcile command.</td>
+              <td><strong>Prototype this.</strong> No hidden session and no second semantics.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section aria-labelledby="boundary-title">
+      <h2 id="boundary-title">One package, independently enforceable surfaces</h2>
+      <div class="boundary-grid">
+        <article class="boundary">
+          <h3>Secret-free core</h3>
+          <p><code>profile</code>, <code>release prepare</code>, <code>inspect</code>, <code>status</code>, <code>object inspect</code>, and <code>evidence export</code> resolve no secret and mutate no external system.</p>
+        </article>
+        <article class="boundary">
+          <h3>Operator-present mutations</h3>
+          <p><code>sign</code>, <code>withdraw</code>, <code>reselect</code>, <code>rotate</code>, and <code>recover</code> require an exact intent and a terminal prompt. The first local FIDO profile proves UV-gated unwrap, not exact-intent approval.</p>
+        </article>
+        <article class="boundary">
+          <h3>Independent verifier</h3>
+          <p><code>release-verify</code> has no credential, provider, authenticator, or network surface. Bootstrap and refresh are separate from pure current or historical verification.</p>
+        </article>
+        <article class="boundary">
+          <h3>Publication adapters</h3>
+          <p>Adapters receive exact approved bytes and an expected prior head. They may replicate and read back; they cannot sign, change intent, choose authority, or fall through after an indeterminate write.</p>
+        </article>
+        <article class="boundary">
+          <h3>Private binding</h3>
+          <p>A public profile names abstract secret slots. A separately selected binding maps them to opaque references. Serialized configuration, JSON results, logs, and evidence never contain resolved values.</p>
+        </article>
+        <article class="boundary">
+          <h3>Offline handoffs</h3>
+          <p>Certifying identity, recovery media, and provider administration remain external ceremonies. The CLI prepares a digest-bound request and stops at <code>handoff-required</code>; it never imitates completion.</p>
+        </article>
+      </div>
+    </section>
+
+    <section aria-labelledby="workspace-title">
+      <h2 id="workspace-title">Press commands and watch the full safety state change</h2>
+      <div class="workspace">
+        <div class="panel">
+          <div class="state-grid">
+            <article class="state-card"><h3>Profile</h3><p>Explicit policy and environment<span class="value" id="state-profile">not configured</span></p></article>
+            <article class="state-card"><h3>Verifier anchor</h3><p>Two-channel bootstrap state<span class="value" id="state-anchor">not initialized</span></p></article>
+            <article class="state-card"><h3>Release intent</h3><p>Prepared immutable inputs<span class="value" id="state-intent">none</span></p></article>
+            <article class="state-card"><h3>Authorization</h3><p>Human and signer-worker boundary<span class="value" id="state-authorization">none</span></p></article>
+            <article class="state-card"><h3>Publication</h3><p>Global head and possible effects<span class="value" id="state-publication">idle</span></p></article>
+            <article class="state-card"><h3>Safety</h3><p>Freeze, recovery, and factor state<span class="value" id="state-safety">normal · custody revision 1</span></p></article>
+            <article class="state-card"><h3>Current release</h3><p>Signed lifecycle state<span class="value" id="state-release">none</span></p></article>
+            <article class="state-card"><h3>Evidence</h3><p>Value-free records retained<span class="value" id="state-evidence">0 records</span></p></article>
+          </div>
+          <details>
+            <summary>Inspect complete in-memory model</summary>
+            <pre class="state-json" id="state-json"></pre>
+          </details>
+        </div>
+
+        <div class="terminal" aria-live="polite">
+          <div class="terminal-bar"><span>simulated command contract</span><span class="exit" id="exit-code">0</span></div>
+          <div class="terminal-body">
+            <p class="stream-label">command</p>
+            <pre class="command-line" id="terminal-command">release-trust --json profile doctor --environment fixture</pre>
+            <p class="stream-label">terminal prompt</p>
+            <pre class="prompt-line" id="terminal-prompt">none: this command needs no authority</pre>
+            <p class="stream-label">stdout · one JSON envelope</p>
+            <pre class="stdout" id="terminal-stdout">{"interface":"release-trust.operator/v1","operation":"profile.doctor","disposition":"ready","effect":"none"}</pre>
+            <p class="stream-label">stderr · human diagnostic</p>
+            <pre class="stderr" id="terminal-stderr">fixture mode; no auth or secret resolution is available</pre>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section aria-labelledby="free-title">
+      <h2 id="free-title">Every action stays available; illegal order fails visibly</h2>
+      <div class="action-groups" id="free-play">
+        <div class="action-group"><h3>Configure and prepare</h3><div class="button-stack">
+          <button data-action="RESET">Reset fixture</button>
+          <button data-action="CONFIGURE_PROFILE">Configure explicit fixture profile</button>
+          <button data-action="BOOTSTRAP_TRUST">Bootstrap verifier anchor</button>
+          <button data-action="PREPARE_RELEASE">Prepare release intent</button>
+          <button data-action="INSPECT_MANIFEST">Inspect canonical manifest</button>
+        </div></div>
+        <div class="action-group"><h3>Authorize and publish</h3><div class="button-stack">
+          <button data-action="SIGN_RELEASE">Authorize and sign exact intent</button>
+          <button data-action="CANCEL_SIGN">Cancel at authorization prompt</button>
+          <button data-action="PUBLISH_RELEASE">Execute successful publication</button>
+          <button data-action="PUBLISH_CONFLICT">Simulate concurrent head conflict</button>
+          <button data-action="PUBLISH_AMBIGUOUS">Simulate ambiguous pointer write</button>
+          <button data-action="RECONCILE_PUBLICATION">Reconcile possible publication effect</button>
+        </div></div>
+        <div class="action-group"><h3>Verify and recover</h3><div class="button-stack">
+          <button data-action="VERIFY_CURRENT">Verify current release independently</button>
+          <button data-action="EXPORT_EVIDENCE">Export value-free evidence</button>
+          <button class="danger" data-action="WITHDRAW_RELEASE">Withdraw current manifest</button>
+          <button data-action="ATTEMPT_REPUBLISH">Attempt to republish withdrawn manifest</button>
+          <button data-action="RESELECT_PREVIOUS">Prepare higher-generation re-selection</button>
+          <button data-action="REPLACE_FACTOR">Prepare factor replacement handoff</button>
+          <button data-action="ROTATE_SIGNER">Prepare signer rotation handoff</button>
+          <button data-action="RECOVERY_ENTRY">Enter one-shot recovery route</button>
+          <button class="danger" data-action="INCIDENT_FREEZE">Begin incident and freeze release scope</button>
+        </div></div>
+      </div>
+    </section>
+
+    <section aria-labelledby="walkthrough-title">
+      <h2 id="walkthrough-title">Repeatable awkward cases</h2>
+      <div class="tabs" id="scenario-tabs" role="tablist"></div>
+      <div class="walkthrough" role="tabpanel">
+        <h3 id="scenario-title"></h3>
+        <p id="scenario-description"></p>
+        <div class="steps" id="scenario-steps"></div>
+      </div>
+    </section>
+
+    <section aria-labelledby="contract-title">
+      <h2 id="contract-title">Discovery stays broad; authority stays narrow</h2>
+      <div class="command-grid">
+        <article class="command-card"><h3>Discovery</h3><p><code>profile list</code>, <code>profile show</code>, <code>profile doctor</code>, <code>operation status</code>, and <code>object inspect</code> are bounded reads with stable JSON.</p></article>
+        <article class="command-card"><h3>Release writes</h3><p><code>release prepare</code> creates an immutable intent. <code>sign</code>, <code>publish</code>, <code>withdraw</code>, and <code>reselect</code> each consume one exact intent and expose their own receipt.</p></article>
+        <article class="command-card"><h3>Lifecycle handoffs</h3><p><code>signer rotate prepare</code>, <code>factor replace prepare</code>, <code>recovery operation prepare</code>, and <code>incident begin</code> stop before separately controlled provider, root, factor, host, or media work.</p></article>
+        <article class="command-card"><h3>Verifier</h3><p><code>anchor init</code> and <code>trust refresh</code> establish mutable local context. <code>verify current</code> and <code>verify historical</code> are pure evaluations over exact supplied bytes.</p></article>
+        <article class="command-card"><h3>Configuration</h3><p>Explicit <code>--profile</code>, <code>--binding</code>, and <code>--environment</code> beat discovery. Discovery checks one XDG location; runtime never merges ambient fragments or scans executable paths.</p></article>
+        <article class="command-card"><h3>Read-only escape hatch</h3><p><code>object inspect --address …</code> exposes canonical objects and adapter receipts. No generic raw provider write belongs in the core CLI.</p></article>
+      </div>
+      <details open>
+        <summary>Exit classes and stream behavior</summary>
+        <div class="comparison-wrap">
+          <table>
+            <thead><tr><th>Exit</th><th>Operator meaning</th><th>Effect rule</th></tr></thead>
+            <tbody>
+              <tr><td><code>0</code></td><td>Completed or exact idempotent no-change</td><td>JSON distinguishes <code>completed</code> from <code>no-change</code>.</td></tr>
+              <tr><td><code>30</code></td><td>Operator cancelled</td><td>No authority or external effect occurred.</td></tr>
+              <tr><td><code>31</code></td><td>Denied or conclusively rejected</td><td>No automatic weakening or fallback.</td></tr>
+              <tr><td><code>32</code></td><td>Expected-head concurrency conflict</td><td>No effect; inspect current head and prepare a new intent.</td></tr>
+              <tr><td><code>33</code></td><td>Effect may have occurred</td><td>Block the scope; use the named reconcile command before retry or adapter change.</td></tr>
+              <tr><td><code>64</code></td><td>Invalid request, profile, or configuration</td><td>No effect.</td></tr>
+              <tr><td><code>69</code></td><td>Required qualified adapter or handoff unavailable</td><td>No effect; never silently choose another provider.</td></tr>
+              <tr><td><code>70</code></td><td>Internal failure</td><td>JSON says whether effect is none or indeterminate.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="fine-print">Operator-present prompts use the controlling terminal, never stdout. Noninteractive execution cannot infer consent. Stdout contains one versioned JSON envelope; stderr contains human diagnostics only. Signals before an effect map to cancellation. Loss of confirmation after a possible write maps to reconciliation required. The separate verifier retains its settled exits: <code>0</code> positive, <code>20</code> rejected, <code>21</code> indeterminate, <code>64</code> invalid request, and <code>70</code> internal failure.</p>
+      </details>
+    </section>
+
+    <section class="intro">
+      <h2>What this can settle, and what it cannot</h2>
+      <p>The model tests whether immutable intents, staged execution, typed handoffs, and an independent verifier make the full lifecycle understandable without hidden mutable context. It can drive later CLI/API requirements, fixtures, conformance cases, and executable documentation.</p>
+      <p class="fine-print">It does not select an implementation language, package layout, provider transport, credential mechanism, production path, repository name, compatibility term, or support promise. It is not a security control and must never be promoted into a production verifier, signer, publisher, or recovery tool.</p>
+      <ul class="legend">
+        <li>All state is in memory</li>
+        <li>All identifiers are synthetic</li>
+        <li>No persistence</li>
+        <li>No network</li>
+        <li>No cryptography</li>
+        <li>No secrets</li>
+      </ul>
+    </section>
+  </main>
+
+  <script>
+    const OperatorModel = (() => {
+      const ids = Object.freeze({
+        root: "f".repeat(64),
+        signer: "e".repeat(64),
+        manifest: "sha-512:" + "a".repeat(128),
+        intent: "sha-512:" + "b".repeat(128),
+        envelope: "sha-512:" + "c".repeat(128),
+        currentHead: "sha-512:" + "d".repeat(128),
+        nextHead: "sha-512:" + "1".repeat(128),
+        priorManifest: "sha-512:" + "2".repeat(128),
+        operation: "op-fixture-7f31"
+      });
+
+      const initialState = () => ({
+        profile: null,
+        trust: { anchor: null, refresh: "not-run", verification: "not-run" },
+        release: { lifecycle: "none", selectedManifest: null, manifestId: null, envelopeId: null },
+        intent: null,
+        approval: { state: "none", mode: null, exactIntentFidoClaim: false },
+        publication: { state: "idle", expectedHead: ids.currentHead, currentHead: ids.currentHead, generation: 7, operationId: null },
+        safety: { blocked: false, freeze: "none", recoveryMode: "ordinary", custodyRevision: 1, factorDisposition: "active", signerRotation: "none" },
+        evidence: [],
+        sequence: 0,
+        last: {
+          command: "release-trust --json profile doctor --environment fixture",
+          prompt: "none: this command needs no authority",
+          stdout: { interface: "release-trust.operator/v1", operation: "profile.doctor", disposition: "ready", effect: "none" },
+          stderr: "fixture mode; no auth or secret resolution is available",
+          exit: 0
+        }
+      });
+
+      const copy = value => JSON.parse(JSON.stringify(value));
+
+      function envelope(operation, disposition, effect, extra = {}) {
+        return { interface: "release-trust.operator/v1", operation, disposition, effect, ...extra };
+      }
+
+      function finish(state, command, stdout, stderr = "", exit = 0, prompt = "none: this command needs no authority") {
+        state.sequence += 1;
+        state.last = { command, stdout, stderr, exit, prompt };
+        return state;
+      }
+
+      function requireProfile(state, operation) {
+        if (state.profile) return null;
+        return finish(state, operation, envelope("request", "invalid", "none", { diagnostic: "profile-required" }), "select an explicit profile and environment", 64);
+      }
+
+      function requireIntent(state, command) {
+        if (state.intent) return null;
+        return finish(state, command, envelope("release", "invalid", "none", { diagnostic: "intent-required" }), "prepare an immutable release intent first", 64);
+      }
+
+      function requireApproval(state, command) {
+        if (state.release.lifecycle === "approved") return null;
+        return finish(state, command, envelope("release", "denied", "none", { diagnostic: "verified-approval-required" }), "no independently verified approval graph is available", 31);
+      }
+
+      function addEvidence(state, type, result) {
+        const key = `${type}:${result}`;
+        if (!state.evidence.some(item => item.key === key)) {
+          state.evidence.push({ key, type, result, subject: ids.manifest, at: `fixture-step-${state.sequence + 1}` });
+        }
+      }
+
+      function transition(source, action) {
+        if (action === "RESET") return initialState();
+        const state = copy(source);
+
+        switch (action) {
+          case "CONFIGURE_PROFILE": {
+            const command = "release-trust --json profile init --profile io.nisavid.release-trust.fixture/v1 --environment fixture --binding secret-ref://fixture/operator";
+            if (state.profile) {
+              return finish(state, command, envelope("profile.init", "no-change", "none", { profile: state.profile.id, environment: "fixture" }), "the exact profile and binding are already selected");
+            }
+            state.profile = { id: "io.nisavid.release-trust.fixture/v1", version: "1", digest: "sha-512:" + "3".repeat(128), environment: "fixture", binding: "secret-ref://fixture/operator" };
+            return finish(state, command, envelope("profile.init", "completed", "local-state", { profile: state.profile.id, environment: "fixture", resolvedSecrets: 0 }), "stored public profile selection and one opaque fixture reference");
+          }
+
+          case "BOOTSTRAP_TRUST": {
+            const command = `release-verify --json anchor init --profile io.nisavid.release-trust.fixture/v1 --fingerprint ${ids.root} --hostname trust.fixture.invalid`;
+            const missing = requireProfile(state, command); if (missing) return missing;
+            state.trust.anchor = { fingerprint: ids.root, hostname: "trust.fixture.invalid", channelsConfirmed: 2 };
+            return finish(state, command, { interface: "release-trust.verifier/v1", operation: "anchor.init", disposition: "completed", effect: "local-state", anchor: { fingerprint: ids.root, hostname: "trust.fixture.invalid" }, channels_confirmed: 2 }, "fixture anchor saved; production profiles reject this authority", 0, "Confirm the fingerprint and hostname match both independent channels [y/N]: y");
+          }
+
+          case "PREPARE_RELEASE": {
+            const command = "release-trust --json release prepare --profile fixture --environment fixture --artifact public-fixture.txt --expected-head sha-512:dddd… --out intent.json";
+            const missing = requireProfile(state, command); if (missing) return missing;
+            if (state.intent && state.intent.id === ids.intent && state.intent.expectedHead === state.publication.currentHead) {
+              return finish(state, command, envelope("release.prepare", "no-change", "none", { intent_id: ids.intent, manifest_id: ids.manifest, expected_head: state.intent.expectedHead }), "identical canonical inputs resolve to the existing intent");
+            }
+            state.intent = { id: ids.intent, manifestId: ids.manifest, expectedHead: state.publication.currentHead, inspected: false, status: "prepared" };
+            state.release = { lifecycle: "candidate", selectedManifest: state.release.selectedManifest, manifestId: ids.manifest, envelopeId: null };
+            state.approval = { state: "none", mode: null, exactIntentFidoClaim: false };
+            return finish(state, command, envelope("release.prepare", "completed", "local-artifact", { intent_id: ids.intent, manifest_id: ids.manifest, expected_head: state.intent.expectedHead, signer: ids.signer, secret_resolution: "none" }), "canonical manifest and intent created from public fixture bytes");
+          }
+
+          case "INSPECT_MANIFEST": {
+            const command = `release-trust --json release inspect --intent ${ids.intent}`;
+            const missing = requireIntent(state, command); if (missing) return missing;
+            state.intent.inspected = true;
+            return finish(state, command, envelope("release.inspect", "completed", "none", { intent_id: state.intent.id, manifest_id: state.intent.manifestId, scope: { product: "fixture-tool", channel: "preview", purpose: "release" }, artifact_count: 1, expected_head: state.intent.expectedHead }), "canonical bytes and semantic projection agree");
+          }
+
+          case "SIGN_RELEASE": {
+            const command = `release-trust --json release sign --intent ${ids.intent} --output approval.json`;
+            const missing = requireIntent(state, command); if (missing) return missing;
+            if (!state.intent.inspected) return finish(state, command, envelope("release.sign", "denied", "none", { diagnostic: "review-required" }), "inspect the canonical manifest before authorizing it", 31);
+            if (state.safety.blocked || state.safety.freeze !== "none") return finish(state, command, envelope("release.sign", "denied", "none", { diagnostic: "scope-blocked" }), "release scope is blocked or frozen", 31);
+            state.approval = { state: "completed", mode: "qualified-uv-gated-local-unwrap-fixture", exactIntentFidoClaim: false };
+            state.intent.status = "signed";
+            state.release.lifecycle = "approved";
+            state.release.envelopeId = ids.envelope;
+            addEvidence(state, "signer-authorization", "completed");
+            return finish(state, command, envelope("release.sign", "completed", "local-artifact", { intent_id: state.intent.id, manifest_id: ids.manifest, envelope_id: ids.envelope, operator_approval: { mode: state.approval.mode, exact_intent_fido_claim: false }, independent_output_verification: "passed" }), "one-shot fixture worker exited; no secret value existed", 0, "Review exact scope, signer, artifact digest, and expected head. Authorize signing [y/N]: y");
+          }
+
+          case "CANCEL_SIGN": {
+            const command = `release-trust --json release sign --intent ${ids.intent} --output approval.json`;
+            const missing = requireIntent(state, command); if (missing) return missing;
+            state.approval = { state: "cancelled", mode: null, exactIntentFidoClaim: false };
+            return finish(state, command, envelope("release.sign", "cancelled", "none", { intent_id: state.intent.id, retry: "same intent remains inspectable" }), "operator cancelled before unwrap or signature", 30, "Review exact scope, signer, artifact digest, and expected head. Authorize signing [y/N]: n");
+          }
+
+          case "PUBLISH_RELEASE": {
+            const command = `release-trust --json release execute --intent ${ids.intent} --through publish`;
+            const missing = requireApproval(state, command); if (missing) return missing;
+            if (state.publication.state === "verified" && state.release.selectedManifest === ids.manifest) {
+              return finish(state, command, envelope("release.publish", "no-change", "none", { operation_id: ids.operation, receipt: "sha-512:" + "4".repeat(128), current_head: state.publication.currentHead }), "idempotency record matches the completed publication");
+            }
+            if (state.intent.expectedHead !== state.publication.currentHead) return finish(state, command, envelope("release.publish", "conflict", "none", { expected_head: state.intent.expectedHead, observed_head: state.publication.currentHead }), "current global head differs; prepare a new intent", 32);
+            state.publication = { state: "verified", expectedHead: ids.currentHead, currentHead: ids.nextHead, generation: 8, operationId: ids.operation };
+            state.release.lifecycle = "published";
+            state.release.selectedManifest = ids.manifest;
+            addEvidence(state, "publication-receipt", "verified");
+            return finish(state, command, envelope("release.publish", "completed", "canonical-state", { operation_id: ids.operation, stages: ["archive-readback", "immutable-readback", "mirror-readback", "pointer-cas", "external-verification"], prior_head: ids.currentHead, current_head: ids.nextHead, generation: 8 }), "all required fixture stages completed and read back", 0, "Promote the exact signed generation from the expected head [y/N]: y");
+          }
+
+          case "PUBLISH_CONFLICT": {
+            const command = `release-trust --json release publish --intent ${ids.intent}`;
+            const missing = requireApproval(state, command); if (missing) return missing;
+            state.publication.currentHead = "sha-512:" + "5".repeat(128);
+            state.publication.generation = 8;
+            state.publication.state = "conflict";
+            return finish(state, command, envelope("release.publish", "conflict", "none", { expected_head: state.intent.expectedHead, observed_head: state.publication.currentHead, next: "release-trust object inspect --address sha-512:5555…" }), "compare-and-swap was not attempted after the precondition failed", 32, "Promote the exact signed generation from the expected head [y/N]: y");
+          }
+
+          case "PUBLISH_AMBIGUOUS": {
+            const command = `release-trust --json release publish --intent ${ids.intent}`;
+            const missing = requireApproval(state, command); if (missing) return missing;
+            state.publication.state = "reconcile-required";
+            state.publication.operationId = ids.operation;
+            state.safety.blocked = true;
+            return finish(state, command, envelope("release.publish", "indeterminate", "possible", { operation_id: ids.operation, last_confirmed_stage: "mirror-readback", ambiguous_stage: "pointer-cas", next: `release-trust --json operation reconcile --id ${ids.operation}` }), "connection ended after the conditional pointer request; do not retry or change adapters", 33, "Promote the exact signed generation from the expected head [y/N]: y");
+          }
+
+          case "RECONCILE_PUBLICATION": {
+            const command = `release-trust --json operation reconcile --id ${ids.operation}`;
+            if (state.publication.state !== "reconcile-required") return finish(state, command, envelope("operation.reconcile", "invalid", "none", { diagnostic: "no-indeterminate-operation" }), "there is no possible external effect to reconcile", 64);
+            state.publication = { state: "verified", expectedHead: ids.currentHead, currentHead: ids.nextHead, generation: 8, operationId: ids.operation };
+            state.release.lifecycle = "published";
+            state.release.selectedManifest = ids.manifest;
+            state.safety.blocked = false;
+            addEvidence(state, "publication-reconciliation", "effect-confirmed-and-verified");
+            return finish(state, command, envelope("operation.reconcile", "completed", "observed-existing-effect", { operation_id: ids.operation, observed_head: ids.nextHead, generation: 8, external_verification: "passed" }), "readback found the exact intended head; no write was repeated");
+          }
+
+          case "VERIFY_CURRENT": {
+            const command = `release-verify --json verify current --request admission-request.json --trust-context retained-context.json`;
+            if (!state.trust.anchor) return finish(state, command, { interface: "release-trust.verifier/v1", operation: "verify.current", outcome: "indeterminate", diagnostic: "trust-anchor-missing", effect: "none" }, "initialize the anchor through two independent channels", 21);
+            if (state.release.lifecycle === "withdrawn" || state.safety.freeze !== "none") return finish(state, command, { interface: "release-trust.verifier/v1", operation: "verify.current", outcome: "rejected", diagnostic: state.release.lifecycle === "withdrawn" ? "manifest-withdrawn" : "scope-frozen", effect: "none" }, "signed restrictive state blocks current acceptance", 20);
+            if (state.publication.state !== "verified" || state.release.lifecycle !== "published") return finish(state, command, { interface: "release-trust.verifier/v1", operation: "verify.current", outcome: "indeterminate", diagnostic: "fresh-current-state-unavailable", effect: "none" }, "an approval graph alone is not current publication state", 21);
+            state.trust.verification = "accepted-current";
+            return finish(state, command, { interface: "release-trust.verifier/v1", operation: "verify.current", outcome: "accepted-current", effect: "none", manifest_id: state.release.selectedManifest, state_head: state.publication.currentHead, generation: state.publication.generation, diagnostics: [] }, "pure fixture evaluation; no network or state mutation", 0);
+          }
+
+          case "EXPORT_EVIDENCE": {
+            const command = "release-trust --json evidence export --operation op-fixture-7f31 --out evidence-index.json";
+            addEvidence(state, "evidence-export", "completed");
+            return finish(state, command, envelope("evidence.export", "completed", "local-artifact", { record_count: state.evidence.length, contains_secret_values: false, subject: ids.manifest, output_digest: "sha-512:" + "6".repeat(128) }), "export contains public identifiers, digests, stages, and results only");
+          }
+
+          case "WITHDRAW_RELEASE": {
+            const command = `release-trust --json release withdraw prepare --manifest ${ids.manifest} --scope release`;
+            if (!state.release.manifestId) return finish(state, command, envelope("release.withdraw", "invalid", "none", { diagnostic: "manifest-required" }), "no manifest exists in this fixture", 64);
+            if (state.release.lifecycle === "withdrawn") return finish(state, command, envelope("release.withdraw", "no-change", "none", { manifest_id: ids.manifest, terminal: true }), "this manifest identity is already terminally withdrawn");
+            if (!["approved", "published", "superseded"].includes(state.release.lifecycle)) return finish(state, command, envelope("release.withdraw", "denied", "none", { diagnostic: "approved-manifest-required" }), "an unsigned candidate has no release identity to bar", 31);
+            state.release.lifecycle = "withdrawn";
+            state.release.selectedManifest = null;
+            state.publication.generation += 1;
+            state.publication.currentHead = "sha-512:" + "7".repeat(128);
+            addEvidence(state, "incident-receipt", "withdrawn");
+            return finish(state, command, envelope("release.withdraw", "completed", "canonical-state", { manifest_id: ids.manifest, terminal: true, authority: "subtractive-status-signer-fixture", generation: state.publication.generation }), "fixture withdrawal promoted at a higher global generation", 0, "Withdraw this exact manifest identity with subtractive authority [y/N]: y");
+          }
+
+          case "ATTEMPT_REPUBLISH": {
+            const command = `release-trust --json release publish --intent ${ids.intent}`;
+            if (state.release.lifecycle !== "withdrawn") return finish(state, command, envelope("release.publish", "invalid", "none", { diagnostic: "fixture-not-withdrawn" }), "withdraw the fixture manifest before testing terminal replay", 64);
+            return finish(state, command, envelope("release.publish", "denied", "none", { diagnostic: "manifest-terminally-withdrawn", manifest_id: ids.manifest }), "a new signature envelope cannot bypass manifest withdrawal", 31, "none: rejected before authority is requested");
+          }
+
+          case "RESELECT_PREVIOUS": {
+            const command = `release-trust --json release reselect prepare --manifest ${ids.priorManifest} --expected-head ${state.publication.currentHead}`;
+            const missing = requireProfile(state, command); if (missing) return missing;
+            return finish(state, command, envelope("release.reselect.prepare", "handoff-required", "none", { target_manifest: ids.priorManifest, expected_head: state.publication.currentHead, required_authority: "active-release-signer", rule: "fresh higher positive transition; never pointer rewind" }), "prepared exact intent; operator-present signing remains separate", 69);
+          }
+
+          case "REPLACE_FACTOR": {
+            const command = "release-trust --json factor replace prepare --role release --remove fixture-primary --add fixture-replacement";
+            const missing = requireProfile(state, command); if (missing) return missing;
+            state.safety.factorDisposition = "replacement-handoff-prepared";
+            return finish(state, command, envelope("factor.replace.prepare", "handoff-required", "none", { current_custody_revision: state.safety.custodyRevision, proposed_custody_revision: state.safety.custodyRevision + 1, signer_rotation: false, required_checks: ["retained-factor", "replacement-factor", "pq-recovery", "two-offline-copies"] }), "no authenticator, ciphertext provider, or recovery path was contacted", 69);
+          }
+
+          case "ROTATE_SIGNER": {
+            const command = "release-trust --json signer rotate prepare --role release --profile fixture";
+            const missing = requireProfile(state, command); if (missing) return missing;
+            state.safety.signerRotation = "root-handoff-prepared";
+            return finish(state, command, envelope("signer.rotate.prepare", "handoff-required", "none", { required_authority: "offline-certifying-identity", successor_state: "pending", predecessor_state: "active", overlap: "profile-defined" }), "root certification and custody creation remain outside this process", 69);
+          }
+
+          case "RECOVERY_ENTRY": {
+            const command = `release-trust --json recovery operation prepare --role release --intent ${ids.intent}`;
+            const missing = requireProfile(state, command); if (missing) return missing;
+            state.safety.recoveryMode = "recovery-only-handoff";
+            return finish(state, command, envelope("recovery.operation.prepare", "handoff-required", "none", { operation_limit: 1, required_inputs: ["highest-consistent-custody-revision", "exact-intent", "qualified-recovery-environment"], ordinary_authority_restored: false }), "offline recovery identity and media remain untouched", 69);
+          }
+
+          case "INCIDENT_FREEZE": {
+            const command = "release-trust --json incident begin --scope release --reason unexplained-output";
+            const missing = requireProfile(state, command); if (missing) return missing;
+            state.safety.freeze = "security-frozen";
+            state.safety.blocked = true;
+            addEvidence(state, "incident-receipt", "security-frozen");
+            return finish(state, command, envelope("incident.begin", "completed", "canonical-state", { scope: "release", disposition: "security-frozen", positive_authority: "blocked", clear_authority: "certifying-identity-only" }), "subtractive fixture state is now the most restrictive state", 0, "Freeze this release scope with subtractive authority [y/N]: y");
+          }
+
+          default:
+            return finish(state, "release-trust --json unknown", envelope("request", "invalid", "none", { diagnostic: "unknown-action" }), "prototype action is not defined", 64);
+        }
+      }
+
+      return { initialState, transition };
+    })();
+
+    const scenarios = [
+      {
+        id: "happy",
+        title: "Ordinary release",
+        description: "Watch exact fixture inputs move through preparation, visible authorization, independent publication checks, pure verification, and value-free evidence.",
+        steps: [["CONFIGURE_PROFILE", "Configure profile"], ["BOOTSTRAP_TRUST", "Bootstrap anchor"], ["PREPARE_RELEASE", "Prepare intent"], ["INSPECT_MANIFEST", "Inspect manifest"], ["SIGN_RELEASE", "Authorize and sign"], ["PUBLISH_RELEASE", "Publish and verify"], ["VERIFY_CURRENT", "Verify current"], ["EXPORT_EVIDENCE", "Export evidence"]]
+      },
+      {
+        id: "cancel",
+        title: "Cancellation before authority",
+        description: "Cancellation leaves the inspected intent intact, produces exit 30 with effect none, and permits a later fresh prompt without pretending approval persisted.",
+        steps: [["CONFIGURE_PROFILE", "Configure profile"], ["PREPARE_RELEASE", "Prepare intent"], ["INSPECT_MANIFEST", "Inspect manifest"], ["CANCEL_SIGN", "Cancel prompt"], ["SIGN_RELEASE", "Authorize afresh"]]
+      },
+      {
+        id: "race",
+        title: "Concurrent publisher",
+        description: "A changed global head produces a conflict before pointer mutation. The old intent remains evidence, but it cannot be silently rebound to the new head.",
+        steps: [["CONFIGURE_PROFILE", "Configure profile"], ["PREPARE_RELEASE", "Prepare intent"], ["INSPECT_MANIFEST", "Inspect manifest"], ["SIGN_RELEASE", "Authorize and sign"], ["PUBLISH_CONFLICT", "Observe CAS conflict"]]
+      },
+      {
+        id: "partial",
+        title: "Ambiguous pointer effect",
+        description: "A lost response after compare-and-swap blocks the scope. Reconciliation reads the selected target and confirms the exact effect without repeating the write or changing adapters.",
+        steps: [["CONFIGURE_PROFILE", "Configure profile"], ["BOOTSTRAP_TRUST", "Bootstrap anchor"], ["PREPARE_RELEASE", "Prepare intent"], ["INSPECT_MANIFEST", "Inspect manifest"], ["SIGN_RELEASE", "Authorize and sign"], ["PUBLISH_AMBIGUOUS", "Lose pointer response"], ["RECONCILE_PUBLICATION", "Reconcile readback"], ["VERIFY_CURRENT", "Verify current"]]
+      },
+      {
+        id: "withdrawal",
+        title: "Terminal withdrawal",
+        description: "Withdrawal advances signed restrictive state. Replaying the old intent or wrapping the same manifest in another signature cannot restore it.",
+        steps: [["CONFIGURE_PROFILE", "Configure profile"], ["BOOTSTRAP_TRUST", "Bootstrap anchor"], ["PREPARE_RELEASE", "Prepare intent"], ["INSPECT_MANIFEST", "Inspect manifest"], ["SIGN_RELEASE", "Authorize and sign"], ["PUBLISH_RELEASE", "Publish"], ["WITHDRAW_RELEASE", "Withdraw manifest"], ["ATTEMPT_REPUBLISH", "Try replay"], ["VERIFY_CURRENT", "Verify rejection"]]
+      },
+      {
+        id: "handoffs",
+        title: "Rotation and recovery boundaries",
+        description: "Lifecycle commands prepare typed, digest-bound handoffs and stop. They do not imitate hardware, provider, certifying-identity, host, or recovery-media completion.",
+        steps: [["CONFIGURE_PROFILE", "Configure profile"], ["REPLACE_FACTOR", "Prepare factor replacement"], ["ROTATE_SIGNER", "Prepare signer rotation"], ["RECOVERY_ENTRY", "Prepare recovery operation"], ["INCIDENT_FREEZE", "Freeze on incident"]]
+      }
+    ];
+
+    const actionLabels = new Map(scenarios.flatMap(s => s.steps));
+    let model = OperatorModel.initialState();
+    let activeScenario = 0;
+    let scenarioStep = 0;
+
+    function short(value, fallback = "none") {
+      if (!value) return fallback;
+      return value.length > 34 ? `${value.slice(0, 17)}…${value.slice(-10)}` : value;
+    }
+
+    function render() {
+      document.getElementById("state-profile").textContent = model.profile ? `${model.profile.id} · ${model.profile.environment}` : "not configured";
+      document.getElementById("state-anchor").textContent = model.trust.anchor ? `${model.trust.anchor.hostname} · 2 channels` : "not initialized";
+      document.getElementById("state-intent").textContent = model.intent ? `${short(model.intent.id)} · ${model.intent.status} · ${model.intent.inspected ? "inspected" : "not inspected"}` : "none";
+      document.getElementById("state-authorization").textContent = `${model.approval.state}${model.approval.mode ? ` · ${model.approval.mode}` : ""}`;
+      document.getElementById("state-publication").textContent = `${model.publication.state} · generation ${model.publication.generation} · ${short(model.publication.currentHead)}`;
+      document.getElementById("state-safety").textContent = `${model.safety.freeze} · ${model.safety.recoveryMode} · custody revision ${model.safety.custodyRevision}${model.safety.blocked ? " · BLOCKED" : ""}`;
+      document.getElementById("state-release").textContent = `${model.release.lifecycle} · ${short(model.release.selectedManifest)}`;
+      document.getElementById("state-evidence").textContent = `${model.evidence.length} record${model.evidence.length === 1 ? "" : "s"}`;
+      document.getElementById("state-json").textContent = JSON.stringify({ ...model, last: undefined }, null, 2);
+
+      document.getElementById("terminal-command").textContent = model.last.command;
+      document.getElementById("terminal-prompt").textContent = model.last.prompt;
+      document.getElementById("terminal-stdout").textContent = JSON.stringify(model.last.stdout, null, 2);
+      document.getElementById("terminal-stderr").textContent = model.last.stderr || "none";
+      const exit = document.getElementById("exit-code");
+      exit.textContent = String(model.last.exit);
+      exit.classList.toggle("error", model.last.exit !== 0);
+      renderScenarioSteps();
+    }
+
+    function dispatch(action) {
+      model = OperatorModel.transition(model, action);
+      render();
+    }
+
+    function selectScenario(index) {
+      activeScenario = index;
+      scenarioStep = 0;
+      model = OperatorModel.initialState();
+      document.querySelectorAll("#scenario-tabs button").forEach((button, buttonIndex) => button.setAttribute("aria-selected", String(buttonIndex === index)));
+      document.getElementById("scenario-title").textContent = scenarios[index].title;
+      document.getElementById("scenario-description").textContent = scenarios[index].description;
+      render();
+    }
+
+    function renderScenarioSteps() {
+      const holder = document.getElementById("scenario-steps");
+      holder.replaceChildren();
+      scenarios[activeScenario].steps.forEach(([action, label], index) => {
+        const button = document.createElement("button");
+        button.textContent = `${index + 1}. ${label}`;
+        button.disabled = index > scenarioStep;
+        button.classList.toggle("step-complete", index < scenarioStep);
+        button.addEventListener("click", () => {
+          dispatch(action);
+          if (index === scenarioStep) scenarioStep += 1;
+          renderScenarioSteps();
+        });
+        holder.appendChild(button);
+      });
+    }
+
+    document.querySelectorAll("[data-action]").forEach(button => button.addEventListener("click", () => dispatch(button.dataset.action)));
+
+    const tabs = document.getElementById("scenario-tabs");
+    scenarios.forEach((scenario, index) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.role = "tab";
+      button.textContent = scenario.title;
+      button.setAttribute("aria-selected", String(index === 0));
+      button.addEventListener("click", () => selectScenario(index));
+      tabs.appendChild(button);
+    });
+
+    selectScenario(0);
+  </script>
+</body>
+</html>
