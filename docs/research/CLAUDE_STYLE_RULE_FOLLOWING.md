@@ -4,7 +4,11 @@ Research note. Observed 2026-08-31 on `claude-opus-5` at high reasoning effort,
 drafting GitHub PR review comments in two rounds of blind A/B tests (three
 fresh scenarios; drafts scored blind by Claude Fable 5 judge panels on
 AI-writing tells, register match, and factual fidelity). This is a dev-side
-note for instruction authors; it deploys nowhere.
+note for instruction authors; it deploys nowhere. Scale: nine drafts over six
+blind judge passes in round one, four drafts over four passes in round two;
+scores are 0-10, averaged per condition across judge passes. The run records
+are session-local, so read every number here as a small-sample observation,
+not a benchmark.
 
 ## Observation
 
@@ -13,7 +17,7 @@ were unreliably applied at generation time: spaced em dashes appeared in every
 test condition, including the conditions whose instructions stated the rule
 explicitly. The same constraints rephrased as mandatory post-draft edit
 actions ("after drafting, scan the text for '—' and judge each occurrence")
-were applied consistently — zero em-dash defects across all drafts in the
+were applied consistently: zero em-dash defects across all drafts in the
 follow-up round.
 
 GPT-family models do not exhibit this gap nearly as much (operator
@@ -49,5 +53,5 @@ match. Guards remain a useful backstop.
 Pair each style preference with a nuanced post-draft edit action; keep
 evidence-grounding requirements alongside style rules; and for batches that
 matter, prefer one adversarial review pass over a finished draft (tell hunt
-plus fact-fidelity check) to piling on more generation-time rules — residual
+plus fact-fidelity check) to piling on more generation-time rules; residual
 tells leaked in roughly half of generations under every rule set tested.
