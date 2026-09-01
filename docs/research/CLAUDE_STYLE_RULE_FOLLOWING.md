@@ -6,9 +6,10 @@ fresh scenarios; drafts scored blind by Claude Fable 5 judge panels on
 AI-writing tells, register match, and factual fidelity). This is a dev-side
 note for instruction authors; it deploys nowhere. Scale: nine drafts over six
 blind judge passes in round one, four drafts over four passes in round two;
-scores are 0-10, averaged per condition across judge passes. The run records
-are session-local, so read every number here as a small-sample observation,
-not a benchmark.
+scores are 0-10, averaged per condition across judge passes. Sanitized run records (scenarios, rule blocks, all drafts, blinded per-judge
+scores) are committed alongside this note as
+`CLAUDE_STYLE_RULE_FOLLOWING_RECORDS.md`; the sample is small, so read every
+number as an observation, not a benchmark.
 
 ## Observation
 
