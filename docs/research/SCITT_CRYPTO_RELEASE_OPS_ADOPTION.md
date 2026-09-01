@@ -53,11 +53,11 @@ mechanisms:
 - [#207 public-core, profile, and qualification boundaries](https://github.com/nisavid/dotfiles/issues/207#issuecomment-5470521497)
 - [#209 release objects and independent admission](https://github.com/nisavid/dotfiles/issues/209#issuecomment-5474608513)
 - [#210 client bootstrap, refresh, and retained state](https://github.com/nisavid/dotfiles/issues/210#issuecomment-5474715429)
-- open [#212 Agent Equipment consumer profile](https://github.com/nisavid/dotfiles/issues/212)
+- accepted [#212 Base Loadout consumer profile](https://github.com/nisavid/dotfiles/issues/212#issuecomment-5494463333)
 
 The local starting points are the [cross-precedent audit](CRYPTO_RELEASE_OPS_PRECEDENT_AUDIT.md),
 the [generic consumer research](../agent-equipment/research/generic-release-trust-components.md),
-and the Agent Equipment [context](../agent-equipment/CONTEXT.md),
+and the current source [context](../agent-equipment/CONTEXT.md),
 [architecture](../agent-equipment/ARCHITECTURE.md), and
 [implementation handoff](../agent-equipment/IMPLEMENTATION_HANDOFF.md).
 
@@ -136,9 +136,9 @@ not specify all-components-required hybrid verification or downgrade handling.
 | Subject | The issuer-defined `sub` identifier used to correlate Statements about an Artifact. | A stable, profile-defined identifier for the exact object or stream. It does not replace the #209 SHA-512 content identity or product/channel/purpose tuple. |
 | Transparency Service (TS) | The entity that applies registration policy, maintains and extends a VDS, and signs receipts. | An external-evidence producer with its own separately bootstrapped receipt trust root. It is not the canonical release publisher, release signer, or verifier-update authority. |
 | Registration Policy | The TS's admission precondition, evaluated before insertion. The operator owns its format and additional checks. | **TS registration policy**, never release authorization or relying-party admission. Passing it says that the service accepted the Signed Statement under its then-current policy. |
-| Receipt | A tagged COSE_Sign1 signed proof of one or more VDS properties. | Always call it a **SCITT receipt**. It is neither a publication readback receipt nor Agent Equipment's terminal `ReleaseReceipt`. |
+| Receipt | A tagged COSE_Sign1 signed proof of one or more VDS properties. | Always call it a **SCITT receipt**. It is neither a publication readback receipt nor Base Loadout's terminal release receipt. |
 | Relying Party / Verifier | A consumer that trusts selected issuer and TS identities, verifies evidence, and applies arbitrary local policy. | The generic verifier is a stricter RP: it must re-run #209 admission and may never let receipt validity upgrade the four-result outcome. |
-| Auditor | A specialized RP that checks all Transparent Statements or replays the sequence for correctness and consistency. | A log-audit role. It does not become the #207 qualification authority or an Agent Equipment authority merely by auditing. |
+| Auditor | A specialized RP that checks all Transparent Statements or replays the sequence for correctness and consistency. | A log-audit role. It does not become the #207 qualification authority or a Base Loadout authority merely by auditing. |
 | Statement Sequence | The TS registration history. | Supplemental observation order only. It is not the #209 alternating global state chain and does not select current release state. |
 | VDS / VDP | A registered verifiable data-structure algorithm and proofs of properties such as inclusion or consistency. | A proof substrate. The profile, prior retained roots, service keys, monitoring, and local policy determine what a particular proof establishes. |
 
@@ -272,7 +272,7 @@ SCITT does not assert that:
 - inclusion alone detects split views;
 - the TS stores the complete payload or provides the #209 complete archive; or
 - verification authorizes installation, execution, archive mutation, or any
-  Agent Equipment `ReleaseReceipt`.
+  Base Loadout release receipt.
 
 ## Live API and receipt profiles
 
@@ -375,7 +375,7 @@ accepted object in place.
 | #207 qualification records | SCITT profile/extension | A qualification record may be a Statement, but SCITT does not decide who has qualification authority, threshold, scope, supersession power, or support obligations. |
 | #204 publication receipts | Outside SCITT | These are provider readback and promotion-operation records. They may themselves be logged, but they do not become SCITT receipts and a SCITT receipt does not prove canonical promotion. |
 | #203 RFC 3161 evidence | Complementary integration | Keep the exact completed OpenPGP signature as the timestamp subject. RFC 9921 applies only if the later COSE wrapper also needs its own timestamp and must preserve CTT/TTC ordering semantics. |
-| Agent Equipment `ReleaseReceipt` | Outside SCITT | It is a terminal record emitted only after independent eleven-stream validation and durable create-only archive. A SCITT receipt is prior external evidence and must never grant launcher, archive, apply, migration, or receipt capability. |
+| Base Loadout release receipt | Outside SCITT | It is a terminal record emitted only after #121's independent complete release-tuple validation and #122's durable create-only archive. A SCITT receipt is prior external evidence and must never grant launcher, archive, application-actuation, fitting, migration, or release-receipt capability. |
 
 ## Architecture comparison
 
@@ -499,8 +499,9 @@ a future profile deliberately grants and specifies that role.
 4. Define qualification authority—issuer or threshold, scope, supersession,
    suspension, and consumer policy—before using SCITT to carry qualification
    records. Logging a record cannot grant its author that role.
-5. In #212, expressly prohibit SCITT receipt validity from crossing directly to
-   Agent Equipment admission, archive, actuation, or `ReleaseReceipt` issuance.
+5. Preserve #212's explicit prohibition on SCITT receipt validity crossing
+   directly to Base Loadout admission, archive, actuation, fitting, or
+   release-receipt issuance.
 
 No closed decision needs reopening merely because RFC 9942 and RFC 9943 are now
 published. A future choice of architecture A would, however, require explicit
@@ -574,7 +575,7 @@ consumer side effect?
    and admission checks.
 6. Emit the unchanged four-result result with typed evidence diagnostics. Perform
    no network call from pure verification and no install, execution, archive, or
-   Agent Equipment receipt operation.
+   Base Loadout release-receipt operation.
 
 Use the Microsoft ledger only in its documented virtual/development mode for a
 separate SCRAPI interoperability experiment. Pin its exact release and draft
@@ -596,9 +597,9 @@ interop evidence, not service qualification.
 - optional evidence absent or invalid versus profile-required evidence absent or
   invalid;
 - Transparent Statement bytes substituted for `release-envelope/v1` identity;
-- SCITT receipt substituted for a publication receipt or Agent Equipment
-  `ReleaseReceipt`; and
-- all three non-current generic outcomes causing zero Agent Equipment tuple,
+- SCITT receipt substituted for a publication receipt or Base Loadout release
+  receipt; and
+- all three non-current generic outcomes causing zero Base Loadout tuple,
   launcher, installer, archive, and receipt effects.
 
 ### Success evidence
@@ -616,7 +617,7 @@ The prototype succeeds only when:
 - no fixture authority, locator, or key can be accepted by a production profile;
   and
 - the run is value-free, offline-verifiable, and has no provider, host, trust-
-  store, credential, authenticator, protected-authority, or Agent Equipment
+  store, credential, authenticator, protected-authority, or Base Loadout
   effect.
 
 ## Evidence required before conformance or service adoption
@@ -671,35 +672,37 @@ or witness evidence above.
 
 ## Wayfinder rescope and dependency contracts
 
-These are proposals for the #202 coordinator; this note performs no tracker
-mutation.
+The #202 coordinator projected these research consequences into the live map;
+this note performs no tracker mutation.
 
-1. **Keep #212 independent of SCITT deployment.** Its consumer profile should
-   accept SCITT only through the generic evidence/admission result, bind the same
-   exact SHA-512 artifact bytes into the Agent Equipment tuple, and state that
-   only `accepted-current` can reach the separate tuple gate. It should require
-   zero launcher/archive/`ReleaseReceipt` effect for every other result.
+1. **Keep #212 independent of SCITT deployment.** Its accepted consumer profile
+   accepts SCITT only through the generic evidence/admission result, binds the
+   same exact SHA-512 artifact bytes into the Base Loadout tuple, and allows only
+   `accepted-current` to reach the separate tuple gate. Every other result has
+   zero launcher, archive, or release-receipt effect.
 2. **Give #213 the disposable SCITT bridge corpus.** Inputs are the settled
    #209/#210 contracts, IETF WG vectors, and this profile sketch. Outputs are
    public frozen bytes, expected results, two-verifier interoperability evidence,
    and zero-effect consumer cases. It owns no service selection or production
    key.
-3. **Add one future SCITT evidence-profile decision under #202.** It should own
+3. **Use [Define the generic SCITT evidence profile](https://github.com/nisavid/dotfiles/issues/248).** It owns
    `iss`/`sub` semantics, RFC 9995 exact-byte binding, TS and evidence-issuer
    roots, VDS/profile selection, optional-versus-required policy, result mapping,
    offline bundle, and version transition. It depends on the prototype, not on a
    live provider.
-4. **Keep service qualification separate.** It depends on the accepted evidence
+4. **Keep [Qualify a SCITT service integration](https://github.com/nisavid/dotfiles/issues/249) separate.** It depends on the accepted evidence
    profile, a final or pinned API/VDS profile, the qualification-authority
    decision, witness/monitor design, and provider exit evidence. It does not
    block the first public release.
-5. **Settle TUF before authority implementation.** The TUF POUF-versus-explicit-
+5. **Settle TUF before authority implementation in [Determine TUF conformance and security delta](https://github.com/nisavid/dotfiles/issues/245).** The TUF POUF-versus-explicit-
    delta decision depends on #209/#210 and precedes an authoritative wire freeze.
    The SCITT lane consumes its outcome and never creates a parallel current head.
-6. **Keep Agent Equipment actuation in its own lane.** The generic consumer-
-   actuation decision owns the protected handoff and updater boundary. Agent
-   Equipment retains the eleven-stream parser, complete tuple, create-only
-   archive, installed ownership, and terminal receipt.
+6. **Keep Base Loadout actuation in its own lane.** [Define the generic consumer
+   updater and protected-launcher boundary](https://github.com/nisavid/dotfiles/issues/244)
+   owns the protected handoff and updater boundary. #120 retains the protected
+   deployment binding, installed identities, and destinations. #121 retains
+   complete release-tuple validation, including every required byte-stream
+   check. #122 retains create-only archive and terminal release-receipt semantics.
 
 ## Uncertainties
 
@@ -726,5 +729,5 @@ mutation.
 This work is planning and public fixtures only. It does not implement a verifier
 or service; install software; create or access credentials, authenticators, or
 private services; mutate trust stores, providers, hosts, protected authority, or
-Agent Equipment; perform production signing or verification; alter Agents work;
+Base Loadout; perform production signing or verification; alter Agents work;
 or create, edit, link, claim, label, resolve, or close an issue.

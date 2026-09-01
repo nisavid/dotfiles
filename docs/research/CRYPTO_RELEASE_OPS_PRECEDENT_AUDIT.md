@@ -2,7 +2,7 @@
 
 **Research date:** 2026-08-31
 
-**Status:** Planning research only. This note records a primary-source precedent audit. It is not an accepted decision, an implementation contract, or authority to change a tracker, repository, branch, release, host, provider, credential, key, trust store, protected installation, or Agent Equipment.
+**Status:** Planning research only. This note records a primary-source precedent audit. It is not an accepted decision, an implementation contract, or authority to change a tracker, repository, branch, release, host, provider, credential, key, trust store, protected installation, or Base Loadout.
 
 ## Executive findings
 
@@ -11,14 +11,14 @@ The accepted release-trust design should remain the sole authority and retained-
 That does not make every custom surface equally justified:
 
 1. **TUF is the closest security architecture and the most important unresolved compatibility decision.** TUF permits implementation-defined canonical metadata and signature schemes, so strict JCS, SHA-512, and RFC 9980 OpenPGP do not prevent conformance. The accepted role and client algorithms, however, do not yet demonstrate TUF's root, targets, snapshot, and timestamp workflow. Before the public protocol freezes, choose either a TUF-conformant POUF with named extensions or a non-TUF protocol with an explicit security delta. Do not create both as competing authority planes.
-2. **Uptane and SUIT expose the right consumer boundary.** Artifact authenticity is not an instruction to install or run it. A consumer independently checks the exact target, device or execution context, authorization policy, conditions, and actuation result. This strongly supports retaining Agent Equipment's separate tuple gate, candidate-independent launcher, archive, and receipt.
+2. **Uptane and SUIT expose the right consumer boundary.** Artifact authenticity is not an instruction to install or run it. A consumer independently checks the exact target, device or execution context, authorization policy, conditions, and actuation result. This strongly supports retaining Base Loadout's separate tuple gate, candidate-independent launcher, archive, and receipt.
 3. **SCITT is a standards seam now and a production dependency later, if qualified.** RFC 9942 and RFC 9943 became Proposed Standards in June 2026, and RFC 9995 now supplies the standard exact-hash bridge to the accepted OpenPGP object. Reserve a typed SCITT evidence profile and publish disposable hostile fixtures before the public wire contract freezes. Keep live registration, service trust, and production receipt verification optional until the API, service, witness, retained-checkpoint, privacy, and post-quantum paths are qualified. SCITT remains evidence, never release authority.
 4. **The RFC 3161 choice is sound but needs an explicit profile.** A first-release optional timestamp adapter should cover the exact completed OpenPGP signature bytes, require a strong message imprint and RFC 5816-era certificate identification, retain the TSA policy and validation material, and make no authorization, public-observation, or non-equivocation claim. Long-term evidence requires renewal, such as an RFC 4998 evidence-record strategy, or a deliberate statement that the first release does not promise it.
 5. **Build evidence has a standard interchange path.** in-toto Attestation 1.2 and SLSA 1.2 are the best first-release profile for non-authoritative build provenance. DSSE may carry that evidence, and Sigstore bundles may supply optional verification material, but neither envelope can replace the exact OpenPGP signature over the JCS authority objects.
 6. **Transport, discovery, and orchestration should stay outside admission.** OCI Distribution and ORAS may carry exact objects; GitHub reusable workflows may orchestrate publication and produce attestations. Registry tags, OCI referrer sets, GitHub environments, OIDC claims, hosted attestations, and provider success do not select current authority.
 7. **The generic actuation interface needs evidence before publication.** The first release should contain a fake-actuator contract and hostile fixtures, not a generic privileged installer. RAUC, systemd-sysupdate, Sparkle, and pacman/libalpm demonstrate materially different installation, health, and rollback semantics. They support a common sequence, not yet a proven common public adapter.
 8. **Three accepted choices deserve explicit scalability review, not silent generalization:** one certifying primary rather than a threshold root, one default signer for the generic namespace, and one globally serialized state head with human-authorized positive transitions. These are coherent for a single-operator first adopter. TUF and Uptane show the compartmentalization and availability that are traded away. The first release should name that trade; a later multi-operator or high-frequency profile should not inherit it by accident.
-9. **Two trusted-client inputs remain underspecified.** “Two independently controlled public channels” needs closed channel classes and control-principal rules, and the claim that a backward clock cannot extend freshness is true only after a trusted time floor exists. These are qualification blockers for the first client, not Agent Equipment-specific policy.
+9. **Two trusted-client inputs remain underspecified.** “Two independently controlled public channels” needs closed channel classes and control-principal rules, and the claim that a backward clock cannot extend freshness is true only after a trusted time floor exists. These are qualification blockers for the first client, not Base Loadout-specific policy.
 10. **A result document is diagnostics, not a bearer capability.** A protected consumer must select its own anchor, retained trust context, and immutable profile; run or re-run admission over held exact bytes; and bind the admitted bytes through installation readback. Passing caller-supplied result JSON, paths, or digests into a privileged launcher would reintroduce substitution and time-of-check/time-of-use risk.
 11. **Qualification evidence needs qualification authority.** The accepted profile model describes exact evidence, reviewers, and lifecycle states, but not the authenticated issuer, scope, threshold, or supersession rules for declaring an implementation or adapter qualified. in-toto, DSSE, Notary, and SCITT can carry a record; none decides who is allowed to issue it.
 
@@ -35,14 +35,14 @@ Accepted decisions are treated here as accurate records of Ivan's intent. The au
 - [#204, “Specify the Cloudflare canonical publication and Vercel site boundary”](https://github.com/nisavid/dotfiles/issues/204#issuecomment-5469266482) and [#214, “Research Cloudflare, Vercel, and GitHub publication capabilities”](https://github.com/nisavid/dotfiles/issues/214#issuecomment-5463592296) keep immutable objects and compare-and-swap state canonical at the trust origin while treating presentation sites, mirrors, workflow evidence, and provider receipts as non-authoritative.
 - [#207, “Define the reusable core, adapter, and adopter-profile boundary”](https://github.com/nisavid/dotfiles/issues/207#issuecomment-5470521497) chooses one public core, closed versioned contracts, explicit adapters, immutable public profiles, private bindings, no ambient discovery or downgrade, and publication of a seam only after variation and conformance evidence justify it.
 
-The Agent Equipment boundary is also settled in the repository context:
+The Base Loadout boundary is also settled in the repository context:
 
 - Generic admission authenticates release bytes and trust state. It does not grant apply, installation, execution, archive, or receipt authority.
-- Only <code>accepted-current</code> may reach the Agent Equipment consumer gate. The other three generic outcomes have no actuation, archive, or receipt effects.
-- Agent Equipment independently binds its complete execution tuple, a candidate-independent protected launcher, eleven archived byte streams, a create-only archive, and a receipt emitted only after durable archive success.
-- The generic verifier/installer and Agent Equipment release-authority assembly remain independently versioned and accepted even if they share one Crypto Ops source project.
+- Only <code>accepted-current</code> may reach the Base Loadout consumer gate. The other three generic outcomes have no actuation, archive, or receipt effects.
+- Base Loadout independently binds its complete release tuple and every required byte stream, uses a candidate-independent protected launcher and create-only archive, and emits a receipt only after durable archive success.
+- The generic verifier/installer and Base Loadout release-authority assembly remain independently versioned and accepted even if they share one Crypto Ops source project.
 
-[The Agent Equipment context](../agent-equipment/CONTEXT.md), [architecture](../agent-equipment/ARCHITECTURE.md), [implementation handoff](../agent-equipment/IMPLEMENTATION_HANDOFF.md), and [generic component research](../agent-equipment/research/generic-release-trust-components.md) define those boundaries. Open issue [#212, “Specify the Agent Equipment release-authority consumer profile”](https://github.com/nisavid/dotfiles/issues/212) owns their exact mapping.
+[The current source context](../agent-equipment/CONTEXT.md), [architecture](../agent-equipment/ARCHITECTURE.md), [implementation handoff](../agent-equipment/IMPLEMENTATION_HANDOFF.md), and [generic component research](../agent-equipment/research/generic-release-trust-components.md) define those boundaries. The accepted [#212 Base Loadout consumer profile](https://github.com/nisavid/dotfiles/issues/212#issuecomment-5494463333) fixes their exact generic-to-application mapping.
 
 ## Requirements-to-precedents crosswalk
 
@@ -52,7 +52,7 @@ The Agent Equipment boundary is also settled in the repository context:
 | Canonical signed JSON and exact object identity | [RFC 8785](https://www.rfc-editor.org/rfc/rfc8785.html) and SHA-512 | Direct adoption. Keep exact JCS bytes as the authority surface. Do not add a second CBOR or DSSE interpretation of the same object version. |
 | Root continuity, scoped signing roles, rollback and freeze resistance | [TUF 1.0.36](https://theupdateframework.github.io/specification/latest/) | Decide TUF-conformant POUF plus extensions versus explicit non-TUF delta. JCS/OpenPGP can fit; the accepted roles and client algorithm are the unresolved part. |
 | Interoperable description of protocol, operations, usage, and format | [TAP 11](https://github.com/theupdateframework/taps/blob/master/tap11.md) | Use its document shape. Call it a TUF POUF only if a working implementation satisfies the TUF role and workflow requirements. |
-| Separate artifact trust from device- or consumer-specific installation instruction | [Uptane 2.1.0](https://uptane.org/docs/latest/standard/uptane-standard) | Semantic alignment for the generic-to-Agent Equipment seam. Do not adopt its automotive two-repository protocol. |
+| Separate artifact trust from device- or consumer-specific installation instruction | [Uptane 2.1.0](https://uptane.org/docs/latest/standard/uptane-standard) | Semantic alignment for the generic-to-Base Loadout seam. Do not adopt its automotive two-repository protocol. |
 | Separate side-effect-free checks from install or invoke directives | [RFC 9019](https://www.rfc-editor.org/rfc/rfc9019.html), [RFC 9124](https://www.rfc-editor.org/rfc/rfc9124.html), and the [SUIT manifest draft](https://datatracker.ietf.org/doc/draft-ietf-suit-manifest/) | Semantic alignment only. Keep command-bearing SUIT manifests and CBOR/COSE outside the authoritative first-release wire format. |
 | Pure four-result current and historical admission | No direct standard; TUF client/repository separation is the nearest architecture | Preserve the result algebra. Document how TUF-class failures map to it and prove that external evidence cannot upgrade a result. |
 | Trusted existence time | [RFC 3161](https://www.rfc-editor.org/rfc/rfc3161.html), updated by [RFC 5816](https://www.rfc-editor.org/rfc/rfc5816.html) | First optional adapter over the exact completed OpenPGP signature bytes. It is evidence, not authority. |
@@ -112,11 +112,11 @@ Do not deploy a TUF repository beside the custom history as a second authority p
 
 **Requirement addressed.** Separation of generic artifact authenticity from a consumer-specific, exact-target installation decision; compromise containment; secure time; rollback and mix-and-match resistance.
 
-**Disposition.** Release Ops and Agent Equipment should **align semantically** with the Image/Director separation without claiming Uptane conformance. The generic release system authenticates exact bytes and current state; Agent Equipment independently supplies the equivalent of target inventory, execution tuple, apply authority, health, archive, and receipt rules.
+**Disposition.** Release Ops and Base Loadout should **align semantically** with the Image/Director separation without claiming Uptane conformance. The generic release system authenticates exact bytes and current state; Base Loadout independently supplies the equivalent of target inventory, execution tuple, application-actuation authority, health, archive, and receipt rules. Protected fitting remains a separate authority lane.
 
 **Benefits.** Uptane demonstrates that two valid signatures can answer different questions: “is this an authentic image?” and “is this the image this exact consumer should install now?” It also demonstrates the value of keeping download, verification, installation, and post-installation state distinct.
 
-**Conflicts and boundaries.** Its vehicle, ECU, inventory, two-repository, secure-time, and metadata-role assumptions are not provider-neutral generic release semantics. A Director-like service would create an additional online authority plane and could collide with Agent Equipment's separately issued apply authorization. Uptane's native wire and cryptographic profiles do not provide the accepted OpenPGP algorithm-30 or pure four-result interface.
+**Conflicts and boundaries.** Its vehicle, ECU, inventory, two-repository, secure-time, and metadata-role assumptions are not provider-neutral generic release semantics. A Director-like service would create an additional online authority plane and could collide with Base Loadout's separately protected application-actuation boundary or the independent fitting authority. Uptane's native wire and cryptographic profiles do not provide the accepted OpenPGP algorithm-30 or pure four-result interface.
 
 **Migration cost.** Low to adopt the semantic split and fixtures; high to adopt the protocol or operate Director and Image repositories.
 
@@ -126,11 +126,11 @@ Do not deploy a TUF repository beside the custom history as a second authority p
 
 **Requirement addressed.** Trust-domain authorization, exact component targeting, dependencies, monotonic sequence, preconditions, safe processing order, installation, and invocation.
 
-**Disposition.** Crypto Ops should **align semantically** with SUIT's separation between conditions and directives. Agent Equipment conditions remain in the pure consumer gate; directives remain in the candidate-independent actuator. SUIT's command-bearing manifest should be **deferred** as a constrained-device adapter and deliberately excluded from the authoritative first-release wire format.
+**Disposition.** Crypto Ops should **align semantically** with SUIT's separation between conditions and directives. Base Loadout conditions remain in the pure consumer gate; directives remain in the candidate-independent actuator. SUIT's command-bearing manifest should be **deferred** as a constrained-device adapter and deliberately excluded from the authoritative first-release wire format.
 
 **Benefits.** SUIT treats an update as authorized remote code execution and therefore makes preauthorization, dependencies, install conditions, and invoke authority explicit. That is useful pressure against letting a signed release manifest silently become an execution plan.
 
-**Conflicts and boundaries.** The accepted release manifest is descriptive and pure admission has no side effects. A SUIT directive sequence inside the authority object would give candidate-supplied signed data more influence over execution and would blur Agent Equipment's independent tuple and apply-authority boundary. CBOR/COSE would also introduce a second canonicalization and signature stack while the manifest wire standard remains unfinished.
+**Conflicts and boundaries.** The accepted release manifest is descriptive and pure admission has no side effects. A SUIT directive sequence inside the authority object would give candidate-supplied signed data more influence over execution and would blur Base Loadout's independent tuple and application-actuation boundaries and the separate fitting-authority boundary. CBOR/COSE would also introduce a second canonicalization and signature stack while the manifest wire standard remains unfinished.
 
 **Migration cost.** Low for semantic and test alignment; high and wire-breaking for direct manifest adoption.
 
@@ -246,7 +246,7 @@ Sigsum is a maintained transparency project for signing-key usage, not a standar
 
 **Benefits.** OCI registries and layouts can carry release objects, artifacts, and evidence without a bespoke blob service. ORAS supplies maintained tooling for exact digest retrieval and copying.
 
-**Conflicts and boundaries.** OCI commonly identifies content with SHA-256, while the accepted protocol uses SHA-512. A registry's mutable tags, garbage collection, referrer enumeration, authentication, and availability are provider behavior, not signed authority state. OCI signatures do not prove Agent Equipment admission or actuation.
+**Conflicts and boundaries.** OCI commonly identifies content with SHA-256, while the accepted protocol uses SHA-512. A registry's mutable tags, garbage collection, referrer enumeration, authentication, and availability are provider behavior, not signed authority state. OCI signatures do not prove Base Loadout admission or actuation.
 
 **Migration cost.** Low to transport opaque blobs, medium to qualify registry capability and retention, high if existing publication is redefined around registry state.
 
@@ -291,7 +291,7 @@ Ship fake-actuator fixtures for crash, retry, partial mutation, digest mismatch,
 
 **Benefits.** The sequence is common across the assessed systems while preserving their different platform mechanics. Fake adapters can prove that the three non-current generic outcomes and every consumer-gate failure produce zero privileged effects.
 
-**Conflicts and boundaries.** Native signature checks, version selection, updater services, app delegates, package keyrings, and “mark good” results cannot replace the generic gate. Agent Equipment's receipt means durable closure over its exact eleven streams; no installer exit code has that meaning.
+**Conflicts and boundaries.** Native signature checks, version selection, updater services, app delegates, package keyrings, and “mark good” results cannot replace the generic gate. Base Loadout's receipt means durable closure over its complete release tuple; no installer exit code has that meaning.
 
 **Migration cost.** Low for the fake contract, medium to high per real platform, and high for any attempt to publish one generic privileged installer before two implementations prove the seam.
 
@@ -346,19 +346,19 @@ Ship fake-actuator fixtures for crash, retry, partial mutation, digest mismatch,
 | [#204, “Specify the Cloudflare canonical publication and Vercel site boundary”](https://github.com/nisavid/dotfiles/issues/204#issuecomment-5469266482) | Uphold. OCI/ORAS, SCITT, Sigstore, and GitHub can be adapters or evidence stores only. Their mutable discovery state cannot replace the signed compare-and-swap head. |
 | [#205, “Research recoverable FIDO authorization for RFC 9980 release signing”](https://github.com/nisavid/dotfiles/issues/205#issuecomment-5463568055) | No standards-driven change. TUF TAP 21's HSM message-size concerns do not turn FIDO user verification or age-envelope unwrap into an independent release-intent display or signer. |
 | [#206, “Choose the release authority topology and continuity contract”](https://github.com/nisavid/dotfiles/issues/206#issuecomment-5465835347) | Keep the RFC 9980 subkey topology for the first adopter. Reconsider whether “one default signer serves the adopter's generic release namespace” and a single certifying primary are generic defaults or a named single-operator profile. TUF's threshold root and delegated targets roles make the sacrificed compromise isolation explicit. |
-| [#207, “Define the reusable core, adapter, and adopter-profile boundary”](https://github.com/nisavid/dotfiles/issues/207#issuecomment-5470521497) | Uphold its separation rule. Add a decision for qualification authority: exact evidence and a named reviewer are not self-authenticating. Before any adapter is “qualified,” define which key or role can issue, suspend, supersede, or retire a qualification for which subject and environment, and how consumers authenticate that state. |
+| [#207, “Define the reusable core, adapter, and adopter-profile boundary”](https://github.com/nisavid/dotfiles/issues/207#issuecomment-5470521497) | Uphold its separation rule. [#246](https://github.com/nisavid/dotfiles/issues/246) owns qualification authority: exact evidence and a named reviewer are not self-authenticating. Before any adapter is “qualified,” define which key or role can issue, suspend, supersede, or retire a qualification for which subject and environment, and how consumers authenticate that state. |
 | [#208, “Choose release-signer custody, recovery, and factor rotation”](https://github.com/nisavid/dotfiles/issues/208#issuecomment-5472198422) | Uphold. No assessed service should receive signer, recovery, or factor authority. Evidence-service and orchestration credentials remain separate and short lived. |
-| [#209, “Define the signed release manifest and independent-admission protocol”](https://github.com/nisavid/dotfiles/issues/209#issuecomment-5474608513) | Keep JCS, SHA-512, RFC 9980, historical attribution, and the four-result algebra. Reopen only enough role/object/state layout to decide TUF-conformant POUF plus extensions versus explicit non-TUF delta. That choice blocks #213 and public contract freeze, not #212's planning disposition. Also reconsider the generic permanence of “one global state head,” “only one logical promotion may be in flight,” and human-signed <code>reaffirm</code> after #216 measures workload. Finally, decide whether manifest withdrawal intentionally permits the same artifact bytes to be rewrapped, or whether a subtractive per-scope digest quarantine is needed. |
-| [#210, “Choose client trust bootstrap, refresh, and verification state”](https://github.com/nisavid/dotfiles/issues/210#issuecomment-5474715429) | Preserve refresh/pure-verification separation and retained anti-rollback/fork state. Add TUF-derived differential fixtures. Before client qualification, define what makes two bootstrap channels independently controlled and how the first trusted-time floor is established; otherwise the first-use mismatch and backward-clock claims are not portable tests. |
+| [#209, “Define the signed release manifest and independent-admission protocol”](https://github.com/nisavid/dotfiles/issues/209#issuecomment-5474608513) | Keep JCS, SHA-512, RFC 9980, historical attribution, and the four-result algebra. [#245](https://github.com/nisavid/dotfiles/issues/245) owns TUF-conformant POUF plus extensions versus an explicit non-TUF delta; that choice blocks #213 and public contract freeze. [#250](https://github.com/nisavid/dotfiles/issues/250) owns release-state scalability after #216 measures workload. [#247](https://github.com/nisavid/dotfiles/issues/247) decides whether manifest withdrawal permits the same artifact bytes to be rewrapped or requires a subtractive per-scope digest quarantine. None silently reinterprets #209. |
+| [#210, “Choose client trust bootstrap, refresh, and verification state”](https://github.com/nisavid/dotfiles/issues/210#issuecomment-5474715429) | Preserve refresh/pure-verification separation and retained anti-rollback/fork state. Add TUF-derived differential fixtures. [#243](https://github.com/nisavid/dotfiles/issues/243) owns independently controlled bootstrap channels and the initial trusted-time floor so first-use mismatch and backward-clock claims become portable tests. |
+| [#212, “Specify the Base Loadout release-authority consumer profile”](https://github.com/nisavid/dotfiles/issues/212#issuecomment-5494463333) | Accepted an Uptane/SUIT-like two-gate boundary: generic authenticity first, then #121's closed digest-bound Base Loadout release-tuple validation and the separately owned application-actuation decision. Only <code>accepted-current</code> crosses the seam; it still grants no execution, archive, release-receipt, or fitting authority. A serialized result is never the handoff. The disposition names the exact generic artifact roles, profile identity, trust-state ownership, installed implementation identity, and bootstrap/self-update dependency without redefining those generic contracts locally. |
 | [#214, “Research Cloudflare, Vercel, and GitHub publication capabilities”](https://github.com/nisavid/dotfiles/issues/214#issuecomment-5463592296) | No authority change. A GitHub reusable workflow, artifact attestation, or OIDC identity is orchestration/evidence and remains subordinate to exact signed objects and provider-neutral publication. |
 | [#215, “Define the system threat and authority model”](https://github.com/nisavid/dotfiles/issues/215#issuecomment-5464747293) | Uphold the accepted first-use split-view residual risk. SCITT or a log receipt alone does not remove it. Revisit the named risk only when an independently witnessed service, monitor policy, retained checkpoint strategy, and PQ migration are concrete. |
 | [#219, “Qualify age-plugin-fido2prf and choose its integration lanes”](https://github.com/nisavid/dotfiles/issues/219#issuecomment-5473754412) | No precedent-driven change. RFC 9980 support at the format level does not replace exact Sequoia, OpenSSL/backend, age, authenticator, and platform qualification. |
 
-### Open decisions
+### Open prototype decisions in the audited set
 
 | Decision | Recommended scope |
 | --- | --- |
-| [#212, “Specify the Agent Equipment release-authority consumer profile”](https://github.com/nisavid/dotfiles/issues/212) | State an Uptane/SUIT-like two-gate boundary: generic authenticity first, then a closed digest-bound Agent Equipment tuple and apply-authority decision. Only <code>accepted-current</code> crosses the seam; it still grants no execution or receipt authority. A serialized result is never the handoff. Name the exact generic artifact roles, profile identity, trust-state ownership, installed implementation identity, and bootstrap/self-update dependency. #212 may close as planning if it records the upstream TUF, bootstrap, and protected-byte-handoff dependencies rather than redefining them locally. |
 | [#216, “Prototype the minimal release operator surface”](https://github.com/nisavid/dotfiles/issues/216) | Exercise the accepted human-signing and compare-and-swap workflow with two independent product/channel streams, simultaneous prepared promotions, stale heads, crash/retry, emergency freeze, signer rotation, and freshness reaffirm. Measure operations and failure recovery before the single global serialization becomes a permanent generic interface. |
 | [#213, “Prototype the conformance and executable-documentation system”](https://github.com/nisavid/dotfiles/issues/213) | Build the cross-standard hostile corpus after #216 fixes the operator-visible contract. Include TUF-class attacks, RFC 9980 packet failures, JCS differentials, DSSE-style cross-type substitution, optional-evidence laundering, SHA-256/SHA-512 cross-binding, SCITT/RFC 3161 non-authority, all four generic outcomes, and fake-actuator zero-effect checks. |
 
@@ -368,7 +368,7 @@ The evidence does not justify reopening the accepted cryptographic profile. It d
 
 1. **“One default signer serves the adopter's generic release namespace.”** Keep it for the single-operator first profile, but stop short of presenting it as the durable generic default. A compromised signer spans every product and channel in that namespace. TUF delegated targets and Uptane's separate repository roles show a maintained alternative. A later profile may need scoped signers or thresholds; the first release should reserve that evolution without inventing it now.
 2. **“One global state head” and “only one logical promotion may be in flight.”** This makes cross-stream coherence simple and auditable, but serializes unrelated releases and emergency operations. The cost is unknown until #216 runs multi-stream and failure scenarios. Preserve the accepted rule for the prototype; decide after measurements whether it is a v1 invariant, a single-operator profile rule, or an implementation choice.
-3. **Human-authorized positive <code>reaffirm</code> for bounded freshness.** This avoids an online key with positive authority, unlike TUF's minimally trusted timestamp role. It also creates recurring human liveness work. The first release should either accept that workload explicitly or define a narrower, non-positive freshness mechanism in a new decision. It must not quietly introduce an online signer through implementation convenience.
+3. **Human-authorized positive <code>reaffirm</code> for bounded freshness.** This avoids an online key with positive authority, unlike TUF's minimally trusted timestamp role. It also creates recurring human liveness work. [#250](https://github.com/nisavid/dotfiles/issues/250) owns the choice between accepting that workload explicitly and defining a narrower, non-positive freshness mechanism. Implementation must not quietly introduce an online signer.
 4. **Single certifying primary versus threshold root.** The accepted threat model already admits that certifying-root compromise ends automatic continuity. TUF makes threshold roots a primary compromise-resilience mechanism. Keep the single-root first profile only with a plain statement that multiple encrypted copies or factors protect one authority but do not provide independent signing thresholds.
 5. **“RFC 3161 adapter” without a closed validation profile.** The decision is directionally correct but leaves interoperability and archival behavior underspecified. Name the imprint algorithm, exact subject bytes, nonce and policy behavior, RFC 5816 certificate identifier, retained chain and revocation material, clock/accuracy treatment, and renewal stance before two implementations can claim the same adapter.
 6. **“Two independently controlled public channels.”** Name allowed channel classes and the controlling principal for each; two URLs, accounts, packages, or pages under one compromise domain are not independent merely because they look different. The persisted bootstrap receipt should record the public provenance and conflict outcome without introducing private account data.
@@ -378,9 +378,9 @@ The evidence does not justify reopening the accepted cryptographic profile. It d
 
 These are reconsideration points, not authorization to edit accepted comments. If the first release intentionally keeps them, the compatibility document should state the resulting TUF status, single-operator failure domains, bootstrap assumptions, incident semantics, and operational-liveness tradeoffs.
 
-## Wayfinder rescope proposals
+## Wayfinder rescope and live decision contracts
 
-The open map [#202, “Reusable post-quantum release trust and cryptographic operations”](https://github.com/nisavid/dotfiles/issues/202) should preserve the accepted core and sharpen the remaining work into separately answerable questions.
+The open map [#202, “Reusable post-quantum release trust and cryptographic operations”](https://github.com/nisavid/dotfiles/issues/202) preserves the accepted core and projects these remaining questions into separate live decisions.
 
 ### Research: specify the TUF compatibility delta
 
@@ -388,9 +388,9 @@ The open map [#202, “Reusable post-quantum release trust and cryptographic ope
 
 **Required output.** A normative comparison, result-mapping table, and test inventory. It must decide whether the public implementation document is merely POUF-shaped or whether a real TUF-conformant profile is worth prototyping. It must not relabel the existing protocol as TUF.
 
-**Dependencies.** Reads accepted #206, #209, and #210. It should feed #213. It need not block #212 if #212 records the generic gate as opaque and exact.
+**Dependencies.** This is now [#245](https://github.com/nisavid/dotfiles/issues/245). It reads accepted #206, #209, and #210 and feeds #213.
 
-### Grilling: choose the release-state scalability profile
+### Grilling: choose the release-state scalability profile in [#250](https://github.com/nisavid/dotfiles/issues/250)
 
 **Questions.**
 
@@ -400,9 +400,9 @@ The open map [#202, “Reusable post-quantum release trust and cryptographic ope
 - Is human-signed freshness reaffirm acceptable at the shortest configured freshness interval?
 - At what adoption boundary do scoped signers, thresholds, or state sharding become required rather than advanced?
 
-**Dependency recommendation.** Run after the first #216 operator simulation and before freezing the global-head and default-signer choices as general v1 compatibility promises. It should not block a named single-operator Agent Equipment profile.
+**Dependency recommendation.** Run after the first #216 operator simulation and before freezing the global-head and default-signer choices as general v1 compatibility promises. It should not block a named single-operator Base Loadout profile.
 
-### Grilling: make bootstrap and initial time testable
+### Grilling: make bootstrap and initial time testable in [#243](https://github.com/nisavid/dotfiles/issues/243)
 
 **Questions.**
 
@@ -413,9 +413,9 @@ The open map [#202, “Reusable post-quantum release trust and cryptographic ope
 - Is initial trusted time provisioned, authenticated by an independent source, or explicitly assumed from the local clock?
 - Which freshness guarantee begins only after the first protected high-water time exists?
 
-**Dependency recommendation.** This is part of the generic client profile under #210, not Agent Equipment policy. It blocks first client qualification and protected-consumer implementation. #212 may close only by recording the generic input as a dependency.
+**Dependency recommendation.** This is part of the generic client profile under #210, not Base Loadout policy. It blocks first client qualification and protected-consumer implementation. The accepted #212 disposition records that generic input without redefining it locally.
 
-### Research and grilling: define qualification authority
+### Research and grilling: define qualification authority in [#246](https://github.com/nisavid/dotfiles/issues/246)
 
 **Research question.** Can the accepted qualification record be represented as an in-toto Statement and authenticated DSSE/OpenPGP envelope without importing the evidence system's identity policy, and what does RFC 9124's split between author and qualification authority require at the consumer?
 
@@ -426,17 +426,17 @@ The open map [#202, “Reusable post-quantum release trust and cryptographic ope
 - How are qualification activation, suspension, supersession, retirement, compromise, and historical interpretation signed and ordered?
 - Which trust policy is installed independently of the candidate, and which result is produced when qualification state is stale, unknown, or conflicting?
 
-**Dependency recommendation.** Decide before #213 publishes a “qualified” conformance result or any real adapter is supported. It does not block #212's semantic consumer mapping.
+**Dependency recommendation.** Decide before #213 publishes a “qualified” conformance result or any real adapter is supported. It consumes #212's accepted semantic consumer mapping without blocking or reopening it.
 
 ### Prototype: prove the generic-to-consumer zero-effect boundary
 
-**Question.** Can one candidate-independent consumer kernel carry the exact bytes behind <code>accepted-current</code> into Agent Equipment's complete tuple gate and protected actuation transaction while proving that every other generic result and every tuple failure performs zero installer, archive, receipt, or credential operation?
+**Question.** Can one candidate-independent consumer kernel carry the exact bytes behind <code>accepted-current</code> into #121's complete Base Loadout release-tuple gate and a protected actuation transaction while proving that every other generic result and every tuple failure performs zero installer, archive, release-receipt, or credential operation?
 
-**Required fixtures.** All four generic outcomes; profile and selector mismatch; cross-product substitution; accepted bytes with an invalid Agent Equipment tuple; digest change between admission, preparation, actuation, readback, archive, and receipt; candidate-selected adapter or destination; partial actuation; crash/retry; health failure; rollback failure; and candidate self-update.
+**Required fixtures.** All four generic outcomes; profile and selector mismatch; cross-product substitution; accepted bytes with an invalid Base Loadout tuple; digest change between admission, preparation, actuation, readback, archive, and receipt; candidate-selected adapter or destination; partial actuation; crash/retry; health failure; rollback failure; and candidate self-update.
 
 **Protected-handoff constraint.** The launcher obtains the anchor, retained state, immutable profile, and trusted time from its own protected store; runs or re-runs admission; and binds the request, state heads, and result to held exact bytes or another immutable captured byte mapping. Caller-supplied result JSON, paths, or digests are diagnostics and requests, never capabilities. Installed bytes are rehashed before health, archive, or receipt processing.
 
-**Dependencies.** #212 must first define the closed handoff. A separate generic consumer-actuation decision under #202 should own the public interface question. #213 then turns the accepted semantics into executable documentation.
+**Dependencies.** #212 supplies the accepted closed handoff. [#244](https://github.com/nisavid/dotfiles/issues/244) owns the public consumer-actuation interface, and #213 then turns the accepted semantics into executable documentation.
 
 ### Research: close the external-evidence profiles
 
@@ -455,11 +455,11 @@ The open map [#202, “Reusable post-quantum release trust and cryptographic ope
 **Questions.**
 
 - Does “withdraw” mean only that one signed authorization object is terminally barred?
-- Which incidents require terminal rejection of the same artifact or Agent Equipment tuple under every later manifest in a scope?
+- Which incidents require terminal rejection of the same artifact or Base Loadout tuple under every later manifest in a scope?
 - Which subtractive authority may quarantine a digest, and can only the certifying identity clear it through a new positive transition?
 - How do historical attribution and archive evidence describe a quarantined artifact without implying that it remains safe to execute?
 
-**Dependency recommendation.** This need not block the first single-product protocol if the wrapper-only limit is explicit. It must be settled before the Agent Equipment profile claims byte-level terminal compromise handling or before production incident procedures depend on it.
+**Dependency recommendation.** This need not block the first single-product protocol if the wrapper-only limit is explicit. It must be settled before the Base Loadout profile claims byte-level terminal compromise handling or before production incident procedures depend on it.
 
 ### Prototype: measure the minimal operator surface in #216
 
@@ -507,10 +507,10 @@ The corpus should identify each case by the standard or invariant it exercises, 
 ## Explicit exclusions
 
 - This audit does not accept, amend, close, label, assign, or otherwise mutate any issue or decision.
-- It does not authorize implementation, publication, signing, deployment, key generation, key transition, trust bootstrap, provider setup, protected installation, package-manager action, or Agent Equipment operation.
+- It does not authorize implementation, publication, signing, deployment, key generation, key transition, trust bootstrap, provider setup, protected installation, package-manager action, or Base Loadout operation.
 - It does not select a transparency, timestamp, CI, registry, or publication provider.
 - It does not define production commands, paths, account identities, credentials, secrets, trust roots, or host configuration.
-- RATS, EAT, CoRIM, and remote-attestation systems are excluded from the first-release recommendation because they report measured platform state rather than release authority or consumer apply authority.
+- RATS, EAT, CoRIM, and remote-attestation systems are excluded from the first-release recommendation because they report measured platform state rather than release authority or consumer actuation authority.
 - Omaha is excluded as an implementation dependency because its official repository is archived. Its service separation is historical design input only. [Omaha repository](https://github.com/google/omaha)
 - OpenTimestamps, Roughtime, blockchain anchoring, software archives, and other observational systems remain outside the required path. They may be researched later as evidence but do not close authority, publication, or non-equivocation claims.
 - No numeric score is assigned. TUF, SUIT, SCITT, Sigsum, and the platform updaters make different security and operational tradeoffs; reducing them to one rank would hide the boundaries this audit is meant to preserve.

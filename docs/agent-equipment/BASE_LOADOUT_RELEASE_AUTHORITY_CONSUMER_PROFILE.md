@@ -6,7 +6,7 @@
 
 ## Purpose
 
-Base Loadout uses the generic release-trust system to authenticate the exact protected components that validate and archive a release tuple. Generic admission remains separate from Base Loadout's complete-tuple validation, release archive, release receipt, protected fitting, and host-migration authority.
+Base Loadout uses the generic release-trust system to authenticate the exact protected components that validate and archive a release tuple. Generic admission remains separate from Base Loadout's complete release-tuple validation, release archive, release receipt, protected fitting, and host-migration authority.
 
 The consumer profile has the immutable identity:
 
@@ -133,7 +133,7 @@ None can substitute for another. No SCITT or release receipt grants a Fitting Gr
 
 SCITT enters only through #209's typed external-evidence boundary. The reserved profile uses RFC 9943 terms and media types, RFC 9942 receipts, and an RFC 9995 SHA-512 bridge over the exact `signature-envelope/v1` bytes. The verifier independently rechecks the underlying OpenPGP release graph.
 
-A valid SCITT statement or receipt cannot select current state, repair invalid authority, clear withdrawal or quarantine, authorize Base Loadout validation, mutate an archive, or issue any Base Loadout receipt. Missing required SCITT evidence can make a later profile `indeterminate`; invalid optional evidence is only a diagnostic note. Production service selection, trust, monitoring, witnessing, and qualification remain later generic work.
+A valid SCITT statement or receipt cannot select current state, repair invalid authority, clear withdrawal or quarantine, authorize Base Loadout validation, mutate an archive, or issue any Base Loadout release receipt. Missing required SCITT evidence can make a later profile `indeterminate`; invalid optional evidence is only a diagnostic note. Production service selection, trust, monitoring, witnessing, and qualification remain later generic work.
 
 Source review, reproducible-build evidence, in-toto or SLSA provenance, Sigstore, Notary, GitHub attestations, SBOMs, and provider readback can likewise be typed evidence. None upgrades a generic outcome or crosses directly into Base Loadout authority.
 
@@ -156,7 +156,7 @@ This release-authority profile authenticates the protected release components us
 
 [Issue #120](https://github.com/nisavid/dotfiles/issues/120), **Provision the protected release-authority boundary**, is the only existing issue that receives this profile directly. It owns the Base Loadout deployment binding, selected source coordinate, protected installation identities and destinations, archive and trusted-digest surfaces, local acceptance evidence, and the later provisioning record.
 
-#120 must not implement its source, updater, installer, or protected-launcher surface until the forthcoming generic consumer updater and protected-launcher decision closes and the #202 coordinator establishes the justified native dependency. #120 must not presume a bespoke Base Loadout repository or fork the generic release-trust contract.
+#120 must not implement its source, updater, installer, or protected-launcher surface until [#244, “Define the generic consumer updater and protected-launcher boundary”](https://github.com/nisavid/dotfiles/issues/244) closes. #120 must not presume a bespoke Base Loadout repository or fork the generic release-trust contract.
 
 [Issue #121](https://github.com/nisavid/dotfiles/issues/121) remains downstream of #120 and remains the sole complete release-tuple validator. #122 remains downstream of #121 and owns archive and release-receipt semantics. The broader Step 8a and fitting graphs retain their current owners and ordering.
 
