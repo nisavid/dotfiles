@@ -6,8 +6,12 @@ reasoning effort, one generation per (scenario, condition). Judges:
 `claude-fable-5`, two blinded passes per scenario (a tell-hunt lens and a
 colleague-read lens); draft labels were rotated per scenario so judges could
 not infer condition order. Scores are 0-10. Aggregates in the research note
-average across judge passes per condition. Sample sizes are as shown here;
-no other runs occurred.
+average across judge passes per condition. Sample sizes are as shown here; no
+other runs occurred. The appendices reproduce the tested rule and exemplar text
+verbatim, including a known tension: the rules forbid topic labels while the
+calibration exemplars open a nit with `Nit:`, which confounds the
+exemplar-enriched conditions and is left uncorrected because the appendices are
+evidence, not policy.
 
 ## Round 1 (2026-08-31)
 

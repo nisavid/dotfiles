@@ -50,8 +50,10 @@ reply scenario). Blind-judged fidelity (0-10) averaged 9.0 for round-one
 `control` and 7.75 for round-one `rules`. Round two added an explicit evidence
 guard ("never assert a test outcome you didn't run; write 'should fail', not
 'fails'") together with other rule changes, and `rules_v2` fidelity averaged
-8.5; the guard's isolated effect was not measured. The primary mitigation is
-grounding, not guards: supply the load-bearing detail and leave the rest
+8.5; the guard's isolated effect was not measured. The operator's working
+recommendation, not a result these runs isolate (both round-two conditions used
+the same verified fact briefs): treat grounding as the primary mitigation and
+guards as secondary; supply the load-bearing detail and leave the rest
 legitimately discoverable with tools. The working hypothesis for the mechanism,
 not something these runs measured: an under-grounded drafting task reads to the
 model as a rhetoric exercise, so it supplies rhetorical (invented) observations
