@@ -17,10 +17,10 @@ number as an observation, not a benchmark.
 Style constraints stated as rules or preferences ("em dashes are unspaced")
 were unreliably applied at generation time: spaced em dashes appeared in six of
 the nine round-one drafts, spanning all three conditions, including the two
-whose instructions stated the rule explicitly. The same constraints rephrased as mandatory post-draft edit
-actions ("after drafting, scan the text for '—' and judge each occurrence")
-were applied consistently: zero em-dash defects across all drafts in the
-follow-up round.
+whose instructions stated the rule explicitly. The same constraints rephrased
+as mandatory post-draft edit actions ("after drafting, scan the text for '—'
+and judge each occurrence") were applied consistently: zero em-dash defects
+across all drafts in the follow-up round.
 
 GPT-family models do not exhibit this gap nearly as much (operator
 observation, not re-tested here). Treat "phrase style constraints as edit
@@ -62,5 +62,6 @@ to match. Guards remain a useful backstop.
 Pair each style preference with a nuanced post-draft edit action; keep
 evidence-grounding requirements alongside style rules; and for batches that
 matter, prefer one adversarial review pass over a finished draft (tell hunt
-plus fact-fidelity check) to piling on more generation-time rules; residual tells (mic-drop closers,
-recap tails, rider phrasing) still surfaced under every rule set tested.
+plus fact-fidelity check) to piling on more generation-time rules; residual
+tells (mic-drop closers, recap tails, rider phrasing) still surfaced under
+every rule set tested.
