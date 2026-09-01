@@ -15,9 +15,9 @@ number as an observation, not a benchmark.
 ## Observation
 
 Style constraints stated as rules or preferences ("em dashes are unspaced")
-were unreliably applied at generation time: spaced em dashes appeared in every
-test condition, including the conditions whose instructions stated the rule
-explicitly. The same constraints rephrased as mandatory post-draft edit
+were unreliably applied at generation time: spaced em dashes appeared in six of
+the nine round-one drafts, spanning all three conditions, including the two
+whose instructions stated the rule explicitly. The same constraints rephrased as mandatory post-draft edit
 actions ("after drafting, scan the text for '—' and judge each occurrence")
 were applied consistently: zero em-dash defects across all drafts in the
 follow-up round.
@@ -40,14 +40,20 @@ the full nuance of the preference it enforces, or it over-applies:
 
 ## Related: style pressure and hallucination
 
-Under strong style rules, `claude-opus-5` invented details it was not given:
-unverified test outcomes stated as fact, motives, and self-committed
-concessions. Blind-judged fidelity dropped roughly 9.0 → 7.75 (0–10) until an
-explicit evidence guard was added ("never assert a test outcome you didn't run;
-write 'should fail', not 'fails'"). The primary mitigation is grounding, not
-guards: supply the load-bearing detail and leave the rest legitimately
-discoverable with tools. The working hypothesis for the mechanism, not
-something these runs measured: an under-grounded drafting task reads to the
+Under strong style rules, `claude-opus-5` invented details it was not given.
+Examples from the committed records: an unverified test outcome stated as fact
+("Written that way it fails on this branch, which is the point"; round one,
+`rules`, batch scenario; the described test passes), an invented motive ("to
+see how it would feel in use"; round two, `rules_v2`, parking scenario), and a
+self-committed concession ("I'm fine going to an hour"; round one, `rules_ex`,
+reply scenario). Blind-judged fidelity (0-10) averaged 9.0 for round-one
+`control` and 7.75 for round-one `rules`. Round two added an explicit evidence
+guard ("never assert a test outcome you didn't run; write 'should fail', not
+'fails'") together with other rule changes, and `rules_v2` fidelity averaged
+8.5; the guard's isolated effect was not measured. The primary mitigation is
+grounding, not guards: supply the load-bearing detail and leave the rest
+legitimately discoverable with tools. The working hypothesis for the mechanism,
+not something these runs measured: an under-grounded drafting task reads to the
 model as a rhetoric exercise, so it supplies rhetorical (invented) observations
 to match. Guards remain a useful backstop.
 
@@ -56,5 +62,5 @@ to match. Guards remain a useful backstop.
 Pair each style preference with a nuanced post-draft edit action; keep
 evidence-grounding requirements alongside style rules; and for batches that
 matter, prefer one adversarial review pass over a finished draft (tell hunt
-plus fact-fidelity check) to piling on more generation-time rules; residual
-tells leaked in roughly half of generations under every rule set tested.
+plus fact-fidelity check) to piling on more generation-time rules; residual tells (mic-drop closers,
+recap tails, rider phrasing) still surfaced under every rule set tested.
