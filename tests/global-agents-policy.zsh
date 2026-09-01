@@ -174,6 +174,7 @@ for phrase in $procedural; do
 done
 
 forbidden=(
+  'Prefer rebase merging when several merge methods are available.'
   'ivan/impeccable'
   'ivan/setup-local'
   'ivan/local-runtime-policy-docs'
