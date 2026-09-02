@@ -20,6 +20,18 @@
     "should_trigger": true
   },
   {
+    "query": "Resume this existing security task after capacity returns, preserving the same task and checking its model again.",
+    "should_trigger": true
+  },
+  {
+    "query": "Send a payload-bearing follow-up to this existing task after revalidating its current model route.",
+    "should_trigger": true
+  },
+  {
+    "query": "The operator explicitly changed the model for this same-task retry; authorize or reject that transition.",
+    "should_trigger": true
+  },
+  {
     "query": "Configure the model router in our product runtime.",
     "should_trigger": false
   },

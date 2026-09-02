@@ -21,6 +21,14 @@ You are the work leader. Keep ambiguity, hypotheses, decisions, interpretation, 
 
 Use [choosing-agent-models](../choosing-agent-models/SKILL.md) after delegation and task shape are settled. That skill is the sole source of model criteria, preferred models, reasoning efforts, and fallbacks. This skill defines none of them.
 
+## Payload-Bearing Transition Gate
+
+Before every payload-bearing new invocation, follow-up, resume, retry, or capacity fallback, invoke [choosing-agent-models](../choosing-agent-models/SKILL.md) with the prior routing state and current scope. Require its authorized exact route, model, and effort or its fail-closed disposition before acting.
+
+Keep a same-task continuation in the existing task and preserve its ownership. Do not create a replacement task merely to obtain another model. Carry forward the prior authorized selection, role and risk floors, mandatory security route, and explicit operator selection. A retry refreshes route evidence and repeats the gate; a capacity failure changes availability but does not reclassify the work or authorize a lower selection.
+
+Bind the decision to the event, same-task or new-task state, prior and current classification, operator-selection state, exact route evidence, capacity state, selected exact model and effort, and disposition. Compare that decision with the intended invocation. Do not send task data until the transition is authorized. On any mismatch or fail-closed disposition, preserve the existing task and return the disposition without invoking, following up, resuming, or retrying it.
+
 ## Validate First
 
 Before relying on a harness command or field name, validate it locally with bounded probes. If local help, tool schema, or a safe probe disagrees with this skill, stop and report the gap instead of translating by memory.

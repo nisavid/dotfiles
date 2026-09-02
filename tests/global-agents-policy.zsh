@@ -5,6 +5,7 @@ repo_root=${0:A:h:h}
 source_root="$repo_root/home"
 template="$source_root/dot_codex/private_AGENTS.md.tmpl"
 encryption_doc="$repo_root/docs/ENCRYPTION.md"
+transition_contract_test="$repo_root/tests/test_model_transition_contract.py"
 rendered=$(mktemp "${TMPDIR:-/tmp}/global-agents-policy.XXXXXX")
 target_state=$(mktemp "${TMPDIR:-/tmp}/global-agents-state.XXXXXX")
 git_policy=$(mktemp "${TMPDIR:-/tmp}/global-agents-git-policy.XXXXXX")
@@ -30,6 +31,7 @@ mode_of() {
 }
 
 [[ -f "$template" ]] || fail "private source template is missing"
+[[ -f "$transition_contract_test" ]] || fail "model-transition contract test is missing"
 [[ ! -e "$source_root/dot_codex/AGENTS.md.tmpl" ]] || fail "public-mode source template still exists"
 [[ $(mode_of "$template") == 644 ]] || fail "source template mode must be 0644"
 [[ $(chezmoi -S "$source_root" target-path "$template") == "$HOME/.codex/AGENTS.md" ]] ||
@@ -141,11 +143,29 @@ required=(
   'Present four or more captures as a local site-shaped collection.'
   'Publication requires separate authorization.'
   'Only refresh local `main` when the operation depends on it.'
+  'Before every payload-bearing new invocation, follow-up, resume, retry, or capacity fallback, use `choosing-agent-models`; preserve same-task identity, and stop rather than silently substituting a model after failure.'
+  'this standing permission covers only a separately supported status-only interface whose installed implementation is proven not to refresh or persist authentication and not to mutate login, configuration, cache, database, task, or turn state.'
+  'Bind that side-effect-safety evidence to the exact installed version and interface, and revalidate it after any implementation, version, startup, or status-path change.'
+  'A protocol method name, `refreshToken: false`, or a read-shaped RPC is not proof of that boundary.'
+  'Do not launch `codex app-server` for this refresh when its status path can call proactive authentication refresh or persist state.'
+  'The Codex 0.149.0 four-call app-server path is outside this standing permission and is not eligible to establish fresh execution authority.'
+  'Direct credential-file reads, credential injection, token refresh, task or turn creation, task-data transfer, task workspace or task tools, login or configuration mutation, delegation, task execution, and the separate harmless task-work probe remain outside this permission.'
+  'If no proven side-effect-free status path exists or it cannot start safely, record the route as status-unverified. If an eligible status refresh is refused, record the route as status-denied.'
+  'Either state keeps the permitted-route inventory incomplete and proves none of genuine model absence, Daybreak unavailability, exhausted capacity, missing task-work authority, or execution authority.'
+  'Before substantive dispatch, require authenticated, version-bound side-effect-safety evidence and complete task, plan, and actuation bindings for the current invocation.'
 )
 
 for ((i = 1; i <= ${#required}; i++)); do
   grep -Fq -- "$required[$i]" "$rendered" || fail "missing required clause $i"
 done
+
+status_policy_reference='When `choosing-agent-models` needs fresh route metadata, this standing permission covers only a separately supported status-only interface whose installed implementation is proven not to refresh or persist authentication and not to mutate login, configuration, cache, database, task, or turn state. Bind that side-effect-safety evidence to the exact installed version and interface, and revalidate it after any implementation, version, startup, or status-path change. A protocol method name, `refreshToken: false`, or a read-shaped RPC is not proof of that boundary. Do not launch `codex app-server` for this refresh when its status path can call proactive authentication refresh or persist state. The Codex 0.149.0 four-call app-server path is outside this standing permission and is not eligible to establish fresh execution authority. Direct credential-file reads, credential injection, token refresh, task or turn creation, task-data transfer, task workspace or task tools, login or configuration mutation, delegation, task execution, and the separate harmless task-work probe remain outside this permission. If no proven side-effect-free status path exists or it cannot start safely, record the route as status-unverified. If an eligible status refresh is refused, record the route as status-denied. Either state keeps the permitted-route inventory incomplete and proves none of genuine model absence, Daybreak unavailability, exhausted capacity, missing task-work authority, or execution authority. Before substantive dispatch, require authenticated, version-bound side-effect-safety evidence and complete task, plan, and actuation bindings for the current invocation.'
+status_policy_lines=$(grep -Ei -- '(app-server|standing permission)' "$rendered")
+[[ $status_policy_lines == $status_policy_reference ]] || \
+  fail 'global policy has unreviewed app-server or standing-status policy'
+
+! grep -Fq -- 'this standing permission authorizes launching the installed `codex app-server`' "$rendered" || \
+  fail 'global policy must not authorize the state-mutating app-server status path'
 
 development_line=$(grep -n '^## Development Work$' "$rendered" | cut -d: -f1)
 git_policy_line=$(grep -n '^## Git Checkpoints And Publication$' "$rendered" | cut -d: -f1)
@@ -216,5 +236,7 @@ done
 
 ! grep -Fq -- 'Installs the complete skill and symlink set' "$encryption_doc" || \
   fail "encryption documentation claims authoritative complete-set installation"
+
+python3 "$transition_contract_test"
 
 print -- 'global AGENTS policy: ok'

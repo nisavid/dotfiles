@@ -218,14 +218,57 @@ test_pr_publication() {
 test_model_selection() {
   local skill_dir="$repo_dir/home/dot_agents/skills/choosing-agent-models"
   local skill="$skill_dir/SKILL.md"
-  local delegation_skill="$repo_dir/home/dot_agents/skills/delegating-cross-agent-work/SKILL.md"
+  local delegation_skill_dir="$repo_dir/home/dot_agents/skills/delegating-cross-agent-work"
+  local delegation_skill="$delegation_skill_dir/SKILL.md"
   local evals="$skill_dir/evals/evals.json"
   local routing_fixture="$skill_dir/evals/fixtures/daybreak-routing-matrix.md"
   local evidence_fixture="$skill_dir/evals/fixtures/daybreak-route-evidence.md"
+  local preflight_fixture="$skill_dir/evals/fixtures/routing-preflight-status-boundary.md"
+  local transition_fixture="$skill_dir/evals/fixtures/model-transition-lifecycle.md"
   local trigger_evals="$skill_dir/evals/trigger-evals.json"
+  local transition_contract_test="$repo_dir/tests/test_model_transition_contract.py"
   local link="$repo_dir/home/dot_claude/skills/symlink_choosing-agent-models"
+  local delegation_link="$repo_dir/home/dot_claude/skills/symlink_delegating-cross-agent-work"
 
   assert_skill_frontmatter "$skill" choosing-agent-models
+  assert_skill_frontmatter "$delegation_skill" delegating-cross-agent-work
+  assert_contains "$skill" '## Model Transition Authorization' \
+    'model selection must own authorization for every payload-bearing transition'
+  assert_contains "$skill" \
+    'Before every payload-bearing new invocation, follow-up, same-task resume, retry, or capacity fallback' \
+    'model selection must rerun across the complete invocation lifecycle'
+  assert_contains "$skill" \
+    'Capacity changes route availability only.' \
+    'capacity failure must not lower the model-selection floor'
+  assert_contains "$transition_contract_test" \
+    'test_additive_lower_tier_authorizations_are_rejected' \
+    'the public gate must include contradiction-sensitive Terra and Luna mutation tests'
+  assert_contains "$transition_contract_test" \
+    'test_paraphrased_app_server_authorizations_are_rejected' \
+    'the public gate must include contradiction-sensitive standing-status mutation tests'
+  assert_contains "$skill" \
+    'Revalidating an existing task before a payload-bearing follow-up, resume, retry, or capacity fallback.' \
+    'the selector trigger contract must include existing-task transitions'
+  assert_contains "$skill" \
+    "Re-read the exact selected invocation surface's current selector and capability state for every invalidated route tuple." \
+    'every invalidated transition must resolve the exact current selector state'
+  assert_contains "$skill" 'prior authorized selection' \
+    'model selection must carry prior selection state across continuations'
+  assert_contains "$skill" 'exact route tuple and current capability evidence' \
+    'model selection must bind the exact current route tuple'
+  assert_contains "$delegation_skill" '## Payload-Bearing Transition Gate' \
+    'delegation must own the payload-bearing lifecycle gate'
+  assert_contains "$delegation_skill" \
+    'Before every payload-bearing new invocation, follow-up, resume, retry, or capacity fallback' \
+    'delegation must invoke model selection for every payload-bearing transition'
+  assert_contains "$delegation_skill" \
+    'Keep a same-task continuation in the existing task' \
+    'delegation must preserve same-task identity across continuation'
+  assert_contains "$delegation_skill" 'prior authorized selection' \
+    'delegation must carry prior selection state into the transition gate'
+  assert_contains "$delegation_skill" \
+    'Do not send task data until the transition is authorized.' \
+    'delegation must fail closed before payload transfer'
   assert_contains "$skill" '## Daybreak Routing For Cybersecurity Work' \
     'model-selection skill must own the public Daybreak routing policy'
   assert_contains "$skill" \
@@ -264,6 +307,32 @@ test_model_selection() {
     'fresh routing information must trigger automatic per-account refresh'
   assert_contains "$skill" 'the operator does not need to authorize it' \
     'local status refresh must not require operator task authorization'
+  assert_contains "$skill" 'refresh observations of local account authentication' \
+    'local status refresh must refresh observations rather than authentication state'
+  assert_contains "$skill" 'separately supported status interface whose installed implementation is proven' \
+    'Codex route status must use a proven side-effect-free interface'
+  assert_contains "$skill" 'Bind that side-effect-safety proof to the exact installed version and interface' \
+    'side-effect-safety evidence must be version-bound'
+  assert_contains "$skill" 'A protocol method name, `refreshToken: false`, or a read-shaped request does not prove that boundary.' \
+    'read-shaped Codex requests must not be treated as proof of a side-effect-free boundary'
+  assert_contains "$skill" 'initialization, `account/read` with `refreshToken: false`, `model/list`, and `account/rateLimits/read` does not make that four-call exchange side-effect-free or authorized.' \
+    'the Codex 0.149.0 four-call path must remain outside standing authorization'
+  assert_contains "$skill" 'The Codex 0.149.0 four-call app-server path is outside this standing permission and is not eligible to establish fresh execution authority.' \
+    'the unsafe app-server path must not establish execution authority'
+  assert_contains "$skill" 'Do not read `auth.json` or another credential file directly' \
+    'route status must not implement direct credential reads'
+  assert_contains "$skill" 'record the route as status-unverified. If an eligible status refresh is refused, record the route as status-denied.' \
+    'status unverification and refresh denial must remain distinct'
+  assert_contains "$skill" 'prove none of genuine model absence, Daybreak unavailability, exhausted capacity, missing task-work authority, or execution authority.' \
+    'unverified or denied status must not be relabeled as another gate outcome'
+  assert_contains "$skill" 'Before substantive dispatch, require authenticated, version-bound side-effect-safety evidence and complete task, plan, and actuation bindings for the current invocation.' \
+    'dispatch must bind safe status evidence to task, plan, and actuation'
+  assert_contains "$skill" \
+    'Keep the permitted-route inventory incomplete until that route has a fresh supported result.' \
+    'status denial must preserve incomplete route inventory'
+  assert_contains "$skill" \
+    'keep incomplete inventory, status-unverified or status-denied, genuine model absence, unknown capacity, exhausted capacity, failed harmless probe or otherwise unproven runnability, and missing task-work authority as distinct states.' \
+    'routing decisions must preserve the complete failure taxonomy'
   assert_contains "$skill" 'exact model exposed at that moment' \
     'refresh evidence must resolve the exact currently exposed model'
   assert_contains "$skill" 'exact currently exposed model' \
@@ -351,20 +420,37 @@ test_model_selection() {
 
   [[ -f "$evals" ]] || fail 'model-selection behavior evals are missing'
   [[ -f "$trigger_evals" ]] || fail 'model-selection trigger evals are missing'
+  python3 "$repo_dir/tests/test_model_transition_contract.py"
   jq -e '
     .skill_name == "choosing-agent-models" and
     all(.evals[]; (.fixture_paths | type) == "array" and (.fixture_paths | length) > 0) and
     all(.evals[]; .prompt | contains("Do not use tools"))
   ' "$evals" >/dev/null || fail 'model-selection behavior evals do not cover the Daybreak routing contract'
-  for eval_name in daybreak-route-evidence daybreak-routing-matrix; do
+  for eval_name in \
+    daybreak-route-evidence daybreak-routing-matrix \
+    model-transition-lifecycle routing-preflight-status-boundary; do
     jq -e --arg name "$eval_name" 'any(.evals[]; .name == $name)' "$evals" >/dev/null || \
       fail "model-selection behavior eval is missing: $eval_name"
   done
+  jq -e '
+    any(.evals[];
+      .name == "model-transition-lifecycle" and
+      .expected_output == "Case A: fail closed, preserve the existing task, and do not invoke Terra. Case B: fail closed, preserve the existing task, and do not invoke Luna. Case C: continue the same task only on the freshly revalidated exact Daybreak route. Case D: continue the same task only after current exact-selector authorization for the explicit eligible operator choice. Case E: stop for an operator-policy conflict and do not invoke Terra. Case F: explicitly reclassify the current mechanical scope before selecting, then use only an eligible selection. Case G: preserve the prior classification and selection, then continue the same task only on a freshly authorized eligible fallback. Case H: apply the hardest security judgment as the floor before the follow-up."
+    )
+  ' "$evals" >/dev/null || \
+    fail 'model-transition lifecycle eval does not bind every case to its fail-closed disposition'
   for expectation_id in \
     automatic-local-refresh cross-harness-delegation-authority external-scrub \
     freshness-invalidation local-account-identification refresh-probe-separation \
     openai-login-boundary \
-    probe-authority-order root-peer-boundary unrelated-task-observation-boundary; do
+    probe-authority-order root-peer-boundary unrelated-task-observation-boundary \
+    every-payload-transition same-task-continuity prior-selection-state \
+    capacity-preserves-floor \
+    terra-luna-rejection sticky-operator-selection operator-policy-conflict \
+    exact-selector-transition explicit-reclassification eligible-fallback \
+    mixed-role-floor supported-status-interface unsafe-status-interface-fails-closed \
+    status-denial-not-absence \
+    pre-dispatch-status-order preflight-failure-taxonomy; do
     jq -e --arg id "$expectation_id" 'any(.evals[].expectations[]; .id == $id)' "$evals" >/dev/null || \
       fail "model-selection behavior expectation is missing: $expectation_id"
   done
@@ -422,12 +508,78 @@ test_model_selection() {
     'routing fixture must distinguish status refresh from task-work probe'
   assert_contains "$routing_fixture" 'task-data transfer, task workspace or task-tool use' \
     'routing fixture must keep task-work authorization separate from refresh'
+  assert_contains "$preflight_fixture" \
+    'native and current-account selectors expose no Daybreak model' \
+    'routing preflight fixture must require inventory beyond the ambient account'
+  assert_contains "$preflight_fixture" \
+    'separately supported side-effect-free status interface' \
+    'routing preflight fixture must exercise only a proven side-effect-free status path'
+  assert_contains "$preflight_fixture" \
+    'Codex 0.149.0' \
+    'routing preflight fixture must reject the installed state-mutating app-server path'
+  assert_contains "$preflight_fixture" \
+    '`AuthManager::auth()`' \
+    'routing preflight fixture must bind the proactive refresh regression'
+  assert_contains "$preflight_fixture" \
+    'not eligible to establish fresh execution authority' \
+    'routing preflight fixture must keep the unsafe app-server path outside execution authority'
+  assert_contains "$preflight_fixture" \
+    'No substantive task payload has been sent.' \
+    'routing preflight fixture must enforce selection before dispatch'
+  assert_contains "$preflight_fixture" 'status-denied' \
+    'routing preflight fixture must represent denied status access'
+  assert_contains "$preflight_fixture" 'incomplete inventory' \
+    'routing preflight fixture must preserve incomplete inventory as its own state'
+  assert_contains "$preflight_fixture" 'genuine model absence' \
+    'routing preflight fixture must distinguish confirmed model absence'
+  assert_contains "$preflight_fixture" 'capacity exhaustion' \
+    'routing preflight fixture must distinguish exhausted capacity'
+  assert_contains "$preflight_fixture" 'capacity is unknown' \
+    'routing preflight fixture must distinguish unknown capacity'
+  assert_contains "$preflight_fixture" 'missing task-work authority' \
+    'routing preflight fixture must distinguish missing execution authority'
+  assert_contains "$preflight_fixture" 'capability-unproven' \
+    'routing preflight fixture must distinguish a failed harmless probe'
+  assert_contains "$transition_fixture" 'proposes Terra High in the same task' \
+    'transition fixture must cover the observed capacity-to-Terra trap'
+  assert_contains "$transition_fixture" 'proposes Luna High in the same task' \
+    'transition fixture must cover the equivalent capacity-to-Luna trap'
+  assert_contains "$transition_fixture" \
+    'Continue the work in the same task without creating a replacement claimant.' \
+    'transition fixture must cover eligible same-task recovery'
+  assert_contains "$transition_fixture" 'The operator now explicitly selects a different exact model' \
+    'transition fixture must cover an explicit eligible operator override'
+  assert_contains "$transition_fixture" \
+    'operator instruction conflicts with the mandatory security route' \
+    'transition fixture must cover an operator and security-policy conflict'
+  assert_contains "$transition_fixture" 'A new current-scope record separates' \
+    'transition fixture must require explicit reclassification'
+  assert_contains "$transition_fixture" \
+    'fallback that remains eligible for the preserved classification and authorized topology' \
+    'transition fixture must distinguish eligible selection fallback from runtime failover'
+  assert_contains "$transition_fixture" 'Carry its prior authorized selection into the new decision.' \
+    'transition fixture must carry the prior selection into same-task recovery'
+  assert_contains "$transition_fixture" 'Use the hardest required judgment as the selection floor.' \
+    'transition fixture must cover mixed-role preservation'
   jq -e '
     (map(select(.should_trigger == true)) | length) >= 4 and
     (map(select(.should_trigger == false)) | length) >= 4
   ' "$trigger_evals" >/dev/null || fail 'model-selection trigger evals need positive and negative coverage'
+  jq -e '
+    any(.[];
+      .should_trigger == true and
+      (.query | contains("Resume this existing security task after capacity returns"))
+    )
+  ' "$trigger_evals" >/dev/null || fail 'model-selection trigger evals must cover same-task resume'
+  jq -e '
+    any(.[];
+      .should_trigger == true and
+      (.query | contains("operator explicitly changed the model"))
+    )
+  ' "$trigger_evals" >/dev/null || fail 'model-selection trigger evals must cover explicit operator transitions'
 
   assert_symlink_source "$link" '../../.agents/skills/choosing-agent-models'
+  assert_symlink_source "$delegation_link" '../../.agents/skills/delegating-cross-agent-work'
 }
 
 typeset -a projection_targets
@@ -464,6 +616,8 @@ case "${1:-all}" in
     projection_targets=(
       "$HOME/.agents/skills/choosing-agent-models"
       "$HOME/.claude/skills/choosing-agent-models"
+      "$HOME/.agents/skills/delegating-cross-agent-work"
+      "$HOME/.claude/skills/delegating-cross-agent-work"
     )
     ;;
   all)
@@ -485,6 +639,8 @@ case "${1:-all}" in
       "$HOME/.claude/skills/graphite"
       "$HOME/.agents/skills/choosing-agent-models"
       "$HOME/.claude/skills/choosing-agent-models"
+      "$HOME/.agents/skills/delegating-cross-agent-work"
+      "$HOME/.claude/skills/delegating-cross-agent-work"
     )
     ;;
   *)
@@ -501,7 +657,7 @@ mkdir -p -- "$isolated_source/dot_agents/skills" "$isolated_source/dot_claude/sk
 for skill in \
   checkpointing-and-publishing-git-work context7-mcp graphite \
   publishing-reviewable-prs writing-reviewable-pr-descriptions \
-  choosing-agent-models; do
+  choosing-agent-models delegating-cross-agent-work; do
   cp -R -- \
     "$repo_dir/home/dot_agents/skills/$skill" \
     "$isolated_source/dot_agents/skills/$skill"
@@ -510,7 +666,7 @@ done
 for link in \
   checkpointing-and-publishing-git-work context7-mcp graphite \
   publishing-reviewable-prs writing-reviewable-pr-descriptions \
-  choosing-agent-models; do
+  choosing-agent-models delegating-cross-agent-work; do
   cp -- \
     "$repo_dir/home/dot_claude/skills/symlink_$link" \
     "$isolated_source/dot_claude/skills/symlink_$link"
@@ -536,7 +692,7 @@ done
 for skill in \
   checkpointing-and-publishing-git-work context7-mcp graphite \
   publishing-reviewable-prs writing-reviewable-pr-descriptions \
-  choosing-agent-models; do
+  choosing-agent-models delegating-cross-agent-work; do
   canonical="$isolated_home/.agents/skills/$skill"
   link="$isolated_home/.claude/skills/$skill"
   if [[ -e "$canonical" || -e "$link" || -L "$link" ]]; then
