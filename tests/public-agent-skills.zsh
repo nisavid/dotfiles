@@ -440,7 +440,7 @@ test_review_output() {
   assert_skill_frontmatter "$skill" reviewing-others-prs
   assert_contains "$skill" 'in his first person, under the global Writing register' \
     'posted review prose must sit under the global Writing register'
-  assert_contains "$skill" 'read `references/review-output.md` and run its pre-post pass over the batch' \
+  assert_contains "$skill" 'read `references/review-output.md` and run its pre-post pass over the batch before posting or resolving' \
     'comment drafting must run the pre-post pass before posting'
   assert_contains "$output" \
     'The global Writing register applies, including its evidence rules and edit pass; this section adds the thread shape.' \

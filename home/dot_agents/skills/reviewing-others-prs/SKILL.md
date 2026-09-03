@@ -32,7 +32,7 @@ Authority defaults to draft review in chat. When posting for Ivan, write terse r
 4. Gather Thermos context: current diff plus enough surrounding code, tests, schemas, generated artifacts, deployment context, and requirements to avoid guessing.
 5. Run paired Thermos passes independently, then synthesize.
 6. Keep only findings that are high-confidence, author-owned, current on the PR head, deduplicated against existing comments, backed by file:line evidence, and paired with the smallest remedy.
-7. For GitHub comments, re-review ledgers, approval/request-changes recommendations, or pause packets, read `references/review-output.md` and run its pre-post pass over the batch. If posting or resolving, refresh head and thread state immediately before acting.
+7. For GitHub comments, re-review ledgers, approval/request-changes recommendations, or pause packets, read `references/review-output.md` and run its pre-post pass over the batch before posting or resolving. If posting or resolving, refresh head and thread state immediately before acting.
 
 ## Guardrails
 

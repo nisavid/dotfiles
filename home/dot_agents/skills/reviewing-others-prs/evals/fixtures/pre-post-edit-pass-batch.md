@@ -1,6 +1,6 @@
 # Brief: edit three drafted comments before posting
 
-You drafted three inline comments on a colleague's pull request. Before posting them for Ivan, run the edit pass over the batch and return the three revised comments, in order, separated by a line containing only `---`. Do not add or drop an ask; keep every `file:line`.
+You drafted three inline comments on a colleague's pull request. Before posting them for Ivan, run the edit pass over the batch and return the three revised comments, in order, separated by a line containing only `---`. Keep each comment's one ask and every `file:line`; the trailing "Also, …" requests are riders, not asks to keep.
 
 ## Facts you hold
 
