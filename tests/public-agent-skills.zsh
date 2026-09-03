@@ -430,6 +430,59 @@ test_model_selection() {
   assert_symlink_source "$link" '../../.agents/skills/choosing-agent-models'
 }
 
+test_review_output() {
+  local skill_dir="$repo_dir/home/dot_agents/skills/reviewing-others-prs"
+  local skill="$skill_dir/SKILL.md"
+  local output="$skill_dir/references/review-output.md"
+  local evals="$skill_dir/evals/evals.json"
+  local trigger_evals="$skill_dir/evals/trigger-evals.json"
+
+  assert_skill_frontmatter "$skill" reviewing-others-prs
+  assert_contains "$skill" 'in his first person, under the global Writing register' \
+    'posted review prose must sit under the global Writing register'
+  assert_contains "$skill" 'read `references/review-output.md` and run its pre-post pass over the batch before posting or resolving' \
+    'comment drafting must run the pre-post pass before posting'
+  assert_contains "$output" \
+    'The global Writing register applies, including its evidence rules and edit pass; this section adds the thread shape.' \
+    'comment voice must defer shared clauses to the global Writing register'
+  assert_contains "$output" 'open with what the change gets right only when that credit carries the point' \
+    'credit must be load-bearing, never freestanding'
+  assert_contains "$output" \
+    "Grade the ask to severity: a declinable question by default (\"Could we…?\"), \"Please\" plus an imperative only for a genuine blocker, \"Let's\" for obvious cleanup, and first-person conviction (\"I'd drop the count\") when confident but not blocking." \
+    'each comment must grade its one ask to severity'
+  assert_contains "$output" \
+    'In a comment, evidence takes this shape: what the diff establishes is a plain declarative on its `file:line`; a test or handler you did not run on this head takes a modal or a condition ("this should fail once the fixture exceeds one page"), and a check you did run names what you ran.' \
+    'comment evidence must separate source-established facts from unrun outcomes'
+  assert_contains "$output" \
+    "Before posting, run the global edit pass over the batch as one piece: comments on the same PR must not share an opening construction, a closing move, or a length profile; strike rider tails (\"Also, …\"), restatements of the author's own diff, and \"I noticed\"; recheck every \`file:line\` and every claimed outcome against the current head." \
+    'a batch of comments must pass the edit pass before posting'
+
+  [[ -f "$evals" ]] || fail 'missing reviewing-others-prs behavior evals'
+  [[ -f "$trigger_evals" ]] || fail 'missing reviewing-others-prs trigger evals'
+  jq -e '
+    .skill_name == "reviewing-others-prs" and
+    (.evals | length) >= 5 and
+    all(.evals[]; (.fixture_paths | type) == "array" and (.fixture_paths | length) > 0) and
+    all(.evals[]; .prompt | contains("Do not use tools")) and
+    all(.evals[]; (.expectations | length) >= 3) and
+    all(.evals[].expectations[]; .severity == "quality" or .severity == "safety")
+  ' "$evals" >/dev/null || fail 'reviewing-others-prs behavior evals do not cover the comment-voice contract'
+  for expectation_id in \
+    one-ask-graded-to-severity no-unobserved-failure-asserted shapes-differ-across-batch \
+    unrun-outcome-takes-modal confidence-separate-from-mergeability credit-only-when-load-bearing \
+    unrun-ci-claim-becomes-modal tells-struck-and-dashes-judged; do
+    jq -e --arg id "$expectation_id" 'any(.evals[].expectations[]; .id == $id)' "$evals" >/dev/null || \
+      fail "reviewing-others-prs behavior expectation is missing: $expectation_id"
+  done
+  while IFS= read -r fixture; do
+    [[ -f "$skill_dir/$fixture" ]] || fail "missing reviewing-others-prs eval fixture: $fixture"
+  done < <(jq -r '.evals[].fixture_paths[]' "$evals")
+  jq -e '
+    (map(select(.should_trigger == true)) | length) >= 4 and
+    (map(select(.should_trigger == false)) | length) >= 4
+  ' "$trigger_evals" >/dev/null || fail 'reviewing-others-prs trigger evals need positive and negative coverage'
+}
+
 typeset -a projection_targets
 
 case "${1:-all}" in
@@ -466,12 +519,19 @@ case "${1:-all}" in
       "$HOME/.claude/skills/choosing-agent-models"
     )
     ;;
+  review-output)
+    test_review_output
+    projection_targets=(
+      "$HOME/.agents/skills/reviewing-others-prs"
+    )
+    ;;
   all)
     test_context7
     test_skill_creator_adapter
     test_git_publication
     test_pr_publication
     test_model_selection
+    test_review_output
     projection_targets=(
       "$HOME/.agents/skills/context7-mcp"
       "$HOME/.claude/skills/context7-mcp"
@@ -485,10 +545,11 @@ case "${1:-all}" in
       "$HOME/.claude/skills/graphite"
       "$HOME/.agents/skills/choosing-agent-models"
       "$HOME/.claude/skills/choosing-agent-models"
+      "$HOME/.agents/skills/reviewing-others-prs"
     )
     ;;
   *)
-    fail 'usage: public-agent-skills.zsh [context7|git-publication|pr-publication|model-selection|all]'
+    fail 'usage: public-agent-skills.zsh [context7|git-publication|pr-publication|model-selection|review-output|all]'
     ;;
 esac
 
@@ -501,7 +562,7 @@ mkdir -p -- "$isolated_source/dot_agents/skills" "$isolated_source/dot_claude/sk
 for skill in \
   checkpointing-and-publishing-git-work context7-mcp graphite \
   publishing-reviewable-prs writing-reviewable-pr-descriptions \
-  choosing-agent-models; do
+  choosing-agent-models reviewing-others-prs; do
   cp -R -- \
     "$repo_dir/home/dot_agents/skills/$skill" \
     "$isolated_source/dot_agents/skills/$skill"
