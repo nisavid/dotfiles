@@ -105,7 +105,7 @@ required=(
   'Terseness serves natural flow, never compression'
   'Make each term self-explanatory where it stands or explain it locally'
   'Pair each dense, load-bearing statement with a concrete instance.'
-  "An operator's brief is compressed input, not the message's voice or frame"
+  "An operator's brief is compressed input, not the message's voice or frame: unpack it into what this reader needs, and never forward its authorship, roles, powers, or sequencing as the frame of the message."
   'Lead with the frame and the requested action, including “nothing right now” when that is the ask.'
   'Coordination with a peer reads as mutual alignment, never as jurisdiction; do not enumerate powers or declare boundaries to a colleague.'
   'Mean the question or do not ask it; a question the next sentence pre-empts is not a question.'
@@ -117,16 +117,16 @@ required=(
   'Before drafting, gather what the draft rests on: what was run and what it returned, what was decided and by whom, what the reader asked in their words, and what they already know.'
   'Most invented detail comes from a thin brief, so supply the load-bearing facts and say what you did not check rather than filling it in.'
   'Evidence is a hard constraint, and style pressure never licenses invention.'
-  'Never assert what a test, command, or system does unless you ran it and saw the result; predicted behavior takes a modal or a condition (“this should fail once the cache is wired up”), never a plain “this fails”.'
+  'What the source in front of you establishes, state as a plain declarative anchored on its path or symbol; a runtime outcome you did not run and observe (a test result, command output, or system behavior) takes a modal or a condition (“this should fail once the cache is wired up”), never a plain “this fails”.'
   'Never commit yourself, or the people you write for, to a position, threshold, offer, deadline, or concession that is not in evidence; offer options, ask the question, or name the decision as open and say who holds it.'
   "Write the observation, not the story: “the config record hasn't changed since June 2”, not “the update silently failed”."
   'rewriting is where “should fail” drifts to “fails” and a question drifts to a commitment'
-  'Treat these rules as edit actions on the finished draft, not only as preferences while drafting'
+  'Treat these rules as edit actions on the finished draft, not only as preferences while drafting: before sending, even when the draft reads well, judge each dash by its usage, reread the last sentence of each piece, strike the tells that follow, compare the pieces of a batch, reread each piece as its recipient, and recheck every fact against the evidence.'
   'If the last sentence lands as a mic-drop, a moral drawn from the point just made, a tidy recap, or a rider adding a second ask, delete it or replace it with the plain point.'
   "Strike on sight “worth noting”, “It's important to”, “credit where due”, “That said”, arrow chains standing in for a sentence, topic labels opening a piece (“Status:”), “I noticed”, and any coinage you would not say aloud to a colleague."
   "Anything that reads as a machine's note to itself (mechanical parallelism, obsessive precision, restating what the reader already knows, an inventory that shows your work) gets rewritten as speech."
   'For anything going to a reviewer, a shared channel, or a customer, have a second pass hunt for tells and recheck every fact.'
-  'Judge each em dash by its usage: a parenthetical dash (an inserted phrase read inline) is unspaced'
+  'Judge each em dash by its usage: a parenthetical dash (an inserted phrase read inline) is unspaced, and a bespoke non-parenthetical usage may be spaced only when the spacing does work that a reader would miss.'
   'Where a dash is not the best structure, use a colon, parentheses, a semicolon, or a new sentence; judge fit, not count.'
   'An en dash joins numeric ranges'
   'Inline lists take the Oxford comma.'
