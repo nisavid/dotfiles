@@ -1,0 +1,177 @@
+{{- $hindsight := .hindsight -}}
+{{- if not (get $hindsight "publicFixture") -}}
+{{- $private := include ".private-hindsight.toml.age" | decrypt | fromToml -}}
+{{- $hindsight = $private.hindsight -}}
+{{- end -}}
+#!/usr/bin/env zsh
+set -euo pipefail
+umask 077
+
+install_root="{{ joinPath .chezmoi.homeDir $hindsight.installRoot }}"
+state_dir="{{ joinPath .chezmoi.homeDir $hindsight.stateRoot "memory" }}"
+expected_config="{{ joinPath .chezmoi.homeDir $hindsight.harnessReconciliationPath }}"
+trusted_upstream="{{ joinPath .chezmoi.homeDir $hindsight.workCodexHome }}"
+destination_root="{{ joinPath .chezmoi.homeDir $hindsight.harnessDestinationRoot }}"
+controller="${HINDSIGHT_HOOK_AUTHORITY_CONTROLLER:-$install_root/bin/hindsight-memory-hook-authority}"
+managed_python="{{ joinPath .chezmoi.homeDir $hindsight.managedPython }}"
+
+disable_all() {
+  local failures=0 harness
+  for harness in codex claude-code cursor; do
+    if ! "$controller" --state-dir "$state_dir" harness-config disable \
+      --destination "$destination_root/${harness}-destination.json" \
+      --upstream-integration-root "$trusted_upstream"; then
+      print -ru2 -- \
+        "hindsight-harness-reconcile: failed to disable ${harness}"
+      failures=1
+    fi
+  done
+  return "$failures"
+}
+
+fail_closed() {
+  print -ru2 -- "hindsight-harness-reconcile: $1"
+  if disable_all; then
+    exit 2
+  fi
+  exit 1
+}
+
+config_is_safe() {
+  "$managed_python" -c '
+import json
+import hashlib
+import os
+from pathlib import Path
+import re
+import stat
+import subprocess
+import sys
+
+path = Path(sys.argv[1])
+flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+descriptor = os.open(path, flags)
+try:
+    metadata = os.fstat(descriptor)
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(metadata.st_mode) != 0o600
+        or metadata.st_nlink != 1
+        or metadata.st_size > 1024 * 1024
+    ):
+        raise RuntimeError
+    chunks = bytearray()
+    while len(chunks) <= 1024 * 1024:
+        chunk = os.read(
+            descriptor,
+            min(65536, 1024 * 1024 + 1 - len(chunks)),
+        )
+        if not chunk:
+            break
+        chunks.extend(chunk)
+    if len(chunks) > 1024 * 1024:
+        raise RuntimeError
+    payload = bytes(chunks)
+finally:
+    os.close(descriptor)
+acl = subprocess.run(
+    ["/bin/ls", "-lde", os.fspath(path)],
+    check=False,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.DEVNULL,
+    text=True,
+)
+if acl.returncode != 0 or any(
+    re.search(r"^\s*\d+:.*\sallow\s", line)
+    for line in acl.stdout.splitlines()
+):
+    raise RuntimeError
+def strict_object(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise RuntimeError
+        value[key] = item
+    return value
+decoded = json.loads(payload, object_pairs_hook=strict_object)
+if not isinstance(decoded, dict):
+    raise RuntimeError
+print(hashlib.sha256(payload).hexdigest())
+' "$expected_config" 2>/dev/null
+}
+
+aggregate_is_healthy() {
+  local phase="$1" aggregate="$2"
+  [[ -z "${aggregate[4097]}" ]] || return 1
+  "$managed_python" -c '
+import json
+import re
+import sys
+
+phase, raw = sys.argv[1:]
+def strict_object(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise RuntimeError
+        value[key] = item
+    return value
+result = json.loads(raw, object_pairs_hook=strict_object)
+expected = {"schema_version", "phase", "status", "hook_digest"}
+if phase == "post-start":
+    expected.add("server_generation")
+if (
+    not isinstance(result, dict)
+    or set(result) != expected
+    or type(result.get("schema_version")) is not int
+    or result["schema_version"] != 1
+    or result.get("phase") != phase
+    or result.get("status") != "healthy"
+    or not isinstance(result.get("hook_digest"), str)
+    or re.fullmatch(r"[0-9a-f]{64}", result["hook_digest"]) is None
+):
+    raise RuntimeError
+if phase == "post-start" and (
+    not isinstance(result.get("server_generation"), str)
+    or not result["server_generation"]
+    or len(result["server_generation"]) > 512
+):
+    raise RuntimeError
+' "$phase" "$aggregate" >/dev/null 2>&1
+}
+
+(( $# == 2 )) || fail_closed \
+  "usage: hindsight-harness-reconcile PHASE CONFIG"
+phase="$1"
+[[ "$phase" == pre-start || "$phase" == post-start || "$phase" == disable ]] || fail_closed \
+  "unexpected reconciliation phase"
+[[ "$2" == "$expected_config" ]] || fail_closed \
+  "unexpected configuration path"
+if [[ "$phase" == disable ]]; then
+  disable_all
+  exit
+fi
+if [[ ! -e "$expected_config" && ! -L "$expected_config" ]]; then
+  disable_all
+  exit
+fi
+config_digest="$(config_is_safe)" ||
+  fail_closed "unsafe or invalid configuration artifact"
+[[ "$config_digest" =~ ^[0-9a-f]{64}$ ]] ||
+  fail_closed "unsafe or invalid configuration artifact"
+
+output=""
+if ! output="$(
+  "$controller" --state-dir "$state_dir" harness-config reconcile \
+    --config "$expected_config" --config-digest "$config_digest" \
+    --phase "$phase" 2>&1
+)"; then
+  fail_closed "reconciliation command failed"
+fi
+[[ -z "${output[65537]}" ]] || fail_closed \
+  "reconciliation output exceeded its safety bound"
+aggregate="${output##*$'\n'}"
+aggregate_is_healthy "$phase" "$aggregate" || fail_closed \
+  "reconciliation returned an unexpected aggregate result"
+print -r -- "$aggregate"
