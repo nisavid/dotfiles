@@ -1,0 +1,42 @@
+[
+  {
+    "query": "Review PR #482 in acme/api and draft comments I can post.",
+    "should_trigger": true
+  },
+  {
+    "query": "The author pushed fixes to the PR I reviewed yesterday; re-review it and check my earlier threads.",
+    "should_trigger": true
+  },
+  {
+    "query": "Should I approve or request changes on my teammate's open pull request?",
+    "should_trigger": true
+  },
+  {
+    "query": "Post review comments on this colleague's pull request for me.",
+    "should_trigger": true
+  },
+  {
+    "query": "Look at the open PR from the platform team and tell me what is wrong with it.",
+    "should_trigger": true
+  },
+  {
+    "query": "Get my PR #91 merged.",
+    "should_trigger": false
+  },
+  {
+    "query": "Write the pull request description for my branch.",
+    "should_trigger": false
+  },
+  {
+    "query": "Reply to the reviewer's comments on my own PR.",
+    "should_trigger": false
+  },
+  {
+    "query": "Review the changes on my current branch before I open a PR.",
+    "should_trigger": false
+  },
+  {
+    "query": "Resolve the merge conflict in this rebase.",
+    "should_trigger": false
+  }
+]

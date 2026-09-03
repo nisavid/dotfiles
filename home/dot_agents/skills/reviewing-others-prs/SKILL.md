@@ -22,7 +22,7 @@ Accept a PR URL, number, branch, repository, base/head pair, or checkout plus fo
 
 Focus context sets priority, not exclusion. Re-reviews include prior Ivan-owned or agent-owned threads plus other reviewer threads needed for current risk.
 
-Authority defaults to draft review in chat. When posting for Ivan, write terse reviewer prose that owns its judgments and evidence in his first person.
+Authority defaults to draft review in chat. When posting for Ivan, write terse reviewer prose that owns its judgments and evidence in his first person, under the global Writing register.
 
 ## Workflow
 
@@ -32,7 +32,7 @@ Authority defaults to draft review in chat. When posting for Ivan, write terse r
 4. Gather Thermos context: current diff plus enough surrounding code, tests, schemas, generated artifacts, deployment context, and requirements to avoid guessing.
 5. Run paired Thermos passes independently, then synthesize.
 6. Keep only findings that are high-confidence, author-owned, current on the PR head, deduplicated against existing comments, backed by file:line evidence, and paired with the smallest remedy.
-7. For GitHub comments, re-review ledgers, approval/request-changes recommendations, or pause packets, read `references/review-output.md`. If posting or resolving, refresh head and thread state immediately before acting.
+7. For GitHub comments, re-review ledgers, approval/request-changes recommendations, or pause packets, read `references/review-output.md` and run its pre-post pass over the batch. If posting or resolving, refresh head and thread state immediately before acting.
 
 ## Guardrails
 
