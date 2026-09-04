@@ -84,6 +84,55 @@ test_context7() {
   assert_symlink_source "$link" '../../.agents/skills/context7-mcp'
 }
 
+test_systalyze_worktrees() {
+  local skill_dir="$repo_dir/home/dot_agents/skills/working-in-systalyze-worktrees"
+  local skill="$skill_dir/SKILL.md"
+  local reference="$skill_dir/references/premerge-stack-surfaces.md"
+  local manifest="$skill_dir/references/premerge-stack.json"
+  local resolver="$skill_dir/scripts/resolve_premerge_stack.py"
+  local resolver_tests="$skill_dir/tests/test_resolve_premerge_stack.py"
+  local link="$repo_dir/home/dot_claude/skills/symlink_working-in-systalyze-worktrees"
+
+  assert_skill_frontmatter "$skill" working-in-systalyze-worktrees
+  [[ -f "$reference" ]] || fail 'missing Systalyze pre-merge stack procedure'
+  [[ -f "$manifest" ]] || fail 'missing Systalyze pre-merge stack manifest'
+  [[ -f "$resolver" ]] || fail 'missing Systalyze pre-merge stack resolver'
+  [[ -f "$resolver_tests" ]] || fail 'missing Systalyze pre-merge stack resolver tests'
+  assert_symlink_source "$link" '../../.agents/skills/working-in-systalyze-worktrees'
+
+  assert_contains "$skill" 'sole source of the temporary grounding-docs and dev-tooling stack alias names' \
+    'Systalyze alias names must have one policy source'
+  assert_contains "$skill" 'python3 scripts/resolve_premerge_stack.py --repo <checkout> --remote <remote>' \
+    'Systalyze resolver invocation must include its required checkout and remote arguments'
+  assert_contains "$skill" 'Do not substitute ordinary PR branches, cached OIDs, remembered PR numbers' \
+    'Systalyze alias failure must not fall back to volatile topology'
+  assert_contains "$skill" 'disposable local-only projection' \
+    'Systalyze product QA must stay out of product history'
+  assert_contains "$skill" 'exact CAS lease' \
+    'Systalyze provider aliases must advance through exact CAS'
+  assert_contains "$reference" 'Reconstructing the stack from ordinary PR topology is not a fallback.' \
+    'Systalyze consumer failures must stop rather than reconstruct aliases'
+  assert_contains "$reference" 'first parent is `P` and second parent is `D`' \
+    'Systalyze local QA projection must have an exact merge shape'
+  assert_contains "$reference" "planner's terminal \`verified\` result" \
+    'Systalyze provider alias updates must be post-verified'
+
+  jq -e '
+    .schemaVersion == 1 and
+    .repository == "github.com/systalyze/systalyze" and
+    ([.surfaces[].role] | sort) == ["product-base", "qa-overlay"] and
+    ([.surfaces[].ref] | unique | length) == 2 and
+    all(.surfaces[]; .ref | startswith("refs/heads/ivan/stack-tips/")) and
+    .relationships == [{"left":"grounding-docs","right":"dev-tooling","require":"common-ancestor"}]
+  ' "$manifest" >/dev/null || fail 'Systalyze pre-merge stack manifest is invalid'
+
+  if rg -n '#[0-9]+|[0-9a-f]{40}' "$skill" "$reference" "$manifest"; then
+    fail 'Systalyze pre-merge policy must not freeze PR numbers or commit OIDs'
+  fi
+
+  python3 -m unittest discover -s "$skill_dir/tests" -p 'test_*.py'
+}
+
 test_skill_creator_adapter() {
   local adapter_dir="$repo_dir/home/dot_agents/skills/adapting-skill-creator-to-harnesses"
 
@@ -493,6 +542,13 @@ case "${1:-all}" in
       "$HOME/.claude/skills/context7-mcp"
     )
     ;;
+  systalyze-worktrees)
+    test_systalyze_worktrees
+    projection_targets=(
+      "$HOME/.agents/skills/working-in-systalyze-worktrees"
+      "$HOME/.claude/skills/working-in-systalyze-worktrees"
+    )
+    ;;
   git-publication)
     test_skill_creator_adapter
     test_git_publication
@@ -527,6 +583,7 @@ case "${1:-all}" in
     ;;
   all)
     test_context7
+    test_systalyze_worktrees
     test_skill_creator_adapter
     test_git_publication
     test_pr_publication
@@ -535,6 +592,8 @@ case "${1:-all}" in
     projection_targets=(
       "$HOME/.agents/skills/context7-mcp"
       "$HOME/.claude/skills/context7-mcp"
+      "$HOME/.agents/skills/working-in-systalyze-worktrees"
+      "$HOME/.claude/skills/working-in-systalyze-worktrees"
       "$HOME/.agents/skills/checkpointing-and-publishing-git-work"
       "$HOME/.claude/skills/checkpointing-and-publishing-git-work"
       "$HOME/.agents/skills/graphite"
@@ -549,7 +608,7 @@ case "${1:-all}" in
     )
     ;;
   *)
-    fail 'usage: public-agent-skills.zsh [context7|git-publication|pr-publication|model-selection|review-output|all]'
+    fail 'usage: public-agent-skills.zsh [context7|systalyze-worktrees|git-publication|pr-publication|model-selection|review-output|all]'
     ;;
 esac
 
@@ -560,7 +619,7 @@ isolated_home="$tmpdir/home"
 mkdir -p -- "$isolated_source/dot_agents/skills" "$isolated_source/dot_claude/skills" "$isolated_home"
 
 for skill in \
-  checkpointing-and-publishing-git-work context7-mcp graphite \
+  checkpointing-and-publishing-git-work context7-mcp working-in-systalyze-worktrees graphite \
   publishing-reviewable-prs writing-reviewable-pr-descriptions \
   choosing-agent-models reviewing-others-prs; do
   cp -R -- \
@@ -569,7 +628,7 @@ for skill in \
 done
 
 for link in \
-  checkpointing-and-publishing-git-work context7-mcp graphite \
+  checkpointing-and-publishing-git-work context7-mcp working-in-systalyze-worktrees graphite \
   publishing-reviewable-prs writing-reviewable-pr-descriptions \
   choosing-agent-models; do
   cp -- \
@@ -595,7 +654,7 @@ for target in $isolated_targets; do
 done
 
 for skill in \
-  checkpointing-and-publishing-git-work context7-mcp graphite \
+  checkpointing-and-publishing-git-work context7-mcp working-in-systalyze-worktrees graphite \
   publishing-reviewable-prs writing-reviewable-pr-descriptions \
   choosing-agent-models; do
   canonical="$isolated_home/.agents/skills/$skill"

@@ -1,0 +1,877 @@
+from __future__ import annotations
+
+import importlib.util
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from types import ModuleType
+from typing import Any, cast
+from unittest import mock
+
+SKILL_DIR = Path(__file__).resolve().parents[1]
+RESOLVER = SKILL_DIR / "scripts" / "resolve_premerge_stack.py"
+
+
+def load_resolver_module() -> ModuleType:
+    spec = importlib.util.spec_from_file_location("resolve_premerge_stack", RESOLVER)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("could not load resolver module")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def run(
+    *args: str,
+    cwd: Path,
+    check: bool = True,
+    environment_overrides: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "GIT_AUTHOR_NAME": "Fixture",
+            "GIT_AUTHOR_EMAIL": "fixture@example.com",
+            "GIT_COMMITTER_NAME": "Fixture",
+            "GIT_COMMITTER_EMAIL": "fixture@example.com",
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_SYSTEM": os.devnull,
+        }
+    )
+    if environment_overrides:
+        environment.update(environment_overrides)
+    return subprocess.run(
+        args,
+        cwd=cwd,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=check,
+    )
+
+
+def git(repo: Path, *args: str) -> str:
+    return run("git", *args, cwd=repo).stdout.strip()
+
+
+def commit(repo: Path, name: str, content: str) -> str:
+    path = repo / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    git(repo, "add", "--", name)
+    git(repo, "commit", "-m", name)
+    return git(repo, "rev-parse", "HEAD")
+
+
+class ResolvePremergeStackTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary_directory = tempfile.TemporaryDirectory()
+        root = Path(self.temporary_directory.name)
+        self.remote = root / "systalyze.git"
+        self.provider = root / "provider"
+        self.unrelated_provider = root / "unrelated-provider"
+        self.consumer = root / "consumer"
+        self.fixture_skill = root / "fixture-skill"
+        self.fixture_resolver = (
+            self.fixture_skill / "scripts" / "resolve_premerge_stack.py"
+        )
+        self.manifest = self.fixture_skill / "references" / "premerge-stack.json"
+        self.pull_requests = root / "pull-requests.json"
+        self.fake_bin = root / "bin"
+        self.git_only_bin = root / "git-only-bin"
+        self.fake_gh_arguments = root / "gh-arguments.jsonl"
+        self.fake_gh_hosts = root / "gh-hosts.txt"
+        self.fake_gh_count = root / "gh-query-count"
+
+        self.fake_bin.mkdir()
+        self.git_only_bin.mkdir()
+        self.fixture_resolver.parent.mkdir(parents=True)
+        self.manifest.parent.mkdir(parents=True)
+        shutil.copy2(RESOLVER, self.fixture_resolver)
+        git_path = shutil.which("git")
+        if git_path is None:
+            self.fail("git fixture requires git")
+        (self.git_only_bin / "git").symlink_to(git_path)
+        fake_gh = self.fake_bin / "gh"
+        fake_gh.write_text(
+            """#!/usr/bin/env python3
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+count_path = Path(os.environ["FIXTURE_GH_COUNT"])
+count = int(count_path.read_text(encoding="utf-8")) if count_path.exists() else 0
+with Path(os.environ["FIXTURE_GH_ARGUMENTS"]).open("a", encoding="utf-8") as stream:
+    stream.write(json.dumps(sys.argv[1:]) + "\\n")
+with Path(os.environ["FIXTURE_GH_HOSTS"]).open("a", encoding="utf-8") as stream:
+    stream.write(os.environ.get("GH_HOST", "") + "\\n")
+if count == 0 and os.environ.get("FIXTURE_GH_ALIAS_REF"):
+    subprocess.run(
+        [
+            "git",
+            "--git-dir",
+            os.environ["FIXTURE_GH_REMOTE"],
+            "update-ref",
+            os.environ["FIXTURE_GH_ALIAS_REF"],
+            os.environ["FIXTURE_GH_ALIAS_OID"],
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+source = os.environ.get("FIXTURE_GH_FINAL") if count else None
+source = source or os.environ["FIXTURE_GH_PRIMARY"]
+count_path.write_text(str(count + 1), encoding="utf-8")
+sys.stdout.write(Path(source).read_text(encoding="utf-8"))
+""",
+            encoding="utf-8",
+        )
+        fake_gh.chmod(0o755)
+
+        run("git", "init", "--bare", str(self.remote), cwd=root)
+        run("git", "init", "-b", "main", str(self.provider), cwd=root)
+        self.base = commit(self.provider, "base.txt", "base\n")
+        self.grounding = commit(self.provider, "grounding.txt", "grounding\n")
+
+        git(self.provider, "switch", "-c", "fixture-dev-tooling", self.base)
+        self.local_dev = commit(self.provider, "local-dev.txt", "local dev\n")
+        git(self.provider, "switch", "main")
+
+        git(self.provider, "remote", "add", "origin", str(self.remote))
+        git(
+            self.provider,
+            "push",
+            "origin",
+            f"{self.base}:refs/heads/main",
+            f"{self.grounding}:refs/heads/ivan/product-grounding",
+            f"{self.local_dev}:refs/heads/ivan/docker-only-local-dev",
+            f"{self.grounding}:refs/heads/ivan/stack-tips/grounding-docs",
+            f"{self.local_dev}:refs/heads/ivan/stack-tips/dev-tooling",
+        )
+
+        run("git", "init", "-b", "unrelated", str(self.unrelated_provider), cwd=root)
+        self.unrelated = commit(self.unrelated_provider, "unrelated.txt", "unrelated\n")
+        git(self.unrelated_provider, "remote", "add", "origin", str(self.remote))
+        git(
+            self.unrelated_provider,
+            "push",
+            "origin",
+            f"{self.unrelated}:refs/heads/ivan/unrelated",
+        )
+
+        run("git", "init", "-b", "task", str(self.consumer), cwd=root)
+        git(self.consumer, "remote", "add", "origin", str(self.remote))
+        git(
+            self.consumer,
+            "fetch",
+            "--no-tags",
+            "origin",
+            "refs/heads/main:refs/remotes/origin/main",
+        )
+        git(self.consumer, "switch", "--detach", "refs/remotes/origin/main")
+
+        self.write_manifest([str(self.remote)])
+        self.write_pull_requests(self.grounding, self.local_dev)
+
+    def tearDown(self) -> None:
+        self.temporary_directory.cleanup()
+
+    @staticmethod
+    def manifest_document(remote_urls: list[str]) -> dict[str, object]:
+        return {
+            "schemaVersion": 1,
+            "repository": "github.com/systalyze/systalyze",
+            "remoteUrls": remote_urls,
+            "surfaces": [
+                {
+                    "name": "grounding-docs",
+                    "role": "product-base",
+                    "ref": "refs/heads/ivan/stack-tips/grounding-docs",
+                },
+                {
+                    "name": "dev-tooling",
+                    "role": "qa-overlay",
+                    "ref": "refs/heads/ivan/stack-tips/dev-tooling",
+                },
+            ],
+            "relationships": [
+                {
+                    "left": "grounding-docs",
+                    "right": "dev-tooling",
+                    "require": "common-ancestor",
+                }
+            ],
+        }
+
+    def write_manifest_document(self, document: object) -> None:
+        self.manifest.write_text(json.dumps(document) + "\n", encoding="utf-8")
+
+    def write_manifest(self, remote_urls: list[str]) -> None:
+        self.write_manifest_document(self.manifest_document(remote_urls))
+
+    def write_pull_requests(self, grounding: str, local_dev: str) -> None:
+        self.pull_requests.write_text(
+            json.dumps(
+                [
+                    {
+                        "number": 101,
+                        "headRefName": "ivan/product-grounding",
+                        "headRefOid": grounding,
+                        "baseRefName": "main",
+                        "baseRefOid": self.base,
+                        "isCrossRepository": False,
+                        "isDraft": False,
+                        "url": "https://example.invalid/pull/101",
+                    },
+                    {
+                        "number": 202,
+                        "headRefName": "ivan/docker-only-local-dev",
+                        "headRefOid": local_dev,
+                        "baseRefName": "ivan/product-grounding",
+                        "baseRefOid": grounding,
+                        "isCrossRepository": False,
+                        "isDraft": True,
+                        "url": "https://example.invalid/pull/202",
+                    },
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+    def resolve(
+        self,
+        *,
+        repo: Path | None = None,
+        final_pull_requests: Path | None = None,
+        alias_move: tuple[str, str] | None = None,
+        missing_gh: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        self.fake_gh_count.unlink(missing_ok=True)
+        self.fake_gh_arguments.unlink(missing_ok=True)
+        self.fake_gh_hosts.unlink(missing_ok=True)
+        environment = {
+            "PATH": (
+                str(self.git_only_bin)
+                if missing_gh
+                else str(self.fake_bin) + os.pathsep + os.environ["PATH"]
+            ),
+            "FIXTURE_GH_COUNT": str(self.fake_gh_count),
+            "FIXTURE_GH_ARGUMENTS": str(self.fake_gh_arguments),
+            "FIXTURE_GH_HOSTS": str(self.fake_gh_hosts),
+            "FIXTURE_GH_PRIMARY": str(self.pull_requests),
+            "GH_HOST": "example.invalid",
+        }
+        if final_pull_requests is not None:
+            environment["FIXTURE_GH_FINAL"] = str(final_pull_requests)
+        if alias_move is not None:
+            alias_ref, alias_oid = alias_move
+            environment.update(
+                {
+                    "FIXTURE_GH_REMOTE": str(self.remote),
+                    "FIXTURE_GH_ALIAS_REF": alias_ref,
+                    "FIXTURE_GH_ALIAS_OID": alias_oid,
+                }
+            )
+        return run(
+            sys.executable,
+            str(self.fixture_resolver),
+            "--repo",
+            str(repo or self.consumer),
+            "--remote",
+            "origin",
+            cwd=repo or self.consumer,
+            check=False,
+            environment_overrides=environment,
+        )
+
+    @staticmethod
+    def error_document(result: subprocess.CompletedProcess[str]) -> dict[str, Any]:
+        return json.loads(result.stderr)
+
+    @classmethod
+    def error_code(cls, result: subprocess.CompletedProcess[str]) -> str:
+        return cls.error_document(result)["error"]["code"]
+
+    def test_resolves_immutable_aliases_without_changing_refs_or_worktree(self) -> None:
+        (self.consumer / ".git" / "FETCH_HEAD").unlink()
+        refs_before = git(self.consumer, "show-ref")
+        status_before = git(self.consumer, "status", "--short")
+        head_before = git(self.consumer, "rev-parse", "HEAD")
+
+        result = self.resolve()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        document = json.loads(result.stdout)
+        self.assertEqual(document["repository"], "github.com/systalyze/systalyze")
+        self.assertEqual(document["surfaces"]["grounding-docs"]["oid"], self.grounding)
+        self.assertEqual(
+            document["surfaces"]["grounding-docs"]["pullRequest"]["number"], 101
+        )
+        self.assertEqual(document["surfaces"]["dev-tooling"]["oid"], self.local_dev)
+        self.assertEqual(
+            document["surfaces"]["dev-tooling"]["pullRequest"]["number"], 202
+        )
+        self.assertEqual(document["relationships"][0]["mergeBaseOid"], self.base)
+        self.assertFalse(document["relationships"][0]["leftIsAncestorOfRight"])
+        self.assertFalse(document["relationships"][0]["rightIsAncestorOfLeft"])
+        gh_arguments = [
+            json.loads(line)
+            for line in self.fake_gh_arguments.read_text(encoding="utf-8").splitlines()
+        ]
+        expected_arguments = [
+            "pr",
+            "list",
+            "--repo",
+            "github.com/systalyze/systalyze",
+            "--state",
+            "open",
+            "--limit",
+            "1000",
+            "--json",
+            "number,headRefName,headRefOid,baseRefName,baseRefOid,isCrossRepository,isDraft,url",
+        ]
+        self.assertEqual(gh_arguments, [expected_arguments, expected_arguments])
+        self.assertEqual(
+            self.fake_gh_hosts.read_text(encoding="utf-8").splitlines(),
+            ["github.com", "github.com"],
+        )
+        self.assertEqual(git(self.consumer, "show-ref"), refs_before)
+        self.assertFalse((self.consumer / ".git" / "FETCH_HEAD").exists())
+        self.assertEqual(git(self.consumer, "status", "--short"), status_before)
+        self.assertEqual(git(self.consumer, "rev-parse", "HEAD"), head_before)
+
+    def test_missing_alias_fails_closed(self) -> None:
+        run(
+            "git",
+            "--git-dir",
+            str(self.remote),
+            "update-ref",
+            "-d",
+            "refs/heads/ivan/stack-tips/dev-tooling",
+            cwd=self.consumer,
+        )
+
+        result = self.resolve()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.error_code(result), "ALIAS_MISSING")
+        evidence = self.error_document(result)["error"]["evidence"]
+        self.assertEqual(
+            evidence["observedRefs"]["refs/heads/ivan/stack-tips/grounding-docs"],
+            [self.grounding],
+        )
+        self.assertEqual(
+            evidence["observedRefs"]["refs/heads/ivan/stack-tips/dev-tooling"],
+            [],
+        )
+
+    def test_immutable_fetch_does_not_recurse_into_nested_repository(self) -> None:
+        root = Path(self.temporary_directory.name)
+        nested_remote = root / "nested.git"
+        nested_provider = root / "nested-provider"
+        outer_remote = root / "outer.git"
+        outer_provider = root / "outer-provider"
+        outer_consumer = root / "outer-consumer"
+
+        run("git", "init", "--bare", str(nested_remote), cwd=root)
+        run("git", "init", "-b", "main", str(nested_provider), cwd=root)
+        nested_base = commit(nested_provider, "nested.txt", "base\n")
+        git(nested_provider, "remote", "add", "origin", str(nested_remote))
+        git(nested_provider, "push", "origin", "main")
+
+        run("git", "init", "--bare", str(outer_remote), cwd=root)
+        run("git", "init", "-b", "main", str(outer_provider), cwd=root)
+        run(
+            "git",
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "-b",
+            "main",
+            str(nested_remote),
+            "nested",
+            cwd=outer_provider,
+        )
+        outer_base = commit(outer_provider, "outer.txt", "base\n")
+        git(outer_provider, "remote", "add", "origin", str(outer_remote))
+        git(outer_provider, "push", "origin", f"{outer_base}:refs/heads/main")
+
+        run("git", "init", "-b", "task", str(outer_consumer), cwd=root)
+        git(outer_consumer, "remote", "add", "origin", str(outer_remote))
+        git(
+            outer_consumer,
+            "fetch",
+            "--no-tags",
+            "origin",
+            "refs/heads/main:refs/remotes/origin/main",
+        )
+        git(outer_consumer, "switch", "--detach", "refs/remotes/origin/main")
+        run(
+            "git",
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "update",
+            "--init",
+            cwd=outer_consumer,
+        )
+        nested_checkout = outer_consumer / "nested"
+        self.assertEqual(
+            git(nested_checkout, "rev-parse", "refs/remotes/origin/main"),
+            nested_base,
+        )
+
+        nested_next = commit(nested_provider, "nested.txt", "next\n")
+        git(nested_provider, "push", "origin", "main")
+        git(outer_provider / "nested", "fetch", "origin", "main")
+        git(outer_provider / "nested", "checkout", nested_next)
+        (outer_provider / "grounding.txt").write_text("grounding\n", encoding="utf-8")
+        git(outer_provider, "add", "--", "nested", "grounding.txt")
+        git(outer_provider, "commit", "-m", "outer-grounding")
+        outer_grounding = git(outer_provider, "rev-parse", "HEAD")
+
+        git(outer_provider, "switch", "-c", "fixture-dev", outer_base)
+        outer_dev = commit(outer_provider, "dev.txt", "dev\n")
+        git(
+            outer_provider,
+            "push",
+            "origin",
+            f"{outer_grounding}:refs/heads/ivan/stack-tips/grounding-docs",
+            f"{outer_dev}:refs/heads/ivan/stack-tips/dev-tooling",
+        )
+
+        self.write_manifest([str(outer_remote)])
+        self.write_pull_requests(outer_grounding, outer_dev)
+        git(outer_consumer, "config", "fetch.recurseSubmodules", "true")
+        nested_refs_before = git(nested_checkout, "show-ref")
+        nested_head_before = git(nested_checkout, "rev-parse", "HEAD")
+        nested_status_before = git(nested_checkout, "status", "--short")
+
+        result = self.resolve(repo=outer_consumer)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(git(nested_checkout, "show-ref"), nested_refs_before)
+        self.assertEqual(git(nested_checkout, "rev-parse", "HEAD"), nested_head_before)
+        self.assertEqual(
+            git(nested_checkout, "status", "--short"), nested_status_before
+        )
+        self.assertEqual(
+            git(nested_checkout, "rev-parse", "refs/remotes/origin/main"),
+            nested_base,
+        )
+
+    def test_alias_without_one_live_pull_request_fails_closed(self) -> None:
+        self.write_pull_requests(self.grounding, self.unrelated)
+
+        result = self.resolve()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.error_code(result), "PR_IDENTITY_MISMATCH")
+
+    def test_alias_branch_pull_request_cannot_satisfy_provider_identity(self) -> None:
+        document = json.loads(self.pull_requests.read_text(encoding="utf-8"))
+        document[0]["headRefName"] = "ivan/stack-tips/grounding-docs"
+        self.pull_requests.write_text(json.dumps(document) + "\n", encoding="utf-8")
+
+        result = self.resolve()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.error_code(result), "PR_IDENTITY_MISMATCH")
+        self.assertEqual(
+            self.error_document(result)["error"]["evidence"],
+            {"aliasHeads": ["ivan/stack-tips/grounding-docs"]},
+        )
+
+    def test_fork_pull_request_with_alias_branch_name_is_not_rejected(self) -> None:
+        document = json.loads(self.pull_requests.read_text(encoding="utf-8"))
+        document.append(
+            {
+                "number": 303,
+                "headRefName": "ivan/stack-tips/grounding-docs",
+                "headRefOid": self.unrelated,
+                "baseRefName": "main",
+                "baseRefOid": self.base,
+                "isCrossRepository": True,
+                "isDraft": True,
+                "url": "https://example.invalid/pull/303",
+            }
+        )
+        self.pull_requests.write_text(json.dumps(document) + "\n", encoding="utf-8")
+
+        result = self.resolve()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_fork_pull_request_cannot_satisfy_provider_identity(self) -> None:
+        document = json.loads(self.pull_requests.read_text(encoding="utf-8"))
+        document[0]["isCrossRepository"] = True
+        self.pull_requests.write_text(json.dumps(document) + "\n", encoding="utf-8")
+
+        result = self.resolve()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.error_code(result), "PR_IDENTITY_MISMATCH")
+
+    def test_same_oid_fork_does_not_make_provider_identity_ambiguous(self) -> None:
+        document = json.loads(self.pull_requests.read_text(encoding="utf-8"))
+        fork_pull_request = dict(document[0])
+        fork_pull_request.update(
+            {
+                "number": 303,
+                "headRefName": "fork-product-grounding",
+                "isCrossRepository": True,
+                "url": "https://example.invalid/pull/303",
+            }
+        )
+        document.append(fork_pull_request)
+        self.pull_requests.write_text(json.dumps(document) + "\n", encoding="utf-8")
+
+        result = self.resolve()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_aliases_without_common_history_fail_closed(self) -> None:
+        run(
+            "git",
+            "--git-dir",
+            str(self.remote),
+            "update-ref",
+            "refs/heads/ivan/stack-tips/dev-tooling",
+            self.unrelated,
+            cwd=self.consumer,
+        )
+        self.write_pull_requests(self.grounding, self.unrelated)
+
+        result = self.resolve()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.error_code(result), "RELATIONSHIP_MISMATCH")
+
+    def test_non_fast_forward_change_from_cached_alias_fails_closed(self) -> None:
+        git(
+            self.consumer,
+            "fetch",
+            "--no-tags",
+            "--no-write-fetch-head",
+            "origin",
+            self.unrelated,
+        )
+        git(
+            self.consumer,
+            "update-ref",
+            "refs/remotes/origin/ivan/stack-tips/grounding-docs",
+            self.unrelated,
+        )
+
+        result = self.resolve()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.error_code(result), "UNEXPECTED_ALIAS_REWRITE")
+
+    def test_unverified_remote_fails_closed(self) -> None:
+        self.write_manifest(["https://example.invalid/not-systalyze"])
+
+        result = self.resolve()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.error_code(result), "REMOTE_IDENTITY_MISMATCH")
+
+    def test_invalid_manifest_shapes_fail_closed(self) -> None:
+        with self.subTest("unparsable JSON"):
+            self.manifest.write_text("{", encoding="utf-8")
+            result = self.resolve()
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(self.error_code(result), "MANIFEST_INVALID")
+
+        remote_urls = [str(self.remote)]
+        unknown_key = self.manifest_document(remote_urls)
+        unknown_key["unknown"] = True
+
+        duplicate_role = self.manifest_document(remote_urls)
+        cast(list[dict[str, object]], duplicate_role["surfaces"])[1]["role"] = (
+            "product-base"
+        )
+
+        tag_ref = self.manifest_document(remote_urls)
+        cast(list[dict[str, object]], tag_ref["surfaces"])[1]["ref"] = (
+            "refs/tags/dev-tooling"
+        )
+
+        unsupported_relationship = self.manifest_document(remote_urls)
+        cast(list[dict[str, object]], unsupported_relationship["relationships"])[0][
+            "require"
+        ] = "left-contains-right"
+
+        nonstring_relationship_name = self.manifest_document(remote_urls)
+        cast(list[dict[str, object]], nonstring_relationship_name["relationships"])[0][
+            "left"
+        ] = []
+
+        hostless_repository = self.manifest_document(remote_urls)
+        hostless_repository["repository"] = "systalyze/systalyze"
+
+        for name, document in (
+            ("unknown key", unknown_key),
+            ("duplicate role", duplicate_role),
+            ("tag ref", tag_ref),
+            ("unsupported relationship", unsupported_relationship),
+            ("non-string relationship name", nonstring_relationship_name),
+            ("hostless repository", hostless_repository),
+        ):
+            with self.subTest(name):
+                self.write_manifest_document(document)
+                result = self.resolve()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(self.error_code(result), "MANIFEST_INVALID")
+
+    def test_http_remote_does_not_match_https_manifest_identity(self) -> None:
+        git(
+            self.consumer,
+            "remote",
+            "set-url",
+            "origin",
+            "http://github.com/systalyze/systalyze.git",
+        )
+        self.write_manifest(["https://github.com/systalyze/systalyze.git"])
+
+        result = self.resolve()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.error_code(result), "REMOTE_IDENTITY_MISMATCH")
+
+    def test_github_repository_path_identity_is_case_insensitive(self) -> None:
+        resolver = load_resolver_module()
+        scp_prefix = "git" + chr(64) + "github.com:"
+
+        self.assertEqual(
+            resolver.normalize_remote_url(scp_prefix + "SYSTALYZE/SYSTALYZE.git"),
+            resolver.normalize_remote_url(scp_prefix + "systalyze/systalyze.git"),
+        )
+
+    def test_remote_port_is_part_of_verified_identity(self) -> None:
+        git(
+            self.consumer,
+            "remote",
+            "set-url",
+            "origin",
+            "ssh://git@github.com:2222/systalyze/systalyze.git",
+        )
+        self.write_manifest(["ssh://git@github.com/systalyze/systalyze.git"])
+
+        result = self.resolve()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.error_code(result), "REMOTE_IDENTITY_MISMATCH")
+
+    def test_repository_identity_must_match_network_remote(self) -> None:
+        resolver = load_resolver_module()
+
+        with self.assertRaises(resolver.ContractError) as raised:
+            resolver.verify_repository_identity(
+                "example.invalid/systalyze/systalyze",
+                "https://github.com/systalyze/systalyze",
+            )
+
+        self.assertEqual(raised.exception.code, "REMOTE_IDENTITY_MISMATCH")
+
+    def test_pull_request_identity_change_during_resolution_fails_closed(self) -> None:
+        final_pull_requests = self.pull_requests.with_name("pull-requests-after.json")
+        document = json.loads(self.pull_requests.read_text(encoding="utf-8"))
+        document[0]["number"] = 303
+        final_pull_requests.write_text(json.dumps(document) + "\n", encoding="utf-8")
+
+        result = self.resolve(final_pull_requests=final_pull_requests)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.error_code(result), "PR_CHANGED_DURING_RESOLUTION")
+
+    def test_nonidentity_pull_request_change_does_not_invalidate_resolution(
+        self,
+    ) -> None:
+        final_pull_requests = self.pull_requests.with_name("pull-requests-after.json")
+        document = json.loads(self.pull_requests.read_text(encoding="utf-8"))
+        document[0]["baseRefOid"] = self.unrelated
+        document[0]["isDraft"] = True
+        final_pull_requests.write_text(json.dumps(document) + "\n", encoding="utf-8")
+
+        result = self.resolve(final_pull_requests=final_pull_requests)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        resolved = json.loads(result.stdout)
+        pull_request = resolved["surfaces"]["grounding-docs"]["pullRequest"]
+        self.assertEqual(pull_request["baseRefOid"], self.unrelated)
+        self.assertTrue(pull_request["isDraft"])
+
+    def test_alias_move_during_resolution_fails_closed(self) -> None:
+        result = self.resolve(
+            alias_move=("refs/heads/ivan/stack-tips/dev-tooling", self.unrelated)
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.error_code(result), "ALIAS_CHANGED_DURING_RESOLUTION")
+
+    def test_command_failure_reports_only_safe_process_evidence(self) -> None:
+        self.remote.rename(self.remote.with_name("unavailable.git"))
+
+        result = self.resolve()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.error_code(result), "ALIAS_QUERY_FAILED")
+        evidence = self.error_document(result)["error"]["evidence"]
+        self.assertEqual(set(evidence), {"returnCode", "stdoutSha256", "stderrSha256"})
+        self.assertRegex(evidence["stdoutSha256"], r"^sha256:[0-9a-f]{64}$")
+        self.assertRegex(evidence["stderrSha256"], r"^sha256:[0-9a-f]{64}$")
+
+    def test_missing_gh_returns_a_json_error_envelope(self) -> None:
+        result = self.resolve(missing_gh=True)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.error_code(result), "PR_QUERY_FAILED")
+        evidence = self.error_document(result)["error"]["evidence"]
+        self.assertEqual(evidence, {"command": "gh", "osError": "FileNotFoundError"})
+
+    def test_nonobject_pull_request_entry_fails_closed(self) -> None:
+        self.pull_requests.write_text("[null]\n", encoding="utf-8")
+
+        result = self.resolve()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.error_code(result), "PR_QUERY_INVALID")
+
+    def test_maximum_pull_request_page_fails_as_truncated(self) -> None:
+        document = json.loads(self.pull_requests.read_text(encoding="utf-8"))
+        document.extend({"number": number} for number in range(3, 1001))
+        self.pull_requests.write_text(json.dumps(document) + "\n", encoding="utf-8")
+
+        result = self.resolve()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.error_code(result), "PR_QUERY_TRUNCATED")
+
+    def test_command_runner_is_bounded_and_noninteractive(self) -> None:
+        resolver = load_resolver_module()
+        with mock.patch.dict(
+            os.environ,
+            {
+                "GIT_SSH_COMMAND": "LC_ALL=C ssh -F 'fixture config'",
+                "GIT_DIR": str(self.remote),
+                "GIT_WORK_TREE": str(self.provider),
+                "GIT_COMMON_DIR": str(self.remote),
+                "GIT_INDEX_FILE": str(self.remote / "fixture-index"),
+                "GIT_OBJECT_DIRECTORY": str(self.remote / "objects"),
+                "GIT_ALTERNATE_OBJECT_DIRECTORIES": str(
+                    self.unrelated_provider / ".git" / "objects"
+                ),
+            },
+            clear=False,
+        ):
+            environment_check = resolver.run(
+                [
+                    sys.executable,
+                    "-c",
+                    (
+                        "import os; "
+                        "print(os.environ['GIT_TERMINAL_PROMPT'], "
+                        "os.environ['GIT_ASKPASS'], "
+                        "os.environ['GCM_INTERACTIVE'], "
+                        "os.environ['GH_PROMPT_DISABLED'], "
+                        "os.environ['SSH_ASKPASS'], "
+                        "os.environ['SSH_ASKPASS_REQUIRE']); "
+                        "print(os.environ['GIT_SSH_COMMAND']); "
+                        "print(any(name in os.environ for name in ("
+                        "'GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', "
+                        "'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY', "
+                        "'GIT_ALTERNATE_OBJECT_DIRECTORIES')))"
+                    ),
+                ],
+                cwd=self.consumer,
+                failure_code="ENVIRONMENT_CHECK_FAILED",
+                timeout_seconds=30,
+            )
+        self.assertEqual(
+            environment_check.stdout.strip(),
+            "0 false never 1 false never\n"
+            "LC_ALL=C ssh -o BatchMode=yes -F 'fixture config'\n"
+            "False",
+        )
+
+        with mock.patch.dict(
+            os.environ, {"GIT_SSH_COMMAND": "ssh -o BatchMode=no"}, clear=False
+        ):
+            batch_mode_override = resolver.run(
+                [
+                    sys.executable,
+                    "-c",
+                    "import os; print(os.environ['GIT_SSH_COMMAND'])",
+                ],
+                cwd=self.consumer,
+                failure_code="ENVIRONMENT_CHECK_FAILED",
+                timeout_seconds=30,
+            )
+        self.assertEqual(
+            batch_mode_override.stdout.strip(),
+            "ssh -o BatchMode=yes -o BatchMode=no",
+        )
+
+        with mock.patch.dict(
+            os.environ,
+            {"GIT_SSH_COMMAND": "plink -P 22"},
+            clear=False,
+        ):
+            putty_command = resolver.run(
+                [
+                    sys.executable,
+                    "-c",
+                    "import os; print(os.environ['GIT_SSH_COMMAND'])",
+                ],
+                cwd=self.consumer,
+                failure_code="ENVIRONMENT_CHECK_FAILED",
+                timeout_seconds=30,
+            )
+        self.assertEqual(putty_command.stdout.strip(), "plink -P 22")
+
+        with self.assertRaises(resolver.ContractError) as raised:
+            resolver.run(
+                [sys.executable, "-c", "import time; time.sleep(1)"],
+                cwd=self.consumer,
+                failure_code="COMMAND_TIMED_OUT",
+                timeout_seconds=0.01,
+            )
+        self.assertEqual(raised.exception.code, "COMMAND_TIMED_OUT")
+        self.assertEqual(
+            raised.exception.evidence,
+            {"command": Path(sys.executable).name, "timeoutSeconds": 0.01},
+        )
+
+    def test_does_not_accept_file_backed_contract_overrides(self) -> None:
+        for flag, value in (
+            ("--manifest", self.manifest),
+            ("--pr-json", self.pull_requests),
+        ):
+            with self.subTest(flag):
+                result = run(
+                    sys.executable,
+                    str(RESOLVER),
+                    "--repo",
+                    str(self.consumer),
+                    flag,
+                    str(value),
+                    cwd=self.consumer,
+                    check=False,
+                )
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(f"unrecognized arguments: {flag}", result.stderr)
+
+
+if __name__ == "__main__":
+    unittest.main()

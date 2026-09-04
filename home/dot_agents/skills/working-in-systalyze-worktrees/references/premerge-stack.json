@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "repository": "github.com/systalyze/systalyze",
+  "remoteUrls": [
+    "https://github.com/systalyze/systalyze",
+    "ssh://git@github.com/systalyze/systalyze.git"
+  ],
+  "surfaces": [
+    {
+      "name": "grounding-docs",
+      "role": "product-base",
+      "ref": "refs/heads/ivan/stack-tips/grounding-docs"
+    },
+    {
+      "name": "dev-tooling",
+      "role": "qa-overlay",
+      "ref": "refs/heads/ivan/stack-tips/dev-tooling"
+    }
+  ],
+  "relationships": [
+    {
+      "left": "grounding-docs",
+      "right": "dev-tooling",
+      "require": "common-ancestor"
+    }
+  ]
+}
