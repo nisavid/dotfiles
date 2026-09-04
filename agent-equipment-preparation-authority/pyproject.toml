@@ -1,0 +1,13 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agent-equipment-preparation-authority"
+version = "0.1.0"
+description = "Candidate-independent preparation authority for Agent Equipment"
+requires-python = ">=3.12"
+dependencies = ["jsonschema>=4.25,<5", "referencing>=0.36,<1"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agent_equipment_preparation"]
