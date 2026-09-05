@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import importlib.util
 import json
 import os
@@ -1084,7 +1085,7 @@ os.execlp(
         self.assertEqual(self.error_code(result), "TLS_VERIFICATION_DISABLED")
         self.assertFalse(self.fake_gh_arguments.exists())
 
-    def test_rejects_shell_credential_helper_before_network_reads(self) -> None:
+    def test_discards_shell_credential_helper_before_network_reads(self) -> None:
         remote_url = "https://github.com/systalyze/systalyze"
         helper_marker = self.consumer.parent / "credential-helper-marker"
         git(self.consumer, "remote", "set-url", "origin", remote_url)
@@ -1100,37 +1101,104 @@ os.execlp(
         result = self.resolve()
 
         self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(
-            self.error_code(result),
-            "CREDENTIAL_HELPER_UNSUPPORTED",
-        )
+        self.assertEqual(self.error_code(result), "ALIAS_QUERY_FAILED")
         self.assertFalse(helper_marker.exists())
         self.assertFalse(self.fake_gh_arguments.exists())
 
-    def test_rejects_every_executable_credential_helper_form(self) -> None:
+    def test_discards_all_checkout_credential_configuration(self) -> None:
         resolver = load_resolver_module()
-
-        for key, value in (
-            ("credential.helper", "!printf exploited"),
-            ("credential.helper", "store"),
-            ("credential.helper", "/checkout/controlled/helper"),
-            ("credential.https://github.com.helper", "manager"),
-        ):
-            with self.subTest(key=key, value=value):
-                with self.assertRaises(resolver.ContractError) as raised:
-                    resolver.apply_git_config_snapshot({}, ((key, value),))
-
-                self.assertEqual(
-                    raised.exception.code,
-                    "CREDENTIAL_HELPER_UNSUPPORTED",
-                )
-
         environment: dict[str, str] = {}
         resolver.apply_git_config_snapshot(
             environment,
-            (("credential.helper", ""),),
+            (
+                ("credential.helper", ""),
+                ("credential.helper", "!printf exploited"),
+                ("credential.username", "checkout-user"),
+                ("credential.useHttpPath", "true"),
+                ("credential.https://github.com.helper", "manager"),
+                ("http.proxy", "http://127.0.0.1:9"),
+            ),
         )
-        self.assertEqual(environment["GIT_CONFIG_VALUE_0"], "")
+        self.assertEqual(environment["GIT_CONFIG_COUNT"], "1")
+        self.assertEqual(environment["GIT_CONFIG_KEY_0"], "http.proxy")
+        self.assertEqual(environment["GIT_CONFIG_VALUE_0"], "http://127.0.0.1:9")
+
+    def test_authenticated_https_git_configuration_is_url_scoped(self) -> None:
+        resolver = load_resolver_module()
+        remote_url = "https://github.com/systalyze/systalyze"
+        captured_environment: dict[str, str] = {}
+
+        def capture_process(
+            arguments: list[str],
+            *,
+            cwd: Path,
+            environment: dict[str, str],
+            timeout_seconds: float,
+        ) -> subprocess.CompletedProcess[bytes]:
+            del cwd, timeout_seconds
+            captured_environment.update(environment)
+            return subprocess.CompletedProcess(arguments, 0, b"", b"")
+
+        with (
+            mock.patch.dict(
+                os.environ,
+                {
+                    "GIT_CURL_VERBOSE": "1",
+                    "GIT_TRACE_CURL": "1",
+                    "GIT_TRACE_PACKET": "1",
+                },
+                clear=False,
+            ),
+            mock.patch.object(
+                resolver,
+                "run_process_bytes",
+                side_effect=capture_process,
+            ),
+        ):
+            result = resolver.run(
+                ["git", "ls-remote", "--refs", remote_url],
+                cwd=self.consumer,
+                failure_code="ALIAS_QUERY_FAILED",
+                uses_ssh_transport=False,
+                git_config_snapshot=(
+                    ("credential.helper", "!printf exploited"),
+                    ("http.extraHeader", "Authorization: Basic checkout"),
+                    ("http.proxy", "http://127.0.0.1:9"),
+                ),
+                git_https_authentication=(remote_url, "fixture-token"),
+            )
+
+        configured = [
+            (
+                captured_environment[f"GIT_CONFIG_KEY_{index}"],
+                captured_environment[f"GIT_CONFIG_VALUE_{index}"],
+            )
+            for index in range(int(captured_environment["GIT_CONFIG_COUNT"]))
+        ]
+        authorization = dict(configured)[f"http.{remote_url}.extraHeader"]
+        scheme, encoded = authorization.split(maxsplit=2)[1:]
+        self.assertEqual(scheme, "Basic")
+        self.assertEqual(
+            base64.b64decode(encoded),
+            b"x-access-token:fixture-token",
+        )
+        self.assertEqual(
+            dict(configured)[f"http.{remote_url}.followRedirects"],
+            "false",
+        )
+        self.assertIn(("http.proxy", "http://127.0.0.1:9"), configured)
+        self.assertFalse(any(key.startswith("credential.") for key, _ in configured))
+        self.assertEqual(
+            sum(key.casefold().endswith(".extraheader") for key, _ in configured),
+            1,
+        )
+        self.assertFalse(
+            any(
+                name in captured_environment
+                for name in ("GIT_CURL_VERBOSE", "GIT_TRACE_CURL", "GIT_TRACE_PACKET")
+            )
+        )
+        self.assertNotIn("fixture-token", " ".join(result.args))
 
     def test_https_tls_trust_anchor_override_fails_closed(self) -> None:
         remote_url = "https://github.com/systalyze/systalyze"

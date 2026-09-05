@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import re
@@ -81,6 +82,7 @@ class VerifiedRemote(NamedTuple):
 
 
 GitConfigSnapshot = tuple[tuple[str, str], ...]
+GitHttpsAuthentication = tuple[str, str]
 SshDestination = tuple[str, int]
 CachedAliases = dict[str, "str | None"]
 
@@ -200,19 +202,15 @@ def apply_git_config_snapshot(
     isolated = []
     for key, value in snapshot:
         normalized_key = key.casefold()
-        if (
-            normalized_key.startswith("credential.")
-            and normalized_key.endswith(".helper")
-            and value
+        if normalized_key.startswith("credential.") or (
+            normalized_key.startswith(("http.", "https."))
+            and normalized_key.endswith(".extraheader")
         ):
-            raise ContractError(
-                "CREDENTIAL_HELPER_UNSUPPORTED",
-                source="gitConfig",
-            )
+            continue
         if normalized_key in {
             "core.sshcommand",
             "ssh.variant",
-        } or normalized_key.startswith(("credential.", "http.", "https.", "protocol.")):
+        } or normalized_key.startswith(("http.", "https.", "protocol.")):
             isolated.append((key, value))
 
     environment.update(
@@ -226,6 +224,39 @@ def apply_git_config_snapshot(
     for index, (key, value) in enumerate(isolated):
         environment[f"GIT_CONFIG_KEY_{index}"] = key
         environment[f"GIT_CONFIG_VALUE_{index}"] = value
+
+
+def apply_git_https_authentication(
+    environment: dict[str, str],
+    authentication: GitHttpsAuthentication | None,
+    *,
+    uses_ssh_transport: bool | None,
+    isolated_git_config: bool,
+) -> None:
+    if authentication is None:
+        return
+    if uses_ssh_transport is not False or not isolated_git_config:
+        raise ValueError("Git HTTPS authentication requires isolated HTTPS Git")
+    remote_url, token = authentication
+    if (
+        urlparse(remote_url).scheme != "https"
+        or not token
+        or any(character.isspace() for character in token)
+    ):
+        raise ValueError("invalid Git HTTPS authentication")
+    for variable in tuple(environment):
+        if variable == "GIT_CURL_VERBOSE" or variable.startswith("GIT_TRACE"):
+            environment.pop(variable, None)
+    count = int(environment.get("GIT_CONFIG_COUNT", "0"))
+    encoded = base64.b64encode(f"x-access-token:{token}".encode()).decode("ascii")
+    settings = (
+        (f"http.{remote_url}.extraHeader", f"Authorization: Basic {encoded}"),
+        (f"http.{remote_url}.followRedirects", "false"),
+    )
+    environment["GIT_CONFIG_COUNT"] = str(count + len(settings))
+    for offset, (key, value) in enumerate(settings, start=count):
+        environment[f"GIT_CONFIG_KEY_{offset}"] = key
+        environment[f"GIT_CONFIG_VALUE_{offset}"] = value
 
 
 def remove_dynamic_loader_environment(environment: dict[str, str]) -> None:
@@ -791,6 +822,7 @@ def run(
     uses_ssh_transport: bool | None = None,
     ssh_destination: SshDestination | None = None,
     git_config_snapshot: GitConfigSnapshot | None = None,
+    git_https_authentication: GitHttpsAuthentication | None = None,
     object_directory: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     arguments, command_name = pin_top_level_executable(
@@ -842,6 +874,12 @@ def run(
         environment["GIT_OBJECT_DIRECTORY"] = str(object_directory)
     if git_config_snapshot is not None:
         apply_git_config_snapshot(environment, git_config_snapshot)
+    apply_git_https_authentication(
+        environment,
+        git_https_authentication,
+        uses_ssh_transport=uses_ssh_transport,
+        isolated_git_config=git_config_snapshot is not None,
+    )
     if uses_ssh_transport is True:
         pin_git_ssh_variant(environment, ssh_destination)
         ssh_command = configured_ssh_command(
@@ -902,6 +940,7 @@ def git(
     uses_ssh_transport: bool | None = None,
     ssh_destination: SshDestination | None = None,
     git_config_snapshot: GitConfigSnapshot | None = None,
+    git_https_authentication: GitHttpsAuthentication | None = None,
     object_directory: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     return run(
@@ -912,6 +951,7 @@ def git(
         uses_ssh_transport=uses_ssh_transport,
         ssh_destination=ssh_destination,
         git_config_snapshot=git_config_snapshot,
+        git_https_authentication=git_https_authentication,
         object_directory=object_directory,
     )
 
@@ -1333,6 +1373,7 @@ def query_aliases(
     uses_ssh_transport: bool,
     ssh_destination: SshDestination | None,
     git_config_snapshot: GitConfigSnapshot,
+    github_token: str = "",
 ) -> dict[str, str]:
     result = git(
         transport_repo,
@@ -1344,6 +1385,11 @@ def query_aliases(
         uses_ssh_transport=uses_ssh_transport,
         ssh_destination=ssh_destination,
         git_config_snapshot=git_config_snapshot,
+        git_https_authentication=(
+            (remote_url, github_token)
+            if urlparse(remote_url).scheme == "https" and github_token
+            else None
+        ),
     )
     observed: dict[str, list[str]] = {}
     for line in result.stdout.splitlines():
@@ -1383,6 +1429,7 @@ def fetch_immutable_objects(
     uses_ssh_transport: bool,
     ssh_destination: SshDestination | None,
     git_config_snapshot: GitConfigSnapshot,
+    github_token: str = "",
 ) -> None:
     git(
         transport_repo,
@@ -1399,6 +1446,11 @@ def fetch_immutable_objects(
         uses_ssh_transport=uses_ssh_transport,
         ssh_destination=ssh_destination,
         git_config_snapshot=git_config_snapshot,
+        git_https_authentication=(
+            (remote_url, github_token)
+            if urlparse(remote_url).scheme == "https" and github_token
+            else None
+        ),
         object_directory=object_directory,
     )
     for oid in aliases.values():
@@ -1719,6 +1771,7 @@ def resolve(arguments: argparse.Namespace) -> dict[str, Any]:
             uses_ssh_transport=uses_ssh_transport,
             ssh_destination=ssh_destination,
             git_config_snapshot=git_config_snapshot,
+            github_token=github_token,
         )
         pull_requests = load_pull_requests(
             repo,
@@ -1742,6 +1795,7 @@ def resolve(arguments: argparse.Namespace) -> dict[str, Any]:
             uses_ssh_transport=uses_ssh_transport,
             ssh_destination=ssh_destination,
             git_config_snapshot=git_config_snapshot,
+            github_token=github_token,
         )
         verify_cached_aliases(
             transport_repo,
@@ -1789,6 +1843,7 @@ def resolve(arguments: argparse.Namespace) -> dict[str, Any]:
             uses_ssh_transport=uses_ssh_transport,
             ssh_destination=ssh_destination,
             git_config_snapshot=git_config_snapshot,
+            github_token=github_token,
         )
         if final_aliases != aliases:
             raise ContractError(
@@ -1822,6 +1877,7 @@ def resolve(arguments: argparse.Namespace) -> dict[str, Any]:
             uses_ssh_transport=uses_ssh_transport,
             ssh_destination=ssh_destination,
             git_config_snapshot=git_config_snapshot,
+            github_token=github_token,
         )
         if aliases_after_pr_query != aliases:
             raise ContractError(
