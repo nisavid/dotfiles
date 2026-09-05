@@ -17,7 +17,7 @@ Do not freeze branch stacks, package runners, gitlink handling, or universal smo
 
 ## Apply the temporary pre-merge contract
 
-While `references/premerge-stack.json` exists, it is the sole source of the temporary grounding-docs and dev-tooling stack alias names. Before creating or publishing product work, or publishing either provider stack, read `references/premerge-stack-surfaces.md` and run `python3 scripts/resolve_premerge_stack.py --repo <checkout> --remote <remote>` against the verified Systalyze remote.
+While `references/premerge-stack.json` exists, it is the sole source of the temporary grounding-docs and dev-tooling stack alias names. Before creating or publishing product work, or publishing either provider stack, read `references/premerge-stack-surfaces.md` and run `python3 "$HOME/.agents/skills/working-in-systalyze-worktrees/scripts/resolve_premerge_stack.py" --repo <checkout> --remote <remote>` against the verified Systalyze remote.
 
 The resolver binds fresh aliases to immutable OIDs and one live PR head each, verifies their required common history, and reports current containment in both directions. A missing, stale, structurally inconsistent, concurrently moved, or unexpectedly rewritten alias is a stop condition. Report the observed refs and OIDs and coordinate with the owning stack task. Do not substitute ordinary PR branches, cached OIDs, remembered PR numbers, or a previously working local tree.
 

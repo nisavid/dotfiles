@@ -4,14 +4,16 @@ The manifest beside this file owns every temporary alias name and lineage rule. 
 
 ## Resolve a consumer snapshot
 
-Run `python3 scripts/resolve_premerge_stack.py --repo <checkout> --remote <remote>` before branch preparation and again immediately before product publication. Git 2.29 or newer is required because preserving `FETCH_HEAD` depends on `git fetch --no-write-fetch-head`.
+Run `python3 "$HOME/.agents/skills/working-in-systalyze-worktrees/scripts/resolve_premerge_stack.py" --repo <checkout> --remote <remote>` before branch preparation and again immediately before product publication. Git 2.29 or newer is required because preserving `FETCH_HEAD` depends on `git fetch --no-write-fetch-head`.
 
 The resolver:
 
-- verifies that the selected remote is one of the manifest's Systalyze endpoints and binds every network read to that verified URL;
-- runs Git and GitHub reads without credential prompts and with a finite per-command timeout;
+- rejects credential-bearing remote URLs, verifies that the selected remote is one of the manifest's Systalyze endpoints, and binds every network read to that verified URL and SSH destination;
+- freezes the caller's authentication and HTTP transport settings, drops URL rewrite rules, and performs network Git reads from a private bare transport repository;
+- rejects grafted, shallow, or promisor repositories and remotes without the standard branch-cache refspec before trusting local graph state;
+- runs Git and GitHub reads without credential prompts and with a finite per-command timeout that terminates the command's process group;
 - queries both aliases without relying on local remote-tracking refs;
-- fetches only the immutable objects, without moving refs, writing `FETCH_HEAD`, or recursing into nested repositories;
+- fetches only the immutable objects, without moving refs, writing `FETCH_HEAD`, recursing into nested repositories, or starting automatic repository maintenance;
 - requires each OID to equal exactly one current open head in the Systalyze repository;
 - verifies the manifest's common-history rule, reports both containment directions, and checks any non-fast-forward change from a cached alias; and
 - queries both PR identities and the aliases again so a concurrent move or PR replacement fails the run.

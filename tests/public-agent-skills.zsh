@@ -102,8 +102,8 @@ test_systalyze_worktrees() {
 
   assert_contains "$skill" 'sole source of the temporary grounding-docs and dev-tooling stack alias names' \
     'Systalyze alias names must have one policy source'
-  assert_contains "$skill" 'python3 scripts/resolve_premerge_stack.py --repo <checkout> --remote <remote>' \
-    'Systalyze resolver invocation must include its required checkout and remote arguments'
+  assert_contains "$skill" 'python3 "$HOME/.agents/skills/working-in-systalyze-worktrees/scripts/resolve_premerge_stack.py" --repo <checkout> --remote <remote>' \
+    'Systalyze resolver invocation must be anchored to its installed skill and include the required arguments'
   assert_contains "$skill" 'Do not substitute ordinary PR branches, cached OIDs, remembered PR numbers' \
     'Systalyze alias failure must not fall back to volatile topology'
   assert_contains "$skill" 'disposable local-only projection' \

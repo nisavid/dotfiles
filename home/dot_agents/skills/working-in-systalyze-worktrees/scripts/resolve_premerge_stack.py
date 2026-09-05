@@ -8,8 +8,10 @@ import json
 import os
 import re
 import shlex
+import signal
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any, NamedTuple
 from urllib.parse import urlparse
@@ -19,6 +21,7 @@ SHELL_ASSIGNMENT_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=.*$")
 PR_IDENTITY_KEYS = ("number", "headRefName", "headRefOid")
 PR_QUERY_LIMIT = 1000
 COMMAND_TIMEOUT_SECONDS = 60.0
+PROCESS_TERMINATION_GRACE_SECONDS = 1.0
 EXPECTED_SURFACE_ROLES = {
     "grounding-docs": "product-base",
     "dev-tooling": "qa-overlay",
@@ -43,6 +46,132 @@ class VerifiedRemote(NamedTuple):
     identity: str
 
 
+GitConfigSnapshot = tuple[tuple[str, str], ...]
+SshDestination = tuple[str, int]
+
+
+def process_output_hashes(
+    result: subprocess.CompletedProcess[bytes],
+) -> dict[str, str]:
+    return {
+        "stdoutSha256": "sha256:" + hashlib.sha256(result.stdout).hexdigest(),
+        "stderrSha256": "sha256:" + hashlib.sha256(result.stderr).hexdigest(),
+    }
+
+
+def terminate_process_group(process: subprocess.Popen[bytes]) -> None:
+    if os.name == "posix":
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    else:
+        process.terminate()
+    try:
+        process.communicate(timeout=PROCESS_TERMINATION_GRACE_SECONDS)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    if os.name == "posix":
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    else:
+        process.kill()
+    process.communicate()
+
+
+def run_process_bytes(
+    arguments: list[str],
+    *,
+    cwd: Path,
+    environment: dict[str, str],
+    timeout_seconds: float,
+) -> subprocess.CompletedProcess[bytes]:
+    process = subprocess.Popen(
+        arguments,
+        cwd=cwd,
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=os.name == "posix",
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        terminate_process_group(process)
+        raise
+    return subprocess.CompletedProcess(
+        arguments,
+        process.returncode,
+        stdout,
+        stderr,
+    )
+
+
+def decode_process_output(
+    result: subprocess.CompletedProcess[bytes],
+    *,
+    failure_code: str,
+    command_name: str,
+    **evidence: object,
+) -> subprocess.CompletedProcess[str]:
+    try:
+        stdout = result.stdout.decode("utf-8")
+        stderr = result.stderr.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ContractError(
+            failure_code,
+            command=command_name,
+            outputEncodingInvalid=True,
+            **process_output_hashes(result),
+            **evidence,
+        ) from error
+    return subprocess.CompletedProcess(
+        result.args,
+        result.returncode,
+        stdout,
+        stderr,
+    )
+
+
+def apply_git_config_snapshot(
+    environment: dict[str, str], snapshot: GitConfigSnapshot
+) -> None:
+    for variable in tuple(environment):
+        if variable in {
+            "GIT_CONFIG",
+            "GIT_CONFIG_COUNT",
+            "GIT_CONFIG_GLOBAL",
+            "GIT_CONFIG_NOSYSTEM",
+            "GIT_CONFIG_PARAMETERS",
+            "GIT_CONFIG_SYSTEM",
+        } or re.fullmatch(r"GIT_CONFIG_(?:KEY|VALUE)_\d+", variable):
+            environment.pop(variable, None)
+
+    isolated = []
+    for key, value in snapshot:
+        normalized_key = key.casefold()
+        if normalized_key in {
+            "core.sshcommand",
+            "ssh.variant",
+        } or normalized_key.startswith(("credential.", "http.", "https.", "protocol.")):
+            isolated.append((key, value))
+
+    environment.update(
+        {
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_SYSTEM": os.devnull,
+            "GIT_CONFIG_COUNT": str(len(isolated)),
+        }
+    )
+    for index, (key, value) in enumerate(isolated):
+        environment[f"GIT_CONFIG_KEY_{index}"] = key
+        environment[f"GIT_CONFIG_VALUE_{index}"] = value
+
+
 def configured_ssh_command(
     cwd: Path,
     environment: dict[str, str],
@@ -53,14 +182,11 @@ def configured_ssh_command(
     if "GIT_SSH_COMMAND" in environment:
         return environment["GIT_SSH_COMMAND"]
     try:
-        result = subprocess.run(
+        raw_result = run_process_bytes(
             ["git", "config", "--get", "core.sshCommand"],
             cwd=cwd,
-            env=environment,
-            text=True,
-            capture_output=True,
-            check=False,
-            timeout=timeout_seconds,
+            environment=environment,
+            timeout_seconds=timeout_seconds,
         )
     except subprocess.TimeoutExpired as error:
         raise ContractError(
@@ -76,19 +202,22 @@ def configured_ssh_command(
             sshCommandQueryFailed=True,
             osError=type(error).__name__,
         ) from error
-    if result.returncode == 1:
+    if raw_result.returncode == 1:
         return "ssh"
-    if result.returncode != 0:
+    if raw_result.returncode != 0:
         raise ContractError(
             failure_code,
             command="git",
             sshCommandQueryFailed=True,
-            returnCode=result.returncode,
-            stdoutSha256="sha256:"
-            + hashlib.sha256(result.stdout.encode("utf-8")).hexdigest(),
-            stderrSha256="sha256:"
-            + hashlib.sha256(result.stderr.encode("utf-8")).hexdigest(),
+            returnCode=raw_result.returncode,
+            **process_output_hashes(raw_result),
         )
+    result = decode_process_output(
+        raw_result,
+        failure_code=failure_code,
+        command_name="git",
+        sshCommandQueryFailed=True,
+    )
     return result.stdout.rstrip("\n")
 
 
@@ -199,12 +328,12 @@ def ssh_program_index(
     return program_index
 
 
-def noninteractive_ssh_command(
+def parse_ssh_shell_words(
     ssh_command: str,
     *,
     failure_code: str,
     command_name: str,
-) -> str:
+) -> list[ShellWord]:
     if not ssh_command.strip():
         raise ContractError(
             failure_code,
@@ -250,6 +379,79 @@ def noninteractive_ssh_command(
             command=command_name,
             sshCommandUnsupported=True,
         )
+    return shell_words
+
+
+def plink_injected_arguments(
+    configured_arguments: list[str],
+    port: int,
+    *,
+    failure_code: str,
+    command_name: str,
+) -> list[str]:
+    index = 0
+    while index < len(configured_arguments):
+        argument = configured_arguments[index]
+        if argument == "-batch":
+            index += 1
+            continue
+        if argument == "-P" and index + 1 < len(configured_arguments):
+            if configured_arguments[index + 1] == str(port):
+                index += 2
+                continue
+        elif argument == f"-P{port}":
+            index += 1
+            continue
+        raise ContractError(
+            failure_code,
+            command=command_name,
+            sshCommandUnsupported=True,
+        )
+    return ["-batch", "-P", str(port)]
+
+
+def ssh_injected_arguments(
+    program: str,
+    configured_arguments: list[str],
+    ssh_destination: SshDestination | None,
+    *,
+    failure_code: str,
+    command_name: str,
+) -> list[str]:
+    if program in {"ssh", "ssh.exe"}:
+        arguments = ["-o", "BatchMode=yes"]
+        if ssh_destination is not None:
+            host, port = ssh_destination
+            arguments.extend(["-o", f"HostName={host}", "-o", f"Port={port}"])
+        return arguments
+    if program in {"plink", "plink.exe", "tortoiseplink", "tortoiseplink.exe"}:
+        if ssh_destination is None:
+            return ["-batch"]
+        return plink_injected_arguments(
+            configured_arguments,
+            ssh_destination[1],
+            failure_code=failure_code,
+            command_name=command_name,
+        )
+    raise ContractError(
+        failure_code,
+        command=command_name,
+        sshCommandUnsupported=True,
+    )
+
+
+def noninteractive_ssh_command(
+    ssh_command: str,
+    *,
+    failure_code: str,
+    command_name: str,
+    ssh_destination: SshDestination | None = None,
+) -> str:
+    shell_words = parse_ssh_shell_words(
+        ssh_command,
+        failure_code=failure_code,
+        command_name=command_name,
+    )
 
     program_index = ssh_program_index(
         shell_words,
@@ -261,18 +463,16 @@ def noninteractive_ssh_command(
         failure_code=failure_code,
         command_name=command_name,
     )
-    if program in {"ssh", "ssh.exe"}:
-        option = " -o BatchMode=yes"
-    elif program in {"plink", "plink.exe", "tortoiseplink", "tortoiseplink.exe"}:
-        option = " -batch"
-    else:
-        raise ContractError(
-            failure_code,
-            command=command_name,
-            sshCommandUnsupported=True,
-        )
+    injected_arguments = ssh_injected_arguments(
+        program,
+        [word.value for word in shell_words[program_index + 1 :]],
+        ssh_destination,
+        failure_code=failure_code,
+        command_name=command_name,
+    )
     insertion_point = shell_words[program_index].raw_end
-    return ssh_command[:insertion_point] + option + ssh_command[insertion_point:]
+    options = "".join(f" {shlex.quote(value)}" for value in injected_arguments)
+    return ssh_command[:insertion_point] + options + ssh_command[insertion_point:]
 
 
 def run(
@@ -284,6 +484,9 @@ def run(
     timeout_seconds: float = COMMAND_TIMEOUT_SECONDS,
     github_host: str | None = None,
     uses_ssh_transport: bool | None = None,
+    ssh_destination: SshDestination | None = None,
+    git_config_snapshot: GitConfigSnapshot | None = None,
+    object_directory: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     environment = os.environ.copy()
     for variable in (
@@ -299,6 +502,7 @@ def run(
         {
             "GIT_TERMINAL_PROMPT": "0",
             "GIT_ASKPASS": "false",
+            "GIT_NO_LAZY_FETCH": "1",
             "GIT_NO_REPLACE_OBJECTS": "1",
             "GCM_INTERACTIVE": "never",
             "GH_PROMPT_DISABLED": "1",
@@ -308,6 +512,10 @@ def run(
     )
     if github_host is not None:
         environment["GH_HOST"] = github_host
+    if object_directory is not None:
+        environment["GIT_OBJECT_DIRECTORY"] = str(object_directory)
+    if git_config_snapshot is not None:
+        apply_git_config_snapshot(environment, git_config_snapshot)
     if uses_ssh_transport is True:
         ssh_command = configured_ssh_command(
             cwd,
@@ -319,20 +527,18 @@ def run(
             ssh_command,
             failure_code=failure_code,
             command_name=Path(arguments[0]).name,
+            ssh_destination=ssh_destination,
         )
     elif uses_ssh_transport is False:
         # A verified non-SSH URL may still be subject to a later Git URL rewrite.
         # Block that transport transition without interpreting the user's wrapper.
         environment["GIT_SSH_COMMAND"] = "false"
     try:
-        result = subprocess.run(
+        raw_result = run_process_bytes(
             arguments,
             cwd=cwd,
-            env=environment,
-            text=True,
-            capture_output=True,
-            check=False,
-            timeout=timeout_seconds,
+            environment=environment,
+            timeout_seconds=timeout_seconds,
         )
     except subprocess.TimeoutExpired as error:
         raise ContractError(
@@ -346,18 +552,19 @@ def run(
             command=Path(arguments[0]).name,
             osError=type(error).__name__,
         ) from error
-    if result.returncode not in allowed_returncodes:
+    if raw_result.returncode not in allowed_returncodes:
         # Process output may contain credential-helper or remote details. Keep
         # diagnostic correlation without copying those bytes into task evidence.
         raise ContractError(
             failure_code,
-            returnCode=result.returncode,
-            stdoutSha256="sha256:"
-            + hashlib.sha256(result.stdout.encode("utf-8")).hexdigest(),
-            stderrSha256="sha256:"
-            + hashlib.sha256(result.stderr.encode("utf-8")).hexdigest(),
+            returnCode=raw_result.returncode,
+            **process_output_hashes(raw_result),
         )
-    return result
+    return decode_process_output(
+        raw_result,
+        failure_code=failure_code,
+        command_name=Path(arguments[0]).name,
+    )
 
 
 def git(
@@ -366,6 +573,9 @@ def git(
     failure_code: str = "GIT_COMMAND_FAILED",
     allowed_returncodes: tuple[int, ...] = (0,),
     uses_ssh_transport: bool | None = None,
+    ssh_destination: SshDestination | None = None,
+    git_config_snapshot: GitConfigSnapshot | None = None,
+    object_directory: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     return run(
         ["git", *arguments],
@@ -373,28 +583,51 @@ def git(
         failure_code=failure_code,
         allowed_returncodes=allowed_returncodes,
         uses_ssh_transport=uses_ssh_transport,
+        ssh_destination=ssh_destination,
+        git_config_snapshot=git_config_snapshot,
+        object_directory=object_directory,
     )
 
 
 def normalize_remote_url(value: str) -> str | None:
     try:
         remote_url = value.strip()
-        scp_match = re.fullmatch(r"(?:[^/@]+@)?([^/:]+):(.+)", remote_url)
+        scp_match = re.fullmatch(
+            r"(?:(?P<user>[A-Za-z0-9._-]+)@)?"
+            r"(?P<host>[^/:]+):(?P<path>.+)",
+            remote_url,
+        )
         if scp_match and "://" not in remote_url:
-            host, path = scp_match.groups()
-            if "[" in host or "]" in host:
+            user = scp_match.group("user")
+            host = scp_match.group("host")
+            path = scp_match.group("path")
+            if "[" in host or "]" in host or "?" in path or "#" in path:
                 return None
-            return (
-                f"ssh://{host.lower()}/{path.strip('/').removesuffix('.git').lower()}"
-            )
+            authority = f"{user.casefold()}@" if user is not None else ""
+            authority += host.lower()
+            return f"ssh://{authority}/{path.strip('/').removesuffix('.git').lower()}"
 
         parsed = urlparse(remote_url)
+        if parsed.params or parsed.query or parsed.fragment:
+            return None
         if parsed.scheme in {"https", "ssh"}:
             hostname = parsed.hostname
             port = parsed.port
             if hostname is None:
                 return None
-            authority = hostname.lower()
+            if parsed.password is not None or (
+                parsed.scheme == "https" and parsed.username is not None
+            ):
+                return None
+            username = parsed.username
+            if username is not None and not re.fullmatch(r"[A-Za-z0-9._-]+", username):
+                return None
+            authority = (
+                f"{username.casefold()}@"
+                if parsed.scheme == "ssh" and username is not None
+                else ""
+            )
+            authority += hostname.lower()
             if port is not None:
                 authority += f":{port}"
             return (
@@ -506,6 +739,92 @@ def load_manifest(path: Path) -> dict[str, Any]:
     return document
 
 
+def read_git_config_snapshot(repo: Path) -> GitConfigSnapshot:
+    result = git(
+        repo,
+        "config",
+        "--null",
+        "--list",
+        failure_code="REPOSITORY_CONFIG_INVALID",
+    )
+    entries = []
+    for record in result.stdout.split("\0"):
+        if not record:
+            continue
+        key, separator, value = record.partition("\n")
+        if not separator or not key:
+            raise ContractError("REPOSITORY_CONFIG_INVALID")
+        entries.append((key, value))
+    return tuple(entries)
+
+
+def resolve_git_path(repo: Path, name: str) -> Path:
+    result = git(
+        repo,
+        "rev-parse",
+        "--git-path",
+        name,
+        failure_code="REPOSITORY_STATE_INVALID",
+    )
+    path = Path(result.stdout.strip())
+    return path if path.is_absolute() else (repo / path).resolve()
+
+
+def config_value_is_true(value: str) -> bool:
+    normalized = value.strip().casefold()
+    return normalized not in {"", "false", "no", "off", "0"}
+
+
+def verify_repository_state(
+    repo: Path,
+    remote: str,
+    config_snapshot: GitConfigSnapshot,
+) -> None:
+    if os.path.lexists(resolve_git_path(repo, "info/grafts")):
+        raise ContractError("REPOSITORY_GRAFTS_UNSUPPORTED")
+
+    shallow = git(
+        repo,
+        "rev-parse",
+        "--is-shallow-repository",
+        failure_code="REPOSITORY_STATE_INVALID",
+    ).stdout.strip()
+    if shallow == "true":
+        raise ContractError("SHALLOW_REPOSITORY_UNSUPPORTED")
+    if shallow != "false":
+        raise ContractError("REPOSITORY_STATE_INVALID")
+
+    for key, value in config_snapshot:
+        normalized_key = key.casefold()
+        if normalized_key == "extensions.partialclone" and value:
+            raise ContractError("PROMISOR_REPOSITORY_UNSUPPORTED")
+        if (
+            normalized_key.startswith("remote.")
+            and normalized_key.endswith(".promisor")
+            and config_value_is_true(value)
+        ):
+            raise ContractError("PROMISOR_REPOSITORY_UNSUPPORTED")
+
+    fetch_key = f"remote.{remote}.fetch".casefold()
+    fetch_refspecs = [
+        value for key, value in config_snapshot if key.casefold() == fetch_key
+    ]
+    expected_refspec = f"refs/heads/*:refs/remotes/{remote}/*"
+    if not fetch_refspecs or any(
+        value.removeprefix("+") != expected_refspec for value in fetch_refspecs
+    ):
+        raise ContractError("REMOTE_FETCH_REFSPEC_UNSUPPORTED")
+
+
+def ssh_destination_for_identity(identity: str) -> SshDestination | None:
+    parsed = urlparse(identity)
+    if parsed.scheme != "ssh":
+        return None
+    if parsed.hostname is None:
+        raise ContractError("REMOTE_IDENTITY_MISMATCH")
+    return parsed.hostname, parsed.port or 22
+
+
 def verify_repository_identity(repository: str, remote_identity: str) -> str:
     host, owner, name = repository.split("/")
     try:
@@ -557,21 +876,25 @@ def verify_remote(repo: Path, remote: str, manifest: dict[str, Any]) -> Verified
 
 
 def query_aliases(
-    repo: Path,
+    transport_repo: Path,
     remote_url: str,
     surfaces: list[dict[str, str]],
     *,
     initial: bool,
     uses_ssh_transport: bool,
+    ssh_destination: SshDestination | None,
+    git_config_snapshot: GitConfigSnapshot,
 ) -> dict[str, str]:
     result = git(
-        repo,
+        transport_repo,
         "ls-remote",
         "--refs",
         remote_url,
         *(surface["ref"] for surface in surfaces),
         failure_code="ALIAS_QUERY_FAILED",
         uses_ssh_transport=uses_ssh_transport,
+        ssh_destination=ssh_destination,
+        git_config_snapshot=git_config_snapshot,
     )
     observed: dict[str, list[str]] = {}
     for line in result.stdout.splitlines():
@@ -603,14 +926,20 @@ def query_aliases(
 
 def fetch_immutable_objects(
     repo: Path,
+    transport_repo: Path,
+    object_directory: Path,
     remote_url: str,
     aliases: dict[str, str],
     *,
     uses_ssh_transport: bool,
+    ssh_destination: SshDestination | None,
+    git_config_snapshot: GitConfigSnapshot,
 ) -> None:
     git(
-        repo,
+        transport_repo,
         "fetch",
+        # Git 2.29 spelling; newer Git treats this as --no-auto-maintenance.
+        "--no-auto-gc",
         "--no-tags",
         "--no-write-fetch-head",
         "--recurse-submodules=no",
@@ -618,6 +947,9 @@ def fetch_immutable_objects(
         *dict.fromkeys(aliases.values()),
         failure_code="ALIAS_OBJECT_FETCH_FAILED",
         uses_ssh_transport=uses_ssh_transport,
+        ssh_destination=ssh_destination,
+        git_config_snapshot=git_config_snapshot,
+        object_directory=object_directory,
     )
     for oid in aliases.values():
         git(
@@ -797,82 +1129,109 @@ def resolve(arguments: argparse.Namespace) -> dict[str, Any]:
     )
     manifest = load_manifest(manifest_path)
     verified_remote = verify_remote(repo, arguments.remote, manifest)
+    git_config_snapshot = read_git_config_snapshot(repo)
+    verify_repository_state(repo, arguments.remote, git_config_snapshot)
     github_host = verify_repository_identity(
         manifest["repository"], verified_remote.identity
     )
-    uses_ssh_transport = urlparse(verified_remote.identity).scheme == "ssh"
+    ssh_destination = ssh_destination_for_identity(verified_remote.identity)
+    uses_ssh_transport = ssh_destination is not None
     surfaces = manifest["surfaces"]
-    aliases = query_aliases(
-        repo,
-        verified_remote.url,
-        surfaces,
-        initial=True,
-        uses_ssh_transport=uses_ssh_transport,
-    )
-    fetch_immutable_objects(
-        repo,
-        verified_remote.url,
-        aliases,
-        uses_ssh_transport=uses_ssh_transport,
-    )
-    verify_cached_aliases(repo, arguments.remote, surfaces, aliases)
-    pull_requests = load_pull_requests(repo, manifest["repository"], github_host)
-    bindings = bind_pull_requests(surfaces, aliases, pull_requests)
-
-    relationships = []
-    for relationship in manifest["relationships"]:
-        left_oid = aliases[relationship["left"]]
-        right_oid = aliases[relationship["right"]]
-        merge_base_oid = find_merge_base(repo, left_oid, right_oid)
-        relationships.append(
-            {
-                **relationship,
-                "leftOid": left_oid,
-                "rightOid": right_oid,
-                "mergeBaseOid": merge_base_oid,
-                "leftIsAncestorOfRight": is_ancestor(repo, left_oid, right_oid),
-                "rightIsAncestorOfLeft": is_ancestor(repo, right_oid, left_oid),
-            }
+    object_directory = resolve_git_path(repo, "objects")
+    with tempfile.TemporaryDirectory(prefix="resolve-premerge-stack-") as directory:
+        transport_root = Path(directory)
+        transport_repo = transport_root / "transport.git"
+        git(
+            transport_root,
+            "init",
+            "--bare",
+            str(transport_repo),
+            failure_code="TRANSPORT_REPOSITORY_FAILED",
+            git_config_snapshot=(),
         )
-
-    final_aliases = query_aliases(
-        repo,
-        verified_remote.url,
-        surfaces,
-        initial=False,
-        uses_ssh_transport=uses_ssh_transport,
-    )
-    if final_aliases != aliases:
-        raise ContractError(
-            "ALIAS_CHANGED_DURING_RESOLUTION",
-            before=aliases,
-            after=final_aliases,
+        aliases = query_aliases(
+            transport_repo,
+            verified_remote.url,
+            surfaces,
+            initial=True,
+            uses_ssh_transport=uses_ssh_transport,
+            ssh_destination=ssh_destination,
+            git_config_snapshot=git_config_snapshot,
         )
-
-    final_pull_requests = load_pull_requests(repo, manifest["repository"], github_host)
-    final_bindings = bind_pull_requests(surfaces, aliases, final_pull_requests)
-    initial_identities = pull_request_identities(bindings)
-    final_identities = pull_request_identities(final_bindings)
-    if final_identities != initial_identities:
-        raise ContractError(
-            "PR_CHANGED_DURING_RESOLUTION",
-            before=initial_identities,
-            after=final_identities,
+        fetch_immutable_objects(
+            repo,
+            transport_repo,
+            object_directory,
+            verified_remote.url,
+            aliases,
+            uses_ssh_transport=uses_ssh_transport,
+            ssh_destination=ssh_destination,
+            git_config_snapshot=git_config_snapshot,
         )
+        verify_cached_aliases(repo, arguments.remote, surfaces, aliases)
+        pull_requests = load_pull_requests(repo, manifest["repository"], github_host)
+        bindings = bind_pull_requests(surfaces, aliases, pull_requests)
 
-    aliases_after_pr_query = query_aliases(
-        repo,
-        verified_remote.url,
-        surfaces,
-        initial=False,
-        uses_ssh_transport=uses_ssh_transport,
-    )
-    if aliases_after_pr_query != aliases:
-        raise ContractError(
-            "ALIAS_CHANGED_DURING_RESOLUTION",
-            before=aliases,
-            after=aliases_after_pr_query,
+        relationships = []
+        for relationship in manifest["relationships"]:
+            left_oid = aliases[relationship["left"]]
+            right_oid = aliases[relationship["right"]]
+            merge_base_oid = find_merge_base(repo, left_oid, right_oid)
+            relationships.append(
+                {
+                    **relationship,
+                    "leftOid": left_oid,
+                    "rightOid": right_oid,
+                    "mergeBaseOid": merge_base_oid,
+                    "leftIsAncestorOfRight": is_ancestor(repo, left_oid, right_oid),
+                    "rightIsAncestorOfLeft": is_ancestor(repo, right_oid, left_oid),
+                }
+            )
+
+        final_aliases = query_aliases(
+            transport_repo,
+            verified_remote.url,
+            surfaces,
+            initial=False,
+            uses_ssh_transport=uses_ssh_transport,
+            ssh_destination=ssh_destination,
+            git_config_snapshot=git_config_snapshot,
         )
+        if final_aliases != aliases:
+            raise ContractError(
+                "ALIAS_CHANGED_DURING_RESOLUTION",
+                before=aliases,
+                after=final_aliases,
+            )
+
+        final_pull_requests = load_pull_requests(
+            repo, manifest["repository"], github_host
+        )
+        final_bindings = bind_pull_requests(surfaces, aliases, final_pull_requests)
+        initial_identities = pull_request_identities(bindings)
+        final_identities = pull_request_identities(final_bindings)
+        if final_identities != initial_identities:
+            raise ContractError(
+                "PR_CHANGED_DURING_RESOLUTION",
+                before=initial_identities,
+                after=final_identities,
+            )
+
+        aliases_after_pr_query = query_aliases(
+            transport_repo,
+            verified_remote.url,
+            surfaces,
+            initial=False,
+            uses_ssh_transport=uses_ssh_transport,
+            ssh_destination=ssh_destination,
+            git_config_snapshot=git_config_snapshot,
+        )
+        if aliases_after_pr_query != aliases:
+            raise ContractError(
+                "ALIAS_CHANGED_DURING_RESOLUTION",
+                before=aliases,
+                after=aliases_after_pr_query,
+            )
 
     resolved_surfaces = {
         surface["name"]: {

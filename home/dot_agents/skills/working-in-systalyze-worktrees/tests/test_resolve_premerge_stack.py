@@ -3,10 +3,12 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import ModuleType
@@ -136,6 +138,21 @@ if count == 0 and os.environ.get("FIXTURE_GH_REPLACEMENT_REMOTE_URL"):
             "set-url",
             "origin",
             os.environ["FIXTURE_GH_REPLACEMENT_REMOTE_URL"],
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+if count == 0 and os.environ.get("FIXTURE_GH_INSTEAD_OF_SOURCE"):
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            os.environ["FIXTURE_GH_REPO"],
+            "config",
+            "--add",
+            f"url.{os.environ['FIXTURE_GH_INSTEAD_OF_TARGET']}.insteadOf",
+            os.environ["FIXTURE_GH_INSTEAD_OF_SOURCE"],
         ],
         check=True,
         capture_output=True,
@@ -300,6 +317,7 @@ os.execlp(
         final_pull_requests: Path | None = None,
         alias_move: tuple[str, str] | None = None,
         replacement_remote_url: str | None = None,
+        instead_of_rewrite: tuple[str, str] | None = None,
         missing_gh: bool = False,
     ) -> subprocess.CompletedProcess[str]:
         self.fake_gh_count.unlink(missing_ok=True)
@@ -333,6 +351,15 @@ os.execlp(
                 {
                     "FIXTURE_GH_REPO": str(self.consumer),
                     "FIXTURE_GH_REPLACEMENT_REMOTE_URL": replacement_remote_url,
+                }
+            )
+        if instead_of_rewrite is not None:
+            source, target = instead_of_rewrite
+            environment.update(
+                {
+                    "FIXTURE_GH_REPO": str(self.consumer),
+                    "FIXTURE_GH_INSTEAD_OF_SOURCE": source,
+                    "FIXTURE_GH_INSTEAD_OF_TARGET": target,
                 }
             )
         return run(
@@ -446,6 +473,77 @@ os.execlp(
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(ssh_calls.exists())
 
+    def test_late_same_transport_rewrite_cannot_redirect_verified_operations(
+        self,
+    ) -> None:
+        original_url = self.remote.as_uri()
+        mirror = self.remote.with_name("mirror.git")
+        run("git", "init", "--bare", str(mirror), cwd=self.consumer.parent)
+        mirror_url = mirror.as_uri()
+        git(self.consumer, "remote", "set-url", "origin", original_url)
+        self.write_manifest([original_url])
+
+        result = self.resolve(
+            instead_of_rewrite=(original_url, mirror_url),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_rejects_nonstandard_remote_fetch_mapping(self) -> None:
+        git(self.consumer, "config", "--unset-all", "remote.origin.fetch")
+        git(
+            self.consumer,
+            "config",
+            "--add",
+            "remote.origin.fetch",
+            "+refs/heads/*:refs/cache/origin/*",
+        )
+
+        result = self.resolve()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(
+            self.error_code(result),
+            "REMOTE_FETCH_REFSPEC_UNSUPPORTED",
+        )
+
+    def test_rejects_repository_grafts_before_network_access(self) -> None:
+        graft_path = Path(git(self.consumer, "rev-parse", "--git-path", "info/grafts"))
+        if not graft_path.is_absolute():
+            graft_path = self.consumer / graft_path
+        graft_path.parent.mkdir(parents=True, exist_ok=True)
+        graft_path.write_text(
+            f"{self.grounding} {self.unrelated}\n",
+            encoding="utf-8",
+        )
+
+        result = self.resolve()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.error_code(result), "REPOSITORY_GRAFTS_UNSUPPORTED")
+        self.assertFalse(self.fake_gh_arguments.exists())
+
+    def test_rejects_shallow_repository_with_specific_error(self) -> None:
+        shallow_path = Path(git(self.consumer, "rev-parse", "--git-path", "shallow"))
+        if not shallow_path.is_absolute():
+            shallow_path = self.consumer / shallow_path
+        shallow_path.write_text(f"{self.base}\n", encoding="utf-8")
+
+        result = self.resolve()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.error_code(result), "SHALLOW_REPOSITORY_UNSUPPORTED")
+        self.assertFalse(self.fake_gh_arguments.exists())
+
+    def test_rejects_promisor_repository_before_object_lookup(self) -> None:
+        git(self.consumer, "config", "remote.origin.promisor", "true")
+
+        result = self.resolve()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.error_code(result), "PROMISOR_REPOSITORY_UNSUPPORTED")
+        self.assertFalse(self.fake_gh_arguments.exists())
+
     def test_non_ssh_network_operation_blocks_late_ssh_rewrite(self) -> None:
         resolver = load_resolver_module()
         ssh_calls = self.configure_fake_ssh_transport()
@@ -500,6 +598,8 @@ os.execlp(
             with self.subTest(arguments=arguments):
                 option_index = arguments.index("-o")
                 self.assertEqual(arguments[option_index + 1], "BatchMode=yes")
+                self.assertIn("HostName=fixture", arguments)
+                self.assertIn("Port=22", arguments)
                 self.assertTrue(arguments[-1].startswith("git-upload-pack "))
 
     def test_ssh_remote_rejects_unrecognized_wrapper_before_transport(self) -> None:
@@ -895,6 +995,38 @@ os.execlp(
             resolver.normalize_remote_url(scp_prefix + "systalyze/systalyze.git"),
         )
 
+    def test_remote_identity_rejects_embedded_credentials_and_url_metadata(
+        self,
+    ) -> None:
+        resolver = load_resolver_module()
+
+        for remote_url in (
+            "https://user@github.com/systalyze/systalyze.git",
+            "https://user:token@github.com/systalyze/systalyze.git",
+            "https://github.com/systalyze/systalyze.git?token=secret",
+            "https://github.com/systalyze/systalyze.git#secret",
+            "ssh://git:secret@github.com/systalyze/systalyze.git",
+            "ssh://git@github.com/systalyze/systalyze.git?token=secret",
+            "ssh://git@github.com/systalyze/systalyze.git#secret",
+        ):
+            with self.subTest(remote_url=remote_url):
+                self.assertIsNone(resolver.normalize_remote_url(remote_url))
+
+        self.assertEqual(
+            resolver.normalize_remote_url("git@github.com:systalyze/systalyze.git"),
+            resolver.normalize_remote_url(
+                "ssh://git@github.com/systalyze/systalyze.git"
+            ),
+        )
+        self.assertNotEqual(
+            resolver.normalize_remote_url(
+                "ssh://other@github.com/systalyze/systalyze.git"
+            ),
+            resolver.normalize_remote_url(
+                "ssh://git@github.com/systalyze/systalyze.git"
+            ),
+        )
+
     def test_remote_port_is_part_of_verified_identity(self) -> None:
         git(
             self.consumer,
@@ -1092,6 +1224,171 @@ os.execlp(
             raised.exception.evidence,
             {"command": Path(sys.executable).name, "timeoutSeconds": 0.01},
         )
+
+    def test_command_runner_disables_lazy_fetch(self) -> None:
+        resolver = load_resolver_module()
+
+        environment_check = resolver.run(
+            [
+                sys.executable,
+                "-c",
+                "import os; print(os.environ['GIT_NO_LAZY_FETCH'])",
+            ],
+            cwd=self.consumer,
+            failure_code="ENVIRONMENT_CHECK_FAILED",
+        )
+
+        self.assertEqual(environment_check.stdout.strip(), "1")
+
+    def test_command_runner_hashes_invalid_failure_output_as_bytes(self) -> None:
+        resolver = load_resolver_module()
+
+        with self.assertRaises(resolver.ContractError) as raised:
+            resolver.run(
+                [
+                    sys.executable,
+                    "-c",
+                    "import os; os.write(2, b'\\xff'); raise SystemExit(7)",
+                ],
+                cwd=self.consumer,
+                failure_code="INVALID_OUTPUT_FAILED",
+            )
+
+        self.assertEqual(raised.exception.code, "INVALID_OUTPUT_FAILED")
+        self.assertEqual(raised.exception.evidence["returnCode"], 7)
+        self.assertRegex(
+            cast(str, raised.exception.evidence["stdoutSha256"]),
+            r"^sha256:[0-9a-f]{64}$",
+        )
+        self.assertRegex(
+            cast(str, raised.exception.evidence["stderrSha256"]),
+            r"^sha256:[0-9a-f]{64}$",
+        )
+
+    def test_command_runner_wraps_invalid_success_output(self) -> None:
+        resolver = load_resolver_module()
+
+        with self.assertRaises(resolver.ContractError) as raised:
+            resolver.run(
+                [
+                    sys.executable,
+                    "-c",
+                    "import os; os.write(1, b'\\xff')",
+                ],
+                cwd=self.consumer,
+                failure_code="INVALID_OUTPUT_FAILED",
+            )
+
+        self.assertEqual(raised.exception.code, "INVALID_OUTPUT_FAILED")
+        self.assertEqual(raised.exception.evidence["outputEncodingInvalid"], True)
+        self.assertRegex(
+            cast(str, raised.exception.evidence["stdoutSha256"]),
+            r"^sha256:[0-9a-f]{64}$",
+        )
+        self.assertRegex(
+            cast(str, raised.exception.evidence["stderrSha256"]),
+            r"^sha256:[0-9a-f]{64}$",
+        )
+
+    def test_command_timeout_terminates_descendants(self) -> None:
+        resolver = load_resolver_module()
+        marker = self.consumer.parent / "descendant-survived"
+        descendant = (
+            "import pathlib,time; time.sleep(0.4); "
+            f"pathlib.Path({str(marker)!r}).write_text('alive', encoding='utf-8')"
+        )
+        parent = (
+            "import subprocess,sys,time; "
+            "subprocess.Popen([sys.executable, '-c', sys.argv[1]], "
+            "stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, "
+            "stderr=subprocess.DEVNULL); time.sleep(30)"
+        )
+
+        with self.assertRaises(resolver.ContractError) as raised:
+            resolver.run(
+                [sys.executable, "-c", parent, descendant],
+                cwd=self.consumer,
+                failure_code="COMMAND_TIMED_OUT",
+                timeout_seconds=0.05,
+            )
+
+        self.assertEqual(raised.exception.code, "COMMAND_TIMED_OUT")
+        time.sleep(0.6)
+        self.assertFalse(marker.exists())
+
+    def test_openssh_destination_is_pinned_before_configured_overrides(self) -> None:
+        resolver = load_resolver_module()
+        ssh_config = self.consumer.parent / "ssh-config"
+        ssh_config.write_text(
+            "Host github.com\n  HostName mirror.invalid\n  Port 2222\n",
+            encoding="utf-8",
+        )
+        command = resolver.noninteractive_ssh_command(
+            f"ssh -F {shlex.quote(str(ssh_config))} "
+            "-o HostName=other.invalid -o Port=3333",
+            failure_code="SSH_CONFIGURATION_FAILED",
+            command_name="git",
+            ssh_destination=("github.com", 22),
+        )
+
+        effective = run(
+            *shlex.split(command),
+            "-G",
+            "github.com",
+            cwd=self.consumer,
+        )
+        settings = dict(
+            line.split(maxsplit=1)
+            for line in effective.stdout.splitlines()
+            if " " in line
+        )
+        self.assertEqual(settings["hostname"], "github.com")
+        self.assertEqual(settings["port"], "22")
+
+    def test_plink_destination_changing_configuration_fails_closed(self) -> None:
+        resolver = load_resolver_module()
+
+        with (
+            mock.patch.dict(
+                os.environ,
+                {"GIT_SSH_COMMAND": "plink -load mirror"},
+                clear=False,
+            ),
+            self.assertRaises(resolver.ContractError) as raised,
+        ):
+            resolver.run(
+                [sys.executable, "-c", "raise SystemExit(0)"],
+                cwd=self.consumer,
+                failure_code="SSH_CONFIGURATION_FAILED",
+                uses_ssh_transport=True,
+                ssh_destination=("github.com", 22),
+            )
+
+        self.assertEqual(raised.exception.code, "SSH_CONFIGURATION_FAILED")
+        self.assertEqual(raised.exception.evidence["sshCommandUnsupported"], True)
+
+    def test_immutable_fetch_disables_automatic_maintenance(self) -> None:
+        resolver = load_resolver_module()
+        completed = subprocess.CompletedProcess(
+            args=["git"],
+            returncode=0,
+            stdout="",
+            stderr="",
+        )
+
+        with mock.patch.object(resolver, "git", return_value=completed) as git_command:
+            resolver.fetch_immutable_objects(
+                self.consumer,
+                self.remote,
+                self.consumer / ".git" / "objects",
+                self.remote.as_uri(),
+                {"grounding-docs": self.grounding},
+                uses_ssh_transport=False,
+                ssh_destination=None,
+                git_config_snapshot=(),
+            )
+
+        self.assertIn("--no-auto-gc", git_command.call_args_list[0].args)
 
     def test_command_runner_preserves_ssh_command_without_transport_mode(self) -> None:
         resolver = load_resolver_module()
