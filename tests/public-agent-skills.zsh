@@ -84,6 +84,138 @@ test_context7() {
   assert_symlink_source "$link" '../../.agents/skills/context7-mcp'
 }
 
+test_systalyze_worktrees() {
+  local skill_dir="$repo_dir/home/dot_agents/skills/working-in-systalyze-worktrees"
+  local skill="$skill_dir/SKILL.md"
+  local reference="$skill_dir/references/premerge-stack-surfaces.md"
+  local manifest="$skill_dir/references/premerge-stack.json"
+  local resolver="$skill_dir/scripts/resolve_premerge_stack.py"
+  local resolver_tests="$skill_dir/tests/test_resolve_premerge_stack.py"
+  local link="$repo_dir/home/dot_claude/skills/symlink_working-in-systalyze-worktrees"
+
+  assert_skill_frontmatter "$skill" working-in-systalyze-worktrees
+  [[ -f "$reference" ]] || fail 'missing Systalyze pre-merge stack procedure'
+  [[ -f "$manifest" ]] || fail 'missing Systalyze pre-merge stack manifest'
+  [[ -f "$resolver" ]] || fail 'missing Systalyze pre-merge stack resolver'
+  [[ -f "$resolver_tests" ]] || fail 'missing Systalyze pre-merge stack resolver tests'
+  assert_symlink_source "$link" '../../.agents/skills/working-in-systalyze-worktrees'
+
+  assert_contains "$skill" 'sole source of the temporary grounding-docs and dev-tooling stack alias names' \
+    'Systalyze alias names must have one policy source'
+  assert_contains "$skill" 'LD_AUDIT= \' \
+    'Systalyze resolver invocation must neutralize loader injection before process startup'
+  assert_contains "$skill" 'LD_LIBRARY_PATH=/dev/null \' \
+    'Systalyze resolver invocation must clear dynamic-loader injection before starting Python'
+  assert_contains "$skill" 'OPENSSL_CONF=/dev/null \' \
+    'Systalyze resolver invocation must clear OpenSSL injection before starting Python'
+  assert_contains "$skill" 'OPENSSL_MODULES=/dev/null &&' \
+    'Systalyze resolver invocation must stop when startup neutralization fails'
+  assert_contains "$skill" 'startup_environment_variables = (' \
+    'Systalyze resolver invocation must enumerate startup variables inside isolated Python'
+  assert_contains "$skill" 'os.environ.pop(variable, None)' \
+    'Systalyze resolver invocation must remove neutralized startup variables before loading the resolver'
+  assert_contains "$skill" 'account_home = pwd.getpwuid(os.getuid()).pw_dir' \
+    'Systalyze resolver invocation must derive the installed home independently of ambient HOME'
+  assert_contains "$skill" 'os.environ["HOME"] = account_home' \
+    'Systalyze resolver invocation must restore the trusted account home before loading the resolver'
+  assert_contains "$skill" 'runpy.run_path(resolver, run_name="__main__")' \
+    'Systalyze resolver invocation must load the resolver through isolated Python'
+  assert_contains "$skill" "' --repo <checkout> --remote=<remote>" \
+    'Systalyze resolver invocation must pass the required arguments after the isolated bootstrap'
+  assert_contains "$reference" 'LD_AUDIT= \' \
+    'Systalyze resolver procedure must neutralize loader injection before process startup'
+  assert_contains "$reference" 'LD_LIBRARY_PATH=/dev/null \' \
+    'Systalyze resolver procedure must clear dynamic-loader injection before starting Python'
+  assert_contains "$reference" 'OPENSSL_CONF=/dev/null \' \
+    'Systalyze resolver procedure must clear OpenSSL injection before starting Python'
+  assert_contains "$reference" 'OPENSSL_MODULES=/dev/null &&' \
+    'Systalyze resolver procedure must stop when startup neutralization fails'
+  assert_contains "$reference" 'startup_environment_variables = (' \
+    'Systalyze resolver procedure must enumerate startup variables inside isolated Python'
+  assert_contains "$reference" 'os.environ.pop(variable, None)' \
+    'Systalyze resolver procedure must remove neutralized startup variables before loading the resolver'
+  assert_contains "$reference" 'account_home = pwd.getpwuid(os.getuid()).pw_dir' \
+    'Systalyze resolver procedure must derive the installed home independently of ambient HOME'
+  assert_contains "$reference" 'os.environ["HOME"] = account_home' \
+    'Systalyze resolver procedure must restore the trusted account home before loading the resolver'
+  assert_contains "$reference" 'runpy.run_path(resolver, run_name="__main__")' \
+    'Systalyze resolver procedure must load the resolver through isolated Python'
+  assert_contains "$reference" "' --repo <checkout> --remote=<remote>" \
+    'Systalyze resolver procedure must pass the required arguments after the isolated bootstrap'
+  ! rg -F -q -- '$HOME/.agents/skills/working-in-systalyze-worktrees/scripts/resolve_premerge_stack.py' \
+    "$skill" "$reference" || \
+    fail 'Systalyze resolver launcher must not trust ambient HOME for its script path'
+  ! rg -q '^import hashlib$' "$resolver" || \
+    fail 'Systalyze resolver must not load OpenSSL before its startup environment checks'
+  ! rg -q '^[[:space:]]+(unset|exec) ' "$skill" "$reference" || \
+    fail 'Systalyze resolver launcher must not call imported unset or exec functions'
+  local launcher_output
+  launcher_output="$(
+    /bin/bash --noprofile --norc -c \
+      'export LD_PRELOAD=/private/tmp/not-a-library; readonly LD_PRELOAD; ( LD_PRELOAD= OPENSSL_CONF=/dev/null && /usr/bin/python3 -I -S -c '\''print("launched")'\'' )' \
+      2>/dev/null || :
+  )"
+  [[ -z "$launcher_output" ]] || \
+    fail 'Systalyze resolver launcher must stop before process startup when loader neutralization fails'
+  launcher_output="$(
+    /bin/bash --noprofile --norc -c \
+      'export OPENSSL_CONF=/private/tmp/not-a-config; readonly OPENSSL_CONF; ( LD_PRELOAD= OPENSSL_CONF=/dev/null && /usr/bin/python3 -I -S -c '\''print("launched")'\'' )' \
+      2>/dev/null || :
+  )"
+  [[ -z "$launcher_output" ]] || \
+    fail 'Systalyze resolver launcher must stop before process startup when OpenSSL neutralization fails'
+  launcher_output="$(
+    /usr/bin/env \
+      'BASH_FUNC_unset%%=() { printf "forged-unset\n"; }' \
+      'BASH_FUNC_exec%%=() { printf "forged-exec\n"; }' \
+      LD_PRELOAD=/private/tmp/not-a-library \
+      LD_LIBRARY_PATH=/private/tmp/not-a-library-path \
+      OPENSSL_CONF=/private/tmp/not-a-config \
+      /bin/bash --noprofile --norc -c \
+      'type -t unset; type -t exec; ( LD_PRELOAD= LD_LIBRARY_PATH=/dev/null OPENSSL_CONF=/dev/null && /usr/bin/python3 -I -S -c "$1" )' \
+      launcher \
+      'import os; expected = {"LD_PRELOAD": "", "LD_LIBRARY_PATH": "/dev/null", "OPENSSL_CONF": "/dev/null"}; clean = all(os.environ.get(key) == value for key, value in expected.items()); [os.environ.pop(key, None) for key in expected]; print("clean" if clean and all(key not in os.environ for key in expected) else "tainted")' \
+      2>/dev/null
+  )"
+  [[ "$launcher_output" == $'function\nfunction\nclean' ]] || \
+    fail 'Systalyze resolver launcher must bypass imported cleanup and dispatch functions'
+  assert_contains "$skill" 'Do not substitute ordinary PR branches, cached OIDs, remembered PR numbers' \
+    'Systalyze alias failure must not fall back to volatile topology'
+  assert_contains "$skill" 'disposable local-only projection' \
+    'Systalyze product QA must stay out of product history'
+  assert_contains "$skill" 'exact CAS lease' \
+    'Systalyze provider aliases must advance through exact CAS'
+  assert_contains "$reference" 'Reconstructing the stack from ordinary PR topology is not a fallback.' \
+    'Systalyze consumer failures must stop rather than reconstruct aliases'
+  assert_contains "$reference" 'discards checkout-provided Git credential configuration and authorization headers' \
+    'Systalyze resolver procedure must isolate authenticated HTTPS reads from checkout credentials'
+  assert_contains "$reference" 'disabling redirects, credential-bearing traces, and TLS key logging' \
+    'Systalyze resolver procedure must prevent caller-selected TLS session-key capture'
+  assert_contains "$reference" 'first parent is `P` and second parent is `D`' \
+    'Systalyze local QA projection must have an exact merge shape'
+  assert_contains "$reference" "planner's terminal \`verified\` result" \
+    'Systalyze provider alias updates must be post-verified'
+
+  jq -e '
+    .schemaVersion == 1 and
+    .repository == "github.com/systalyze/systalyze" and
+    ([.surfaces[].role] | sort) == ["product-base", "qa-overlay"] and
+    ([.surfaces[].name] | unique | length) == 2 and
+    ([.surfaces[].ref] | unique | length) == 2 and
+    all(.surfaces[]; .ref | startswith("refs/heads/ivan/stack-tips/")) and
+    (.relationships | length) == 1 and
+    .relationships[0].require == "common-ancestor" and
+    ([.relationships[0].left, .relationships[0].right] | sort) ==
+      ([.surfaces[].name] | sort)
+  ' "$manifest" >/dev/null || fail 'Systalyze pre-merge stack manifest is invalid'
+
+  if rg -n '#[0-9]+|[0-9a-f]{40}' "$skill" "$reference" "$manifest"; then
+    fail 'Systalyze pre-merge policy must not freeze PR numbers or commit OIDs'
+  fi
+
+  python3 -m unittest discover -s "$skill_dir/tests" -p 'test_*.py'
+}
+
 test_skill_creator_adapter() {
   local adapter_dir="$repo_dir/home/dot_agents/skills/adapting-skill-creator-to-harnesses"
 
@@ -493,6 +625,13 @@ case "${1:-all}" in
       "$HOME/.claude/skills/context7-mcp"
     )
     ;;
+  systalyze-worktrees)
+    test_systalyze_worktrees
+    projection_targets=(
+      "$HOME/.agents/skills/working-in-systalyze-worktrees"
+      "$HOME/.claude/skills/working-in-systalyze-worktrees"
+    )
+    ;;
   git-publication)
     test_skill_creator_adapter
     test_git_publication
@@ -527,6 +666,7 @@ case "${1:-all}" in
     ;;
   all)
     test_context7
+    test_systalyze_worktrees
     test_skill_creator_adapter
     test_git_publication
     test_pr_publication
@@ -535,6 +675,8 @@ case "${1:-all}" in
     projection_targets=(
       "$HOME/.agents/skills/context7-mcp"
       "$HOME/.claude/skills/context7-mcp"
+      "$HOME/.agents/skills/working-in-systalyze-worktrees"
+      "$HOME/.claude/skills/working-in-systalyze-worktrees"
       "$HOME/.agents/skills/checkpointing-and-publishing-git-work"
       "$HOME/.claude/skills/checkpointing-and-publishing-git-work"
       "$HOME/.agents/skills/graphite"
@@ -549,7 +691,7 @@ case "${1:-all}" in
     )
     ;;
   *)
-    fail 'usage: public-agent-skills.zsh [context7|git-publication|pr-publication|model-selection|review-output|all]'
+    fail 'usage: public-agent-skills.zsh [context7|systalyze-worktrees|git-publication|pr-publication|model-selection|review-output|all]'
     ;;
 esac
 
@@ -560,7 +702,7 @@ isolated_home="$tmpdir/home"
 mkdir -p -- "$isolated_source/dot_agents/skills" "$isolated_source/dot_claude/skills" "$isolated_home"
 
 for skill in \
-  checkpointing-and-publishing-git-work context7-mcp graphite \
+  checkpointing-and-publishing-git-work context7-mcp working-in-systalyze-worktrees graphite \
   publishing-reviewable-prs writing-reviewable-pr-descriptions \
   choosing-agent-models reviewing-others-prs; do
   cp -R -- \
@@ -569,7 +711,7 @@ for skill in \
 done
 
 for link in \
-  checkpointing-and-publishing-git-work context7-mcp graphite \
+  checkpointing-and-publishing-git-work context7-mcp working-in-systalyze-worktrees graphite \
   publishing-reviewable-prs writing-reviewable-pr-descriptions \
   choosing-agent-models; do
   cp -- \
@@ -595,7 +737,7 @@ for target in $isolated_targets; do
 done
 
 for skill in \
-  checkpointing-and-publishing-git-work context7-mcp graphite \
+  checkpointing-and-publishing-git-work context7-mcp working-in-systalyze-worktrees graphite \
   publishing-reviewable-prs writing-reviewable-pr-descriptions \
   choosing-agent-models; do
   canonical="$isolated_home/.agents/skills/$skill"
