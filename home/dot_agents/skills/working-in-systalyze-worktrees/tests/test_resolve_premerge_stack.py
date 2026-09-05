@@ -5,6 +5,7 @@ import json
 import os
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -623,6 +624,36 @@ os.execlp(
             )
 
         self.assertFalse(ssh_calls.exists())
+
+    def test_https_tls_verification_override_fails_closed(self) -> None:
+        remote_url = "https://github.com/systalyze/systalyze"
+        git(self.consumer, "remote", "set-url", "origin", remote_url)
+        git(self.consumer, "config", "http.proxy", "http://127.0.0.1:9")
+        git(self.consumer, "config", "http.sslVerify", "false")
+        self.write_manifest([remote_url])
+
+        result = self.resolve()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.error_code(result), "TLS_VERIFICATION_DISABLED")
+        self.assertFalse(self.fake_gh_arguments.exists())
+
+    def test_https_tls_environment_override_fails_closed(self) -> None:
+        remote_url = "https://github.com/systalyze/systalyze"
+        git(self.consumer, "remote", "set-url", "origin", remote_url)
+        git(self.consumer, "config", "http.proxy", "http://127.0.0.1:9")
+        self.write_manifest([remote_url])
+
+        with mock.patch.dict(
+            os.environ,
+            {"GIT_SSL_NO_VERIFY": "1"},
+            clear=False,
+        ):
+            result = self.resolve()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.error_code(result), "TLS_VERIFICATION_DISABLED")
+        self.assertFalse(self.fake_gh_arguments.exists())
 
     def test_resolver_hardens_every_ssh_remote_operation(self) -> None:
         ssh_calls = self.configure_ssh_remote()
@@ -1452,6 +1483,38 @@ os.execlp(
         self.assertEqual(raised.exception.code, "COMMAND_TIMED_OUT")
         time.sleep(0.6)
         self.assertFalse(marker.exists())
+
+    def test_timeout_cleanup_bounds_final_pipe_drain(self) -> None:
+        resolver = load_resolver_module()
+        process = mock.Mock(
+            pid=12345,
+            stdout=mock.Mock(),
+            stderr=mock.Mock(),
+        )
+        process.communicate.side_effect = subprocess.TimeoutExpired(
+            cmd="fixture",
+            timeout=0.05,
+        )
+        process.wait.side_effect = subprocess.TimeoutExpired(
+            cmd="fixture",
+            timeout=0.05,
+        )
+
+        with mock.patch.object(resolver.os, "killpg") as kill_group:
+            resolver.terminate_process_group(process)
+
+        self.assertEqual(
+            kill_group.call_args_list,
+            [
+                mock.call(process.pid, signal.SIGTERM),
+                mock.call(process.pid, signal.SIGKILL),
+            ],
+        )
+        process.stdout.close.assert_called_once_with()
+        process.stderr.close.assert_called_once_with()
+        process.wait.assert_called_once_with(
+            timeout=resolver.PROCESS_TERMINATION_GRACE_SECONDS,
+        )
 
     def test_openssh_destination_is_pinned_before_configured_overrides(self) -> None:
         resolver = load_resolver_module()

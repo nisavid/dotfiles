@@ -8,11 +8,11 @@ Run `python3 "$HOME/.agents/skills/working-in-systalyze-worktrees/scripts/resolv
 
 The resolver:
 
-- rejects credential-bearing remote URLs, verifies that the selected remote is one of the manifest's Systalyze endpoints, and binds every network read to that verified URL and SSH destination with OpenSSH proxy routing disabled;
+- rejects credential-bearing remote URLs, verifies that the selected remote is one of the manifest's Systalyze endpoints, requires certificate verification for HTTPS, and binds every network read to that verified URL and SSH destination with OpenSSH proxy routing disabled;
 - freezes the caller's authentication and HTTP transport settings, drops URL rewrite rules, ignores ambient Git templates, and performs network Git reads from a private bare transport repository;
 - rejects grafted, shallow, or promisor repositories and remotes without the standard branch-cache refspec before trusting local graph state;
 - snapshots each present cached alias before network access, rejects one whose object cannot peel to a commit, and advertises only HEAD plus those snapshots as fetch negotiation tips;
-- runs Git and GitHub reads without credential prompts and with a finite per-command timeout that terminates the command's process group;
+- runs Git and GitHub reads without credential prompts and with a finite per-command timeout that terminates the command's process group and bounds final pipe cleanup;
 - queries both aliases without relying on local remote-tracking refs;
 - fetches only the immutable objects, without moving refs, writing `FETCH_HEAD`, recursing into nested repositories, or starting automatic repository maintenance;
 - requires each OID to equal exactly one current open head in the Systalyze repository;

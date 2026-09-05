@@ -81,7 +81,13 @@ def terminate_process_group(process: subprocess.Popen[bytes]) -> None:
             pass
     else:
         process.kill()
-    process.communicate()
+    for pipe in (process.stdout, process.stderr):
+        if pipe is not None:
+            pipe.close()
+    try:
+        process.wait(timeout=PROCESS_TERMINATION_GRACE_SECONDS)
+    except subprocess.TimeoutExpired:
+        pass
 
 
 def run_process_bytes(
@@ -588,6 +594,7 @@ def run(
         "GIT_INDEX_FILE",
         "GIT_OBJECT_DIRECTORY",
         "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_SSL_NO_VERIFY",
         "GIT_TEMPLATE_DIR",
     ):
         environment.pop(variable, None)
@@ -866,6 +873,30 @@ def resolve_git_path(repo: Path, name: str) -> Path:
 def config_value_is_true(value: str) -> bool:
     normalized = value.strip().casefold()
     return normalized not in {"", "false", "no", "off", "0"}
+
+
+def verify_https_transport_security(
+    remote_identity: str,
+    config_snapshot: GitConfigSnapshot,
+) -> None:
+    if urlparse(remote_identity).scheme != "https":
+        return
+    for key, value in config_snapshot:
+        normalized_key = key.casefold()
+        if (
+            normalized_key.startswith(("http.", "https."))
+            and normalized_key.endswith(".sslverify")
+            and not config_value_is_true(value)
+        ):
+            raise ContractError(
+                "TLS_VERIFICATION_DISABLED",
+                source="gitConfig",
+            )
+    if config_value_is_true(os.environ.get("GIT_SSL_NO_VERIFY", "")):
+        raise ContractError(
+            "TLS_VERIFICATION_DISABLED",
+            source="environment",
+        )
 
 
 def verify_repository_state(
@@ -1287,6 +1318,7 @@ def resolve(arguments: argparse.Namespace) -> dict[str, Any]:
     manifest = load_manifest(manifest_path)
     verified_remote = verify_remote(repo, arguments.remote, manifest)
     git_config_snapshot = read_git_config_snapshot(repo)
+    verify_https_transport_security(verified_remote.identity, git_config_snapshot)
     verify_repository_state(repo, arguments.remote, git_config_snapshot)
     github_host = verify_repository_identity(
         manifest["repository"], verified_remote.identity
