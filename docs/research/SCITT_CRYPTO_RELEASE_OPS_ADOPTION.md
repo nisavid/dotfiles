@@ -2,6 +2,9 @@
 
 **Research date:** 2026-08-31
 
+**Naming:** For the selected project, interface, and human-facing record names,
+see the [Cryptosacristy and Codiquarium naming decision](CRYPTO_RELEASE_OPS_NAMING.md).
+
 **Status:** Public planning research. This note audits accepted mechanisms; it
 does not amend an issue resolution, select a service, claim conformance, or
 authorize implementation or deployment.

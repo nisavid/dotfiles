@@ -2,6 +2,9 @@
 
 **Research date:** 2026-09-04
 
+**Current naming:** The [selected Cryptosacristy and Codiquarium names](CRYPTO_RELEASE_OPS_NAMING.md)
+supersede these candidates. This screen remains evidence about Sigil and Canon.
+
 **Status:** Preliminary, primarily U.S.-focused knockout and technical-collision
 screen. This is not a legal opinion, a comprehensive trademark clearance, or
 authority to provision, rename, publish, or register anything.
