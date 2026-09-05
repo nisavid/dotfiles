@@ -109,6 +109,23 @@ from pathlib import Path
 import subprocess
 import sys
 
+if sys.argv[1:3] == ["auth", "token"]:
+    if sys.argv[3:] != ["--hostname", os.environ.get("GH_HOST")]:
+        raise SystemExit(98)
+    sys.stdout.write("fixture-token\\n")
+    raise SystemExit(0)
+
+config_dir = os.environ.get("GH_CONFIG_DIR")
+if config_dir and (Path(config_dir) / "reject-pr-transport").exists():
+    raise SystemExit(97)
+if os.environ.get("GH_TOKEN") != "fixture-token":
+    raise SystemExit(96)
+if any(
+    variable in os.environ
+    for variable in ("GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN")
+):
+    raise SystemExit(95)
+
 count_path = Path(os.environ["FIXTURE_GH_COUNT"])
 count = int(count_path.read_text(encoding="utf-8")) if count_path.exists() else 0
 with Path(os.environ["FIXTURE_GH_ARGUMENTS"]).open("a", encoding="utf-8") as stream:
@@ -654,6 +671,38 @@ os.execlp(
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.error_code(result), "TLS_VERIFICATION_DISABLED")
         self.assertFalse(self.fake_gh_arguments.exists())
+
+    def test_unrelated_https_tls_override_is_ignored(self) -> None:
+        resolver = load_resolver_module()
+
+        resolver.verify_https_transport_security(
+            "https://github.com/systalyze/systalyze",
+            (("http.https://unrelated.example.invalid/.sslVerify", "false"),),
+        )
+
+    def test_github_queries_ignore_unix_socket_configuration(self) -> None:
+        config_dir = self.consumer.parent / "malicious-gh-config"
+        config_dir.mkdir()
+        (config_dir / "reject-pr-transport").touch()
+        ambient_environment = dict.fromkeys(
+            (
+                "GH_TOKEN",
+                "GITHUB_TOKEN",
+                "GH_ENTERPRISE_TOKEN",
+                "GITHUB_ENTERPRISE_TOKEN",
+            ),
+            "ambient-authentication",
+        )
+        ambient_environment["GH_CONFIG_DIR"] = str(config_dir)
+
+        with mock.patch.dict(
+            os.environ,
+            ambient_environment,
+            clear=False,
+        ):
+            result = self.resolve()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_resolver_hardens_every_ssh_remote_operation(self) -> None:
         ssh_calls = self.configure_ssh_remote()

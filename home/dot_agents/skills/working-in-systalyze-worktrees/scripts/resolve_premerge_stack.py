@@ -23,6 +23,7 @@ PR_QUERY_LIMIT = 1000
 COMMAND_TIMEOUT_SECONDS = 60.0
 PROCESS_TERMINATION_GRACE_SECONDS = 1.0
 TRUSTED_OPENSSH_EXECUTABLE = Path("/usr/bin/ssh")
+GITHUB_TOKEN_ENVIRONMENT_VARIABLE = "GH_TOKEN"
 EXPECTED_SURFACE_ROLES = {
     "grounding-docs": "product-base",
     "dev-tooling": "qa-overlay",
@@ -581,6 +582,8 @@ def run(
     allowed_returncodes: tuple[int, ...] = (0,),
     timeout_seconds: float = COMMAND_TIMEOUT_SECONDS,
     github_host: str | None = None,
+    github_config_dir: Path | None = None,
+    github_authentication: str = "",
     uses_ssh_transport: bool | None = None,
     ssh_destination: SshDestination | None = None,
     git_config_snapshot: GitConfigSnapshot | None = None,
@@ -612,6 +615,17 @@ def run(
     )
     if github_host is not None:
         environment["GH_HOST"] = github_host
+    if github_config_dir is not None:
+        environment["GH_CONFIG_DIR"] = str(github_config_dir)
+    if github_authentication:
+        for variable in (
+            "GH_TOKEN",
+            "GITHUB_TOKEN",
+            "GH_ENTERPRISE_TOKEN",
+            "GITHUB_ENTERPRISE_TOKEN",
+        ):
+            environment.pop(variable, None)
+        environment[GITHUB_TOKEN_ENVIRONMENT_VARIABLE] = github_authentication
     if object_directory is not None:
         environment["GIT_OBJECT_DIRECTORY"] = str(object_directory)
     if git_config_snapshot is not None:
@@ -876,22 +890,34 @@ def config_value_is_true(value: str) -> bool:
 
 
 def verify_https_transport_security(
-    remote_identity: str,
+    remote_url: str,
     config_snapshot: GitConfigSnapshot,
 ) -> None:
-    if urlparse(remote_identity).scheme != "https":
+    if urlparse(remote_url).scheme != "https":
         return
-    for key, value in config_snapshot:
-        normalized_key = key.casefold()
-        if (
-            normalized_key.startswith(("http.", "https."))
-            and normalized_key.endswith(".sslverify")
-            and not config_value_is_true(value)
-        ):
+    with tempfile.TemporaryDirectory(
+        prefix="resolve-premerge-stack-config-"
+    ) as directory:
+        configured = git(
+            Path(directory),
+            "config",
+            "--bool",
+            "--get-urlmatch",
+            "http.sslVerify",
+            remote_url,
+            failure_code="REPOSITORY_CONFIG_INVALID",
+            allowed_returncodes=(0, 1),
+            git_config_snapshot=config_snapshot,
+        )
+    if configured.returncode == 0:
+        ssl_verify = configured.stdout.strip()
+        if ssl_verify == "false":
             raise ContractError(
                 "TLS_VERIFICATION_DISABLED",
                 source="gitConfig",
             )
+        if ssl_verify != "true":
+            raise ContractError("REPOSITORY_CONFIG_INVALID")
     if config_value_is_true(os.environ.get("GIT_SSL_NO_VERIFY", "")):
         raise ContractError(
             "TLS_VERIFICATION_DISABLED",
@@ -1209,8 +1235,29 @@ def verify_cached_aliases(
             )
 
 
+def read_github_auth_token(repo: Path, github_host: str) -> str:
+    result = run(
+        ["gh", "auth", "token", "--hostname", github_host],
+        cwd=repo,
+        failure_code="PR_QUERY_FAILED",
+        github_host=github_host,
+    )
+    token = result.stdout.strip()
+    if not token or any(character.isspace() for character in token):
+        raise ContractError(
+            "PR_QUERY_FAILED",
+            command="gh",
+            githubTokenInvalid=True,
+        )
+    return token
+
+
 def load_pull_requests(
-    repo: Path, repository: str, github_host: str
+    repo: Path,
+    repository: str,
+    github_host: str,
+    github_config_dir: Path,
+    github_token: str,
 ) -> list[dict[str, Any]]:
     result = run(
         [
@@ -1229,6 +1276,8 @@ def load_pull_requests(
         cwd=repo,
         failure_code="PR_QUERY_FAILED",
         github_host=github_host,
+        github_config_dir=github_config_dir,
+        github_authentication=github_token,
     )
     try:
         document = json.loads(result.stdout)
@@ -1318,11 +1367,12 @@ def resolve(arguments: argparse.Namespace) -> dict[str, Any]:
     manifest = load_manifest(manifest_path)
     verified_remote = verify_remote(repo, arguments.remote, manifest)
     git_config_snapshot = read_git_config_snapshot(repo)
-    verify_https_transport_security(verified_remote.identity, git_config_snapshot)
+    verify_https_transport_security(verified_remote.url, git_config_snapshot)
     verify_repository_state(repo, arguments.remote, git_config_snapshot)
     github_host = verify_repository_identity(
         manifest["repository"], verified_remote.identity
     )
+    github_token = read_github_auth_token(repo, github_host)
     ssh_destination = ssh_destination_for_identity(verified_remote.identity)
     uses_ssh_transport = ssh_destination is not None
     surfaces = manifest["surfaces"]
@@ -1332,6 +1382,8 @@ def resolve(arguments: argparse.Namespace) -> dict[str, Any]:
     with tempfile.TemporaryDirectory(prefix="resolve-premerge-stack-") as directory:
         transport_root = Path(directory)
         transport_repo = transport_root / "transport.git"
+        github_config_dir = transport_root / "gh-config"
+        github_config_dir.mkdir(mode=0o700)
         git(
             transport_root,
             "init",
@@ -1361,7 +1413,13 @@ def resolve(arguments: argparse.Namespace) -> dict[str, Any]:
             git_config_snapshot=git_config_snapshot,
         )
         verify_cached_aliases(repo, cached_aliases, aliases)
-        pull_requests = load_pull_requests(repo, manifest["repository"], github_host)
+        pull_requests = load_pull_requests(
+            repo,
+            manifest["repository"],
+            github_host,
+            github_config_dir,
+            github_token,
+        )
         bindings = bind_pull_requests(surfaces, aliases, pull_requests)
 
         relationships = []
@@ -1397,7 +1455,11 @@ def resolve(arguments: argparse.Namespace) -> dict[str, Any]:
             )
 
         final_pull_requests = load_pull_requests(
-            repo, manifest["repository"], github_host
+            repo,
+            manifest["repository"],
+            github_host,
+            github_config_dir,
+            github_token,
         )
         final_bindings = bind_pull_requests(surfaces, aliases, final_pull_requests)
         initial_identities = pull_request_identities(bindings)
