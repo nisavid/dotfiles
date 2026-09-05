@@ -1093,6 +1093,29 @@ os.execlp(
             {"command": Path(sys.executable).name, "timeoutSeconds": 0.01},
         )
 
+    def test_command_runner_preserves_ssh_command_without_transport_mode(self) -> None:
+        resolver = load_resolver_module()
+        with mock.patch.dict(
+            os.environ,
+            {"GIT_SSH_COMMAND": "custom-ssh-wrapper --mode fixture"},
+            clear=False,
+        ):
+            environment_check = resolver.run(
+                [
+                    sys.executable,
+                    "-c",
+                    "import os; print(os.environ['GIT_SSH_COMMAND'])",
+                ],
+                cwd=self.consumer,
+                failure_code="ENVIRONMENT_CHECK_FAILED",
+                timeout_seconds=30,
+            )
+
+        self.assertEqual(
+            environment_check.stdout.strip(),
+            "custom-ssh-wrapper --mode fixture",
+        )
+
     def test_command_runner_preserves_configured_ssh_command(self) -> None:
         resolver = load_resolver_module()
         git(

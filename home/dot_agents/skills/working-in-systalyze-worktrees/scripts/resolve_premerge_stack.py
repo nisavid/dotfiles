@@ -224,6 +224,9 @@ def noninteractive_ssh_command(
         shell_words: list[ShellWord] = []
         raw_cursor = 0
         while (word := lexer.get_token()) is not None:
+            # tell() may include a punctuation delimiter held in shlex's
+            # character pushback. Such tokens make the command unsupported
+            # below, before raw_end can become the insertion point.
             raw_end = lexer.instream.tell()
             while raw_end > 0 and ssh_command[raw_end - 1].isspace():
                 raw_end -= 1
