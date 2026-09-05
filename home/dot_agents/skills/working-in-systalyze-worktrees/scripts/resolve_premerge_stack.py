@@ -103,12 +103,12 @@ def noninteractive_ssh_command(
         lexer = shlex.shlex(ssh_command, posix=True, punctuation_chars=True)
         lexer.whitespace_split = True
         lexer.commenters = ""
-        tokens: list[tuple[str, int]] = []
-        while (token := lexer.get_token()) is not None:
+        shell_words: list[tuple[str, int]] = []
+        while (word := lexer.get_token()) is not None:
             raw_end = lexer.instream.tell()
             while raw_end > 0 and ssh_command[raw_end - 1].isspace():
                 raw_end -= 1
-            tokens.append((token, raw_end))
+            shell_words.append((word, raw_end))
     except ValueError as error:
         raise ContractError(
             failure_code,
@@ -116,7 +116,9 @@ def noninteractive_ssh_command(
             sshCommandInvalid=True,
         ) from error
 
-    if not tokens or any(re.fullmatch(r"[();<>|&]+", token) for token, _ in tokens):
+    if not shell_words or any(
+        re.fullmatch(r"[();<>|&]+", word) for word, _ in shell_words
+    ):
         raise ContractError(
             failure_code,
             command=command_name,
@@ -124,41 +126,41 @@ def noninteractive_ssh_command(
         )
 
     program_index = 0
-    while program_index < len(tokens) and SHELL_ASSIGNMENT_PATTERN.fullmatch(
-        tokens[program_index][0]
+    while program_index < len(shell_words) and SHELL_ASSIGNMENT_PATTERN.fullmatch(
+        shell_words[program_index][0]
     ):
         program_index += 1
 
-    if program_index < len(tokens) and Path(
-        tokens[program_index][0]
+    if program_index < len(shell_words) and Path(
+        shell_words[program_index][0]
     ).name.casefold() in {"env", "env.exe"}:
         program_index += 1
-        while program_index < len(tokens):
-            token = tokens[program_index][0]
-            if token == "--":
+        while program_index < len(shell_words):
+            word = shell_words[program_index][0]
+            if word == "--":
                 program_index += 1
                 break
-            if SHELL_ASSIGNMENT_PATTERN.fullmatch(token) or token in {
+            if SHELL_ASSIGNMENT_PATTERN.fullmatch(word) or word in {
                 "-i",
                 "--ignore-environment",
             }:
                 program_index += 1
                 continue
-            if token in {"-u", "--unset", "-C", "--chdir"}:
+            if word in {"-u", "--unset", "-C", "--chdir"}:
                 program_index += 2
-                if program_index > len(tokens):
+                if program_index > len(shell_words):
                     raise ContractError(
                         failure_code,
                         command=command_name,
                         sshCommandInvalid=True,
                     )
                 continue
-            if (token.startswith(("-u", "-C")) and len(token) > 2) or token.startswith(
+            if (word.startswith(("-u", "-C")) and len(word) > 2) or word.startswith(
                 ("--unset=", "--chdir=")
             ):
                 program_index += 1
                 continue
-            if token.startswith("-"):
+            if word.startswith("-"):
                 raise ContractError(
                     failure_code,
                     command=command_name,
@@ -166,13 +168,13 @@ def noninteractive_ssh_command(
                 )
             break
 
-    if program_index >= len(tokens):
+    if program_index >= len(shell_words):
         raise ContractError(
             failure_code,
             command=command_name,
             sshCommandInvalid=True,
         )
-    program = Path(tokens[program_index][0]).name.casefold()
+    program = Path(shell_words[program_index][0]).name.casefold()
     if program in {"ssh", "ssh.exe"}:
         option = " -o BatchMode=yes"
     elif program in {"plink", "plink.exe", "tortoiseplink", "tortoiseplink.exe"}:
@@ -183,7 +185,7 @@ def noninteractive_ssh_command(
             command=command_name,
             sshCommandUnsupported=True,
         )
-    insertion_point = tokens[program_index][1]
+    insertion_point = shell_words[program_index][1]
     return ssh_command[:insertion_point] + option + ssh_command[insertion_point:]
 
 
