@@ -651,6 +651,24 @@ os.execlp(
             "REMOTE_FETCH_REFSPEC_UNSUPPORTED",
         )
 
+    def test_rejects_fetch_mapping_from_case_distinct_remote(self) -> None:
+        git(self.consumer, "config", "--unset-all", "remote.origin.fetch")
+        git(
+            self.consumer,
+            "config",
+            "--add",
+            "remote.Origin.fetch",
+            "+refs/heads/*:refs/remotes/origin/*",
+        )
+
+        result = self.resolve()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(
+            self.error_code(result),
+            "REMOTE_FETCH_REFSPEC_UNSUPPORTED",
+        )
+
     def test_rejects_repository_grafts_before_network_access(self) -> None:
         graft_path = Path(git(self.consumer, "rev-parse", "--git-path", "info/grafts"))
         if not graft_path.is_absolute():
@@ -731,6 +749,68 @@ os.execlp(
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.error_code(result), "TLS_VERIFICATION_DISABLED")
         self.assertFalse(self.fake_gh_arguments.exists())
+
+    def test_https_tls_trust_anchor_override_fails_closed(self) -> None:
+        remote_url = "https://github.com/systalyze/systalyze"
+        trust_anchor = self.consumer.parent / "checkout-controlled-ca.pem"
+        trust_anchor.write_text("checkout controlled\n", encoding="utf-8")
+        git(self.consumer, "remote", "set-url", "origin", remote_url)
+        git(self.consumer, "config", "http.proxy", "http://127.0.0.1:9")
+        git(self.consumer, "config", "http.sslCAInfo", str(trust_anchor))
+        self.write_manifest([remote_url])
+
+        result = self.resolve()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(
+            self.error_code(result),
+            "TLS_TRUST_ANCHOR_OVERRIDE_UNSUPPORTED",
+        )
+        self.assertFalse(self.fake_gh_arguments.exists())
+
+    def test_https_tls_trust_anchor_directory_override_fails_closed(self) -> None:
+        resolver = load_resolver_module()
+
+        with self.assertRaises(resolver.ContractError) as raised:
+            resolver.verify_https_transport_security(
+                "https://github.com/systalyze/systalyze",
+                (("http.https://github.com/.sslCAPath", "/checkout/controlled"),),
+            )
+
+        self.assertEqual(
+            raised.exception.code,
+            "TLS_TRUST_ANCHOR_OVERRIDE_UNSUPPORTED",
+        )
+
+    def test_https_tls_environment_trust_anchor_overrides_fail_closed(self) -> None:
+        resolver = load_resolver_module()
+
+        for variable in (
+            "CURL_CA_BUNDLE",
+            "GIT_SSL_CAINFO",
+            "GIT_SSL_CAPATH",
+            "SSL_CERT_DIR",
+            "SSL_CERT_FILE",
+        ):
+            for value in ("", " ", "/caller/controlled"):
+                with (
+                    self.subTest(variable=variable, value=value),
+                    mock.patch.dict(
+                        os.environ,
+                        {variable: value},
+                        clear=True,
+                    ),
+                    self.assertRaises(resolver.ContractError) as raised,
+                ):
+                    resolver.verify_https_transport_security(
+                        "https://github.com/systalyze/systalyze",
+                        (),
+                    )
+
+                self.assertEqual(
+                    raised.exception.code,
+                    "TLS_TRUST_ANCHOR_OVERRIDE_UNSUPPORTED",
+                )
 
     def test_https_tls_environment_override_fails_closed(self) -> None:
         remote_url = "https://github.com/systalyze/systalyze"

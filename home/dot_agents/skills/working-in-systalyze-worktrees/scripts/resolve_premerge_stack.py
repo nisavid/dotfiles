@@ -31,6 +31,14 @@ TRUSTED_GITHUB_CLI_EXECUTABLES = (
 )
 GITHUB_TOKEN_ENVIRONMENT_VARIABLE = "GH_TOKEN"
 DEFAULT_REMOTE_PORTS = {"https": 443, "ssh": 22}
+TLS_TRUST_ANCHOR_CONFIG_KEYS = ("http.sslCAInfo", "http.sslCAPath")
+TLS_TRUST_ANCHOR_ENVIRONMENT_VARIABLES = (
+    "CURL_CA_BUNDLE",
+    "GIT_SSL_CAINFO",
+    "GIT_SSL_CAPATH",
+    "SSL_CERT_DIR",
+    "SSL_CERT_FILE",
+)
 EXPECTED_SURFACE_ROLES = {
     "grounding-docs": "product-base",
     "dev-tooling": "qa-overlay",
@@ -1023,6 +1031,26 @@ def config_value_is_true(value: str) -> bool:
     return normalized not in {"", "false", "no", "off", "0"}
 
 
+def config_subsection_key_matches(
+    key: str,
+    *,
+    section: str,
+    subsection: str,
+    variable: str,
+) -> bool:
+    configured_section, section_separator, remainder = key.partition(".")
+    configured_subsection, variable_separator, configured_variable = (
+        remainder.rpartition(".")
+    )
+    return (
+        bool(section_separator)
+        and bool(variable_separator)
+        and configured_section.casefold() == section.casefold()
+        and configured_subsection == subsection
+        and configured_variable.casefold() == variable.casefold()
+    )
+
+
 def verify_https_transport_security(
     remote_url: str,
     config_snapshot: GitConfigSnapshot,
@@ -1052,11 +1080,38 @@ def verify_https_transport_security(
             )
         if ssl_verify != "true":
             raise ContractError("REPOSITORY_CONFIG_INVALID")
+    with tempfile.TemporaryDirectory(
+        prefix="resolve-premerge-stack-config-"
+    ) as directory:
+        for setting in TLS_TRUST_ANCHOR_CONFIG_KEYS:
+            configured = git(
+                Path(directory),
+                "config",
+                "--get-urlmatch",
+                setting,
+                remote_url,
+                failure_code="REPOSITORY_CONFIG_INVALID",
+                allowed_returncodes=(0, 1),
+                git_config_snapshot=config_snapshot,
+            )
+            if configured.returncode == 0:
+                raise ContractError(
+                    "TLS_TRUST_ANCHOR_OVERRIDE_UNSUPPORTED",
+                    source="gitConfig",
+                    setting=setting,
+                )
     if config_value_is_true(os.environ.get("GIT_SSL_NO_VERIFY", "")):
         raise ContractError(
             "TLS_VERIFICATION_DISABLED",
             source="environment",
         )
+    for variable in TLS_TRUST_ANCHOR_ENVIRONMENT_VARIABLES:
+        if variable in os.environ:
+            raise ContractError(
+                "TLS_TRUST_ANCHOR_OVERRIDE_UNSUPPORTED",
+                source="environment",
+                setting=variable,
+            )
 
 
 def verify_repository_state(
@@ -1089,9 +1144,15 @@ def verify_repository_state(
         ):
             raise ContractError("PROMISOR_REPOSITORY_UNSUPPORTED")
 
-    fetch_key = f"remote.{remote}.fetch".casefold()
     fetch_refspecs = [
-        value for key, value in config_snapshot if key.casefold() == fetch_key
+        value
+        for key, value in config_snapshot
+        if config_subsection_key_matches(
+            key,
+            section="remote",
+            subsection=remote,
+            variable="fetch",
+        )
     ]
     expected_refspec = f"refs/heads/*:refs/remotes/{remote}/*"
     if not fetch_refspecs or any(
