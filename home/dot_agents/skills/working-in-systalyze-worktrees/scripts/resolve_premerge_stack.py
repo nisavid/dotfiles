@@ -254,6 +254,7 @@ def validate_literal_shell_word(
     """Reject shell words whose value would change when the command executes."""
     quote: str | None = None
     escaped = False
+    assignment_word = SHELL_ASSIGNMENT_PATTERN.fullmatch(shell_word.raw) is not None
     for index, character in enumerate(shell_word.raw):
         if escaped:
             escaped = False
@@ -277,8 +278,16 @@ def validate_literal_shell_word(
             continue
         if character in {"'", '"'}:
             quote = character
-        elif character in {"$", "`", "*", "?", "["} or (
-            character == "~" and index == 0
+        elif (
+            character in {"$", "`", "*", "?", "[", "{", "}"}
+            or (character == "#" and index == 0)
+            or (
+                character == "~"
+                and (
+                    index == 0
+                    or (assignment_word and shell_word.raw[index - 1] in {"=", ":"})
+                )
+            )
         ):
             raise ContractError(
                 failure_code,

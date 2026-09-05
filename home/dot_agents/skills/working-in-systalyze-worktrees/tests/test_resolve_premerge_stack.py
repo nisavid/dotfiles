@@ -1138,13 +1138,14 @@ os.execlp(
         self.assertEqual(self.error_code(result), "UNEXPECTED_ALIAS_REWRITE")
 
     def test_fetch_negotiation_does_not_advertise_unpublished_head(self) -> None:
+        cached_only = commit(self.consumer, "cached-only.txt", "cached only\n")
         private_head = commit(self.consumer, "private.txt", "private\n")
         for surface in ("grounding-docs", "dev-tooling"):
             git(
                 self.consumer,
                 "update-ref",
                 f"refs/remotes/origin/ivan/stack-tips/{surface}",
-                self.base,
+                cached_only,
             )
         trace = self.consumer.parent / "git-packets.log"
 
@@ -1155,9 +1156,11 @@ os.execlp(
         ):
             result = self.resolve()
 
-        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.error_code(result), "UNEXPECTED_ALIAS_REWRITE")
         trace_contents = trace.read_text(encoding="utf-8")
         self.assertNotIn(private_head, trace_contents)
+        self.assertNotIn(cached_only, trace_contents)
         self.assertIn(f"have {self.base}", trace_contents)
 
     def test_late_repository_graft_cannot_hide_cached_alias_rewrite(self) -> None:
@@ -2075,6 +2078,9 @@ os.execl("/bin/sh", "sh", "-c", arguments[index + 1])
             ("*/ssh", "sshCommandUnsupported"),
             ('ssh -F "$HOME/config"', "sshCommandUnsupported"),
             ("ssh `helper`", "sshCommandUnsupported"),
+            ("HOME=~ ssh", "sshCommandUnsupported"),
+            ("ssh -F {one,two}", "sshCommandUnsupported"),
+            ("ssh -F config # comment", "sshCommandUnsupported"),
         ):
             with (
                 self.subTest(ssh_command=repr(ssh_command)),
