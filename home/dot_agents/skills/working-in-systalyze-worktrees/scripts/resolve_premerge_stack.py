@@ -806,6 +806,7 @@ def run(
         "GIT_WORK_TREE",
         "GIT_COMMON_DIR",
         "GIT_INDEX_FILE",
+        "GIT_SHALLOW_FILE",
         "GIT_OBJECT_DIRECTORY",
         "GIT_ALTERNATE_OBJECT_DIRECTORIES",
         "GIT_SSL_NO_VERIFY",
@@ -1121,6 +1122,35 @@ def config_subsection_key_matches(
     )
 
 
+def urlmatched_git_boolean(
+    remote_url: str,
+    setting: str,
+    config_snapshot: GitConfigSnapshot,
+) -> bool | None:
+    with tempfile.TemporaryDirectory(
+        prefix="resolve-premerge-stack-config-"
+    ) as directory:
+        configured = git(
+            Path(directory),
+            "config",
+            "--bool",
+            "--get-urlmatch",
+            setting,
+            remote_url,
+            failure_code="REPOSITORY_CONFIG_INVALID",
+            allowed_returncodes=(0, 1),
+            git_config_snapshot=config_snapshot,
+        )
+    if configured.returncode == 1:
+        return None
+    value = configured.stdout.strip()
+    if value == "true":
+        return True
+    if value == "false":
+        return False
+    raise ContractError("REPOSITORY_CONFIG_INVALID")
+
+
 def verify_https_transport_security(
     remote_url: str,
     config_snapshot: GitConfigSnapshot,
@@ -1134,29 +1164,16 @@ def verify_https_transport_security(
             )
     if urlparse(remote_url).scheme != "https":
         return
-    with tempfile.TemporaryDirectory(
-        prefix="resolve-premerge-stack-config-"
-    ) as directory:
-        configured = git(
-            Path(directory),
-            "config",
-            "--bool",
-            "--get-urlmatch",
-            "http.sslVerify",
-            remote_url,
-            failure_code="REPOSITORY_CONFIG_INVALID",
-            allowed_returncodes=(0, 1),
-            git_config_snapshot=config_snapshot,
+    if urlmatched_git_boolean(remote_url, "http.sslVerify", config_snapshot) is False:
+        raise ContractError(
+            "TLS_VERIFICATION_DISABLED",
+            source="gitConfig",
         )
-    if configured.returncode == 0:
-        ssl_verify = configured.stdout.strip()
-        if ssl_verify == "false":
-            raise ContractError(
-                "TLS_VERIFICATION_DISABLED",
-                source="gitConfig",
-            )
-        if ssl_verify != "true":
-            raise ContractError("REPOSITORY_CONFIG_INVALID")
+    if urlmatched_git_boolean(remote_url, "http.saveCookies", config_snapshot) is True:
+        raise ContractError(
+            "HTTP_COOKIE_PERSISTENCE_UNSUPPORTED",
+            source="gitConfig",
+        )
     with tempfile.TemporaryDirectory(
         prefix="resolve-premerge-stack-config-"
     ) as directory:

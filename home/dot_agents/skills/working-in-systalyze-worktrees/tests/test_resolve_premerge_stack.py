@@ -768,6 +768,24 @@ os.execlp(
         self.assertEqual(self.error_code(result), "SHALLOW_REPOSITORY_UNSUPPORTED")
         self.assertFalse(self.fake_gh_arguments.exists())
 
+    def test_ambient_shallow_file_cannot_hide_shallow_repository(self) -> None:
+        shallow_path = Path(git(self.consumer, "rev-parse", "--git-path", "shallow"))
+        if not shallow_path.is_absolute():
+            shallow_path = self.consumer / shallow_path
+        shallow_path.write_text(f"{self.base}\n", encoding="utf-8")
+        nonexistent_shallow_file = self.consumer.parent / "not-shallow"
+
+        with mock.patch.dict(
+            os.environ,
+            {"GIT_SHALLOW_FILE": str(nonexistent_shallow_file)},
+            clear=False,
+        ):
+            result = self.resolve()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.error_code(result), "SHALLOW_REPOSITORY_UNSUPPORTED")
+        self.assertFalse(self.fake_gh_arguments.exists())
+
     def test_rejects_promisor_repository_before_object_lookup(self) -> None:
         git(self.consumer, "config", "remote.origin.promisor", "true")
 
@@ -1145,6 +1163,51 @@ os.execlp(
             raised.exception.code,
             "TLS_TRUST_ANCHOR_OVERRIDE_UNSUPPORTED",
         )
+
+    def test_https_cookie_persistence_fails_closed(self) -> None:
+        resolver = load_resolver_module()
+        remote_url = "https://github.com/systalyze/systalyze"
+        cookie_file = self.consumer.parent / "checkout-controlled-cookies"
+        cookie_file.write_text("preserve exactly\n", encoding="utf-8")
+
+        for setting in (
+            "http.saveCookies",
+            "http.https://github.com/.saveCookies",
+        ):
+            with (
+                self.subTest(setting=setting),
+                mock.patch.dict(os.environ, {}, clear=True),
+                self.assertRaises(resolver.ContractError) as raised,
+            ):
+                resolver.verify_https_transport_security(
+                    remote_url,
+                    (
+                        ("http.cookieFile", str(cookie_file)),
+                        (setting, "true"),
+                    ),
+                )
+
+            self.assertEqual(
+                raised.exception.code,
+                "HTTP_COOKIE_PERSISTENCE_UNSUPPORTED",
+            )
+        self.assertEqual(
+            cookie_file.read_text(encoding="utf-8"),
+            "preserve exactly\n",
+        )
+
+    def test_unrelated_or_disabled_cookie_persistence_is_allowed(self) -> None:
+        resolver = load_resolver_module()
+        remote_url = "https://github.com/systalyze/systalyze"
+
+        with mock.patch.dict(os.environ, {}, clear=True):
+            resolver.verify_https_transport_security(
+                remote_url,
+                (
+                    ("http.saveCookies", "false"),
+                    ("http.https://unrelated.example.invalid/.saveCookies", "true"),
+                ),
+            )
 
     def test_https_tls_environment_trust_anchor_overrides_fail_closed(self) -> None:
         resolver = load_resolver_module()
@@ -2018,6 +2081,7 @@ os.execlp(
                 "GIT_WORK_TREE": str(self.provider),
                 "GIT_COMMON_DIR": str(self.remote),
                 "GIT_INDEX_FILE": str(self.remote / "fixture-index"),
+                "GIT_SHALLOW_FILE": str(self.remote / "fixture-shallow"),
                 "GIT_EXEC_PATH": str(self.fake_bin),
                 "GIT_OBJECT_DIRECTORY": str(self.remote / "objects"),
                 "GIT_ALTERNATE_OBJECT_DIRECTORIES": str(
@@ -2041,7 +2105,8 @@ os.execlp(
                         "print(os.environ['GIT_SSH_COMMAND']); "
                         "print(any(name in os.environ for name in ("
                         "'GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', "
-                        "'GIT_INDEX_FILE', 'GIT_EXEC_PATH', 'GIT_OBJECT_DIRECTORY', "
+                        "'GIT_INDEX_FILE', 'GIT_SHALLOW_FILE', 'GIT_EXEC_PATH', "
+                        "'GIT_OBJECT_DIRECTORY', "
                         "'GIT_ALTERNATE_OBJECT_DIRECTORIES')))"
                     ),
                 ],

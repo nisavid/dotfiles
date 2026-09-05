@@ -161,9 +161,13 @@ test_systalyze_worktrees() {
     .schemaVersion == 1 and
     .repository == "github.com/systalyze/systalyze" and
     ([.surfaces[].role] | sort) == ["product-base", "qa-overlay"] and
+    ([.surfaces[].name] | unique | length) == 2 and
     ([.surfaces[].ref] | unique | length) == 2 and
     all(.surfaces[]; .ref | startswith("refs/heads/ivan/stack-tips/")) and
-    .relationships == [{"left":"grounding-docs","right":"dev-tooling","require":"common-ancestor"}]
+    (.relationships | length) == 1 and
+    .relationships[0].require == "common-ancestor" and
+    ([.relationships[0].left, .relationships[0].right] | sort) ==
+      ([.surfaces[].name] | sort)
   ' "$manifest" >/dev/null || fail 'Systalyze pre-merge stack manifest is invalid'
 
   if rg -n '#[0-9]+|[0-9a-f]{40}' "$skill" "$reference" "$manifest"; then
