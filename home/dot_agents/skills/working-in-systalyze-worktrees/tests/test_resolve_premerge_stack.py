@@ -709,6 +709,13 @@ os.execlp(
     def test_non_ssh_network_operation_blocks_late_ssh_rewrite(self) -> None:
         resolver = load_resolver_module()
         ssh_calls = self.configure_fake_ssh_transport()
+        failure_helper_marker = self.consumer.parent / "failure-helper-marker"
+        fake_failure_helper = self.fake_bin / "false"
+        fake_failure_helper.write_text(
+            f"#!/bin/sh\ntouch {shlex.quote(str(failure_helper_marker))}\nexit 1\n",
+            encoding="utf-8",
+        )
+        fake_failure_helper.chmod(0o755)
         git(
             self.consumer,
             "config",
@@ -736,6 +743,7 @@ os.execlp(
             )
 
         self.assertFalse(ssh_calls.exists())
+        self.assertFalse(failure_helper_marker.exists())
 
     def test_https_tls_verification_override_fails_closed(self) -> None:
         remote_url = "https://github.com/systalyze/systalyze"
@@ -812,6 +820,34 @@ os.execlp(
                     "TLS_TRUST_ANCHOR_OVERRIDE_UNSUPPORTED",
                 )
 
+    def test_ssh_remote_rejects_github_tls_environment_trust_anchor_override(
+        self,
+    ) -> None:
+        ssh_calls = self.configure_ssh_remote()
+
+        for variable in ("SSL_CERT_DIR", "SSL_CERT_FILE"):
+            with (
+                self.subTest(variable=variable),
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        "FIXTURE_SSH_CALLS": str(ssh_calls),
+                        "FIXTURE_SSH_REMOTE": str(self.remote),
+                        variable: "/caller/controlled",
+                    },
+                    clear=False,
+                ),
+            ):
+                result = self.resolve()
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(
+                self.error_code(result),
+                "TLS_TRUST_ANCHOR_OVERRIDE_UNSUPPORTED",
+            )
+            self.assertFalse(self.fake_gh_arguments.exists())
+            self.assertFalse(ssh_calls.exists())
+
     def test_https_tls_environment_override_fails_closed(self) -> None:
         remote_url = "https://github.com/systalyze/systalyze"
         git(self.consumer, "remote", "set-url", "origin", remote_url)
@@ -832,10 +868,11 @@ os.execlp(
     def test_unrelated_https_tls_override_is_ignored(self) -> None:
         resolver = load_resolver_module()
 
-        resolver.verify_https_transport_security(
-            "https://github.com/systalyze/systalyze",
-            (("http.https://unrelated.example.invalid/.sslVerify", "false"),),
-        )
+        with mock.patch.dict(os.environ, {}, clear=True):
+            resolver.verify_https_transport_security(
+                "https://github.com/systalyze/systalyze",
+                (("http.https://unrelated.example.invalid/.sslVerify", "false"),),
+            )
 
     def test_github_queries_ignore_unix_socket_configuration(self) -> None:
         config_dir = self.consumer.parent / "malicious-gh-config"
@@ -1642,9 +1679,30 @@ os.execlp(
             )
         self.assertEqual(
             environment_check.stdout.strip(),
-            "0 false never 1 false never\n"
+            "0 /usr/bin/false never 1 /usr/bin/false never\n"
             "LC_ALL=C ssh -o BatchMode=yes -F 'fixture config'\n"
             "False",
+        )
+
+        non_ssh_environment_check = resolver.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import os; "
+                    "print(os.environ['GIT_ASKPASS'], "
+                    "os.environ['SSH_ASKPASS'], "
+                    "os.environ['GIT_SSH_COMMAND'])"
+                ),
+            ],
+            cwd=self.consumer,
+            failure_code="ENVIRONMENT_CHECK_FAILED",
+            timeout_seconds=30,
+            uses_ssh_transport=False,
+        )
+        self.assertEqual(
+            non_ssh_environment_check.stdout.strip(),
+            "/usr/bin/false /usr/bin/false /usr/bin/false",
         )
 
         with mock.patch.dict(

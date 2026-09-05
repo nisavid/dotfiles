@@ -22,6 +22,7 @@ PR_IDENTITY_KEYS = ("number", "headRefName", "headRefOid")
 PR_QUERY_LIMIT = 1000
 COMMAND_TIMEOUT_SECONDS = 60.0
 PROCESS_TERMINATION_GRACE_SECONDS = 1.0
+TRUSTED_FAILURE_EXECUTABLE = Path("/usr/bin/false")
 TRUSTED_OPENSSH_EXECUTABLE = Path("/usr/bin/ssh")
 TRUSTED_GIT_EXECUTABLES = (Path("/usr/bin/git"),)
 TRUSTED_GITHUB_CLI_EXECUTABLES = (
@@ -32,10 +33,12 @@ TRUSTED_GITHUB_CLI_EXECUTABLES = (
 GITHUB_TOKEN_ENVIRONMENT_VARIABLE = "GH_TOKEN"
 DEFAULT_REMOTE_PORTS = {"https": 443, "ssh": 22}
 TLS_TRUST_ANCHOR_CONFIG_KEYS = ("http.sslCAInfo", "http.sslCAPath")
-TLS_TRUST_ANCHOR_ENVIRONMENT_VARIABLES = (
+GIT_TLS_TRUST_ANCHOR_ENVIRONMENT_VARIABLES = (
     "CURL_CA_BUNDLE",
     "GIT_SSL_CAINFO",
     "GIT_SSL_CAPATH",
+)
+GITHUB_TLS_TRUST_ANCHOR_ENVIRONMENT_VARIABLES = (
     "SSL_CERT_DIR",
     "SSL_CERT_FILE",
 )
@@ -743,12 +746,12 @@ def run(
     environment.update(
         {
             "GIT_TERMINAL_PROMPT": "0",
-            "GIT_ASKPASS": "false",
+            "GIT_ASKPASS": str(TRUSTED_FAILURE_EXECUTABLE),
             "GIT_NO_LAZY_FETCH": "1",
             "GIT_NO_REPLACE_OBJECTS": "1",
             "GCM_INTERACTIVE": "never",
             "GH_PROMPT_DISABLED": "1",
-            "SSH_ASKPASS": "false",
+            "SSH_ASKPASS": str(TRUSTED_FAILURE_EXECUTABLE),
             "SSH_ASKPASS_REQUIRE": "never",
         }
     )
@@ -786,7 +789,7 @@ def run(
     elif uses_ssh_transport is False:
         # A verified non-SSH URL may still be subject to a later Git URL rewrite.
         # Block that transport transition without interpreting the user's wrapper.
-        environment["GIT_SSH_COMMAND"] = "false"
+        environment["GIT_SSH_COMMAND"] = str(TRUSTED_FAILURE_EXECUTABLE)
     try:
         raw_result = run_process_bytes(
             arguments,
@@ -1055,6 +1058,13 @@ def verify_https_transport_security(
     remote_url: str,
     config_snapshot: GitConfigSnapshot,
 ) -> None:
+    for variable in GITHUB_TLS_TRUST_ANCHOR_ENVIRONMENT_VARIABLES:
+        if variable in os.environ:
+            raise ContractError(
+                "TLS_TRUST_ANCHOR_OVERRIDE_UNSUPPORTED",
+                source="environment",
+                setting=variable,
+            )
     if urlparse(remote_url).scheme != "https":
         return
     with tempfile.TemporaryDirectory(
@@ -1105,7 +1115,7 @@ def verify_https_transport_security(
             "TLS_VERIFICATION_DISABLED",
             source="environment",
         )
-    for variable in TLS_TRUST_ANCHOR_ENVIRONMENT_VARIABLES:
+    for variable in GIT_TLS_TRUST_ANCHOR_ENVIRONMENT_VARIABLES:
         if variable in os.environ:
             raise ContractError(
                 "TLS_TRUST_ANCHOR_OVERRIDE_UNSUPPORTED",
