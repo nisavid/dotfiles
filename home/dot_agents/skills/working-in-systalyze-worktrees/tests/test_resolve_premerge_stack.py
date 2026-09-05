@@ -120,6 +120,8 @@ from pathlib import Path
 import subprocess
 import sys
 
+if "GH_HTTP_UNIX_SOCKET" in os.environ:
+    raise SystemExit(94)
 if sys.argv[1:3] == ["auth", "token"]:
     if sys.argv[3:] != ["--hostname", os.environ.get("GH_HOST")]:
         raise SystemExit(98)
@@ -1420,6 +1422,9 @@ os.execlp(
             "ambient-authentication",
         )
         ambient_environment["GH_CONFIG_DIR"] = str(config_dir)
+        ambient_environment["GH_HTTP_UNIX_SOCKET"] = str(
+            self.consumer.parent / "untrusted-gh.sock"
+        )
 
         with mock.patch.dict(
             os.environ,

@@ -963,6 +963,7 @@ def run(
         "GIT_ALTERNATE_OBJECT_DIRECTORIES",
         "GIT_SSL_NO_VERIFY",
         "GIT_TEMPLATE_DIR",
+        "GH_HTTP_UNIX_SOCKET",
         "SSLKEYLOGFILE",
         "SSH_SK_HELPER",
         "SSH_SK_PROVIDER",
