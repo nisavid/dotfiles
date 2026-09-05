@@ -762,6 +762,38 @@ os.execlp(
 
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_rejects_worktree_scoped_promisor_repository_before_object_lookup(
+        self,
+    ) -> None:
+        git(self.consumer, "config", "extensions.worktreeConfig", "true")
+        git(
+            self.consumer,
+            "config",
+            "--worktree",
+            "remote.origin.promisor",
+            "true",
+        )
+
+        result = self.resolve()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.error_code(result), "PROMISOR_REPOSITORY_UNSUPPORTED")
+        self.assertFalse(self.fake_gh_arguments.exists())
+
+    def test_accepts_explicitly_empty_worktree_scoped_promisor_boolean(self) -> None:
+        git(self.consumer, "config", "extensions.worktreeConfig", "true")
+        git(
+            self.consumer,
+            "config",
+            "--worktree",
+            "remote.origin.promisor",
+            "",
+        )
+
+        result = self.resolve()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_rejects_unsanitized_dynamic_loader_environment_before_commands(
         self,
     ) -> None:
@@ -798,6 +830,36 @@ os.execlp(
 
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_rejects_unsanitized_openssl_environment_before_commands(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {
+                "OPENSSL_CONF": "",
+                "OPENSSL_CONF_INCLUDE": "",
+                "OPENSSL_ENGINES": "",
+                "OPENSSL_MODULES": "",
+            },
+            clear=False,
+        ):
+            result = self.resolve()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(
+            self.error_code(result),
+            "OPENSSL_ENVIRONMENT_UNSUPPORTED",
+        )
+        self.assertFalse(self.fake_gh_arguments.exists())
+
+    def test_allows_noninjecting_openssl_diagnostics(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {"OPENSSL_TRACE": ""},
+            clear=False,
+        ):
+            result = self.resolve()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_dynamic_loader_override_set_matches_launcher_contract(self) -> None:
         resolver = load_resolver_module()
 
@@ -816,6 +878,19 @@ os.execlp(
                 "DYLD_SHARED_CACHE_DIR",
                 "DYLD_VERSIONED_FRAMEWORK_PATH",
                 "DYLD_VERSIONED_LIBRARY_PATH",
+            ),
+        )
+
+    def test_openssl_override_set_matches_launcher_contract(self) -> None:
+        resolver = load_resolver_module()
+
+        self.assertEqual(
+            resolver.OPENSSL_OVERRIDE_ENVIRONMENT_VARIABLES,
+            (
+                "OPENSSL_CONF",
+                "OPENSSL_CONF_INCLUDE",
+                "OPENSSL_ENGINES",
+                "OPENSSL_MODULES",
             ),
         )
 
@@ -864,6 +939,45 @@ os.execlp(
         )
         self.assertEqual(child_environment["DYLD_PRINT_LIBRARIES"], "diagnostic")
         self.assertEqual(child_environment["LD_DEBUG"], "diagnostic")
+
+    def test_child_processes_clear_openssl_environment(self) -> None:
+        resolver = load_resolver_module()
+        completed = subprocess.CompletedProcess(
+            ["/usr/bin/true"],
+            0,
+            b"",
+            b"",
+        )
+        with (
+            mock.patch.dict(
+                os.environ,
+                {
+                    "OPENSSL_CONF": "fixture",
+                    "OPENSSL_CONF_INCLUDE": "fixture",
+                    "OPENSSL_ENGINES": "fixture",
+                    "OPENSSL_MODULES": "fixture",
+                    "OPENSSL_TRACE": "diagnostic",
+                },
+                clear=False,
+            ),
+            mock.patch.object(
+                resolver,
+                "run_process_bytes",
+                return_value=completed,
+            ) as run_process_bytes,
+        ):
+            resolver.run(
+                ["/usr/bin/true"],
+                cwd=self.consumer,
+                failure_code="FIXTURE_FAILED",
+            )
+
+        child_environment = run_process_bytes.call_args.kwargs["environment"]
+        self.assertFalse(
+            set(resolver.OPENSSL_OVERRIDE_ENVIRONMENT_VARIABLES)
+            & child_environment.keys()
+        )
+        self.assertEqual(child_environment["OPENSSL_TRACE"], "diagnostic")
 
     def test_non_ssh_network_operation_blocks_late_ssh_rewrite(self) -> None:
         resolver = load_resolver_module()

@@ -12,7 +12,8 @@ Run this block before branch preparation and again immediately before product pu
     DYLD_FALLBACK_FRAMEWORK_PATH DYLD_FALLBACK_LIBRARY_PATH \
     DYLD_FRAMEWORK_PATH DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH \
     DYLD_ROOT_PATH DYLD_SHARED_CACHE_DIR \
-    DYLD_VERSIONED_FRAMEWORK_PATH DYLD_VERSIONED_LIBRARY_PATH &&
+    DYLD_VERSIONED_FRAMEWORK_PATH DYLD_VERSIONED_LIBRARY_PATH \
+    OPENSSL_CONF OPENSSL_CONF_INCLUDE OPENSSL_ENGINES OPENSSL_MODULES &&
   exec /usr/bin/python3 -I -S -c '
 import os
 import pwd
@@ -31,12 +32,12 @@ runpy.run_path(resolver, run_name="__main__")
 )
 ```
 
-The subshell clears the listed injection-capable dynamic-loader overrides before Python starts. Isolated Python derives the installed skill path from the account record rather than ambient `HOME`, restores that account home for the resolver, and rejects any listed override that remains. The resolver also strips those overrides from every child command. The absolute interpreter and both isolation flags are part of the trust boundary; do not substitute an activated or PATH-resolved runtime. The resolver pins Git to `/usr/bin/git` and accepts GitHub CLI only from `/opt/homebrew/bin/gh`, `/usr/local/bin/gh`, or `/usr/bin/gh`; it never follows ambient `PATH` for either command. Git 2.29 or newer is required because preserving `FETCH_HEAD` depends on `git fetch --no-write-fetch-head`. SSH remotes accept only the bare trusted system executable at `/usr/bin/ssh`; the resolver supplies `/dev/null` as its user configuration and rejects caller-provided wrappers, arguments, or configuration files.
+The subshell clears the listed injection-capable dynamic-loader and OpenSSL provider or engine configuration overrides before Python starts. Isolated Python derives the installed skill path from the account record rather than ambient `HOME`, restores that account home for the resolver, and rejects any listed override that remains. The resolver strips those overrides from every child command. The absolute interpreter and both isolation flags are part of the trust boundary; do not substitute an activated or PATH-resolved runtime. The resolver pins Git to `/usr/bin/git` and accepts GitHub CLI only from `/opt/homebrew/bin/gh`, `/usr/local/bin/gh`, or `/usr/bin/gh`; it never follows ambient `PATH` for either command. Git 2.29 or newer is required because preserving `FETCH_HEAD` depends on `git fetch --no-write-fetch-head`. SSH remotes accept only the bare trusted system executable at `/usr/bin/ssh`; the resolver supplies `/dev/null` as its user configuration and rejects caller-provided wrappers, arguments, or configuration files.
 
 The resolver:
 
 - normalizes scheme-default ports, rejects credential-bearing remote URLs, verifies that the selected remote is one of the manifest's Systalyze endpoints, requires certificate verification for HTTPS, and binds every network read to that verified URL and SSH destination using a pinned OpenSSH variant with proxy routing and connection sharing disabled and strict host-key checking enforced;
-- rejects executable Git credential helpers before network reads, freezes the caller's remaining authentication and HTTP transport settings, drops URL rewrite rules, ignores ambient Git executable and template overrides, and performs network Git reads from a private bare SHA-1 transport repository;
+- snapshots repository-local and enabled per-worktree Git configuration, rejects executable Git credential helpers before network reads, freezes the caller's remaining authentication and HTTP transport settings, drops URL rewrite rules, ignores ambient Git executable and template overrides, and performs network Git reads from a private bare SHA-1 transport repository;
 - queries GitHub with the active host token through an empty temporary CLI configuration, excluding configured Unix-socket routes;
 - rejects grafted, shallow, or promisor repositories and remotes without the standard branch-cache refspec before trusting local graph state;
 - snapshots each present cached alias before network access, rejects one whose object cannot peel to a commit, and advertises only locally present commits exposed as heads or bases by the bound provider PRs as fetch negotiation tips;

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import re
@@ -56,6 +55,12 @@ DYNAMIC_LOADER_OVERRIDE_ENVIRONMENT_VARIABLES = (
     "DYLD_VERSIONED_FRAMEWORK_PATH",
     "DYLD_VERSIONED_LIBRARY_PATH",
 )
+OPENSSL_OVERRIDE_ENVIRONMENT_VARIABLES = (
+    "OPENSSL_CONF",
+    "OPENSSL_CONF_INCLUDE",
+    "OPENSSL_ENGINES",
+    "OPENSSL_MODULES",
+)
 EXPECTED_SURFACE_ROLES = {
     "grounding-docs": "product-base",
     "dev-tooling": "qa-overlay",
@@ -84,12 +89,19 @@ SshDestination = tuple[str, int]
 CachedAliases = dict[str, "str | None"]
 
 
+def sha256_fingerprint(value: bytes) -> str:
+    verify_openssl_environment()
+    import hashlib
+
+    return "sha256:" + hashlib.sha256(value).hexdigest()
+
+
 def process_output_hashes(
     result: subprocess.CompletedProcess[bytes],
 ) -> dict[str, str]:
     return {
-        "stdoutSha256": "sha256:" + hashlib.sha256(result.stdout).hexdigest(),
-        "stderrSha256": "sha256:" + hashlib.sha256(result.stderr).hexdigest(),
+        "stdoutSha256": sha256_fingerprint(result.stdout),
+        "stderrSha256": sha256_fingerprint(result.stderr),
     }
 
 
@@ -225,6 +237,11 @@ def remove_dynamic_loader_environment(environment: dict[str, str]) -> None:
         environment.pop(variable, None)
 
 
+def remove_openssl_environment(environment: dict[str, str]) -> None:
+    for variable in OPENSSL_OVERRIDE_ENVIRONMENT_VARIABLES:
+        environment.pop(variable, None)
+
+
 def verify_dynamic_loader_environment() -> None:
     configured = sorted(
         variable
@@ -234,6 +251,19 @@ def verify_dynamic_loader_environment() -> None:
     if configured:
         raise ContractError(
             "DYNAMIC_LOADER_ENVIRONMENT_UNSUPPORTED",
+            settings=configured,
+        )
+
+
+def verify_openssl_environment() -> None:
+    configured = sorted(
+        variable
+        for variable in OPENSSL_OVERRIDE_ENVIRONMENT_VARIABLES
+        if variable in os.environ
+    )
+    if configured:
+        raise ContractError(
+            "OPENSSL_ENVIRONMENT_UNSUPPORTED",
             settings=configured,
         )
 
@@ -773,6 +803,7 @@ def run(
     )
     environment = os.environ.copy()
     remove_dynamic_loader_environment(environment)
+    remove_openssl_environment(environment)
     for variable in (
         "GIT_DIR",
         "GIT_EXEC_PATH",
@@ -1044,7 +1075,6 @@ def read_git_config_snapshot(repo: Path) -> GitConfigSnapshot:
     result = git(
         repo,
         "config",
-        "--local",
         "--null",
         "--list",
         failure_code="REPOSITORY_CONFIG_INVALID",
@@ -1799,8 +1829,9 @@ def resolve(arguments: argparse.Namespace) -> dict[str, Any]:
         "repository": manifest["repository"],
         "remote": arguments.remote,
         "remoteIdentity": verified_remote.identity,
-        "remoteIdentityFingerprint": "sha256:"
-        + hashlib.sha256(verified_remote.identity.encode("utf-8")).hexdigest(),
+        "remoteIdentityFingerprint": sha256_fingerprint(
+            verified_remote.identity.encode("utf-8")
+        ),
         "surfaces": resolved_surfaces,
         "relationships": relationships,
     }
@@ -1816,6 +1847,7 @@ def parse_arguments() -> argparse.Namespace:
 def main() -> int:
     try:
         verify_dynamic_loader_environment()
+        verify_openssl_environment()
         document = resolve(parse_arguments())
     except ContractError as error:
         print(

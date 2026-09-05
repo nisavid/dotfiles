@@ -104,8 +104,8 @@ test_systalyze_worktrees() {
     'Systalyze alias names must have one policy source'
   assert_contains "$skill" 'unset LD_AUDIT LD_LIBRARY_PATH LD_PRELOAD' \
     'Systalyze resolver invocation must clear dynamic-loader injection before starting Python'
-  assert_contains "$skill" 'DYLD_VERSIONED_FRAMEWORK_PATH DYLD_VERSIONED_LIBRARY_PATH &&' \
-    'Systalyze resolver invocation must start Python only after loader cleanup succeeds'
+  assert_contains "$skill" 'OPENSSL_CONF OPENSSL_CONF_INCLUDE OPENSSL_ENGINES OPENSSL_MODULES &&' \
+    'Systalyze resolver invocation must clear OpenSSL injection before starting Python'
   assert_contains "$skill" 'account_home = pwd.getpwuid(os.getuid()).pw_dir' \
     'Systalyze resolver invocation must derive the installed home independently of ambient HOME'
   assert_contains "$skill" 'os.environ["HOME"] = account_home' \
@@ -116,8 +116,8 @@ test_systalyze_worktrees() {
     'Systalyze resolver invocation must pass the required arguments after the isolated bootstrap'
   assert_contains "$reference" 'unset LD_AUDIT LD_LIBRARY_PATH LD_PRELOAD' \
     'Systalyze resolver procedure must clear dynamic-loader injection before starting Python'
-  assert_contains "$reference" 'DYLD_VERSIONED_FRAMEWORK_PATH DYLD_VERSIONED_LIBRARY_PATH &&' \
-    'Systalyze resolver procedure must start Python only after loader cleanup succeeds'
+  assert_contains "$reference" 'OPENSSL_CONF OPENSSL_CONF_INCLUDE OPENSSL_ENGINES OPENSSL_MODULES &&' \
+    'Systalyze resolver procedure must clear OpenSSL injection before starting Python'
   assert_contains "$reference" 'account_home = pwd.getpwuid(os.getuid()).pw_dir' \
     'Systalyze resolver procedure must derive the installed home independently of ambient HOME'
   assert_contains "$reference" 'os.environ["HOME"] = account_home' \
@@ -129,12 +129,19 @@ test_systalyze_worktrees() {
   ! rg -F -q -- '$HOME/.agents/skills/working-in-systalyze-worktrees/scripts/resolve_premerge_stack.py' \
     "$skill" "$reference" || \
     fail 'Systalyze resolver launcher must not trust ambient HOME for its script path'
+  ! rg -q '^import hashlib$' "$resolver" || \
+    fail 'Systalyze resolver must not load OpenSSL before its startup environment checks'
   local launcher_output
   launcher_output="$(
     /bin/bash -c 'export LD_PRELOAD=; readonly LD_PRELOAD; (unset LD_PRELOAD && printf launched); exit 0' 2>/dev/null
   )"
   [[ -z "$launcher_output" ]] || \
     fail 'Systalyze resolver launcher must not continue after loader cleanup fails'
+  launcher_output="$(
+    /bin/bash -c 'export OPENSSL_CONF=; readonly OPENSSL_CONF; (unset OPENSSL_CONF && printf launched); exit 0' 2>/dev/null
+  )"
+  [[ -z "$launcher_output" ]] || \
+    fail 'Systalyze resolver launcher must not continue after OpenSSL cleanup fails'
   assert_contains "$skill" 'Do not substitute ordinary PR branches, cached OIDs, remembered PR numbers' \
     'Systalyze alias failure must not fall back to volatile topology'
   assert_contains "$skill" 'disposable local-only projection' \

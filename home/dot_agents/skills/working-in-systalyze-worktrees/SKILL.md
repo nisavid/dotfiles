@@ -25,7 +25,8 @@ While `references/premerge-stack.json` exists, it is the sole source of the temp
     DYLD_FALLBACK_FRAMEWORK_PATH DYLD_FALLBACK_LIBRARY_PATH \
     DYLD_FRAMEWORK_PATH DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH \
     DYLD_ROOT_PATH DYLD_SHARED_CACHE_DIR \
-    DYLD_VERSIONED_FRAMEWORK_PATH DYLD_VERSIONED_LIBRARY_PATH &&
+    DYLD_VERSIONED_FRAMEWORK_PATH DYLD_VERSIONED_LIBRARY_PATH \
+    OPENSSL_CONF OPENSSL_CONF_INCLUDE OPENSSL_ENGINES OPENSSL_MODULES &&
   exec /usr/bin/python3 -I -S -c '
 import os
 import pwd
@@ -44,7 +45,7 @@ runpy.run_path(resolver, run_name="__main__")
 )
 ```
 
-The launch block clears the listed injection-capable dynamic-loader overrides before Python starts. Isolated Python derives the installed skill path from the account record rather than ambient `HOME`, restores that account home for the resolver, and rejects any listed override that remains. The resolver also strips those overrides from every child command. It uses only its pinned Git and GitHub CLI installations. If either is unavailable, stop rather than substituting an executable found through `PATH`. For SSH remotes it also rejects caller-provided SSH arguments and configuration; use the trusted bare system SSH command or stop.
+The launch block clears the listed injection-capable dynamic-loader and OpenSSL provider or engine configuration overrides before Python starts. Isolated Python derives the installed skill path from the account record rather than ambient `HOME`, restores that account home for the resolver, and rejects any listed override that remains. The resolver strips those overrides from every child command and snapshots repository-local plus enabled per-worktree Git configuration. It uses only its pinned Git and GitHub CLI installations. If either is unavailable, stop rather than substituting an executable found through `PATH`. For SSH remotes it also rejects caller-provided SSH arguments and configuration; use the trusted bare system SSH command or stop.
 
 The resolver binds fresh aliases to immutable OIDs and one live PR head each, verifies their required common history, and reports current containment in both directions. A missing, stale, structurally inconsistent, concurrently moved, or unexpectedly rewritten alias is a stop condition. Report the observed refs and OIDs and coordinate with the owning stack task. Do not substitute ordinary PR branches, cached OIDs, remembered PR numbers, or a previously working local tree.
 
