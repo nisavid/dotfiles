@@ -27,6 +27,29 @@ a body of practice. Names apply to the surfaces the projects need.
 `cophax` contracts **CO**do**PH**yl**AX** and is pronounced “co-fax.” The
 operator name applies across public interfaces; the command names the CLI/TUI.
 
+## Domain naming convention
+
+When introducing or revising a domain entity, relationship, or operation for
+the current increment, establish its plain technical definition, relationships,
+and lifecycle first. Consider terminology consistent with the projects'
+techno-ecclesiastical, Ninth World-inspired naming scheme. Select thematic
+language when it improves recognition without implying additional behavior
+or authority. Create roles, objects, and operations only when the domain
+requires them.
+
+Record accepted terms and their technical crosswalk in the owning project's
+`CONTEXT.md` before propagating them through the current increment's interfaces,
+code, and documentation. Keep unresolved candidates with the relevant design
+question, outside the canonical glossary. Settle names as their concepts
+become clear; a complete thematic vocabulary is not a project-wide prerequisite.
+Preserve established protocol identifiers.
+
+Let the institutional vocabulary express custody, instruments, examination,
+records, and practice. Retain precise technical terms and operation verbs where
+they communicate the concept better. A named ceremony may be evocative while
+its individual steps remain explicit. The naming layers apply to needed
+surfaces, not a requirement to fill every role in both projects.
+
 ## Release vocabulary
 
 **Release writ**, or **writ**:
