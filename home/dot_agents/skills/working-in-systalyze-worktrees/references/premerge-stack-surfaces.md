@@ -8,7 +8,7 @@ Run `python3 scripts/resolve_premerge_stack.py --repo <checkout> --remote <remot
 
 The resolver:
 
-- verifies that the selected remote is one of the manifest's Systalyze endpoints;
+- verifies that the selected remote is one of the manifest's Systalyze endpoints and binds every network read to that verified URL;
 - runs Git and GitHub reads without credential prompts and with a finite per-command timeout;
 - queries both aliases without relying on local remote-tracking refs;
 - fetches only the immutable objects, without moving refs, writing `FETCH_HEAD`, or recursing into nested repositories;

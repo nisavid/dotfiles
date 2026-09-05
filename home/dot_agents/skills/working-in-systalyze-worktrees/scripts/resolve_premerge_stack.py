@@ -11,7 +11,7 @@ import shlex
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 from urllib.parse import urlparse
 
 SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
@@ -30,6 +30,17 @@ class ContractError(Exception):
         super().__init__(code)
         self.code = code
         self.evidence = evidence
+
+
+class ShellWord(NamedTuple):
+    value: str
+    raw: str
+    raw_end: int
+
+
+class VerifiedRemote(NamedTuple):
+    url: str
+    identity: str
 
 
 def configured_ssh_command(
@@ -81,62 +92,73 @@ def configured_ssh_command(
     return result.stdout.rstrip("\n")
 
 
-def noninteractive_ssh_command(
-    ssh_command: str,
+def literal_program_name(
+    shell_word: ShellWord,
     *,
     failure_code: str,
     command_name: str,
 ) -> str:
-    if not ssh_command.strip():
-        raise ContractError(
-            failure_code,
-            command=command_name,
-            sshCommandInvalid=True,
-        )
-    if "\n" in ssh_command or "\r" in ssh_command:
-        raise ContractError(
-            failure_code,
-            command=command_name,
-            sshCommandUnsupported=True,
-        )
-    try:
-        lexer = shlex.shlex(ssh_command, posix=True, punctuation_chars=True)
-        lexer.whitespace_split = True
-        lexer.commenters = ""
-        shell_words: list[tuple[str, int]] = []
-        while (word := lexer.get_token()) is not None:
-            raw_end = lexer.instream.tell()
-            while raw_end > 0 and ssh_command[raw_end - 1].isspace():
-                raw_end -= 1
-            shell_words.append((word, raw_end))
-    except ValueError as error:
-        raise ContractError(
-            failure_code,
-            command=command_name,
-            sshCommandInvalid=True,
-        ) from error
+    """Return a basename only when the shell word needs no runtime expansion."""
+    quote: str | None = None
+    escaped = False
+    for index, character in enumerate(shell_word.raw):
+        if escaped:
+            escaped = False
+            continue
+        if quote == "'":
+            if character == "'":
+                quote = None
+            continue
+        if character == "\\":
+            escaped = True
+            continue
+        if quote == '"':
+            if character == '"':
+                quote = None
+            elif character in {"$", "`"}:
+                raise ContractError(
+                    failure_code,
+                    command=command_name,
+                    sshCommandUnsupported=True,
+                )
+            continue
+        if character in {"'", '"'}:
+            quote = character
+        elif character in {"$", "`", "*", "?", "["} or (
+            character == "~" and index == 0
+        ):
+            raise ContractError(
+                failure_code,
+                command=command_name,
+                sshCommandUnsupported=True,
+            )
 
-    if not shell_words or any(
-        re.fullmatch(r"[();<>|&]+", word) for word, _ in shell_words
-    ):
-        raise ContractError(
-            failure_code,
-            command=command_name,
-            sshCommandUnsupported=True,
-        )
+    return Path(shell_word.value).name.casefold()
 
+
+def ssh_program_index(
+    shell_words: list[ShellWord],
+    *,
+    failure_code: str,
+    command_name: str,
+) -> int:
+    """Locate SSH after shell assignments and an optional env wrapper."""
     program_index = 0
+    # Shell assignment recognition happens before quote removal, while env sees
+    # quote-removed argv. Preserve that grammar distinction deliberately.
     while program_index < len(shell_words) and SHELL_ASSIGNMENT_PATTERN.fullmatch(
-        shell_words[program_index][0]
+        shell_words[program_index].raw
     ):
         program_index += 1
 
-    if program_index < len(shell_words) and Path(
-        shell_words[program_index][0]
-    ).name.casefold() in {"env", "env.exe"}:
+    if program_index < len(shell_words) and literal_program_name(
+        shell_words[program_index],
+        failure_code=failure_code,
+        command_name=command_name,
+    ) in {"env", "env.exe"}:
         program_index += 1
         while program_index < len(shell_words):
-            word = shell_words[program_index][0]
+            word = shell_words[program_index].value
             if word == "--":
                 program_index += 1
                 break
@@ -174,7 +196,68 @@ def noninteractive_ssh_command(
             command=command_name,
             sshCommandInvalid=True,
         )
-    program = Path(shell_words[program_index][0]).name.casefold()
+    return program_index
+
+
+def noninteractive_ssh_command(
+    ssh_command: str,
+    *,
+    failure_code: str,
+    command_name: str,
+) -> str:
+    if not ssh_command.strip():
+        raise ContractError(
+            failure_code,
+            command=command_name,
+            sshCommandInvalid=True,
+        )
+    if "\n" in ssh_command or "\r" in ssh_command:
+        raise ContractError(
+            failure_code,
+            command=command_name,
+            sshCommandUnsupported=True,
+        )
+    try:
+        lexer = shlex.shlex(ssh_command, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        shell_words: list[ShellWord] = []
+        raw_cursor = 0
+        while (word := lexer.get_token()) is not None:
+            raw_end = lexer.instream.tell()
+            while raw_end > 0 and ssh_command[raw_end - 1].isspace():
+                raw_end -= 1
+            raw_start = raw_cursor
+            while raw_start < raw_end and ssh_command[raw_start].isspace():
+                raw_start += 1
+            shell_words.append(ShellWord(word, ssh_command[raw_start:raw_end], raw_end))
+            raw_cursor = raw_end
+    except ValueError as error:
+        raise ContractError(
+            failure_code,
+            command=command_name,
+            sshCommandInvalid=True,
+        ) from error
+
+    if not shell_words or any(
+        re.fullmatch(r"[();<>|&]+", word.value) for word in shell_words
+    ):
+        raise ContractError(
+            failure_code,
+            command=command_name,
+            sshCommandUnsupported=True,
+        )
+
+    program_index = ssh_program_index(
+        shell_words,
+        failure_code=failure_code,
+        command_name=command_name,
+    )
+    program = literal_program_name(
+        shell_words[program_index],
+        failure_code=failure_code,
+        command_name=command_name,
+    )
     if program in {"ssh", "ssh.exe"}:
         option = " -o BatchMode=yes"
     elif program in {"plink", "plink.exe", "tortoiseplink", "tortoiseplink.exe"}:
@@ -185,7 +268,7 @@ def noninteractive_ssh_command(
             command=command_name,
             sshCommandUnsupported=True,
         )
-    insertion_point = shell_words[program_index][1]
+    insertion_point = shell_words[program_index].raw_end
     return ssh_command[:insertion_point] + option + ssh_command[insertion_point:]
 
 
@@ -197,6 +280,7 @@ def run(
     allowed_returncodes: tuple[int, ...] = (0,),
     timeout_seconds: float = COMMAND_TIMEOUT_SECONDS,
     github_host: str | None = None,
+    uses_ssh_transport: bool | None = None,
 ) -> subprocess.CompletedProcess[str]:
     environment = os.environ.copy()
     for variable in (
@@ -221,17 +305,22 @@ def run(
     )
     if github_host is not None:
         environment["GH_HOST"] = github_host
-    ssh_command = configured_ssh_command(
-        cwd,
-        environment,
-        failure_code=failure_code,
-        timeout_seconds=timeout_seconds,
-    )
-    environment["GIT_SSH_COMMAND"] = noninteractive_ssh_command(
-        ssh_command,
-        failure_code=failure_code,
-        command_name=Path(arguments[0]).name,
-    )
+    if uses_ssh_transport is True:
+        ssh_command = configured_ssh_command(
+            cwd,
+            environment,
+            failure_code=failure_code,
+            timeout_seconds=timeout_seconds,
+        )
+        environment["GIT_SSH_COMMAND"] = noninteractive_ssh_command(
+            ssh_command,
+            failure_code=failure_code,
+            command_name=Path(arguments[0]).name,
+        )
+    elif uses_ssh_transport is False:
+        # A verified non-SSH URL may still be subject to a later Git URL rewrite.
+        # Block that transport transition without interpreting the user's wrapper.
+        environment["GIT_SSH_COMMAND"] = "false"
     try:
         result = subprocess.run(
             arguments,
@@ -273,12 +362,14 @@ def git(
     *arguments: str,
     failure_code: str = "GIT_COMMAND_FAILED",
     allowed_returncodes: tuple[int, ...] = (0,),
+    uses_ssh_transport: bool | None = None,
 ) -> subprocess.CompletedProcess[str]:
     return run(
         ["git", *arguments],
         cwd=repo,
         failure_code=failure_code,
         allowed_returncodes=allowed_returncodes,
+        uses_ssh_transport=uses_ssh_transport,
     )
 
 
@@ -437,7 +528,7 @@ def verify_repository_identity(repository: str, remote_identity: str) -> str:
     return remote_host.casefold()
 
 
-def verify_remote(repo: Path, remote: str, manifest: dict[str, Any]) -> str:
+def verify_remote(repo: Path, remote: str, manifest: dict[str, Any]) -> VerifiedRemote:
     result = git(
         repo,
         "remote",
@@ -446,9 +537,8 @@ def verify_remote(repo: Path, remote: str, manifest: dict[str, Any]) -> str:
         remote,
         failure_code="REMOTE_NOT_FOUND",
     )
-    identities = [
-        normalize_remote_url(line) for line in result.stdout.splitlines() if line
-    ]
+    remote_urls = [line for line in result.stdout.splitlines() if line]
+    identities = [normalize_remote_url(remote_url) for remote_url in remote_urls]
     expected = {
         identity
         for value in manifest["remoteUrls"]
@@ -460,23 +550,25 @@ def verify_remote(repo: Path, remote: str, manifest: dict[str, Any]) -> str:
         raise ContractError("REMOTE_IDENTITY_MISMATCH")
     remote_identity = identities[0]
     assert remote_identity is not None
-    return remote_identity
+    return VerifiedRemote(remote_urls[0], remote_identity)
 
 
 def query_aliases(
     repo: Path,
-    remote: str,
+    remote_url: str,
     surfaces: list[dict[str, str]],
     *,
     initial: bool,
+    uses_ssh_transport: bool,
 ) -> dict[str, str]:
     result = git(
         repo,
         "ls-remote",
         "--refs",
-        remote,
+        remote_url,
         *(surface["ref"] for surface in surfaces),
         failure_code="ALIAS_QUERY_FAILED",
+        uses_ssh_transport=uses_ssh_transport,
     )
     observed: dict[str, list[str]] = {}
     for line in result.stdout.splitlines():
@@ -506,16 +598,23 @@ def query_aliases(
     return resolved
 
 
-def fetch_immutable_objects(repo: Path, remote: str, aliases: dict[str, str]) -> None:
+def fetch_immutable_objects(
+    repo: Path,
+    remote_url: str,
+    aliases: dict[str, str],
+    *,
+    uses_ssh_transport: bool,
+) -> None:
     git(
         repo,
         "fetch",
         "--no-tags",
         "--no-write-fetch-head",
         "--recurse-submodules=no",
-        remote,
+        remote_url,
         *dict.fromkeys(aliases.values()),
         failure_code="ALIAS_OBJECT_FETCH_FAILED",
+        uses_ssh_transport=uses_ssh_transport,
     )
     for oid in aliases.values():
         git(
@@ -694,11 +793,25 @@ def resolve(arguments: argparse.Namespace) -> dict[str, Any]:
         Path(__file__).resolve().parents[1] / "references" / "premerge-stack.json"
     )
     manifest = load_manifest(manifest_path)
-    remote_identity = verify_remote(repo, arguments.remote, manifest)
-    github_host = verify_repository_identity(manifest["repository"], remote_identity)
+    verified_remote = verify_remote(repo, arguments.remote, manifest)
+    github_host = verify_repository_identity(
+        manifest["repository"], verified_remote.identity
+    )
+    uses_ssh_transport = urlparse(verified_remote.identity).scheme == "ssh"
     surfaces = manifest["surfaces"]
-    aliases = query_aliases(repo, arguments.remote, surfaces, initial=True)
-    fetch_immutable_objects(repo, arguments.remote, aliases)
+    aliases = query_aliases(
+        repo,
+        verified_remote.url,
+        surfaces,
+        initial=True,
+        uses_ssh_transport=uses_ssh_transport,
+    )
+    fetch_immutable_objects(
+        repo,
+        verified_remote.url,
+        aliases,
+        uses_ssh_transport=uses_ssh_transport,
+    )
     verify_cached_aliases(repo, arguments.remote, surfaces, aliases)
     pull_requests = load_pull_requests(repo, manifest["repository"], github_host)
     bindings = bind_pull_requests(surfaces, aliases, pull_requests)
@@ -719,7 +832,13 @@ def resolve(arguments: argparse.Namespace) -> dict[str, Any]:
             }
         )
 
-    final_aliases = query_aliases(repo, arguments.remote, surfaces, initial=False)
+    final_aliases = query_aliases(
+        repo,
+        verified_remote.url,
+        surfaces,
+        initial=False,
+        uses_ssh_transport=uses_ssh_transport,
+    )
     if final_aliases != aliases:
         raise ContractError(
             "ALIAS_CHANGED_DURING_RESOLUTION",
@@ -739,7 +858,11 @@ def resolve(arguments: argparse.Namespace) -> dict[str, Any]:
         )
 
     aliases_after_pr_query = query_aliases(
-        repo, arguments.remote, surfaces, initial=False
+        repo,
+        verified_remote.url,
+        surfaces,
+        initial=False,
+        uses_ssh_transport=uses_ssh_transport,
     )
     if aliases_after_pr_query != aliases:
         raise ContractError(
@@ -761,9 +884,9 @@ def resolve(arguments: argparse.Namespace) -> dict[str, Any]:
         "schemaVersion": 1,
         "repository": manifest["repository"],
         "remote": arguments.remote,
-        "remoteIdentity": remote_identity,
+        "remoteIdentity": verified_remote.identity,
         "remoteIdentityFingerprint": "sha256:"
-        + hashlib.sha256(remote_identity.encode("utf-8")).hexdigest(),
+        + hashlib.sha256(verified_remote.identity.encode("utf-8")).hexdigest(),
         "surfaces": resolved_surfaces,
         "relationships": relationships,
     }

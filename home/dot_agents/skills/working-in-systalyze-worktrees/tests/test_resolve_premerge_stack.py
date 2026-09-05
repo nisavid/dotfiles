@@ -126,6 +126,21 @@ if count == 0 and os.environ.get("FIXTURE_GH_ALIAS_REF"):
         capture_output=True,
         text=True,
     )
+if count == 0 and os.environ.get("FIXTURE_GH_REPLACEMENT_REMOTE_URL"):
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            os.environ["FIXTURE_GH_REPO"],
+            "remote",
+            "set-url",
+            "origin",
+            os.environ["FIXTURE_GH_REPLACEMENT_REMOTE_URL"],
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
 source = os.environ.get("FIXTURE_GH_FINAL") if count else None
 source = source or os.environ["FIXTURE_GH_PRIMARY"]
 count_path.write_text(str(count + 1), encoding="utf-8")
@@ -246,12 +261,45 @@ sys.stdout.write(Path(source).read_text(encoding="utf-8"))
             encoding="utf-8",
         )
 
+    def configure_fake_ssh_transport(self) -> Path:
+        ssh_calls = self.consumer.parent / "ssh-calls.jsonl"
+        fake_ssh = self.fake_bin / "ssh"
+        fake_ssh.write_text(
+            """#!/usr/bin/env python3
+import json
+import os
+from pathlib import Path
+import sys
+
+with Path(os.environ["FIXTURE_SSH_CALLS"]).open("a", encoding="utf-8") as stream:
+    stream.write(json.dumps(sys.argv[1:]) + "\\n")
+os.execlp(
+    "git-upload-pack",
+    "git-upload-pack",
+    os.environ["FIXTURE_SSH_REMOTE"],
+)
+""",
+            encoding="utf-8",
+        )
+        fake_ssh.chmod(0o755)
+        return ssh_calls
+
+    def configure_ssh_remote(self) -> Path:
+        ssh_calls = self.configure_fake_ssh_transport()
+        remote_url = "ssh://fixture/systalyze/systalyze.git"
+        git(self.consumer, "remote", "set-url", "origin", remote_url)
+        document = self.manifest_document([remote_url])
+        document["repository"] = "fixture/systalyze/systalyze"
+        self.write_manifest_document(document)
+        return ssh_calls
+
     def resolve(
         self,
         *,
         repo: Path | None = None,
         final_pull_requests: Path | None = None,
         alias_move: tuple[str, str] | None = None,
+        replacement_remote_url: str | None = None,
         missing_gh: bool = False,
     ) -> subprocess.CompletedProcess[str]:
         self.fake_gh_count.unlink(missing_ok=True)
@@ -278,6 +326,13 @@ sys.stdout.write(Path(source).read_text(encoding="utf-8"))
                     "FIXTURE_GH_REMOTE": str(self.remote),
                     "FIXTURE_GH_ALIAS_REF": alias_ref,
                     "FIXTURE_GH_ALIAS_OID": alias_oid,
+                }
+            )
+        if replacement_remote_url is not None:
+            environment.update(
+                {
+                    "FIXTURE_GH_REPO": str(self.consumer),
+                    "FIXTURE_GH_REPLACEMENT_REMOTE_URL": replacement_remote_url,
                 }
             )
         return run(
@@ -349,6 +404,131 @@ sys.stdout.write(Path(source).read_text(encoding="utf-8"))
         self.assertEqual(fetch_head.read_bytes(), fetch_head_contents)
         self.assertEqual(git(self.consumer, "status", "--short"), status_before)
         self.assertEqual(git(self.consumer, "rev-parse", "HEAD"), head_before)
+
+    def test_non_ssh_remote_ignores_unrecognized_ambient_ssh_wrapper(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {"GIT_SSH_COMMAND": "custom-ssh-wrapper --mode fixture"},
+            clear=False,
+        ):
+            result = self.resolve()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_non_ssh_remote_ignores_unrecognized_configured_ssh_wrapper(self) -> None:
+        git(
+            self.consumer,
+            "config",
+            "core.sshCommand",
+            "custom-ssh-wrapper --mode fixture",
+        )
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("GIT_SSH_COMMAND", None)
+            result = self.resolve()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_remote_name_change_cannot_redirect_verified_operations(self) -> None:
+        ssh_calls = self.configure_fake_ssh_transport()
+        with mock.patch.dict(
+            os.environ,
+            {
+                "FIXTURE_SSH_CALLS": str(ssh_calls),
+                "FIXTURE_SSH_REMOTE": str(self.remote),
+                "GIT_SSH_COMMAND": "ssh",
+            },
+            clear=False,
+        ):
+            result = self.resolve(
+                replacement_remote_url="ssh://fixture/systalyze/systalyze.git"
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(ssh_calls.exists())
+
+    def test_non_ssh_network_operation_blocks_late_ssh_rewrite(self) -> None:
+        resolver = load_resolver_module()
+        ssh_calls = self.configure_fake_ssh_transport()
+        git(
+            self.consumer,
+            "config",
+            "url.ssh://fixture/.insteadOf",
+            str(self.remote),
+        )
+        with (
+            mock.patch.dict(
+                os.environ,
+                {
+                    "FIXTURE_SSH_CALLS": str(ssh_calls),
+                    "FIXTURE_SSH_REMOTE": str(self.remote),
+                    "GIT_SSH_COMMAND": "ssh",
+                    "PATH": str(self.fake_bin) + os.pathsep + os.environ["PATH"],
+                },
+                clear=False,
+            ),
+            self.assertRaises(resolver.ContractError),
+        ):
+            resolver.run(
+                ["git", "ls-remote", str(self.remote)],
+                cwd=self.consumer,
+                failure_code="NON_SSH_TRANSPORT_CHANGED",
+                uses_ssh_transport=False,
+            )
+
+        self.assertFalse(ssh_calls.exists())
+
+    def test_resolver_hardens_every_ssh_remote_operation(self) -> None:
+        ssh_calls = self.configure_ssh_remote()
+        with mock.patch.dict(
+            os.environ,
+            {
+                "FIXTURE_SSH_CALLS": str(ssh_calls),
+                "FIXTURE_SSH_REMOTE": str(self.remote),
+                "GIT_SSH_COMMAND": "ssh",
+            },
+            clear=False,
+        ):
+            result = self.resolve()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        invocations = [
+            json.loads(line)
+            for line in ssh_calls.read_text(encoding="utf-8").splitlines()
+        ]
+        self.assertEqual(len(invocations), 4)
+        for arguments in invocations:
+            with self.subTest(arguments=arguments):
+                option_index = arguments.index("-o")
+                self.assertEqual(arguments[option_index + 1], "BatchMode=yes")
+                self.assertTrue(arguments[-1].startswith("git-upload-pack "))
+
+    def test_ssh_remote_rejects_unrecognized_wrapper_before_transport(self) -> None:
+        ssh_calls = self.configure_ssh_remote()
+        for ssh_command in (
+            "custom-ssh-wrapper --mode fixture",
+            "'x=y' ssh",
+        ):
+            with (
+                self.subTest(ssh_command=ssh_command),
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        "FIXTURE_SSH_CALLS": str(ssh_calls),
+                        "FIXTURE_SSH_REMOTE": str(self.remote),
+                        "GIT_SSH_COMMAND": ssh_command,
+                    },
+                    clear=False,
+                ),
+            ):
+                result = self.resolve()
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(self.error_code(result), "ALIAS_QUERY_FAILED")
+                self.assertEqual(
+                    self.error_document(result)["error"]["evidence"],
+                    {"command": "git", "sshCommandUnsupported": True},
+                )
+                self.assertFalse(ssh_calls.exists())
 
     def test_missing_alias_fails_closed(self) -> None:
         run(
@@ -854,6 +1034,7 @@ sys.stdout.write(Path(source).read_text(encoding="utf-8"))
                 cwd=self.consumer,
                 failure_code="ENVIRONMENT_CHECK_FAILED",
                 timeout_seconds=30,
+                uses_ssh_transport=True,
             )
         self.assertEqual(
             environment_check.stdout.strip(),
@@ -874,6 +1055,7 @@ sys.stdout.write(Path(source).read_text(encoding="utf-8"))
                 cwd=self.consumer,
                 failure_code="ENVIRONMENT_CHECK_FAILED",
                 timeout_seconds=30,
+                uses_ssh_transport=True,
             )
         self.assertEqual(
             batch_mode_override.stdout.strip(),
@@ -894,6 +1076,7 @@ sys.stdout.write(Path(source).read_text(encoding="utf-8"))
                 cwd=self.consumer,
                 failure_code="ENVIRONMENT_CHECK_FAILED",
                 timeout_seconds=30,
+                uses_ssh_transport=True,
             )
         self.assertEqual(putty_command.stdout.strip(), "plink -batch -P 22")
 
@@ -930,6 +1113,7 @@ sys.stdout.write(Path(source).read_text(encoding="utf-8"))
                 cwd=self.consumer,
                 failure_code="ENVIRONMENT_CHECK_FAILED",
                 timeout_seconds=30,
+                uses_ssh_transport=True,
             )
 
         self.assertEqual(
@@ -989,6 +1173,7 @@ os.execl("/bin/sh", "sh", "-c", arguments[index + 1])
                 ["git", "ls-remote", remote_url],
                 cwd=self.consumer,
                 failure_code="SSH_TRANSPORT_FAILED",
+                uses_ssh_transport=True,
             )
 
         self.assertEqual(
@@ -1010,6 +1195,7 @@ os.execl("/bin/sh", "sh", "-c", arguments[index + 1])
                 ["git", "ls-remote", remote_url],
                 cwd=self.consumer,
                 failure_code="SSH_TRANSPORT_FAILED",
+                uses_ssh_transport=True,
             )
 
         self.assertEqual(
@@ -1031,6 +1217,16 @@ os.execl("/bin/sh", "sh", "-c", arguments[index + 1])
             ("ssh\rssh", "sshCommandUnsupported"),
             ("ssh; ssh", "sshCommandUnsupported"),
             ("custom-ssh-wrapper --mode fixture", "sshCommandUnsupported"),
+            ("env --split-string ssh", "sshCommandUnsupported"),
+            ("env -u", "sshCommandInvalid"),
+            ("'x=y' ssh", "sshCommandUnsupported"),
+            ('"x=y" ssh', "sshCommandUnsupported"),
+            (r"x\=y ssh", "sshCommandUnsupported"),
+            ("x'='y ssh", "sshCommandUnsupported"),
+            ("LC_ALL=C 'x=y' ssh", "sshCommandUnsupported"),
+            ('"$HOME/bin/ssh"', "sshCommandUnsupported"),
+            ("`helper`/ssh", "sshCommandUnsupported"),
+            ("*/ssh", "sshCommandUnsupported"),
         ):
             with (
                 self.subTest(ssh_command=repr(ssh_command)),
@@ -1045,6 +1241,7 @@ os.execl("/bin/sh", "sh", "-c", arguments[index + 1])
                         [sys.executable, "-c", "raise SystemExit(0)"],
                         cwd=self.consumer,
                         failure_code="ENVIRONMENT_CHECK_FAILED",
+                        uses_ssh_transport=True,
                     )
 
                 self.assertEqual(raised.exception.code, "ENVIRONMENT_CHECK_FAILED")
@@ -1066,6 +1263,7 @@ os.execl("/bin/sh", "sh", "-c", arguments[index + 1])
                 [sys.executable, "-c", "raise SystemExit(0)"],
                 cwd=self.consumer,
                 failure_code="ENVIRONMENT_CHECK_FAILED",
+                uses_ssh_transport=True,
             )
 
         self.assertEqual(raised.exception.code, "ENVIRONMENT_CHECK_FAILED")
@@ -1076,6 +1274,29 @@ os.execl("/bin/sh", "sh", "-c", arguments[index + 1])
                 "sshCommandInvalid": True,
             },
         )
+
+    def test_ssh_parser_preserves_static_assignment_and_env_forms(self) -> None:
+        resolver = load_resolver_module()
+        for ssh_command, expected in (
+            ("x=y ssh", "x=y ssh -o BatchMode=yes"),
+            ("x='y z' ssh", "x='y z' ssh -o BatchMode=yes"),
+            ("x=y Y=z ssh", "x=y Y=z ssh -o BatchMode=yes"),
+            ("env 'x=y' ssh", "env 'x=y' ssh -o BatchMode=yes"),
+            ("env -i x=y ssh", "env -i x=y ssh -o BatchMode=yes"),
+            (
+                '"/usr/bin/ssh" -F "$HOME/fixture config"',
+                '"/usr/bin/ssh" -o BatchMode=yes -F "$HOME/fixture config"',
+            ),
+        ):
+            with self.subTest(ssh_command=ssh_command):
+                self.assertEqual(
+                    resolver.noninteractive_ssh_command(
+                        ssh_command,
+                        failure_code="ENVIRONMENT_CHECK_FAILED",
+                        command_name="git",
+                    ),
+                    expected,
+                )
 
     def test_does_not_accept_file_backed_contract_overrides(self) -> None:
         for flag, value in (
