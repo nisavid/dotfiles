@@ -580,6 +580,8 @@ def ssh_injected_arguments(
             )
             arguments.extend(
                 [
+                    "-F",
+                    os.devnull,
                     "-o",
                     "StrictHostKeyChecking=yes",
                     "-o",
@@ -646,6 +648,7 @@ def noninteractive_ssh_command(
         failure_code=failure_code,
         command_name=command_name,
     )
+    configured_arguments = [word.value for word in shell_words[program_index + 1 :]]
     trusted_program: Path | None = None
     if ssh_destination is not None:
         if program_index != 0:
@@ -660,9 +663,15 @@ def noninteractive_ssh_command(
             command_name=command_name,
         )
         program = "ssh"
+        if configured_arguments:
+            raise ContractError(
+                failure_code,
+                command=command_name,
+                sshCommandUnsupported=True,
+            )
     injected_arguments = ssh_injected_arguments(
         program,
-        [word.value for word in shell_words[program_index + 1 :]],
+        configured_arguments,
         ssh_destination,
         failure_code=failure_code,
         command_name=command_name,

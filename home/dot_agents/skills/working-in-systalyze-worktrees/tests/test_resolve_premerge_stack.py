@@ -810,6 +810,8 @@ os.execlp(
                 self.assertIn("HostName=fixture", arguments)
                 self.assertIn("HostKeyAlias=fixture", arguments)
                 self.assertIn("Port=22", arguments)
+                config_index = arguments.index("-F")
+                self.assertEqual(arguments[config_index + 1], os.devnull)
                 self.assertTrue(arguments[-1].startswith("git-upload-pack "))
 
     def test_ssh_remote_rejects_shell_execution_in_arguments(self) -> None:
@@ -1682,10 +1684,14 @@ os.execlp(
                 ssh_destination=("github.com", 22),
             )
 
+        arguments = shlex.split(environment_check.stdout.strip())
+        self.assertEqual(arguments[0], "/usr/bin/ssh")
         self.assertEqual(
-            shlex.split(environment_check.stdout.strip())[0],
-            "/usr/bin/ssh",
+            arguments[1:3],
+            ["-o", "BatchMode=yes"],
         )
+        config_index = arguments.index("-F")
+        self.assertEqual(arguments[config_index + 1], os.devnull)
 
     def test_destination_bound_ssh_rejects_lookalike_and_wrapper(self) -> None:
         resolver = load_resolver_module()
@@ -1921,40 +1927,47 @@ os.execlp(
             timeout=resolver.PROCESS_TERMINATION_GRACE_SECONDS,
         )
 
-    def test_openssh_destination_is_pinned_before_configured_overrides(self) -> None:
+    def test_openssh_destination_rejects_executable_configuration(self) -> None:
         resolver = load_resolver_module()
         ssh_config = self.consumer.parent / "ssh-config"
+        marker = self.consumer.parent / "ssh-match-exec-ran"
         ssh_config.write_text(
-            "Host github.com\n"
-            "  HostName mirror.invalid\n"
-            "  Port 2222\n"
-            "  ProxyCommand nc proxy.invalid 2222\n",
+            f'Host *\n  BatchMode yes\nMatch exec "/usr/bin/touch {marker}"\n',
             encoding="utf-8",
         )
-        command = resolver.noninteractive_ssh_command(
-            f"ssh -F {shlex.quote(str(ssh_config))} "
-            "-o HostName=other.invalid -o Port=3333 "
-            "-o ProxyJump=jump.invalid",
-            failure_code="SSH_CONFIGURATION_FAILED",
-            command_name="git",
-            ssh_destination=("github.com", 22),
-        )
-
-        effective = run(
-            *shlex.split(command),
+        control = run(
+            "/usr/bin/ssh",
             "-G",
+            "-F",
+            str(ssh_config),
             "github.com",
             cwd=self.consumer,
+            check=False,
         )
-        settings = dict(
-            line.split(maxsplit=1)
-            for line in effective.stdout.splitlines()
-            if " " in line
-        )
-        self.assertEqual(settings["hostname"], "github.com")
-        self.assertEqual(settings["port"], "22")
-        self.assertNotIn("proxycommand", settings)
-        self.assertNotIn("proxyjump", settings)
+        self.assertEqual(control.returncode, 0, control.stderr)
+        self.assertTrue(marker.exists())
+        marker.unlink()
+
+        for configured in (
+            f"ssh -F {shlex.quote(str(ssh_config))}",
+            "ssh -o PermitLocalCommand=yes",
+            "ssh -i fixture-key",
+            "ssh -v",
+        ):
+            with (
+                self.subTest(configured=configured),
+                self.assertRaises(resolver.ContractError) as raised,
+            ):
+                resolver.noninteractive_ssh_command(
+                    configured,
+                    failure_code="SSH_CONFIGURATION_FAILED",
+                    command_name="git",
+                    ssh_destination=("github.com", 22),
+                )
+
+            self.assertEqual(raised.exception.code, "SSH_CONFIGURATION_FAILED")
+            self.assertEqual(raised.exception.evidence["sshCommandUnsupported"], True)
+        self.assertFalse(marker.exists())
 
     def test_plink_destination_changing_configuration_fails_closed(self) -> None:
         resolver = load_resolver_module()
@@ -2058,22 +2071,7 @@ os.execlp(
 
     def test_ssh_command_enforces_host_key_verification(self) -> None:
         resolver = load_resolver_module()
-        ssh_config = self.consumer.parent / "ssh-config"
-        ssh_config.write_text(
-            "Host github.com\n"
-            "  StrictHostKeyChecking no\n"
-            "  HostKeyAlias mirror.invalid\n"
-            "  UserKnownHostsFile /dev/null\n"
-            "  ControlMaster auto\n"
-            f"  ControlPath {self.consumer.parent / 'configured-control'}\n",
-            encoding="utf-8",
-        )
-        configured = (
-            f"/usr/bin/ssh -F {shlex.quote(str(ssh_config))} "
-            "-o StrictHostKeyChecking=no "
-            "-o HostKeyAlias=argument.invalid "
-            f"-S {shlex.quote(str(self.consumer.parent / 'argument-control'))}"
-        )
+        configured = "/usr/bin/ssh"
 
         hardened = resolver.noninteractive_ssh_command(
             configured,
@@ -2098,10 +2096,7 @@ os.execlp(
 
     def test_ssh_command_pins_port_qualified_host_key_alias(self) -> None:
         resolver = load_resolver_module()
-        configured = (
-            "/usr/bin/ssh -o HostName=mirror.invalid "
-            "-o Port=9999 -o HostKeyAlias=mirror.invalid"
-        )
+        configured = "/usr/bin/ssh"
 
         hardened = resolver.noninteractive_ssh_command(
             configured,

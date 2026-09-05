@@ -19,7 +19,7 @@ Do not freeze branch stacks, package runners, gitlink handling, or universal smo
 
 While `references/premerge-stack.json` exists, it is the sole source of the temporary grounding-docs and dev-tooling stack alias names. Before creating or publishing product work, or publishing either provider stack, read `references/premerge-stack-surfaces.md` and run `/usr/bin/python3 -I -S "$HOME/.agents/skills/working-in-systalyze-worktrees/scripts/resolve_premerge_stack.py" --repo <checkout> --remote <remote>` against the verified Systalyze remote.
 
-The resolver uses only its pinned Git and GitHub CLI installations. If either is unavailable, stop rather than substituting an executable found through `PATH`.
+The resolver uses only its pinned Git and GitHub CLI installations. If either is unavailable, stop rather than substituting an executable found through `PATH`. For SSH remotes it also rejects caller-provided SSH arguments and configuration; use the trusted bare system SSH command or stop.
 
 The resolver binds fresh aliases to immutable OIDs and one live PR head each, verifies their required common history, and reports current containment in both directions. A missing, stale, structurally inconsistent, concurrently moved, or unexpectedly rewritten alias is a stop condition. Report the observed refs and OIDs and coordinate with the owning stack task. Do not substitute ordinary PR branches, cached OIDs, remembered PR numbers, or a previously working local tree.
 
