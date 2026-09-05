@@ -301,7 +301,7 @@ sys.stdout.write(Path(source).read_text(encoding="utf-8"))
         return cls.error_document(result)["error"]["code"]
 
     def test_resolves_immutable_aliases_without_changing_refs_or_worktree(self) -> None:
-        (self.consumer / ".git" / "FETCH_HEAD").unlink()
+        (self.consumer / ".git" / "FETCH_HEAD").unlink(missing_ok=True)
         refs_before = git(self.consumer, "show-ref")
         status_before = git(self.consumer, "status", "--short")
         head_before = git(self.consumer, "rev-parse", "HEAD")
@@ -619,6 +619,10 @@ sys.stdout.write(Path(source).read_text(encoding="utf-8"))
         hostless_repository = self.manifest_document(remote_urls)
         hostless_repository["repository"] = "systalyze/systalyze"
 
+        malformed_remote_url = self.manifest_document(
+            [str(self.remote), "not a remote URL"]
+        )
+
         for name, document in (
             ("unknown key", unknown_key),
             ("duplicate role", duplicate_role),
@@ -626,6 +630,7 @@ sys.stdout.write(Path(source).read_text(encoding="utf-8"))
             ("unsupported relationship", unsupported_relationship),
             ("non-string relationship name", nonstring_relationship_name),
             ("hostless repository", hostless_repository),
+            ("malformed remote URL", malformed_remote_url),
         ):
             with self.subTest(name):
                 self.write_manifest_document(document)

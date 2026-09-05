@@ -245,6 +245,8 @@ def load_manifest(path: Path) -> dict[str, Any]:
         raise ContractError("MANIFEST_INVALID")
     if not all(isinstance(value, str) and value for value in document["remoteUrls"]):
         raise ContractError("MANIFEST_INVALID")
+    if any(normalize_remote_url(value) is None for value in document["remoteUrls"]):
+        raise ContractError("MANIFEST_INVALID")
 
     names = validate_surfaces(document["surfaces"])
     validate_relationships(document["relationships"], names)
