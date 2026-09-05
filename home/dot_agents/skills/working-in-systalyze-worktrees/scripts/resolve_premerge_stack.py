@@ -22,6 +22,7 @@ PR_IDENTITY_KEYS = ("number", "headRefName", "headRefOid")
 PR_QUERY_LIMIT = 1000
 COMMAND_TIMEOUT_SECONDS = 60.0
 PROCESS_TERMINATION_GRACE_SECONDS = 1.0
+TRUSTED_OPENSSH_EXECUTABLE = Path("/usr/bin/ssh")
 EXPECTED_SURFACE_ROLES = {
     "grounding-docs": "product-base",
     "dev-tooling": "qa-overlay",
@@ -48,6 +49,7 @@ class VerifiedRemote(NamedTuple):
 
 GitConfigSnapshot = tuple[tuple[str, str], ...]
 SshDestination = tuple[str, int]
+CachedAliases = dict[str, str | None]
 
 
 def process_output_hashes(
@@ -265,6 +267,63 @@ def literal_program_name(
     return Path(shell_word.value).name.casefold()
 
 
+def trusted_openssh_executable(
+    shell_word: ShellWord,
+    *,
+    failure_code: str,
+    command_name: str,
+) -> Path:
+    if literal_program_name(
+        shell_word,
+        failure_code=failure_code,
+        command_name=command_name,
+    ) not in {"ssh", "ssh.exe"}:
+        raise ContractError(
+            failure_code,
+            command=command_name,
+            sshCommandUnsupported=True,
+        )
+    try:
+        trusted = TRUSTED_OPENSSH_EXECUTABLE.resolve(strict=True)
+    except OSError as error:
+        raise ContractError(
+            failure_code,
+            command=command_name,
+            sshExecutableUnavailable=True,
+        ) from error
+    if not trusted.is_file() or not os.access(trusted, os.X_OK):
+        raise ContractError(
+            failure_code,
+            command=command_name,
+            sshExecutableUnavailable=True,
+        )
+
+    if shell_word.value.casefold() in {"ssh", "ssh.exe"}:
+        return trusted
+    candidate = Path(shell_word.value)
+    if not candidate.is_absolute():
+        raise ContractError(
+            failure_code,
+            command=command_name,
+            sshExecutableUntrusted=True,
+        )
+    try:
+        candidate = candidate.resolve(strict=True)
+    except OSError as error:
+        raise ContractError(
+            failure_code,
+            command=command_name,
+            sshExecutableUntrusted=True,
+        ) from error
+    if candidate != trusted:
+        raise ContractError(
+            failure_code,
+            command=command_name,
+            sshExecutableUntrusted=True,
+        )
+    return trusted
+
+
 def ssh_program_index(
     shell_words: list[ShellWord],
     *,
@@ -474,6 +533,20 @@ def noninteractive_ssh_command(
         failure_code=failure_code,
         command_name=command_name,
     )
+    trusted_program: Path | None = None
+    if ssh_destination is not None:
+        if program_index != 0:
+            raise ContractError(
+                failure_code,
+                command=command_name,
+                sshCommandUnsupported=True,
+            )
+        trusted_program = trusted_openssh_executable(
+            shell_words[program_index],
+            failure_code=failure_code,
+            command_name=command_name,
+        )
+        program = "ssh"
     injected_arguments = ssh_injected_arguments(
         program,
         [word.value for word in shell_words[program_index + 1 :]],
@@ -483,6 +556,14 @@ def noninteractive_ssh_command(
     )
     insertion_point = shell_words[program_index].raw_end
     options = "".join(f" {shlex.quote(value)}" for value in injected_arguments)
+    if trusted_program is not None:
+        program_start = insertion_point - len(shell_words[program_index].raw)
+        return (
+            ssh_command[:program_start]
+            + shlex.quote(str(trusted_program))
+            + options
+            + ssh_command[insertion_point:]
+        )
     return ssh_command[:insertion_point] + options + ssh_command[insertion_point:]
 
 
@@ -942,6 +1023,7 @@ def fetch_immutable_objects(
     remote_url: str,
     aliases: dict[str, str],
     *,
+    negotiation_tips: tuple[str, ...],
     uses_ssh_transport: bool,
     ssh_destination: SshDestination | None,
     git_config_snapshot: GitConfigSnapshot,
@@ -954,6 +1036,7 @@ def fetch_immutable_objects(
         "--no-tags",
         "--no-write-fetch-head",
         "--recurse-submodules=no",
+        *(f"--negotiation-tip={oid}" for oid in negotiation_tips),
         remote_url,
         *dict.fromkeys(aliases.values()),
         failure_code="ALIAS_OBJECT_FETCH_FAILED",
@@ -1000,15 +1083,33 @@ def find_merge_base(repo: Path, left: str, right: str) -> str:
     return merge_base_oid
 
 
-def verify_cached_aliases(
+def read_cached_aliases(
     repo: Path,
     remote: str,
     surfaces: list[dict[str, str]],
-    aliases: dict[str, str],
-) -> None:
+) -> CachedAliases:
+    cached_aliases: CachedAliases = {}
     for surface in surfaces:
         branch = surface["ref"].removeprefix("refs/heads/")
         cached_ref = f"refs/remotes/{remote}/{branch}"
+        referenced = git(
+            repo,
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            cached_ref,
+            allowed_returncodes=(0, 1),
+        )
+        if referenced.returncode == 1:
+            cached_aliases[surface["name"]] = None
+            continue
+        referenced_oid = referenced.stdout.strip()
+        if not SHA_PATTERN.fullmatch(referenced_oid):
+            raise ContractError(
+                "CACHED_ALIAS_OBJECT_UNAVAILABLE",
+                surface=surface["name"],
+                ref=cached_ref,
+            )
         cached = git(
             repo,
             "rev-parse",
@@ -1017,16 +1118,60 @@ def verify_cached_aliases(
             f"{cached_ref}^{{commit}}",
             allowed_returncodes=(0, 1),
         )
-        if cached.returncode == 1:
+        cached_oid = cached.stdout.strip()
+        if (
+            cached.returncode == 1
+            or not SHA_PATTERN.fullmatch(cached_oid)
+            or cached_oid != referenced_oid
+        ):
+            raise ContractError(
+                "CACHED_ALIAS_OBJECT_UNAVAILABLE",
+                surface=surface["name"],
+                ref=cached_ref,
+                observedOid=referenced_oid,
+            )
+        cached_aliases[surface["name"]] = cached_oid
+    return cached_aliases
+
+
+def collect_negotiation_tips(
+    repo: Path,
+    cached_aliases: CachedAliases,
+) -> tuple[str, ...]:
+    head = git(
+        repo,
+        "rev-parse",
+        "--verify",
+        "--quiet",
+        "HEAD^{commit}",
+        failure_code="REPOSITORY_STATE_INVALID",
+        allowed_returncodes=(0, 1),
+    )
+    head_oid = head.stdout.strip()
+    if head.returncode == 1 or not SHA_PATTERN.fullmatch(head_oid):
+        raise ContractError("REPOSITORY_STATE_INVALID")
+    return tuple(
+        dict.fromkeys(
+            [head_oid, *(oid for oid in cached_aliases.values() if oid is not None)]
+        )
+    )
+
+
+def verify_cached_aliases(
+    repo: Path,
+    cached_aliases: CachedAliases,
+    aliases: dict[str, str],
+) -> None:
+    for surface, previous_oid in cached_aliases.items():
+        if previous_oid is None:
             continue
-        previous_oid = cached.stdout.strip()
-        current_oid = aliases[surface["name"]]
+        current_oid = aliases[surface]
         if previous_oid != current_oid and not is_ancestor(
             repo, previous_oid, current_oid
         ):
             raise ContractError(
                 "UNEXPECTED_ALIAS_REWRITE",
-                surface=surface["name"],
+                surface=surface,
                 previousOid=previous_oid,
                 currentOid=current_oid,
             )
@@ -1149,6 +1294,8 @@ def resolve(arguments: argparse.Namespace) -> dict[str, Any]:
     uses_ssh_transport = ssh_destination is not None
     surfaces = manifest["surfaces"]
     object_directory = resolve_git_path(repo, "objects")
+    cached_aliases = read_cached_aliases(repo, arguments.remote, surfaces)
+    negotiation_tips = collect_negotiation_tips(repo, cached_aliases)
     with tempfile.TemporaryDirectory(prefix="resolve-premerge-stack-") as directory:
         transport_root = Path(directory)
         transport_repo = transport_root / "transport.git"
@@ -1175,11 +1322,12 @@ def resolve(arguments: argparse.Namespace) -> dict[str, Any]:
             object_directory,
             verified_remote.url,
             aliases,
+            negotiation_tips=negotiation_tips,
             uses_ssh_transport=uses_ssh_transport,
             ssh_destination=ssh_destination,
             git_config_snapshot=git_config_snapshot,
         )
-        verify_cached_aliases(repo, arguments.remote, surfaces, aliases)
+        verify_cached_aliases(repo, cached_aliases, aliases)
         pull_requests = load_pull_requests(repo, manifest["repository"], github_host)
         bindings = bind_pull_requests(surfaces, aliases, pull_requests)
 

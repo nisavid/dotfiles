@@ -303,6 +303,18 @@ os.execlp(
 
     def configure_ssh_remote(self) -> Path:
         ssh_calls = self.configure_fake_ssh_transport()
+        fake_ssh = self.fake_bin / "ssh"
+        resolver_source = self.fixture_resolver.read_text(encoding="utf-8")
+        trusted_source = 'TRUSTED_OPENSSH_EXECUTABLE = Path("/usr/bin/ssh")'
+        self.assertIn(trusted_source, resolver_source)
+        self.fixture_resolver.write_text(
+            resolver_source.replace(
+                trusted_source,
+                f"TRUSTED_OPENSSH_EXECUTABLE = Path({str(fake_ssh)!r})",
+                1,
+            ),
+            encoding="utf-8",
+        )
         remote_url = "ssh://fixture/systalyze/systalyze.git"
         git(self.consumer, "remote", "set-url", "origin", remote_url)
         document = self.manifest_document([remote_url])
@@ -888,6 +900,24 @@ os.execlp(
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.error_code(result), "UNEXPECTED_ALIAS_REWRITE")
 
+    def test_missing_cached_alias_object_fails_closed(self) -> None:
+        cached_ref = (
+            self.consumer
+            / ".git"
+            / "refs/remotes/origin/ivan/stack-tips/grounding-docs"
+        )
+        cached_ref.parent.mkdir(parents=True, exist_ok=True)
+        cached_ref.write_text("f" * 40 + "\n", encoding="ascii")
+
+        result = self.resolve()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(
+            self.error_code(result),
+            "CACHED_ALIAS_OBJECT_UNAVAILABLE",
+        )
+        self.assertFalse(self.fake_gh_arguments.exists())
+
     def test_unverified_remote_fails_closed(self) -> None:
         self.write_manifest(["https://example.invalid/not-systalyze"])
 
@@ -1246,6 +1276,70 @@ os.execlp(
 
         self.assertEqual(environment_check.stdout.strip(), "1")
 
+    def test_destination_bound_ssh_uses_trusted_executable(self) -> None:
+        resolver = load_resolver_module()
+        fake_ssh = self.fake_bin / "ssh"
+        fake_ssh.write_text("#!/bin/sh\nexit 97\n", encoding="utf-8")
+        fake_ssh.chmod(0o755)
+
+        with mock.patch.dict(
+            os.environ,
+            {
+                "GIT_SSH_COMMAND": "ssh",
+                "PATH": str(self.fake_bin) + os.pathsep + os.environ["PATH"],
+            },
+            clear=False,
+        ):
+            environment_check = resolver.run(
+                [
+                    sys.executable,
+                    "-c",
+                    "import os; print(os.environ['GIT_SSH_COMMAND'])",
+                ],
+                cwd=self.consumer,
+                failure_code="ENVIRONMENT_CHECK_FAILED",
+                uses_ssh_transport=True,
+                ssh_destination=("github.com", 22),
+            )
+
+        self.assertEqual(
+            shlex.split(environment_check.stdout.strip())[0],
+            "/usr/bin/ssh",
+        )
+
+    def test_destination_bound_ssh_rejects_lookalike_and_wrapper(self) -> None:
+        resolver = load_resolver_module()
+        fake_ssh = self.fake_bin / "ssh"
+        fake_ssh.write_text("#!/bin/sh\nexit 97\n", encoding="utf-8")
+        fake_ssh.chmod(0o755)
+
+        for ssh_command, evidence_key in (
+            (str(fake_ssh), "sshExecutableUntrusted"),
+            ("env FIXTURE=value ssh", "sshCommandUnsupported"),
+        ):
+            with self.subTest(ssh_command=ssh_command):
+                with (
+                    mock.patch.dict(
+                        os.environ,
+                        {"GIT_SSH_COMMAND": ssh_command},
+                        clear=False,
+                    ),
+                    self.assertRaises(resolver.ContractError) as raised,
+                ):
+                    resolver.run(
+                        [sys.executable, "-c", "raise SystemExit(0)"],
+                        cwd=self.consumer,
+                        failure_code="SSH_CONFIGURATION_FAILED",
+                        uses_ssh_transport=True,
+                        ssh_destination=("github.com", 22),
+                    )
+
+                self.assertEqual(
+                    raised.exception.code,
+                    "SSH_CONFIGURATION_FAILED",
+                )
+                self.assertEqual(raised.exception.evidence[evidence_key], True)
+
     def test_command_runner_hashes_invalid_failure_output_as_bytes(self) -> None:
         resolver = load_resolver_module()
 
@@ -1395,12 +1489,17 @@ os.execlp(
                 self.consumer / ".git" / "objects",
                 self.remote.as_uri(),
                 {"grounding-docs": self.grounding},
+                negotiation_tips=(self.base,),
                 uses_ssh_transport=False,
                 ssh_destination=None,
                 git_config_snapshot=(),
             )
 
         self.assertIn("--no-auto-gc", git_command.call_args_list[0].args)
+        self.assertIn(
+            f"--negotiation-tip={self.base}",
+            git_command.call_args_list[0].args,
+        )
 
     def test_command_runner_preserves_ssh_command_without_transport_mode(self) -> None:
         resolver = load_resolver_module()

@@ -4,13 +4,14 @@ The manifest beside this file owns every temporary alias name and lineage rule. 
 
 ## Resolve a consumer snapshot
 
-Run `python3 "$HOME/.agents/skills/working-in-systalyze-worktrees/scripts/resolve_premerge_stack.py" --repo <checkout> --remote <remote>` before branch preparation and again immediately before product publication. Git 2.29 or newer is required because preserving `FETCH_HEAD` depends on `git fetch --no-write-fetch-head`.
+Run `python3 "$HOME/.agents/skills/working-in-systalyze-worktrees/scripts/resolve_premerge_stack.py" --repo <checkout> --remote <remote>` before branch preparation and again immediately before product publication. Git 2.29 or newer is required because preserving `FETCH_HEAD` depends on `git fetch --no-write-fetch-head`. SSH remotes require the trusted system executable at `/usr/bin/ssh`; a wrapper or lookalike executable is a stop condition.
 
 The resolver:
 
 - rejects credential-bearing remote URLs, verifies that the selected remote is one of the manifest's Systalyze endpoints, and binds every network read to that verified URL and SSH destination with OpenSSH proxy routing disabled;
 - freezes the caller's authentication and HTTP transport settings, drops URL rewrite rules, and performs network Git reads from a private bare transport repository;
 - rejects grafted, shallow, or promisor repositories and remotes without the standard branch-cache refspec before trusting local graph state;
+- snapshots each present cached alias before network access, rejects one whose object cannot peel to a commit, and advertises only HEAD plus those snapshots as fetch negotiation tips;
 - runs Git and GitHub reads without credential prompts and with a finite per-command timeout that terminates the command's process group;
 - queries both aliases without relying on local remote-tracking refs;
 - fetches only the immutable objects, without moving refs, writing `FETCH_HEAD`, recursing into nested repositories, or starting automatic repository maintenance;
