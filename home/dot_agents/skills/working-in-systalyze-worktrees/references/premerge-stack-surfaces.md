@@ -4,7 +4,9 @@ The manifest beside this file owns every temporary alias name and lineage rule. 
 
 ## Resolve a consumer snapshot
 
-Run `python3 scripts/resolve_premerge_stack.py --repo <checkout> --remote <remote>` before branch preparation and again immediately before product publication. The resolver:
+Run `python3 scripts/resolve_premerge_stack.py --repo <checkout> --remote <remote>` before branch preparation and again immediately before product publication. Git 2.29 or newer is required because preserving `FETCH_HEAD` depends on `git fetch --no-write-fetch-head`.
+
+The resolver:
 
 - verifies that the selected remote is one of the manifest's Systalyze endpoints;
 - runs Git and GitHub reads without credential prompts and with a finite per-command timeout;

@@ -19,6 +19,10 @@ SHELL_ASSIGNMENT_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=.*$")
 PR_IDENTITY_KEYS = ("number", "headRefName", "headRefOid")
 PR_QUERY_LIMIT = 1000
 COMMAND_TIMEOUT_SECONDS = 60.0
+EXPECTED_SURFACE_ROLES = {
+    "grounding-docs": "product-base",
+    "dev-tooling": "qa-overlay",
+}
 
 
 class ContractError(Exception):
@@ -26,6 +30,161 @@ class ContractError(Exception):
         super().__init__(code)
         self.code = code
         self.evidence = evidence
+
+
+def configured_ssh_command(
+    cwd: Path,
+    environment: dict[str, str],
+    *,
+    failure_code: str,
+    timeout_seconds: float,
+) -> str:
+    if "GIT_SSH_COMMAND" in environment:
+        return environment["GIT_SSH_COMMAND"]
+    try:
+        result = subprocess.run(
+            ["git", "config", "--get", "core.sshCommand"],
+            cwd=cwd,
+            env=environment,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise ContractError(
+            failure_code,
+            command="git",
+            sshCommandQueryTimedOut=True,
+            timeoutSeconds=timeout_seconds,
+        ) from error
+    except OSError as error:
+        raise ContractError(
+            failure_code,
+            command="git",
+            sshCommandQueryFailed=True,
+            osError=type(error).__name__,
+        ) from error
+    if result.returncode == 1:
+        return "ssh"
+    if result.returncode != 0:
+        raise ContractError(
+            failure_code,
+            command="git",
+            sshCommandQueryFailed=True,
+            returnCode=result.returncode,
+            stdoutSha256="sha256:"
+            + hashlib.sha256(result.stdout.encode("utf-8")).hexdigest(),
+            stderrSha256="sha256:"
+            + hashlib.sha256(result.stderr.encode("utf-8")).hexdigest(),
+        )
+    return result.stdout.rstrip("\n")
+
+
+def noninteractive_ssh_command(
+    ssh_command: str,
+    *,
+    failure_code: str,
+    command_name: str,
+) -> str:
+    if not ssh_command.strip():
+        raise ContractError(
+            failure_code,
+            command=command_name,
+            sshCommandInvalid=True,
+        )
+    if "\n" in ssh_command or "\r" in ssh_command:
+        raise ContractError(
+            failure_code,
+            command=command_name,
+            sshCommandUnsupported=True,
+        )
+    try:
+        lexer = shlex.shlex(ssh_command, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        tokens: list[tuple[str, int]] = []
+        while (token := lexer.get_token()) is not None:
+            raw_end = lexer.instream.tell()
+            while raw_end > 0 and ssh_command[raw_end - 1].isspace():
+                raw_end -= 1
+            tokens.append((token, raw_end))
+    except ValueError as error:
+        raise ContractError(
+            failure_code,
+            command=command_name,
+            sshCommandInvalid=True,
+        ) from error
+
+    if not tokens or any(re.fullmatch(r"[();<>|&]+", token) for token, _ in tokens):
+        raise ContractError(
+            failure_code,
+            command=command_name,
+            sshCommandUnsupported=True,
+        )
+
+    program_index = 0
+    while program_index < len(tokens) and SHELL_ASSIGNMENT_PATTERN.fullmatch(
+        tokens[program_index][0]
+    ):
+        program_index += 1
+
+    if program_index < len(tokens) and Path(
+        tokens[program_index][0]
+    ).name.casefold() in {"env", "env.exe"}:
+        program_index += 1
+        while program_index < len(tokens):
+            token = tokens[program_index][0]
+            if token == "--":
+                program_index += 1
+                break
+            if SHELL_ASSIGNMENT_PATTERN.fullmatch(token) or token in {
+                "-i",
+                "--ignore-environment",
+            }:
+                program_index += 1
+                continue
+            if token in {"-u", "--unset", "-C", "--chdir"}:
+                program_index += 2
+                if program_index > len(tokens):
+                    raise ContractError(
+                        failure_code,
+                        command=command_name,
+                        sshCommandInvalid=True,
+                    )
+                continue
+            if (token.startswith(("-u", "-C")) and len(token) > 2) or token.startswith(
+                ("--unset=", "--chdir=")
+            ):
+                program_index += 1
+                continue
+            if token.startswith("-"):
+                raise ContractError(
+                    failure_code,
+                    command=command_name,
+                    sshCommandUnsupported=True,
+                )
+            break
+
+    if program_index >= len(tokens):
+        raise ContractError(
+            failure_code,
+            command=command_name,
+            sshCommandInvalid=True,
+        )
+    program = Path(tokens[program_index][0]).name.casefold()
+    if program in {"ssh", "ssh.exe"}:
+        option = " -o BatchMode=yes"
+    elif program in {"plink", "plink.exe", "tortoiseplink", "tortoiseplink.exe"}:
+        option = " -batch"
+    else:
+        raise ContractError(
+            failure_code,
+            command=command_name,
+            sshCommandUnsupported=True,
+        )
+    insertion_point = tokens[program_index][1]
+    return ssh_command[:insertion_point] + option + ssh_command[insertion_point:]
 
 
 def run(
@@ -51,6 +210,7 @@ def run(
         {
             "GIT_TERMINAL_PROMPT": "0",
             "GIT_ASKPASS": "false",
+            "GIT_NO_REPLACE_OBJECTS": "1",
             "GCM_INTERACTIVE": "never",
             "GH_PROMPT_DISABLED": "1",
             "SSH_ASKPASS": "false",
@@ -59,33 +219,17 @@ def run(
     )
     if github_host is not None:
         environment["GH_HOST"] = github_host
-    ssh_command = environment.get("GIT_SSH_COMMAND", "ssh")
-    try:
-        ssh_arguments = shlex.split(ssh_command)
-    except ValueError as error:
-        raise ContractError(
-            failure_code,
-            command=Path(arguments[0]).name,
-            sshCommandInvalid=True,
-        ) from error
-    if not ssh_arguments:
-        ssh_arguments = ["ssh"]
-        ssh_command = "ssh"
-    program_index = 0
-    while program_index < len(ssh_arguments) and SHELL_ASSIGNMENT_PATTERN.fullmatch(
-        ssh_arguments[program_index]
-    ):
-        program_index += 1
-    if program_index < len(ssh_arguments) and Path(
-        ssh_arguments[program_index]
-    ).name.casefold() in {"ssh", "ssh.exe"}:
-        ssh_arguments[program_index + 1 : program_index + 1] = [
-            "-o",
-            "BatchMode=yes",
-        ]
-        environment["GIT_SSH_COMMAND"] = shlex.join(ssh_arguments)
-    else:
-        environment["GIT_SSH_COMMAND"] = ssh_command
+    ssh_command = configured_ssh_command(
+        cwd,
+        environment,
+        failure_code=failure_code,
+        timeout_seconds=timeout_seconds,
+    )
+    environment["GIT_SSH_COMMAND"] = noninteractive_ssh_command(
+        ssh_command,
+        failure_code=failure_code,
+        command_name=Path(arguments[0]).name,
+    )
     try:
         result = subprocess.run(
             arguments,
@@ -137,29 +281,36 @@ def git(
 
 
 def normalize_remote_url(value: str) -> str | None:
-    remote_url = value.strip()
-    scp_match = re.fullmatch(r"(?:[^/@]+@)?([^/:]+):(.+)", remote_url)
-    if scp_match and "://" not in remote_url:
-        host, path = scp_match.groups()
-        return f"ssh://{host.lower()}/{path.strip('/').removesuffix('.git').lower()}"
+    try:
+        remote_url = value.strip()
+        scp_match = re.fullmatch(r"(?:[^/@]+@)?([^/:]+):(.+)", remote_url)
+        if scp_match and "://" not in remote_url:
+            host, path = scp_match.groups()
+            if "[" in host or "]" in host:
+                return None
+            return (
+                f"ssh://{host.lower()}/{path.strip('/').removesuffix('.git').lower()}"
+            )
 
-    parsed = urlparse(remote_url)
-    if parsed.scheme in {"https", "ssh"} and parsed.hostname:
-        try:
+        parsed = urlparse(remote_url)
+        if parsed.scheme in {"https", "ssh"}:
+            hostname = parsed.hostname
             port = parsed.port
-        except ValueError:
-            return None
-        authority = parsed.hostname.lower()
-        if port is not None:
-            authority += f":{port}"
-        return (
-            f"{parsed.scheme}://{authority}/"
-            f"{parsed.path.strip('/').removesuffix('.git').lower()}"
-        )
-    if parsed.scheme == "file":
-        return str(Path(parsed.path).resolve())
-    if remote_url.startswith("/"):
-        return str(Path(remote_url).resolve())
+            if hostname is None:
+                return None
+            authority = hostname.lower()
+            if port is not None:
+                authority += f":{port}"
+            return (
+                f"{parsed.scheme}://{authority}/"
+                f"{parsed.path.strip('/').removesuffix('.git').lower()}"
+            )
+        if parsed.scheme == "file":
+            return str(Path(parsed.path).resolve())
+        if remote_url.startswith("/"):
+            return str(Path(remote_url).resolve())
+    except (OSError, RuntimeError, ValueError):
+        return None
     return None
 
 
@@ -170,6 +321,7 @@ def validate_surfaces(surfaces: object) -> set[str]:
     names: set[str] = set()
     roles: set[str] = set()
     refs: set[str] = set()
+    roles_by_name: dict[str, str] = {}
     for surface in surfaces:
         if not isinstance(surface, dict) or set(surface) != {"name", "role", "ref"}:
             raise ContractError("MANIFEST_INVALID")
@@ -187,8 +339,12 @@ def validate_surfaces(surfaces: object) -> set[str]:
         names.add(name)
         roles.add(role)
         refs.add(ref)
+        roles_by_name[name] = role
 
-    if roles != {"product-base", "qa-overlay"}:
+    if (
+        roles != {"product-base", "qa-overlay"}
+        or roles_by_name != EXPECTED_SURFACE_ROLES
+    ):
         raise ContractError("MANIFEST_INVALID")
     return names
 
@@ -256,16 +412,16 @@ def load_manifest(path: Path) -> dict[str, Any]:
 
 def verify_repository_identity(repository: str, remote_identity: str) -> str:
     host, owner, name = repository.split("/")
-    parsed = urlparse(remote_identity)
+    try:
+        parsed = urlparse(remote_identity)
+        remote_host = parsed.hostname
+        port = parsed.port
+    except ValueError as error:
+        raise ContractError("REMOTE_IDENTITY_MISMATCH") from error
     if parsed.scheme not in {"https", "ssh"}:
         # Local paths are accepted only by packaged test fixtures. Production
         # manifests bind their repository to a network remote identity.
         return host
-    try:
-        port = parsed.port
-    except ValueError as error:
-        raise ContractError("REMOTE_IDENTITY_MISMATCH") from error
-    remote_host = parsed.hostname
     if remote_host is None:
         raise ContractError("REMOTE_IDENTITY_MISMATCH")
     if port is not None:

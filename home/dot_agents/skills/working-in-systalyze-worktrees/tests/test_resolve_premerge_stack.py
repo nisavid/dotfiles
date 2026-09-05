@@ -301,7 +301,9 @@ sys.stdout.write(Path(source).read_text(encoding="utf-8"))
         return cls.error_document(result)["error"]["code"]
 
     def test_resolves_immutable_aliases_without_changing_refs_or_worktree(self) -> None:
-        (self.consumer / ".git" / "FETCH_HEAD").unlink(missing_ok=True)
+        fetch_head = self.consumer / ".git" / "FETCH_HEAD"
+        fetch_head_contents = b"preserve this FETCH_HEAD exactly\n"
+        fetch_head.write_bytes(fetch_head_contents)
         refs_before = git(self.consumer, "show-ref")
         status_before = git(self.consumer, "status", "--short")
         head_before = git(self.consumer, "rev-parse", "HEAD")
@@ -344,7 +346,7 @@ sys.stdout.write(Path(source).read_text(encoding="utf-8"))
             ["github.com", "github.com"],
         )
         self.assertEqual(git(self.consumer, "show-ref"), refs_before)
-        self.assertFalse((self.consumer / ".git" / "FETCH_HEAD").exists())
+        self.assertEqual(fetch_head.read_bytes(), fetch_head_contents)
         self.assertEqual(git(self.consumer, "status", "--short"), status_before)
         self.assertEqual(git(self.consumer, "rev-parse", "HEAD"), head_before)
 
@@ -556,6 +558,33 @@ sys.stdout.write(Path(source).read_text(encoding="utf-8"))
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.error_code(result), "RELATIONSHIP_MISMATCH")
 
+    def test_local_replace_refs_cannot_fabricate_common_history(self) -> None:
+        run(
+            "git",
+            "--git-dir",
+            str(self.remote),
+            "update-ref",
+            "refs/heads/ivan/stack-tips/dev-tooling",
+            self.unrelated,
+            cwd=self.consumer,
+        )
+        self.write_pull_requests(self.grounding, self.unrelated)
+        git(
+            self.consumer,
+            "fetch",
+            "--no-tags",
+            "--no-write-fetch-head",
+            "origin",
+            self.local_dev,
+            self.unrelated,
+        )
+        git(self.consumer, "replace", self.unrelated, self.local_dev)
+
+        result = self.resolve()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.error_code(result), "RELATIONSHIP_MISMATCH")
+
     def test_non_fast_forward_change_from_cached_alias_fails_closed(self) -> None:
         git(
             self.consumer,
@@ -601,6 +630,14 @@ sys.stdout.write(Path(source).read_text(encoding="utf-8"))
             "product-base"
         )
 
+        swapped_roles = self.manifest_document(remote_urls)
+        cast(list[dict[str, object]], swapped_roles["surfaces"])[0]["role"] = (
+            "qa-overlay"
+        )
+        cast(list[dict[str, object]], swapped_roles["surfaces"])[1]["role"] = (
+            "product-base"
+        )
+
         tag_ref = self.manifest_document(remote_urls)
         cast(list[dict[str, object]], tag_ref["surfaces"])[1]["ref"] = (
             "refs/tags/dev-tooling"
@@ -623,14 +660,30 @@ sys.stdout.write(Path(source).read_text(encoding="utf-8"))
             [str(self.remote), "not a remote URL"]
         )
 
+        malformed_remote_authority = self.manifest_document(
+            [str(self.remote), "https://[::1"]
+        )
+
+        malformed_scp_authority = self.manifest_document(
+            [str(self.remote), "git@[foo:owner/repo"]
+        )
+
+        nul_local_path = self.manifest_document(
+            [str(self.remote), "file:///tmp/\N{NULL}"]
+        )
+
         for name, document in (
             ("unknown key", unknown_key),
             ("duplicate role", duplicate_role),
+            ("swapped roles", swapped_roles),
             ("tag ref", tag_ref),
             ("unsupported relationship", unsupported_relationship),
             ("non-string relationship name", nonstring_relationship_name),
             ("hostless repository", hostless_repository),
             ("malformed remote URL", malformed_remote_url),
+            ("malformed remote authority", malformed_remote_authority),
+            ("malformed scp authority", malformed_scp_authority),
+            ("NUL local path", nul_local_path),
         ):
             with self.subTest(name):
                 self.write_manifest_document(document)
@@ -842,7 +895,7 @@ sys.stdout.write(Path(source).read_text(encoding="utf-8"))
                 failure_code="ENVIRONMENT_CHECK_FAILED",
                 timeout_seconds=30,
             )
-        self.assertEqual(putty_command.stdout.strip(), "plink -P 22")
+        self.assertEqual(putty_command.stdout.strip(), "plink -batch -P 22")
 
         with self.assertRaises(resolver.ContractError) as raised:
             resolver.run(
@@ -855,6 +908,173 @@ sys.stdout.write(Path(source).read_text(encoding="utf-8"))
         self.assertEqual(
             raised.exception.evidence,
             {"command": Path(sys.executable).name, "timeoutSeconds": 0.01},
+        )
+
+    def test_command_runner_preserves_configured_ssh_command(self) -> None:
+        resolver = load_resolver_module()
+        git(
+            self.consumer,
+            "config",
+            "core.sshCommand",
+            "ssh -F 'fixture config'",
+        )
+
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("GIT_SSH_COMMAND", None)
+            environment_check = resolver.run(
+                [
+                    sys.executable,
+                    "-c",
+                    "import os; print(os.environ['GIT_SSH_COMMAND'])",
+                ],
+                cwd=self.consumer,
+                failure_code="ENVIRONMENT_CHECK_FAILED",
+                timeout_seconds=30,
+            )
+
+        self.assertEqual(
+            environment_check.stdout.strip(),
+            "ssh -o BatchMode=yes -F 'fixture config'",
+        )
+
+    def test_configured_ssh_command_preserves_shell_expansion_in_git_transport(
+        self,
+    ) -> None:
+        resolver = load_resolver_module()
+        fixture_home = self.consumer.parent / "fixture home"
+        fixture_home.mkdir()
+        fixture_config = fixture_home / "fixture config"
+        fixture_config.write_text("", encoding="utf-8")
+        ssh_arguments = self.consumer.parent / "ssh-arguments.json"
+        fake_ssh = self.fake_bin / "ssh"
+        fake_ssh.write_text(
+            """#!/usr/bin/env python3
+import json
+import os
+from pathlib import Path
+import sys
+
+arguments = sys.argv[1:]
+Path(os.environ["FIXTURE_SSH_ARGUMENTS"]).write_text(
+    json.dumps(arguments), encoding="utf-8"
+)
+index = 0
+while index < len(arguments) and arguments[index].startswith("-"):
+    index += 2 if arguments[index] in {"-F", "-i", "-o", "-p"} else 1
+if len(arguments) - index != 2:
+    raise SystemExit(2)
+os.execl("/bin/sh", "sh", "-c", arguments[index + 1])
+""",
+            encoding="utf-8",
+        )
+        fake_ssh.chmod(0o755)
+        git(
+            self.consumer,
+            "config",
+            "core.sshCommand",
+            'env FIXTURE_TRANSPORT=configured ssh -F "$HOME/fixture config"',
+        )
+        environment = {
+            "FIXTURE_SSH_ARGUMENTS": str(ssh_arguments),
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_SYSTEM": os.devnull,
+            "HOME": str(fixture_home),
+            "PATH": str(self.fake_bin) + os.pathsep + os.environ["PATH"],
+        }
+        remote_url = f"ssh://fixture{self.remote}"
+
+        with mock.patch.dict(os.environ, environment, clear=False):
+            os.environ.pop("GIT_SSH_COMMAND", None)
+            resolver.run(
+                ["git", "ls-remote", remote_url],
+                cwd=self.consumer,
+                failure_code="SSH_TRANSPORT_FAILED",
+            )
+
+        self.assertEqual(
+            json.loads(ssh_arguments.read_text(encoding="utf-8"))[:5],
+            ["-o", "BatchMode=yes", "-F", str(fixture_config), "fixture"],
+        )
+
+        with mock.patch.dict(
+            os.environ,
+            {
+                **environment,
+                "GIT_SSH_COMMAND": (
+                    'env FIXTURE_TRANSPORT=ambient ssh -F "$HOME/ambient config"'
+                ),
+            },
+            clear=False,
+        ):
+            resolver.run(
+                ["git", "ls-remote", remote_url],
+                cwd=self.consumer,
+                failure_code="SSH_TRANSPORT_FAILED",
+            )
+
+        self.assertEqual(
+            json.loads(ssh_arguments.read_text(encoding="utf-8"))[:5],
+            [
+                "-o",
+                "BatchMode=yes",
+                "-F",
+                str(fixture_home / "ambient config"),
+                "fixture",
+            ],
+        )
+
+    def test_command_runner_rejects_unsafe_ssh_commands(self) -> None:
+        resolver = load_resolver_module()
+        for ssh_command, evidence_key in (
+            ("", "sshCommandInvalid"),
+            ("ssh\nssh", "sshCommandUnsupported"),
+            ("ssh\rssh", "sshCommandUnsupported"),
+            ("ssh; ssh", "sshCommandUnsupported"),
+            ("custom-ssh-wrapper --mode fixture", "sshCommandUnsupported"),
+        ):
+            with (
+                self.subTest(ssh_command=repr(ssh_command)),
+                mock.patch.dict(
+                    os.environ,
+                    {"GIT_SSH_COMMAND": ssh_command},
+                    clear=False,
+                ),
+            ):
+                with self.assertRaises(resolver.ContractError) as raised:
+                    resolver.run(
+                        [sys.executable, "-c", "raise SystemExit(0)"],
+                        cwd=self.consumer,
+                        failure_code="ENVIRONMENT_CHECK_FAILED",
+                    )
+
+                self.assertEqual(raised.exception.code, "ENVIRONMENT_CHECK_FAILED")
+                self.assertEqual(
+                    raised.exception.evidence,
+                    {
+                        "command": Path(sys.executable).name,
+                        evidence_key: True,
+                    },
+                )
+
+        git(self.consumer, "config", "core.sshCommand", "")
+        with (
+            mock.patch.dict(os.environ, {}, clear=False),
+            self.assertRaises(resolver.ContractError) as raised,
+        ):
+            os.environ.pop("GIT_SSH_COMMAND", None)
+            resolver.run(
+                [sys.executable, "-c", "raise SystemExit(0)"],
+                cwd=self.consumer,
+                failure_code="ENVIRONMENT_CHECK_FAILED",
+            )
+
+        self.assertEqual(raised.exception.code, "ENVIRONMENT_CHECK_FAILED")
+        self.assertEqual(
+            raised.exception.evidence,
+            {
+                "command": Path(sys.executable).name,
+                "sshCommandInvalid": True,
+            },
         )
 
     def test_does_not_accept_file_backed_contract_overrides(self) -> None:
