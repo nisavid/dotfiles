@@ -752,6 +752,8 @@ def normalize_remote_url(value: str) -> str | None:
             port = parsed.port
             if hostname is None:
                 return None
+            if port is not None and port < 1:
+                return None
             if parsed.password is not None or (
                 parsed.scheme == "https" and parsed.username is not None
             ):
@@ -995,7 +997,8 @@ def ssh_destination_for_identity(identity: str) -> SshDestination | None:
         return None
     if parsed.hostname is None:
         raise ContractError("REMOTE_IDENTITY_MISMATCH")
-    return parsed.hostname, parsed.port or DEFAULT_REMOTE_PORTS["ssh"]
+    port = parsed.port
+    return parsed.hostname, DEFAULT_REMOTE_PORTS["ssh"] if port is None else port
 
 
 def verify_repository_identity(repository: str, remote_identity: str) -> str:

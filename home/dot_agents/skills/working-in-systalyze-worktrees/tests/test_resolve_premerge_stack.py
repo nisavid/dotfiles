@@ -112,6 +112,13 @@ import sys
 if sys.argv[1:3] == ["auth", "token"]:
     if sys.argv[3:] != ["--hostname", os.environ.get("GH_HOST")]:
         raise SystemExit(98)
+    if os.environ.get("FIXTURE_GH_AUTH_GRAFT_PATH"):
+        graft_path = Path(os.environ["FIXTURE_GH_AUTH_GRAFT_PATH"])
+        graft_path.parent.mkdir(parents=True, exist_ok=True)
+        graft_path.write_text(
+            os.environ["FIXTURE_GH_AUTH_GRAFT_CONTENT"],
+            encoding="utf-8",
+        )
     sys.stdout.write("fixture-token\\n")
     raise SystemExit(0)
 
@@ -355,6 +362,7 @@ os.execlp(
         alias_move: tuple[str, str] | None = None,
         replacement_remote_url: str | None = None,
         instead_of_rewrite: tuple[str, str] | None = None,
+        auth_graft: tuple[Path, str] | None = None,
         late_graft: tuple[Path, str] | None = None,
         missing_gh: bool = False,
     ) -> subprocess.CompletedProcess[str]:
@@ -398,6 +406,14 @@ os.execlp(
                     "FIXTURE_GH_REPO": str(self.consumer),
                     "FIXTURE_GH_INSTEAD_OF_SOURCE": source,
                     "FIXTURE_GH_INSTEAD_OF_TARGET": target,
+                }
+            )
+        if auth_graft is not None:
+            path, contents = auth_graft
+            environment.update(
+                {
+                    "FIXTURE_GH_AUTH_GRAFT_PATH": str(path),
+                    "FIXTURE_GH_AUTH_GRAFT_CONTENT": contents,
                 }
             )
         if late_graft is not None:
@@ -1092,6 +1108,33 @@ os.execlp(
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.error_code(result), "UNEXPECTED_ALIAS_REWRITE")
 
+    def test_late_repository_graft_cannot_hide_cached_alias_rewrite(self) -> None:
+        git(
+            self.consumer,
+            "fetch",
+            "--no-tags",
+            "--no-write-fetch-head",
+            "origin",
+            self.unrelated,
+        )
+        git(
+            self.consumer,
+            "update-ref",
+            "refs/remotes/origin/ivan/stack-tips/grounding-docs",
+            self.unrelated,
+        )
+        graft_path = Path(git(self.consumer, "rev-parse", "--git-path", "info/grafts"))
+        if not graft_path.is_absolute():
+            graft_path = self.consumer / graft_path
+
+        result = self.resolve(
+            auth_graft=(graft_path, f"{self.grounding} {self.unrelated}\n")
+        )
+
+        self.assertTrue(graft_path.exists())
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.error_code(result), "UNEXPECTED_ALIAS_REWRITE")
+
     def test_missing_cached_alias_object_fails_closed(self) -> None:
         cached_ref = (
             self.consumer
@@ -1172,6 +1215,10 @@ os.execlp(
             [str(self.remote), "git@[foo:owner/repo"]
         )
 
+        zero_ssh_port = self.manifest_document(
+            [str(self.remote), "ssh://github.com:0/systalyze/systalyze.git"]
+        )
+
         nul_local_path = self.manifest_document(
             [str(self.remote), "file:///tmp/\N{NULL}"]
         )
@@ -1187,6 +1234,7 @@ os.execlp(
             ("malformed remote URL", malformed_remote_url),
             ("malformed remote authority", malformed_remote_authority),
             ("malformed scp authority", malformed_scp_authority),
+            ("zero SSH port", zero_ssh_port),
             ("NUL local path", nul_local_path),
         ):
             with self.subTest(name):
@@ -1834,6 +1882,34 @@ os.execlp(
         self.assertEqual(settings["stricthostkeychecking"], "true")
         self.assertEqual(settings["hostkeyalias"], "github.com")
         self.assertNotIn("controlpath", settings)
+
+    def test_ssh_command_pins_port_qualified_host_key_alias(self) -> None:
+        resolver = load_resolver_module()
+        configured = (
+            "/usr/bin/ssh -o HostName=mirror.invalid "
+            "-o Port=9999 -o HostKeyAlias=mirror.invalid"
+        )
+
+        hardened = resolver.noninteractive_ssh_command(
+            configured,
+            failure_code="SSH_CONFIGURATION_FAILED",
+            command_name="git",
+            ssh_destination=("github.com", 2222),
+        )
+        result = subprocess.run(
+            [*shlex.split(hardened), "-G", "github.com"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        settings = dict(
+            line.split(maxsplit=1) for line in result.stdout.splitlines() if " " in line
+        )
+        self.assertEqual(settings["hostname"], "github.com")
+        self.assertEqual(settings["port"], "2222")
+        self.assertEqual(settings["hostkeyalias"], "[github.com]:2222")
 
     def test_configured_ssh_command_preserves_shell_expansion_in_git_transport(
         self,
