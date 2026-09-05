@@ -380,6 +380,7 @@ os.execlp(
         self,
         *,
         repo: Path | None = None,
+        remote_name: str = "origin",
         final_pull_requests: Path | None = None,
         alias_move: tuple[str, str] | None = None,
         replacement_remote_url: str | None = None,
@@ -460,8 +461,7 @@ os.execlp(
                 str(self.fixture_resolver),
                 "--repo",
                 str(repo or self.consumer),
-                "--remote",
-                "origin",
+                f"--remote={remote_name}",
                 cwd=repo or self.consumer,
                 check=False,
                 environment_overrides=environment,
@@ -527,6 +527,14 @@ os.execlp(
         self.assertEqual(fetch_head.read_bytes(), fetch_head_contents)
         self.assertEqual(git(self.consumer, "status", "--short"), status_before)
         self.assertEqual(git(self.consumer, "rev-parse", "HEAD"), head_before)
+
+    def test_remote_name_beginning_with_dash_is_not_parsed_as_an_option(self) -> None:
+        git(self.consumer, "remote", "rename", "--", "origin", "-fixture")
+
+        result = self.resolve(remote_name="-fixture")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["remote"], "-fixture")
 
     def test_non_ssh_remote_ignores_unrecognized_ambient_ssh_wrapper(self) -> None:
         with mock.patch.dict(

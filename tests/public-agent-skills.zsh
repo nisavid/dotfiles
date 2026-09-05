@@ -112,7 +112,7 @@ test_systalyze_worktrees() {
     'Systalyze resolver invocation must restore the trusted account home before loading the resolver'
   assert_contains "$skill" 'runpy.run_path(resolver, run_name="__main__")' \
     'Systalyze resolver invocation must load the resolver through isolated Python'
-  assert_contains "$skill" "' --repo <checkout> --remote <remote>" \
+  assert_contains "$skill" "' --repo <checkout> --remote=<remote>" \
     'Systalyze resolver invocation must pass the required arguments after the isolated bootstrap'
   assert_contains "$reference" 'unset LD_AUDIT LD_LIBRARY_PATH LD_PRELOAD' \
     'Systalyze resolver procedure must clear dynamic-loader injection before starting Python'
@@ -124,7 +124,7 @@ test_systalyze_worktrees() {
     'Systalyze resolver procedure must restore the trusted account home before loading the resolver'
   assert_contains "$reference" 'runpy.run_path(resolver, run_name="__main__")' \
     'Systalyze resolver procedure must load the resolver through isolated Python'
-  assert_contains "$reference" "' --repo <checkout> --remote <remote>" \
+  assert_contains "$reference" "' --repo <checkout> --remote=<remote>" \
     'Systalyze resolver procedure must pass the required arguments after the isolated bootstrap'
   ! rg -F -q -- '$HOME/.agents/skills/working-in-systalyze-worktrees/scripts/resolve_premerge_stack.py' \
     "$skill" "$reference" || \

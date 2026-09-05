@@ -41,7 +41,7 @@ resolver = os.path.join(
 )
 sys.argv[0] = resolver
 runpy.run_path(resolver, run_name="__main__")
-' --repo <checkout> --remote <remote>
+' --repo <checkout> --remote=<remote>
 )
 ```
 

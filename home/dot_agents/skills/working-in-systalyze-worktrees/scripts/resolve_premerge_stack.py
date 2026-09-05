@@ -1290,6 +1290,7 @@ def verify_remote(repo: Path, remote: str, manifest: dict[str, Any]) -> Verified
         "remote",
         "get-url",
         "--all",
+        "--",
         remote,
         failure_code="REMOTE_NOT_FOUND",
     )
