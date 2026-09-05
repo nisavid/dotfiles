@@ -36,7 +36,7 @@ The subshell clears the listed injection-capable dynamic-loader and OpenSSL prov
 
 The resolver:
 
-- normalizes scheme-default ports, rejects credential-bearing remote URLs, verifies that the selected remote is one of the manifest's Systalyze endpoints, requires certificate verification for HTTPS, and binds every network read to that verified URL and SSH destination using a pinned OpenSSH variant with proxy routing and connection sharing disabled and strict host-key checking enforced;
+- normalizes scheme-default ports, rejects credential-bearing remote URLs, verifies the selected remote's raw repository/worktree URL entries against the manifest's Systalyze endpoints without applying `url.*.insteadOf` rewrites, requires certificate verification for HTTPS, and binds every network read to that verified URL and SSH destination using a pinned OpenSSH variant with proxy routing and connection sharing disabled and strict host-key checking enforced;
 - snapshots repository-local and enabled per-worktree Git configuration, rejects executable Git credential helpers before network reads, freezes the caller's remaining authentication and HTTP transport settings, drops URL rewrite rules, ignores ambient Git executable and template overrides, and performs network Git reads from a private bare SHA-1 transport repository;
 - queries GitHub with the active host token through an empty temporary CLI configuration, excluding configured Unix-socket routes;
 - rejects grafted, shallow, or promisor repositories and remotes without the standard branch-cache refspec before trusting local graph state;

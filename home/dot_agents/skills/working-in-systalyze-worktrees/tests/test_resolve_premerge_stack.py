@@ -1699,6 +1699,32 @@ os.execlp(
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.error_code(result), "REMOTE_IDENTITY_MISMATCH")
 
+    def test_ambient_instead_of_cannot_rewrite_unverified_remote(self) -> None:
+        unverified_remote = "https://evil.invalid/systalyze/systalyze.git"
+        git(self.consumer, "remote", "set-url", "origin", unverified_remote)
+
+        with mock.patch.dict(
+            os.environ,
+            {
+                "GIT_CONFIG_COUNT": "1",
+                "GIT_CONFIG_KEY_0": f"url.{self.remote}.insteadOf",
+                "GIT_CONFIG_VALUE_0": unverified_remote,
+            },
+            clear=False,
+        ):
+            result = self.resolve()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.error_code(result), "REMOTE_IDENTITY_MISMATCH")
+
+    def test_empty_additional_remote_url_fails_closed(self) -> None:
+        git(self.consumer, "config", "--add", "remote.origin.url", "")
+
+        result = self.resolve()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.error_code(result), "REMOTE_IDENTITY_MISMATCH")
+
     def test_invalid_manifest_shapes_fail_closed(self) -> None:
         with self.subTest("unparsable JSON"):
             self.manifest.write_text("{", encoding="utf-8")

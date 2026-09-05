@@ -1284,17 +1284,23 @@ def verify_repository_identity(repository: str, remote_identity: str) -> str:
     return remote_host.casefold()
 
 
-def verify_remote(repo: Path, remote: str, manifest: dict[str, Any]) -> VerifiedRemote:
-    result = git(
-        repo,
-        "remote",
-        "get-url",
-        "--all",
-        "--",
-        remote,
-        failure_code="REMOTE_NOT_FOUND",
-    )
-    remote_urls = [line for line in result.stdout.splitlines() if line]
+def verify_remote(
+    remote: str,
+    manifest: dict[str, Any],
+    config_snapshot: GitConfigSnapshot,
+) -> VerifiedRemote:
+    remote_urls = [
+        value
+        for key, value in config_snapshot
+        if config_subsection_key_matches(
+            key,
+            section="remote",
+            subsection=remote,
+            variable="url",
+        )
+    ]
+    if not remote_urls:
+        raise ContractError("REMOTE_NOT_FOUND")
     identities = [normalize_remote_url(remote_url) for remote_url in remote_urls]
     expected = {
         identity
@@ -1670,8 +1676,8 @@ def resolve(arguments: argparse.Namespace) -> dict[str, Any]:
         Path(__file__).resolve().parents[1] / "references" / "premerge-stack.json"
     )
     manifest = load_manifest(manifest_path)
-    verified_remote = verify_remote(repo, arguments.remote, manifest)
     git_config_snapshot = read_git_config_snapshot(repo)
+    verified_remote = verify_remote(arguments.remote, manifest, git_config_snapshot)
     verify_https_transport_security(verified_remote.url, git_config_snapshot)
     verify_repository_state(repo, arguments.remote, git_config_snapshot)
     github_host = verify_repository_identity(
