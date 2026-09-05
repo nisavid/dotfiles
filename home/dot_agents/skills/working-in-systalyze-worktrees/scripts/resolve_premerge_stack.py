@@ -50,7 +50,7 @@ class VerifiedRemote(NamedTuple):
 
 GitConfigSnapshot = tuple[tuple[str, str], ...]
 SshDestination = tuple[str, int]
-CachedAliases = dict[str, str | None]
+CachedAliases = dict[str, "str | None"]
 
 
 def process_output_hashes(
@@ -72,7 +72,6 @@ def terminate_process_group(process: subprocess.Popen[bytes]) -> None:
         process.terminate()
     try:
         process.communicate(timeout=PROCESS_TERMINATION_GRACE_SECONDS)
-        return
     except subprocess.TimeoutExpired:
         pass
     if os.name == "posix":
@@ -250,11 +249,14 @@ def validate_literal_shell_word(
     *,
     failure_code: str,
     command_name: str,
+    leading_assignment: bool = False,
 ) -> None:
     """Reject shell words whose value would change when the command executes."""
     quote: str | None = None
     escaped = False
-    assignment_word = SHELL_ASSIGNMENT_PATTERN.fullmatch(shell_word.raw) is not None
+    assignment_value_start = (
+        shell_word.raw.index("=") + 1 if leading_assignment else None
+    )
     for index, character in enumerate(shell_word.raw):
         if escaped:
             escaped = False
@@ -279,13 +281,23 @@ def validate_literal_shell_word(
         if character in {"'", '"'}:
             quote = character
         elif (
-            character in {"$", "`", "*", "?", "[", "{", "}"}
+            character in {"$", "`", "*", "?", "["}
+            or (character in {"{", "}"} and not leading_assignment)
             or (character == "#" and index == 0)
             or (
                 character == "~"
                 and (
                     index == 0
-                    or (assignment_word and shell_word.raw[index - 1] in {"=", ":"})
+                    or (
+                        assignment_value_start is not None
+                        and (
+                            index == assignment_value_start
+                            or (
+                                index > assignment_value_start
+                                and shell_word.raw[index - 1] == ":"
+                            )
+                        )
+                    )
                 )
             )
         ):
@@ -558,11 +570,17 @@ def noninteractive_ssh_command(
         failure_code=failure_code,
         command_name=command_name,
     )
-    for shell_word in shell_words:
+    leading_assignment_count = 0
+    while leading_assignment_count < len(shell_words) and (
+        SHELL_ASSIGNMENT_PATTERN.fullmatch(shell_words[leading_assignment_count].raw)
+    ):
+        leading_assignment_count += 1
+    for index, shell_word in enumerate(shell_words):
         validate_literal_shell_word(
             shell_word,
             failure_code=failure_code,
             command_name=command_name,
+            leading_assignment=index < leading_assignment_count,
         )
 
     program_index = ssh_program_index(
@@ -602,11 +620,6 @@ def noninteractive_ssh_command(
     hardened_words[program_index + 1 : program_index + 1] = injected_arguments
     if ssh_destination is not None:
         hardened_words.extend(("-S", "none"))
-    leading_assignment_count = 0
-    while leading_assignment_count < len(shell_words) and (
-        SHELL_ASSIGNMENT_PATTERN.fullmatch(shell_words[leading_assignment_count].raw)
-    ):
-        leading_assignment_count += 1
     hardened_fragments = []
     for index, word in enumerate(hardened_words):
         if index < leading_assignment_count:
@@ -643,6 +656,7 @@ def run(
     environment = os.environ.copy()
     for variable in (
         "GIT_DIR",
+        "GIT_EXEC_PATH",
         "GIT_WORK_TREE",
         "GIT_COMMON_DIR",
         "GIT_INDEX_FILE",

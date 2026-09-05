@@ -1488,6 +1488,7 @@ os.execlp(
                 "GIT_WORK_TREE": str(self.provider),
                 "GIT_COMMON_DIR": str(self.remote),
                 "GIT_INDEX_FILE": str(self.remote / "fixture-index"),
+                "GIT_EXEC_PATH": str(self.fake_bin),
                 "GIT_OBJECT_DIRECTORY": str(self.remote / "objects"),
                 "GIT_ALTERNATE_OBJECT_DIRECTORIES": str(
                     self.unrelated_provider / ".git" / "objects"
@@ -1510,7 +1511,7 @@ os.execlp(
                         "print(os.environ['GIT_SSH_COMMAND']); "
                         "print(any(name in os.environ for name in ("
                         "'GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', "
-                        "'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY', "
+                        "'GIT_INDEX_FILE', 'GIT_EXEC_PATH', 'GIT_OBJECT_DIRECTORY', "
                         "'GIT_ALTERNATE_OBJECT_DIRECTORIES')))"
                     ),
                 ],
@@ -1707,28 +1708,59 @@ os.execlp(
 
     def test_command_timeout_terminates_descendants(self) -> None:
         resolver = load_resolver_module()
+        ready = self.consumer.parent / "descendant-ready"
         marker = self.consumer.parent / "descendant-survived"
         descendant = (
-            "import pathlib,time; time.sleep(0.4); "
+            "import pathlib,signal,time; "
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+            f"pathlib.Path({str(ready)!r}).touch(); time.sleep(0.6); "
             f"pathlib.Path({str(marker)!r}).write_text('alive', encoding='utf-8')"
         )
         parent = (
-            "import subprocess,sys,time; "
+            "import pathlib,subprocess,sys,time\n"
             "subprocess.Popen([sys.executable, '-c', sys.argv[1]], "
             "stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, "
-            "stderr=subprocess.DEVNULL); time.sleep(30)"
+            "stderr=subprocess.DEVNULL)\n"
+            "ready = pathlib.Path(sys.argv[2])\n"
+            "while not ready.exists():\n"
+            "    time.sleep(0.005)\n"
+            "time.sleep(30)\n"
         )
 
         with self.assertRaises(resolver.ContractError) as raised:
             resolver.run(
-                [sys.executable, "-c", parent, descendant],
+                [sys.executable, "-c", parent, descendant, str(ready)],
                 cwd=self.consumer,
                 failure_code="COMMAND_TIMED_OUT",
-                timeout_seconds=0.05,
+                timeout_seconds=0.2,
             )
 
         self.assertEqual(raised.exception.code, "COMMAND_TIMED_OUT")
-        time.sleep(0.6)
+        self.assertTrue(ready.exists())
+        time.sleep(0.7)
+        self.assertFalse(marker.exists())
+
+    def test_documented_interpreter_ignores_ambient_python_startup(self) -> None:
+        startup = self.consumer.parent / "python-startup"
+        startup.mkdir()
+        marker = self.consumer.parent / "sitecustomize-loaded"
+        (startup / "sitecustomize.py").write_text(
+            f"from pathlib import Path\nPath({str(marker)!r}).touch()\n",
+            encoding="utf-8",
+        )
+        environment = os.environ.copy()
+        environment["PYTHONPATH"] = str(startup)
+
+        result = subprocess.run(
+            ["/usr/bin/python3", "-I", "-S", str(RESOLVER), "--help"],
+            cwd=self.consumer,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(marker.exists())
 
     def test_timeout_cleanup_bounds_final_pipe_drain(self) -> None:
@@ -2134,8 +2166,11 @@ os.execl("/bin/sh", "sh", "-c", arguments[index + 1])
         for ssh_command, expected in (
             ("x=y ssh", "x=y ssh -o BatchMode=yes"),
             ("x='y z' ssh", "x='y z' ssh -o BatchMode=yes"),
+            ("x=a=~ ssh", "x='a=~' ssh -o BatchMode=yes"),
+            ("x={one,two} ssh", "x='{one,two}' ssh -o BatchMode=yes"),
             ("x=y Y=z ssh", "x=y Y=z ssh -o BatchMode=yes"),
             ("env 'x=y' ssh", "env x=y ssh -o BatchMode=yes"),
+            ("env HOME=~ ssh", "env 'HOME=~' ssh -o BatchMode=yes"),
             ("env -i x=y ssh", "env -i x=y ssh -o BatchMode=yes"),
         ):
             with self.subTest(ssh_command=ssh_command):
