@@ -5,9 +5,10 @@ release-operations project for authenticated software artifacts.
 
 **Decision date:** 2026-09-04
 
-**Status:** Names selected. The [2026-09-05 preliminary screen](CRYPTO_RELEASE_OPS_NAME_CLEARANCE.md)
-recommends retaining the project/operator names and reconsidering the short
-commands `sacrypt` and `cophax`. No replacement decision has been made.
+**Status:** Names selected and retained, including `sacrypt` and `cophax`.
+The [2026-09-05 preliminary screen](CRYPTO_RELEASE_OPS_NAME_CLEARANCE.md)
+records existing uses and trademark similarities as non-blocking findings for
+this naming decision, not comprehensive legal clearance.
 
 ## Naming layers
 
@@ -44,10 +45,9 @@ protocol identifiers and semantics remain unchanged.
 
 ## Clearance and adoption
 
-Use the selected names in planning and documentation with the screening status
-above. Resolve the command-name findings before public provisioning; repository
-and package coordinates remain unreserved. The preliminary screen is not
-comprehensive legal clearance.
+Use the selected names in planning and documentation. The command-name findings
+do not hold up adoption. Repository provisioning and package publication remain
+separately scoped steps; their coordinates are unreserved.
 
 The [Sigil/Canon screen](SIGIL_CANON_NAME_CLEARANCE.md) records findings about
 the earlier candidates, not clearance for this pair. Historical evidence and

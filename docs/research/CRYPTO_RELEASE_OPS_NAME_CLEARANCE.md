@@ -1,10 +1,10 @@
 # Cryptosacristy and Codiquarium name screen
 
-Keep the selected project and operator names provisionally; reconsider the
-short commands `sacrypt` and `cophax` before public adoption. `sacrypt` already
-names encryption software, and `cophax`, pronounced “co-fax,” closely resembles
-KOFAX, which has live US software trademark registrations. These are practical
-naming recommendations, not determinations of infringement.
+Retain the selected project, operator, and command names, including `sacrypt`
+and `cophax`. The small existing `sacrypt` project has no package in Arch's
+official repositories and is disregarded under the operator's stated criterion.
+The Cofax/KOFAX similarities are recorded below but do not hold up this naming
+decision. This is a practical disposition, not a finding of legal clearance.
 
 **Research date:** 2026-09-05
 
@@ -19,19 +19,19 @@ authorizes provisioning, registration, reservation, or implementation.
 | --- | --- | --- |
 | **Cryptosacristy**, project | No exact software/product match found. **The Crypto Sacristy** is an existing cryptocurrency/DeFi content identity; its [author's article](https://medium.com/@the.crypto.sacristy/furio-my-new-bank-in-defi-2bbcaa518879) concerns that community. This is a close wording association, not an established competing cryptographic-operations tool. | Retain provisionally. Describe it plainly as cryptographic operations, not cryptocurrency investment. |
 | **Cryptosacrist**, public operator | No relevant exact software/product match found in the targeted search. | Retain provisionally. |
-| **`sacrypt`**, command | [pro7357/sacrypt](https://github.com/pro7357/sacrypt) is an existing save-and-encrypt project with a [`sacrypt.sh` script](https://github.com/pro7357/sacrypt/blob/main/sacrypt.sh). Historical software catalogs also describe **SACrypt**, a Windows Explorer encryption utility attributed to Smaller Animals Software. | Prefer a different short command. The primary repository evidence alone establishes same-name use in closely related tooling; it does not establish a bare `sacrypt` PATH collision or trademark right. |
+| **`sacrypt`**, command | [pro7357/sacrypt](https://github.com/pro7357/sacrypt) is an existing save-and-encrypt project with a [`sacrypt.sh` script](https://github.com/pro7357/sacrypt/blob/main/sacrypt.sh). It had zero stars when checked on 2026-09-05; the official Arch package search below found no package for it. Historical catalogs also describe a Windows Explorer encryption utility called **SACrypt**. | Retain. The operator disregards the small existing project in the absence of a mainline Arch package. The historical utility does not establish a current command/package collision or a naming blocker. |
 | **Cryptostewards**, internal workers | No competing exact plural product found. The singular “crypto-steward” appears as a [generic role in PQCMesh](https://github.com/sadpig70/pqcmesh). | Retain as a role name when workers are needed. |
 | **Cryptopraxis**, published practice | No relevant exact software/product match found; unrelated literary wording appeared in search. | Retain provisionally. |
 | **Codiquarium**, project | No exact software/product match found. [Code Aquarium Technologies](https://codeaquarium.tech/) offers custom software and AI services; a [VS Code Aquarium extension](https://github.com/Perla-Al-Haddad/vs-code-aquarium) also exists. Neither uses the selected spelling. | Retain provisionally. These similarities merit disclosure, but this screen does not establish confusion with an authenticated-artifact operations project. |
 | **Codophylax**, public operator | No relevant exact software/product match found in the targeted search. | Retain provisionally. |
-| **`cophax`**, command | No exact software/product or selected package match found. Its intended pronunciation matches **Cofax**, a historical [Java publishing/CMS project](http://www.cofax.org/site/about.jsp), and closely resembles **KOFAX**. Two KOFAX registrations are live in the federal search below. | Prefer a different short command. This is the strongest trademark-screen concern in the family, not proof that the proposed tool would infringe. |
+| **`cophax`**, command | No exact software/product or selected package match found. Its intended pronunciation matches **Cofax**, a historical [Java publishing/CMS project](http://www.cofax.org/site/about.jsp), and closely resembles **KOFAX**. Two KOFAX registrations are live in the federal search below. | Retain. The command is a distinct contraction of Codophylax for a different tool. The screen has not established a practical collision or likely source confusion that warrants renaming it. Different spelling alone is not legal clearance. |
 
 The historical SACrypt product is supported by
 [Softpedia](https://www.softpedia.com/get/Security/Encrypting/SACrypt.shtml) and
 [FindMySoft](https://www.findmysoft.com/publisher/smaller-animals-software-inc-/),
 not a successfully retrieved manufacturer page. Its present distribution and
-rights status were not established. It corroborates the naming concern; it is
-not the sole basis for it.
+rights status were not established. This historical occurrence is retained as
+evidence, not a reason to change the selected command.
 
 Separate quoted web queries for `"Cryptosacrist"`, `"Codiquarium"`, and
 `"Codophylax"` returned no results on 2026-09-05. The quoted `"Cryptostewards"`
@@ -136,7 +136,7 @@ for the existing records/results, not separately cleared product brands.
 Codiquarium worker/documentation names and the hypothetical Writ Bureau remain
 outside this screen.
 
-The next decision is whether to replace the two short commands while retaining
-the institution/operator pairing. No replacement is selected here. Provisioning
-remains a separate step after that decision; protocol identifiers, data types,
+The command-name question is settled for this increment: retain `sacrypt` and
+`cophax` with the institution/operator pairing. Repository provisioning and
+package publication remain separate steps; protocol identifiers, data types,
 and project scope are unchanged.
