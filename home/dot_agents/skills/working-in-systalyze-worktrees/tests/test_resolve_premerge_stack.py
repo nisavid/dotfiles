@@ -1741,21 +1741,76 @@ os.execlp(
         self.assertFalse(marker.exists())
 
     def test_documented_interpreter_isolates_python_startup_and_imports(self) -> None:
-        startup = self.consumer.parent / "python-startup"
-        startup.mkdir()
+        site_startup = self.consumer.parent / "python-site-startup"
+        site_startup.mkdir()
+        import_startup = self.consumer.parent / "python-import-startup"
+        import_startup.mkdir()
         site_marker = self.consumer.parent / "sitecustomize-loaded"
         import_marker = self.consumer.parent / "ambient-argparse-loaded"
-        (startup / "sitecustomize.py").write_text(
+        (site_startup / "sitecustomize.py").write_text(
             f"from pathlib import Path\nPath({str(site_marker)!r}).touch()\n",
             encoding="utf-8",
         )
-        (startup / "argparse.py").write_text(
+        (import_startup / "argparse.py").write_text(
             f"from pathlib import Path\nPath({str(import_marker)!r}).touch()\n"
             "raise RuntimeError('ambient argparse loaded')\n",
             encoding="utf-8",
         )
+
+        site_environment = os.environ.copy()
+        site_environment["PYTHONPATH"] = str(site_startup)
+        site_control = subprocess.run(
+            ["/usr/bin/python3", "-c", "pass"],
+            cwd=self.consumer,
+            env=site_environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(site_control.returncode, 0, site_control.stderr)
+        self.assertTrue(site_marker.exists())
+        site_marker.unlink()
+
+        no_site = subprocess.run(
+            ["/usr/bin/python3", "-S", "-c", "pass"],
+            cwd=self.consumer,
+            env=site_environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(no_site.returncode, 0, no_site.stderr)
+        self.assertFalse(site_marker.exists())
+
+        import_environment = os.environ.copy()
+        import_environment["PYTHONPATH"] = str(import_startup)
+        import_control = subprocess.run(
+            ["/usr/bin/python3", "-c", "import argparse"],
+            cwd=self.consumer,
+            env=import_environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertNotEqual(import_control.returncode, 0)
+        self.assertTrue(import_marker.exists())
+        import_marker.unlink()
+
+        isolated_import = subprocess.run(
+            ["/usr/bin/python3", "-I", "-c", "import argparse"],
+            cwd=self.consumer,
+            env=import_environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(isolated_import.returncode, 0, isolated_import.stderr)
+        self.assertFalse(import_marker.exists())
+
         environment = os.environ.copy()
-        environment["PYTHONPATH"] = str(startup)
+        environment["PYTHONPATH"] = os.pathsep.join(
+            [str(site_startup), str(import_startup)]
+        )
 
         result = subprocess.run(
             ["/usr/bin/python3", "-I", "-S", str(RESOLVER), "--help"],
