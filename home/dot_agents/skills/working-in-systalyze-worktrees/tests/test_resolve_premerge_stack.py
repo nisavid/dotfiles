@@ -107,6 +107,7 @@ class ResolvePremergeStackTests(unittest.TestCase):
         self.fake_bin = root / "bin"
         self.git_only_bin = root / "git-only-bin"
         self.fake_gh_arguments = root / "gh-arguments.jsonl"
+        self.fake_gh_invocations = root / "gh-invocations.jsonl"
         self.fake_gh_hosts = root / "gh-hosts.txt"
         self.fake_gh_count = root / "gh-query-count"
 
@@ -131,6 +132,8 @@ import sys
 
 if "GH_HTTP_UNIX_SOCKET" in os.environ:
     raise SystemExit(94)
+with Path(os.environ["FIXTURE_GH_INVOCATIONS"]).open("a", encoding="utf-8") as stream:
+    stream.write(json.dumps(sys.argv[1:]) + "\\n")
 if sys.argv[1:3] == ["auth", "token"]:
     if sys.argv[3:] != ["--hostname", os.environ.get("GH_HOST")]:
         raise SystemExit(98)
@@ -451,6 +454,7 @@ os.execlp(
     ) -> subprocess.CompletedProcess[str]:
         self.fake_gh_count.unlink(missing_ok=True)
         self.fake_gh_arguments.unlink(missing_ok=True)
+        self.fake_gh_invocations.unlink(missing_ok=True)
         self.fake_gh_hosts.unlink(missing_ok=True)
         fixture_path = (
             str(self.git_only_bin)
@@ -464,6 +468,7 @@ os.execlp(
             "FIXTURE_GIT_EXECUTABLE": str(self.git_path),
             "FIXTURE_GH_COUNT": str(self.fake_gh_count),
             "FIXTURE_GH_ARGUMENTS": str(self.fake_gh_arguments),
+            "FIXTURE_GH_INVOCATIONS": str(self.fake_gh_invocations),
             "FIXTURE_GH_HOSTS": str(self.fake_gh_hosts),
             "FIXTURE_GH_PRIMARY": str(self.pull_requests),
             "GH_HOST": "example.invalid",
@@ -733,6 +738,60 @@ os.execlp(
             result = self.resolve()
 
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_sha256_checkout_fails_before_remote_queries(self) -> None:
+        sha256_consumer = self.consumer.parent / "sha256-consumer"
+        initialized = run(
+            "git",
+            "init",
+            "--object-format=sha256",
+            "-b",
+            "task",
+            str(sha256_consumer),
+            cwd=self.consumer.parent,
+            check=False,
+        )
+        if initialized.returncode != 0:
+            self.skipTest("fixture Git does not support SHA-256 repositories")
+        git(sha256_consumer, "remote", "add", "origin", str(self.remote))
+
+        trace = self.consumer.parent / "sha256-git-events.json"
+        with mock.patch.dict(
+            os.environ,
+            {"GIT_TRACE2_EVENT": str(trace)},
+            clear=False,
+        ):
+            result = self.resolve(repo=sha256_consumer)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.error_code(result), "OBJECT_FORMAT_UNSUPPORTED")
+        self.assertFalse(self.fake_gh_invocations.exists())
+        self.assertFalse(self.fake_gh_arguments.exists())
+        commands = trace2_command_names(trace)
+        self.assertNotIn("ls-remote", commands)
+        self.assertNotIn("fetch", commands)
+
+    def test_resolution_preserves_checkout_object_database(self) -> None:
+        object_directory = self.consumer / ".git" / "objects"
+
+        def snapshot() -> dict[str, tuple[str, bytes | str]]:
+            entries: dict[str, tuple[str, bytes | str]] = {}
+            for path in sorted(object_directory.rglob("*")):
+                relative = str(path.relative_to(object_directory))
+                if path.is_symlink():
+                    entries[relative] = ("symlink", os.readlink(path))
+                elif path.is_dir():
+                    entries[relative] = ("directory", "")
+                else:
+                    entries[relative] = ("file", path.read_bytes())
+            return entries
+
+        before = snapshot()
+
+        result = self.resolve()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(snapshot(), before)
 
     def test_rejects_nonstandard_remote_fetch_mapping(self) -> None:
         git(self.consumer, "config", "--unset-all", "remote.origin.fetch")
@@ -1877,7 +1936,7 @@ os.execlp(
         trace_contents = trace.read_text(encoding="utf-8")
         self.assertNotIn(private_head, trace_contents)
         self.assertNotIn(cached_only, trace_contents)
-        self.assertIn(f"have {self.base}", trace_contents)
+        self.assertNotIn(f"have {self.base}", trace_contents)
 
     def test_alternate_object_database_fails_before_network_queries(self) -> None:
         alternates = self.consumer / ".git" / "objects" / "info" / "alternates"
@@ -1904,13 +1963,14 @@ os.execlp(
         self.assertNotIn("ls-remote", commands)
         self.assertNotIn("fetch", commands)
 
-    def test_late_alternate_object_database_fails_before_negotiation(self) -> None:
+    def test_late_checkout_alternate_cannot_enter_private_graph(self) -> None:
+        private_tip = commit(self.unrelated_provider, "private-tip.txt", "private\n")
         alternates = self.consumer / ".git" / "objects" / "info" / "alternates"
-        trace = self.consumer.parent / "git-events.json"
+        trace = self.consumer.parent / "late-alternate-packets.log"
 
         with mock.patch.dict(
             os.environ,
-            {"GIT_TRACE2_EVENT": str(trace)},
+            {"GIT_TRACE_PACKET": str(trace)},
             clear=False,
         ):
             result = self.resolve(
@@ -1920,15 +1980,56 @@ os.execlp(
                 )
             )
 
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(
-            self.error_code(result),
-            "ALTERNATE_OBJECT_DATABASE_UNSUPPORTED",
-        )
+        self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(alternates.exists())
-        commands = trace2_command_names(trace)
-        self.assertIn("ls-remote", commands)
-        self.assertNotIn("fetch", commands)
+        self.assertNotIn(private_tip, trace.read_text(encoding="utf-8"))
+
+    def test_private_graph_ignores_replaced_checkout_object_database(self) -> None:
+        resolver = load_resolver_module()
+        private_tip = commit(self.unrelated_provider, "private-tip.txt", "private\n")
+        graph_repo = self.consumer.parent / "private-graph.git"
+        run("git", "init", "--bare", str(graph_repo), cwd=self.consumer.parent)
+        run(
+            "git",
+            "--git-dir",
+            str(graph_repo),
+            "fetch",
+            "--no-tags",
+            "--no-write-fetch-head",
+            self.remote.as_uri(),
+            self.grounding,
+            cwd=self.consumer.parent,
+        )
+        object_directory = self.consumer / ".git" / "objects"
+        original_object_directory = object_directory.with_name("objects-original")
+        alternates = object_directory / "info" / "alternates"
+        object_directory.rename(original_object_directory)
+        try:
+            alternates.parent.mkdir(parents=True)
+            alternates.write_text(
+                str(self.unrelated_provider / ".git" / "objects") + "\n",
+                encoding="utf-8",
+            )
+            public = resolver.git(
+                graph_repo,
+                "cat-file",
+                "-e",
+                f"{self.grounding}^{{commit}}",
+                allowed_returncodes=(0, 1, 128),
+            )
+            private = resolver.git(
+                graph_repo,
+                "cat-file",
+                "-e",
+                f"{private_tip}^{{commit}}",
+                allowed_returncodes=(0, 1, 128),
+            )
+        finally:
+            shutil.rmtree(object_directory)
+            original_object_directory.rename(object_directory)
+
+        self.assertEqual(public.returncode, 0)
+        self.assertNotEqual(private.returncode, 0)
 
     def test_late_repository_graft_cannot_hide_cached_alias_rewrite(self) -> None:
         git(
@@ -2585,6 +2686,37 @@ os.execlp(
         time.sleep(2.1)
         self.assertFalse(marker.exists())
 
+    def test_command_timeout_terminates_pipe_holder_after_leader_exits(self) -> None:
+        resolver = load_resolver_module()
+        ready = self.consumer.parent / "pipe-holder-ready"
+        marker = self.consumer.parent / "pipe-holder-survived"
+        descendant = (
+            "import pathlib,signal,time; "
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+            f"pathlib.Path({str(ready)!r}).touch(); time.sleep(2.0); "
+            f"pathlib.Path({str(marker)!r}).write_text('alive', encoding='utf-8')"
+        )
+        parent = (
+            "import pathlib,subprocess,sys,time\n"
+            "subprocess.Popen([sys.executable, '-c', sys.argv[1]])\n"
+            "ready = pathlib.Path(sys.argv[2])\n"
+            "while not ready.exists():\n"
+            "    time.sleep(0.005)\n"
+        )
+
+        with self.assertRaises(resolver.ContractError) as raised:
+            resolver.run(
+                [sys.executable, "-c", parent, descendant, str(ready)],
+                cwd=self.consumer,
+                failure_code="COMMAND_TIMED_OUT",
+                timeout_seconds=0.2,
+            )
+
+        self.assertEqual(raised.exception.code, "COMMAND_TIMED_OUT")
+        self.assertTrue(ready.exists())
+        time.sleep(2.1)
+        self.assertFalse(marker.exists())
+
     def test_command_interrupt_terminates_process_group(self) -> None:
         resolver = load_resolver_module()
         process = mock.Mock(
@@ -3055,10 +3187,10 @@ os.execlp(
         terminate_group.assert_called_once_with(process)
 
     @unittest.skipUnless(os.name == "posix", "POSIX signal behavior")
-    def test_sigterm_during_timeout_handoff_cannot_bypass_cleanup(self) -> None:
+    def test_sigterm_during_timeout_handoff_cleans_reaped_leader_group(self) -> None:
         resolver = load_resolver_module()
-        process = mock.Mock(pid=12345, returncode=None)
-        process.poll.return_value = None
+        process = mock.Mock(pid=12345, returncode=0)
+        process.poll.return_value = 0
         signal_fired = False
         source_lines, start_line = inspect.getsourcelines(resolver.run_process_bytes)
         timeout_handler = next(
@@ -3107,6 +3239,7 @@ os.execlp(
         self.assertTrue(signal_fired)
         self.assertEqual(raised.exception.code, 128 + signal.SIGTERM)
         terminate_group.assert_called_once_with(process)
+        process.poll.assert_not_called()
 
     @unittest.skipUnless(os.name == "posix", "POSIX signal behavior")
     def test_sigterm_after_process_reap_does_not_signal_reused_group(self) -> None:
@@ -3228,6 +3361,33 @@ os.execlp(
         self.assertEqual(result.returncode, 0)
         self.assertEqual(result.stdout, b"output")
         self.assertEqual(result.stderr, b"diagnostic")
+        terminate_group.assert_not_called()
+
+    def test_successful_command_ignores_callers_active_timeout(self) -> None:
+        resolver = load_resolver_module()
+        process = mock.Mock(pid=12345, returncode=0)
+        process.poll.return_value = 0
+        process.communicate.return_value = (b"", b"")
+
+        try:
+            raise subprocess.TimeoutExpired(cmd="outer-fixture", timeout=0.05)
+        except subprocess.TimeoutExpired:
+            with (
+                mock.patch.object(resolver.subprocess, "Popen", return_value=process),
+                mock.patch.object(
+                    resolver,
+                    "terminate_process_group_uninterruptibly",
+                ) as terminate_group,
+            ):
+                result = resolver.run_process_bytes(
+                    [sys.executable, "-c", "pass"],
+                    cwd=self.consumer,
+                    environment=os.environ.copy(),
+                    timeout_seconds=30,
+                )
+
+        self.assertEqual(result.returncode, 0)
+        process.poll.assert_called_once_with()
         terminate_group.assert_not_called()
 
     def test_stale_returncode_does_not_signal_reaped_process_group(self) -> None:
@@ -3538,19 +3698,21 @@ os.execlp(
         with mock.patch.object(resolver, "git", return_value=completed) as git_command:
             resolver.fetch_immutable_objects(
                 self.remote,
-                self.consumer / ".git" / "objects",
                 self.remote.as_uri(),
                 {"grounding-docs": self.grounding},
-                negotiation_tips=(self.base,),
                 uses_ssh_transport=False,
                 ssh_destination=None,
                 git_config_snapshot=(),
             )
 
         self.assertIn("--no-auto-gc", git_command.call_args_list[0].args)
-        self.assertIn(
-            f"--negotiation-tip={self.base}",
-            git_command.call_args_list[0].args,
+        self.assertIn("--filter=tree:0", git_command.call_args_list[0].args)
+        self.assertFalse(
+            any(
+                isinstance(argument, str)
+                and argument.startswith("--negotiation-tip=")
+                for argument in git_command.call_args_list[0].args
+            )
         )
 
     def test_command_runner_preserves_ssh_command_without_transport_mode(self) -> None:

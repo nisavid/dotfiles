@@ -189,6 +189,21 @@ def propagate_command_signal(signum: int) -> None:
     raise SystemExit(128 + signum)
 
 
+def exception_chain_contains(
+    error: BaseException | None,
+    expected_type: type[BaseException],
+    *,
+    stop_at: BaseException | None = None,
+) -> bool:
+    seen: set[int] = set()
+    while error is not None and error is not stop_at and id(error) not in seen:
+        if isinstance(error, expected_type):
+            return True
+        seen.add(id(error))
+        error = error.__cause__ if error.__cause__ is not None else error.__context__
+    return False
+
+
 def install_process_signal_handlers(
     previous_handlers: dict[int, Any],
     request_termination: Callable[[int, FrameType | None], None],
@@ -221,10 +236,12 @@ def run_process_bytes(
     environment: dict[str, str],
     timeout_seconds: float,
 ) -> subprocess.CompletedProcess[bytes]:
+    caller_error = sys.exc_info()[1]
     process: subprocess.Popen[bytes] | None = None
     pending_signal: int | None = None
     tearing_down = False
     finalizing = False
+    communication_completed = False
     previous_handlers: dict[int, Any] = {}
 
     def request_termination(signum: int, _frame: FrameType | None) -> None:
@@ -252,6 +269,7 @@ def run_process_bytes(
                 tearing_down = True
                 propagate_command_signal(pending_signal)
             stdout, stderr = process.communicate(timeout=timeout_seconds)
+            communication_completed = True
             result = subprocess.CompletedProcess(
                 arguments,
                 process.returncode,
@@ -267,8 +285,23 @@ def run_process_bytes(
     finally:
         finalizing = True
         try:
-            # Poll first so an already-reaped leader's PGID is never signaled.
-            if process is not None and complete_cleanup_action(process.poll) is None:
+            # A communication timeout means the leader has not been reaped, even
+            # when it exited while a descendant kept a pipe open. Keep that PID
+            # as the process-group identity until cleanup. A managed signal may
+            # replace TimeoutExpired during exception handoff, so inspect the
+            # active exception chain rather than relying on handler-local state.
+            communication_timed_out = (
+                not communication_completed
+                and exception_chain_contains(
+                    sys.exc_info()[1],
+                    subprocess.TimeoutExpired,
+                    stop_at=caller_error,
+                )
+            )
+            if process is not None and (
+                communication_timed_out
+                or complete_cleanup_action(process.poll) is None
+            ):
                 terminate_process_group_uninterruptibly(process)
         finally:
             for signum, previous_handler in previous_handlers.items():
@@ -957,7 +990,6 @@ def run(
     ssh_destination: SshDestination | None = None,
     git_config_snapshot: GitConfigSnapshot | None = None,
     git_https_authentication: GitHttpsAuthentication | None = None,
-    object_directory: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     arguments, command_name = pin_top_level_executable(
         arguments,
@@ -1008,9 +1040,6 @@ def run(
         ):
             environment.pop(variable, None)
         environment[GITHUB_TOKEN_ENVIRONMENT_VARIABLE] = github_authentication
-    if object_directory is not None:
-        reject_alternate_object_database(object_directory)
-        environment["GIT_OBJECT_DIRECTORY"] = str(object_directory)
     if git_config_snapshot is not None:
         apply_git_config_snapshot(environment, git_config_snapshot)
     apply_git_https_authentication(
@@ -1080,7 +1109,6 @@ def git(
     ssh_destination: SshDestination | None = None,
     git_config_snapshot: GitConfigSnapshot | None = None,
     git_https_authentication: GitHttpsAuthentication | None = None,
-    object_directory: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     return run(
         ["git", *arguments],
@@ -1091,7 +1119,6 @@ def git(
         ssh_destination=ssh_destination,
         git_config_snapshot=git_config_snapshot,
         git_https_authentication=git_https_authentication,
-        object_directory=object_directory,
     )
 
 
@@ -1395,6 +1422,17 @@ def verify_repository_state(
     config_snapshot: GitConfigSnapshot,
 ) -> None:
     reject_alternate_object_database(resolve_git_path(repo, "objects"))
+    object_format = git(
+        repo,
+        "rev-parse",
+        "--show-object-format",
+        failure_code="REPOSITORY_STATE_INVALID",
+    ).stdout.strip()
+    if object_format != "sha1":
+        raise ContractError(
+            "OBJECT_FORMAT_UNSUPPORTED",
+            objectFormat=object_format,
+        )
     if os.path.lexists(resolve_git_path(repo, "info/grafts")):
         raise ContractError("REPOSITORY_GRAFTS_UNSUPPORTED")
 
@@ -1557,11 +1595,9 @@ def query_aliases(
 
 def fetch_immutable_objects(
     transport_repo: Path,
-    object_directory: Path,
     remote_url: str,
     aliases: dict[str, str],
     *,
-    negotiation_tips: tuple[str, ...],
     uses_ssh_transport: bool,
     ssh_destination: SshDestination | None,
     git_config_snapshot: GitConfigSnapshot,
@@ -1574,8 +1610,9 @@ def fetch_immutable_objects(
         "--no-auto-gc",
         "--no-tags",
         "--no-write-fetch-head",
+        "--no-write-commit-graph",
         "--recurse-submodules=no",
-        *(f"--negotiation-tip={oid}" for oid in negotiation_tips),
+        "--filter=tree:0",
         remote_url,
         *dict.fromkeys(aliases.values()),
         failure_code="ALIAS_OBJECT_FETCH_FAILED",
@@ -1583,7 +1620,6 @@ def fetch_immutable_objects(
         ssh_destination=ssh_destination,
         git_config_snapshot=git_config_snapshot,
         git_https_authentication=git_https_authentication,
-        object_directory=object_directory,
     )
     for oid in aliases.values():
         git(
@@ -1592,13 +1628,11 @@ def fetch_immutable_objects(
             "-e",
             f"{oid}^{{commit}}",
             failure_code="ALIAS_NOT_COMMIT",
-            object_directory=object_directory,
         )
 
 
 def is_ancestor(
     graph_repo: Path,
-    object_directory: Path,
     ancestor: str,
     descendant: str,
 ) -> bool:
@@ -1610,14 +1644,12 @@ def is_ancestor(
         descendant,
         failure_code="ANCESTRY_CHECK_FAILED",
         allowed_returncodes=(0, 1),
-        object_directory=object_directory,
     )
     return result.returncode == 0
 
 
 def find_merge_base(
     graph_repo: Path,
-    object_directory: Path,
     left: str,
     right: str,
 ) -> str:
@@ -1628,7 +1660,6 @@ def find_merge_base(
         right,
         failure_code="RELATIONSHIP_CHECK_FAILED",
         allowed_returncodes=(0, 1),
-        object_directory=object_directory,
     )
     merge_base_oid = result.stdout.strip()
     if result.returncode != 0 or not SHA_PATTERN.fullmatch(merge_base_oid):
@@ -1687,36 +1718,8 @@ def read_cached_aliases(
     return cached_aliases
 
 
-def collect_public_negotiation_tips(
-    graph_repo: Path,
-    object_directory: Path,
-    bindings: dict[str, dict[str, Any]],
-) -> tuple[str, ...]:
-    candidates = dict.fromkeys(
-        oid
-        for binding in bindings.values()
-        for key in ("headRefOid", "baseRefOid")
-        if isinstance((oid := binding.get(key)), str) and SHA_PATTERN.fullmatch(oid)
-    )
-    available = []
-    for oid in candidates:
-        present = git(
-            graph_repo,
-            "cat-file",
-            "-e",
-            f"{oid}^{{commit}}",
-            failure_code="NEGOTIATION_TIP_CHECK_FAILED",
-            allowed_returncodes=(0, 1, 128),
-            object_directory=object_directory,
-        )
-        if present.returncode == 0:
-            available.append(oid)
-    return tuple(available)
-
-
 def verify_cached_aliases(
     graph_repo: Path,
-    object_directory: Path,
     cached_aliases: CachedAliases,
     aliases: dict[str, str],
 ) -> None:
@@ -1724,11 +1727,18 @@ def verify_cached_aliases(
         if previous_oid is None:
             continue
         current_oid = aliases[surface]
-        if previous_oid != current_oid and not is_ancestor(
+        if previous_oid == current_oid:
+            continue
+        available = git(
             graph_repo,
-            object_directory,
-            previous_oid,
-            current_oid,
+            "cat-file",
+            "-e",
+            f"{previous_oid}^{{commit}}",
+            failure_code="ANCESTRY_CHECK_FAILED",
+            allowed_returncodes=(0, 1, 128),
+        )
+        if available.returncode != 0 or not is_ancestor(
+            graph_repo, previous_oid, current_oid
         ):
             raise ContractError(
                 "UNEXPECTED_ALIAS_REWRITE",
@@ -1884,7 +1894,6 @@ def resolve(arguments: argparse.Namespace) -> dict[str, Any]:
         else None
     )
     surfaces = manifest["surfaces"]
-    object_directory = resolve_git_path(repo, "objects")
     cached_aliases = read_cached_aliases(repo, arguments.remote, surfaces)
     with tempfile.TemporaryDirectory(prefix="resolve-premerge-stack-") as directory:
         transport_root = Path(directory)
@@ -1918,17 +1927,10 @@ def resolve(arguments: argparse.Namespace) -> dict[str, Any]:
             github_token,
         )
         bindings = bind_pull_requests(surfaces, aliases, pull_requests)
-        negotiation_tips = collect_public_negotiation_tips(
-            transport_repo,
-            object_directory,
-            bindings,
-        )
         fetch_immutable_objects(
             transport_repo,
-            object_directory,
             verified_remote.url,
             aliases,
-            negotiation_tips=negotiation_tips,
             uses_ssh_transport=uses_ssh_transport,
             ssh_destination=ssh_destination,
             git_config_snapshot=git_config_snapshot,
@@ -1936,7 +1938,6 @@ def resolve(arguments: argparse.Namespace) -> dict[str, Any]:
         )
         verify_cached_aliases(
             transport_repo,
-            object_directory,
             cached_aliases,
             aliases,
         )
@@ -1947,7 +1948,6 @@ def resolve(arguments: argparse.Namespace) -> dict[str, Any]:
             right_oid = aliases[relationship["right"]]
             merge_base_oid = find_merge_base(
                 transport_repo,
-                object_directory,
                 left_oid,
                 right_oid,
             )
@@ -1959,13 +1959,11 @@ def resolve(arguments: argparse.Namespace) -> dict[str, Any]:
                     "mergeBaseOid": merge_base_oid,
                     "leftIsAncestorOfRight": is_ancestor(
                         transport_repo,
-                        object_directory,
                         left_oid,
                         right_oid,
                     ),
                     "rightIsAncestorOfLeft": is_ancestor(
                         transport_repo,
-                        object_directory,
                         right_oid,
                         left_oid,
                     ),
