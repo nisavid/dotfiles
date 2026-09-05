@@ -8,14 +8,46 @@ Run this block before branch preparation and again immediately before product pu
 
 ```sh
 (
-  unset LD_AUDIT LD_LIBRARY_PATH LD_PRELOAD \
-    DYLD_FALLBACK_FRAMEWORK_PATH DYLD_FALLBACK_LIBRARY_PATH \
-    DYLD_FRAMEWORK_PATH DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH \
-    DYLD_ROOT_PATH DYLD_SHARED_CACHE_DIR \
-    DYLD_VERSIONED_FRAMEWORK_PATH DYLD_VERSIONED_LIBRARY_PATH \
-    OPENSSL_CONF OPENSSL_CONF_INCLUDE OPENSSL_ENGINES OPENSSL_MODULES &&
-  exec /usr/bin/python3 -I -S -c '
+  LD_AUDIT= \
+  LD_LIBRARY_PATH=/dev/null \
+  LD_PRELOAD= \
+  DYLD_FALLBACK_FRAMEWORK_PATH=/dev/null \
+  DYLD_FALLBACK_LIBRARY_PATH=/dev/null \
+  DYLD_FRAMEWORK_PATH=/dev/null \
+  DYLD_INSERT_LIBRARIES= \
+  DYLD_LIBRARY_PATH=/dev/null \
+  DYLD_ROOT_PATH=/dev/null \
+  DYLD_SHARED_CACHE_DIR=/dev/null \
+  DYLD_VERSIONED_FRAMEWORK_PATH=/dev/null \
+  DYLD_VERSIONED_LIBRARY_PATH=/dev/null \
+  OPENSSL_CONF=/dev/null \
+  OPENSSL_CONF_INCLUDE=/dev/null \
+  OPENSSL_ENGINES=/dev/null \
+  OPENSSL_MODULES=/dev/null &&
+  /usr/bin/python3 -I -S -c '
 import os
+
+startup_environment_variables = (
+    "LD_AUDIT",
+    "LD_LIBRARY_PATH",
+    "LD_PRELOAD",
+    "DYLD_FALLBACK_FRAMEWORK_PATH",
+    "DYLD_FALLBACK_LIBRARY_PATH",
+    "DYLD_FRAMEWORK_PATH",
+    "DYLD_INSERT_LIBRARIES",
+    "DYLD_LIBRARY_PATH",
+    "DYLD_ROOT_PATH",
+    "DYLD_SHARED_CACHE_DIR",
+    "DYLD_VERSIONED_FRAMEWORK_PATH",
+    "DYLD_VERSIONED_LIBRARY_PATH",
+    "OPENSSL_CONF",
+    "OPENSSL_CONF_INCLUDE",
+    "OPENSSL_ENGINES",
+    "OPENSSL_MODULES",
+)
+for variable in startup_environment_variables:
+    os.environ.pop(variable, None)
+
 import pwd
 import runpy
 import sys
@@ -32,7 +64,7 @@ runpy.run_path(resolver, run_name="__main__")
 )
 ```
 
-The subshell clears the listed injection-capable dynamic-loader and OpenSSL provider or engine configuration overrides before Python starts. Isolated Python derives the installed skill path from the account record rather than ambient `HOME`, restores that account home for the resolver, and rejects any listed override that remains. The resolver strips those overrides from every child command. The absolute interpreter and both isolation flags are part of the trust boundary; do not substitute an activated or PATH-resolved runtime. The resolver pins Git to `/usr/bin/git` and accepts GitHub CLI only from `/opt/homebrew/bin/gh`, `/usr/local/bin/gh`, or `/usr/bin/gh`; it never follows ambient `PATH` for either command. Git 2.29 or newer is required because preserving `FETCH_HEAD` depends on `git fetch --no-write-fetch-head`. SSH remotes accept only the bare trusted system executable at `/usr/bin/ssh`; the resolver supplies `/dev/null` as its user configuration and rejects caller-provided wrappers, arguments, or configuration files.
+The guarded assignment-only command runs in a subshell, gives every inherited listed dynamic-loader and OpenSSL provider or engine configuration override an inert value, and prevents the first external process from starting if any assignment fails. Isolated Python removes the variables before importing anything beyond `os`. Because the launcher does not call shell `unset` or `exec`, imported functions with those names cannot intercept cleanup or dispatch. Python then derives the installed skill path from the account record rather than ambient `HOME`, restores that account home for the resolver, and rejects any listed override that remains. The resolver strips those overrides from every child command. The absolute interpreter and both isolation flags are part of the trust boundary; do not substitute an activated or PATH-resolved runtime. The resolver pins Git to `/usr/bin/git` and accepts GitHub CLI only from `/opt/homebrew/bin/gh`, `/usr/local/bin/gh`, or `/usr/bin/gh`; it never follows ambient `PATH` for either command. Git 2.29 or newer is required because preserving `FETCH_HEAD` depends on `git fetch --no-write-fetch-head`. SSH remotes accept only the bare trusted system executable at `/usr/bin/ssh`; the resolver supplies `/dev/null` as its user configuration and rejects caller-provided wrappers, arguments, or configuration files.
 
 The resolver:
 

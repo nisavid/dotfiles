@@ -38,6 +38,14 @@ def run(
     environment_overrides: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     environment = os.environ.copy()
+    for variable in tuple(environment):
+        if variable in {
+            "GIT_CONFIG",
+            "GIT_CONFIG_COUNT",
+            "GIT_CONFIG_NOSYSTEM",
+            "GIT_CONFIG_PARAMETERS",
+        } or variable.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")):
+            environment.pop(variable, None)
     environment.update(
         {
             "GIT_AUTHOR_NAME": "Fixture",
@@ -270,6 +278,36 @@ sys.stdout.write(Path(source).read_text(encoding="utf-8"))
 
     def tearDown(self) -> None:
         self.temporary_directory.cleanup()
+
+    def test_fixture_commands_ignore_ambient_command_scoped_git_config(
+        self,
+    ) -> None:
+        command_config = {
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "commit.gpgSign",
+            "GIT_CONFIG_VALUE_0": "true",
+        }
+        with mock.patch.dict(os.environ, command_config, clear=False):
+            ambient_result = run(
+                "git",
+                "config",
+                "--get",
+                "commit.gpgSign",
+                cwd=self.consumer,
+                check=False,
+            )
+            override_result = run(
+                "git",
+                "config",
+                "--get",
+                "commit.gpgSign",
+                cwd=self.consumer,
+                environment_overrides=command_config,
+            )
+
+        self.assertEqual(ambient_result.returncode, 1)
+        self.assertEqual(ambient_result.stdout, "")
+        self.assertEqual(override_result.stdout.strip(), "true")
 
     @staticmethod
     def manifest_document(remote_urls: list[str]) -> dict[str, object]:

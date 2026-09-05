@@ -102,10 +102,18 @@ test_systalyze_worktrees() {
 
   assert_contains "$skill" 'sole source of the temporary grounding-docs and dev-tooling stack alias names' \
     'Systalyze alias names must have one policy source'
-  assert_contains "$skill" 'unset LD_AUDIT LD_LIBRARY_PATH LD_PRELOAD' \
+  assert_contains "$skill" 'LD_AUDIT= \' \
+    'Systalyze resolver invocation must neutralize loader injection before process startup'
+  assert_contains "$skill" 'LD_LIBRARY_PATH=/dev/null \' \
     'Systalyze resolver invocation must clear dynamic-loader injection before starting Python'
-  assert_contains "$skill" 'OPENSSL_CONF OPENSSL_CONF_INCLUDE OPENSSL_ENGINES OPENSSL_MODULES &&' \
+  assert_contains "$skill" 'OPENSSL_CONF=/dev/null \' \
     'Systalyze resolver invocation must clear OpenSSL injection before starting Python'
+  assert_contains "$skill" 'OPENSSL_MODULES=/dev/null &&' \
+    'Systalyze resolver invocation must stop when startup neutralization fails'
+  assert_contains "$skill" 'startup_environment_variables = (' \
+    'Systalyze resolver invocation must enumerate startup variables inside isolated Python'
+  assert_contains "$skill" 'os.environ.pop(variable, None)' \
+    'Systalyze resolver invocation must remove neutralized startup variables before loading the resolver'
   assert_contains "$skill" 'account_home = pwd.getpwuid(os.getuid()).pw_dir' \
     'Systalyze resolver invocation must derive the installed home independently of ambient HOME'
   assert_contains "$skill" 'os.environ["HOME"] = account_home' \
@@ -114,10 +122,18 @@ test_systalyze_worktrees() {
     'Systalyze resolver invocation must load the resolver through isolated Python'
   assert_contains "$skill" "' --repo <checkout> --remote=<remote>" \
     'Systalyze resolver invocation must pass the required arguments after the isolated bootstrap'
-  assert_contains "$reference" 'unset LD_AUDIT LD_LIBRARY_PATH LD_PRELOAD' \
+  assert_contains "$reference" 'LD_AUDIT= \' \
+    'Systalyze resolver procedure must neutralize loader injection before process startup'
+  assert_contains "$reference" 'LD_LIBRARY_PATH=/dev/null \' \
     'Systalyze resolver procedure must clear dynamic-loader injection before starting Python'
-  assert_contains "$reference" 'OPENSSL_CONF OPENSSL_CONF_INCLUDE OPENSSL_ENGINES OPENSSL_MODULES &&' \
+  assert_contains "$reference" 'OPENSSL_CONF=/dev/null \' \
     'Systalyze resolver procedure must clear OpenSSL injection before starting Python'
+  assert_contains "$reference" 'OPENSSL_MODULES=/dev/null &&' \
+    'Systalyze resolver procedure must stop when startup neutralization fails'
+  assert_contains "$reference" 'startup_environment_variables = (' \
+    'Systalyze resolver procedure must enumerate startup variables inside isolated Python'
+  assert_contains "$reference" 'os.environ.pop(variable, None)' \
+    'Systalyze resolver procedure must remove neutralized startup variables before loading the resolver'
   assert_contains "$reference" 'account_home = pwd.getpwuid(os.getuid()).pw_dir' \
     'Systalyze resolver procedure must derive the installed home independently of ambient HOME'
   assert_contains "$reference" 'os.environ["HOME"] = account_home' \
@@ -131,17 +147,38 @@ test_systalyze_worktrees() {
     fail 'Systalyze resolver launcher must not trust ambient HOME for its script path'
   ! rg -q '^import hashlib$' "$resolver" || \
     fail 'Systalyze resolver must not load OpenSSL before its startup environment checks'
+  ! rg -q '^[[:space:]]+(unset|exec) ' "$skill" "$reference" || \
+    fail 'Systalyze resolver launcher must not call imported unset or exec functions'
   local launcher_output
   launcher_output="$(
-    /bin/bash -c 'export LD_PRELOAD=; readonly LD_PRELOAD; (unset LD_PRELOAD && printf launched); exit 0' 2>/dev/null
+    /bin/bash --noprofile --norc -c \
+      'export LD_PRELOAD=/private/tmp/not-a-library; readonly LD_PRELOAD; ( LD_PRELOAD= OPENSSL_CONF=/dev/null && /usr/bin/python3 -I -S -c '\''print("launched")'\'' )' \
+      2>/dev/null || :
   )"
   [[ -z "$launcher_output" ]] || \
-    fail 'Systalyze resolver launcher must not continue after loader cleanup fails'
+    fail 'Systalyze resolver launcher must stop before process startup when loader neutralization fails'
   launcher_output="$(
-    /bin/bash -c 'export OPENSSL_CONF=; readonly OPENSSL_CONF; (unset OPENSSL_CONF && printf launched); exit 0' 2>/dev/null
+    /bin/bash --noprofile --norc -c \
+      'export OPENSSL_CONF=/private/tmp/not-a-config; readonly OPENSSL_CONF; ( LD_PRELOAD= OPENSSL_CONF=/dev/null && /usr/bin/python3 -I -S -c '\''print("launched")'\'' )' \
+      2>/dev/null || :
   )"
   [[ -z "$launcher_output" ]] || \
-    fail 'Systalyze resolver launcher must not continue after OpenSSL cleanup fails'
+    fail 'Systalyze resolver launcher must stop before process startup when OpenSSL neutralization fails'
+  launcher_output="$(
+    /usr/bin/env \
+      'BASH_FUNC_unset%%=() { printf "forged-unset\n"; }' \
+      'BASH_FUNC_exec%%=() { printf "forged-exec\n"; }' \
+      LD_PRELOAD=/private/tmp/not-a-library \
+      LD_LIBRARY_PATH=/private/tmp/not-a-library-path \
+      OPENSSL_CONF=/private/tmp/not-a-config \
+      /bin/bash --noprofile --norc -c \
+      'type -t unset; type -t exec; ( LD_PRELOAD= LD_LIBRARY_PATH=/dev/null OPENSSL_CONF=/dev/null && /usr/bin/python3 -I -S -c "$1" )' \
+      launcher \
+      'import os; expected = {"LD_PRELOAD": "", "LD_LIBRARY_PATH": "/dev/null", "OPENSSL_CONF": "/dev/null"}; clean = all(os.environ.get(key) == value for key, value in expected.items()); [os.environ.pop(key, None) for key in expected]; print("clean" if clean and all(key not in os.environ for key in expected) else "tainted")' \
+      2>/dev/null
+  )"
+  [[ "$launcher_output" == $'function\nfunction\nclean' ]] || \
+    fail 'Systalyze resolver launcher must bypass imported cleanup and dispatch functions'
   assert_contains "$skill" 'Do not substitute ordinary PR branches, cached OIDs, remembered PR numbers' \
     'Systalyze alias failure must not fall back to volatile topology'
   assert_contains "$skill" 'disposable local-only projection' \
