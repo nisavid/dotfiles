@@ -1740,12 +1740,18 @@ os.execlp(
         time.sleep(0.7)
         self.assertFalse(marker.exists())
 
-    def test_documented_interpreter_ignores_ambient_python_startup(self) -> None:
+    def test_documented_interpreter_isolates_python_startup_and_imports(self) -> None:
         startup = self.consumer.parent / "python-startup"
         startup.mkdir()
-        marker = self.consumer.parent / "sitecustomize-loaded"
+        site_marker = self.consumer.parent / "sitecustomize-loaded"
+        import_marker = self.consumer.parent / "ambient-argparse-loaded"
         (startup / "sitecustomize.py").write_text(
-            f"from pathlib import Path\nPath({str(marker)!r}).touch()\n",
+            f"from pathlib import Path\nPath({str(site_marker)!r}).touch()\n",
+            encoding="utf-8",
+        )
+        (startup / "argparse.py").write_text(
+            f"from pathlib import Path\nPath({str(import_marker)!r}).touch()\n"
+            "raise RuntimeError('ambient argparse loaded')\n",
             encoding="utf-8",
         )
         environment = os.environ.copy()
@@ -1761,7 +1767,8 @@ os.execlp(
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertFalse(marker.exists())
+        self.assertFalse(site_marker.exists())
+        self.assertFalse(import_marker.exists())
 
     def test_timeout_cleanup_bounds_final_pipe_drain(self) -> None:
         resolver = load_resolver_module()
