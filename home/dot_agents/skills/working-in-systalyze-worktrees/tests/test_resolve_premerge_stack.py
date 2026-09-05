@@ -72,6 +72,15 @@ def git(repo: Path, *args: str) -> str:
     return run("git", *args, cwd=repo).stdout.strip()
 
 
+def trace2_command_names(path: Path) -> list[str]:
+    return [
+        event["name"]
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if (event := json.loads(line)).get("event") == "cmd_name"
+        and isinstance(event.get("name"), str)
+    ]
+
+
 def commit(repo: Path, name: str, content: str) -> str:
     path = repo / name
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -200,6 +209,13 @@ if count == 0 and os.environ.get("FIXTURE_GH_GRAFT_PATH"):
     graft_path.parent.mkdir(parents=True, exist_ok=True)
     graft_path.write_text(
         os.environ["FIXTURE_GH_GRAFT_CONTENT"],
+        encoding="utf-8",
+    )
+if count == 0 and os.environ.get("FIXTURE_GH_ALTERNATES_PATH"):
+    alternates_path = Path(os.environ["FIXTURE_GH_ALTERNATES_PATH"])
+    alternates_path.parent.mkdir(parents=True, exist_ok=True)
+    alternates_path.write_text(
+        os.environ["FIXTURE_GH_ALTERNATES_CONTENT"],
         encoding="utf-8",
     )
 source = os.environ.get("FIXTURE_GH_FINAL") if count else None
@@ -429,6 +445,7 @@ os.execlp(
         instead_of_rewrite: tuple[str, str] | None = None,
         auth_graft: tuple[Path, str] | None = None,
         late_graft: tuple[Path, str] | None = None,
+        late_alternates: tuple[Path, str] | None = None,
         missing_gh: bool = False,
         path_prefix: Path | None = None,
     ) -> subprocess.CompletedProcess[str]:
@@ -492,6 +509,14 @@ os.execlp(
                 {
                     "FIXTURE_GH_GRAFT_PATH": str(path),
                     "FIXTURE_GH_GRAFT_CONTENT": contents,
+                }
+            )
+        if late_alternates is not None:
+            path, contents = late_alternates
+            environment.update(
+                {
+                    "FIXTURE_GH_ALTERNATES_PATH": str(path),
+                    "FIXTURE_GH_ALTERNATES_CONTENT": contents,
                 }
             )
         disabled_gh = self.fake_gh.with_name("gh.disabled")
@@ -1853,6 +1878,57 @@ os.execlp(
         self.assertNotIn(private_head, trace_contents)
         self.assertNotIn(cached_only, trace_contents)
         self.assertIn(f"have {self.base}", trace_contents)
+
+    def test_alternate_object_database_fails_before_network_queries(self) -> None:
+        alternates = self.consumer / ".git" / "objects" / "info" / "alternates"
+        trace = self.consumer.parent / "git-events.json"
+        alternates.write_text(
+            str(self.unrelated_provider / ".git" / "objects") + "\n",
+            encoding="utf-8",
+        )
+
+        with mock.patch.dict(
+            os.environ,
+            {"GIT_TRACE2_EVENT": str(trace)},
+            clear=False,
+        ):
+            result = self.resolve()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(
+            self.error_code(result),
+            "ALTERNATE_OBJECT_DATABASE_UNSUPPORTED",
+        )
+        self.assertFalse(self.fake_gh_arguments.exists())
+        commands = trace2_command_names(trace)
+        self.assertNotIn("ls-remote", commands)
+        self.assertNotIn("fetch", commands)
+
+    def test_late_alternate_object_database_fails_before_negotiation(self) -> None:
+        alternates = self.consumer / ".git" / "objects" / "info" / "alternates"
+        trace = self.consumer.parent / "git-events.json"
+
+        with mock.patch.dict(
+            os.environ,
+            {"GIT_TRACE2_EVENT": str(trace)},
+            clear=False,
+        ):
+            result = self.resolve(
+                late_alternates=(
+                    alternates,
+                    str(self.unrelated_provider / ".git" / "objects") + "\n",
+                )
+            )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(
+            self.error_code(result),
+            "ALTERNATE_OBJECT_DATABASE_UNSUPPORTED",
+        )
+        self.assertTrue(alternates.exists())
+        commands = trace2_command_names(trace)
+        self.assertIn("ls-remote", commands)
+        self.assertNotIn("fetch", commands)
 
     def test_late_repository_graft_cannot_hide_cached_alias_rewrite(self) -> None:
         git(

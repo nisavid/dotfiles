@@ -929,6 +929,20 @@ def pin_git_ssh_variant(
         environment["GIT_SSH_VARIANT"] = "ssh"
 
 
+def reject_alternate_object_database(object_directory: Path) -> None:
+    alternates_path = object_directory / "info" / "alternates"
+    try:
+        alternates_path.lstat()
+    except FileNotFoundError:
+        return
+    except OSError as error:
+        raise ContractError(
+            "REPOSITORY_STATE_INVALID",
+            osError=type(error).__name__,
+        ) from error
+    raise ContractError("ALTERNATE_OBJECT_DATABASE_UNSUPPORTED")
+
+
 def run(
     arguments: list[str],
     *,
@@ -995,6 +1009,7 @@ def run(
             environment.pop(variable, None)
         environment[GITHUB_TOKEN_ENVIRONMENT_VARIABLE] = github_authentication
     if object_directory is not None:
+        reject_alternate_object_database(object_directory)
         environment["GIT_OBJECT_DIRECTORY"] = str(object_directory)
     if git_config_snapshot is not None:
         apply_git_config_snapshot(environment, git_config_snapshot)
@@ -1379,6 +1394,7 @@ def verify_repository_state(
     remote: str,
     config_snapshot: GitConfigSnapshot,
 ) -> None:
+    reject_alternate_object_database(resolve_git_path(repo, "objects"))
     if os.path.lexists(resolve_git_path(repo, "info/grafts")):
         raise ContractError("REPOSITORY_GRAFTS_UNSUPPORTED")
 
