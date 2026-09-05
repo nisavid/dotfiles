@@ -133,7 +133,6 @@ if any(
     for variable in ("GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN")
 ):
     raise SystemExit(95)
-
 count_path = Path(os.environ["FIXTURE_GH_COUNT"])
 count = int(count_path.read_text(encoding="utf-8")) if count_path.exists() else 0
 with Path(os.environ["FIXTURE_GH_ARGUMENTS"]).open("a", encoding="utf-8") as stream:
@@ -669,6 +668,43 @@ os.execlp(
             "REMOTE_FETCH_REFSPEC_UNSUPPORTED",
         )
 
+    def test_rejects_ambient_git_config_replacement_for_missing_local_fetch_mapping(
+        self,
+    ) -> None:
+        git(self.consumer, "config", "--unset-all", "remote.origin.fetch")
+        ambient_config = self.consumer.parent / "ambient-git-config"
+        run(
+            "git",
+            "config",
+            "--file",
+            str(ambient_config),
+            "remote.origin.url",
+            self.remote.as_uri(),
+            cwd=self.consumer,
+        )
+        run(
+            "git",
+            "config",
+            "--file",
+            str(ambient_config),
+            "remote.origin.fetch",
+            "+refs/heads/*:refs/remotes/origin/*",
+            cwd=self.consumer,
+        )
+
+        with mock.patch.dict(
+            os.environ,
+            {"GIT_CONFIG": str(ambient_config)},
+            clear=False,
+        ):
+            result = self.resolve()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(
+            self.error_code(result),
+            "REMOTE_FETCH_REFSPEC_UNSUPPORTED",
+        )
+
     def test_rejects_repository_grafts_before_network_access(self) -> None:
         graft_path = Path(git(self.consumer, "rev-parse", "--git-path", "info/grafts"))
         if not graft_path.is_absolute():
@@ -705,6 +741,85 @@ os.execlp(
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.error_code(result), "PROMISOR_REPOSITORY_UNSUPPORTED")
         self.assertFalse(self.fake_gh_arguments.exists())
+
+    def test_rejects_valueless_promisor_repository_before_object_lookup(self) -> None:
+        config_path = Path(git(self.consumer, "rev-parse", "--git-path", "config"))
+        if not config_path.is_absolute():
+            config_path = self.consumer / config_path
+        with config_path.open("a", encoding="utf-8") as stream:
+            stream.write('[remote "origin"]\n\tpromisor\n')
+
+        result = self.resolve()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.error_code(result), "PROMISOR_REPOSITORY_UNSUPPORTED")
+        self.assertFalse(self.fake_gh_arguments.exists())
+
+    def test_accepts_explicitly_empty_promisor_boolean(self) -> None:
+        git(self.consumer, "config", "remote.origin.promisor", "")
+
+        result = self.resolve()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_rejects_unsanitized_dynamic_loader_environment_before_commands(
+        self,
+    ) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {
+                "DYLD_INSERT_LIBRARIES": "",
+                "DYLD_LIBRARY_PATH": "",
+                "LD_AUDIT": "",
+                "LD_LIBRARY_PATH": "",
+                "LD_PRELOAD": "",
+            },
+            clear=False,
+        ):
+            result = self.resolve()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(
+            self.error_code(result),
+            "DYNAMIC_LOADER_ENVIRONMENT_UNSUPPORTED",
+        )
+        self.assertFalse(self.fake_gh_arguments.exists())
+
+    def test_child_processes_clear_dynamic_loader_environment(self) -> None:
+        resolver = load_resolver_module()
+        completed = subprocess.CompletedProcess(
+            ["/usr/bin/true"],
+            0,
+            b"",
+            b"",
+        )
+        with (
+            mock.patch.dict(
+                os.environ,
+                {
+                    "DYLD_INSERT_LIBRARIES": "fixture",
+                    "LD_AUDIT": "fixture",
+                    "LD_LIBRARY_PATH": "fixture",
+                    "LD_PRELOAD": "fixture",
+                },
+                clear=False,
+            ),
+            mock.patch.object(
+                resolver,
+                "run_process_bytes",
+                return_value=completed,
+            ) as run_process_bytes,
+        ):
+            resolver.run(
+                ["/usr/bin/true"],
+                cwd=self.consumer,
+                failure_code="FIXTURE_FAILED",
+            )
+
+        child_environment = run_process_bytes.call_args.kwargs["environment"]
+        self.assertFalse(
+            any(variable.startswith(("DYLD_", "LD_")) for variable in child_environment)
+        )
 
     def test_non_ssh_network_operation_blocks_late_ssh_rewrite(self) -> None:
         resolver = load_resolver_module()

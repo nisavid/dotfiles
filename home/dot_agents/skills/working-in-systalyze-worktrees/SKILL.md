@@ -17,9 +17,20 @@ Do not freeze branch stacks, package runners, gitlink handling, or universal smo
 
 ## Apply the temporary pre-merge contract
 
-While `references/premerge-stack.json` exists, it is the sole source of the temporary grounding-docs and dev-tooling stack alias names. Before creating or publishing product work, or publishing either provider stack, read `references/premerge-stack-surfaces.md` and run `/usr/bin/python3 -I -S "$HOME/.agents/skills/working-in-systalyze-worktrees/scripts/resolve_premerge_stack.py" --repo <checkout> --remote <remote>` against the verified Systalyze remote.
+While `references/premerge-stack.json` exists, it is the sole source of the temporary grounding-docs and dev-tooling stack alias names. Before creating or publishing product work, or publishing either provider stack, read `references/premerge-stack-surfaces.md` and run this block against the verified Systalyze remote:
 
-The resolver uses only its pinned Git and GitHub CLI installations. If either is unavailable, stop rather than substituting an executable found through `PATH`. For SSH remotes it also rejects caller-provided SSH arguments and configuration; use the trusted bare system SSH command or stop.
+```sh
+(
+  unset LD_AUDIT LD_LIBRARY_PATH LD_PRELOAD \
+    DYLD_FALLBACK_FRAMEWORK_PATH DYLD_FALLBACK_LIBRARY_PATH \
+    DYLD_FRAMEWORK_PATH DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH \
+    DYLD_ROOT_PATH DYLD_SHARED_CACHE_DIR \
+    DYLD_VERSIONED_FRAMEWORK_PATH DYLD_VERSIONED_LIBRARY_PATH &&
+  exec /usr/bin/python3 -I -S "$HOME/.agents/skills/working-in-systalyze-worktrees/scripts/resolve_premerge_stack.py" --repo <checkout> --remote <remote>
+)
+```
+
+The launch block clears injection-capable dynamic-loader settings before Python starts. The resolver rejects any remaining `LD_*` or `DYLD_*` setting and strips them from every child command. It uses only its pinned Git and GitHub CLI installations. If either is unavailable, stop rather than substituting an executable found through `PATH`. For SSH remotes it also rejects caller-provided SSH arguments and configuration; use the trusted bare system SSH command or stop.
 
 The resolver binds fresh aliases to immutable OIDs and one live PR head each, verifies their required common history, and reports current containment in both directions. A missing, stale, structurally inconsistent, concurrently moved, or unexpectedly rewritten alias is a stop condition. Report the observed refs and OIDs and coordinate with the owning stack task. Do not substitute ordinary PR branches, cached OIDs, remembered PR numbers, or a previously working local tree.
 

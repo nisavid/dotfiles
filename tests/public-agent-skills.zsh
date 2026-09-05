@@ -102,10 +102,24 @@ test_systalyze_worktrees() {
 
   assert_contains "$skill" 'sole source of the temporary grounding-docs and dev-tooling stack alias names' \
     'Systalyze alias names must have one policy source'
-  assert_contains "$skill" '/usr/bin/python3 -I -S "$HOME/.agents/skills/working-in-systalyze-worktrees/scripts/resolve_premerge_stack.py" --repo <checkout> --remote <remote>' \
+  assert_contains "$skill" 'unset LD_AUDIT LD_LIBRARY_PATH LD_PRELOAD' \
+    'Systalyze resolver invocation must clear dynamic-loader injection before starting Python'
+  assert_contains "$skill" 'DYLD_VERSIONED_FRAMEWORK_PATH DYLD_VERSIONED_LIBRARY_PATH &&' \
+    'Systalyze resolver invocation must start Python only after loader cleanup succeeds'
+  assert_contains "$skill" 'exec /usr/bin/python3 -I -S "$HOME/.agents/skills/working-in-systalyze-worktrees/scripts/resolve_premerge_stack.py" --repo <checkout> --remote <remote>' \
     'Systalyze resolver invocation must be anchored to its installed skill and include the required arguments'
-  assert_contains "$reference" '/usr/bin/python3 -I -S "$HOME/.agents/skills/working-in-systalyze-worktrees/scripts/resolve_premerge_stack.py" --repo <checkout> --remote <remote>' \
+  assert_contains "$reference" 'unset LD_AUDIT LD_LIBRARY_PATH LD_PRELOAD' \
+    'Systalyze resolver procedure must clear dynamic-loader injection before starting Python'
+  assert_contains "$reference" 'DYLD_VERSIONED_FRAMEWORK_PATH DYLD_VERSIONED_LIBRARY_PATH &&' \
+    'Systalyze resolver procedure must start Python only after loader cleanup succeeds'
+  assert_contains "$reference" 'exec /usr/bin/python3 -I -S "$HOME/.agents/skills/working-in-systalyze-worktrees/scripts/resolve_premerge_stack.py" --repo <checkout> --remote <remote>' \
     'Systalyze resolver procedure must isolate Python startup before loading the resolver'
+  local launcher_output
+  launcher_output="$(
+    /bin/bash -c 'export LD_PRELOAD=; readonly LD_PRELOAD; (unset LD_PRELOAD && printf launched); exit 0' 2>/dev/null
+  )"
+  [[ -z "$launcher_output" ]] || \
+    fail 'Systalyze resolver launcher must not continue after loader cleanup fails'
   assert_contains "$skill" 'Do not substitute ordinary PR branches, cached OIDs, remembered PR numbers' \
     'Systalyze alias failure must not fall back to volatile topology'
   assert_contains "$skill" 'disposable local-only projection' \

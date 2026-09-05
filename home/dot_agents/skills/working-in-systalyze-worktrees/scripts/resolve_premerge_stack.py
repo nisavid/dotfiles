@@ -42,6 +42,7 @@ GITHUB_TLS_TRUST_ANCHOR_ENVIRONMENT_VARIABLES = (
     "SSL_CERT_DIR",
     "SSL_CERT_FILE",
 )
+DYNAMIC_LOADER_ENVIRONMENT_VARIABLE_PREFIXES = ("DYLD_", "LD_")
 EXPECTED_SURFACE_ROLES = {
     "grounding-docs": "product-base",
     "dev-tooling": "qa-overlay",
@@ -195,6 +196,25 @@ def apply_git_config_snapshot(
     for index, (key, value) in enumerate(isolated):
         environment[f"GIT_CONFIG_KEY_{index}"] = key
         environment[f"GIT_CONFIG_VALUE_{index}"] = value
+
+
+def remove_dynamic_loader_environment(environment: dict[str, str]) -> None:
+    for variable in tuple(environment):
+        if variable.startswith(DYNAMIC_LOADER_ENVIRONMENT_VARIABLE_PREFIXES):
+            environment.pop(variable, None)
+
+
+def verify_dynamic_loader_environment() -> None:
+    configured = sorted(
+        variable
+        for variable in os.environ
+        if variable.startswith(DYNAMIC_LOADER_ENVIRONMENT_VARIABLE_PREFIXES)
+    )
+    if configured:
+        raise ContractError(
+            "DYNAMIC_LOADER_ENVIRONMENT_UNSUPPORTED",
+            settings=configured,
+        )
 
 
 def trusted_top_level_executable(
@@ -731,6 +751,7 @@ def run(
         failure_code=failure_code,
     )
     environment = os.environ.copy()
+    remove_dynamic_loader_environment(environment)
     for variable in (
         "GIT_DIR",
         "GIT_EXEC_PATH",
@@ -1002,17 +1023,21 @@ def read_git_config_snapshot(repo: Path) -> GitConfigSnapshot:
     result = git(
         repo,
         "config",
+        "--local",
         "--null",
         "--list",
         failure_code="REPOSITORY_CONFIG_INVALID",
+        git_config_snapshot=(),
     )
     entries = []
     for record in result.stdout.split("\0"):
         if not record:
             continue
         key, separator, value = record.partition("\n")
-        if not separator or not key:
+        if not key:
             raise ContractError("REPOSITORY_CONFIG_INVALID")
+        if not separator:
+            value = "true"
         entries.append((key, value))
     return tuple(entries)
 
@@ -1110,7 +1135,9 @@ def verify_https_transport_security(
                     source="gitConfig",
                     setting=setting,
                 )
-    if config_value_is_true(os.environ.get("GIT_SSL_NO_VERIFY", "")):
+    if "GIT_SSL_NO_VERIFY" in os.environ and config_value_is_true(
+        os.environ["GIT_SSL_NO_VERIFY"]
+    ):
         raise ContractError(
             "TLS_VERIFICATION_DISABLED",
             source="environment",
@@ -1767,6 +1794,7 @@ def parse_arguments() -> argparse.Namespace:
 
 def main() -> int:
     try:
+        verify_dynamic_loader_environment()
         document = resolve(parse_arguments())
     except ContractError as error:
         print(
