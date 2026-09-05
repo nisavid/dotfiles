@@ -917,6 +917,54 @@ os.execlp(
         self.assertEqual(self.error_code(result), "TLS_VERIFICATION_DISABLED")
         self.assertFalse(self.fake_gh_arguments.exists())
 
+    def test_rejects_shell_credential_helper_before_network_reads(self) -> None:
+        remote_url = "https://github.com/systalyze/systalyze"
+        helper_marker = self.consumer.parent / "credential-helper-marker"
+        git(self.consumer, "remote", "set-url", "origin", remote_url)
+        git(self.consumer, "config", "http.proxy", "http://127.0.0.1:9")
+        git(
+            self.consumer,
+            "config",
+            "credential.helper",
+            f"!touch {shlex.quote(str(helper_marker))}",
+        )
+        self.write_manifest([remote_url])
+
+        result = self.resolve()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(
+            self.error_code(result),
+            "CREDENTIAL_HELPER_UNSUPPORTED",
+        )
+        self.assertFalse(helper_marker.exists())
+        self.assertFalse(self.fake_gh_arguments.exists())
+
+    def test_rejects_every_executable_credential_helper_form(self) -> None:
+        resolver = load_resolver_module()
+
+        for key, value in (
+            ("credential.helper", "!printf exploited"),
+            ("credential.helper", "store"),
+            ("credential.helper", "/checkout/controlled/helper"),
+            ("credential.https://github.com.helper", "manager"),
+        ):
+            with self.subTest(key=key, value=value):
+                with self.assertRaises(resolver.ContractError) as raised:
+                    resolver.apply_git_config_snapshot({}, ((key, value),))
+
+                self.assertEqual(
+                    raised.exception.code,
+                    "CREDENTIAL_HELPER_UNSUPPORTED",
+                )
+
+        environment: dict[str, str] = {}
+        resolver.apply_git_config_snapshot(
+            environment,
+            (("credential.helper", ""),),
+        )
+        self.assertEqual(environment["GIT_CONFIG_VALUE_0"], "")
+
     def test_https_tls_trust_anchor_override_fails_closed(self) -> None:
         remote_url = "https://github.com/systalyze/systalyze"
         trust_anchor = self.consumer.parent / "checkout-controlled-ca.pem"

@@ -192,6 +192,15 @@ def apply_git_config_snapshot(
     isolated = []
     for key, value in snapshot:
         normalized_key = key.casefold()
+        if (
+            normalized_key.startswith("credential.")
+            and normalized_key.endswith(".helper")
+            and value
+        ):
+            raise ContractError(
+                "CREDENTIAL_HELPER_UNSUPPORTED",
+                source="gitConfig",
+            )
         if normalized_key in {
             "core.sshcommand",
             "ssh.variant",

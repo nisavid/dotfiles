@@ -143,6 +143,8 @@ test_systalyze_worktrees() {
     'Systalyze provider aliases must advance through exact CAS'
   assert_contains "$reference" 'Reconstructing the stack from ordinary PR topology is not a fallback.' \
     'Systalyze consumer failures must stop rather than reconstruct aliases'
+  assert_contains "$reference" 'rejects executable Git credential helpers before network reads' \
+    'Systalyze resolver procedure must reject executable credential helpers before network access'
   assert_contains "$reference" 'first parent is `P` and second parent is `D`' \
     'Systalyze local QA projection must have an exact merge shape'
   assert_contains "$reference" "planner's terminal \`verified\` result" \
