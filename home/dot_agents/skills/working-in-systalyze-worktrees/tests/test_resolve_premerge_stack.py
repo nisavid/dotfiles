@@ -598,6 +598,8 @@ os.execlp(
             with self.subTest(arguments=arguments):
                 option_index = arguments.index("-o")
                 self.assertEqual(arguments[option_index + 1], "BatchMode=yes")
+                self.assertIn("ProxyCommand=none", arguments)
+                self.assertIn("ProxyJump=none", arguments)
                 self.assertIn("HostName=fixture", arguments)
                 self.assertIn("Port=22", arguments)
                 self.assertTrue(arguments[-1].startswith("git-upload-pack "))
@@ -1324,12 +1326,16 @@ os.execlp(
         resolver = load_resolver_module()
         ssh_config = self.consumer.parent / "ssh-config"
         ssh_config.write_text(
-            "Host github.com\n  HostName mirror.invalid\n  Port 2222\n",
+            "Host github.com\n"
+            "  HostName mirror.invalid\n"
+            "  Port 2222\n"
+            "  ProxyCommand nc proxy.invalid 2222\n",
             encoding="utf-8",
         )
         command = resolver.noninteractive_ssh_command(
             f"ssh -F {shlex.quote(str(ssh_config))} "
-            "-o HostName=other.invalid -o Port=3333",
+            "-o HostName=other.invalid -o Port=3333 "
+            "-o ProxyJump=jump.invalid",
             failure_code="SSH_CONFIGURATION_FAILED",
             command_name="git",
             ssh_destination=("github.com", 22),
@@ -1348,6 +1354,8 @@ os.execlp(
         )
         self.assertEqual(settings["hostname"], "github.com")
         self.assertEqual(settings["port"], "22")
+        self.assertNotIn("proxycommand", settings)
+        self.assertNotIn("proxyjump", settings)
 
     def test_plink_destination_changing_configuration_fails_closed(self) -> None:
         resolver = load_resolver_module()

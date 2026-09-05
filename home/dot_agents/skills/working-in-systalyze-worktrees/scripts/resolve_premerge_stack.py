@@ -422,7 +422,18 @@ def ssh_injected_arguments(
         arguments = ["-o", "BatchMode=yes"]
         if ssh_destination is not None:
             host, port = ssh_destination
-            arguments.extend(["-o", f"HostName={host}", "-o", f"Port={port}"])
+            arguments.extend(
+                [
+                    "-o",
+                    "ProxyCommand=none",
+                    "-o",
+                    "ProxyJump=none",
+                    "-o",
+                    f"HostName={host}",
+                    "-o",
+                    f"Port={port}",
+                ]
+            )
         return arguments
     if program in {"plink", "plink.exe", "tortoiseplink", "tortoiseplink.exe"}:
         if ssh_destination is None:
