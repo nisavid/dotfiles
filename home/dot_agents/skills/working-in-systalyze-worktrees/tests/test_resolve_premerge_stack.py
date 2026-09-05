@@ -556,6 +556,16 @@ os.execlp(
         self.assertEqual(document["surfaces"]["grounding-docs"]["oid"], self.grounding)
         self.assertEqual(document["surfaces"]["dev-tooling"]["oid"], self.local_dev)
 
+    def test_ambient_default_hash_cannot_change_private_transport_format(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {"GIT_DEFAULT_HASH": "sha256"},
+            clear=False,
+        ):
+            result = self.resolve()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_rejects_nonstandard_remote_fetch_mapping(self) -> None:
         git(self.consumer, "config", "--unset-all", "remote.origin.fetch")
         git(
@@ -727,6 +737,7 @@ os.execlp(
             with self.subTest(arguments=arguments):
                 option_index = arguments.index("-o")
                 self.assertEqual(arguments[option_index + 1], "BatchMode=yes")
+                self.assertIn("StrictHostKeyChecking=yes", arguments)
                 self.assertIn("ProxyCommand=none", arguments)
                 self.assertIn("ProxyJump=none", arguments)
                 self.assertIn("HostName=fixture", arguments)
@@ -1143,6 +1154,26 @@ os.execlp(
             resolver.normalize_remote_url(scp_prefix + "SYSTALYZE/SYSTALYZE.git"),
             resolver.normalize_remote_url(scp_prefix + "systalyze/systalyze.git"),
         )
+
+    def test_default_remote_ports_are_normalized(self) -> None:
+        resolver = load_resolver_module()
+        at_sign = chr(64)
+
+        for implicit, explicit in (
+            (
+                "https://github.com/systalyze/systalyze.git",
+                "https://github.com:443/systalyze/systalyze.git",
+            ),
+            (
+                f"ssh://git{at_sign}github.com/systalyze/systalyze.git",
+                f"ssh://git{at_sign}github.com:22/systalyze/systalyze.git",
+            ),
+        ):
+            with self.subTest(explicit=explicit):
+                self.assertEqual(
+                    resolver.normalize_remote_url(explicit),
+                    resolver.normalize_remote_url(implicit),
+                )
 
     def test_remote_identity_rejects_embedded_credentials_and_url_metadata(
         self,
@@ -1700,6 +1731,39 @@ os.execlp(
             environment_check.stdout.strip(),
             "ssh -o BatchMode=yes -F 'fixture config'",
         )
+
+    def test_ssh_command_enforces_host_key_verification(self) -> None:
+        resolver = load_resolver_module()
+        ssh_config = self.consumer.parent / "ssh-config"
+        ssh_config.write_text(
+            "Host github.com\n"
+            "  StrictHostKeyChecking no\n"
+            "  UserKnownHostsFile /dev/null\n",
+            encoding="utf-8",
+        )
+        configured = (
+            f"/usr/bin/ssh -F {shlex.quote(str(ssh_config))} "
+            "-o StrictHostKeyChecking=no"
+        )
+
+        hardened = resolver.noninteractive_ssh_command(
+            configured,
+            failure_code="SSH_CONFIGURATION_FAILED",
+            command_name="git",
+            ssh_destination=("github.com", 22),
+        )
+        result = subprocess.run(
+            [*shlex.split(hardened), "-G", "github.com"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        settings = dict(
+            line.split(maxsplit=1) for line in result.stdout.splitlines() if " " in line
+        )
+        self.assertEqual(settings["stricthostkeychecking"], "true")
 
     def test_configured_ssh_command_preserves_shell_expansion_in_git_transport(
         self,

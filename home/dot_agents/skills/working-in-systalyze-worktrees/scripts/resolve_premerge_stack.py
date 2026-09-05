@@ -24,6 +24,7 @@ COMMAND_TIMEOUT_SECONDS = 60.0
 PROCESS_TERMINATION_GRACE_SECONDS = 1.0
 TRUSTED_OPENSSH_EXECUTABLE = Path("/usr/bin/ssh")
 GITHUB_TOKEN_ENVIRONMENT_VARIABLE = "GH_TOKEN"
+DEFAULT_REMOTE_PORTS = {"https": 443, "ssh": 22}
 EXPECTED_SURFACE_ROLES = {
     "grounding-docs": "product-base",
     "dev-tooling": "qa-overlay",
@@ -491,6 +492,8 @@ def ssh_injected_arguments(
             arguments.extend(
                 [
                     "-o",
+                    "StrictHostKeyChecking=yes",
+                    "-o",
                     "ProxyCommand=none",
                     "-o",
                     "ProxyJump=none",
@@ -742,7 +745,7 @@ def normalize_remote_url(value: str) -> str | None:
                 else ""
             )
             authority += hostname.lower()
-            if port is not None:
+            if port is not None and port != DEFAULT_REMOTE_PORTS[parsed.scheme]:
                 authority += f":{port}"
             return (
                 f"{parsed.scheme}://{authority}/"
@@ -972,7 +975,7 @@ def ssh_destination_for_identity(identity: str) -> SshDestination | None:
         return None
     if parsed.hostname is None:
         raise ContractError("REMOTE_IDENTITY_MISMATCH")
-    return parsed.hostname, parsed.port or 22
+    return parsed.hostname, parsed.port or DEFAULT_REMOTE_PORTS["ssh"]
 
 
 def verify_repository_identity(repository: str, remote_identity: str) -> str:
@@ -1388,6 +1391,7 @@ def resolve(arguments: argparse.Namespace) -> dict[str, Any]:
             transport_root,
             "init",
             "--bare",
+            "--object-format=sha1",
             str(transport_repo),
             failure_code="TRANSPORT_REPOSITORY_FAILED",
             git_config_snapshot=(),
