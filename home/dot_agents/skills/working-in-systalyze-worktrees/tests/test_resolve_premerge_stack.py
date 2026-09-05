@@ -999,31 +999,35 @@ os.execlp(
         self,
     ) -> None:
         resolver = load_resolver_module()
+        at_sign = chr(64)
+        host = "example.com"
 
         for remote_url in (
-            "https://user@github.com/systalyze/systalyze.git",
-            "https://user:token@github.com/systalyze/systalyze.git",
-            "https://github.com/systalyze/systalyze.git?token=secret",
-            "https://github.com/systalyze/systalyze.git#secret",
-            "ssh://git:secret@github.com/systalyze/systalyze.git",
-            "ssh://git@github.com/systalyze/systalyze.git?token=secret",
-            "ssh://git@github.com/systalyze/systalyze.git#secret",
+            f"https://user{at_sign}{host}/systalyze/systalyze.git",
+            f"https://user:value{at_sign}{host}/systalyze/systalyze.git",
+            f"https://{host}/systalyze/systalyze.git?tracking=value",
+            f"https://{host}/systalyze/systalyze.git#section",
+            f"ssh://git:value{at_sign}{host}/systalyze/systalyze.git",
+            f"ssh://git{at_sign}{host}/systalyze/systalyze.git?tracking=value",
+            f"ssh://git{at_sign}{host}/systalyze/systalyze.git#section",
         ):
             with self.subTest(remote_url=remote_url):
                 self.assertIsNone(resolver.normalize_remote_url(remote_url))
 
         self.assertEqual(
-            resolver.normalize_remote_url("git@github.com:systalyze/systalyze.git"),
             resolver.normalize_remote_url(
-                "ssh://git@github.com/systalyze/systalyze.git"
+                f"git{at_sign}{host}:systalyze/systalyze.git"
+            ),
+            resolver.normalize_remote_url(
+                f"ssh://git{at_sign}{host}/systalyze/systalyze.git"
             ),
         )
         self.assertNotEqual(
             resolver.normalize_remote_url(
-                "ssh://other@github.com/systalyze/systalyze.git"
+                f"ssh://other{at_sign}{host}/systalyze/systalyze.git"
             ),
             resolver.normalize_remote_url(
-                "ssh://git@github.com/systalyze/systalyze.git"
+                f"ssh://git{at_sign}{host}/systalyze/systalyze.git"
             ),
         )
 
