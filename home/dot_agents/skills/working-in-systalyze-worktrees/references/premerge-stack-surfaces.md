@@ -12,7 +12,7 @@ The resolver:
 - freezes the caller's authentication and HTTP transport settings, drops URL rewrite rules, ignores ambient Git templates, and performs network Git reads from a private bare SHA-1 transport repository;
 - queries GitHub with the active host token through an empty temporary CLI configuration, excluding configured Unix-socket routes;
 - rejects grafted, shallow, or promisor repositories and remotes without the standard branch-cache refspec before trusting local graph state;
-- snapshots each present cached alias before network access, rejects one whose object cannot peel to a commit, and advertises only HEAD plus those snapshots as fetch negotiation tips;
+- snapshots each present cached alias before network access, rejects one whose object cannot peel to a commit, and advertises only locally present commits exposed as heads or bases by the bound provider PRs as fetch negotiation tips;
 - runs Git and GitHub reads without credential prompts and with a finite per-command timeout that terminates the command's process group and bounds final pipe cleanup;
 - queries both aliases without relying on local remote-tracking refs;
 - fetches only the immutable objects, without moving refs, writing `FETCH_HEAD`, recursing into nested repositories, or starting automatic repository maintenance;

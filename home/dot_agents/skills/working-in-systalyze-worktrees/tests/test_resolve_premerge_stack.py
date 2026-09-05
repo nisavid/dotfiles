@@ -777,6 +777,35 @@ os.execlp(
                 self.assertIn("Port=22", arguments)
                 self.assertTrue(arguments[-1].startswith("git-upload-pack "))
 
+    def test_ssh_remote_rejects_shell_execution_in_arguments(self) -> None:
+        ssh_calls = self.configure_ssh_remote()
+        marker = self.consumer.parent / "shell-expansion-marker"
+        git(
+            self.consumer,
+            "config",
+            "core.sshCommand",
+            f"ssh `touch {shlex.quote(str(marker))}`",
+        )
+        with mock.patch.dict(
+            os.environ,
+            {
+                "FIXTURE_SSH_CALLS": str(ssh_calls),
+                "FIXTURE_SSH_REMOTE": str(self.remote),
+            },
+            clear=False,
+        ):
+            os.environ.pop("GIT_SSH_COMMAND", None)
+            result = self.resolve()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.error_code(result), "ALIAS_QUERY_FAILED")
+        self.assertEqual(
+            self.error_document(result)["error"]["evidence"],
+            {"command": "git", "sshCommandUnsupported": True},
+        )
+        self.assertFalse(marker.exists())
+        self.assertFalse(ssh_calls.exists())
+
     def test_resolver_pins_git_ssh_variant(self) -> None:
         ssh_calls = self.configure_ssh_remote()
         git(
@@ -1107,6 +1136,29 @@ os.execlp(
 
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.error_code(result), "UNEXPECTED_ALIAS_REWRITE")
+
+    def test_fetch_negotiation_does_not_advertise_unpublished_head(self) -> None:
+        private_head = commit(self.consumer, "private.txt", "private\n")
+        for surface in ("grounding-docs", "dev-tooling"):
+            git(
+                self.consumer,
+                "update-ref",
+                f"refs/remotes/origin/ivan/stack-tips/{surface}",
+                self.base,
+            )
+        trace = self.consumer.parent / "git-packets.log"
+
+        with mock.patch.dict(
+            os.environ,
+            {"GIT_TRACE_PACKET": str(trace)},
+            clear=False,
+        ):
+            result = self.resolve()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        trace_contents = trace.read_text(encoding="utf-8")
+        self.assertNotIn(private_head, trace_contents)
+        self.assertIn(f"have {self.base}", trace_contents)
 
     def test_late_repository_graft_cannot_hide_cached_alias_rewrite(self) -> None:
         git(
@@ -1911,7 +1963,7 @@ os.execlp(
         self.assertEqual(settings["port"], "2222")
         self.assertEqual(settings["hostkeyalias"], "[github.com]:2222")
 
-    def test_configured_ssh_command_preserves_shell_expansion_in_git_transport(
+    def test_configured_ssh_command_preserves_literal_arguments_in_git_transport(
         self,
     ) -> None:
         resolver = load_resolver_module()
@@ -1929,6 +1981,8 @@ from pathlib import Path
 import sys
 
 arguments = sys.argv[1:]
+if os.environ.get("FIXTURE_TRANSPORT") not in {"configured transport", "ambient"}:
+    raise SystemExit(3)
 Path(os.environ["FIXTURE_SSH_ARGUMENTS"]).write_text(
     json.dumps(arguments), encoding="utf-8"
 )
@@ -1946,7 +2000,8 @@ os.execl("/bin/sh", "sh", "-c", arguments[index + 1])
             self.consumer,
             "config",
             "core.sshCommand",
-            'env FIXTURE_TRANSPORT=configured ssh -F "$HOME/fixture config"',
+            "FIXTURE_TRANSPORT='configured transport' ssh "
+            f"-F {shlex.quote(str(fixture_config))}",
         )
         environment = {
             "FIXTURE_SSH_ARGUMENTS": str(ssh_arguments),
@@ -1976,7 +2031,8 @@ os.execl("/bin/sh", "sh", "-c", arguments[index + 1])
             {
                 **environment,
                 "GIT_SSH_COMMAND": (
-                    'env FIXTURE_TRANSPORT=ambient ssh -F "$HOME/ambient config"'
+                    "env FIXTURE_TRANSPORT=ambient ssh "
+                    f"-F {shlex.quote(str(fixture_home / 'ambient config'))}"
                 ),
             },
             clear=False,
@@ -2017,6 +2073,8 @@ os.execl("/bin/sh", "sh", "-c", arguments[index + 1])
             ('"$HOME/bin/ssh"', "sshCommandUnsupported"),
             ("`helper`/ssh", "sshCommandUnsupported"),
             ("*/ssh", "sshCommandUnsupported"),
+            ('ssh -F "$HOME/config"', "sshCommandUnsupported"),
+            ("ssh `helper`", "sshCommandUnsupported"),
         ):
             with (
                 self.subTest(ssh_command=repr(ssh_command)),
@@ -2065,18 +2123,14 @@ os.execl("/bin/sh", "sh", "-c", arguments[index + 1])
             },
         )
 
-    def test_ssh_parser_preserves_static_assignment_and_env_forms(self) -> None:
+    def test_ssh_parser_normalizes_static_assignment_and_env_forms(self) -> None:
         resolver = load_resolver_module()
         for ssh_command, expected in (
             ("x=y ssh", "x=y ssh -o BatchMode=yes"),
             ("x='y z' ssh", "x='y z' ssh -o BatchMode=yes"),
             ("x=y Y=z ssh", "x=y Y=z ssh -o BatchMode=yes"),
-            ("env 'x=y' ssh", "env 'x=y' ssh -o BatchMode=yes"),
+            ("env 'x=y' ssh", "env x=y ssh -o BatchMode=yes"),
             ("env -i x=y ssh", "env -i x=y ssh -o BatchMode=yes"),
-            (
-                '"/usr/bin/ssh" -F "$HOME/fixture config"',
-                '"/usr/bin/ssh" -o BatchMode=yes -F "$HOME/fixture config"',
-            ),
         ):
             with self.subTest(ssh_command=ssh_command):
                 self.assertEqual(

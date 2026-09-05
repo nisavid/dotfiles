@@ -41,7 +41,6 @@ class ContractError(Exception):
 class ShellWord(NamedTuple):
     value: str
     raw: str
-    raw_end: int
 
 
 class VerifiedRemote(NamedTuple):
@@ -238,6 +237,21 @@ def literal_program_name(
     command_name: str,
 ) -> str:
     """Return a basename only when the shell word needs no runtime expansion."""
+    validate_literal_shell_word(
+        shell_word,
+        failure_code=failure_code,
+        command_name=command_name,
+    )
+    return Path(shell_word.value).name.casefold()
+
+
+def validate_literal_shell_word(
+    shell_word: ShellWord,
+    *,
+    failure_code: str,
+    command_name: str,
+) -> None:
+    """Reject shell words whose value would change when the command executes."""
     quote: str | None = None
     escaped = False
     for index, character in enumerate(shell_word.raw):
@@ -271,8 +285,6 @@ def literal_program_name(
                 command=command_name,
                 sshCommandUnsupported=True,
             )
-
-    return Path(shell_word.value).name.casefold()
 
 
 def trusted_openssh_executable(
@@ -422,14 +434,14 @@ def parse_ssh_shell_words(
         while (word := lexer.get_token()) is not None:
             # tell() may include a punctuation delimiter held in shlex's
             # character pushback. Such tokens make the command unsupported
-            # below, before raw_end can become the insertion point.
+            # below; retain their exact raw spelling for validation.
             raw_end = lexer.instream.tell()
             while raw_end > 0 and ssh_command[raw_end - 1].isspace():
                 raw_end -= 1
             raw_start = raw_cursor
             while raw_start < raw_end and ssh_command[raw_start].isspace():
                 raw_start += 1
-            shell_words.append(ShellWord(word, ssh_command[raw_start:raw_end], raw_end))
+            shell_words.append(ShellWord(word, ssh_command[raw_start:raw_end]))
             raw_cursor = raw_end
     except ValueError as error:
         raise ContractError(
@@ -537,6 +549,12 @@ def noninteractive_ssh_command(
         failure_code=failure_code,
         command_name=command_name,
     )
+    for shell_word in shell_words:
+        validate_literal_shell_word(
+            shell_word,
+            failure_code=failure_code,
+            command_name=command_name,
+        )
 
     program_index = ssh_program_index(
         shell_words,
@@ -569,23 +587,25 @@ def noninteractive_ssh_command(
         failure_code=failure_code,
         command_name=command_name,
     )
-    insertion_point = shell_words[program_index].raw_end
-    options = "".join(f" {shlex.quote(value)}" for value in injected_arguments)
+    hardened_words = [word.value for word in shell_words]
     if trusted_program is not None:
-        program_start = insertion_point - len(shell_words[program_index].raw)
-        hardened = (
-            ssh_command[:program_start]
-            + shlex.quote(str(trusted_program))
-            + options
-            + ssh_command[insertion_point:]
-        )
-    else:
-        hardened = (
-            ssh_command[:insertion_point] + options + ssh_command[insertion_point:]
-        )
+        hardened_words[program_index] = str(trusted_program)
+    hardened_words[program_index + 1 : program_index + 1] = injected_arguments
     if ssh_destination is not None:
-        hardened += " -S none"
-    return hardened
+        hardened_words.extend(("-S", "none"))
+    leading_assignment_count = 0
+    while leading_assignment_count < len(shell_words) and (
+        SHELL_ASSIGNMENT_PATTERN.fullmatch(shell_words[leading_assignment_count].raw)
+    ):
+        leading_assignment_count += 1
+    hardened_fragments = []
+    for index, word in enumerate(hardened_words):
+        if index < leading_assignment_count:
+            name, value = word.split("=", maxsplit=1)
+            hardened_fragments.append(f"{name}={shlex.quote(value)}")
+        else:
+            hardened_fragments.append(shlex.quote(word))
+    return " ".join(hardened_fragments)
 
 
 def pin_git_ssh_variant(
@@ -1230,27 +1250,31 @@ def read_cached_aliases(
     return cached_aliases
 
 
-def collect_negotiation_tips(
-    repo: Path,
-    cached_aliases: CachedAliases,
+def collect_public_negotiation_tips(
+    graph_repo: Path,
+    object_directory: Path,
+    bindings: dict[str, dict[str, Any]],
 ) -> tuple[str, ...]:
-    head = git(
-        repo,
-        "rev-parse",
-        "--verify",
-        "--quiet",
-        "HEAD^{commit}",
-        failure_code="REPOSITORY_STATE_INVALID",
-        allowed_returncodes=(0, 1),
+    candidates = dict.fromkeys(
+        oid
+        for binding in bindings.values()
+        for key in ("headRefOid", "baseRefOid")
+        if isinstance((oid := binding.get(key)), str) and SHA_PATTERN.fullmatch(oid)
     )
-    head_oid = head.stdout.strip()
-    if head.returncode == 1 or not SHA_PATTERN.fullmatch(head_oid):
-        raise ContractError("REPOSITORY_STATE_INVALID")
-    return tuple(
-        dict.fromkeys(
-            [head_oid, *(oid for oid in cached_aliases.values() if oid is not None)]
+    available = []
+    for oid in candidates:
+        present = git(
+            graph_repo,
+            "cat-file",
+            "-e",
+            f"{oid}^{{commit}}",
+            failure_code="NEGOTIATION_TIP_CHECK_FAILED",
+            allowed_returncodes=(0, 1, 128),
+            object_directory=object_directory,
         )
-    )
+        if present.returncode == 0:
+            available.append(oid)
+    return tuple(available)
 
 
 def verify_cached_aliases(
@@ -1420,7 +1444,6 @@ def resolve(arguments: argparse.Namespace) -> dict[str, Any]:
     surfaces = manifest["surfaces"]
     object_directory = resolve_git_path(repo, "objects")
     cached_aliases = read_cached_aliases(repo, arguments.remote, surfaces)
-    negotiation_tips = collect_negotiation_tips(repo, cached_aliases)
     with tempfile.TemporaryDirectory(prefix="resolve-premerge-stack-") as directory:
         transport_root = Path(directory)
         transport_repo = transport_root / "transport.git"
@@ -1444,6 +1467,19 @@ def resolve(arguments: argparse.Namespace) -> dict[str, Any]:
             ssh_destination=ssh_destination,
             git_config_snapshot=git_config_snapshot,
         )
+        pull_requests = load_pull_requests(
+            repo,
+            manifest["repository"],
+            github_host,
+            github_config_dir,
+            github_token,
+        )
+        bindings = bind_pull_requests(surfaces, aliases, pull_requests)
+        negotiation_tips = collect_public_negotiation_tips(
+            transport_repo,
+            object_directory,
+            bindings,
+        )
         fetch_immutable_objects(
             transport_repo,
             object_directory,
@@ -1460,14 +1496,6 @@ def resolve(arguments: argparse.Namespace) -> dict[str, Any]:
             cached_aliases,
             aliases,
         )
-        pull_requests = load_pull_requests(
-            repo,
-            manifest["repository"],
-            github_host,
-            github_config_dir,
-            github_token,
-        )
-        bindings = bind_pull_requests(surfaces, aliases, pull_requests)
 
         relationships = []
         for relationship in manifest["relationships"]:
