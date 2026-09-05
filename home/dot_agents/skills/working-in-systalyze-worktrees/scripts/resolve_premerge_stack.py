@@ -588,6 +588,7 @@ def run(
         "GIT_INDEX_FILE",
         "GIT_OBJECT_DIRECTORY",
         "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_TEMPLATE_DIR",
     ):
         environment.pop(variable, None)
     environment.update(

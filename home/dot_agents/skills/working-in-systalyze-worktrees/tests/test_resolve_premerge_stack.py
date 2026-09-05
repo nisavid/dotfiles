@@ -501,6 +501,43 @@ os.execlp(
 
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_ambient_git_template_cannot_redirect_private_transport(self) -> None:
+        original_url = self.remote.as_uri()
+        mirror = self.remote.with_name("template-mirror.git")
+        run("git", "init", "--bare", str(mirror), cwd=self.consumer.parent)
+        mirror_url = mirror.as_uri()
+        git(
+            self.provider,
+            "push",
+            mirror_url,
+            f"{self.local_dev}:refs/heads/ivan/stack-tips/grounding-docs",
+            f"{self.grounding}:refs/heads/ivan/stack-tips/dev-tooling",
+        )
+        git(self.consumer, "remote", "set-url", "origin", original_url)
+        self.write_manifest([original_url])
+        template = self.consumer.parent / "malicious-template"
+        template.mkdir()
+        (template / "config").write_text(
+            "[core]\n"
+            "\trepositoryformatversion = 0\n"
+            "\tbare = true\n"
+            f'[url "{mirror_url}"]\n'
+            f"\tinsteadOf = {original_url}\n",
+            encoding="utf-8",
+        )
+
+        with mock.patch.dict(
+            os.environ,
+            {"GIT_TEMPLATE_DIR": str(template)},
+            clear=False,
+        ):
+            result = self.resolve()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        document = json.loads(result.stdout)
+        self.assertEqual(document["surfaces"]["grounding-docs"]["oid"], self.grounding)
+        self.assertEqual(document["surfaces"]["dev-tooling"]["oid"], self.local_dev)
+
     def test_rejects_nonstandard_remote_fetch_mapping(self) -> None:
         git(self.consumer, "config", "--unset-all", "remote.origin.fetch")
         git(
