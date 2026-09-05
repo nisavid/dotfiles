@@ -23,6 +23,12 @@ PR_QUERY_LIMIT = 1000
 COMMAND_TIMEOUT_SECONDS = 60.0
 PROCESS_TERMINATION_GRACE_SECONDS = 1.0
 TRUSTED_OPENSSH_EXECUTABLE = Path("/usr/bin/ssh")
+TRUSTED_GIT_EXECUTABLES = (Path("/usr/bin/git"),)
+TRUSTED_GITHUB_CLI_EXECUTABLES = (
+    Path("/opt/homebrew/bin/gh"),
+    Path("/usr/local/bin/gh"),
+    Path("/usr/bin/gh"),
+)
 GITHUB_TOKEN_ENVIRONMENT_VARIABLE = "GH_TOKEN"
 DEFAULT_REMOTE_PORTS = {"https": 443, "ssh": 22}
 EXPECTED_SURFACE_ROLES = {
@@ -180,6 +186,49 @@ def apply_git_config_snapshot(
         environment[f"GIT_CONFIG_VALUE_{index}"] = value
 
 
+def trusted_top_level_executable(
+    command_name: str,
+    *,
+    failure_code: str,
+) -> Path:
+    if command_name == "git":
+        candidates = TRUSTED_GIT_EXECUTABLES
+    elif command_name == "gh":
+        candidates = TRUSTED_GITHUB_CLI_EXECUTABLES
+    else:
+        raise ValueError(f"unsupported trusted executable: {command_name}")
+
+    for configured in candidates:
+        if not configured.is_absolute():
+            continue
+        try:
+            executable = configured.resolve(strict=True)
+        except OSError:
+            continue
+        if executable.is_file() and os.access(executable, os.X_OK):
+            return executable
+    raise ContractError(
+        failure_code,
+        command=command_name,
+        executableUnavailable=True,
+    )
+
+
+def pin_top_level_executable(
+    arguments: list[str],
+    *,
+    failure_code: str,
+) -> tuple[list[str], str]:
+    command_name = Path(arguments[0]).name
+    if arguments[0] not in {"git", "gh"}:
+        return arguments, command_name
+    executable = trusted_top_level_executable(
+        arguments[0],
+        failure_code=failure_code,
+    )
+    return [str(executable), *arguments[1:]], command_name
+
+
 def configured_ssh_command(
     cwd: Path,
     environment: dict[str, str],
@@ -189,9 +238,13 @@ def configured_ssh_command(
 ) -> str:
     if "GIT_SSH_COMMAND" in environment:
         return environment["GIT_SSH_COMMAND"]
+    git_executable = trusted_top_level_executable(
+        "git",
+        failure_code=failure_code,
+    )
     try:
         raw_result = run_process_bytes(
-            ["git", "config", "--get", "core.sshCommand"],
+            [str(git_executable), "config", "--get", "core.sshCommand"],
             cwd=cwd,
             environment=environment,
             timeout_seconds=timeout_seconds,
@@ -653,6 +706,10 @@ def run(
     git_config_snapshot: GitConfigSnapshot | None = None,
     object_directory: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
+    arguments, command_name = pin_top_level_executable(
+        arguments,
+        failure_code=failure_code,
+    )
     environment = os.environ.copy()
     for variable in (
         "GIT_DIR",
@@ -706,7 +763,7 @@ def run(
         environment["GIT_SSH_COMMAND"] = noninteractive_ssh_command(
             ssh_command,
             failure_code=failure_code,
-            command_name=Path(arguments[0]).name,
+            command_name=command_name,
             ssh_destination=ssh_destination,
         )
     elif uses_ssh_transport is False:
@@ -723,13 +780,13 @@ def run(
     except subprocess.TimeoutExpired as error:
         raise ContractError(
             failure_code,
-            command=Path(arguments[0]).name,
+            command=command_name,
             timeoutSeconds=timeout_seconds,
         ) from error
     except OSError as error:
         raise ContractError(
             failure_code,
-            command=Path(arguments[0]).name,
+            command=command_name,
             osError=type(error).__name__,
         ) from error
     if raw_result.returncode not in allowed_returncodes:
@@ -743,7 +800,7 @@ def run(
     return decode_process_output(
         raw_result,
         failure_code=failure_code,
-        command_name=Path(arguments[0]).name,
+        command_name=command_name,
     )
 
 

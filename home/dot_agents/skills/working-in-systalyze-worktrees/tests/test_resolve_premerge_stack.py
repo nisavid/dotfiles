@@ -99,9 +99,10 @@ class ResolvePremergeStackTests(unittest.TestCase):
         git_path = shutil.which("git")
         if git_path is None:
             self.fail("git fixture requires git")
-        (self.git_only_bin / "git").symlink_to(git_path)
-        fake_gh = self.fake_bin / "gh"
-        fake_gh.write_text(
+        self.git_path = Path(git_path).resolve()
+        (self.git_only_bin / "git").symlink_to(self.git_path)
+        self.fake_gh = self.fake_bin / "gh"
+        self.fake_gh.write_text(
             """#!/usr/bin/env python3
 import json
 import os
@@ -142,7 +143,7 @@ with Path(os.environ["FIXTURE_GH_HOSTS"]).open("a", encoding="utf-8") as stream:
 if count == 0 and os.environ.get("FIXTURE_GH_ALIAS_REF"):
     subprocess.run(
         [
-            "git",
+            os.environ["FIXTURE_GIT_EXECUTABLE"],
             "--git-dir",
             os.environ["FIXTURE_GH_REMOTE"],
             "update-ref",
@@ -156,7 +157,7 @@ if count == 0 and os.environ.get("FIXTURE_GH_ALIAS_REF"):
 if count == 0 and os.environ.get("FIXTURE_GH_REPLACEMENT_REMOTE_URL"):
     subprocess.run(
         [
-            "git",
+            os.environ["FIXTURE_GIT_EXECUTABLE"],
             "-C",
             os.environ["FIXTURE_GH_REPO"],
             "remote",
@@ -171,7 +172,7 @@ if count == 0 and os.environ.get("FIXTURE_GH_REPLACEMENT_REMOTE_URL"):
 if count == 0 and os.environ.get("FIXTURE_GH_INSTEAD_OF_SOURCE"):
     subprocess.run(
         [
-            "git",
+            os.environ["FIXTURE_GIT_EXECUTABLE"],
             "-C",
             os.environ["FIXTURE_GH_REPO"],
             "config",
@@ -197,7 +198,29 @@ sys.stdout.write(Path(source).read_text(encoding="utf-8"))
 """,
             encoding="utf-8",
         )
-        fake_gh.chmod(0o755)
+        self.fake_gh.chmod(0o755)
+
+        resolver_source = self.fixture_resolver.read_text(encoding="utf-8")
+        trusted_git_source = 'TRUSTED_GIT_EXECUTABLES = (Path("/usr/bin/git"),)'
+        trusted_gh_source = """TRUSTED_GITHUB_CLI_EXECUTABLES = (
+    Path("/opt/homebrew/bin/gh"),
+    Path("/usr/local/bin/gh"),
+    Path("/usr/bin/gh"),
+)"""
+        self.assertIn(trusted_git_source, resolver_source)
+        self.assertIn(trusted_gh_source, resolver_source)
+        self.fixture_resolver.write_text(
+            resolver_source.replace(
+                trusted_git_source,
+                f"TRUSTED_GIT_EXECUTABLES = (Path({str(self.git_path)!r}),)",
+                1,
+            ).replace(
+                trusted_gh_source,
+                f"TRUSTED_GITHUB_CLI_EXECUTABLES = (Path({str(self.fake_gh)!r}),)",
+                1,
+            ),
+            encoding="utf-8",
+        )
 
         run("git", "init", "--bare", str(self.remote), cwd=root)
         run("git", "init", "-b", "main", str(self.provider), cwd=root)
@@ -365,16 +388,21 @@ os.execlp(
         auth_graft: tuple[Path, str] | None = None,
         late_graft: tuple[Path, str] | None = None,
         missing_gh: bool = False,
+        path_prefix: Path | None = None,
     ) -> subprocess.CompletedProcess[str]:
         self.fake_gh_count.unlink(missing_ok=True)
         self.fake_gh_arguments.unlink(missing_ok=True)
         self.fake_gh_hosts.unlink(missing_ok=True)
+        fixture_path = (
+            str(self.git_only_bin)
+            if missing_gh
+            else str(self.fake_bin) + os.pathsep + os.environ["PATH"]
+        )
+        if path_prefix is not None:
+            fixture_path = str(path_prefix) + os.pathsep + fixture_path
         environment = {
-            "PATH": (
-                str(self.git_only_bin)
-                if missing_gh
-                else str(self.fake_bin) + os.pathsep + os.environ["PATH"]
-            ),
+            "PATH": fixture_path,
+            "FIXTURE_GIT_EXECUTABLE": str(self.git_path),
             "FIXTURE_GH_COUNT": str(self.fake_gh_count),
             "FIXTURE_GH_ARGUMENTS": str(self.fake_gh_arguments),
             "FIXTURE_GH_HOSTS": str(self.fake_gh_hosts),
@@ -424,17 +452,24 @@ os.execlp(
                     "FIXTURE_GH_GRAFT_CONTENT": contents,
                 }
             )
-        return run(
-            sys.executable,
-            str(self.fixture_resolver),
-            "--repo",
-            str(repo or self.consumer),
-            "--remote",
-            "origin",
-            cwd=repo or self.consumer,
-            check=False,
-            environment_overrides=environment,
-        )
+        disabled_gh = self.fake_gh.with_name("gh.disabled")
+        if missing_gh:
+            self.fake_gh.rename(disabled_gh)
+        try:
+            return run(
+                sys.executable,
+                str(self.fixture_resolver),
+                "--repo",
+                str(repo or self.consumer),
+                "--remote",
+                "origin",
+                cwd=repo or self.consumer,
+                check=False,
+                environment_overrides=environment,
+            )
+        finally:
+            if missing_gh and disabled_gh.exists():
+                disabled_gh.rename(self.fake_gh)
 
     @staticmethod
     def error_document(result: subprocess.CompletedProcess[str]) -> dict[str, Any]:
@@ -1458,7 +1493,10 @@ os.execlp(
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.error_code(result), "PR_QUERY_FAILED")
         evidence = self.error_document(result)["error"]["evidence"]
-        self.assertEqual(evidence, {"command": "gh", "osError": "FileNotFoundError"})
+        self.assertEqual(
+            evidence,
+            {"command": "gh", "executableUnavailable": True},
+        )
 
     def test_nonobject_pull_request_entry_fails_closed(self) -> None:
         self.pull_requests.write_text("[null]\n", encoding="utf-8")
@@ -1576,6 +1614,32 @@ os.execlp(
             raised.exception.evidence,
             {"command": Path(sys.executable).name, "timeoutSeconds": 0.01},
         )
+
+    def test_command_runner_pins_git_and_github_cli_executables(self) -> None:
+        shadow_bin = self.consumer.parent / "shadow-command-bin"
+        shadow_bin.mkdir()
+        shadow_markers: dict[str, Path] = {}
+        for command in ("git", "gh"):
+            shadow_marker = self.consumer.parent / f"shadow-{command}-ran"
+            shadow = shadow_bin / command
+            shadow.write_text(
+                f"#!/bin/sh\n: > {shlex.quote(str(shadow_marker))}\nexit 97\n",
+                encoding="utf-8",
+            )
+            shadow.chmod(0o755)
+            shadow_markers[command] = shadow_marker
+
+        hostile_path = str(shadow_bin) + os.pathsep + str(self.fake_bin)
+        self.assertEqual(
+            shutil.which("git", path=hostile_path), str(shadow_bin / "git")
+        )
+        self.assertEqual(shutil.which("gh", path=hostile_path), str(shadow_bin / "gh"))
+
+        result = self.resolve(path_prefix=shadow_bin)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for command in ("git", "gh"):
+            self.assertFalse(shadow_markers[command].exists())
 
     def test_command_runner_disables_lazy_fetch(self) -> None:
         resolver = load_resolver_module()
