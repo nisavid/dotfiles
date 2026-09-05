@@ -176,6 +176,13 @@ if count == 0 and os.environ.get("FIXTURE_GH_INSTEAD_OF_SOURCE"):
         capture_output=True,
         text=True,
     )
+if count == 0 and os.environ.get("FIXTURE_GH_GRAFT_PATH"):
+    graft_path = Path(os.environ["FIXTURE_GH_GRAFT_PATH"])
+    graft_path.parent.mkdir(parents=True, exist_ok=True)
+    graft_path.write_text(
+        os.environ["FIXTURE_GH_GRAFT_CONTENT"],
+        encoding="utf-8",
+    )
 source = os.environ.get("FIXTURE_GH_FINAL") if count else None
 source = source or os.environ["FIXTURE_GH_PRIMARY"]
 count_path.write_text(str(count + 1), encoding="utf-8")
@@ -348,6 +355,7 @@ os.execlp(
         alias_move: tuple[str, str] | None = None,
         replacement_remote_url: str | None = None,
         instead_of_rewrite: tuple[str, str] | None = None,
+        late_graft: tuple[Path, str] | None = None,
         missing_gh: bool = False,
     ) -> subprocess.CompletedProcess[str]:
         self.fake_gh_count.unlink(missing_ok=True)
@@ -390,6 +398,14 @@ os.execlp(
                     "FIXTURE_GH_REPO": str(self.consumer),
                     "FIXTURE_GH_INSTEAD_OF_SOURCE": source,
                     "FIXTURE_GH_INSTEAD_OF_TARGET": target,
+                }
+            )
+        if late_graft is not None:
+            path, contents = late_graft
+            environment.update(
+                {
+                    "FIXTURE_GH_GRAFT_PATH": str(path),
+                    "FIXTURE_GH_GRAFT_CONTENT": contents,
                 }
             )
         return run(
@@ -741,6 +757,7 @@ os.execlp(
                 self.assertIn("ProxyCommand=none", arguments)
                 self.assertIn("ProxyJump=none", arguments)
                 self.assertIn("HostName=fixture", arguments)
+                self.assertIn("HostKeyAlias=fixture", arguments)
                 self.assertIn("Port=22", arguments)
                 self.assertTrue(arguments[-1].startswith("git-upload-pack "))
 
@@ -1001,6 +1018,29 @@ os.execlp(
 
         result = self.resolve()
 
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.error_code(result), "RELATIONSHIP_MISMATCH")
+
+    def test_late_repository_graft_cannot_fabricate_common_history(self) -> None:
+        run(
+            "git",
+            "--git-dir",
+            str(self.remote),
+            "update-ref",
+            "refs/heads/ivan/stack-tips/dev-tooling",
+            self.unrelated,
+            cwd=self.consumer,
+        )
+        self.write_pull_requests(self.grounding, self.unrelated)
+        graft_path = Path(git(self.consumer, "rev-parse", "--git-path", "info/grafts"))
+        if not graft_path.is_absolute():
+            graft_path = self.consumer / graft_path
+
+        result = self.resolve(
+            late_graft=(graft_path, f"{self.unrelated} {self.grounding}\n")
+        )
+
+        self.assertTrue(graft_path.exists())
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.error_code(result), "RELATIONSHIP_MISMATCH")
 
@@ -1688,7 +1728,6 @@ os.execlp(
 
         with mock.patch.object(resolver, "git", return_value=completed) as git_command:
             resolver.fetch_immutable_objects(
-                self.consumer,
                 self.remote,
                 self.consumer / ".git" / "objects",
                 self.remote.as_uri(),
@@ -1762,6 +1801,7 @@ os.execlp(
         ssh_config.write_text(
             "Host github.com\n"
             "  StrictHostKeyChecking no\n"
+            "  HostKeyAlias mirror.invalid\n"
             "  UserKnownHostsFile /dev/null\n"
             "  ControlMaster auto\n"
             f"  ControlPath {self.consumer.parent / 'configured-control'}\n",
@@ -1770,6 +1810,7 @@ os.execlp(
         configured = (
             f"/usr/bin/ssh -F {shlex.quote(str(ssh_config))} "
             "-o StrictHostKeyChecking=no "
+            "-o HostKeyAlias=argument.invalid "
             f"-S {shlex.quote(str(self.consumer.parent / 'argument-control'))}"
         )
 
@@ -1791,6 +1832,7 @@ os.execlp(
             line.split(maxsplit=1) for line in result.stdout.splitlines() if " " in line
         )
         self.assertEqual(settings["stricthostkeychecking"], "true")
+        self.assertEqual(settings["hostkeyalias"], "github.com")
         self.assertNotIn("controlpath", settings)
 
     def test_configured_ssh_command_preserves_shell_expansion_in_git_transport(

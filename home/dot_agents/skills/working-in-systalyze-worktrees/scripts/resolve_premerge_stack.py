@@ -489,6 +489,9 @@ def ssh_injected_arguments(
         arguments = ["-o", "BatchMode=yes"]
         if ssh_destination is not None:
             host, port = ssh_destination
+            host_key_alias = (
+                host if port == DEFAULT_REMOTE_PORTS["ssh"] else f"[{host}]:{port}"
+            )
             arguments.extend(
                 [
                     "-o",
@@ -499,6 +502,8 @@ def ssh_injected_arguments(
                     "ProxyJump=none",
                     "-o",
                     f"HostName={host}",
+                    "-o",
+                    f"HostKeyAlias={host_key_alias}",
                     "-o",
                     f"Port={port}",
                 ]
@@ -1093,7 +1098,6 @@ def query_aliases(
 
 
 def fetch_immutable_objects(
-    repo: Path,
     transport_repo: Path,
     object_directory: Path,
     remote_url: str,
@@ -1123,35 +1127,48 @@ def fetch_immutable_objects(
     )
     for oid in aliases.values():
         git(
-            repo,
+            transport_repo,
             "cat-file",
             "-e",
             f"{oid}^{{commit}}",
             failure_code="ALIAS_NOT_COMMIT",
+            object_directory=object_directory,
         )
 
 
-def is_ancestor(repo: Path, ancestor: str, descendant: str) -> bool:
+def is_ancestor(
+    graph_repo: Path,
+    object_directory: Path,
+    ancestor: str,
+    descendant: str,
+) -> bool:
     result = git(
-        repo,
+        graph_repo,
         "merge-base",
         "--is-ancestor",
         ancestor,
         descendant,
         failure_code="ANCESTRY_CHECK_FAILED",
         allowed_returncodes=(0, 1),
+        object_directory=object_directory,
     )
     return result.returncode == 0
 
 
-def find_merge_base(repo: Path, left: str, right: str) -> str:
+def find_merge_base(
+    graph_repo: Path,
+    object_directory: Path,
+    left: str,
+    right: str,
+) -> str:
     result = git(
-        repo,
+        graph_repo,
         "merge-base",
         left,
         right,
         failure_code="RELATIONSHIP_CHECK_FAILED",
         allowed_returncodes=(0, 1),
+        object_directory=object_directory,
     )
     merge_base_oid = result.stdout.strip()
     if result.returncode != 0 or not SHA_PATTERN.fullmatch(merge_base_oid):
@@ -1234,7 +1251,8 @@ def collect_negotiation_tips(
 
 
 def verify_cached_aliases(
-    repo: Path,
+    graph_repo: Path,
+    object_directory: Path,
     cached_aliases: CachedAliases,
     aliases: dict[str, str],
 ) -> None:
@@ -1243,7 +1261,10 @@ def verify_cached_aliases(
             continue
         current_oid = aliases[surface]
         if previous_oid != current_oid and not is_ancestor(
-            repo, previous_oid, current_oid
+            graph_repo,
+            object_directory,
+            previous_oid,
+            current_oid,
         ):
             raise ContractError(
                 "UNEXPECTED_ALIAS_REWRITE",
@@ -1421,7 +1442,6 @@ def resolve(arguments: argparse.Namespace) -> dict[str, Any]:
             git_config_snapshot=git_config_snapshot,
         )
         fetch_immutable_objects(
-            repo,
             transport_repo,
             object_directory,
             verified_remote.url,
@@ -1431,7 +1451,12 @@ def resolve(arguments: argparse.Namespace) -> dict[str, Any]:
             ssh_destination=ssh_destination,
             git_config_snapshot=git_config_snapshot,
         )
-        verify_cached_aliases(repo, cached_aliases, aliases)
+        verify_cached_aliases(
+            transport_repo,
+            object_directory,
+            cached_aliases,
+            aliases,
+        )
         pull_requests = load_pull_requests(
             repo,
             manifest["repository"],
@@ -1445,15 +1470,30 @@ def resolve(arguments: argparse.Namespace) -> dict[str, Any]:
         for relationship in manifest["relationships"]:
             left_oid = aliases[relationship["left"]]
             right_oid = aliases[relationship["right"]]
-            merge_base_oid = find_merge_base(repo, left_oid, right_oid)
+            merge_base_oid = find_merge_base(
+                transport_repo,
+                object_directory,
+                left_oid,
+                right_oid,
+            )
             relationships.append(
                 {
                     **relationship,
                     "leftOid": left_oid,
                     "rightOid": right_oid,
                     "mergeBaseOid": merge_base_oid,
-                    "leftIsAncestorOfRight": is_ancestor(repo, left_oid, right_oid),
-                    "rightIsAncestorOfLeft": is_ancestor(repo, right_oid, left_oid),
+                    "leftIsAncestorOfRight": is_ancestor(
+                        transport_repo,
+                        object_directory,
+                        left_oid,
+                        right_oid,
+                    ),
+                    "rightIsAncestorOfLeft": is_ancestor(
+                        transport_repo,
+                        object_directory,
+                        right_oid,
+                        left_oid,
+                    ),
                 }
             )
 
