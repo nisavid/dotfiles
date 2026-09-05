@@ -33,6 +33,12 @@ not a successfully retrieved manufacturer page. Its present distribution and
 rights status were not established. It corroborates the naming concern; it is
 not the sole basis for it.
 
+Separate quoted web queries for `"Cryptosacrist"`, `"Codiquarium"`, and
+`"Codophylax"` returned no results on 2026-09-05. The quoted `"Cryptostewards"`
+query returned spaced generic cryptocurrency-steward references, not an exact
+joined-name software product. These observations support the corresponding
+negative findings above only within the targeted search.
+
 ## Repository and package namespaces
 
 These exact-coordinate checks were observed on 2026-09-05. The authenticated
@@ -57,9 +63,10 @@ inventory of installed executables or executable files in all packages.
 ## US federal trademark screen
 
 The following queries were submitted through the
-[USPTO Trademark Search interface](https://tmsearch.uspto.gov/) on 2026-09-05,
-without a live-only or goods/services-class restriction. `CM` searches the
-combined mark field; the query grammar and broader-search guidance come from
+[USPTO Trademark Search interface](https://tmsearch.uspto.gov/) on 2026-09-05.
+The query expressions add no live-status or goods/services-class conditions;
+the returned cards below include both live and dead records. `CM` searches
+the combined mark field; the query grammar and broader-search guidance come from
 the [USPTO's federal searching guide](https://www.uspto.gov/trademarks/search/federal-trademark-searching).
 
 1. Selected words:
