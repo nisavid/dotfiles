@@ -152,6 +152,8 @@ test_systalyze_worktrees() {
     'Systalyze consumer failures must stop rather than reconstruct aliases'
   assert_contains "$reference" 'discards checkout-provided Git credential configuration and authorization headers' \
     'Systalyze resolver procedure must isolate authenticated HTTPS reads from checkout credentials'
+  assert_contains "$reference" 'disabling redirects, credential-bearing traces, and TLS key logging' \
+    'Systalyze resolver procedure must prevent caller-selected TLS session-key capture'
   assert_contains "$reference" 'first parent is `P` and second parent is `D`' \
     'Systalyze local QA projection must have an exact merge shape'
   assert_contains "$reference" "planner's terminal \`verified\` result" \

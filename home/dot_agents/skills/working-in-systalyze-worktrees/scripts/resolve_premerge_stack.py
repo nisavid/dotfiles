@@ -845,6 +845,9 @@ def run(
         "GIT_ALTERNATE_OBJECT_DIRECTORIES",
         "GIT_SSL_NO_VERIFY",
         "GIT_TEMPLATE_DIR",
+        "SSLKEYLOGFILE",
+        "SSH_SK_HELPER",
+        "SSH_SK_PROVIDER",
     ):
         environment.pop(variable, None)
     environment.update(

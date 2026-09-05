@@ -1146,6 +1146,7 @@ os.execlp(
                     "GIT_CURL_VERBOSE": "1",
                     "GIT_TRACE_CURL": "1",
                     "GIT_TRACE_PACKET": "1",
+                    "SSLKEYLOGFILE": str(self.consumer.parent / "tls-session-keys"),
                 },
                 clear=False,
             ),
@@ -1195,7 +1196,12 @@ os.execlp(
         self.assertFalse(
             any(
                 name in captured_environment
-                for name in ("GIT_CURL_VERBOSE", "GIT_TRACE_CURL", "GIT_TRACE_PACKET")
+                for name in (
+                    "GIT_CURL_VERBOSE",
+                    "GIT_TRACE_CURL",
+                    "GIT_TRACE_PACKET",
+                    "SSLKEYLOGFILE",
+                )
             )
         )
         self.assertNotIn("fixture-token", " ".join(result.args))
@@ -2155,6 +2161,10 @@ os.execlp(
                 "GIT_ALTERNATE_OBJECT_DIRECTORIES": str(
                     self.unrelated_provider / ".git" / "objects"
                 ),
+                "SSH_SK_HELPER": str(self.fake_bin / "checkout-security-key-helper"),
+                "SSH_SK_PROVIDER": str(
+                    self.fake_bin / "checkout-security-key-provider"
+                ),
             },
             clear=False,
         ):
@@ -2175,7 +2185,8 @@ os.execlp(
                         "'GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', "
                         "'GIT_INDEX_FILE', 'GIT_SHALLOW_FILE', 'GIT_EXEC_PATH', "
                         "'GIT_OBJECT_DIRECTORY', "
-                        "'GIT_ALTERNATE_OBJECT_DIRECTORIES')))"
+                        "'GIT_ALTERNATE_OBJECT_DIRECTORIES', "
+                        "'SSH_SK_HELPER', 'SSH_SK_PROVIDER')))"
                     ),
                 ],
                 cwd=self.consumer,
