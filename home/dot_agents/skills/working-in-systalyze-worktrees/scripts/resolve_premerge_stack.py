@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 from types import FrameType
@@ -114,33 +115,52 @@ def complete_cleanup_action(action: Callable[[], Any]) -> Any:
             continue
 
 
+def wait_for_process_group_grace() -> None:
+    deadline = time.monotonic() + PROCESS_TERMINATION_GRACE_SECONDS
+    while True:
+        remaining_seconds = deadline - time.monotonic()
+        if remaining_seconds <= 0:
+            return
+        try:
+            time.sleep(remaining_seconds)
+        except (KeyboardInterrupt, SystemExit):
+            continue
+
+
+def signal_process_group(process: subprocess.Popen[bytes], signum: int) -> bool:
+    try:
+        complete_cleanup_action(lambda: os.killpg(process.pid, signum))
+    except PermissionError:
+        if sys.platform != "darwin" or complete_cleanup_action(process.poll) is None:
+            raise
+        # Darwin reports EPERM when a group contains only an unreaped zombie.
+        return False
+    except ProcessLookupError:
+        return False
+    return True
+
+
 def terminate_process_group(process: subprocess.Popen[bytes]) -> None:
     if os.name == "posix":
-        try:
-            complete_cleanup_action(lambda: os.killpg(process.pid, signal.SIGTERM))
-        except ProcessLookupError:
-            pass
+        group_has_live_members = signal_process_group(process, signal.SIGTERM)
+        if group_has_live_members:
+            wait_for_process_group_grace()
+            if process.returncode is None:
+                signal_process_group(process, signal.SIGKILL)
     else:
         try:
             complete_cleanup_action(process.terminate)
         except ProcessLookupError:
             pass
-    try:
-        complete_cleanup_action(
-            lambda: process.communicate(timeout=PROCESS_TERMINATION_GRACE_SECONDS)
-        )
-    except subprocess.TimeoutExpired:
-        pass
-    if os.name == "posix":
         try:
-            complete_cleanup_action(lambda: os.killpg(process.pid, signal.SIGKILL))
-        except ProcessLookupError:
-            pass
-    else:
-        try:
-            complete_cleanup_action(process.kill)
-        except ProcessLookupError:
-            pass
+            complete_cleanup_action(
+                lambda: process.communicate(timeout=PROCESS_TERMINATION_GRACE_SECONDS)
+            )
+        except subprocess.TimeoutExpired:
+            try:
+                complete_cleanup_action(process.kill)
+            except ProcessLookupError:
+                pass
     for pipe in (process.stdout, process.stderr):
         if pipe is not None:
             complete_cleanup_action(pipe.close)
@@ -169,6 +189,31 @@ def propagate_command_signal(signum: int) -> None:
     raise SystemExit(128 + signum)
 
 
+def install_process_signal_handlers(
+    previous_handlers: dict[int, Any],
+    request_termination: Callable[[int, FrameType | None], None],
+) -> None:
+    if os.name != "posix" or threading.current_thread() is not threading.main_thread():
+        return
+    sigchld_handler = signal.getsignal(signal.SIGCHLD)
+    if sigchld_handler is not signal.SIG_DFL and sigchld_handler is not signal.SIG_IGN:
+        raise ContractError(
+            "PROCESS_SIGNAL_CONFIGURATION_UNSUPPORTED",
+            signal="SIGCHLD",
+        )
+    if sigchld_handler is signal.SIG_IGN:
+        previous_handlers[signal.SIGCHLD] = sigchld_handler
+        signal.signal(signal.SIGCHLD, signal.SIG_DFL)
+    for signum, expected_handler in (
+        (signal.SIGTERM, signal.SIG_DFL),
+        (signal.SIGINT, signal.default_int_handler),
+    ):
+        previous_handler = signal.getsignal(signum)
+        if previous_handler == expected_handler:
+            previous_handlers[signum] = previous_handler
+            signal.signal(signum, request_termination)
+
+
 def run_process_bytes(
     arguments: list[str],
     *,
@@ -192,16 +237,8 @@ def run_process_bytes(
         if interrupt_command:
             propagate_command_signal(signum)
 
-    if os.name == "posix" and threading.current_thread() is threading.main_thread():
-        for signum, expected_handler in (
-            (signal.SIGTERM, signal.SIG_DFL),
-            (signal.SIGINT, signal.default_int_handler),
-        ):
-            previous_handler = signal.getsignal(signum)
-            if previous_handler == expected_handler:
-                previous_handlers[signum] = previous_handler
-                signal.signal(signum, request_termination)
     try:
+        install_process_signal_handlers(previous_handlers, request_termination)
         try:
             process = subprocess.Popen(
                 arguments,
@@ -230,7 +267,8 @@ def run_process_bytes(
     finally:
         finalizing = True
         try:
-            if process is not None:
+            # Poll first so an already-reaped leader's PGID is never signaled.
+            if process is not None and complete_cleanup_action(process.poll) is None:
                 terminate_process_group_uninterruptibly(process)
         finally:
             for signum, previous_handler in previous_handlers.items():

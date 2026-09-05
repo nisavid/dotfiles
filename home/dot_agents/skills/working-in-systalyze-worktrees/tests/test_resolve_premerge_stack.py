@@ -2439,7 +2439,7 @@ os.execlp(
         descendant = (
             "import pathlib,signal,time; "
             "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
-            f"pathlib.Path({str(ready)!r}).touch(); time.sleep(0.6); "
+            f"pathlib.Path({str(ready)!r}).touch(); time.sleep(2.0); "
             f"pathlib.Path({str(marker)!r}).write_text('alive', encoding='utf-8')"
         )
         parent = (
@@ -2463,25 +2463,28 @@ os.execlp(
 
         self.assertEqual(raised.exception.code, "COMMAND_TIMED_OUT")
         self.assertTrue(ready.exists())
-        time.sleep(0.7)
+        time.sleep(2.1)
         self.assertFalse(marker.exists())
 
     def test_command_interrupt_terminates_process_group(self) -> None:
         resolver = load_resolver_module()
         process = mock.Mock(
             pid=12345,
+            returncode=None,
             stdout=mock.Mock(),
             stderr=mock.Mock(),
         )
-        process.communicate.side_effect = [
-            KeyboardInterrupt,
-            KeyboardInterrupt,
-            (b"", b""),
-        ]
+        process.poll.return_value = None
+        process.communicate.side_effect = KeyboardInterrupt
 
         with (
             mock.patch.object(resolver.subprocess, "Popen", return_value=process),
             mock.patch.object(resolver.os, "killpg") as kill_group,
+            mock.patch.object(
+                resolver,
+                "wait_for_process_group_grace",
+                create=True,
+            ),
             self.assertRaises(KeyboardInterrupt),
         ):
             resolver.run_process_bytes(
@@ -2504,10 +2507,358 @@ os.execlp(
             timeout=resolver.PROCESS_TERMINATION_GRACE_SECONDS,
         )
 
+    def test_process_group_grace_remains_bounded_when_interrupted(self) -> None:
+        resolver = load_resolver_module()
+
+        with (
+            mock.patch.object(
+                resolver.time,
+                "monotonic",
+                side_effect=[100.0, 100.2, 100.6, 101.1],
+            ),
+            mock.patch.object(
+                resolver.time,
+                "sleep",
+                side_effect=[KeyboardInterrupt, SystemExit],
+            ) as sleep,
+        ):
+            resolver.wait_for_process_group_grace()
+
+        self.assertEqual(len(sleep.call_args_list), 2)
+        self.assertAlmostEqual(sleep.call_args_list[0].args[0], 0.8)
+        self.assertAlmostEqual(sleep.call_args_list[1].args[0], 0.4)
+
+    @unittest.skipUnless(os.name == "posix", "POSIX signal behavior")
+    def test_custom_sigchld_handler_fails_before_process_spawn(self) -> None:
+        resolver = load_resolver_module()
+        previous_handler = signal.getsignal(signal.SIGCHLD)
+
+        def custom_handler(_signum: int, _frame: Any) -> None:
+            pass
+
+        signal.signal(signal.SIGCHLD, custom_handler)
+        try:
+            with (
+                mock.patch.object(
+                    resolver.subprocess,
+                    "Popen",
+                    side_effect=AssertionError("process was spawned"),
+                ) as popen,
+                self.assertRaises(resolver.ContractError) as raised,
+            ):
+                resolver.run_process_bytes(
+                    [sys.executable, "-c", "pass"],
+                    cwd=self.consumer,
+                    environment=os.environ.copy(),
+                    timeout_seconds=30,
+                )
+        finally:
+            signal.signal(signal.SIGCHLD, previous_handler)
+
+        self.assertEqual(
+            raised.exception.code,
+            "PROCESS_SIGNAL_CONFIGURATION_UNSUPPORTED",
+        )
+        self.assertEqual(raised.exception.evidence["signal"], "SIGCHLD")
+        popen.assert_not_called()
+
+    @unittest.skipUnless(os.name == "posix", "POSIX signal behavior")
+    def test_unhashable_sigchld_handler_fails_before_process_spawn(self) -> None:
+        resolver = load_resolver_module()
+        previous_handler = signal.getsignal(signal.SIGCHLD)
+
+        class UnhashableHandler:
+            __hash__ = None
+
+            def __call__(self, _signum: int, _frame: Any) -> None:
+                pass
+
+        signal.signal(signal.SIGCHLD, UnhashableHandler())
+        try:
+            with (
+                mock.patch.object(
+                    resolver.subprocess,
+                    "Popen",
+                    side_effect=AssertionError("process was spawned"),
+                ) as popen,
+                self.assertRaises(resolver.ContractError) as raised,
+            ):
+                resolver.run_process_bytes(
+                    [sys.executable, "-c", "pass"],
+                    cwd=self.consumer,
+                    environment=os.environ.copy(),
+                    timeout_seconds=30,
+                )
+        finally:
+            signal.signal(signal.SIGCHLD, previous_handler)
+
+        self.assertEqual(
+            raised.exception.code,
+            "PROCESS_SIGNAL_CONFIGURATION_UNSUPPORTED",
+        )
+        self.assertEqual(raised.exception.evidence["signal"], "SIGCHLD")
+        popen.assert_not_called()
+
+    @unittest.skipUnless(os.name == "posix", "POSIX signal behavior")
+    def test_ignored_sigchld_is_defaulted_until_process_group_is_reaped(
+        self,
+    ) -> None:
+        supervisor = (
+            "import importlib.util,json,os,pathlib,signal,subprocess,sys\n"
+            f"spec = importlib.util.spec_from_file_location('resolver', {str(RESOLVER)!r})\n"
+            "resolver = importlib.util.module_from_spec(spec)\n"
+            "spec.loader.exec_module(resolver)\n"
+            "signal.signal(signal.SIGCHLD, signal.SIG_IGN)\n"
+            "events = []\n"
+            "kill_process_group = resolver.os.killpg\n"
+            "def checked_kill_process_group(pid, signum):\n"
+            "    try:\n"
+            "        os.kill(pid, 0)\n"
+            "    except ProcessLookupError:\n"
+            "        leader_exists = False\n"
+            "    else:\n"
+            "        leader_exists = True\n"
+            "    events.append({\n"
+            "        'signal': signum,\n"
+            "        'leaderExists': leader_exists,\n"
+            "        'sigchldDefault': signal.getsignal(signal.SIGCHLD) == signal.SIG_DFL,\n"
+            "    })\n"
+            "    if signum == signal.SIGKILL and not leader_exists:\n"
+            "        raise RuntimeError('numeric process-group ID was reused')\n"
+            "    return kill_process_group(pid, signum)\n"
+            "resolver.os.killpg = checked_kill_process_group\n"
+            "try:\n"
+            "    resolver.run_process_bytes(\n"
+            "        [sys.executable, '-c', 'import time; time.sleep(30)'],\n"
+            "        cwd=pathlib.Path(sys.argv[1]),\n"
+            "        environment=os.environ.copy(),\n"
+            "        timeout_seconds=0.05,\n"
+            "    )\n"
+            "except subprocess.TimeoutExpired:\n"
+            "    pass\n"
+            "else:\n"
+            "    raise SystemExit('command did not time out')\n"
+            "print(json.dumps({\n"
+            "    'events': events,\n"
+            "    'sigchldRestored': signal.getsignal(signal.SIGCHLD) == signal.SIG_IGN,\n"
+            "}))\n"
+        )
+
+        result = subprocess.run(
+            [sys.executable, "-I", "-S", "-c", supervisor, str(self.consumer)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        evidence = json.loads(result.stdout)
+        self.assertEqual(
+            [event["signal"] for event in evidence["events"]],
+            [signal.SIGTERM, signal.SIGKILL],
+        )
+        self.assertTrue(all(event["leaderExists"] for event in evidence["events"]))
+        self.assertTrue(all(event["sigchldDefault"] for event in evidence["events"]))
+        self.assertTrue(evidence["sigchldRestored"])
+
+    @unittest.skipUnless(os.name == "posix", "POSIX process-group behavior")
+    def test_cleanup_does_not_signal_group_after_reap_during_grace(self) -> None:
+        resolver = load_resolver_module()
+        process = mock.Mock(
+            pid=12345,
+            returncode=None,
+            stdout=mock.Mock(),
+            stderr=mock.Mock(),
+        )
+        process.poll.return_value = None
+        communicate_calls = 0
+
+        def interrupt_then_reap(
+            *_args: object, **_kwargs: object
+        ) -> tuple[bytes, bytes]:
+            nonlocal communicate_calls
+            communicate_calls += 1
+            if communicate_calls == 1:
+                raise KeyboardInterrupt
+            process.returncode = 0
+            return b"", b""
+
+        def mark_reaped_during_grace() -> None:
+            process.returncode = 0
+
+        def reject_signal_after_reap(_pid: int, signum: int) -> None:
+            if signum == signal.SIGKILL and process.returncode is not None:
+                raise AssertionError("numeric process-group ID was signaled after reap")
+
+        process.communicate.side_effect = interrupt_then_reap
+        with (
+            mock.patch.object(resolver.subprocess, "Popen", return_value=process),
+            mock.patch.object(
+                resolver.os,
+                "killpg",
+                side_effect=reject_signal_after_reap,
+            ) as kill_group,
+            mock.patch.object(
+                resolver,
+                "wait_for_process_group_grace",
+                side_effect=mark_reaped_during_grace,
+                create=True,
+            ) as wait_for_grace,
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            resolver.run_process_bytes(
+                [sys.executable, "-c", "pass"],
+                cwd=self.consumer,
+                environment=os.environ.copy(),
+                timeout_seconds=30,
+            )
+
+        wait_for_grace.assert_called_once_with()
+        kill_group.assert_called_once_with(process.pid, signal.SIGTERM)
+        process.stdout.close.assert_called_once_with()
+        process.stderr.close.assert_called_once_with()
+        process.wait.assert_called_once_with(
+            timeout=resolver.PROCESS_TERMINATION_GRACE_SECONDS,
+        )
+
+    @unittest.skipUnless(os.name == "posix", "POSIX process-group behavior")
+    def test_macos_zombie_only_group_is_reaped_after_initial_signal(self) -> None:
+        resolver = load_resolver_module()
+        process = mock.Mock(
+            pid=12345,
+            returncode=None,
+            stdout=mock.Mock(),
+            stderr=mock.Mock(),
+        )
+        process.poll.side_effect = [None, 0]
+        process.communicate.side_effect = KeyboardInterrupt
+
+        with (
+            mock.patch.object(resolver.subprocess, "Popen", return_value=process),
+            mock.patch.object(resolver.sys, "platform", "darwin"),
+            mock.patch.object(
+                resolver.os,
+                "killpg",
+                side_effect=PermissionError(1, "Operation not permitted"),
+            ) as kill_group,
+            mock.patch.object(
+                resolver,
+                "wait_for_process_group_grace",
+            ) as wait_for_grace,
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            resolver.run_process_bytes(
+                [sys.executable, "-c", "pass"],
+                cwd=self.consumer,
+                environment=os.environ.copy(),
+                timeout_seconds=30,
+            )
+
+        kill_group.assert_called_once_with(process.pid, signal.SIGTERM)
+        self.assertEqual(process.poll.call_count, 2)
+        wait_for_grace.assert_not_called()
+        process.stdout.close.assert_called_once_with()
+        process.stderr.close.assert_called_once_with()
+        process.wait.assert_called_once_with(
+            timeout=resolver.PROCESS_TERMINATION_GRACE_SECONDS,
+        )
+
+    @unittest.skipUnless(os.name == "posix", "POSIX process-group behavior")
+    def test_macos_live_group_permission_error_is_not_suppressed(self) -> None:
+        resolver = load_resolver_module()
+        process = mock.Mock(
+            pid=12345,
+            returncode=None,
+            stdout=mock.Mock(),
+            stderr=mock.Mock(),
+        )
+        process.poll.return_value = None
+
+        with (
+            mock.patch.object(resolver.sys, "platform", "darwin"),
+            mock.patch.object(
+                resolver.os,
+                "killpg",
+                side_effect=PermissionError(1, "Operation not permitted"),
+            ) as kill_group,
+            self.assertRaises(PermissionError),
+        ):
+            resolver.terminate_process_group(process)
+
+        kill_group.assert_called_once_with(process.pid, signal.SIGTERM)
+        process.poll.assert_called_once_with()
+        process.stdout.close.assert_not_called()
+        process.stderr.close.assert_not_called()
+        process.wait.assert_not_called()
+
+    @unittest.skipUnless(os.name == "posix", "POSIX process-group behavior")
+    def test_non_macos_initial_group_permission_error_is_not_suppressed(
+        self,
+    ) -> None:
+        resolver = load_resolver_module()
+        process = mock.Mock(
+            pid=12345,
+            returncode=None,
+            stdout=mock.Mock(),
+            stderr=mock.Mock(),
+        )
+
+        with (
+            mock.patch.object(resolver.sys, "platform", "linux"),
+            mock.patch.object(
+                resolver.os,
+                "killpg",
+                side_effect=PermissionError(1, "Operation not permitted"),
+            ) as kill_group,
+            self.assertRaises(PermissionError),
+        ):
+            resolver.terminate_process_group(process)
+
+        kill_group.assert_called_once_with(process.pid, signal.SIGTERM)
+        process.stdout.close.assert_not_called()
+        process.stderr.close.assert_not_called()
+        process.wait.assert_not_called()
+
+    @unittest.skipUnless(os.name == "posix", "POSIX process-group behavior")
+    def test_non_macos_final_group_permission_error_is_not_suppressed(
+        self,
+    ) -> None:
+        resolver = load_resolver_module()
+        process = mock.Mock(
+            pid=12345,
+            returncode=None,
+            stdout=mock.Mock(),
+            stderr=mock.Mock(),
+        )
+
+        with (
+            mock.patch.object(resolver.sys, "platform", "linux"),
+            mock.patch.object(
+                resolver.os,
+                "killpg",
+                side_effect=[None, PermissionError(1, "Operation not permitted")],
+            ) as kill_group,
+            mock.patch.object(resolver, "wait_for_process_group_grace"),
+            self.assertRaises(PermissionError),
+        ):
+            resolver.terminate_process_group(process)
+
+        self.assertEqual(
+            kill_group.call_args_list,
+            [
+                mock.call(process.pid, signal.SIGTERM),
+                mock.call(process.pid, signal.SIGKILL),
+            ],
+        )
+        process.stdout.close.assert_not_called()
+        process.stderr.close.assert_not_called()
+        process.wait.assert_not_called()
+
     @unittest.skipUnless(os.name == "posix", "POSIX signal behavior")
     def test_sigterm_during_process_spawn_is_deferred_until_cleanup(self) -> None:
         resolver = load_resolver_module()
-        process = mock.Mock(pid=12345)
+        process = mock.Mock(pid=12345, returncode=None)
+        process.poll.return_value = None
 
         def signal_during_spawn(*_args: object, **_kwargs: object) -> mock.Mock:
             signal.raise_signal(signal.SIGTERM)
@@ -2537,7 +2888,8 @@ os.execlp(
         self,
     ) -> None:
         resolver = load_resolver_module()
-        process = mock.Mock(pid=12345)
+        process = mock.Mock(pid=12345, returncode=None)
+        process.poll.return_value = None
         second_signal_fired = False
         source_lines, start_line = inspect.getsourcelines(resolver.run_process_bytes)
         command_signal_handler = next(
@@ -2586,7 +2938,8 @@ os.execlp(
     @unittest.skipUnless(os.name == "posix", "POSIX signal behavior")
     def test_sigterm_during_timeout_handoff_cannot_bypass_cleanup(self) -> None:
         resolver = load_resolver_module()
-        process = mock.Mock(pid=12345)
+        process = mock.Mock(pid=12345, returncode=None)
+        process.poll.return_value = None
         signal_fired = False
         source_lines, start_line = inspect.getsourcelines(resolver.run_process_bytes)
         timeout_handler = next(
@@ -2637,9 +2990,10 @@ os.execlp(
         terminate_group.assert_called_once_with(process)
 
     @unittest.skipUnless(os.name == "posix", "POSIX signal behavior")
-    def test_sigterm_before_finalization_is_cleaned_before_propagation(self) -> None:
+    def test_sigterm_after_process_reap_does_not_signal_reused_group(self) -> None:
         resolver = load_resolver_module()
         process = mock.Mock(pid=12345, returncode=0)
+        process.poll.return_value = 0
         process.communicate.return_value = (b"", b"")
         signal_fired = False
         source_lines, start_line = inspect.getsourcelines(resolver.run_process_bytes)
@@ -2683,14 +3037,15 @@ os.execlp(
 
         self.assertTrue(signal_fired)
         self.assertEqual(raised.exception.code, 128 + signal.SIGTERM)
-        terminate_group.assert_called_once_with(process)
+        terminate_group.assert_not_called()
 
     @unittest.skipUnless(os.name == "posix", "POSIX signal behavior")
-    def test_sigterm_at_handler_restoration_follows_process_group_cleanup(
+    def test_sigterm_at_handler_restoration_does_not_signal_reused_group(
         self,
     ) -> None:
         resolver = load_resolver_module()
         process = mock.Mock(pid=12345, returncode=0)
+        process.poll.return_value = 0
         process.communicate.return_value = (b"", b"")
         signal_fired = False
         install_signal_handler = signal.signal
@@ -2729,7 +3084,56 @@ os.execlp(
 
         self.assertTrue(signal_fired)
         self.assertEqual(raised.exception.code, 128 + signal.SIGTERM)
-        terminate_group.assert_called_once_with(process)
+        terminate_group.assert_not_called()
+
+    def test_successful_command_does_not_signal_reaped_process_group(self) -> None:
+        resolver = load_resolver_module()
+        process = mock.Mock(pid=12345, returncode=0)
+        process.poll.return_value = 0
+        process.communicate.return_value = (b"output", b"diagnostic")
+
+        with (
+            mock.patch.object(resolver.subprocess, "Popen", return_value=process),
+            mock.patch.object(
+                resolver,
+                "terminate_process_group_uninterruptibly",
+            ) as terminate_group,
+        ):
+            result = resolver.run_process_bytes(
+                [sys.executable, "-c", "pass"],
+                cwd=self.consumer,
+                environment=os.environ.copy(),
+                timeout_seconds=30,
+            )
+
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, b"output")
+        self.assertEqual(result.stderr, b"diagnostic")
+        terminate_group.assert_not_called()
+
+    def test_stale_returncode_does_not_signal_reaped_process_group(self) -> None:
+        resolver = load_resolver_module()
+        process = mock.Mock(pid=12345, returncode=None)
+        process.poll.return_value = 0
+        process.communicate.side_effect = KeyboardInterrupt
+
+        with (
+            mock.patch.object(resolver.subprocess, "Popen", return_value=process),
+            mock.patch.object(
+                resolver,
+                "terminate_process_group_uninterruptibly",
+            ) as terminate_group,
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            resolver.run_process_bytes(
+                [sys.executable, "-c", "pass"],
+                cwd=self.consumer,
+                environment=os.environ.copy(),
+                timeout_seconds=30,
+            )
+
+        process.poll.assert_called_once_with()
+        terminate_group.assert_not_called()
 
     @unittest.skipUnless(os.name == "posix", "POSIX process-group behavior")
     def test_command_sigterm_terminates_descendants(self) -> None:
@@ -2739,7 +3143,7 @@ os.execlp(
         descendant = (
             "import pathlib,signal,time; "
             "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
-            f"pathlib.Path({str(ready)!r}).touch(); time.sleep(1.2); "
+            f"pathlib.Path({str(ready)!r}).touch(); time.sleep(2.0); "
             f"pathlib.Path({str(marker)!r}).write_text('alive', encoding='utf-8')"
         )
         parent = (
@@ -2803,7 +3207,7 @@ os.execlp(
                 128 + signal.SIGTERM,
                 (stdout, stderr),
             )
-            time.sleep(1.3)
+            time.sleep(2.1)
             self.assertFalse(marker.exists())
         finally:
             if group_pid.exists():
@@ -2903,6 +3307,7 @@ os.execlp(
         resolver = load_resolver_module()
         process = mock.Mock(
             pid=12345,
+            returncode=None,
             stdout=mock.Mock(),
             stderr=mock.Mock(),
         )
@@ -2915,7 +3320,14 @@ os.execlp(
             timeout=0.05,
         )
 
-        with mock.patch.object(resolver.os, "killpg") as kill_group:
+        with (
+            mock.patch.object(resolver.os, "killpg") as kill_group,
+            mock.patch.object(
+                resolver,
+                "wait_for_process_group_grace",
+                create=True,
+            ),
+        ):
             resolver.terminate_process_group(process)
 
         self.assertEqual(
