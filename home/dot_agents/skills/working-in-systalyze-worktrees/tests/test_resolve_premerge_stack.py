@@ -1162,7 +1162,7 @@ os.execlp(
                 uses_ssh_transport=False,
                 git_config_snapshot=(
                     ("credential.helper", "!printf exploited"),
-                    ("http.extraHeader", "Authorization: Basic checkout"),
+                    ("http.extraHeader", "Authorization: Basic $CHECKOUT_CREDENTIAL"),
                     ("http.proxy", "http://127.0.0.1:9"),
                 ),
                 git_https_authentication=(remote_url, "fixture-token"),
@@ -1175,8 +1175,8 @@ os.execlp(
             )
             for index in range(int(captured_environment["GIT_CONFIG_COUNT"]))
         ]
-        authorization = dict(configured)[f"http.{remote_url}.extraHeader"]
-        scheme, encoded = authorization.split(maxsplit=2)[1:]
+        configured_header = dict(configured)[f"http.{remote_url}.extraHeader"]
+        scheme, encoded = configured_header.split(maxsplit=2)[1:]
         self.assertEqual(scheme, "Basic")
         self.assertEqual(
             base64.b64decode(encoded),
