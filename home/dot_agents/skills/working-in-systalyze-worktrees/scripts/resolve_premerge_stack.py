@@ -568,13 +568,27 @@ def noninteractive_ssh_command(
     options = "".join(f" {shlex.quote(value)}" for value in injected_arguments)
     if trusted_program is not None:
         program_start = insertion_point - len(shell_words[program_index].raw)
-        return (
+        hardened = (
             ssh_command[:program_start]
             + shlex.quote(str(trusted_program))
             + options
             + ssh_command[insertion_point:]
         )
-    return ssh_command[:insertion_point] + options + ssh_command[insertion_point:]
+    else:
+        hardened = (
+            ssh_command[:insertion_point] + options + ssh_command[insertion_point:]
+        )
+    if ssh_destination is not None:
+        hardened += " -S none"
+    return hardened
+
+
+def pin_git_ssh_variant(
+    environment: dict[str, str],
+    ssh_destination: SshDestination | None,
+) -> None:
+    if ssh_destination is not None:
+        environment["GIT_SSH_VARIANT"] = "ssh"
 
 
 def run(
@@ -634,6 +648,7 @@ def run(
     if git_config_snapshot is not None:
         apply_git_config_snapshot(environment, git_config_snapshot)
     if uses_ssh_transport is True:
+        pin_git_ssh_variant(environment, ssh_destination)
         ssh_command = configured_ssh_command(
             cwd,
             environment,

@@ -744,6 +744,30 @@ os.execlp(
                 self.assertIn("Port=22", arguments)
                 self.assertTrue(arguments[-1].startswith("git-upload-pack "))
 
+    def test_resolver_pins_git_ssh_variant(self) -> None:
+        ssh_calls = self.configure_ssh_remote()
+        git(
+            self.consumer,
+            "remote",
+            "set-url",
+            "origin",
+            "ssh://fixture:22/systalyze/systalyze.git",
+        )
+        with mock.patch.dict(
+            os.environ,
+            {
+                "FIXTURE_SSH_CALLS": str(ssh_calls),
+                "FIXTURE_SSH_REMOTE": str(self.remote),
+                "GIT_SSH_COMMAND": "ssh",
+                "GIT_SSH_VARIANT": "simple",
+            },
+            clear=False,
+        ):
+            result = self.resolve()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(ssh_calls.exists())
+
     def test_ssh_remote_rejects_unrecognized_wrapper_before_transport(self) -> None:
         ssh_calls = self.configure_ssh_remote()
         for ssh_command in (
@@ -1738,12 +1762,15 @@ os.execlp(
         ssh_config.write_text(
             "Host github.com\n"
             "  StrictHostKeyChecking no\n"
-            "  UserKnownHostsFile /dev/null\n",
+            "  UserKnownHostsFile /dev/null\n"
+            "  ControlMaster auto\n"
+            f"  ControlPath {self.consumer.parent / 'configured-control'}\n",
             encoding="utf-8",
         )
         configured = (
             f"/usr/bin/ssh -F {shlex.quote(str(ssh_config))} "
-            "-o StrictHostKeyChecking=no"
+            "-o StrictHostKeyChecking=no "
+            f"-S {shlex.quote(str(self.consumer.parent / 'argument-control'))}"
         )
 
         hardened = resolver.noninteractive_ssh_command(
@@ -1764,6 +1791,7 @@ os.execlp(
             line.split(maxsplit=1) for line in result.stdout.splitlines() if " " in line
         )
         self.assertEqual(settings["stricthostkeychecking"], "true")
+        self.assertNotIn("controlpath", settings)
 
     def test_configured_ssh_command_preserves_shell_expansion_in_git_transport(
         self,
