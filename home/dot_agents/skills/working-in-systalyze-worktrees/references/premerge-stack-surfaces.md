@@ -13,11 +13,25 @@ Run this block before branch preparation and again immediately before product pu
     DYLD_FRAMEWORK_PATH DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH \
     DYLD_ROOT_PATH DYLD_SHARED_CACHE_DIR \
     DYLD_VERSIONED_FRAMEWORK_PATH DYLD_VERSIONED_LIBRARY_PATH &&
-  exec /usr/bin/python3 -I -S "$HOME/.agents/skills/working-in-systalyze-worktrees/scripts/resolve_premerge_stack.py" --repo <checkout> --remote <remote>
+  exec /usr/bin/python3 -I -S -c '
+import os
+import pwd
+import runpy
+import sys
+
+account_home = pwd.getpwuid(os.getuid()).pw_dir
+os.environ["HOME"] = account_home
+resolver = os.path.join(
+    account_home,
+    ".agents/skills/working-in-systalyze-worktrees/scripts/resolve_premerge_stack.py",
+)
+sys.argv[0] = resolver
+runpy.run_path(resolver, run_name="__main__")
+' --repo <checkout> --remote <remote>
 )
 ```
 
-The subshell clears injection-capable dynamic-loader settings before Python starts. The resolver rejects any remaining `LD_*` or `DYLD_*` setting and strips them from every child command. The absolute interpreter and both isolation flags are also part of the trust boundary; do not substitute an activated or PATH-resolved runtime. The resolver pins Git to `/usr/bin/git` and accepts GitHub CLI only from `/opt/homebrew/bin/gh`, `/usr/local/bin/gh`, or `/usr/bin/gh`; it never follows ambient `PATH` for either command. Git 2.29 or newer is required because preserving `FETCH_HEAD` depends on `git fetch --no-write-fetch-head`. SSH remotes accept only the bare trusted system executable at `/usr/bin/ssh`; the resolver supplies `/dev/null` as its user configuration and rejects caller-provided wrappers, arguments, or configuration files.
+The subshell clears the listed injection-capable dynamic-loader overrides before Python starts. Isolated Python derives the installed skill path from the account record rather than ambient `HOME`, restores that account home for the resolver, and rejects any listed override that remains. The resolver also strips those overrides from every child command. The absolute interpreter and both isolation flags are part of the trust boundary; do not substitute an activated or PATH-resolved runtime. The resolver pins Git to `/usr/bin/git` and accepts GitHub CLI only from `/opt/homebrew/bin/gh`, `/usr/local/bin/gh`, or `/usr/bin/gh`; it never follows ambient `PATH` for either command. Git 2.29 or newer is required because preserving `FETCH_HEAD` depends on `git fetch --no-write-fetch-head`. SSH remotes accept only the bare trusted system executable at `/usr/bin/ssh`; the resolver supplies `/dev/null` as its user configuration and rejects caller-provided wrappers, arguments, or configuration files.
 
 The resolver:
 

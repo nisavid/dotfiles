@@ -106,14 +106,29 @@ test_systalyze_worktrees() {
     'Systalyze resolver invocation must clear dynamic-loader injection before starting Python'
   assert_contains "$skill" 'DYLD_VERSIONED_FRAMEWORK_PATH DYLD_VERSIONED_LIBRARY_PATH &&' \
     'Systalyze resolver invocation must start Python only after loader cleanup succeeds'
-  assert_contains "$skill" 'exec /usr/bin/python3 -I -S "$HOME/.agents/skills/working-in-systalyze-worktrees/scripts/resolve_premerge_stack.py" --repo <checkout> --remote <remote>' \
-    'Systalyze resolver invocation must be anchored to its installed skill and include the required arguments'
+  assert_contains "$skill" 'account_home = pwd.getpwuid(os.getuid()).pw_dir' \
+    'Systalyze resolver invocation must derive the installed home independently of ambient HOME'
+  assert_contains "$skill" 'os.environ["HOME"] = account_home' \
+    'Systalyze resolver invocation must restore the trusted account home before loading the resolver'
+  assert_contains "$skill" 'runpy.run_path(resolver, run_name="__main__")' \
+    'Systalyze resolver invocation must load the resolver through isolated Python'
+  assert_contains "$skill" "' --repo <checkout> --remote <remote>" \
+    'Systalyze resolver invocation must pass the required arguments after the isolated bootstrap'
   assert_contains "$reference" 'unset LD_AUDIT LD_LIBRARY_PATH LD_PRELOAD' \
     'Systalyze resolver procedure must clear dynamic-loader injection before starting Python'
   assert_contains "$reference" 'DYLD_VERSIONED_FRAMEWORK_PATH DYLD_VERSIONED_LIBRARY_PATH &&' \
     'Systalyze resolver procedure must start Python only after loader cleanup succeeds'
-  assert_contains "$reference" 'exec /usr/bin/python3 -I -S "$HOME/.agents/skills/working-in-systalyze-worktrees/scripts/resolve_premerge_stack.py" --repo <checkout> --remote <remote>' \
-    'Systalyze resolver procedure must isolate Python startup before loading the resolver'
+  assert_contains "$reference" 'account_home = pwd.getpwuid(os.getuid()).pw_dir' \
+    'Systalyze resolver procedure must derive the installed home independently of ambient HOME'
+  assert_contains "$reference" 'os.environ["HOME"] = account_home' \
+    'Systalyze resolver procedure must restore the trusted account home before loading the resolver'
+  assert_contains "$reference" 'runpy.run_path(resolver, run_name="__main__")' \
+    'Systalyze resolver procedure must load the resolver through isolated Python'
+  assert_contains "$reference" "' --repo <checkout> --remote <remote>" \
+    'Systalyze resolver procedure must pass the required arguments after the isolated bootstrap'
+  ! rg -F -q -- '$HOME/.agents/skills/working-in-systalyze-worktrees/scripts/resolve_premerge_stack.py' \
+    "$skill" "$reference" || \
+    fail 'Systalyze resolver launcher must not trust ambient HOME for its script path'
   local launcher_output
   launcher_output="$(
     /bin/bash -c 'export LD_PRELOAD=; readonly LD_PRELOAD; (unset LD_PRELOAD && printf launched); exit 0' 2>/dev/null

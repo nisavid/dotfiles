@@ -42,7 +42,20 @@ GITHUB_TLS_TRUST_ANCHOR_ENVIRONMENT_VARIABLES = (
     "SSL_CERT_DIR",
     "SSL_CERT_FILE",
 )
-DYNAMIC_LOADER_ENVIRONMENT_VARIABLE_PREFIXES = ("DYLD_", "LD_")
+DYNAMIC_LOADER_OVERRIDE_ENVIRONMENT_VARIABLES = (
+    "LD_AUDIT",
+    "LD_LIBRARY_PATH",
+    "LD_PRELOAD",
+    "DYLD_FALLBACK_FRAMEWORK_PATH",
+    "DYLD_FALLBACK_LIBRARY_PATH",
+    "DYLD_FRAMEWORK_PATH",
+    "DYLD_INSERT_LIBRARIES",
+    "DYLD_LIBRARY_PATH",
+    "DYLD_ROOT_PATH",
+    "DYLD_SHARED_CACHE_DIR",
+    "DYLD_VERSIONED_FRAMEWORK_PATH",
+    "DYLD_VERSIONED_LIBRARY_PATH",
+)
 EXPECTED_SURFACE_ROLES = {
     "grounding-docs": "product-base",
     "dev-tooling": "qa-overlay",
@@ -199,16 +212,15 @@ def apply_git_config_snapshot(
 
 
 def remove_dynamic_loader_environment(environment: dict[str, str]) -> None:
-    for variable in tuple(environment):
-        if variable.startswith(DYNAMIC_LOADER_ENVIRONMENT_VARIABLE_PREFIXES):
-            environment.pop(variable, None)
+    for variable in DYNAMIC_LOADER_OVERRIDE_ENVIRONMENT_VARIABLES:
+        environment.pop(variable, None)
 
 
 def verify_dynamic_loader_environment() -> None:
     configured = sorted(
         variable
-        for variable in os.environ
-        if variable.startswith(DYNAMIC_LOADER_ENVIRONMENT_VARIABLE_PREFIXES)
+        for variable in DYNAMIC_LOADER_OVERRIDE_ENVIRONMENT_VARIABLES
+        if variable in os.environ
     )
     if configured:
         raise ContractError(

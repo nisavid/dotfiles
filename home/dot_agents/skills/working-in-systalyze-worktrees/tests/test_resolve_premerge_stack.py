@@ -785,6 +785,40 @@ os.execlp(
         )
         self.assertFalse(self.fake_gh_arguments.exists())
 
+    def test_allows_noninjecting_dynamic_loader_diagnostics(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {
+                "DYLD_PRINT_LIBRARIES": "",
+                "LD_DEBUG": "",
+            },
+            clear=False,
+        ):
+            result = self.resolve()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_dynamic_loader_override_set_matches_launcher_contract(self) -> None:
+        resolver = load_resolver_module()
+
+        self.assertEqual(
+            resolver.DYNAMIC_LOADER_OVERRIDE_ENVIRONMENT_VARIABLES,
+            (
+                "LD_AUDIT",
+                "LD_LIBRARY_PATH",
+                "LD_PRELOAD",
+                "DYLD_FALLBACK_FRAMEWORK_PATH",
+                "DYLD_FALLBACK_LIBRARY_PATH",
+                "DYLD_FRAMEWORK_PATH",
+                "DYLD_INSERT_LIBRARIES",
+                "DYLD_LIBRARY_PATH",
+                "DYLD_ROOT_PATH",
+                "DYLD_SHARED_CACHE_DIR",
+                "DYLD_VERSIONED_FRAMEWORK_PATH",
+                "DYLD_VERSIONED_LIBRARY_PATH",
+            ),
+        )
+
     def test_child_processes_clear_dynamic_loader_environment(self) -> None:
         resolver = load_resolver_module()
         completed = subprocess.CompletedProcess(
@@ -798,7 +832,9 @@ os.execlp(
                 os.environ,
                 {
                     "DYLD_INSERT_LIBRARIES": "fixture",
+                    "DYLD_PRINT_LIBRARIES": "diagnostic",
                     "LD_AUDIT": "fixture",
+                    "LD_DEBUG": "diagnostic",
                     "LD_LIBRARY_PATH": "fixture",
                     "LD_PRELOAD": "fixture",
                 },
@@ -818,8 +854,16 @@ os.execlp(
 
         child_environment = run_process_bytes.call_args.kwargs["environment"]
         self.assertFalse(
-            any(variable.startswith(("DYLD_", "LD_")) for variable in child_environment)
+            {
+                "DYLD_INSERT_LIBRARIES",
+                "LD_AUDIT",
+                "LD_LIBRARY_PATH",
+                "LD_PRELOAD",
+            }
+            & child_environment.keys()
         )
+        self.assertEqual(child_environment["DYLD_PRINT_LIBRARIES"], "diagnostic")
+        self.assertEqual(child_environment["LD_DEBUG"], "diagnostic")
 
     def test_non_ssh_network_operation_blocks_late_ssh_rewrite(self) -> None:
         resolver = load_resolver_module()
