@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import importlib.util
+import inspect
 import json
 import os
 import shlex
@@ -2464,6 +2465,354 @@ os.execlp(
         self.assertTrue(ready.exists())
         time.sleep(0.7)
         self.assertFalse(marker.exists())
+
+    def test_command_interrupt_terminates_process_group(self) -> None:
+        resolver = load_resolver_module()
+        process = mock.Mock(
+            pid=12345,
+            stdout=mock.Mock(),
+            stderr=mock.Mock(),
+        )
+        process.communicate.side_effect = [
+            KeyboardInterrupt,
+            KeyboardInterrupt,
+            (b"", b""),
+        ]
+
+        with (
+            mock.patch.object(resolver.subprocess, "Popen", return_value=process),
+            mock.patch.object(resolver.os, "killpg") as kill_group,
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            resolver.run_process_bytes(
+                [sys.executable, "-c", "pass"],
+                cwd=self.consumer,
+                environment=os.environ.copy(),
+                timeout_seconds=30,
+            )
+
+        self.assertEqual(
+            kill_group.call_args_list,
+            [
+                mock.call(process.pid, signal.SIGTERM),
+                mock.call(process.pid, signal.SIGKILL),
+            ],
+        )
+        process.stdout.close.assert_called_once_with()
+        process.stderr.close.assert_called_once_with()
+        process.wait.assert_called_once_with(
+            timeout=resolver.PROCESS_TERMINATION_GRACE_SECONDS,
+        )
+
+    @unittest.skipUnless(os.name == "posix", "POSIX signal behavior")
+    def test_sigterm_during_process_spawn_is_deferred_until_cleanup(self) -> None:
+        resolver = load_resolver_module()
+        process = mock.Mock(pid=12345)
+
+        def signal_during_spawn(*_args: object, **_kwargs: object) -> mock.Mock:
+            signal.raise_signal(signal.SIGTERM)
+            return process
+
+        with (
+            mock.patch.object(
+                resolver.subprocess,
+                "Popen",
+                side_effect=signal_during_spawn,
+            ),
+            mock.patch.object(resolver, "terminate_process_group") as terminate_group,
+            self.assertRaises(SystemExit) as raised,
+        ):
+            resolver.run_process_bytes(
+                [sys.executable, "-c", "pass"],
+                cwd=self.consumer,
+                environment=os.environ.copy(),
+                timeout_seconds=30,
+            )
+
+        self.assertEqual(raised.exception.code, 128 + signal.SIGTERM)
+        terminate_group.assert_called_once_with(process)
+
+    @unittest.skipUnless(os.name == "posix", "POSIX signal behavior")
+    def test_second_sigterm_during_exception_handoff_cannot_bypass_cleanup(
+        self,
+    ) -> None:
+        resolver = load_resolver_module()
+        process = mock.Mock(pid=12345)
+        second_signal_fired = False
+        source_lines, start_line = inspect.getsourcelines(resolver.run_process_bytes)
+        command_signal_handler = next(
+            index
+            for index, line in enumerate(source_lines)
+            if line.strip() == "except BaseException:"
+        )
+        handoff_line = start_line + command_signal_handler + 1
+
+        def first_signal(*_args: object, **_kwargs: object) -> None:
+            signal.raise_signal(signal.SIGTERM)
+
+        def inject_second_signal(frame: Any, event: str, _argument: object) -> Any:
+            nonlocal second_signal_fired
+            if (
+                not second_signal_fired
+                and event == "line"
+                and frame.f_code is resolver.run_process_bytes.__code__
+                and frame.f_lineno == handoff_line
+            ):
+                second_signal_fired = True
+                signal.raise_signal(signal.SIGTERM)
+            return inject_second_signal
+
+        process.communicate.side_effect = first_signal
+        with (
+            mock.patch.object(resolver.subprocess, "Popen", return_value=process),
+            mock.patch.object(resolver, "terminate_process_group") as terminate_group,
+            self.assertRaises(SystemExit) as raised,
+        ):
+            sys.settrace(inject_second_signal)
+            try:
+                resolver.run_process_bytes(
+                    [sys.executable, "-c", "pass"],
+                    cwd=self.consumer,
+                    environment=os.environ.copy(),
+                    timeout_seconds=30,
+                )
+            finally:
+                sys.settrace(None)
+
+        self.assertTrue(second_signal_fired)
+        self.assertEqual(raised.exception.code, 128 + signal.SIGTERM)
+        terminate_group.assert_called_once_with(process)
+
+    @unittest.skipUnless(os.name == "posix", "POSIX signal behavior")
+    def test_sigterm_during_timeout_handoff_cannot_bypass_cleanup(self) -> None:
+        resolver = load_resolver_module()
+        process = mock.Mock(pid=12345)
+        signal_fired = False
+        source_lines, start_line = inspect.getsourcelines(resolver.run_process_bytes)
+        timeout_handler = next(
+            index
+            for index, line in enumerate(source_lines)
+            if line.strip()
+            in {
+                "except subprocess.TimeoutExpired:",
+                "except BaseException:",
+            }
+        )
+        handoff_line = start_line + timeout_handler + 1
+        process.communicate.side_effect = subprocess.TimeoutExpired(
+            cmd="fixture",
+            timeout=0.05,
+        )
+
+        def inject_signal(frame: Any, event: str, _argument: object) -> Any:
+            nonlocal signal_fired
+            if (
+                not signal_fired
+                and event == "line"
+                and frame.f_code is resolver.run_process_bytes.__code__
+                and frame.f_lineno == handoff_line
+            ):
+                signal_fired = True
+                signal.raise_signal(signal.SIGTERM)
+            return inject_signal
+
+        with (
+            mock.patch.object(resolver.subprocess, "Popen", return_value=process),
+            mock.patch.object(resolver, "terminate_process_group") as terminate_group,
+            self.assertRaises(SystemExit) as raised,
+        ):
+            sys.settrace(inject_signal)
+            try:
+                resolver.run_process_bytes(
+                    [sys.executable, "-c", "pass"],
+                    cwd=self.consumer,
+                    environment=os.environ.copy(),
+                    timeout_seconds=30,
+                )
+            finally:
+                sys.settrace(None)
+
+        self.assertTrue(signal_fired)
+        self.assertEqual(raised.exception.code, 128 + signal.SIGTERM)
+        terminate_group.assert_called_once_with(process)
+
+    @unittest.skipUnless(os.name == "posix", "POSIX signal behavior")
+    def test_sigterm_before_finalization_is_cleaned_before_propagation(self) -> None:
+        resolver = load_resolver_module()
+        process = mock.Mock(pid=12345, returncode=0)
+        process.communicate.return_value = (b"", b"")
+        signal_fired = False
+        source_lines, start_line = inspect.getsourcelines(resolver.run_process_bytes)
+        finalizer_handoff = next(
+            index
+            for index, line in enumerate(source_lines)
+            if line.strip() == "finalizing = True"
+        )
+        handoff_line = start_line + finalizer_handoff
+
+        def inject_signal(frame: Any, event: str, _argument: object) -> Any:
+            nonlocal signal_fired
+            if (
+                not signal_fired
+                and event == "line"
+                and frame.f_code is resolver.run_process_bytes.__code__
+                and frame.f_lineno == handoff_line
+            ):
+                signal_fired = True
+                signal.raise_signal(signal.SIGTERM)
+            return inject_signal
+
+        with (
+            mock.patch.object(resolver.subprocess, "Popen", return_value=process),
+            mock.patch.object(
+                resolver,
+                "terminate_process_group_uninterruptibly",
+            ) as terminate_group,
+            self.assertRaises(SystemExit) as raised,
+        ):
+            sys.settrace(inject_signal)
+            try:
+                resolver.run_process_bytes(
+                    [sys.executable, "-c", "pass"],
+                    cwd=self.consumer,
+                    environment=os.environ.copy(),
+                    timeout_seconds=30,
+                )
+            finally:
+                sys.settrace(None)
+
+        self.assertTrue(signal_fired)
+        self.assertEqual(raised.exception.code, 128 + signal.SIGTERM)
+        terminate_group.assert_called_once_with(process)
+
+    @unittest.skipUnless(os.name == "posix", "POSIX signal behavior")
+    def test_sigterm_at_handler_restoration_follows_process_group_cleanup(
+        self,
+    ) -> None:
+        resolver = load_resolver_module()
+        process = mock.Mock(pid=12345, returncode=0)
+        process.communicate.return_value = (b"", b"")
+        signal_fired = False
+        install_signal_handler = signal.signal
+
+        def restore_signal_handler(signum: int, handler: Any) -> Any:
+            nonlocal signal_fired
+            if (
+                not signal_fired
+                and signum == signal.SIGTERM
+                and handler == signal.SIG_DFL
+                and callable(signal.getsignal(signum))
+            ):
+                signal_fired = True
+                signal.raise_signal(signal.SIGTERM)
+            return install_signal_handler(signum, handler)
+
+        with (
+            mock.patch.object(resolver.subprocess, "Popen", return_value=process),
+            mock.patch.object(
+                resolver.signal,
+                "signal",
+                side_effect=restore_signal_handler,
+            ),
+            mock.patch.object(
+                resolver,
+                "terminate_process_group_uninterruptibly",
+            ) as terminate_group,
+            self.assertRaises(SystemExit) as raised,
+        ):
+            resolver.run_process_bytes(
+                [sys.executable, "-c", "pass"],
+                cwd=self.consumer,
+                environment=os.environ.copy(),
+                timeout_seconds=30,
+            )
+
+        self.assertTrue(signal_fired)
+        self.assertEqual(raised.exception.code, 128 + signal.SIGTERM)
+        terminate_group.assert_called_once_with(process)
+
+    @unittest.skipUnless(os.name == "posix", "POSIX process-group behavior")
+    def test_command_sigterm_terminates_descendants(self) -> None:
+        ready = self.consumer.parent / "sigterm-descendant-ready"
+        marker = self.consumer.parent / "sigterm-descendant-survived"
+        group_pid = self.consumer.parent / "sigterm-process-group"
+        descendant = (
+            "import pathlib,signal,time; "
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+            f"pathlib.Path({str(ready)!r}).touch(); time.sleep(1.2); "
+            f"pathlib.Path({str(marker)!r}).write_text('alive', encoding='utf-8')"
+        )
+        parent = (
+            "import os,pathlib,signal,subprocess,sys,time\n"
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+            "pathlib.Path(sys.argv[3]).write_text(str(os.getpid()), encoding='utf-8')\n"
+            "subprocess.Popen([sys.executable, '-c', sys.argv[1]], "
+            "stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, "
+            "stderr=subprocess.DEVNULL)\n"
+            "ready = pathlib.Path(sys.argv[2])\n"
+            "while not ready.exists():\n"
+            "    time.sleep(0.005)\n"
+            "time.sleep(30)\n"
+        )
+        supervisor = (
+            "import importlib.util,os,pathlib,sys\n"
+            f"spec = importlib.util.spec_from_file_location('resolver', {str(RESOLVER)!r})\n"
+            "resolver = importlib.util.module_from_spec(spec)\n"
+            "spec.loader.exec_module(resolver)\n"
+            "resolver.run_process_bytes(\n"
+            "    [sys.executable, '-c', sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]],\n"
+            "    cwd=pathlib.Path(sys.argv[5]),\n"
+            "    environment=os.environ.copy(),\n"
+            "    timeout_seconds=30,\n"
+            ")\n"
+        )
+        supervisor_process = subprocess.Popen(
+            [
+                sys.executable,
+                "-I",
+                "-S",
+                "-c",
+                supervisor,
+                parent,
+                descendant,
+                str(ready),
+                str(group_pid),
+                str(self.consumer),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        try:
+            deadline = time.monotonic() + 2
+            while (
+                not (ready.exists() and group_pid.exists())
+                and supervisor_process.poll() is None
+            ):
+                if time.monotonic() >= deadline:
+                    self.fail("supervised descendant did not become ready")
+                time.sleep(0.01)
+
+            self.assertTrue(ready.exists())
+            self.assertTrue(group_pid.exists())
+            supervisor_process.send_signal(signal.SIGTERM)
+            time.sleep(0.1)
+            supervisor_process.send_signal(signal.SIGTERM)
+            stdout, stderr = supervisor_process.communicate(timeout=5)
+            self.assertEqual(
+                supervisor_process.returncode,
+                128 + signal.SIGTERM,
+                (stdout, stderr),
+            )
+            time.sleep(1.3)
+            self.assertFalse(marker.exists())
+        finally:
+            if group_pid.exists():
+                try:
+                    os.killpg(
+                        int(group_pid.read_text(encoding="utf-8")), signal.SIGKILL
+                    )
+                except ProcessLookupError:
+                    pass
 
     def test_documented_interpreter_isolates_python_startup_and_imports(self) -> None:
         site_startup = self.consumer.parent / "python-site-startup"

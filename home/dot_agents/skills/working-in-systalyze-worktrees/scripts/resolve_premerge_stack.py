@@ -12,7 +12,10 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
+from collections.abc import Callable
 from pathlib import Path
+from types import FrameType
 from typing import Any, NamedTuple
 from urllib.parse import urlparse
 
@@ -103,32 +106,67 @@ def process_output_hashes(
     }
 
 
+def complete_cleanup_action(action: Callable[[], Any]) -> Any:
+    while True:
+        try:
+            return action()
+        except (KeyboardInterrupt, SystemExit):
+            continue
+
+
 def terminate_process_group(process: subprocess.Popen[bytes]) -> None:
     if os.name == "posix":
         try:
-            os.killpg(process.pid, signal.SIGTERM)
+            complete_cleanup_action(lambda: os.killpg(process.pid, signal.SIGTERM))
         except ProcessLookupError:
             pass
     else:
-        process.terminate()
+        try:
+            complete_cleanup_action(process.terminate)
+        except ProcessLookupError:
+            pass
     try:
-        process.communicate(timeout=PROCESS_TERMINATION_GRACE_SECONDS)
+        complete_cleanup_action(
+            lambda: process.communicate(timeout=PROCESS_TERMINATION_GRACE_SECONDS)
+        )
     except subprocess.TimeoutExpired:
         pass
     if os.name == "posix":
         try:
-            os.killpg(process.pid, signal.SIGKILL)
+            complete_cleanup_action(lambda: os.killpg(process.pid, signal.SIGKILL))
         except ProcessLookupError:
             pass
     else:
-        process.kill()
+        try:
+            complete_cleanup_action(process.kill)
+        except ProcessLookupError:
+            pass
     for pipe in (process.stdout, process.stderr):
         if pipe is not None:
-            pipe.close()
+            complete_cleanup_action(pipe.close)
     try:
-        process.wait(timeout=PROCESS_TERMINATION_GRACE_SECONDS)
+        complete_cleanup_action(
+            lambda: process.wait(timeout=PROCESS_TERMINATION_GRACE_SECONDS)
+        )
     except subprocess.TimeoutExpired:
         pass
+
+
+def terminate_process_group_uninterruptibly(
+    process: subprocess.Popen[bytes],
+) -> None:
+    while True:
+        try:
+            terminate_process_group(process)
+            return
+        except (KeyboardInterrupt, SystemExit):
+            continue
+
+
+def propagate_command_signal(signum: int) -> None:
+    if signum == signal.SIGINT:
+        raise KeyboardInterrupt
+    raise SystemExit(128 + signum)
 
 
 def run_process_bytes(
@@ -138,25 +176,67 @@ def run_process_bytes(
     environment: dict[str, str],
     timeout_seconds: float,
 ) -> subprocess.CompletedProcess[bytes]:
-    process = subprocess.Popen(
-        arguments,
-        cwd=cwd,
-        env=environment,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        start_new_session=os.name == "posix",
-    )
+    process: subprocess.Popen[bytes] | None = None
+    pending_signal: int | None = None
+    tearing_down = False
+    finalizing = False
+    previous_handlers: dict[int, Any] = {}
+
+    def request_termination(signum: int, _frame: FrameType | None) -> None:
+        nonlocal pending_signal, tearing_down
+        if pending_signal is None:
+            pending_signal = signum
+        interrupt_command = process is not None and not tearing_down and not finalizing
+        if process is not None:
+            tearing_down = True
+        if interrupt_command:
+            propagate_command_signal(signum)
+
+    if os.name == "posix" and threading.current_thread() is threading.main_thread():
+        for signum, expected_handler in (
+            (signal.SIGTERM, signal.SIG_DFL),
+            (signal.SIGINT, signal.default_int_handler),
+        ):
+            previous_handler = signal.getsignal(signum)
+            if previous_handler == expected_handler:
+                previous_handlers[signum] = previous_handler
+                signal.signal(signum, request_termination)
     try:
-        stdout, stderr = process.communicate(timeout=timeout_seconds)
-    except subprocess.TimeoutExpired:
-        terminate_process_group(process)
-        raise
-    return subprocess.CompletedProcess(
-        arguments,
-        process.returncode,
-        stdout,
-        stderr,
-    )
+        try:
+            process = subprocess.Popen(
+                arguments,
+                cwd=cwd,
+                env=environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                start_new_session=os.name == "posix",
+            )
+            if pending_signal is not None:
+                tearing_down = True
+                propagate_command_signal(pending_signal)
+            stdout, stderr = process.communicate(timeout=timeout_seconds)
+            result = subprocess.CompletedProcess(
+                arguments,
+                process.returncode,
+                stdout,
+                stderr,
+            )
+            finalizing = True
+            return result
+        except BaseException:
+            tearing_down = True
+            finalizing = True
+            raise
+    finally:
+        finalizing = True
+        try:
+            if process is not None:
+                terminate_process_group_uninterruptibly(process)
+        finally:
+            for signum, previous_handler in previous_handlers.items():
+                signal.signal(signum, previous_handler)
+        if pending_signal is not None:
+            propagate_command_signal(pending_signal)
 
 
 def decode_process_output(
