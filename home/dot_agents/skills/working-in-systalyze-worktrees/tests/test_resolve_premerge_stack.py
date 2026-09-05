@@ -528,6 +528,33 @@ os.execlp(
         self.assertEqual(git(self.consumer, "status", "--short"), status_before)
         self.assertEqual(git(self.consumer, "rev-parse", "HEAD"), head_before)
 
+    def test_surface_names_and_refs_are_derived_from_manifest(self) -> None:
+        product_name = "product-foundation"
+        product_ref = "refs/heads/ivan/stack-tips/product-foundation"
+        tooling_name = "tooling-environment"
+        tooling_ref = "refs/heads/ivan/stack-tips/tooling-environment"
+        git(self.remote, "update-ref", product_ref, self.grounding)
+        git(self.remote, "update-ref", tooling_ref, self.local_dev)
+
+        document = self.manifest_document([str(self.remote)])
+        surfaces = cast(list[dict[str, object]], document["surfaces"])
+        surfaces[0]["name"] = product_name
+        surfaces[0]["ref"] = product_ref
+        surfaces[1]["name"] = tooling_name
+        surfaces[1]["ref"] = tooling_ref
+        relationship = cast(list[dict[str, object]], document["relationships"])[0]
+        relationship["left"] = product_name
+        relationship["right"] = tooling_name
+        self.write_manifest_document(document)
+
+        result = self.resolve()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        resolved = json.loads(result.stdout)
+        self.assertEqual(set(resolved["surfaces"]), {product_name, tooling_name})
+        self.assertEqual(resolved["surfaces"][product_name]["role"], "product-base")
+        self.assertEqual(resolved["surfaces"][tooling_name]["role"], "qa-overlay")
+
     def test_remote_name_beginning_with_dash_is_not_parsed_as_an_option(self) -> None:
         git(self.consumer, "remote", "rename", "--", "origin", "-fixture")
 
@@ -1741,14 +1768,6 @@ os.execlp(
             "product-base"
         )
 
-        swapped_roles = self.manifest_document(remote_urls)
-        cast(list[dict[str, object]], swapped_roles["surfaces"])[0]["role"] = (
-            "qa-overlay"
-        )
-        cast(list[dict[str, object]], swapped_roles["surfaces"])[1]["role"] = (
-            "product-base"
-        )
-
         tag_ref = self.manifest_document(remote_urls)
         cast(list[dict[str, object]], tag_ref["surfaces"])[1]["ref"] = (
             "refs/tags/dev-tooling"
@@ -1790,7 +1809,6 @@ os.execlp(
         for name, document in (
             ("unknown key", unknown_key),
             ("duplicate role", duplicate_role),
-            ("swapped roles", swapped_roles),
             ("tag ref", tag_ref),
             ("unsupported relationship", unsupported_relationship),
             ("non-string relationship name", nonstring_relationship_name),

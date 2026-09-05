@@ -61,10 +61,6 @@ OPENSSL_OVERRIDE_ENVIRONMENT_VARIABLES = (
     "OPENSSL_ENGINES",
     "OPENSSL_MODULES",
 )
-EXPECTED_SURFACE_ROLES = {
-    "grounding-docs": "product-base",
-    "dev-tooling": "qa-overlay",
-}
 
 
 class ContractError(Exception):
@@ -982,7 +978,6 @@ def validate_surfaces(surfaces: object) -> set[str]:
     names: set[str] = set()
     roles: set[str] = set()
     refs: set[str] = set()
-    roles_by_name: dict[str, str] = {}
     for surface in surfaces:
         if not isinstance(surface, dict) or set(surface) != {"name", "role", "ref"}:
             raise ContractError("MANIFEST_INVALID")
@@ -1000,12 +995,8 @@ def validate_surfaces(surfaces: object) -> set[str]:
         names.add(name)
         roles.add(role)
         refs.add(ref)
-        roles_by_name[name] = role
 
-    if (
-        roles != {"product-base", "qa-overlay"}
-        or roles_by_name != EXPECTED_SURFACE_ROLES
-    ):
+    if roles != {"product-base", "qa-overlay"}:
         raise ContractError("MANIFEST_INVALID")
     return names
 
