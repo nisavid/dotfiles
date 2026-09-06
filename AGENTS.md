@@ -16,6 +16,8 @@ The five canonical triage labels, verbatim: `needs-triage`, `needs-info`, `ready
 
 Multi-context: root `CONTEXT-MAP.md` names each context and links its `CONTEXT.md` under `docs/<context>/`; system-wide ADRs live under `docs/adr/`. The map lists in-repo contexts only. See `docs/agents/domain.md`.
 
+When introducing or revising Cryptosacristy or Codiquarium domain concepts in this repository's design work, follow the [shared domain naming convention](docs/research/CRYPTO_RELEASE_OPS_NAMING.md#domain-naming-convention).
+
 ## Git and validation
 
 This is a personal `nisavid` project. Use `Ivan D Vasin <ivan@nisavid.io>` for Git work and the `nisavid` GitHub account for repository mutations. Prefix branches with `ivan/`. Use Conventional Commits for commits and pull request titles; `cog.toml` and the repository hooks enforce the policy.
