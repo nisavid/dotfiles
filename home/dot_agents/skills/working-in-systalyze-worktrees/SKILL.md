@@ -21,6 +21,9 @@ While `references/premerge-stack.json` exists, it is the sole source of the temp
 
 ```sh
 (
+  DEVELOPER_DIR= \
+  SDKROOT= \
+  TOOLCHAINS= \
   LD_AUDIT= \
   LD_LIBRARY_PATH=/dev/null \
   LD_PRELOAD= \
@@ -41,6 +44,9 @@ While `references/premerge-stack.json` exists, it is the sole source of the temp
 import os
 
 startup_environment_variables = (
+    "DEVELOPER_DIR",
+    "SDKROOT",
+    "TOOLCHAINS",
     "LD_AUDIT",
     "LD_LIBRARY_PATH",
     "LD_PRELOAD",
@@ -77,7 +83,7 @@ runpy.run_path(resolver, run_name="__main__")
 )
 ```
 
-The guarded assignment-only command runs in a subshell, gives every inherited listed dynamic-loader and OpenSSL provider or engine configuration override an inert value, and prevents the first external process from starting if any assignment fails. Isolated Python removes the variables before importing anything beyond `os`. Because the launcher does not call shell `unset` or `exec`, imported functions with those names cannot intercept cleanup or dispatch. Python then derives the installed skill path from the account record rather than ambient `HOME`, restores that account home for the resolver, and rejects any listed override that remains. The resolver strips those overrides plus Git repository-layout, shallow-file, TLS key-log, and OpenSSH security-key helper and provider overrides from every child command, then snapshots repository-local plus enabled per-worktree Git configuration. It verifies the selected remote's raw `remote.<name>.url` entries from that snapshot without applying `url.*.insteadOf` rewrites. HTTPS Git reads discard checkout-provided credential configuration and authorization headers, use the active host token from the pinned GitHub CLI only for the verified URL, disable redirects and credential-bearing traces, and reject cookie persistence. The resolver uses only its pinned Git and GitHub CLI installations. If either is unavailable, stop rather than substituting an executable found through `PATH`. For SSH remotes it also rejects caller-provided SSH arguments and configuration; use the trusted bare system SSH command or stop.
+The guarded assignment-only command runs in a subshell, gives every inherited listed Apple tool-selection, dynamic-loader, and OpenSSL provider or engine configuration override an inert value, and prevents the first external process from starting if any assignment fails. On macOS, this prevents `/usr/bin/python3` from being redirected through a caller-selected developer directory, SDK, or toolchain. Isolated Python removes the variables before importing anything beyond `os`. Because the launcher does not call shell `unset` or `exec`, imported functions with those names cannot intercept cleanup or dispatch. Python then derives the installed skill path from the account record rather than ambient `HOME`, restores that account home for the resolver, and rejects any listed override that remains. The resolver strips those overrides plus Git repository-layout, shallow-file, TLS key-log, and OpenSSH security-key helper and provider overrides from every child command, then snapshots repository-local plus enabled per-worktree Git configuration. It verifies the selected remote's raw `remote.<name>.url` entries from that snapshot without applying `url.*.insteadOf` rewrites. HTTPS Git reads discard checkout-provided credential configuration and authorization headers, use the active host token from the pinned GitHub CLI only for the verified URL, disable redirects and credential-bearing traces, and reject cookie persistence. The resolver uses only its pinned Git and GitHub CLI installations. If either is unavailable, stop rather than substituting an executable found through `PATH`. For SSH remotes it also rejects caller-provided SSH arguments and configuration, disables host-key updates, and uses the trusted bare system SSH command or stops.
 
 The resolver binds fresh aliases to immutable OIDs and one live PR head each, verifies their required common history, and reports current containment in both directions. A missing, stale, structurally inconsistent, concurrently moved, or unexpectedly rewritten alias is a stop condition. Report the observed refs and OIDs and coordinate with the owning stack task. Do not substitute ordinary PR branches, cached OIDs, remembered PR numbers, or a previously working local tree.
 

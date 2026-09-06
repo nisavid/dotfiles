@@ -36,8 +36,11 @@ def run(
     cwd: Path,
     check: bool = True,
     environment_overrides: dict[str, str] | None = None,
+    environment_removals: tuple[str, ...] = (),
 ) -> subprocess.CompletedProcess[str]:
     environment = os.environ.copy()
+    for variable in environment_removals:
+        environment.pop(variable, None)
     for variable in tuple(environment):
         if variable in {
             "GIT_CONFIG",
@@ -451,6 +454,7 @@ os.execlp(
         late_alternates: tuple[Path, str] | None = None,
         missing_gh: bool = False,
         path_prefix: Path | None = None,
+        preserve_apple_toolchain_environment: bool = False,
     ) -> subprocess.CompletedProcess[str]:
         self.fake_gh_count.unlink(missing_ok=True)
         self.fake_gh_arguments.unlink(missing_ok=True)
@@ -537,6 +541,11 @@ os.execlp(
                 cwd=repo or self.consumer,
                 check=False,
                 environment_overrides=environment,
+                environment_removals=(
+                    ()
+                    if preserve_apple_toolchain_environment
+                    else ("DEVELOPER_DIR", "SDKROOT", "TOOLCHAINS")
+                ),
             )
         finally:
             if missing_gh and disabled_gh.exists():
@@ -811,6 +820,25 @@ os.execlp(
             "REMOTE_FETCH_REFSPEC_UNSUPPORTED",
         )
 
+    def test_rejects_remote_name_that_cannot_form_tracking_refs(self) -> None:
+        resolver = load_resolver_module()
+        remote_name = "origin/../escape"
+        config_snapshot = (
+            (
+                f"remote.{remote_name}.fetch",
+                f"+refs/heads/*:refs/remotes/{remote_name}/*",
+            ),
+        )
+
+        with self.assertRaises(resolver.ContractError) as raised:
+            resolver.verify_repository_state(
+                self.consumer,
+                remote_name,
+                config_snapshot,
+            )
+
+        self.assertEqual(raised.exception.code, "REMOTE_NAME_INVALID")
+
     def test_rejects_fetch_mapping_from_case_distinct_remote(self) -> None:
         git(self.consumer, "config", "--unset-all", "remote.origin.fetch")
         git(
@@ -1073,6 +1101,39 @@ os.execlp(
             ),
         )
 
+    def test_apple_toolchain_override_set_matches_launcher_contract(self) -> None:
+        resolver = load_resolver_module()
+
+        self.assertEqual(
+            resolver.APPLE_TOOLCHAIN_OVERRIDE_ENVIRONMENT_VARIABLES,
+            (
+                "DEVELOPER_DIR",
+                "SDKROOT",
+                "TOOLCHAINS",
+            ),
+        )
+
+    def test_rejects_unsanitized_apple_toolchain_environment_before_commands(
+        self,
+    ) -> None:
+        for variable in ("DEVELOPER_DIR", "SDKROOT", "TOOLCHAINS"):
+            with (
+                self.subTest(variable=variable),
+                mock.patch.dict(
+                    os.environ,
+                    {variable: "/private/tmp/checkout-selected-toolchain"},
+                    clear=False,
+                ),
+            ):
+                result = self.resolve(preserve_apple_toolchain_environment=True)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(
+                self.error_code(result),
+                "APPLE_TOOLCHAIN_ENVIRONMENT_UNSUPPORTED",
+            )
+            self.assertFalse(self.fake_gh_arguments.exists())
+
     def test_child_processes_clear_dynamic_loader_environment(self) -> None:
         resolver = load_resolver_module()
         completed = subprocess.CompletedProcess(
@@ -1157,6 +1218,42 @@ os.execlp(
             & child_environment.keys()
         )
         self.assertEqual(child_environment["OPENSSL_TRACE"], "diagnostic")
+
+    def test_child_processes_clear_apple_toolchain_environment(self) -> None:
+        resolver = load_resolver_module()
+        completed = subprocess.CompletedProcess(
+            ["/usr/bin/true"],
+            0,
+            b"",
+            b"",
+        )
+        with (
+            mock.patch.dict(
+                os.environ,
+                {
+                    "DEVELOPER_DIR": "/private/tmp/checkout-selected-developer",
+                    "SDKROOT": "/private/tmp/checkout-selected-sdk",
+                    "TOOLCHAINS": "checkout-selected-toolchain",
+                },
+                clear=False,
+            ),
+            mock.patch.object(
+                resolver,
+                "run_process_bytes",
+                return_value=completed,
+            ) as run_process_bytes,
+        ):
+            resolver.run(
+                ["/usr/bin/true"],
+                cwd=self.consumer,
+                failure_code="FIXTURE_FAILED",
+            )
+
+        child_environment = run_process_bytes.call_args.kwargs["environment"]
+        self.assertFalse(
+            set(resolver.APPLE_TOOLCHAIN_OVERRIDE_ENVIRONMENT_VARIABLES)
+            & child_environment.keys()
+        )
 
     def test_non_ssh_network_operation_blocks_late_ssh_rewrite(self) -> None:
         resolver = load_resolver_module()
@@ -1543,6 +1640,7 @@ os.execlp(
                 option_index = arguments.index("-o")
                 self.assertEqual(arguments[option_index + 1], "BatchMode=yes")
                 self.assertIn("StrictHostKeyChecking=yes", arguments)
+                self.assertIn("UpdateHostKeys=no", arguments)
                 self.assertIn("ProxyCommand=none", arguments)
                 self.assertIn("ProxyJump=none", arguments)
                 self.assertIn("HostName=fixture", arguments)
@@ -3568,9 +3666,25 @@ os.execlp(
         environment["PYTHONPATH"] = os.pathsep.join(
             [str(site_startup), str(import_startup)]
         )
+        environment.update(
+            {
+                "DEVELOPER_DIR": "",
+                "SDKROOT": "",
+                "TOOLCHAINS": "",
+            }
+        )
+        bootstrap = (
+            "import os\n"
+            "for variable in ('DEVELOPER_DIR', 'SDKROOT', 'TOOLCHAINS'):\n"
+            "    os.environ.pop(variable, None)\n"
+            "import runpy\n"
+            "import sys\n"
+            f"sys.argv = [{str(RESOLVER)!r}, '--help']\n"
+            f"runpy.run_path({str(RESOLVER)!r}, run_name='__main__')\n"
+        )
 
         result = subprocess.run(
-            ["/usr/bin/python3", "-I", "-S", str(RESOLVER), "--help"],
+            ["/usr/bin/python3", "-I", "-S", "-c", bootstrap],
             cwd=self.consumer,
             env=environment,
             capture_output=True,
@@ -3709,8 +3823,7 @@ os.execlp(
         self.assertIn("--filter=tree:0", git_command.call_args_list[0].args)
         self.assertFalse(
             any(
-                isinstance(argument, str)
-                and argument.startswith("--negotiation-tip=")
+                isinstance(argument, str) and argument.startswith("--negotiation-tip=")
                 for argument in git_command.call_args_list[0].args
             )
         )
@@ -4016,6 +4129,7 @@ os.execl("/bin/sh", "sh", "-c", arguments[index + 1])
                     str(value),
                     cwd=self.consumer,
                     check=False,
+                    environment_removals=("DEVELOPER_DIR", "SDKROOT", "TOOLCHAINS"),
                 )
 
                 self.assertNotEqual(result.returncode, 0)

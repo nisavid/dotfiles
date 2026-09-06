@@ -66,6 +66,11 @@ OPENSSL_OVERRIDE_ENVIRONMENT_VARIABLES = (
     "OPENSSL_ENGINES",
     "OPENSSL_MODULES",
 )
+APPLE_TOOLCHAIN_OVERRIDE_ENVIRONMENT_VARIABLES = (
+    "DEVELOPER_DIR",
+    "SDKROOT",
+    "TOOLCHAINS",
+)
 
 
 class ContractError(Exception):
@@ -299,8 +304,7 @@ def run_process_bytes(
                 )
             )
             if process is not None and (
-                communication_timed_out
-                or complete_cleanup_action(process.poll) is None
+                communication_timed_out or complete_cleanup_action(process.poll) is None
             ):
                 terminate_process_group_uninterruptibly(process)
         finally:
@@ -422,6 +426,11 @@ def remove_openssl_environment(environment: dict[str, str]) -> None:
         environment.pop(variable, None)
 
 
+def remove_apple_toolchain_environment(environment: dict[str, str]) -> None:
+    for variable in APPLE_TOOLCHAIN_OVERRIDE_ENVIRONMENT_VARIABLES:
+        environment.pop(variable, None)
+
+
 def verify_dynamic_loader_environment() -> None:
     configured = sorted(
         variable
@@ -444,6 +453,19 @@ def verify_openssl_environment() -> None:
     if configured:
         raise ContractError(
             "OPENSSL_ENVIRONMENT_UNSUPPORTED",
+            settings=configured,
+        )
+
+
+def verify_apple_toolchain_environment() -> None:
+    configured = sorted(
+        variable
+        for variable in APPLE_TOOLCHAIN_OVERRIDE_ENVIRONMENT_VARIABLES
+        if variable in os.environ
+    )
+    if configured:
+        raise ContractError(
+            "APPLE_TOOLCHAIN_ENVIRONMENT_UNSUPPORTED",
             settings=configured,
         )
 
@@ -847,6 +869,8 @@ def ssh_injected_arguments(
                     "-o",
                     "StrictHostKeyChecking=yes",
                     "-o",
+                    "UpdateHostKeys=no",
+                    "-o",
                     "ProxyCommand=none",
                     "-o",
                     "ProxyJump=none",
@@ -998,6 +1022,7 @@ def run(
     environment = os.environ.copy()
     remove_dynamic_loader_environment(environment)
     remove_openssl_environment(environment)
+    remove_apple_toolchain_environment(environment)
     for variable in (
         "GIT_DIR",
         "GIT_EXEC_PATH",
@@ -1421,6 +1446,18 @@ def verify_repository_state(
     remote: str,
     config_snapshot: GitConfigSnapshot,
 ) -> None:
+    tracking_ref = f"refs/remotes/{remote}/__premerge_stack_alias__"
+    valid_tracking_ref = git(
+        repo,
+        "check-ref-format",
+        tracking_ref,
+        failure_code="REMOTE_NAME_VALIDATION_FAILED",
+        allowed_returncodes=(0, 1),
+        git_config_snapshot=(),
+    )
+    if valid_tracking_ref.returncode != 0:
+        raise ContractError("REMOTE_NAME_INVALID")
+
     reject_alternate_object_database(resolve_git_path(repo, "objects"))
     object_format = git(
         repo,
@@ -2054,6 +2091,7 @@ def main() -> int:
     try:
         verify_dynamic_loader_environment()
         verify_openssl_environment()
+        verify_apple_toolchain_environment()
         document = resolve(parse_arguments())
     except ContractError as error:
         print(
