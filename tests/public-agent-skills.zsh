@@ -102,12 +102,14 @@ test_systalyze_worktrees() {
 
   assert_contains "$skill" 'sole source of the temporary grounding-docs and dev-tooling stack alias names' \
     'Systalyze alias names must have one policy source'
-  assert_contains "$skill" 'DEVELOPER_DIR= \' \
-    'Systalyze resolver invocation must neutralize Apple tool selection before process startup'
-  assert_contains "$skill" 'SDKROOT= \' \
-    'Systalyze resolver invocation must neutralize Apple SDK selection before process startup'
-  assert_contains "$skill" 'TOOLCHAINS= \' \
-    'Systalyze resolver invocation must neutralize Apple toolchain selection before process startup'
+  assert_contains "$skill" '/usr/bin/env \' \
+    'Systalyze resolver invocation must use a pinned environment scrubber before Python'
+  assert_contains "$skill" '-u DEVELOPER_DIR \' \
+    'Systalyze resolver invocation must remove Apple tool selection before Python starts'
+  assert_contains "$skill" '-u SDKROOT \' \
+    'Systalyze resolver invocation must remove Apple SDK selection before Python starts'
+  assert_contains "$skill" '-u TOOLCHAINS \' \
+    'Systalyze resolver invocation must remove Apple toolchain selection before Python starts'
   assert_contains "$skill" 'LD_AUDIT= \' \
     'Systalyze resolver invocation must neutralize loader injection before process startup'
   assert_contains "$skill" 'LD_LIBRARY_PATH=/dev/null \' \
@@ -130,12 +132,14 @@ test_systalyze_worktrees() {
     'Systalyze resolver invocation must pass the required arguments after the isolated bootstrap'
   assert_contains "$reference" 'LD_AUDIT= \' \
     'Systalyze resolver procedure must neutralize loader injection before process startup'
-  assert_contains "$reference" 'DEVELOPER_DIR= \' \
-    'Systalyze resolver procedure must neutralize Apple tool selection before process startup'
-  assert_contains "$reference" 'SDKROOT= \' \
-    'Systalyze resolver procedure must neutralize Apple SDK selection before process startup'
-  assert_contains "$reference" 'TOOLCHAINS= \' \
-    'Systalyze resolver procedure must neutralize Apple toolchain selection before process startup'
+  assert_contains "$reference" '/usr/bin/env \' \
+    'Systalyze resolver procedure must use a pinned environment scrubber before Python'
+  assert_contains "$reference" '-u DEVELOPER_DIR \' \
+    'Systalyze resolver procedure must remove Apple tool selection before Python starts'
+  assert_contains "$reference" '-u SDKROOT \' \
+    'Systalyze resolver procedure must remove Apple SDK selection before Python starts'
+  assert_contains "$reference" '-u TOOLCHAINS \' \
+    'Systalyze resolver procedure must remove Apple toolchain selection before Python starts'
   assert_contains "$reference" 'LD_LIBRARY_PATH=/dev/null \' \
     'Systalyze resolver procedure must clear dynamic-loader injection before starting Python'
   assert_contains "$reference" 'OPENSSL_CONF=/dev/null \' \
@@ -178,11 +182,11 @@ test_systalyze_worktrees() {
     fail 'Systalyze resolver launcher must stop before process startup when OpenSSL neutralization fails'
   launcher_output="$(
     /bin/bash --noprofile --norc -c \
-      'export DEVELOPER_DIR=/private/tmp/not-a-developer-dir; readonly DEVELOPER_DIR; ( DEVELOPER_DIR= LD_PRELOAD= OPENSSL_CONF=/dev/null && /usr/bin/python3 -I -S -c '\''print("launched")'\'' )' \
+      'export DEVELOPER_DIR=/private/tmp/not-a-developer-dir SDKROOT=/private/tmp/not-an-sdk TOOLCHAINS=not-a-toolchain; readonly DEVELOPER_DIR SDKROOT TOOLCHAINS; ( LD_PRELOAD= OPENSSL_CONF=/dev/null && /usr/bin/env -u DEVELOPER_DIR -u SDKROOT -u TOOLCHAINS -u LD_PRELOAD -u OPENSSL_CONF /usr/bin/python3 -I -S -c '\''import os; print("clean" if "DEVELOPER_DIR" not in os.environ and os.environ.get("SDKROOT") != "/private/tmp/not-an-sdk" and "TOOLCHAINS" not in os.environ else "tainted")'\'' )' \
       2>/dev/null || :
   )"
-  [[ -z "$launcher_output" ]] || \
-    fail 'Systalyze resolver launcher must stop before process startup when Apple tool neutralization fails'
+  [[ "$launcher_output" == 'clean' ]] || \
+    fail 'Systalyze resolver launcher must remove readonly Apple tool selection before Python starts'
   launcher_output="$(
     /usr/bin/env \
       'BASH_FUNC_unset%%=() { printf "forged-unset\n"; }' \
@@ -194,9 +198,9 @@ test_systalyze_worktrees() {
       LD_LIBRARY_PATH=/private/tmp/not-a-library-path \
       OPENSSL_CONF=/private/tmp/not-a-config \
       /bin/bash --noprofile --norc -c \
-      'type -t unset; type -t exec; ( DEVELOPER_DIR= SDKROOT= TOOLCHAINS= LD_PRELOAD= LD_LIBRARY_PATH=/dev/null OPENSSL_CONF=/dev/null && /usr/bin/python3 -I -S -c "$1" )' \
+      'type -t unset; type -t exec; ( LD_PRELOAD= LD_LIBRARY_PATH=/dev/null OPENSSL_CONF=/dev/null && /usr/bin/env -u DEVELOPER_DIR -u SDKROOT -u TOOLCHAINS -u LD_PRELOAD -u LD_LIBRARY_PATH -u OPENSSL_CONF /usr/bin/python3 -I -S -c "$1" )' \
       launcher \
-      'import os; expected = {"DEVELOPER_DIR": "", "TOOLCHAINS": "", "LD_PRELOAD": "", "LD_LIBRARY_PATH": "/dev/null", "OPENSSL_CONF": "/dev/null"}; startup = (*expected, "SDKROOT"); clean = all(os.environ.get(key) == value for key, value in expected.items()) and os.environ.get("SDKROOT") != "/private/tmp/not-an-sdk"; [os.environ.pop(key, None) for key in startup]; print("clean" if clean and all(key not in os.environ for key in startup) else "tainted")' \
+      'import os; startup = ("DEVELOPER_DIR", "SDKROOT", "TOOLCHAINS", "LD_PRELOAD", "LD_LIBRARY_PATH", "OPENSSL_CONF"); clean = all(key not in os.environ for key in startup if key != "SDKROOT") and os.environ.get("SDKROOT") != "/private/tmp/not-an-sdk"; [os.environ.pop(key, None) for key in startup]; print("clean" if clean and all(key not in os.environ for key in startup) else "tainted")' \
       2>/dev/null
   )"
   [[ "$launcher_output" == $'function\nfunction\nclean' ]] || \

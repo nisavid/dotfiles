@@ -8,9 +8,6 @@ Run this block before branch preparation and again immediately before product pu
 
 ```sh
 (
-  DEVELOPER_DIR= \
-  SDKROOT= \
-  TOOLCHAINS= \
   LD_AUDIT= \
   LD_LIBRARY_PATH=/dev/null \
   LD_PRELOAD= \
@@ -27,7 +24,27 @@ Run this block before branch preparation and again immediately before product pu
   OPENSSL_CONF_INCLUDE=/dev/null \
   OPENSSL_ENGINES=/dev/null \
   OPENSSL_MODULES=/dev/null &&
-  /usr/bin/python3 -I -S -c '
+  /usr/bin/env \
+    -u DEVELOPER_DIR \
+    -u SDKROOT \
+    -u TOOLCHAINS \
+    -u LD_AUDIT \
+    -u LD_LIBRARY_PATH \
+    -u LD_PRELOAD \
+    -u DYLD_FALLBACK_FRAMEWORK_PATH \
+    -u DYLD_FALLBACK_LIBRARY_PATH \
+    -u DYLD_FRAMEWORK_PATH \
+    -u DYLD_INSERT_LIBRARIES \
+    -u DYLD_LIBRARY_PATH \
+    -u DYLD_ROOT_PATH \
+    -u DYLD_SHARED_CACHE_DIR \
+    -u DYLD_VERSIONED_FRAMEWORK_PATH \
+    -u DYLD_VERSIONED_LIBRARY_PATH \
+    -u OPENSSL_CONF \
+    -u OPENSSL_CONF_INCLUDE \
+    -u OPENSSL_ENGINES \
+    -u OPENSSL_MODULES \
+    /usr/bin/python3 -I -S -c '
 import os
 
 startup_environment_variables = (
@@ -70,7 +87,7 @@ runpy.run_path(resolver, run_name="__main__")
 )
 ```
 
-The guarded assignment-only command runs in a subshell, gives every inherited listed Apple tool-selection, dynamic-loader, and OpenSSL provider or engine configuration override an inert value, and prevents the first external process from starting if any assignment fails. On macOS, this prevents `/usr/bin/python3` from being redirected through a caller-selected developer directory, SDK, or toolchain. Isolated Python removes the variables before importing anything beyond `os`. Because the launcher does not call shell `unset` or `exec`, imported functions with those names cannot intercept cleanup or dispatch. Python then derives the installed skill path from the account record rather than ambient `HOME`, restores that account home for the resolver, and rejects any listed override that remains. The resolver strips those overrides from every child command. The absolute interpreter and both isolation flags are part of the trust boundary; do not substitute an activated or PATH-resolved runtime. The resolver pins Git to `/usr/bin/git` and accepts GitHub CLI only from `/opt/homebrew/bin/gh`, `/usr/local/bin/gh`, or `/usr/bin/gh`; it never follows ambient `PATH` for either command. Git 2.29 or newer and a SHA-1 checkout object format are required; preserving `FETCH_HEAD` depends on `git fetch --no-write-fetch-head`, and the temporary aliases are SHA-1 OIDs. SSH remotes accept only the bare trusted system executable at `/usr/bin/ssh`; the resolver supplies `/dev/null` as its user configuration, disables host-key updates, and rejects caller-provided wrappers, arguments, or configuration files.
+The guarded command runs in a subshell, gives every inherited listed dynamic-loader and OpenSSL provider or engine configuration override an inert value, and prevents the first external process from starting if any assignment fails. The pinned `/usr/bin/env` process removes those overrides plus the Apple developer directory, SDK, and toolchain selectors before starting `/usr/bin/python3`. This prevents the interpreter from being redirected through caller-selected Apple tooling and keeps loader or OpenSSL configuration out of Python startup. Isolated Python removes the same variables again before importing anything beyond `os`, including any system-selected `SDKROOT` supplied while the interpreter starts. Because the launcher does not call shell `unset` or `exec`, imported functions with those names cannot intercept cleanup or dispatch. Python then derives the installed skill path from the account record rather than ambient `HOME`, restores that account home for the resolver, and rejects any listed override that remains. The resolver strips those overrides from every child command. The absolute environment scrubber, interpreter, and both isolation flags are part of the trust boundary; do not substitute an activated or PATH-resolved runtime. The resolver pins Git to `/usr/bin/git` and accepts GitHub CLI only from `/opt/homebrew/bin/gh`, `/usr/local/bin/gh`, or `/usr/bin/gh`; it never follows ambient `PATH` for either command. Git 2.29 or newer and a SHA-1 checkout object format are required; preserving `FETCH_HEAD` depends on `git fetch --no-write-fetch-head`, and the temporary aliases are SHA-1 OIDs. SSH remotes accept only the bare trusted system executable at `/usr/bin/ssh`; the resolver supplies `/dev/null` as its user configuration, disables host-key updates, and rejects caller-provided wrappers, arguments, or configuration files.
 
 The resolver:
 
