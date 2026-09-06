@@ -240,7 +240,8 @@ if [[ -n ${FD_AUDIT_TARGET:-} ]]; then
       (( ++matching_fds ))
   done
   print -r -- "readiness:$matching_fds" >>$FD_AUDIT_LOG
-  (( matching_fds == 0 )) || exit 96
+  # stderr is intentional; secret-exec opens its escape descriptor afterward.
+  (( matching_fds == 1 )) || exit 96
 fi
 EOF
 cat > "$fast_local_bin/pass-cli" <<'EOF'
@@ -312,7 +313,7 @@ set -e
 (( fd_audit_status == 0 )) ||
   fail "provider and final consumer scenario must succeed: status=$fd_audit_status error=$(<"$fd_audit_target")"
 if (( fd_audit_enabled )); then
-  [[ $(<"$fd_audit_log") == $'readiness:0\nprovider:2\nconsumer:1' ]] ||
+  [[ $(<"$fd_audit_log") == $'readiness:1\nprovider:2\nconsumer:1' ]] ||
     fail 'provider and final consumer must not inherit the escape diagnostic descriptor'
   cp -- "$fast_exit" "$fast_local_bin/proton-pass-ensure-ready"
 fi
