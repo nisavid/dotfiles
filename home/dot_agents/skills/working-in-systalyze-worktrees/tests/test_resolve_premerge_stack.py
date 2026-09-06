@@ -20,6 +20,13 @@ from unittest import mock
 
 SKILL_DIR = Path(__file__).resolve().parents[1]
 RESOLVER = SKILL_DIR / "scripts" / "resolve_premerge_stack.py"
+FIXTURE_TLS_TRUST_ANCHOR_ENVIRONMENT_VARIABLES = (
+    "CURL_CA_BUNDLE",
+    "GIT_SSL_CAINFO",
+    "GIT_SSL_CAPATH",
+    "SSL_CERT_DIR",
+    "SSL_CERT_FILE",
+)
 
 
 def load_resolver_module() -> ModuleType:
@@ -39,7 +46,10 @@ def run(
     environment_removals: tuple[str, ...] = (),
 ) -> subprocess.CompletedProcess[str]:
     environment = os.environ.copy()
-    for variable in environment_removals:
+    for variable in (
+        *FIXTURE_TLS_TRUST_ANCHOR_ENVIRONMENT_VARIABLES,
+        *environment_removals,
+    ):
         environment.pop(variable, None)
     for variable in tuple(environment):
         if variable in {
@@ -333,6 +343,35 @@ sys.stdout.write(Path(source).read_text(encoding="utf-8"))
         self.assertEqual(ambient_result.stdout, "")
         self.assertEqual(override_result.stdout.strip(), "true")
 
+    def test_fixture_commands_ignore_ambient_tls_trust_anchors(self) -> None:
+        trust_anchors = {
+            "CURL_CA_BUNDLE": "/ambient/curl-ca-bundle",
+            "GIT_SSL_CAINFO": "/ambient/git-ca-bundle",
+            "GIT_SSL_CAPATH": "/ambient/git-ca-directory",
+            "SSL_CERT_DIR": "/ambient/ca-directory",
+            "SSL_CERT_FILE": "/ambient/ca-bundle",
+        }
+        probe = (
+            "import json,os; "
+            "print(json.dumps({name: os.environ.get(name) for name in "
+            f"{tuple(trust_anchors)!r}}}, sort_keys=True))"
+        )
+        with mock.patch.dict(os.environ, trust_anchors, clear=False):
+            ambient_result = run(sys.executable, "-c", probe, cwd=self.consumer)
+            override_result = run(
+                sys.executable,
+                "-c",
+                probe,
+                cwd=self.consumer,
+                environment_overrides=trust_anchors,
+            )
+
+        self.assertEqual(
+            json.loads(ambient_result.stdout),
+            {name: None for name in trust_anchors},
+        )
+        self.assertEqual(json.loads(override_result.stdout), trust_anchors)
+
     @staticmethod
     def manifest_document(remote_urls: list[str]) -> dict[str, object]:
         return {
@@ -455,6 +494,7 @@ os.execlp(
         missing_gh: bool = False,
         path_prefix: Path | None = None,
         preserve_apple_toolchain_environment: bool = False,
+        additional_environment: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
         self.fake_gh_count.unlink(missing_ok=True)
         self.fake_gh_arguments.unlink(missing_ok=True)
@@ -528,6 +568,8 @@ os.execlp(
                     "FIXTURE_GH_ALTERNATES_CONTENT": contents,
                 }
             )
+        if additional_environment is not None:
+            environment.update(additional_environment)
         disabled_gh = self.fake_gh.with_name("gh.disabled")
         if missing_gh:
             self.fake_gh.rename(disabled_gh)
@@ -1541,19 +1583,14 @@ os.execlp(
         ssh_calls = self.configure_ssh_remote()
 
         for variable in ("SSL_CERT_DIR", "SSL_CERT_FILE"):
-            with (
-                self.subTest(variable=variable),
-                mock.patch.dict(
-                    os.environ,
-                    {
+            with self.subTest(variable=variable):
+                result = self.resolve(
+                    additional_environment={
                         "FIXTURE_SSH_CALLS": str(ssh_calls),
                         "FIXTURE_SSH_REMOTE": str(self.remote),
                         variable: "/caller/controlled",
-                    },
-                    clear=False,
-                ),
-            ):
-                result = self.resolve()
+                    }
+                )
 
             self.assertNotEqual(result.returncode, 0)
             self.assertEqual(
