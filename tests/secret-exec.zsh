@@ -98,6 +98,8 @@ for latest_ready_reason in existing-session concurrent-repair repaired; do
 done
 rm -f -- "$latest_readiness_probe"
 test_process_fixture_run_signal_probe_mode
+zsh "$repo_root/tests/proton-pass-agent-readiness.zsh" >/dev/null ||
+  fail 'the agent readiness consumer/helper seam must pass'
 kill_audit_library=
 kill_audit_log=$test_dir/negative-pgid-kill-audit.log
 status_fragment_library=
@@ -987,7 +989,7 @@ set -e
 [[ ! -e $TARGET_MARKER ]] ||
   fail 'a locked native store must not start the selected consumer'
 [[ $locked_output ==
-  'secret-exec: the Proton Pass provider session is unavailable; unlock the native credential store and retry' ]] ||
+  'proton-pass-ensure-ready: the native bootstrap item is unavailable or locked' ]] ||
   fail 'a locked native store must produce one fixed actionable consumer error'
 grep -Fqx 'state=unavailable' "$status_file" ||
   fail 'a locked native store must leave value-free unavailable status'
@@ -1024,8 +1026,8 @@ for consumer_pid in $consumer_pids; do
     if [[ -s $concurrent_error_file ]]; then
       concurrent_error_marker=unexpected
       case $(<"$concurrent_error_file") in
-        'secret-exec: the Proton Pass provider session is unavailable; unlock the native credential store and retry')
-          concurrent_error_marker=provider-unavailable
+        proton-pass-ensure-ready:*)
+          concurrent_error_marker=readiness-failed
           ;;
         'secret-exec: timed out resolving CONTEXT7_API_KEY'|\
         'secret-exec: timed out resolving FIRECRAWL_API_KEY'|\
