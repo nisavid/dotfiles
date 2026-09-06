@@ -69,6 +69,10 @@ The first-party registry endpoints produced this point-in-time matrix:
 The compound coordinates are therefore viable only as a technical starting
 point. The bare package names are unsuitable for a cross-ecosystem release.
 
+The matrix records observations from the research date. Its links lead to live
+lookup endpoints, not archived responses. Recheck any coordinate before using
+it; this historical screen does not establish current availability.
+
 ### Bare executable conflicts
 
 The upstream Sigil build installs a target named `sigil` into the executable

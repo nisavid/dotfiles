@@ -70,12 +70,14 @@ protocol identifiers and semantics remain unchanged.
 
 Use the selected names in planning and documentation. The command-name findings
 do not hold up adoption. Repository provisioning and package publication remain
-separately scoped steps; their coordinates are unreserved.
+separately scoped steps. Check coordinate availability when performing those
+steps; the name screen neither reserves coordinates nor guarantees availability.
 
 The [Sigil/Canon screen](SIGIL_CANON_NAME_CLEARANCE.md) records findings about
 the earlier candidates, not clearance for this pair. Historical evidence and
 existing protocol identifiers retain their original names.
 
-Writ Bureau and the `writ` command remain future possibilities, separate from
-the selected **writ** domain term. Codiquarium's worker and documentation
-names remain open until needed.
+Revisit Writ Bureau and the `writ` command if a separate authorization, approval,
+dispatch, or actuation surface needs an identity. These are candidates for that
+future surface, separate from the selected **writ** domain term. Codiquarium's
+worker and documentation names remain open until needed.
