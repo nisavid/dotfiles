@@ -1,14 +1,11 @@
-# Cryptosacristy and Codiquarium naming
+# Sacrysty and Codiquary naming
 
-Cryptosacristy is the crypto-operations project. Codiquarium is the
+Sacrysty is the crypto-operations project. Codiquary is the
 release-operations project for authenticated software artifacts.
 
-**Decision date:** 2026-09-04
-
-**Status:** Names selected and retained, including `sacrypt` and `cophax`.
-The [2026-09-05 preliminary screen](CRYPTO_RELEASE_OPS_NAME_CLEARANCE.md)
-records existing uses and trademark similarities as non-blocking findings for
-this naming decision, not comprehensive legal clearance.
+The [accepted naming decision](https://github.com/nisavid/codiquary/issues/2#issuecomment-5565084063)
+selects the project, public operator, and command for each system. Worker and
+documentation names remain unassigned until those surfaces need names.
 
 ## Naming layers
 
@@ -16,16 +13,20 @@ Projects are institutions; public interfaces are personified operators;
 background workers are restrained functionaries; published documentation is
 a body of practice. Names apply to the surfaces the projects need.
 
-| Surface | Cryptosacristy | Codiquarium |
+| Surface | Sacrysty | Codiquary |
 | --- | --- | --- |
-| Project / institution | Cryptosacristy | Codiquarium |
-| Public operator | Cryptosacrist | Codophylax |
-| CLI/TUI command | `sacrypt` | `cophax` |
-| Background/internal workers, when applicable | Cryptostewards | Not yet selected |
-| Published documentation | Cryptopraxis | Not yet selected |
+| Project / institution | Sacrysty | Codiquary |
+| Public operator | Sacrystan | Codophylax |
+| CLI/TUI command | `sacryd` | `cophax` |
 
-`cophax` contracts **CO**do**PH**yl**AX** and is pronounced “co-fax.” The
-operator name applies across public interfaces; the command names the CLI/TUI.
+`sacryd` is pronounced “sacred.” `cophax` contracts **CO**do**PH**yl**AX** and
+is pronounced “co-fax.” The operator name applies across public interfaces;
+the command names the CLI/TUI.
+
+The repository coordinates are `nisavid/sacrysty` and `nisavid/codiquary`.
+Codiquary's Cargo package and library coordinate is `codiquary`. Sacrysty's
+implementation substrate and package/library coordinates remain open;
+selecting `sacryd` does not settle them.
 
 ## Domain naming convention
 
@@ -68,16 +69,17 @@ protocol identifiers and semantics remain unchanged.
 
 ## Clearance and adoption
 
-Use the selected names in planning and documentation. The command-name findings
-do not hold up adoption. Repository provisioning and package publication remain
-separately scoped steps. Check coordinate availability when performing those
-steps; the name screen neither reserves coordinates nor guarantees availability.
+Use the selected names in planning and documentation. Repository provisioning
+and package publication remain separately scoped steps. Check coordinate
+availability when performing those steps; selecting a name neither reserves
+coordinates nor guarantees availability.
 
-The [Sigil/Canon screen](SIGIL_CANON_NAME_CLEARANCE.md) records findings about
-the earlier candidates, not clearance for this pair. Historical evidence and
-existing protocol identifiers retain their original names.
+The [2026-09-05 preliminary screen](CRYPTO_RELEASE_OPS_NAME_CLEARANCE.md) and
+[Sigil/Canon screen](SIGIL_CANON_NAME_CLEARANCE.md) record findings about the
+names they examined, not comprehensive legal clearance or a new screen of
+the selected pair. Historical evidence and existing protocol identifiers
+retain their original names.
 
 Revisit Writ Bureau and the `writ` command if a separate authorization, approval,
 dispatch, or actuation surface needs an identity. These are candidates for that
-future surface, separate from the selected **writ** domain term. Codiquarium's
-worker and documentation names remain open until needed.
+future surface, separate from the selected **writ** domain term.

@@ -1,5 +1,11 @@
 # Cryptosacristy and Codiquarium name screen
 
+**Current naming:** The [selected Sacrysty and Codiquary names](CRYPTO_RELEASE_OPS_NAMING.md)
+supersede this screen's naming recommendations. The findings below remain
+historical evidence for the names screened, not clearance for the current names.
+
+## Historical disposition
+
 Retain the selected project, operator, and command names, including `sacrypt`
 and `cophax`. The small existing `sacrypt` project has no package in Arch's
 official repositories and is disregarded under the operator's stated criterion.
