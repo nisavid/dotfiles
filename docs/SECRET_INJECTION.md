@@ -63,6 +63,10 @@ non-symlinked, executable, owned by root or the current user, and not writable
 by its group or other users. Readiness status housekeeping also uses fixed
 system utility paths instead of ambient `PATH` resolution.
 
+When readiness fails, `secret-exec` preserves the readiness helper's fixed,
+value-free diagnostic. It does not replace an unknown, timeout, lock, login,
+verification, or native-store failure with inferred unlock guidance.
+
 When repair is needed, the helper serializes callers and classifies a second
 bounded readiness check from a private diagnostic file. A positively identified
 unauthenticated state proceeds directly to login. A positively identified
@@ -114,12 +118,18 @@ readiness without starting a second repair. The takeover path and the extended
 concurrent-wait path each remain below the 26-second per-call startup budget,
 including cleanup and bounded polling overhead. The helper logs out only when
 the provider reports the complete recognized invalidated-session diagnostic.
-One or more non-empty corresponding `pass-cli` main-command error records may
-frame a complete recognized absent or invalidated diagnostic. Every framing
-record must be either plain or use the canonical reset, dim, and red SGR
-decoration emitted by the supported CLI around its timestamp, severity, source
-path, separator, and colon-terminated line number. A diagnostic cannot mix the
-two forms. The recognized terminal diagnostic remains byte-exact and unstyled.
+The readiness and secret-resolution controllers disable Zsh background-job
+priority adjustment before creating their PTY sessions, so a denied
+`setpriority` operation cannot enter the private status channel.
+The complete recognized absent diagnostic may be immediately preceded by the
+exact unstyled `Command is not logout there is no session` record. One or more
+non-empty corresponding `pass-cli` main-command error records may otherwise
+frame a complete recognized absent or invalidated diagnostic. Every such
+framing record must be either plain or use the canonical reset, dim, and red
+SGR decoration emitted by the supported CLI around its timestamp, severity,
+source path, separator, and colon-terminated line number. A diagnostic cannot
+mix the two forms. The recognized terminal diagnostic remains byte-exact and
+unstyled.
 Empty framing, blank records, other controls or structured logs, arbitrary prefixes or
 suffixes, and diagnostic fragments remain unclassified. The forced local
 cleanup must succeed before login.

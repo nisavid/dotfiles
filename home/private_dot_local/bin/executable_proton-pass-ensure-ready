@@ -17,11 +17,13 @@ readonly PROTON_PASS_POLL_CENTISECONDS=1
 readonly PROTON_PASS_TERMINATION_GRACE_CENTISECONDS=10
 readonly PROTON_PASS_SCRIPT_DIR=${0:A:h}
 PROTON_PASS_ABSENT_DIAGNOSTIC='Error: This operation requires an authenticated client'
+PROTON_PASS_ABSENT_STATE_RECORD='Command is not logout there is no session'
 PROTON_PASS_INVALIDATED_DIAGNOSTIC='Your session has been invalidated and you have '
 PROTON_PASS_INVALIDATED_DIAGNOSTIC+='been logged out automatically.'
 PROTON_PASS_INVALIDATED_DIAGNOSTIC+=$'\n'
 PROTON_PASS_INVALIDATED_DIAGNOSTIC+='Please log in again with: pass login'
-readonly PROTON_PASS_ABSENT_DIAGNOSTIC PROTON_PASS_INVALIDATED_DIAGNOSTIC
+readonly PROTON_PASS_ABSENT_DIAGNOSTIC PROTON_PASS_ABSENT_STATE_RECORD
+readonly PROTON_PASS_INVALIDATED_DIAGNOSTIC
 typeset -g PROTON_PASS_ACTIVE_CHILD_NAME=
 typeset -gi PROTON_PASS_ACTIVE_CHILD_PGID=0
 typeset -gi PROTON_PASS_CHILD_SEQUENCE=0
@@ -105,6 +107,7 @@ cleanup_readiness_process() {
 
 start_bounded_child() {
   emulate -L zsh
+  unsetopt bg_nice
 
   local environment_name=$1
   local output_mode=$2
@@ -477,6 +480,10 @@ diagnostic_matches_state() {
   local expected=$2
   local state=$3
   [[ $diagnostic == "$expected" ]] && return 0
+  if [[ $state == absent &&
+    $diagnostic == "$PROTON_PASS_ABSENT_STATE_RECORD"$'\n'"$expected" ]]; then
+    return 0
+  fi
   [[ $diagnostic == *$'\n'"$expected" ]] || return 1
 
   local framing=${diagnostic%$'\n'"$expected"}

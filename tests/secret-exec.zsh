@@ -98,6 +98,8 @@ for latest_ready_reason in existing-session concurrent-repair repaired; do
 done
 rm -f -- "$latest_readiness_probe"
 test_process_fixture_run_signal_probe_mode
+zsh "$repo_root/tests/proton-pass-agent-readiness.zsh" >/dev/null ||
+  fail 'the agent readiness consumer/helper seam must pass'
 kill_audit_library=
 kill_audit_log=$test_dir/negative-pgid-kill-audit.log
 status_fragment_library=
@@ -238,7 +240,8 @@ if [[ -n ${FD_AUDIT_TARGET:-} ]]; then
       (( ++matching_fds ))
   done
   print -r -- "readiness:$matching_fds" >>$FD_AUDIT_LOG
-  (( matching_fds == 0 )) || exit 96
+  # stderr is intentional; secret-exec opens its escape descriptor afterward.
+  (( matching_fds == 1 )) || exit 96
 fi
 EOF
 cat > "$fast_local_bin/pass-cli" <<'EOF'
@@ -310,7 +313,7 @@ set -e
 (( fd_audit_status == 0 )) ||
   fail "provider and final consumer scenario must succeed: status=$fd_audit_status error=$(<"$fd_audit_target")"
 if (( fd_audit_enabled )); then
-  [[ $(<"$fd_audit_log") == $'readiness:0\nprovider:2\nconsumer:1' ]] ||
+  [[ $(<"$fd_audit_log") == $'readiness:1\nprovider:2\nconsumer:1' ]] ||
     fail 'provider and final consumer must not inherit the escape diagnostic descriptor'
   cp -- "$fast_exit" "$fast_local_bin/proton-pass-ensure-ready"
 fi
@@ -987,7 +990,7 @@ set -e
 [[ ! -e $TARGET_MARKER ]] ||
   fail 'a locked native store must not start the selected consumer'
 [[ $locked_output ==
-  'secret-exec: the Proton Pass provider session is unavailable; unlock the native credential store and retry' ]] ||
+  'proton-pass-ensure-ready: the native bootstrap item is unavailable or locked' ]] ||
   fail 'a locked native store must produce one fixed actionable consumer error'
 grep -Fqx 'state=unavailable' "$status_file" ||
   fail 'a locked native store must leave value-free unavailable status'
@@ -1024,8 +1027,8 @@ for consumer_pid in $consumer_pids; do
     if [[ -s $concurrent_error_file ]]; then
       concurrent_error_marker=unexpected
       case $(<"$concurrent_error_file") in
-        'secret-exec: the Proton Pass provider session is unavailable; unlock the native credential store and retry')
-          concurrent_error_marker=provider-unavailable
+        proton-pass-ensure-ready:*)
+          concurrent_error_marker=readiness-failed
           ;;
         'secret-exec: timed out resolving CONTEXT7_API_KEY'|\
         'secret-exec: timed out resolving FIRECRAWL_API_KEY'|\
