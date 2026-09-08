@@ -250,13 +250,13 @@ test_model_selection() {
     'private account bindings must not be double-counted as invocation routes'
   assert_contains "$skill" 'one harmless probe containing no task data succeeds' \
     'a successful harmless probe must be part of runnable-route evidence'
-  assert_contains "$skill" 'classify the route as unavailable without probing it' \
+  assert_contains "$skill" 'classify the route as unavailable without running the harmless probe' \
     'unauthorized task work must not be probed'
   assert_contains "$skill" 'no-task-data local status refresh' \
     'routing must distinguish a no-task-data local status refresh'
   assert_contains "$skill" 'local status probe used solely to refresh' \
     'refresh must be limited to local status facts'
-  assert_contains "$skill" 'This status request is distinct from the separate harmless probe required after task-work authorization' \
+  assert_contains "$skill" 'This status request is distinct from the separate harmless probe required after route and probe authority are available' \
     'status refresh must not be confused with the task-work probe'
   assert_contains "$skill" 'never satisfies or consumes the separate harmless-probe gate' \
     'status refresh must not satisfy or consume task-work probe evidence'
@@ -308,7 +308,7 @@ test_model_selection() {
     'OpenAI local-fallback restrictions must be scoped to Daybreak-routed work'
   assert_contains "$skill" 'local non-Daybreak fall-through is forbidden' \
     'OpenAI-authenticated ChatGPT and Codex must reject local non-Daybreak fallback'
-  assert_contains "$skill" 'model approval alone does not authorize delegation' \
+  assert_contains "$skill" 'model approval alone does not establish any missing delegation authority' \
     'operator model approval must not grant cross-harness delegation authority'
   assert_contains "$skill" \
     'For Daybreak-routed work in every other harness, including ChatGPT or Codex without an OpenAI login' \
@@ -363,6 +363,9 @@ test_model_selection() {
   for expectation_id in \
     automatic-local-refresh cross-harness-delegation-authority external-scrub \
     freshness-invalidation local-account-identification refresh-probe-separation \
+    each-delegation-reclassified continued-security-scope invalidated-security-evidence \
+    ordinary-handoff-existing-authority itemized-protected-payload-approval \
+    existing-itemized-approval-reuse \
     openai-login-boundary \
     probe-authority-order root-peer-boundary unrelated-task-observation-boundary; do
     jq -e --arg id "$expectation_id" 'any(.evals[].expectations[]; .id == $id)' "$evals" >/dev/null || \
@@ -373,7 +376,7 @@ test_model_selection() {
   done < <(jq -r '.evals[].fixture_paths[]' "$evals")
   assert_contains "$routing_fixture" '## Case H' \
     'model-selection fixture must cover the root-only peer boundary'
-  assert_contains "$routing_fixture" 'does not authorize that account, workspace, tools, probe' \
+  assert_contains "$routing_fixture" 'no standing or task-specific authority for that account, workspace, tools, harmless probe' \
     'model-selection fixture must cover authority-before-probe refusal'
   assert_contains "$routing_fixture" \
     'with an OpenAI login but configured for a non-OpenAI inference provider' \
