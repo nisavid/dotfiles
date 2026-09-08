@@ -10,11 +10,41 @@ index 0cc702d..e80a924 100644
  snafu = { version = "0.8", features = ["futures"] }
  tempfile = "3"
  tokio = { version = "1", default-features = false, features = ["io-util", "sync", "fs", "rt", "time"] }
+diff --git a/tough/src/schema/de.rs b/tough/src/schema/de.rs
+index 1601838..bb7b24e 100644
+--- a/tough/src/schema/de.rs
++++ b/tough/src/schema/de.rs
+@@ -22,6 +22,7 @@ where
+         key: Key,
+         map: &mut HashMap<Decoded<Hex>, Key>,
+     ) -> Result<(), error::Error> {
++        key.validate_metadata_profile()?;
+         let calculated = key.key_id()?;
+         let keyid_hex = hex::encode(&keyid);
+         ensure!(
+diff --git a/tough/src/schema/error.rs b/tough/src/schema/error.rs
+index eb61e60..d01a9c9 100644
+--- a/tough/src/schema/error.rs
++++ b/tough/src/schema/error.rs
+@@ -57,6 +57,13 @@ pub enum Error {
+         backtrace: Backtrace,
+     },
+ 
++    /// A key does not satisfy its metadata profile.
++    #[snafu(display("Invalid key: {}", reason))]
++    InvalidKey {
++        reason: String,
++        backtrace: Backtrace,
++    },
++
+     /// Failed to decode a hexadecimal-encoded string.
+     #[snafu(display("Invalid hex string: {}", source))]
+     HexDecode {
 diff --git a/tough/src/schema/key.rs b/tough/src/schema/key.rs
-index 24f4c9f..f75e639 100644
+index 24f4c9f..24f258a 100644
 --- a/tough/src/schema/key.rs
 +++ b/tough/src/schema/key.rs
-@@ -7,6 +7,15 @@ use crate::schema::error::{self, Result};
+@@ -7,9 +7,18 @@ use crate::schema::error::{self, Result};
  use aws_lc_rs::digest::{digest, SHA256};
  use aws_lc_rs::signature::VerificationAlgorithm;
  use olpc_cjson::CanonicalFormatter;
@@ -29,7 +59,11 @@ index 24f4c9f..f75e639 100644
 +use sequoia_openpgp::{Cert, Fingerprint, KeyHandle, Packet, PacketPile};
  use serde::{Deserialize, Serialize};
  use serde_json::Value;
- use snafu::ResultExt;
+-use snafu::ResultExt;
++use snafu::{ensure, ResultExt};
+ use std::collections::HashMap;
+ use std::fmt;
+ use std::str::FromStr;
 @@ -78,6 +87,46 @@ pub enum Key {
          #[serde(flatten)]
          _extra: HashMap<String, Value>,
@@ -77,7 +111,28 @@ index 24f4c9f..f75e639 100644
  }
  
  /// Used to identify the RSA signature scheme in use.
-@@ -151,7 +200,27 @@ impl Key {
+@@ -139,6 +188,20 @@ pub struct EcdsaKey {
+ }
+ 
+ impl Key {
++    /// Validates constraints shared by metadata ingestion and signature verification.
++    pub(super) fn validate_metadata_profile(&self) -> Result<()> {
++        if let Key::OpenPgp { keyval, _extra, .. } = self {
++            ensure!(
++                _extra.is_empty() && keyval._extra.is_empty(),
++                error::InvalidKeySnafu {
++                    reason: "provisional OpenPGP keys cannot contain undefined fields"
++                }
++            );
++        }
++
++        Ok(())
++    }
++
+     /// Calculate the key ID for this key.
+     pub fn key_id(&self) -> Result<Decoded<Hex>> {
+         let mut buf = Vec::new();
+@@ -151,7 +214,24 @@ impl Key {
      }
  
      /// Verify a signature of an object made with this key.
@@ -91,13 +146,10 @@ index 24f4c9f..f75e639 100644
 +        if let Key::OpenPgp {
 +            scheme: OpenPgpScheme::OpenPgpRfc9980MlDsa65Ed25519Sha512,
 +            keyval,
-+            _extra,
++            ..
 +        } = self
 +        {
-+            if !_extra.is_empty() || !keyval._extra.is_empty() {
-+                return None;
-+            }
-+
++            self.validate_metadata_profile().ok()?;
 +            return verify_openpgp_rfc9980(&keyval.public, msg, signature)
 +                .ok()
 +                .map(ThresholdIdentity::OpenPgpSigningKey);
@@ -106,7 +158,7 @@ index 24f4c9f..f75e639 100644
          let (alg, public_key): (&dyn VerificationAlgorithm, untrusted::Input<'_>) = match self {
              Key::Ecdsa {
                  scheme: EcdsaScheme::EcdsaSha2Nistp256,
-@@ -182,13 +251,120 @@ impl Key {
+@@ -182,13 +262,120 @@ impl Key {
                  &aws_lc_rs::signature::RSA_PSS_2048_8192_SHA256,
                  untrusted::Input::from(&keyval.public),
              ),

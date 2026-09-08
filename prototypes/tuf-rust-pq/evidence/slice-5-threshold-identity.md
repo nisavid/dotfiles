@@ -21,7 +21,20 @@ The historical patch had SHA-256
 It verified an OpenPGP key without using its flattened fields, while Tough
 included those fields in the canonical key object hashed into the TUF key ID.
 
-## Behavioral red
+## Historical behavioral-red summaries
+
+The descriptions and excerpts below are historical summaries, not standalone
+reproducible raw bundles. The retained Slice 5 execution event stream has
+SHA-256 `9c24fd139b1589654fa5a5d9f7f091979ad64a5961760977c568aaa090697b46`;
+it preserves the exact commands, complete command outputs, exit statuses, and
+printed candidate hashes. Its file-change events preserve paths but not the
+complete source bytes for each red candidate, however, and no separate copies
+of those candidate bytes were retained. The hashes below must therefore not be
+treated as recoverable source evidence.
+
+The current correction has a new hash-bound red/green bundle in
+[the Cycle 2 execution record](slice-8-cycle-2.md). It does not relabel any new
+run as historical evidence.
 
 The counterexamples used Tough's public metadata types and public role
 verifiers. Key maps were serialized and reparsed, so Tough checked that every

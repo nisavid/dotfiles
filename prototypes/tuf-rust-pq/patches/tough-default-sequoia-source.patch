@@ -1,0 +1,13 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 0ee3e0e..914ced7 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -7,3 +7,8 @@ members = [
+     "tough-kms",
+     "tuftool",
+ ]
++
++# Disposable compatibility-test override matching the prototype's pinned
++# Sequoia source identity. This is test preparation, not an upstream change.
++[patch.crates-io]
++sequoia-openpgp = { path = "../sequoia/openpgp" }

@@ -6,7 +6,9 @@ to either the Ed25519 or ML-DSA-65 component. Across root and delegated-targets
 verification, one verified composite signing-key fingerprint contributes at
 most once to a signature threshold even when authorized key objects have
 different correctly derived TUF key IDs. Undefined fields on the provisional
-OpenPGP key object or its `keyval` are rejected during verification.
+OpenPGP key object or its `keyval` are rejected before Root or Delegations
+metadata is accepted, including when the key is unused. Direct verification of
+programmatically constructed keys applies the same check.
 
 > [!CAUTION]
 > This is one synthetic publisher/verifier seam, not a production security
@@ -23,8 +25,20 @@ identity once. This is the proposed correction, pending a new independent
 review; it is not an operator, custody, or underlying-component independence
 claim.
 
-The result was observed only on `x86_64-unknown-linux-gnu` with Rust and Cargo
-1.98.1 and external OpenSSL 3.6.3. The Sequoia backend requires external OpenSSL
+A second independent review found that the undefined-field check still ran
+only for a key selected to verify a signature. The current patch moves that
+profile validation to the shared metadata key-map deserializer and retains it
+in direct verification. The correction has new reproducible red/green
+evidence. The applicable pinned Tough default suite now passes, and two focused
+ECDSA regressions exercise the conventional `Key::verify` identity through
+both public threshold loops. This compatibility correction still awaits
+independent review; see the
+[current compatibility record](evidence/current-compatibility.md).
+
+The current prototype and Tough results were observed on
+`x86_64-unknown-linux-gnu` with Rust and Cargo 1.98.1 and external OpenSSL
+3.6.3. An earlier Tough run used the host's Rust and Cargo 1.98.0 and remains
+only as superseded diagnostic evidence. The Sequoia backend requires OpenSSL
 3.5 or newer. macOS remains unexecuted.
 
 ## Prerequisites
@@ -81,14 +95,17 @@ test "$(git -C .scratch/sequoia rev-parse 'HEAD^{tree}')" = \
   "$tuf278_sequoia_tree"
 ```
 
-Verify the prototype inputs, apply the sole Tough patch, and verify its output:
+Verify the prototype inputs, apply the main Tough source patch, and verify its
+output:
 
 ```sh
 sha256sum -c <<'CHECKSUMS'
 23861ca0bdef144e3974a753acac92ff715f53cd1614b16bf277488d4d737624  Cargo.toml
 02d9911a563dc2444f2252f8c47a31a545dec1c34fe0fa877ee8c11b0d879ad9  Cargo.lock
-e2070c8deba02f51c9c47e2bf868da52cd761847a6e0ba6ed7b9bfdad737e42e  patches/tough-openpgp-rfc9980.patch
-9057b159657ebc7113d729b87cf405fc2474fa55e51211bfdf2b0184cbc5965f  tests/composite_metadata.rs
+8540324f3cd231ca244928024b2b1eea92ec2e16433187b2e4b708696b8e50dc  patches/tough-openpgp-rfc9980.patch
+8720ad3dd63c05109761b624922248b94a938205a1d43987032d93e73377100c  patches/tough-default-sequoia-source.patch
+8951066c56b6f1fbbc391aedcdf6e15322f88356ff0f2d4d04b3ebf926fbe268  evidence/tough-default.Cargo.lock
+c2ab4935f0c58ca4a1ad398007b2ba7c8e9e0c81ed7ea70368e00e4c933f3724  tests/composite_metadata.rs
 CHECKSUMS
 
 git -C .scratch/tough apply --check \
@@ -97,7 +114,9 @@ git -C .scratch/tough apply ../../patches/tough-openpgp-rfc9980.patch
 
 sha256sum -c <<'CHECKSUMS'
 8b4c3d4803ed2e0fa4250fd7e9069b628d537b67122f999e6ae78a35118cbb84  .scratch/tough/tough/Cargo.toml
-0475738e80b34934af6ae8f277693f3b4437283f952514d5b3a40796b4532488  .scratch/tough/tough/src/schema/key.rs
+ac1b3c4fb6242f109a08bce5d10fcf8b2bbb56248a8b57c14792fc498dbb0575  .scratch/tough/tough/src/schema/de.rs
+3ac428c534fa2b7560febb58b959091015ab20f84b2ba04170c71193d8094993  .scratch/tough/tough/src/schema/error.rs
+0b62446332794800c3b24660acceb0d22a9e9f603ec69ae79a59ddf143879104  .scratch/tough/tough/src/schema/key.rs
 dc9d19ecf6332fa909b20e31d68463f0c64c79f54f8561bb0b8eeb0e714c6685  .scratch/tough/tough/src/schema/verify.rs
 CHECKSUMS
 ```
@@ -147,6 +166,14 @@ The recorded review used targeted capability scans plus manual source reading;
 it was not a full security audit. Its inventory digests and source findings are
 in [the source/build inspection](evidence/source-build-inspection.md).
 
+That 189-package inventory covers the prototype command below. The applicable
+Tough normal/build/dev graph was separately resolved with the pinned Sequoia
+path source. Of its 263 reachable packages, 145 package name/version pairs were
+new relative to the prototype inventory. Their registry archives, manifests,
+build scripts, and proc macros were inspected before the locked offline suite
+ran. The exact graph, lock, results, and limits are in the
+[current compatibility record](evidence/current-compatibility.md).
+
 ## Run the tested slice
 
 First confirm that Bubblewrap can create a private network namespace:
@@ -183,11 +210,66 @@ the host denied Bubblewrap's `NETLINK_ROUTE` socket. The recorded green run used
 network access. Use that substitution only after independently verifying the
 parent network denial; otherwise the replay prerequisite is unsatisfied.
 
-The test should report four passing integration tests. Its generated key ID and
-fingerprint vary by run. Compare the stable format and rejection assertions with
-the [current threshold-identity execution record](evidence/slice-5-threshold-identity.md).
-The [original red/green record](evidence/slice-3-red-green.md) is historical and
-describes the independently reviewed candidate before the correction.
+The test should report nine passing integration tests: the seven existing
+composite and profile-boundary tests plus two focused conventional ECDSA tests.
+Its generated key ID and fingerprint vary by run. Compare the stable format and
+rejection assertions with the
+[current compatibility record](evidence/current-compatibility.md). The
+[Cycle 2 record](evidence/slice-8-cycle-2.md),
+[threshold-identity record](evidence/slice-5-threshold-identity.md), and
+[original red/green record](evidence/slice-3-red-green.md) preserve their
+historical checkpoints.
+
+## Run the applicable Tough suite
+
+The patched Sequoia edge needs a workspace source override and its ordinary
+Cargo-resolved test lock; the pristine upstream lock is not the executed lock.
+After applying the main source patch above, apply the replay inputs:
+
+```sh
+git -C .scratch/tough apply --check \
+  ../../patches/tough-default-sequoia-source.patch
+git -C .scratch/tough apply \
+  ../../patches/tough-default-sequoia-source.patch
+cp evidence/tough-default.Cargo.lock .scratch/tough/Cargo.lock
+sha256sum -c <<'CHECKSUMS'
+dd5807256002ffa16dfa4eba7c7db03ee3ba7daed2a74a9099b3496eda2314ba  .scratch/tough/Cargo.toml
+8951066c56b6f1fbbc391aedcdf6e15322f88356ff0f2d4d04b3ebf926fbe268  .scratch/tough/Cargo.lock
+CHECKSUMS
+```
+
+Fetch the locked Linux test graph without building it. Before execution,
+repeat the bounded graph-delta inspection in the current compatibility record.
+
+```sh
+tuf278_tough_cargo="$(rustup which --toolchain 1.98.1 cargo)"
+tuf278_tough_toolchain_bin="$(dirname "$tuf278_tough_cargo")"
+env -i \
+  PATH="$tuf278_tough_toolchain_bin:/usr/bin:/bin" \
+  CARGO_HOME="$tuf278_run/cargo-home" \
+  CARGO_TERM_COLOR=never \
+  "$tuf278_tough_cargo" fetch --locked \
+    --manifest-path .scratch/tough/tough/Cargo.toml \
+    --target x86_64-unknown-linux-gnu
+```
+
+Then use the same empty-environment, read-only-source, offline sandbox and run
+the following direct Cargo invocation. Resolve the binary path before entering
+the empty environment so the command does not depend on a rustup shim or home
+configuration.
+
+```sh
+tuf278_tough_cargo="$(rustup which --toolchain 1.98.1 cargo)"
+"$tuf278_tough_cargo" test --locked --offline \
+  --manifest-path .scratch/tough/tough/Cargo.toml \
+  --package tough \
+  --target x86_64-unknown-linux-gnu \
+  --no-default-features
+```
+
+The recorded run passed 78 tests, failed 0, and ignored 1. No Tough feature was
+enabled; `http`, `http2`, and `integ` remain outside this slice. The current
+compatibility record binds the exact command and outputs by SHA-256.
 
 ## Scope
 
