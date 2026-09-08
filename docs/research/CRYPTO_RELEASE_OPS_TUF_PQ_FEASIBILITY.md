@@ -2,8 +2,10 @@
 
 ## Decision
 
-A disposable feasibility prototype is warranted. No inspected Rust TUF stack
-supports Codiquary's RFC 9580/9980 profile off the shelf, but the missing work is
+A bounded sequence of disposable feasibility prototypes is warranted. First
+prove the Rust and post-quantum TUF integration, then exercise its transport and
+representative consumer boundary. No inspected Rust TUF stack supports
+Codiquary's RFC 9580/9980 profile off the shelf, but the missing work is
 concentrated enough to test without implementing a new update protocol.
 
 The preferred candidate is a version-pinned patch of [`tough` 0.24.0 at
@@ -12,14 +14,14 @@ using [`sequoia-openpgp` 2.4.1 at
 `0b0c8c7f038b829de2da0d28a822941d8600f3ee`](https://gitlab.com/sequoia-pgp/sequoia/-/tags/openpgp%2Fv2.4.1)
 for RFC 9980 signatures. `tough` already places a Rust client, repository editor,
 and publisher CLI around one metadata model. Sequoia 2.4.1 already implements
-RFC 9980 through its OpenSSL and RustCrypto backends. The prototype must add and
-exercise the connection between those two existing implementations; it must not
-replace either cryptographic construction or TUF's update workflow.
+RFC 9980 through its OpenSSL and RustCrypto backends. The first prototype must add
+and exercise the connection between those two existing implementations; it must
+not replace either cryptographic construction or TUF's update workflow.
 
 This is a positive prototype decision, not a TUF adoption decision. Adoption
 remains conditional on a supportable upstream change or consciously owned patch,
-a versioned POUF, preserved Codiquary policy, and clean conformance evidence on
-the final candidate.
+a versioned POUF, preserved Codiquary policy, clean conformance evidence, and a
+representative nonprivileged consumer integration on the final candidate.
 
 ## What exists and what is missing
 
@@ -28,16 +30,16 @@ The assessment is bound to the public versions and revisions named below as of
 
 | Surface | Existing support | Required Codiquary work | Classification |
 | --- | --- | --- | --- |
-| TUF client workflow | `tough` loads sequential roots, timestamp, snapshot, targets, and recursively fetched delegated roles; it enforces thresholds, expiry, rollback checks, length limits, and target paths. | Preserve the workflow unchanged and expose an accepted trusted-time input instead of relying only on the datastore's system time. Stage persistence until TUF and Codiquary checks both succeed. | Bounded upstream change or downstream patch. |
+| TUF client workflow | `tough` loads sequential roots, timestamp, snapshot, targets, and recursively fetched delegated roles; it enforces thresholds, expiry, rollback checks, length limits, and target paths. | Preserve the specified stepwise root and refresh transitions, including durable intermediate-root, timestamp, and snapshot state, while exposing an accepted trusted-time input. Hold verified target payload bytes outside application state until retained Codiquary policy accepts them, and test this split against the accepted atomic client-state contract. | Bounded upstream change or downstream patch plus adoption-time contract mapping. |
 | Repository publisher | `RepositoryEditor`, `TargetsEditor`, and `SignedRole` build and sign all roles. `SignedRole` signs the OLPC canonical-JSON bytes through a `Sign` implementation. `tuftool` 0.17.0 is the stock CLI. | Add an RFC 9980 key representation and a programmatic OpenPGP `KeySource`/`Sign` implementation. Keep production secret custody behind the separate operator boundary; do not teach the stock CLI to read unprotected production keys. | Documented signing hook plus a required schema patch. |
 | Client signature verification | `Root::verify_role` and delegation verification dispatch through the concrete `schema::key::Key` verifier. The public key enum has RSA, Ed25519, and ECDSA variants. `RepositoryLoader` has no verifier-provider parameter. | Add one OpenPGP key variant and strict Sequoia verification of the complete detached signature. A publisher-only `Sign` implementation is insufficient. | Required patch; no existing extension point. |
 | RFC 9980 primitive and packets | Sequoia 2.4.1 adds ML-DSA-65+Ed25519 key generation, signature parsing, signing, verification, and policy identifiers. Its OpenSSL and RustCrypto backends support the RFC 9980 algorithms. | Pin one backend and qualify it. Prefer the backend Sequoia marks production-ready and constant-time for any code that handles signing secrets; keep the RustCrypto path disposable until separately qualified. | Existing implementation, qualification required. |
 | Canonical TUF metadata | Publisher and verifier use `olpc_cjson::CanonicalFormatter` over the `signed` role. The serialized outer metadata may be pretty-printed without changing the signed bytes. | Freeze this exact form in the POUF and add differential fixtures. Keep Codiquary's JCS objects as distinct target objects; one object version must never accept both canonical forms. | Existing support plus profile and tests. |
 | Key identity and thresholds | TUF 1.0.36 defines a SHA-256 key ID over the canonical key object and counts distinct authorized key IDs toward a positive role threshold. `tough` follows that model. | Keep the TUF key ID distinct from the RFC 9580 v6 fingerprint. Treat one RFC 9980 composite key as one TUF threshold key; its Ed25519 and ML-DSA components are not two quorum votes. | POUF mapping, no threshold-algorithm change. |
-| SHA-512 binding | The accepted Codiquary objects use SHA-512. `tough`'s editor and schema paths inspected here produce or require SHA-256 references. | Require SHA-512 alongside any compatibility SHA-256 reference and verify it for targets and metadata under this POUF. The independent Codiquary admission check must still verify the accepted SHA-512 object and artifact identities. | Bounded schema/verifier patch and integration gate. |
-| Root rotation | `tough` implements sequential root loading, old-and-new root authorization, a root-update bound, and publisher support for old signatures. | Exercise the same algorithm with every authorizing key represented by the RFC 9980 scheme. Keep the accepted certifying identity and human root-transition policy as additional checks. | Existing workflow, new crypto fixtures. |
+| SHA-512 binding | The accepted Codiquary objects use SHA-512. `tough`'s editor and schema paths inspected here produce or require SHA-256 references. | Require SHA-512 alongside any compatibility SHA-256 reference and verify it for targets and metadata under this POUF. The retained Codiquary policy gate must still verify the accepted SHA-512 object and artifact identities. | Bounded schema/verifier patch and integration gate. |
+| Root rotation | `tough` implements sequential root loading, old-and-new root authorization, a root-update bound, and publisher support for old signatures. | Exercise the same algorithm with every authorizing key represented by the RFC 9980 scheme, durably persisting each verified intermediate root before processing the next. Keep the accepted certifying identity and human root-transition policy as additional checks. | Existing workflow, new crypto fixtures. |
 | Delegated targets | The 0.24.0 landing page says delegation is unsupported, but the same release exposes `TargetsEditor` delegation APIs and the tagged client source recursively loads and verifies delegated roles. | Qualify the source behavior. Do not model Codiquary's non-transitive grants as recursive TUF delegation; application grants remain leaf authorization checks. | Existing but documentation-inconsistent support. |
-| POUF and conformance | TUF permits adopter-defined key types, schemes, and metadata formats. The official conformance suite covers the TUF client algorithm. | Publish an experimental, versioned POUF and add RFC 9980, canonical-byte, trusted-time, SHA-512, and joint-admission cases. The official suite cannot certify the custom scheme or Codiquary policy. | New profile and project-specific fixtures. |
+| POUF and conformance | TUF permits adopter-defined key types, schemes, and metadata formats. The official conformance suite covers the TUF client algorithm. | Publish an experimental, versioned POUF and add RFC 9980, canonical-byte, trusted-time, SHA-512, and joint-gate cases. The official suite cannot certify the custom scheme or Codiquary policy. | New profile and project-specific fixtures. |
 
 The decisive source boundary is visible in `tough` itself. Its
 [`Sign` trait](https://docs.rs/tough/0.24.0/tough/sign/trait.Sign.html) accepts
@@ -93,9 +95,12 @@ classical TUF signature over a separately PQ-signed artifact would be a differen
 and weaker profile.
 
 Every root, targets, snapshot, timestamp, and used delegated-targets role must be
-authorized only by keys using this scheme. TUF thresholds still express distinct
-operator keys. One composite OpenPGP signature contributes at most one valid key
-toward a role threshold.
+authorized only by keys using this scheme. TUF thresholds count distinct
+authorized key IDs. One composite OpenPGP signature contributes at most one
+valid key toward a role threshold. A numeric threshold does not by itself prove
+distinct people, operators, custody boundaries, or independent underlying key
+material; the experimental policy and fixtures must state what independence they
+intend to test without designing production custody.
 
 ### Canonicalization, names, and references
 
@@ -123,9 +128,20 @@ writers, retain observed forks, or resolve publication conflicts.
 `tough` 0.24.0 takes a fixed update-start value from its datastore and writes
 verified roles during the load. The public `RepositoryLoader` exposes safe or
 unsafe expiry enforcement but not a caller-supplied time. The prototype must add
-a trusted-time input or stage the full load in a disposable datastore, recheck
-every role against Codiquary's accepted time, and atomically promote state only
-after all checks pass. Disabling TUF expiry is not an acceptable solution.
+an accepted trusted-time input without placing TUF persistence behind application
+admission. It must durably write every verified intermediate root before
+processing the next root and preserve the specified timestamp and snapshot state
+transitions during refresh, including crash recovery, even when later Codiquary
+policy rejects a target. Disabling TUF expiry or discarding verified TUF trust
+state after an application-policy rejection is not acceptable.
+
+Exact target bytes remain private held bytes while application policy runs.
+Release of those bytes to a consumer, Codiquary accepted-current and installation
+state, and installation itself require both TUF verification and the retained
+Codiquary checks. The prototype must test whether those independent TUF trust-state
+writes compose with the accepted atomic client-state contract and identify any
+required amendment for the later adoption/contract-mapping decision; this report
+does not silently redefine either state machine.
 
 TUF timestamp freshness is mirror-freshness evidence. It is not OpenPGP signing
 time, human approval, `reaffirm`, or `reaffirm-authority`. The canonical
@@ -141,16 +157,25 @@ It should not absorb policies it does not define.
 | --- | --- |
 | Root continuity, role thresholds, rollback/freeze checks, metadata mix-and-match resistance, target-path authorization, and verified target bytes | TUF client under the selected POUF. |
 | Stable RFC 9580 fingerprint, certifying-primary/subkey lineage, scoped non-transitive grants, status and quarantine, human authorization and expiry, `reaffirm`, and `reaffirm-authority` | Codiquary authority and admission checks. |
-| One alternating `release-state/v1` history, producer compare-and-swap, retained forks and conflicts, compromise-aware historical attribution, and offline archives | Codiquary state and publication contracts. TUF metadata may point to these objects but does not replace them. |
+| Producer compare-and-swap and serialization, retained fork and conflict evidence, compromise-aware historical attribution, and offline archives | Codiquary publication and history contracts. Preserve history as evidence, not as a second current selector. Do not carry the existing `release-state/v1` current-selection chain unchanged into a TUF design; exact replacement schemas belong to the adoption/contract-mapping decision. |
 | Product, version, channel, purpose, and policy-profile choice | The calling application. The TUF library must not select "latest" for the application. |
-| Installation | The protected consumer boundary, after both TUF verification and Codiquary `admission-result/v1` authorize the exact held bytes. Historical attribution never authorizes installation. |
+| Held-byte release, accepted-current and installation state, and installation | The protected consumer boundary, after TUF verification and retained Codiquary authorization both accept the exact held bytes and application intent. Historical attribution never selects current state or authorizes installation. |
 
 This composition avoids a second release authority. TUF authenticates acquisition
-and current repository state; Codiquary applies the retained authorization and
-actuation policy to the exact TUF-verified bytes. If either side rejects or lacks
-required input, the protected installer does not run.
+and current repository state; Codiquary applies retained non-TUF authorization
+and actuation policy to the exact TUF-verified bytes. The prototype's fake gate is
+deliberately narrower than the current `independent-admission/v1` input contract:
+it exercises the retained checks without importing the existing
+`release-state/v1` selector or claiming unmodified `admission-result/v1`
+semantics. The adoption decision owns exact schema amendments. If either side
+rejects or lacks required input, held bytes are not released, Codiquary
+accepted-current or installation state does not advance, and the protected
+installer does not run; already verified TUF trust-state transitions remain
+durable.
 
-## Smallest decisive experiment
+## Smallest decisive experiments
+
+### Rust and post-quantum integration
 
 Use public synthetic material only. Pin TUF 1.0.36, `tough` 0.24.0 at
 `98d8eb8b2ce63515d9b4981c938ef6453c5b5771`, and `sequoia-openpgp` 2.4.1 at
@@ -160,8 +185,8 @@ system software or touch a production key, trust store, provider, or host path.
 
 1. Add a direct OpenPGP `Key` variant and strict verify branch to the pinned
    `tough` source. Add caller-supplied trusted time and required SHA-512
-   verification without changing the root, timestamp, snapshot, targets, or
-   delegation algorithms.
+   verification without replacing the root, timestamp, snapshot, targets, or
+   delegation algorithms or their required persistence order.
 2. Implement a programmatic `KeySource`/`Sign` adapter using Sequoia. Start with
    RFC 9980 Appendix A public vectors or generated disposable fixture keys. Keep
    all test secret bytes inside the disposable fixture directory.
@@ -169,16 +194,22 @@ system software or touch a production key, trust store, provider, or host path.
    targets leaf and one delegated leaf, `consistent_snapshot: true`, explicit
    limits, SHA-512 references, and a JCS Codiquary object as the target.
 4. From a pinned v1 root, load v2 through the existing sequential root algorithm,
-   including signatures valid under both old and new composite root thresholds.
-   Refresh at a supplied accepted time, request an application-supplied target
-   path, consume the stream fully, and pass the exact bytes to a fake Codiquary
-   admission gate. Persist neither state nor output unless both gates accept.
+   including signatures valid under both old and new composite root thresholds,
+   and durably write every verified intermediate root before continuing. Refresh
+   at a supplied accepted time and preserve the specified timestamp and snapshot
+   state transitions. Request an application-supplied target path, consume the
+   stream fully into private held bytes, and pass those exact bytes to a fake gate
+   that evaluates only retained non-TUF Codiquary authorization. Preserve TUF
+   trust state independently; release no held bytes and advance no Codiquary
+   accepted-current or installation state unless both gates accept.
 5. Prove negative cases for either composite component failing; wrong packet
    version, algorithm, hash, signature type, issuer, or key projection; duplicate
    threshold key IDs; missing SHA-512; expired roles; rollback; root skipping;
    delegated-path escape; canonical-byte drift; truncated or trailing packets;
-   oversized keys, signatures, and metadata; and TUF acceptance followed by
-   Codiquary rejection.
+   oversized keys, signatures, and metadata; a crash after each durable root,
+   timestamp, and snapshot transition; and TUF acceptance followed by Codiquary
+   rejection with TUF trust state preserved and no application-state or output
+   promotion.
 6. Run the official
    [`tuf-conformance`](https://github.com/theupdateframework/tuf-conformance)
    cases applicable to the unchanged client workflow, then run the custom POUF
@@ -186,10 +217,35 @@ system software or touch a production key, trust store, provider, or host path.
    into a conformance claim.
 
 The experiment succeeds only if the crypto, clock, digest, and publisher changes
-remain isolated from the TUF state machine; all metadata authority edges are RFC
-9980 protected; exact bytes reach a non-bypassable second admission gate; and a
-reviewable POUF can describe the resulting wire and operation contract. It does
-not need production custody, a provider adapter, or a complete Codiquary client.
+compose with the specified TUF root and refresh state transitions rather than
+forking them; all metadata authority edges are RFC 9980 protected; required TUF
+trust state survives crashes and later Codiquary rejection; exact bytes reach a
+non-bypassable retained-policy gate; and only the conjunction releases held bytes
+or advances Codiquary accepted-current and installation state. It must expose the
+atomic-client-state interaction for later contract mapping, and a reviewable POUF
+must describe the resulting wire and operation contract. It does not need
+production custody, a provider adapter, or a complete Codiquary client.
+
+### Representative consumer integration gate
+
+Keep consumer integration in a second disposable prototype, blocked by the Rust
+and post-quantum prototype and itself blocking adoption. Using synthetic fixtures
+only, exercise release-like local file or HTTP transport and a nonprivileged
+consumer adapter shaped first by Lemonade's PKGBUILD flow and the
+`arch-strix-halo-pkgs` pacman flow. The application must supply its intended
+product, version, channel, purpose, policy profile, and target; TUF must
+authenticate the eligible description and place the exact bytes in private held
+storage; and the retained Codiquary policy gate must remain non-bypassable over
+those same bytes.
+
+The fixture must preserve PKGBUILD artifact-signature verification and pacman's
+native package and repository-database signatures as independent checks. It must
+prove that target or intent substitution, held-byte mutation, either policy-gate
+failure, or disabled native signatures cannot reach the fake consumer. It must
+not provision a real package repository, install a package, cross a privilege
+boundary, or mutate a host. Passing shows only that the proposed boundaries
+compose for the initial consumer shapes; it does not qualify a production
+transport, package repository, updater, or adapter.
 
 ## Maintenance and stop conditions
 
@@ -203,21 +259,27 @@ and
 [LGPL-2.0-or-later licensing](https://docs.rs/crate/sequoia-openpgp/2.4.1/source/Cargo.toml)
 also require normal build and distribution review.
 
-Stop and retain the non-TUF baseline if the experiment shows any of the
+Stop and retain the non-TUF baseline if either experiment shows any of the
 following:
 
 - RFC 9980 support requires changing TUF's root or refresh algorithm rather than
   adding a key scheme;
 - all-role PQ protection requires a classical fallback or a second authority
   interpretation;
-- trusted time or state can be applied only after untrusted metadata has been
-  irreversibly promoted;
+- required TUF trust-state transitions cannot be durably persisted and recovered
+  independently while held-byte release and Codiquary application state remain
+  gated, or their interaction with the accepted atomic client-state contract
+  cannot be characterized for the adoption decision;
 - SHA-512 or the exact OpenPGP packet profile cannot be enforced before the
   install boundary;
 - the publisher must import production secret keys into general repository
   tooling;
 - the POUF cannot make `tough`, Sequoia, and Codiquary byte semantics
-  unambiguous; or
+  unambiguous;
+- the representative synthetic consumer fixture can compose the layers only by
+  bypassing application intent, weakening retained Codiquary policy, disabling
+  PKGBUILD or pacman native signatures, provisioning a real repository, or
+  installing packages; or
 - the patch cannot be upstreamed and its measured downstream maintenance burden
   is disproportionate to the TUF client and conformance code being reused.
 
@@ -243,13 +305,15 @@ GitHub source fetch through Git, and Firecrawl exact-page access each failed on
 their first network attempt; official tagged sources, docs.rs, GitLab, RFC Editor,
 and TUF pages were inspected through the read-only web fallback instead.
 
-No new policy decision is needed before the proposed disposable prototype; the
-prototype itself remains separate work. Adoption will require one explicit
-choice after its evidence exists: require an upstream verifier extension, or
-accept ownership of a version-pinned downstream patch with a stated maintenance
-budget. The later adoption decision must also settle POUF interoperability,
-role-key custody and thresholds, and the exact contract mapping; this report
-does not decide those policies.
+No new policy decision is needed before the two proposed disposable prototypes;
+each remains separate work. Adoption will require one explicit choice after both
+sets of evidence exist: require an upstream verifier extension, or accept
+ownership of a version-pinned downstream patch with a stated maintenance budget.
+The later adoption decision must also settle POUF interoperability, authorized
+key-ID thresholds and any separate operator/custody policy, the mapping between
+TUF's durable trust state and the accepted atomic client-state contract, retirement
+of the overlapping `release-state/v1` selector, and exact amendments to current
+admission contracts. This report does not decide those policies.
 
 ## Primary sources
 
