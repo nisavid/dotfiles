@@ -92,10 +92,10 @@ _OBSERVATION_SOURCE_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9 .,/_+-]{0,254}"
 EXPECTED_SCHEMA_SHA256 = MappingProxyType(
     {
         "acceptance-evidence-v1.schema.json": "5264aad08075c115cb3633f3d0f9a46b8a0a2027758b931c4334a2f234e660d5",
-        "adapter-contract-v1.schema.json": "b7ea9ca7c9c2c9c114a1090c4df1f2b3241616e2ae915558d2ca286c945b68d5",
+        "adapter-contract-v1.schema.json": "edf9cbfc8729f18a46fe896884b6ce42cb5e9ad88fbbee76f29742d4c5e06afe",
         "captured-state-v1.schema.json": "d0c30850f03366dd612208d12ee35b2462d84e5e6901e3ca7d0a6b0ed3bdf693",
         "catalog-v1.schema.json": "d0582e3343d9960ffcadbdf4afe694b9bdd6f37bdab5d381d77b91e29be8c3b6",
-        "execution-authority-v1.schema.json": "30c61c9fdbbc52679bf1f18bf80cf99d7429d7efc07a8b6ccf80dde7ee4d5b48",
+        "execution-authority-v1.schema.json": "1f774ca99bbfbe699bd5be4ada986f3a651d2a97b1b28d01579f646763b40dc4",
         "lock-v1.schema.json": "482b55f05c6d0622961f2526095975d946d651b9bf398c06e33fd04f8e5d4714",
         "plan-action-set-v1.schema.json": "2096ece6780cedd1df10dea43a279bbb360550927ad69d871c0ad75c1ffcf504",
     }
@@ -524,6 +524,12 @@ def validate_captured_schema_document(
         "adapter-contract-v1.schema.json": {
             "adapter-contract-v1.schema.json",
             "catalog-v1.schema.json",
+        },
+        "captured-state-v1.schema.json": {
+            "captured-state-v1.schema.json",
+        },
+        "execution-authority-v1.schema.json": {
+            "execution-authority-v1.schema.json",
         },
         "plan-action-set-v1.schema.json": {
             "plan-action-set-v1.schema.json",

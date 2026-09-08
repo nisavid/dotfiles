@@ -65,16 +65,16 @@ OBSERVED_MATT_CONTENT_DIGEST = (
 # projector's document, canonical bytes, or claimed digest.
 TRUSTED_REAL_RESOLVER_ACTION_SET_DIGESTS = {
     "direct-claude": (
-        "sha256:144f5168aceeffdfff754bb5b06b717e29b305768021dd7eda1ab89d3d1ffd68"
+        "sha256:05470752b1f9979651c8f1c9de3fb67008a071265104a7eafd322c27617e26bd"
     ),
     "direct-codex": (
-        "sha256:a7560f80b59bbfd8c8dce8cba9cf34e5cf4c5bac4a36e420404e675445c3ccf1"
+        "sha256:2af5b968045f1dd3d9bdfc8b4b2e612fee6d067f30d6d5b2d1dcdf8aada1624d"
     ),
     "direct-cursor": (
-        "sha256:a92a0051c28189326d20ac2322c2e873d6c446d063d7c3794308af64c435b32b"
+        "sha256:753c04d312b8898a8039d0a568bfd0c6638869810ff0414b26a16f801ffc70a7"
     ),
     "controlled-codex": (
-        "sha256:3233eee8b70760718e3d83ab523c373fed4468dd08090915caa413b0d1ef6d1d"
+        "sha256:c65231b3b154c10dfeb9963182b4568cb723cc8d9d016cf5346d07e82ed97246"
     ),
 }
 
@@ -214,10 +214,13 @@ def capability(
         },
         "record_versions": {
             "observe_request": "adapter-contract-v1",
+            "prepare_request": "adapter-contract-v1",
+            "prepared_state_facts": "adapter-contract-v1",
             "runtime_observation": "adapter-contract-v1",
             "planned_action": "adapter-contract-v1",
             "mutation_receipt": "adapter-contract-v1",
             "captured_state": "agent-equipment-captured-state/v1",
+            "adapter_manifest_set": "agent-equipment-preparation-adapter-manifest-set/v1",
         },
         "automated_control_owners": ["reconciler_owned"],
     }

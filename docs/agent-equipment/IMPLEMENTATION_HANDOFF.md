@@ -61,9 +61,9 @@ major rollout is never permitted.
 | `docs/agent-equipment/lock-v1.schema.json` | Expanded lock serialization contract |
 | `docs/agent-equipment/captured-state-v1.schema.json` | Pre-mutation runtime capture and recovery-evidence contract |
 | `docs/agent-equipment/plan-action-set-v1.schema.json` | Closed projection of every independently validated automated plan action supplied to captured-state validation |
-| `docs/agent-equipment/adapter-contract-v1.schema.json` | Closed capability, request, observation, action, and receipt serialization contract, including immutable-content evidence |
+| `docs/agent-equipment/adapter-contract-v1.schema.json` | Closed capability, preparation-gate and adapter-manifest, capability-binding-set, prepare-request, prepared-state-facts, observation, action, and receipt serialization contract, including immutable-content evidence |
 | `docs/agent-equipment/acceptance-evidence-v1.schema.json` | Closed expected-case, candidate evidence, and post-run attestation contract |
-| `docs/agent-equipment/execution-authority-v1.schema.json` | Ten closed records with the same normalized immutable-content state: apply authorization, capture-observation-authority set, prepared-action-authority set, checkpoint-store snapshot, checkpoint set, compensation authorization and transition claim, run terminal, release archive manifest, and release receipt |
+| `docs/agent-equipment/execution-authority-v1.schema.json` | Twelve closed records with the same normalized immutable-content state where applicable: preparation bundle and receipt, apply authorization, capture-observation-authority set, prepared-action-authority set, checkpoint-store snapshot, checkpoint set, compensation authorization and transition claim, run terminal, release archive manifest, and release receipt |
 | `docs/agent-equipment/initial-catalog.proposed.json` | Schema-valid initial desired-state proposal; no live authority |
 | `docs/agent-equipment/initial-lock.proposed.json` | Generated lock with nine current Source Manifests, empty Source Manifest history, 132 coverage records, and 23 retirements, bound to the proposed catalog digest |
 | `docs/agent-equipment/INVENTORY.md` and `initial-inventory.json` | Dated, secret-free read-only observation and initial classification |
@@ -113,6 +113,9 @@ publishes a release or grants runtime-migration authority.
 Add these exact source paths in dependency order:
 
 ```text
+agent-equipment-preparation-authority/pyproject.toml
+agent-equipment-preparation-authority/src/agent_equipment_preparation/__init__.py
+agent-equipment-preparation-authority/src/agent_equipment_preparation/preparation.py
 home/dot_config/agent-equipment/catalog-v1.json
 home/dot_config/agent-equipment/lock-v1.json
 home/private_dot_local/bin/executable_agent-equipment
@@ -132,6 +135,7 @@ home/private_dot_local/lib/agent-equipment/agent_equipment/resolver.py
 home/private_dot_local/lib/agent-equipment/agent_equipment/inventory.py
 home/private_dot_local/lib/agent-equipment/agent_equipment/secrets.py
 home/private_dot_local/lib/agent-equipment/agent_equipment/discovery.py
+home/private_dot_local/lib/agent-equipment/agent_equipment/execution_authority.py
 home/private_dot_local/lib/agent-equipment/agent_equipment/authoring.py
 home/private_dot_local/lib/agent-equipment/agent_equipment/source_resolution.py
 home/private_dot_local/lib/agent-equipment/agent_equipment/updater.py
@@ -153,6 +157,14 @@ home/private_dot_local/lib/agent-equipment/agent_equipment/adapters/cursor_mcp.p
 home/run_onchange_after_status-agent-equipment.zsh.tmpl
 tests/agent_equipment/
 ```
+
+The separately packaged `agent-equipment-preparation-authority` is not part of
+the candidate package or its installed-implementation manifest. It owns only
+candidate-independent preparation: static validation, manifest-bound read-only
+adapter preparation, sealing, and an atomic create-only preparation store. It
+cannot issue apply authority, claim a nonce, create a checkpoint, invoke a
+mutating adapter operation, or mutate a host. The candidate and its package do
+not receive the gate's store-commit or receipt-issuance capability.
 
 The candidate-independent release authority is a different protected source and
 deployment unit. Its exact source path is
@@ -275,21 +287,21 @@ The resolver has one side-effect-free entry point:
 resolve(command, catalog, lock, inventory, capabilities) -> Resolution
 ```
 
-The executor has one forward-mutation seam and one separately authorized public
-compensation seam:
+Preclaim, forward mutation, and separately authorized public compensation are
+three ordered seams:
 
 ```python
+ApplyPreclaimGate(resolver).admit(
+    apply_authorization_bytes,
+    ApplyAuthorizationTrust(...),
+) -> AdmittedApplyAuthorization | ApplyAdmissionRejection
+
 execute(
     validated_plan,
-    apply_authorization_bytes,
+    admitted_apply_authorization,
     adapters,
     checkpoint_store,
     authorization_ledger,
-    *,
-    trusted_apply_authorization_digest,
-    trusted_execution_domain_identity,
-    trusted_operator_review_package_digest,
-    trusted_clock,
 ) -> ApplyReport
 
 compensate(
@@ -305,8 +317,64 @@ compensate(
 ) -> CompensationReport
 ```
 
-After validating `ApplyAuthorization`, the executor obtains the expected
-capture-observation-authority identity/digest from its closed bindings. Every
+Preparation is a separate pre-authorization seam owned by the independently
+packaged gate:
+
+```python
+gate = PreparationGate(
+    gate_manifest_bytes=gate_manifest_bytes,
+    expected_gate_manifest_digest=trusted_gate_manifest_digest,
+    schema_documents=exact_schema_bytes,
+    adapters=prepare_only_manifest_bound_adapters,
+    expected_adapter_manifest_set_digest=trusted_adapter_manifest_set_digest,
+    store=preprovisioned_create_only_store,
+)
+
+gate.prepare(
+    plan_action_set_bytes,
+    captured_state_bytes,
+    trusted_preparation_bindings,
+    reuse_receipt_bytes=previous_receipt_bytes_or_none,
+) -> VerifiedPreparationNoOp | PreparedBundleCommit | PreparationRejection
+```
+
+The gate validates every static binding before it calls an adapter. For each
+action it calls exactly the manifest-bound, read-only `prepare` seam with a
+closed `PrepareRequest`, accepts only closed `PreparedStateFacts`, and verifies
+its echoed bindings and complete normalized pre/post self-digests. Facts cannot
+provide surface scope, controlled-component membership, authority identities,
+or mutation capability. Construction consumes the Schema mapping once and uses
+the resulting exact immutable byte snapshot for both active validators and gate-
+manifest authentication. It also captures the prepare, store-commit, and receipt-
+resolution call targets once; replacing methods on supplied objects afterward
+does not replace those capabilities. The gate derives the complete canonical capture and
+prepared authority sets, requires each prepared pre-state to equal the matching
+capture member, and commits the complete bundle and receipt atomically. Native
+remove guards use the matching prepared member's full
+`expected_post_state_digest`.
+The deployment supplies a prepare-only adapter handle; a handle declaring
+another public callable is rejected before use, and deployment qualification
+excludes dynamically exposed mutation seams. The protected store root must
+already exist with owner-only permissions. Gate construction never provisions
+it.
+
+The receipt is evidence of a durable commit, not authorization. The apply
+issuer resolves it only through the authenticated producer-owned store,
+rehashes its exact bundle bytes, and derives the bundle digest and both
+authority-set tuples before it can issue `ApplyAuthorization`. Reuse requires
+full binding revalidation and byte-identical committed data; a conflict,
+partial entry, or durability uncertainty yields no receipt. A retry starts from
+binding revalidation. An admitted empty action set is a terminal verified no-op
+and creates no sets, bundle, receipt, authorization, nonce, checkpoint, or
+adapter call.
+
+After issuance, `ApplyPreclaimGate` validates the raw authorization against
+independent trust, resolves the authorization-bound preparation-bundle digest,
+and independently revalidates the receipt, bundle, and seven exact artifact
+streams. Gate construction captures the producer-owned resolver callable once,
+so later replacement on the resolver object cannot add a new effect or evidence
+source. The admitted result exposes the expected capture-observation-authority
+identity/digest from its closed bindings. Every
 checkpoint, compensation, recovery, terminal, archive, and receipt validator
 takes the exact `CaptureObservationAuthoritySet` plus that expected tuple. The
 public API has no raw observation-list or caller-supplied observation-digest
@@ -317,10 +385,10 @@ The operator invocation supplies the exact authorization file from
 `~/.local/state/agent-equipment/authorization-inbox/<authorization_identity>.json`
 and its separately authenticated `trusted_apply_authorization_digest`. The CLI
 does not discover a newest authorization, infer its digest, or fall back to an
-environment/config value. Before the first action checkpoint it strictly parses
-and validates the record, checks the complete binding tuple, exact top-level
-`execution_domain_identity` against `trusted_execution_domain_identity`, and
-UTC window,
+environment/config value. `ApplyPreclaimGate` strictly parses and validates the
+record, checks the complete binding tuple, exact top-level
+`execution_domain_identity` against independently trusted input, and UTC window,
+then returns an admitted immutable result. #116 accepts only that result,
 performs the final authorized live comparison, and only then durably claims its
 execution nonce under
 `~/.local/state/agent-equipment/authorization-ledger/`, whose independently
@@ -364,7 +432,7 @@ does not mint a fresh nonce or reapply the expired clock window.
 `compensation_blocked` requires separate operator disposition, and public
 recovery never replaces `automatic_apply` provenance.
 
-Every adapter implements:
+Every production adapter implements:
 
 ```python
 capabilities() -> tuple[CapabilityRecord, ...] | AdapterError
@@ -384,17 +452,28 @@ returns no partial capability tuple.
 
 Adapters receive resolved complete route records. They do not choose providers,
 merge coverage defaults, rewrite outcomes, resolve secret values into returned
-objects, or mutate a surface outside the action. Before apply issuance, validate
-every input shape and seal the complete `CaptureObservationAuthoritySet` from
-the trusted plan and capture. Validate its independently trusted identity/digest,
-then seal the complete `PreparedActionAuthoritySet` from that artifact and the
-adapter-derived normalized pre/post state. Before
-adapter invocation, construct the `ApplySequence` authority context from that
-validated set and the prepared checkpoint, and enforce its same
-pre-mutation bindings. After receipt and verification, the pure cross-record
+objects, or mutate a surface outside the action. Before apply issuance, the
+preparation gate validates every input shape and seals the complete
+`CaptureObservationAuthoritySet` from the trusted plan and capture, then seals
+the complete `PreparedActionAuthoritySet` from that artifact and the adapter-
+derived normalized pre/post state. The issuer derives both tuples from the
+authenticated bundle and binds them into `ApplyAuthorization`; post-issuance
+preclaim independently revalidates that authorization-bound evidence. Before
+adapter invocation, #116 constructs the `ApplySequence` authority context only
+from the admitted preclaim result and the prepared checkpoint, and enforces the
+same pre-mutation bindings. After receipt and verification, the pure cross-record
 validator accepts only the complete success proof; it re-derives exact surfaces,
 proves complete desired component state against the route and capability, and
 binds the receipt and verification back to the capture and authority context.
+
+The `prepare` operation is not part of this mutation interface. Only a
+PreparationGate may call it through the exact adapter-manifest binding, and it
+is read-only. #115 stops after sealing and committing preparation evidence and
+the issuer's authenticated resolution for issuance, followed by post-issuance
+`ApplyPreclaimGate` admission. #116 owns final live comparison, authorized
+nonce-claim composition, checkpoint creation, ordered execution, compensation,
+and recovery; neither it nor this handoff authorizes live installation,
+credential access, release work, or host mutation.
 
 The production candidate evidence writer has two nonmutating seams:
 
@@ -669,15 +748,18 @@ Later steps do not begin until the named evidence passes.
 
 ### 4. Implement checkpointing before any production adapter mutation
 
-- Implement the closed `ApplyAuthorization` parser and semantic validator plus
-  the durable authorization ledger. The public executor requires exact
-  authorization bytes and the separately supplied
-  `trusted_apply_authorization_digest`, `trusted_execution_domain_identity`, and
-  trusted operator-review-package digest; validate the canonical identity, full
-  tuple, command, UTC window, run, and nonce before the first action checkpoint.
-  Require the authorization's top-level execution domain to equal that trusted
-  identity and the one authoritative ledger namespace and CAS target. Claim the
-  nonce with an exclusive, fsynced create in that domain. Test missing, extra,
+This step is #116 work. #115 supplies only the sealed preparation bundle and
+receipt plus the issuer-derived authority-set tuples. It does not create an
+authorization-ledger claim, checkpoint, mutation sequence, compensation path,
+or recovery state.
+
+- Compose the existing `ApplyPreclaimGate` with #116's final live comparator and
+  the separate durable `FileAuthorizationLedger`. The executor accepts only an
+  `AdmittedApplyAuthorization`; never restore a direct raw validate-and-claim
+  API. Require its execution domain to equal the one authoritative ledger
+  namespace and CAS target. After the final live comparison, derive the closed
+  ledger claim from the admitted authorization and claim the nonce with an
+  exclusive, fsynced create in that domain. Test missing, extra,
   expired, not-yet-valid, replayed, cross-run, cross-plan, cross-domain, and
   persistence-fault cases for zero adapter calls and zero action checkpoints.
 - Put a 256 KiB raw-byte limit ahead of UTF-8 decoding, JSON parsing, regular
@@ -742,27 +824,25 @@ Later steps do not begin until the named evidence passes.
   bindings, and one identical catalog/lock tuple across every action, then map
   the all-and-only checkpoint-store subset uniquely into it.
   Never replace it with a naked caller action list.
-- Before apply issuance, derive and seal one complete
-  `CaptureObservationAuthoritySet`. Obtain its expected identity and complete
-  digest through an independent trusted channel; never derive either expected
-  value from the artifact under review. Its closed bindings name the exact
+- Consume the complete `CaptureObservationAuthoritySet` already sealed by the
+  preparation gate and revalidated by preclaim. Its expected identity and
+  complete digest come from the admitted authorization-bound bundle, never a
+  caller tuple or the artifact under review. Its closed bindings name the exact
   candidate, implementation, plan, plan-action set, capability set, and captured
   state. Each all-and-only ordered observation binds action identity and ordinal,
   captured-state identity/digest, exact surface scope, controlled-component
-  identities, complete normalized pre-state, and its canonical digest. Bind the
-  validated set identity/digest into `ApplyAuthorization`. The raw observation-
+  identities, complete normalized pre-state, and its canonical digest. The raw observation-
   list and standalone expected-observation-digest API is removed.
-- Derive and independently validate one complete sealed
-  `PreparedActionAuthoritySet` from that validated capture-observation artifact.
+- Consume the complete sealed `PreparedActionAuthoritySet` already derived from
+  that validated capture-observation artifact and revalidated by preclaim.
   Require each prepared pre-state to equal its matching observation exactly, plus
   all-and-only canonical plan membership, exact candidate, implementation,
   plan, capability, and capture bindings, normalized pre/post self-digests and
   native-update invariants, exact sorted controlled-component identities in
   both states, and the planned desired-state fragment in expected post-state.
-  Bind the prepared set identity/digest into `ApplyAuthorization`; every public
-  validation seam takes both closed artifacts and gets both expected tuples from
-  the validated authorization. Checkpoints consume the prepared set's exact
-  state rather than a caller map or raw capture observation.
+  Every public validation seam takes both closed artifacts and gets both
+  expected tuples from the admitted authorization. Checkpoints consume the
+  prepared set's exact state rather than a caller map or raw capture observation.
 - Add the closed `RunTerminalRecord`, bound to the exact apply tuple, complete
   plan-action-set digest, checkpoint-set identity/digest, store generation, and
   `state: succeeded`. Require full plan coverage by unique completed checkpoints
@@ -953,14 +1033,15 @@ Later steps do not begin until the named evidence passes.
 
 - Validate the complete plan and every compensation before opening the first
   checkpoint.
-- Validate the complete captured-state artifact against that plan and seal the
-  exact `CaptureObservationAuthoritySet` over every normalized pre-state. Derive
-  the adapter-normalized post-state context and seal the exact
-  `PreparedActionAuthoritySet` before requesting `ApplyAuthorization`. Bind both
-  independently trusted identity/digest tuples into that authorization. Reject a
+- Give the validated plan and captured-state artifact to the preparation gate,
+  which seals the exact `CaptureObservationAuthoritySet` over every normalized
+  pre-state and the exact `PreparedActionAuthoritySet` over the adapter-normalized
+  post-state context. The issuer derives both identity/digest tuples from the
+  authenticated bundle and binds them, plus the preparation-bundle digest, into
+  `ApplyAuthorization`; preclaim re-resolves and revalidates that evidence. Reject a
   missing/extra action, duplicate ordinal or component identity, capability-set
   mismatch, capture/prepared-state mismatch, desired-post fragment mismatch, or
-  independently trusted set-identity/digest mismatch before issuance.
+  authorization-bound set-identity/digest mismatch before execution.
 - Require a closed, cycle-free dependency graph and execute only its
   deterministic topological order. Reverse compensation uses the reverse
   topological order.
@@ -1046,7 +1127,8 @@ Later steps do not begin until the named evidence passes.
   capture, and resolve again against them. Produce the exact candidate
   implementation identity and installed-manifest digest, catalog digest, lock
   digest, one immutable migration-plan digest, plan-action-set digest,
-  capability-set digest, captured-state identity and digest, sealed capture-
+  capability-set digest, authenticated preparation receipt and revalidated
+  preparation-bundle digest, captured-state identity and digest, sealed capture-
   observation-authority-set identity/digest, sealed prepared-action-authority-set
   identity/digest, expected action list, explicit verification and migration
   nodes, sealed expected-case manifest and digest, compensation list, and
@@ -1054,7 +1136,8 @@ Later steps do not begin until the named evidence passes.
 - Ask for authorization naming that complete candidate, catalog, lock, plan,
   plan-action-set, capture-observation-authority-set identity/digest, prepared-
   action-authority-set identity/digest, capability-set, captured-state identity/
-  digest, expected-case-manifest digest, operator-review-package digest, and independently
+  digest, preparation-bundle digest, expected-case-manifest digest,
+  operator-review-package digest, and independently
   selected execution-domain identity tuple.
   The authority emits the closed `ApplyAuthorization`, including command, issuer,
   time window, execution domain, run, and fresh execution nonce, then supplies
@@ -1143,7 +1226,8 @@ route, or a canonical `~/.agents/skills` entry.
    immutable plan, plan-action-set, already validated and sealed capture-
    observation-authority-set identity/digest, already validated and sealed
    prepared-action-authority-set identity/digest, capability-set, and already
-   sealed captured-state identity/digest, sealed expected-case manifest and digest,
+   sealed captured-state identity/digest, preparation-bundle digest, sealed
+   expected-case manifest and digest,
    issuer, validity window, independently trusted execution-domain identity,
    run, and fresh execution nonce. Bind the exact live
    mutations, rollback command/actions, and review receipts transitively through
@@ -1174,7 +1258,7 @@ misbound, names a foreign execution domain, is replayed, or cannot be claimed
 durably; its canonical digest differs
 from `trusted_apply_authorization_digest`; or the exact runtime plan, plan-
 action-set, capture-observation-authority-set, prepared-action-authority-set,
-captured-state, and expected-case-manifest digests lack
+captured-state, preparation-bundle, and expected-case-manifest digests lack
 authorization.
 
 Stop before a public compensation transition when `CompensationAuthorization`

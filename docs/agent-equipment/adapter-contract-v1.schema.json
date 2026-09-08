@@ -4,7 +4,12 @@
   "title": "Global agent equipment adapter contract v1",
   "oneOf": [
     {"$ref": "#/$defs/applySequenceEnvelope"},
+    {"$ref": "#/$defs/adapterManifestSetEnvelope"},
+    {"$ref": "#/$defs/gateManifestEnvelope"},
+    {"$ref": "#/$defs/capabilityBindingSetEnvelope"},
     {"$ref": "#/$defs/capabilityDiscoveryEnvelope"},
+    {"$ref": "#/$defs/prepareRequestEnvelope"},
+    {"$ref": "#/$defs/preparedStateFactsEnvelope"},
     {"$ref": "#/$defs/observeRequestEnvelope"},
     {"$ref": "#/$defs/runtimeObservationEnvelope"},
     {"$ref": "#/$defs/plannedActionEnvelope"},
@@ -414,13 +419,303 @@
         }
       ]
     },
+    "gateManifestFile": {
+      "type": "object",
+      "required": ["path", "digest"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\u0000]+$"
+        },
+        "digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "gateManifestSchemaDigest": {
+      "type": "object",
+      "required": ["name", "digest"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*\\.schema\\.json$"
+        },
+        "digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "gateManifest": {
+      "type": "object",
+      "required": ["schema_version", "gate_identity", "runtime_identity", "runtime_executable_digest", "files", "schema_digests", "manifest_digest"],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "agent-equipment-preparation-gate-manifest/v1"
+        },
+        "gate_identity": {"$ref": "#/$defs/nonEmptyString"},
+        "runtime_identity": {"$ref": "#/$defs/nonEmptyString"},
+        "runtime_executable_digest": {"$ref": "#/$defs/digest"},
+        "files": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4096,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/gateManifestFile"}
+        },
+        "schema_digests": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4096,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/gateManifestSchemaDigest"}
+        },
+        "manifest_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "gateManifestEnvelope": {
+      "type": "object",
+      "required": ["record_type", "record"],
+      "additionalProperties": false,
+      "properties": {
+        "record_type": {"const": "GateManifest"},
+        "record": {"$ref": "#/$defs/gateManifest"}
+      }
+    },
+    "capabilityBinding": {
+      "type": "object",
+      "required": ["capability_identity", "capability_digest", "manager_version_evidence_digest"],
+      "additionalProperties": false,
+      "properties": {
+        "capability_identity": {"$ref": "#/$defs/nonEmptyString"},
+        "capability_digest": {"$ref": "#/$defs/digest"},
+        "manager_version_evidence_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "capabilityBindingSet": {
+      "type": "object",
+      "required": ["schema_version", "capability_binding_set_identity", "bindings", "capability_set_digest", "capability_binding_set_digest"],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "agent-equipment-capability-binding-set/v1"
+        },
+        "capability_binding_set_identity": {
+          "type": "string",
+          "pattern": "^capability-binding-set:sha256:[0-9a-f]{64}$"
+        },
+        "bindings": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4096,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/capabilityBinding"}
+        },
+        "capability_set_digest": {"$ref": "#/$defs/digest"},
+        "capability_binding_set_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "capabilityBindingSetEnvelope": {
+      "type": "object",
+      "required": ["record_type", "record"],
+      "additionalProperties": false,
+      "properties": {
+        "record_type": {"const": "CapabilityBindingSet"},
+        "record": {"$ref": "#/$defs/capabilityBindingSet"}
+      }
+    },
+    "adapterPrepareSeam": {
+      "type": "object",
+      "required": ["entrypoint", "effect", "request_record", "response_record"],
+      "additionalProperties": false,
+      "properties": {
+        "entrypoint": {"const": "prepare"},
+        "effect": {"const": "read_only"},
+        "request_record": {"const": "PrepareRequest"},
+        "response_record": {"const": "PreparedStateFacts"}
+      }
+    },
+    "adapterManifest": {
+      "type": "object",
+      "required": ["adapter_manifest_identity", "adapter_identity", "adapter_version", "adapter_implementation_identity", "adapter_implementation_manifest_digest", "capability_binding", "prepare_seam", "adapter_manifest_digest"],
+      "additionalProperties": false,
+      "properties": {
+        "adapter_manifest_identity": {
+          "type": "string",
+          "pattern": "^preparation-adapter-manifest:sha256:[0-9a-f]{64}$"
+        },
+        "adapter_identity": {"$ref": "#/$defs/nonEmptyString"},
+        "adapter_version": {"$ref": "#/$defs/nonEmptyString"},
+        "adapter_implementation_identity": {"$ref": "#/$defs/nonEmptyString"},
+        "adapter_implementation_manifest_digest": {"$ref": "#/$defs/digest"},
+        "capability_binding": {"$ref": "#/$defs/capabilityBinding"},
+        "prepare_seam": {"$ref": "#/$defs/adapterPrepareSeam"},
+        "adapter_manifest_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "adapterManifestSet": {
+      "type": "object",
+      "required": ["schema_version", "adapter_manifest_set_identity", "manifests", "adapter_manifest_set_digest"],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "agent-equipment-preparation-adapter-manifest-set/v1"
+        },
+        "adapter_manifest_set_identity": {
+          "type": "string",
+          "pattern": "^preparation-adapter-manifest-set:sha256:[0-9a-f]{64}$"
+        },
+        "manifests": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4096,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/adapterManifest"}
+        },
+        "adapter_manifest_set_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "adapterManifestSetEnvelope": {
+      "type": "object",
+      "required": ["record_type", "record"],
+      "additionalProperties": false,
+      "properties": {
+        "record_type": {"const": "AdapterManifestSet"},
+        "record": {"$ref": "#/$defs/adapterManifestSet"}
+      }
+    },
+    "preparationEchoBindings": {
+      "type": "object",
+      "required": ["candidate_identity", "implementation_manifest_digest", "plan_digest", "plan_action_set_digest", "action_identity", "action_digest", "ordinal", "route_identity", "route_digest", "provider_digest", "operation_digest", "compensation_digest", "desired_state_digest", "captured_state_identity", "captured_state_digest", "captured_projection_digest", "capability_identity", "capability_digest", "manager_version_evidence_digest", "capability_set_digest", "adapter_identity", "adapter_version", "adapter_manifest_identity", "adapter_manifest_digest", "preparation_adapter_manifest_set_digest", "adapter_implementation_identity", "adapter_implementation_manifest_digest"],
+      "additionalProperties": false,
+      "properties": {
+        "candidate_identity": {"$ref": "#/$defs/nonEmptyString"},
+        "implementation_manifest_digest": {"$ref": "#/$defs/digest"},
+        "plan_digest": {"$ref": "#/$defs/digest"},
+        "plan_action_set_digest": {"$ref": "#/$defs/digest"},
+        "action_identity": {"$ref": "#/$defs/actionIdentity"},
+        "action_digest": {"$ref": "#/$defs/digest"},
+        "ordinal": {"type": "integer", "minimum": 0, "maximum": 2147483647},
+        "route_identity": {
+          "type": "string",
+          "pattern": "^route:[a-z0-9][a-z0-9._/-]*$"
+        },
+        "route_digest": {"$ref": "#/$defs/digest"},
+        "provider_digest": {"$ref": "#/$defs/digest"},
+        "operation_digest": {"$ref": "#/$defs/digest"},
+        "compensation_digest": {"$ref": "#/$defs/digest"},
+        "desired_state_digest": {"$ref": "#/$defs/digest"},
+        "captured_state_identity": {"$ref": "#/$defs/nonEmptyString"},
+        "captured_state_digest": {"$ref": "#/$defs/digest"},
+        "captured_projection_digest": {"$ref": "#/$defs/digest"},
+        "capability_identity": {"$ref": "#/$defs/nonEmptyString"},
+        "capability_digest": {"$ref": "#/$defs/digest"},
+        "manager_version_evidence_digest": {"$ref": "#/$defs/digest"},
+        "capability_set_digest": {"$ref": "#/$defs/digest"},
+        "adapter_identity": {"$ref": "#/$defs/nonEmptyString"},
+        "adapter_version": {"$ref": "#/$defs/nonEmptyString"},
+        "adapter_manifest_identity": {
+          "type": "string",
+          "pattern": "^preparation-adapter-manifest:sha256:[0-9a-f]{64}$"
+        },
+        "adapter_manifest_digest": {"$ref": "#/$defs/digest"},
+        "preparation_adapter_manifest_set_digest": {"$ref": "#/$defs/digest"},
+        "adapter_implementation_identity": {"$ref": "#/$defs/nonEmptyString"},
+        "adapter_implementation_manifest_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "capturedProjection": {
+      "type": "object",
+      "required": ["captured_state_bytes_base64", "captured_state_bytes_digest", "route_identity", "action_identity", "surface_ids"],
+      "additionalProperties": false,
+      "properties": {
+        "captured_state_bytes_base64": {
+          "type": "string",
+          "minLength": 4,
+          "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$"
+        },
+        "captured_state_bytes_digest": {"$ref": "#/$defs/digest"},
+        "route_identity": {
+          "type": "string",
+          "pattern": "^route:[a-z0-9][a-z0-9._/-]*$"
+        },
+        "action_identity": {"$ref": "#/$defs/actionIdentity"},
+        "surface_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4096,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/nonEmptyString"}
+        }
+      }
+    },
+    "prepareRequest": {
+      "type": "object",
+      "required": ["contract_version", "request_identity", "request_digest", "echo_bindings", "captured_projection", "operation", "desired_state", "desired_state_digest", "compensation_operation"],
+      "additionalProperties": false,
+      "properties": {
+        "contract_version": {"const": "adapter-contract-v1"},
+        "request_identity": {
+          "type": "string",
+          "pattern": "^prepare-request:sha256:[0-9a-f]{64}$"
+        },
+        "request_digest": {"$ref": "#/$defs/digest"},
+        "echo_bindings": {"$ref": "#/$defs/preparationEchoBindings"},
+        "captured_projection": {"$ref": "#/$defs/capturedProjection"},
+        "operation": {"$ref": "#/$defs/operation"},
+        "desired_state": {"$ref": "#/$defs/desiredState"},
+        "desired_state_digest": {"$ref": "#/$defs/digest"},
+        "compensation_operation": {"const": "restore_captured_pre_state"}
+      }
+    },
+    "prepareRequestEnvelope": {
+      "type": "object",
+      "required": ["record_type", "record"],
+      "additionalProperties": false,
+      "properties": {
+        "record_type": {"const": "PrepareRequest"},
+        "record": {"$ref": "#/$defs/prepareRequest"}
+      }
+    },
+    "preparedStateFacts": {
+      "type": "object",
+      "required": ["contract_version", "request_identity", "request_digest", "echo_bindings", "captured_pre_state", "captured_pre_state_digest", "expected_post_state", "expected_post_state_digest", "facts_digest"],
+      "additionalProperties": false,
+      "properties": {
+        "contract_version": {"const": "adapter-contract-v1"},
+        "request_identity": {
+          "type": "string",
+          "pattern": "^prepare-request:sha256:[0-9a-f]{64}$"
+        },
+        "request_digest": {"$ref": "#/$defs/digest"},
+        "echo_bindings": {"$ref": "#/$defs/preparationEchoBindings"},
+        "captured_pre_state": {"$ref": "#/$defs/normalizedState"},
+        "captured_pre_state_digest": {"$ref": "#/$defs/digest"},
+        "expected_post_state": {"$ref": "#/$defs/normalizedState"},
+        "expected_post_state_digest": {"$ref": "#/$defs/digest"},
+        "facts_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "preparedStateFactsEnvelope": {
+      "type": "object",
+      "required": ["record_type", "record"],
+      "additionalProperties": false,
+      "properties": {
+        "record_type": {"const": "PreparedStateFacts"},
+        "record": {"$ref": "#/$defs/preparedStateFacts"}
+      }
+    },
     "recordVersions": {
       "type": "object",
-      "required": ["observe_request", "runtime_observation", "planned_action", "mutation_receipt", "captured_state"],
+      "required": ["observe_request", "runtime_observation", "prepare_request", "prepared_state_facts", "adapter_manifest_set", "planned_action", "mutation_receipt", "captured_state"],
       "additionalProperties": false,
       "properties": {
         "observe_request": {"const": "adapter-contract-v1"},
         "runtime_observation": {"const": "adapter-contract-v1"},
+        "prepare_request": {"const": "adapter-contract-v1"},
+        "prepared_state_facts": {"const": "adapter-contract-v1"},
+        "adapter_manifest_set": {
+          "const": "agent-equipment-preparation-adapter-manifest-set/v1"
+        },
         "planned_action": {"const": "adapter-contract-v1"},
         "mutation_receipt": {"const": "adapter-contract-v1"},
         "captured_state": {"const": "agent-equipment-captured-state/v1"}
