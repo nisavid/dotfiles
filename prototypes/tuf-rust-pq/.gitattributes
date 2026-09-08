@@ -1,0 +1,2 @@
+# Unified-diff blank context lines retain their required space prefix.
+patches/tough-openpgp-rfc9980.patch whitespace=-blank-at-eol

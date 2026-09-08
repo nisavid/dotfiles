@@ -1,0 +1,291 @@
+diff --git a/tough/Cargo.toml b/tough/Cargo.toml
+index 0cc702d..e80a924 100644
+--- a/tough/Cargo.toml
++++ b/tough/Cargo.toml
+@@ -30,6 +30,7 @@ rustls-platform-verifier = { version = "0.7", optional = true }
+ serde = { version = "1", features = ["derive"] }
+ serde_json = "1"
+ serde_plain = "1"
++sequoia-openpgp = { version = "=2.4.1", default-features = false, features = ["crypto-openssl"] }
+ snafu = { version = "0.8", features = ["futures"] }
+ tempfile = "3"
+ tokio = { version = "1", default-features = false, features = ["io-util", "sync", "fs", "rt", "time"] }
+diff --git a/tough/src/schema/key.rs b/tough/src/schema/key.rs
+index 24f4c9f..f75e639 100644
+--- a/tough/src/schema/key.rs
++++ b/tough/src/schema/key.rs
+@@ -7,6 +7,15 @@ use crate::schema::error::{self, Result};
+ use aws_lc_rs::digest::{digest, SHA256};
+ use aws_lc_rs::signature::VerificationAlgorithm;
+ use olpc_cjson::CanonicalFormatter;
++use sequoia_openpgp as openpgp;
++use sequoia_openpgp::parse::stream::{
++    DetachedVerifierBuilder, GoodChecksum, MessageLayer, MessageStructure, VerificationHelper,
++};
++use sequoia_openpgp::parse::Parse;
++use sequoia_openpgp::policy::StandardPolicy;
++use sequoia_openpgp::serialize::SerializeInto;
++use sequoia_openpgp::types::{HashAlgorithm, PublicKeyAlgorithm, SignatureType};
++use sequoia_openpgp::{Cert, Fingerprint, KeyHandle, Packet, PacketPile};
+ use serde::{Deserialize, Serialize};
+ use serde_json::Value;
+ use snafu::ResultExt;
+@@ -78,6 +87,46 @@ pub enum Key {
+         #[serde(flatten)]
+         _extra: HashMap<String, Value>,
+     },
++    /// An unarmored RFC 9580 OpenPGP certificate containing an RFC 9980
++    /// ML-DSA-65 + Ed25519 composite signing key.
++    #[serde(rename = "openpgp-rfc9580")]
++    OpenPgp {
++        /// The OpenPGP certificate's public projection.
++        keyval: OpenPgpKey,
++        /// Denotes the OpenPGP signature scheme.
++        scheme: OpenPgpScheme,
++        /// Any additional fields read during deserialization; will not be used.
++        #[serde(flatten)]
++        _extra: HashMap<String, Value>,
++    },
++}
++
++/// Identifies the provisional RFC 9980 composite signature scheme.
++#[derive(Debug, Clone, Copy, Deserialize, Serialize, Eq, PartialEq)]
++pub enum OpenPgpScheme {
++    /// A v6 binary signature using algorithm 30 and SHA-512.
++    #[serde(rename = "openpgp-rfc9980-ml-dsa-65+ed25519-sha512")]
++    OpenPgpRfc9980MlDsa65Ed25519Sha512,
++}
++
++/// Represents an unarmored OpenPGP public certificate.
++#[derive(Debug, Clone, Deserialize, Serialize, Eq, PartialEq)]
++pub struct OpenPgpKey {
++    /// The binary public certificate.
++    pub public: Decoded<Hex>,
++
++    /// Any additional fields read during deserialization; will not be used.
++    #[serde(flatten)]
++    pub _extra: HashMap<String, Value>,
++}
++
++/// The identity counted toward a role's signature threshold.
++#[derive(Debug, Clone, Eq, Hash, PartialEq)]
++pub(super) enum ThresholdIdentity {
++    /// Existing TUF key types remain distinct by their authorized TUF key ID.
++    TufKeyId(Decoded<Hex>),
++    /// Composite OpenPGP keys are distinct by the verified signing-key fingerprint.
++    OpenPgpSigningKey(Fingerprint),
+ }
+ 
+ /// Used to identify the RSA signature scheme in use.
+@@ -151,7 +200,27 @@ impl Key {
+     }
+ 
+     /// Verify a signature of an object made with this key.
+-    pub(super) fn verify(&self, msg: &[u8], signature: &[u8]) -> bool {
++    pub(super) fn verify(
++        &self,
++        key_id: &Decoded<Hex>,
++        msg: &[u8],
++        signature: &[u8],
++    ) -> Option<ThresholdIdentity> {
++        if let Key::OpenPgp {
++            scheme: OpenPgpScheme::OpenPgpRfc9980MlDsa65Ed25519Sha512,
++            keyval,
++            _extra,
++        } = self
++        {
++            if !_extra.is_empty() || !keyval._extra.is_empty() {
++                return None;
++            }
++
++            return verify_openpgp_rfc9980(&keyval.public, msg, signature)
++                .ok()
++                .map(ThresholdIdentity::OpenPgpSigningKey);
++        }
++
+         let (alg, public_key): (&dyn VerificationAlgorithm, untrusted::Input<'_>) = match self {
+             Key::Ecdsa {
+                 scheme: EcdsaScheme::EcdsaSha2Nistp256,
+@@ -182,13 +251,120 @@ impl Key {
+                 &aws_lc_rs::signature::RSA_PSS_2048_8192_SHA256,
+                 untrusted::Input::from(&keyval.public),
+             ),
++            Key::OpenPgp { .. } => unreachable!("OpenPGP keys are handled above"),
+         };
+ 
+         alg.verify_sig(public_key.as_slice_less_safe(), msg, signature)
+             .is_ok()
++            .then(|| ThresholdIdentity::TufKeyId(key_id.clone()))
+     }
+ }
+ 
++struct OpenPgpVerificationHelper {
++    cert: Cert,
++    issuer: Fingerprint,
++}
++
++impl VerificationHelper for OpenPgpVerificationHelper {
++    fn get_certs(&mut self, ids: &[KeyHandle]) -> openpgp::Result<Vec<Cert>> {
++        if ids
++            .iter()
++            .any(|id| id.aliases(KeyHandle::from(&self.issuer)))
++        {
++            Ok(vec![self.cert.clone()])
++        } else {
++            Ok(Vec::new())
++        }
++    }
++
++    fn check(&mut self, structure: MessageStructure<'_>) -> openpgp::Result<()> {
++        let mut layers = structure.into_iter();
++        let Some(MessageLayer::SignatureGroup { results }) = layers.next() else {
++            return openpgp_rejection("detached signature group is missing");
++        };
++        if layers.next().is_some() || results.len() != 1 {
++            return openpgp_rejection("expected exactly one detached signature result");
++        }
++
++        match &results[0] {
++            Ok(GoodChecksum { ka, .. }) if ka.key().fingerprint() == self.issuer => Ok(()),
++            _ => openpgp_rejection("composite signature verification failed"),
++        }
++    }
++}
++
++fn verify_openpgp_rfc9980(
++    public: &[u8],
++    msg: &[u8],
++    signature: &[u8],
++) -> openpgp::Result<Fingerprint> {
++    let cert = Cert::from_bytes(public)?;
++    if cert.is_tsk() || cert.clone().to_vec()?.as_slice() != public {
++        return openpgp_rejection("expected one canonical unarmored public certificate");
++    }
++    if cert.primary_key().key().version() != 6
++        || cert.primary_key().key().pk_algo() != PublicKeyAlgorithm::MLDSA65_Ed25519
++    {
++        return openpgp_rejection("expected an RFC 9580 algorithm-30 primary key");
++    }
++
++    let mut packets = PacketPile::from_bytes(signature)?.into_children();
++    let Some(Packet::Signature(parsed_signature)) = packets.next() else {
++        return openpgp_rejection("expected one detached signature packet");
++    };
++    if packets.next().is_some()
++        || Packet::from(parsed_signature.clone()).to_vec()?.as_slice() != signature
++    {
++        return openpgp_rejection("expected one canonical unarmored signature packet");
++    }
++    if parsed_signature.version() != 6
++        || parsed_signature.typ() != SignatureType::Binary
++        || parsed_signature.pk_algo() != PublicKeyAlgorithm::MLDSA65_Ed25519
++        || parsed_signature.hash_algo() != HashAlgorithm::SHA512
++    {
++        return openpgp_rejection("signature parameters do not match the provisional scheme");
++    }
++
++    let mut issuers = parsed_signature.issuer_fingerprints();
++    let Some(issuer @ Fingerprint::V6(_)) = issuers.next() else {
++        return openpgp_rejection("expected one v6 issuer fingerprint");
++    };
++    if issuers.next().is_some() {
++        return openpgp_rejection("expected one v6 issuer fingerprint");
++    }
++    let issuer = issuer.clone();
++
++    let policy = StandardPolicy::new();
++    let signing_keys: Vec<_> = cert
++        .keys()
++        .with_policy(&policy, None)
++        .supported()
++        .alive()
++        .revoked(false)
++        .for_signing()
++        .collect();
++    if signing_keys.len() != 1
++        || signing_keys[0].key().version() != 6
++        || signing_keys[0].key().pk_algo() != PublicKeyAlgorithm::MLDSA65_Ed25519
++        || signing_keys[0].key().fingerprint() != issuer
++    {
++        return openpgp_rejection("issuer is not the certificate's sole composite signing key");
++    }
++
++    let helper = OpenPgpVerificationHelper {
++        cert,
++        issuer: issuer.clone(),
++    };
++    let mut verifier =
++        DetachedVerifierBuilder::from_bytes(signature)?.with_policy(&policy, None, helper)?;
++    verifier.verify_bytes(msg)?;
++    Ok(issuer)
++}
++
++fn openpgp_rejection<T>(reason: &str) -> openpgp::Result<T> {
++    Err(openpgp::Error::InvalidOperation(reason.to_owned()).into())
++}
++
+ impl FromStr for Key {
+     type Err = KeyParseError;
+ 
+diff --git a/tough/src/schema/verify.rs b/tough/src/schema/verify.rs
+index 001ec2a..dd6cfe0 100644
+--- a/tough/src/schema/verify.rs
++++ b/tough/src/schema/verify.rs
+@@ -1,4 +1,5 @@
+ use super::error::{self, Result};
++use super::key::ThresholdIdentity;
+ use super::{Delegations, Role, RoleType, Root, Signed, Targets};
+ use olpc_cjson::CanonicalFormatter;
+ use serde::Serialize;
+@@ -22,7 +23,7 @@ impl Root {
+                 what: format!("{} role", T::TYPE),
+             })?;
+ 
+-        let mut valid_keyids = HashSet::new();
++        let mut valid_threshold_identities = HashSet::<ThresholdIdentity>::new();
+         let mut contained_keyids = HashSet::new();
+ 
+         for signature in &role.signatures {
+@@ -35,12 +36,10 @@ impl Root {
+             contained_keyids.insert(&signature.keyid);
+             if role_keys.keyids.contains(&signature.keyid) {
+                 if let Some(key) = self.keys.get(&signature.keyid) {
+-                    if key.verify(&data, &signature.sig) {
+-                        // we have ensured that this keyid is not already
+-                        // present in valid_keyids with the test on
+-                        // contained_keyids.
+-                        valid_keyids.insert(&signature.keyid);
+-                        valid += 1;
++                    if let Some(identity) = key.verify(&signature.keyid, &data, &signature.sig) {
++                        if valid_threshold_identities.insert(identity) {
++                            valid += 1;
++                        }
+                     }
+                 }
+             }
+@@ -78,7 +77,7 @@ impl Delegations {
+             .context(error::JsonSerializationSnafu {
+                 what: format!("{name} role"),
+             })?;
+-        let mut valid_keyids = HashSet::new();
++        let mut valid_threshold_identities = HashSet::<ThresholdIdentity>::new();
+         let mut contained_keyids = HashSet::new();
+ 
+         for signature in &role.signatures {
+@@ -91,12 +90,10 @@ impl Delegations {
+             contained_keyids.insert(&signature.keyid);
+             if role_keys.keyids.contains(&signature.keyid) {
+                 if let Some(key) = self.keys.get(&signature.keyid) {
+-                    if key.verify(&data, &signature.sig) {
+-                        // we have ensured that this keyid is not already
+-                        // present in valid_keyids with the test on
+-                        // contained_keyids.
+-                        valid_keyids.insert(&signature.keyid);
+-                        valid += 1;
++                    if let Some(identity) = key.verify(&signature.keyid, &data, &signature.sig) {
++                        if valid_threshold_identities.insert(identity) {
++                            valid += 1;
++                        }
+                     }
+                 }
+             }

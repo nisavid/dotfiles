@@ -1,0 +1,17 @@
+[package]
+name = "tuf-rust-pq-prototype"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.98.1"
+publish = false
+
+[dependencies]
+async-trait = "0.1"
+aws-lc-rs = "1"
+sequoia-openpgp = { version = "=2.4.1", path = ".scratch/sequoia/openpgp", default-features = false, features = ["crypto-openssl"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt"] }
+tough = { version = "=0.24.0", path = ".scratch/tough/tough" }
+
+[patch.crates-io]
+sequoia-openpgp = { path = ".scratch/sequoia/openpgp" }
