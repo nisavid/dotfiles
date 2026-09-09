@@ -12,6 +12,12 @@ This skill is the external-mutation orchestrator for PR creation, title/body pub
 
 GitHub exposes no conditional title/body/readiness mutation. These helpers use guarded best effort: exact preflight, one mutation, and a final re-read. They detect observed drift but cannot eliminate the final read/write race. Never claim atomicity, automatic rollback, or that a concurrent edit cannot be overwritten.
 
+Run the owned helpers directly. This workflow requires no PreToolUse hook or hook-trust step; leave a disabled publication hook disabled. The helpers validate their supported operations, not arbitrary shell commands or connectors.
+
+Install `publishing-reviewable-prs` and a compatible `writing-reviewable-pr-descriptions` as sibling skill directories. Both publication helpers resolve the writer validator beside their own package. If it is missing, repair the sibling installation before publication. The commands below use the standard managed installation; for a relocated pair, resolve helper paths from this skill's directory.
+
+When installing this workflow from dotfiles or retiring its former hook, follow the [hook-free publication installation procedure](https://github.com/nisavid/dotfiles/blob/main/docs/agents/hook-free-pr-publication.md).
+
 ## Routing
 
 - For a chat-only title/body draft, use `writing-reviewable-pr-descriptions` alone and stop before GitHub mutation.
@@ -103,5 +109,3 @@ For both text and ready mutations, a command error followed by the exact intende
 ## Completion Evidence
 
 Report the PR URL, exact base/head and OIDs, stored title/body and digest verification, draft/ready state, checks used, and remaining operator action.
-
-The personal PreToolUse guard is inactive until its exact definition is trusted. After applying a new or changed hook definition, have the operator open `/hooks`, review it, and mark it trusted. It is bounded defense in depth over recognized static command, script, API-client, and connector surfaces; it fails closed on recognized but unprovable routes, but does not interpret arbitrary opaque programs or runtime-generated behavior. The hard rules above remain primary. Do not claim even that bounded enforcement until `/hooks` shows this command enabled and trusted; this manual activation gate is intentional for the user-level hook.

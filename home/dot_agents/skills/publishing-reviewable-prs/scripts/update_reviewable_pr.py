@@ -27,8 +27,10 @@ from reviewable_pr_state import (
 
 
 VALIDATOR = (
-    Path.home()
-    / ".agents/skills/writing-reviewable-pr-descriptions/scripts/validate_change_navigation.py"
+    Path(__file__).resolve().parents[2]
+    / "writing-reviewable-pr-descriptions"
+    / "scripts"
+    / "validate_change_navigation.py"
 )
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 

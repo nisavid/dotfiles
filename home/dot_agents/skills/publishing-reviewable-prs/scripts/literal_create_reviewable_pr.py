@@ -28,8 +28,10 @@ from reviewable_pr_state import (
 
 PR_NUMBER_TOKEN = "__PUBLISHING_REVIEWABLE_PRS_PR_NUMBER__"
 VALIDATOR = (
-    Path.home()
-    / ".agents/skills/writing-reviewable-pr-descriptions/scripts/validate_change_navigation.py"
+    Path(__file__).resolve().parents[2]
+    / "writing-reviewable-pr-descriptions"
+    / "scripts"
+    / "validate_change_navigation.py"
 )
 
 

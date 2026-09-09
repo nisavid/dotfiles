@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
-"""Merge the bounded canonical PR-publication guard into Codex's hooks file.
+"""Remove the retired PR-publication guard from Codex's hooks file.
 
-This remains a user-level command hook. Codex intentionally skips a new or
-changed definition until the operator reviews and trusts it through `/hooks`.
-The guard is defense in depth over recognized static command and connector
-surfaces; the publication skill's owned helpers and hard rules remain primary.
+Only command forms previously owned by this dotfiles repository are removed.
+Documents without an owned registration are emitted byte for byte.
 """
 
 import json
@@ -13,21 +11,26 @@ import sys
 
 
 raw = sys.stdin.read()
-document = json.loads(raw) if raw.strip() else {}
+if not raw.strip():
+    sys.stdout.write(raw)
+    raise SystemExit(0)
+
+document = json.loads(raw)
 if not isinstance(document, dict):
     raise ValueError("hooks document root must be a JSON object")
 if "hooks" not in document:
-    document["hooks"] = {}
+    sys.stdout.write(raw)
+    raise SystemExit(0)
 hooks = document["hooks"]
 if not isinstance(hooks, dict):
     raise ValueError("hooks must be a JSON object")
 if "PreToolUse" not in hooks:
-    hooks["PreToolUse"] = []
+    sys.stdout.write(raw)
+    raise SystemExit(0)
 pre_tool_use = hooks["PreToolUse"]
 if not isinstance(pre_tool_use, list):
     raise ValueError("hooks.PreToolUse must be a JSON list")
-guard_path = {{ joinPath .chezmoi.homeDir ".codex/scripts/block_pr_fill.py" | quote }}
-guard_command = shlex.join(["python3", guard_path])
+obsolete_path = {{ joinPath .chezmoi.homeDir ".codex/scripts/block_pr_fill.py" | quote }}
 
 
 def unwrap_env(arguments):
@@ -44,8 +47,8 @@ def unwrap_env(arguments):
     return tail
 
 
-def is_expandable_guard_path(argument, command):
-    if argument == guard_path:
+def is_expandable_obsolete_path(argument, command):
+    if argument == obsolete_path:
         return True
     spellings = (
         "$HOME/.codex/scripts/block_pr_fill.py",
@@ -69,7 +72,7 @@ def is_expandable_guard_path(argument, command):
     )
 
 
-def is_guard_hook(hook):
+def is_obsolete_hook(hook):
     if not isinstance(hook, dict):
         return False
     if hook.get("type") not in {None, "command"}:
@@ -80,7 +83,7 @@ def is_guard_hook(hook):
     except ValueError:
         return False
     arguments = unwrap_env(arguments)
-    if len(arguments) == 1 and is_expandable_guard_path(
+    if len(arguments) == 1 and is_expandable_obsolete_path(
         arguments[0], command
     ):
         return True
@@ -90,43 +93,33 @@ def is_guard_hook(hook):
     path_arguments = arguments[1:]
     if path_arguments[:1] == ["-u"]:
         path_arguments = path_arguments[1:]
-    return len(path_arguments) == 1 and is_expandable_guard_path(
+    return len(path_arguments) == 1 and is_expandable_obsolete_path(
         path_arguments[0], command
     )
 
 
 filtered = []
-insert_at = None
+removed = False
 for index, matcher in enumerate(pre_tool_use):
     nested_hooks = matcher.get("hooks", []) if isinstance(matcher, dict) else []
     if not isinstance(nested_hooks, list):
         raise ValueError(
             f"hooks.PreToolUse matcher {index} hooks must be a JSON list"
         )
-    retained_hooks = [hook for hook in nested_hooks if not is_guard_hook(hook)]
+    retained_hooks = [hook for hook in nested_hooks if not is_obsolete_hook(hook)]
     if len(retained_hooks) == len(nested_hooks):
         filtered.append(matcher)
         continue
-    if insert_at is None:
-        insert_at = len(filtered)
+    removed = True
     if retained_hooks:
         retained_matcher = dict(matcher)
         retained_matcher["hooks"] = retained_hooks
         filtered.append(retained_matcher)
 
-canonical_matcher = (
-    {
-        "hooks": [
-            {
-                "type": "command",
-                "command": guard_command,
-                "timeout": 12,
-                "statusMessage": "Checking canonical PR publication",
-            }
-        ]
-    }
-)
-filtered.insert(len(filtered) if insert_at is None else insert_at, canonical_matcher)
+if not removed:
+    sys.stdout.write(raw)
+    raise SystemExit(0)
+
 hooks["PreToolUse"] = filtered
 json.dump(document, sys.stdout, indent=2)
 sys.stdout.write("\n")
