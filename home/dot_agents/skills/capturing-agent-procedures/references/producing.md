@@ -16,7 +16,7 @@ Use `ralph-review-until-clean` for one labeled loop on the candidate equipment:
 
 1. Evaluate with `plugin-eval:evaluate-skill`; review the instructions and their relevant references/helpers. Classify findings using Ralph's valid, fixed, rejected-with-evidence, and operator-blocked states.
 2. Address valid findings through `plugin-eval:improve-skill`, using the installed `skill-creator` equivalent. Reevaluate with `plugin-eval:evaluate-skill` after improvements. Continue alternating until the latest evaluation of the final candidate is clean.
-3. Derive realistic discovery and application tests from the candidate procedure's entry conditions, supported inputs, decision branches, and completion criteria, including relevant failure and no-op paths. Static analysis alone does not establish the procedure's behavior.
+3. Derive tests from the candidate procedure's entry conditions, supported inputs, decision branches, and completion criteria. Test discovery separately: include requests that should invoke the procedure and nearby requests that should not. For application, test the observable result of relevant success, failure, and no-op branches. A no-op application still invokes the procedure, so it cannot substitute for negative discovery. Static analysis alone does not establish these behaviors.
 
 Ralph owns escalation checkpoints and stopping rules. Active checkpoints or operator-blocked findings pause the loop for the required decision. Any candidate or relevant dependency change invalidates affected evidence; every selected focus needs a clean latest pass on the final revision.
 
