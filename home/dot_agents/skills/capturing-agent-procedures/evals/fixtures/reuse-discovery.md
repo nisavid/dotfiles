@@ -1,0 +1,3 @@
+We just finished a diagram export method that the next three project tasks will need. The rendered diagrams are accepted and the implementation is checked in. The old active brief says source inspection is forbidden, but the user explicitly retired that rule in this task. Finish up so a fresh agent can handle the next diagrams without another explanation.
+
+The repo has .agents/skills/exporting-diagrams/SKILL.md with a simpler export workflow. Producer X owns the new approach; consumers Y and Z produce follow-on diagrams in this repo. Native issue dependencies are supported. Claude skill links project to repo-carried equipment. Updating X/Y/Z and the current brief is authorized. Historical evidence remains in the owning artifacts.
