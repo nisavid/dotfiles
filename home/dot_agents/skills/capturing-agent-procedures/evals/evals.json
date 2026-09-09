@@ -5,7 +5,7 @@
       "id": 0,
       "name": "reuse-discovery",
       "prompt": "Using the supplied fixture, respond as the agent handling the request. This is a no-tools simulation: do not inspect files, run commands, or perform external actions. Return concrete next actions, completion criteria, and any question you would ask. Do not evaluate your own response.",
-      "expected_output": "Extends the existing repo-carried export skill and repairs the active retired instruction while preserving historical artifacts.; Captures entry conditions, inputs, branches, procedure, references, and observable completion; acceptance of diagrams alone does not finish equipment capture.; Uses writing-for-agents and Ralph evaluate-skill, improve-skill for valid findings, then evaluate-skill again until the final candidate is clean; includes discovery and application behavior tests.; Adds invocation pointers and real prerequisite dependencies from Y/Z to X, with used revision and correction feedback in consumer completion.",
+      "expected_output": "Extends the existing diagram-export procedure, validates its final revision, and connects dependent diagram tasks to it.",
       "fixture_paths": [
         "evals/fixtures/reuse-discovery.md"
       ],
@@ -36,7 +36,7 @@
       "id": 1,
       "name": "global-placement",
       "prompt": "Using the supplied fixture, respond as the agent handling the request. This is a no-tools simulation: do not inspect files, run commands, or perform external actions. Return concrete next actions, completion criteria, and any question you would ask. Do not evaluate your own response.",
-      "expected_output": "Inspects existing equipment ownership and uses a global user-local extension of surveying-projects, preserving the upstream package.; Keeps project-specific survey findings and historical evidence in their owning project artifacts.; Requires writing-for-agents and the alternating Ralph evaluation/improvement route with final discovery/application evidence and verified installation.",
+      "expected_output": "Adds a user-local extension for the reusable survey method, with maintained ownership and verified review and installation.",
       "fixture_paths": [
         "evals/fixtures/global-placement.md"
       ],
@@ -62,7 +62,7 @@
       "id": 2,
       "name": "method-correction",
       "prompt": "Using the supplied fixture, respond as the agent handling the request. This is a no-tools simulation: do not inspect files, run commands, or perform external actions. Return concrete next actions, completion criteria, and any question you would ask. Do not evaluate your own response.",
-      "expected_output": "Feeds the consumer correction into the existing producer method and its relevant helper.; Treats a1 review as stale for the revised contract and tests both existing supported input and the new branch, binding final review to instructions and helper revision.; Keeps actual deployment outside this rehearsal task.",
+      "expected_output": "Revises the existing rehearsal method and helper for multi-service inputs, with current review and behavioral evidence.",
       "fixture_paths": [
         "evals/fixtures/method-correction.md"
       ],
@@ -88,7 +88,7 @@
       "id": 3,
       "name": "uncertain-proposal",
       "prompt": "Using the supplied fixture, respond as the agent handling the request. This is a no-tools simulation: do not inspect files, run commands, or perform external actions. Return concrete next actions, completion criteria, and any question you would ask. Do not evaluate your own response.",
-      "expected_output": "Records a concrete proposal with intended change, evidence limits, placement, tradeoff, and the decision to make; uses grilling and waits for the human response.; Does not install uncertain behavior as settled global or repo equipment or assume approval after time passes.; Continues independently authorized closeout of the verified main change.",
+      "expected_output": "Presents uncertain reuse as a concrete human decision while finishing independently authorized work.",
       "fixture_paths": [
         "evals/fixtures/uncertain-proposal.md"
       ],
@@ -114,7 +114,7 @@
       "id": 4,
       "name": "consumer-dependencies",
       "prompt": "Using the supplied fixture, respond as the agent handling the request. This is a no-tools simulation: do not inspect files, run commands, or perform external actions. Return concrete next actions, completion criteria, and any question you would ask. Do not evaluate your own response.",
-      "expected_output": "Makes method capture and validation part of P completion, without a self-dependency; records candidate revision for producer self-use.; Makes Q and the dependent portion of R require P while allowing independent work and avoiding dependency cycles.; Consumer completion identifies the invoked source and revision, verifies outputs against the procedure criteria, and feeds useful corrections back to P.",
+      "expected_output": "Makes the validated method part of producer completion and a prerequisite for dependent consumer work.",
       "fixture_paths": [
         "evals/fixtures/consumer-dependencies.md"
       ],
@@ -140,7 +140,7 @@
       "id": 5,
       "name": "routine-no-capture",
       "prompt": "Using the supplied fixture, respond as the agent handling the request. This is a no-tools simulation: do not inspect files, run commands, or perform external actions. Return concrete next actions, completion criteria, and any question you would ask. Do not evaluate your own response.",
-      "expected_output": "Finishes ordinary work without creating or modifying equipment, proposing a global convention, or starting an equipment review loop.",
+      "expected_output": "Finishes routine work through the existing workflow without producing new equipment.",
       "fixture_paths": [
         "evals/fixtures/routine-no-capture.md"
       ],
@@ -156,7 +156,7 @@
       "id": 6,
       "name": "instruction-only",
       "prompt": "Using the supplied fixture, respond as the agent handling the request. This is a no-tools simulation: do not inspect files, run commands, or perform external actions. Return concrete next actions, completion criteria, and any question you would ask. Do not evaluate your own response.",
-      "expected_output": "Reviews AGENTS.md as an instruction artifact and evaluates/exercises its owning skill route instead of passing AGENTS.md as a valid skill package.; Labels Ralph cycles on the instruction artifact, applies anti-recursion, and does not spawn a recursive review of the review loop.; Rechecks discovery and application for the changed final pointer and binds the clean result to final instruction and route dependencies.",
+      "expected_output": "Reviews the final instruction artifact and its owning route with current discovery and application evidence, without recursive review.",
       "fixture_paths": [
         "evals/fixtures/instruction-only.md"
       ],
@@ -195,6 +195,32 @@
         {
           "id": "no-redundant-production",
           "text": "Does not add capture work or start a new Ralph/plugin-eval equipment loop for unchanged reviewed equipment; retains normal output acceptance.",
+          "severity": "quality"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "name": "candidate-specific-tests",
+      "prompt": "Using the supplied fixture, respond as the agent handling the request. This is a no-tools simulation: do not inspect files, run commands, or perform external actions. Return concrete next actions, completion criteria, and any question you would ask. Do not evaluate your own response.",
+      "expected_output": "Derives diagram-export discovery and application tests from the procedure's supported behavior.",
+      "fixture_paths": [
+        "evals/fixtures/candidate-specific-tests.md"
+      ],
+      "expectations": [
+        {
+          "id": "candidate-contract",
+          "text": "Tests both SVG and PNG, the background option, missing-font behavior, and the overwrite decision.",
+          "severity": "quality"
+        },
+        {
+          "id": "discovery",
+          "text": "Includes realistic positive and negative discovery cases for diagram export.",
+          "severity": "quality"
+        },
+        {
+          "id": "scope",
+          "text": "Does not prescribe placement, uncertain equipment proposals, producer-consumer dependencies, or routine no-capture cases as tests of the diagram-export skill.",
           "severity": "quality"
         }
       ]
