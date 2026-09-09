@@ -1,0 +1,34 @@
+[
+  {
+    "query": "We pioneered a repeatable export procedure and the next tasks will reuse it. Finish the work.",
+    "should_trigger": true
+  },
+  {
+    "query": "Plan the adoption workflow for a method that future agents will need across projects.",
+    "should_trigger": true
+  },
+  {
+    "query": "The consuming task corrected a branch of the existing agent procedure. Finish this revision.",
+    "should_trigger": true
+  },
+  {
+    "query": "Review this new operating method and preserve it for future agents.",
+    "should_trigger": true
+  },
+  {
+    "query": "This task depends on a captured procedure from a producer task. Set up the consumer.",
+    "should_trigger": true
+  },
+  {
+    "query": "This workaround may be a reusable method, but the right placement is uncertain.",
+    "should_trigger": true
+  },
+  {
+    "query": "Fix the typo in this static page using our existing workflow.",
+    "should_trigger": false
+  },
+  {
+    "query": "What is 17 times 4?",
+    "should_trigger": false
+  }
+]
