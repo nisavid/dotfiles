@@ -22,6 +22,12 @@ BASE_SHA = "a" * 40
 HEAD_SHA = "b" * 40
 REPOSITORY = "owner/repository"
 PR_NUMBER = 42
+SOURCE_VALIDATOR = (
+    SCRIPTS.resolve().parents[1]
+    / "writing-reviewable-pr-descriptions"
+    / "scripts"
+    / "validate_change_navigation.py"
+)
 
 
 class ValidationIdentityTests(unittest.TestCase):
@@ -38,7 +44,7 @@ class ValidationIdentityTests(unittest.TestCase):
         run.assert_called_once_with(
             [
                 sys.executable,
-                str(module.VALIDATOR),
+                str(SOURCE_VALIDATOR),
                 "/dev/stdin",
                 "--repository",
                 REPOSITORY,
@@ -52,10 +58,10 @@ class ValidationIdentityTests(unittest.TestCase):
             input_text="body",
         )
 
-    def test_create_validation_passes_immutable_identity(self) -> None:
+    def test_create_validation_uses_source_sibling_with_identity(self) -> None:
         self.assert_validator_receives_identity(create_reviewable_pr, "_validate")
 
-    def test_update_validation_passes_immutable_identity(self) -> None:
+    def test_update_validation_uses_source_sibling_with_identity(self) -> None:
         self.assert_validator_receives_identity(update_reviewable_pr, "_validate_body")
 
 

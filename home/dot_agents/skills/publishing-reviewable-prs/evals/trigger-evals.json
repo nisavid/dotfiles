@@ -70,5 +70,13 @@
   {
     "query": "Ship the commits to the remote branch, but do not create or change any pull request text or state.",
     "should_trigger": false
+  },
+  {
+    "query": "The PR-publication hook is disabled. Create a draft pull request for this pushed branch through the installed helper without changing hook settings.",
+    "should_trigger": true
+  },
+  {
+    "query": "Inspect the disabled PR-publication hook configuration and report its state. Do not create or change a pull request.",
+    "should_trigger": false
   }
 ]

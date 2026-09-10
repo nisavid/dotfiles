@@ -212,6 +212,8 @@ test_pr_publication() {
 
   python3 -m unittest discover -s "${writer:h}/tests" -p 'test_*.py'
   python3 "$repo_dir/tests/test_publish_reviewable_pr.py"
+  python3 -m unittest discover -s "${publisher:h}/tests" -p 'test_*.py'
+  python3 "$repo_dir/tests/test_modify_hooks.py"
   python3 "$repo_dir/tests/test_modify_private_config.py"
 }
 
