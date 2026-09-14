@@ -560,6 +560,8 @@ cat > "$profile_dir/firecrawl.env" <<'EOF'
 FIRECRAWL_API_KEY=pass://cli-secrets/firecrawl/password
 EOF
 cat > "$profile_dir/github.env" <<'EOF'
+# secret-exec-github-profile=github-fixture-personal
+# secret-exec-github-login=nisavid
 GITHUB_PERSONAL_ACCESS_TOKEN=pass://cli-secrets/github-mcp/password
 EOF
 cat > "$profile_dir/greptile.env" <<'EOF'
@@ -675,6 +677,14 @@ EOF
 chmod +x "$homebrew_cellar_bin/pass-cli"
 ln -s ../Cellar/proton-pass-cli/2.3.2/bin/pass-cli \
   "$homebrew_prefix/bin/pass-cli"
+
+cat > "$fake_bin/gh" <<'EOF'
+#!/usr/bin/env zsh
+set -euo pipefail
+[[ $GH_TOKEN == github-canary ]] || exit 72
+print -r -- nisavid
+EOF
+chmod +x "$fake_bin/gh"
 
 cat > "$native_store_adapter" <<'EOF'
 #!/bin/zsh -f
