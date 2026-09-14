@@ -14,6 +14,26 @@ Chezmoi keeps the profile catalog encrypted. Apply renders individual profile
 files into a mode-`0700` directory with mode-`0600` files. Profile names and
 credential names must be unique and syntactically valid.
 
+### Host-bound GitHub profiles
+
+The GitHub consumer is selected from an encrypted host binding. `hatchery`
+renders the `github-personal` profile and expects the `nisavid` login;
+`stlz-ivan-mbp` renders `github-systalyze` and expects `ivan-systalyze`.
+There is no fallback `github` profile: an unknown or incomplete hostname
+binding fails during rendering.
+
+The rendered `github.env` file carries only the selected profile name and
+expected login as comments alongside the process-scoped token locator. Before
+the consumer starts, `secret-exec github` runs a bounded `gh api user` check
+with the resolved token held in the child environment. It compares the login
+with the rendered expectation and reports only a generic failure, so a stale
+or cross-host credential cannot silently start the MCP process.
+
+After applying a profile change, restart or reinitialize every MCP consumer.
+An app-managed connector can retain a prior process or route outside this
+launcher; that route is a separate app integration issue and does not weaken
+the `secret-exec` boundary.
+
 Each assignment uses one of these locators:
 
 - `pass://...` resolves a single field through the Proton Pass CLI.
