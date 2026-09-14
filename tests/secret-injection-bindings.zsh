@@ -280,6 +280,7 @@ mkdir -m 700 -- "$rendered_profiles"
 for profile_template in "${profile_templates[@]}"; do
   profile_name=${${profile_template:t}#private_}
   profile_name=${profile_name%.env.tmpl}
+  [[ $profile_name == github ]] && continue
   rendered_profile=$rendered_profiles/$profile_name.env
   chezmoi -S home execute-template \
     --override-data-file tests/fixtures/secret-exec-public.toml \
@@ -293,6 +294,41 @@ for profile_template in "${profile_templates[@]}"; do
       fail "$profile_name fixture profile contains an invalid mapping"
   done < "$rendered_profile"
 done
+
+render_github_profile() {
+  local host=$1
+  local target=$2
+  local override_data
+  override_data=$(printf '{"chezmoi":{"hostname":"%s"}}' "$host")
+  chezmoi -S home execute-template \
+    --override-data "$override_data" \
+    --override-data-file tests/fixtures/secret-exec-public.toml \
+    < home/dot_config/private_secret-exec/private_profiles/private_github.env.tmpl > "$target"
+}
+
+github_personal_profile=$test_dir/github-personal.env
+render_github_profile test-host "$github_personal_profile"
+grep -Fx '# secret-exec-github-profile=github-fixture-personal' "$github_personal_profile" >/dev/null || \
+  fail 'the fixture host must select the personal GitHub profile'
+grep -Fx '# secret-exec-github-login=fixture-personal' "$github_personal_profile" >/dev/null || \
+  fail 'the fixture host must carry the personal GitHub identity marker'
+grep -Fx 'GITHUB_PERSONAL_ACCESS_TOKEN=pass://fixture-vault/item-d/password' "$github_personal_profile" >/dev/null || \
+  fail 'the fixture host must render the personal GitHub locator'
+
+github_systalyze_profile=$test_dir/github-systalyze.env
+render_github_profile stlz-fixture "$github_systalyze_profile"
+grep -Fx '# secret-exec-github-profile=github-fixture-systalyze' "$github_systalyze_profile" >/dev/null || \
+  fail 'the second fixture host must select the Systalyze GitHub profile'
+grep -Fx '# secret-exec-github-login=fixture-systalyze' "$github_systalyze_profile" >/dev/null || \
+  fail 'the second fixture host must carry the Systalyze GitHub identity marker'
+grep -Fx 'GITHUB_PERSONAL_ACCESS_TOKEN=pass://fixture-vault/item-f/password' "$github_systalyze_profile" >/dev/null || \
+  fail 'the second fixture host must render its distinct GitHub locator'
+
+if render_github_profile unknown-fixture "$test_dir/github-unknown.env" 2> "$test_dir/github-unknown.err"; then
+  fail 'an unbound host must not render a GitHub profile'
+fi
+grep -F 'no GitHub credential binding for host' "$test_dir/github-unknown.err" >/dev/null || \
+  fail 'an unbound host must report a value-free profile-selection failure'
 
 commands_template=home/dot_config/private_secret-exec/private_commands.env.tmpl
 rendered_commands=$test_dir/rendered-commands.env
