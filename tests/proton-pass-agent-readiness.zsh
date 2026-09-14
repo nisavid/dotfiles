@@ -67,6 +67,16 @@ case $1 in
           'Error: This operation requires an authenticated client'
         exit 1
         ;;
+      absent-modern)
+        print -u2 -rl -- \
+          'Error: Error getting personal access token name' \
+          '' \
+          'Caused by:' \
+          '    0: Error sending request' \
+          '    1: failed to authenticate: non-existent session' \
+          '    2: non-existent session'
+        exit 1
+        ;;
       unknown)
         print -u2 -rl -- \
           'Operation not permitted while accessing the native keyring' \
@@ -134,6 +144,16 @@ print -r -- absent > "$FAKE_SESSION_STATE"
   fail 'the recorded absent-session diagnostic must complete one repair before resolution'
 [[ $(<"$FAKE_NATIVE_STORE_LOG") == proton-bootstrap ]] ||
   fail 'the recorded absent-session diagnostic must reach native-store bootstrap'
+
+print -r -- absent-modern > "$FAKE_SESSION_STATE"
+: > "$FAKE_PASS_LOG"
+: > "$FAKE_NATIVE_STORE_LOG"
+rm -f -- "$FAKE_TARGET_MARKER"
+"$launcher" agent -- check-agent-fixture
+[[ -e "$FAKE_TARGET_MARKER" ]] ||
+  fail 'the current non-existent-session diagnostic must recover before starting the consumer'
+[[ $(<"$FAKE_PASS_LOG") == $'info\ninfo\nlogin\ninfo\nitem' ]] ||
+  fail 'the current non-existent-session diagnostic must complete one repair before resolution'
 
 print -r -- unknown > "$FAKE_SESSION_STATE"
 : > "$FAKE_PASS_LOG"
