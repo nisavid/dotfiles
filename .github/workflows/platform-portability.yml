@@ -83,6 +83,10 @@ jobs:
             --output "$age_package" \
             "https://github.com/FiloSottile/age/releases/download/v${AGE_VERSION}/$age_archive"
           printf '%s  %s\n' "$age_digest" "$age_package" | shasum -a 256 --check
+          {
+            printf 'AGE_TOOLING_ARCHIVE=%s\n' "$age_package"
+            printf 'AGE_TOOLING_ARCHIVE_SHA256=%s\n' "$age_digest"
+          } >>"$GITHUB_ENV"
           tar -xzf "$age_package" -C "$RUNNER_TEMP"
           install -m 0755 \
             "$RUNNER_TEMP/age/age" \
@@ -110,13 +114,18 @@ jobs:
           mkdir -p "$RUNNER_TEMP/chezmoi-bin"
           tar -xzf "$package" -C "$RUNNER_TEMP/chezmoi-bin" chezmoi
           age_archive=age-v${AGE_VERSION}-linux-amd64.tar.gz
+          age_digest=bdc69c09cbdd6cf8b1f333d372a1f58247b3a33146406333e30c0f26e8f51377
           age_package="$RUNNER_TEMP/$age_archive"
           curl --fail --location --silent --show-error \
             --output "$age_package" \
             "https://github.com/FiloSottile/age/releases/download/v${AGE_VERSION}/$age_archive"
           printf '%s  %s\n' \
-            bdc69c09cbdd6cf8b1f333d372a1f58247b3a33146406333e30c0f26e8f51377 \
+            "$age_digest" \
             "$age_package" | sha256sum --check
+          {
+            printf 'AGE_TOOLING_ARCHIVE=%s\n' "$age_package"
+            printf 'AGE_TOOLING_ARCHIVE_SHA256=%s\n' "$age_digest"
+          } >>"$GITHUB_ENV"
           tar -xzf "$age_package" -C "$RUNNER_TEMP"
           install -m 0755 \
             "$RUNNER_TEMP/age/age" \
@@ -208,6 +217,16 @@ jobs:
           REQUIRE_AGE_TOOLING=1 \
             python3 -m unittest tests/test_agent_equipment_public_data.py
           python3 -m unittest tests/test_privacy_age_integrity_gate.py
+          python3 -m unittest tests/test_proton_pass_age_admission.py
+          AGE_TOOLING_ARCHIVE="$AGE_TOOLING_ARCHIVE" \
+          AGE_TOOLING_ARCHIVE_SHA256="$AGE_TOOLING_ARCHIVE_SHA256" \
+          REQUIRE_AGE_TOOLING=1 \
+            python3 -B -m unittest tests.test_age_admission_provider_fixture
+          AGE_TOOLING_ARCHIVE="$AGE_TOOLING_ARCHIVE" \
+          AGE_TOOLING_ARCHIVE_SHA256="$AGE_TOOLING_ARCHIVE_SHA256" \
+          REQUIRE_AGE_TOOLING=1 \
+            python3 -B -m unittest tests.test_age_admission_provisioning
+          python3 -B -m unittest tests.test_age_admission_recovery_preimage
           REQUIRE_AGE_TOOLING=1 \
             python3 -m unittest tests/test_privacy_age_admission.py
           REQUIRE_AGE_TOOLING=1 \

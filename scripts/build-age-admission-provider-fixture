@@ -1,0 +1,1625 @@
+#!/usr/bin/env python3
+"""Build one provider-free, synthetic age-admission qualification fixture."""
+
+from __future__ import annotations
+
+import sys
+
+_FAILURE = "age-admission provider fixture failed"
+_INTERRUPTED = "age-admission provider fixture interrupted"
+
+if not sys.flags.isolated or not sys.flags.dont_write_bytecode or not sys.flags.no_site:
+    print(_FAILURE, file=sys.stderr)
+    raise SystemExit(1)
+
+import argparse
+import base64
+import binascii
+import hashlib
+import io
+import json
+import os
+import re
+import selectors
+import shutil
+import signal
+import stat
+import struct
+import subprocess
+import tarfile
+import tempfile
+import time
+from pathlib import Path
+from types import FrameType
+from typing import Any
+
+os.umask(0o077)
+
+REQUEST_SCHEMA = "issue286-provider-fixture/v1"
+MANIFEST_SCHEMA = "issue286-reviewed-source-manifest/v1"
+FIXTURE_SCHEMA = "issue286-provider-fixture-binding/v1"
+FIXTURE_REPOSITORY = "fixture.invalid/issue286-age-admission-provider"
+ADMISSION_NAMESPACE = "nisavid/dotfiles/age-admission/v1"
+ADMISSION_PRINCIPAL = "repository-owner"
+AGE_VERSION = b"v1.3.1\n"
+
+MAX_REQUEST_BYTES = 256 * 1024
+MAX_MANIFEST_BYTES = 256 * 1024
+MAX_PUBLIC_KEY_BYTES = 4 * 1024
+MAX_SOURCE_BLOB_BYTES = 4 * 1024 * 1024
+MAX_SOURCE_AGGREGATE_BYTES = 16 * 1024 * 1024
+MAX_AGE_ARCHIVE_BYTES = 64 * 1024 * 1024
+MAX_AGE_MEMBER_BYTES = 32 * 1024 * 1024
+MAX_CHILD_CAPTURE_BYTES = 1024 * 1024
+MAX_PREFLIGHT_CHANNEL_BYTES = 32
+MAX_GIT_TREE_ENTRIES = 10_000
+CHILD_TIMEOUT_SECONDS = 30
+PREFLIGHT_TIMEOUT_SECONDS = 75
+TERMINATION_GRACE_SECONDS = 1.0
+
+COMMIT_ID = re.compile(r"[0-9a-f]{40}\Z", re.ASCII)
+DIGEST = re.compile(r"[0-9a-f]{64}\Z", re.ASCII)
+PQ_RECIPIENT = re.compile(rb"age1pq1[a-z0-9]+\n\Z", re.ASCII)
+SOURCE_PATH = re.compile(r"[A-Za-z0-9._/-]+\Z", re.ASCII)
+
+SOURCE_MODES = {
+    "home/private_dot_local/bin/executable_proton-pass-age-admission": "100644",
+    "home/private_dot_local/bin/executable_proton-pass-ensure-ready": "100755",
+    "scripts/admit-age-envelopes": "100755",
+    "scripts/agent_equipment_public_data.py": "100644",
+    "scripts/build-age-admission-provider-fixture": "100755",
+    "scripts/create-age-admission-receipt": "100755",
+    "scripts/prepare-age-admission-recovery-preimage": "100755",
+    "scripts/privacy-scan": "100755",
+    "scripts/privacy_age_admission.py": "100644",
+    "scripts/privacy_age_envelopes.py": "100644",
+    "scripts/privacy_age_integrity_gate.py": "100755",
+    "scripts/provision-age-admission-signer": "100755",
+    "scripts/run-trusted-age-admission": "100755",
+}
+
+_ACTIVE_PROCESS: subprocess.Popen[bytes] | None = None
+_ACTIVE_PROCESS_GROUP: int | None = None
+_PROCESS_STATE = "unowned"
+_CREATED_OPERATION: Path | None = None
+_CREATED_OPERATION_IDENTITY: tuple[int, int] | None = None
+_OPERATION_STATE = "unowned"
+_PRIVATE_TEMP_DIRECTORY: Path | None = None
+_FIRST_TERMINATION_SIGNAL: int | None = None
+_TERMINATION_SIGNALS = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
+
+
+class FixtureBuildError(RuntimeError):
+    """The closed fixture build contract was not established."""
+
+
+class FixtureBuildInterrupted(BaseException):
+    """A catchable signal interrupted the fixture build."""
+
+    def __init__(self, signum: int) -> None:
+        super().__init__(signum)
+        self.signum = signum
+
+
+def _signal_handler(signum: int, _frame: FrameType | None) -> None:
+    global _FIRST_TERMINATION_SIGNAL
+    if _FIRST_TERMINATION_SIGNAL is not None:
+        return
+    _FIRST_TERMINATION_SIGNAL = signum
+    process_group = _ACTIVE_PROCESS_GROUP
+    if process_group is not None:
+        try:
+            os.killpg(process_group, signal.SIGTERM)
+        except (OSError, ValueError):
+            pass
+
+
+def _raise_if_interrupted() -> None:
+    if _FIRST_TERMINATION_SIGNAL is not None:
+        raise FixtureBuildInterrupted(_FIRST_TERMINATION_SIGNAL)
+
+
+def _install_signal_handlers() -> None:
+    for signum in _TERMINATION_SIGNALS:
+        signal.signal(signum, _signal_handler)
+
+
+def _sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _canonical_json(document: object) -> bytes:
+    try:
+        return (
+            json.dumps(document, ensure_ascii=True, indent=2, sort_keys=True) + "\n"
+        ).encode("ascii")
+    except (
+        TypeError,
+        UnicodeError,
+        ValueError,
+        OverflowError,
+        RecursionError,
+    ) as error:
+        raise FixtureBuildError("JSON value is not canonicalizable") from error
+
+
+def _reject_constant(_: str) -> None:
+    raise FixtureBuildError("non-finite JSON number")
+
+
+def _object_from_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise FixtureBuildError("duplicate JSON member")
+        result[key] = value
+    return result
+
+
+def _parse_canonical_json(data: bytes) -> dict[str, Any]:
+    try:
+        source = data.decode("utf-8")
+        document = json.loads(
+            source,
+            object_pairs_hook=_object_from_pairs,
+            parse_constant=_reject_constant,
+        )
+    except (UnicodeError, json.JSONDecodeError, RecursionError, ValueError) as error:
+        raise FixtureBuildError("JSON input is invalid") from error
+    if not isinstance(document, dict) or _canonical_json(document) != data:
+        raise FixtureBuildError("JSON input is not canonical")
+    return document
+
+
+def _absolute_path(value: object) -> Path:
+    if not isinstance(value, str) or not value or "\x00" in value:
+        raise FixtureBuildError("path is invalid")
+    path = Path(value)
+    if not path.is_absolute() or os.fspath(path) != os.path.abspath(path):
+        raise FixtureBuildError("path is not canonical and absolute")
+    return path
+
+
+def _reject_symlink_components(path: Path) -> None:
+    current = Path(path.anchor)
+    for segment in path.parts[1:]:
+        current /= segment
+        try:
+            info = current.lstat()
+        except OSError as error:
+            raise FixtureBuildError("path is unavailable") from error
+        if stat.S_ISLNK(info.st_mode):
+            raise FixtureBuildError("path traverses a symbolic link")
+
+
+def _validate_private_parent(path: Path) -> None:
+    parent = path.parent
+    _reject_symlink_components(parent)
+    try:
+        info = parent.lstat()
+    except OSError as error:
+        raise FixtureBuildError("private parent is unavailable") from error
+    if (
+        not stat.S_ISDIR(info.st_mode)
+        or info.st_uid != os.geteuid()
+        or stat.S_IMODE(info.st_mode) != 0o700
+    ):
+        raise FixtureBuildError("private parent is not authoritative")
+
+
+def _read_regular(
+    path: Path,
+    *,
+    maximum: int,
+    required_mode: int | None = None,
+    private_parent: bool = False,
+    require_single_link: bool = False,
+) -> bytes:
+    if private_parent:
+        _validate_private_parent(path)
+    _reject_symlink_components(path)
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    no_block = getattr(os, "O_NONBLOCK", None)
+    if no_follow is None or no_block is None:
+        raise FixtureBuildError("safe regular-file reads are unavailable")
+    try:
+        descriptor = os.open(
+            path,
+            os.O_RDONLY | no_follow | no_block | getattr(os, "O_CLOEXEC", 0),
+        )
+    except OSError as error:
+        raise FixtureBuildError("input file is unavailable") from error
+    try:
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_uid not in {0, os.geteuid()}
+            or before.st_size > maximum
+            or require_single_link
+            and before.st_nlink != 1
+            or required_mode is not None
+            and stat.S_IMODE(before.st_mode) != required_mode
+        ):
+            raise FixtureBuildError("input file is not authoritative")
+        chunks: list[bytes] = []
+        remaining = maximum + 1
+        while remaining:
+            chunk = os.read(descriptor, min(remaining, 64 * 1024))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        data = b"".join(chunks)
+        after = os.fstat(descriptor)
+        if require_single_link and after.st_nlink != 1:
+            raise FixtureBuildError("input file changed during validation")
+        if len(data) > maximum or (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mtime_ns,
+        ) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
+            raise FixtureBuildError("input file changed during validation")
+        return data
+    except OSError as error:
+        raise FixtureBuildError("input file could not be read") from error
+    finally:
+        os.close(descriptor)
+
+
+def _write_all(descriptor: int, data: bytes) -> None:
+    remaining = memoryview(data)
+    while remaining:
+        written = os.write(descriptor, remaining)
+        if written <= 0:
+            raise FixtureBuildError("file write did not complete")
+        remaining = remaining[written:]
+
+
+def _exclusive_write(path: Path, data: bytes, *, final_mode: int) -> None:
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    if no_follow is None:
+        raise FixtureBuildError("safe file creation is unavailable")
+    try:
+        descriptor = os.open(
+            path,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | no_follow
+            | getattr(os, "O_CLOEXEC", 0),
+            0o600,
+        )
+    except OSError as error:
+        raise FixtureBuildError("file could not be created exclusively") from error
+    try:
+        os.fchmod(descriptor, 0o600)
+        _write_all(descriptor, data)
+        os.fsync(descriptor)
+        os.fchmod(descriptor, final_mode)
+        os.fsync(descriptor)
+        info = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.geteuid()
+            or info.st_size != len(data)
+            or stat.S_IMODE(info.st_mode) != final_mode
+        ):
+            raise FixtureBuildError("created file is not authoritative")
+    except OSError as error:
+        raise FixtureBuildError("created file could not be finalized") from error
+    finally:
+        os.close(descriptor)
+
+
+def _mkdir(path: Path) -> None:
+    try:
+        path.mkdir(mode=0o700)
+        path.chmod(0o700)
+        info = path.lstat()
+    except OSError as error:
+        raise FixtureBuildError("directory could not be created") from error
+    if (
+        not stat.S_ISDIR(info.st_mode)
+        or info.st_uid != os.geteuid()
+        or stat.S_IMODE(info.st_mode) != 0o700
+    ):
+        raise FixtureBuildError("created directory is not authoritative")
+
+
+def _acquire_operation(path: Path) -> None:
+    global _CREATED_OPERATION, _CREATED_OPERATION_IDENTITY, _OPERATION_STATE
+    _raise_if_interrupted()
+    _CREATED_OPERATION = path
+    _CREATED_OPERATION_IDENTITY = None
+    _OPERATION_STATE = "acquiring"
+    try:
+        path.mkdir(mode=0o700)
+    except OSError as error:
+        _CREATED_OPERATION = None
+        _OPERATION_STATE = "unowned"
+        raise FixtureBuildError("directory could not be created") from error
+    try:
+        path.chmod(0o700)
+        info = path.lstat()
+    except OSError as error:
+        try:
+            info = path.lstat()
+        except OSError:
+            _OPERATION_STATE = "unverified"
+        else:
+            _CREATED_OPERATION_IDENTITY = (info.st_dev, info.st_ino)
+            _OPERATION_STATE = "owned"
+        raise FixtureBuildError("directory could not be created") from error
+    _CREATED_OPERATION_IDENTITY = (info.st_dev, info.st_ino)
+    _OPERATION_STATE = "owned"
+    if (
+        not stat.S_ISDIR(info.st_mode)
+        or stat.S_ISLNK(info.st_mode)
+        or info.st_uid != os.geteuid()
+        or stat.S_IMODE(info.st_mode) != 0o700
+    ):
+        raise FixtureBuildError("created directory is not authoritative")
+
+
+def _mkdir_parents(root: Path, parent: Path) -> None:
+    try:
+        relative = parent.relative_to(root)
+    except ValueError as error:
+        raise FixtureBuildError("fixture path escapes its root") from error
+    current = root
+    for segment in relative.parts:
+        current /= segment
+        if current.exists():
+            info = current.lstat()
+            if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode):
+                raise FixtureBuildError("fixture directory is invalid")
+            continue
+        _mkdir(current)
+
+
+def _fsync_directory(path: Path) -> None:
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
+    try:
+        descriptor = os.open(path, flags)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    except OSError as error:
+        raise FixtureBuildError(
+            "directory durability could not be established"
+        ) from error
+
+
+def _registered_process_group(process: subprocess.Popen[bytes]) -> int:
+    if _ACTIVE_PROCESS is not process or _ACTIVE_PROCESS_GROUP is None:
+        raise FixtureBuildError("child process ownership is unavailable")
+    return _ACTIVE_PROCESS_GROUP
+
+
+def _process_group_exists(process_group: int) -> bool:
+    try:
+        os.killpg(process_group, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError as error:
+        raise FixtureBuildError("child process group could not be inspected") from error
+    return True
+
+
+def _process_and_group_retired(
+    process: subprocess.Popen[bytes], *, process_group: int, deadline: float
+) -> bool:
+    while True:
+        leader_reaped = process.poll() is not None
+        group_exists = _process_group_exists(process_group)
+        if leader_reaped and not group_exists:
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(0.01, remaining))
+
+
+def _terminate_process(process: subprocess.Popen[bytes]) -> None:
+    global _PROCESS_STATE
+    if _PROCESS_STATE != "owned":
+        raise FixtureBuildError("child process cleanup is unverified")
+    process_group = _registered_process_group(process)
+    _PROCESS_STATE = "finalizing"
+    try:
+        if _process_group_exists(process_group):
+            try:
+                os.killpg(process_group, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            except OSError as error:
+                raise FixtureBuildError(
+                    "child process group could not be retired"
+                ) from error
+        if _process_and_group_retired(
+            process,
+            process_group=process_group,
+            deadline=time.monotonic() + TERMINATION_GRACE_SECONDS,
+        ):
+            _release_process(process)
+            return
+        if _process_group_exists(process_group):
+            try:
+                os.killpg(process_group, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            except OSError as error:
+                raise FixtureBuildError(
+                    "child process group could not be retired"
+                ) from error
+        if not _process_and_group_retired(
+            process,
+            process_group=process_group,
+            deadline=time.monotonic() + TERMINATION_GRACE_SECONDS,
+        ):
+            raise FixtureBuildError("child process group survived cleanup")
+    except (FixtureBuildError, OSError):
+        _PROCESS_STATE = "unverified"
+        raise
+    _release_process(process)
+
+
+def _release_process(process: subprocess.Popen[bytes]) -> None:
+    global _ACTIVE_PROCESS, _ACTIVE_PROCESS_GROUP, _PROCESS_STATE
+    if _ACTIVE_PROCESS is not process or _PROCESS_STATE not in {"owned", "finalizing"}:
+        raise FixtureBuildError("child process cleanup is unverified")
+    _ACTIVE_PROCESS = None
+    _ACTIVE_PROCESS_GROUP = None
+    _PROCESS_STATE = "released"
+
+
+def _wait_for_child(process: subprocess.Popen[bytes], *, deadline: float) -> int:
+    while True:
+        _raise_if_interrupted()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise FixtureBuildError("child process timed out")
+        try:
+            return process.wait(timeout=min(0.05, remaining))
+        except subprocess.TimeoutExpired:
+            continue
+
+
+def _run_child(
+    command: list[str],
+    *,
+    environment: dict[str, str],
+    timeout: int = CHILD_TIMEOUT_SECONDS,
+    input_data: bytes | None = None,
+    maximum_stdout: int = MAX_CHILD_CAPTURE_BYTES,
+    maximum_stderr: int = MAX_CHILD_CAPTURE_BYTES,
+) -> tuple[int, bytes, bytes]:
+    global _ACTIVE_PROCESS, _ACTIVE_PROCESS_GROUP, _PROCESS_STATE
+    input_stream: io.BufferedRandom | int
+    temporary_input: io.BufferedRandom | None = None
+    if input_data is None:
+        input_stream = subprocess.DEVNULL
+    else:
+        if _PRIVATE_TEMP_DIRECTORY is None:
+            raise FixtureBuildError("private child-input staging is unavailable")
+        temporary_input = tempfile.TemporaryFile(  # noqa: SIM115
+            mode="w+b",
+            dir=_PRIVATE_TEMP_DIRECTORY,
+        )
+        temporary_input.write(input_data)
+        temporary_input.flush()
+        temporary_input.seek(0)
+        input_stream = temporary_input
+    process: subprocess.Popen[bytes] | None = None
+    selector: selectors.BaseSelector | None = None
+    captures = {"stdout": bytearray(), "stderr": bytearray()}
+    limits = {"stdout": maximum_stdout, "stderr": maximum_stderr}
+    deadline = time.monotonic() + timeout
+    try:
+        # Every caller supplies a fixed argv shape and validated absolute executable;
+        # no command is parsed by a shell.
+        _raise_if_interrupted()
+        if _PROCESS_STATE not in {"unowned", "released"}:
+            raise FixtureBuildError("child process ownership is unavailable")
+        _PROCESS_STATE = "acquiring"
+        try:
+            process = subprocess.Popen(
+                command,
+                stdin=input_stream,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=environment,
+                start_new_session=True,
+                close_fds=True,
+            )
+        except OSError:
+            _PROCESS_STATE = "unowned"
+            raise
+        _ACTIVE_PROCESS = process
+        _ACTIVE_PROCESS_GROUP = process.pid
+        _PROCESS_STATE = "owned"
+        _raise_if_interrupted()
+        if process.stdout is None or process.stderr is None:
+            raise FixtureBuildError("child capture is unavailable")
+        selector = selectors.DefaultSelector()
+        selector.register(process.stdout, selectors.EVENT_READ, "stdout")
+        selector.register(process.stderr, selectors.EVENT_READ, "stderr")
+        while selector.get_map():
+            _raise_if_interrupted()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise FixtureBuildError("child process timed out")
+            events = selector.select(min(remaining, 0.25))
+            for key, _ in events:
+                channel = key.data
+                chunk = os.read(key.fileobj.fileno(), 64 * 1024)
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                    continue
+                captures[channel].extend(chunk)
+                if len(captures[channel]) > limits[channel]:
+                    raise FixtureBuildError("child capture exceeded its bound")
+        status = _wait_for_child(process, deadline=deadline)
+        _raise_if_interrupted()
+        process_group = _registered_process_group(process)
+        if _process_group_exists(process_group):
+            _terminate_process(process)
+            raise FixtureBuildError("child process group did not retire")
+        _release_process(process)
+        return status, bytes(captures["stdout"]), bytes(captures["stderr"])
+    except OSError as error:
+        raise FixtureBuildError("child process could not be executed") from error
+    finally:
+        if selector is not None:
+            selector.close()
+        if process is not None and _ACTIVE_PROCESS is process:
+            if _PROCESS_STATE == "owned":
+                _terminate_process(process)
+            elif _PROCESS_STATE != "released":
+                raise FixtureBuildError("child process cleanup is unverified")
+        if temporary_input is not None:
+            temporary_input.close()
+
+
+def _git_environment() -> dict[str, str]:
+    environment = os.environ.copy()
+    for name in (
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_ALLOW_PROTOCOL",
+        "GIT_COMMON_DIR",
+        "GIT_CONFIG_COUNT",
+        "GIT_CONFIG_PARAMETERS",
+        "GIT_CONFIG_SYSTEM",
+        "GIT_DIR",
+        "GIT_EXEC_PATH",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_PROTOCOL_FROM_USER",
+        "GIT_SHALLOW_FILE",
+        "GIT_TEMPLATE_DIR",
+        "GIT_WORK_TREE",
+    ):
+        environment.pop(name, None)
+    for name in tuple(environment):
+        if name.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")):
+            environment.pop(name, None)
+    environment.update(
+        {
+            "GIT_ALLOW_PROTOCOL": "",
+            "GIT_ATTR_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_DEFAULT_HASH": "sha1",
+            "GIT_NO_LAZY_FETCH": "1",
+            "GIT_NO_REPLACE_OBJECTS": "1",
+            "GIT_OPTIONAL_LOCKS": "0",
+            "GIT_PROTOCOL_FROM_USER": "0",
+            "GIT_TERMINAL_PROMPT": "0",
+            "LC_ALL": "C",
+        }
+    )
+    return environment
+
+
+def _git(
+    repository: Path,
+    *arguments: str,
+    maximum_stdout: int = MAX_CHILD_CAPTURE_BYTES,
+    environment_overrides: dict[str, str] | None = None,
+) -> bytes:
+    executable = shutil.which("git")
+    if executable is None:
+        raise FixtureBuildError("Git is unavailable")
+    environment = _git_environment()
+    if environment_overrides:
+        environment.update(environment_overrides)
+    status, stdout, stderr = _run_child(
+        [
+            executable,
+            "-c",
+            "protocol.allow=never",
+            "-c",
+            f"core.hooksPath={os.devnull}",
+            "-c",
+            "core.fsmonitor=false",
+            "-c",
+            "commit.gpgsign=false",
+            "-C",
+            os.fspath(repository),
+            *arguments,
+        ],
+        environment=environment,
+        maximum_stdout=maximum_stdout,
+        maximum_stderr=64 * 1024,
+    )
+    if status != 0 or stderr:
+        raise FixtureBuildError("Git operation failed closed")
+    return stdout
+
+
+def _validate_request(document: dict[str, Any]) -> dict[str, Any]:
+    if set(document) != {
+        "age_tooling",
+        "reviewed_source",
+        "schema",
+        "signer_public_key",
+    }:
+        raise FixtureBuildError("fixture request shape is invalid")
+    if document["schema"] != REQUEST_SCHEMA:
+        raise FixtureBuildError("fixture request schema is unsupported")
+    source = document["reviewed_source"]
+    tooling = document["age_tooling"]
+    if not isinstance(source, dict) or set(source) != {
+        "commit",
+        "manifest",
+        "repository",
+    }:
+        raise FixtureBuildError("reviewed source request is invalid")
+    if not isinstance(tooling, dict) or set(tooling) != {"archive", "sha256"}:
+        raise FixtureBuildError("age tooling request is invalid")
+    manifest = source["manifest"]
+    if not isinstance(manifest, dict) or set(manifest) != {"path", "sha256"}:
+        raise FixtureBuildError("source manifest request is invalid")
+    commit = source["commit"]
+    for digest in (manifest["sha256"], tooling["sha256"]):
+        if not isinstance(digest, str) or DIGEST.fullmatch(digest) is None:
+            raise FixtureBuildError("request digest is invalid")
+    if not isinstance(commit, str) or COMMIT_ID.fullmatch(commit) is None:
+        raise FixtureBuildError("reviewed source commit is invalid")
+    return {
+        "archive": _absolute_path(tooling["archive"]),
+        "archive_sha256": tooling["sha256"],
+        "commit": commit,
+        "manifest": _absolute_path(manifest["path"]),
+        "manifest_sha256": manifest["sha256"],
+        "repository": _absolute_path(source["repository"]),
+        "signer_public_key": _absolute_path(document["signer_public_key"]),
+    }
+
+
+def _validate_manifest(
+    document: dict[str, Any], *, commit: str
+) -> list[dict[str, str]]:
+    if set(document) != {"commit", "entries", "schema"}:
+        raise FixtureBuildError("reviewed source manifest shape is invalid")
+    if document["schema"] != MANIFEST_SCHEMA or document["commit"] != commit:
+        raise FixtureBuildError("reviewed source manifest binding is invalid")
+    raw_entries = document["entries"]
+    if not isinstance(raw_entries, list) or len(raw_entries) != len(SOURCE_MODES):
+        raise FixtureBuildError("reviewed source manifest closure is invalid")
+    entries: list[dict[str, str]] = []
+    for raw in raw_entries:
+        if not isinstance(raw, dict) or set(raw) != {"mode", "path", "sha256"}:
+            raise FixtureBuildError("reviewed source manifest entry is invalid")
+        path = raw["path"]
+        mode = raw["mode"]
+        digest = raw["sha256"]
+        if (
+            not isinstance(path, str)
+            or SOURCE_PATH.fullmatch(path) is None
+            or path.startswith("/")
+            or any(segment in {"", ".", ".."} for segment in path.split("/"))
+            or path not in SOURCE_MODES
+            or mode != SOURCE_MODES[path]
+            or not isinstance(digest, str)
+            or DIGEST.fullmatch(digest) is None
+        ):
+            raise FixtureBuildError("reviewed source manifest entry is invalid")
+        entries.append({"mode": mode, "path": path, "sha256": digest})
+    if [entry["path"] for entry in entries] != sorted(SOURCE_MODES):
+        raise FixtureBuildError(
+            "reviewed source manifest is not a closed sorted inventory"
+        )
+    return entries
+
+
+def _read_reviewed_sources(
+    repository: Path,
+    commit: str,
+    entries: list[dict[str, str]],
+) -> dict[str, bytes]:
+    _reject_symlink_components(repository)
+    if not repository.is_dir():
+        raise FixtureBuildError("reviewed source repository is unavailable")
+    common_raw = _git(
+        repository,
+        "rev-parse",
+        "--path-format=absolute",
+        "--git-common-dir",
+        maximum_stdout=4096,
+    )
+    try:
+        common_directory = _absolute_path(common_raw.decode("utf-8").rstrip("\n"))
+    except UnicodeError as error:
+        raise FixtureBuildError("reviewed Git object database is invalid") from error
+    _reject_symlink_components(common_directory)
+    objects = common_directory / "objects"
+    if not objects.is_dir() or any(
+        os.path.lexists(objects / "info" / name)
+        for name in ("alternates", "http-alternates")
+    ):
+        raise FixtureBuildError("reviewed Git object database has external alternates")
+    actual = _git(
+        repository, "rev-parse", "--verify", f"{commit}^{{commit}}", maximum_stdout=64
+    )
+    if actual != f"{commit}\n".encode("ascii"):
+        raise FixtureBuildError("reviewed source commit is unavailable")
+    records = _git(
+        repository,
+        "ls-tree",
+        "-z",
+        commit,
+        "--",
+        *[entry["path"] for entry in entries],
+        maximum_stdout=256 * 1024,
+    )
+    parsed: dict[str, tuple[str, str]] = {}
+    for raw in (record for record in records.split(b"\0") if record):
+        try:
+            metadata, raw_path = raw.split(b"\t", 1)
+            mode, kind, object_id = metadata.split(b" ", 2)
+            path = raw_path.decode("ascii")
+        except (ValueError, UnicodeError) as error:
+            raise FixtureBuildError(
+                "reviewed source tree record is malformed"
+            ) from error
+        if (
+            kind != b"blob"
+            or COMMIT_ID.fullmatch(object_id.decode("ascii", "ignore")) is None
+            or path in parsed
+        ):
+            raise FixtureBuildError("reviewed source tree record is invalid")
+        parsed[path] = (mode.decode("ascii"), object_id.decode("ascii"))
+    if len(parsed) != len(entries) or len(parsed) > MAX_GIT_TREE_ENTRIES:
+        raise FixtureBuildError("reviewed source tree is incomplete")
+    sources: dict[str, bytes] = {}
+    aggregate = 0
+    for entry in entries:
+        path = entry["path"]
+        if path not in parsed or parsed[path][0] != entry["mode"]:
+            raise FixtureBuildError("reviewed source tree mode is invalid")
+        data = _git(
+            repository,
+            "cat-file",
+            "blob",
+            parsed[path][1],
+            maximum_stdout=MAX_SOURCE_BLOB_BYTES + 1,
+        )
+        aggregate += len(data)
+        if (
+            len(data) > MAX_SOURCE_BLOB_BYTES
+            or aggregate > MAX_SOURCE_AGGREGATE_BYTES
+            or _sha256(data) != entry["sha256"]
+        ):
+            raise FixtureBuildError("reviewed source blob binding is invalid")
+        sources[path] = data
+    own_bytes = _read_regular(
+        Path(os.path.abspath(__file__)),
+        maximum=MAX_SOURCE_BLOB_BYTES,
+    )
+    if own_bytes != sources["scripts/build-age-admission-provider-fixture"]:
+        raise FixtureBuildError(
+            "running builder does not match the reviewed source blob"
+        )
+    return sources
+
+
+def _extract_age_tools(archive_data: bytes, tools: Path) -> dict[str, bytes]:
+    targets = {
+        "age/age": "age",
+        "age/age-inspect": "age-inspect",
+        "age/age-keygen": "age-keygen",
+    }
+    extracted: dict[str, bytes] = {}
+    try:
+        with tarfile.open(fileobj=io.BytesIO(archive_data), mode="r:gz") as archive:
+            aggregate_size = 0
+            for count, member in enumerate(archive, start=1):
+                if count > 1000:
+                    raise FixtureBuildError("age archive contains too many members")
+                if member.size < 0 or member.size > MAX_AGE_MEMBER_BYTES:
+                    raise FixtureBuildError("age archive member size is invalid")
+                aggregate_size += member.size
+                if aggregate_size > MAX_AGE_ARCHIVE_BYTES:
+                    raise FixtureBuildError("age archive expands beyond its bound")
+                if member.name not in targets:
+                    continue
+                if (
+                    not member.isreg()
+                    or member.size <= 0
+                    or member.size > MAX_AGE_MEMBER_BYTES
+                    or targets[member.name] in extracted
+                ):
+                    raise FixtureBuildError("age archive member is invalid")
+                stream = archive.extractfile(member)
+                if stream is None:
+                    raise FixtureBuildError("age archive member is unavailable")
+                data = stream.read(MAX_AGE_MEMBER_BYTES + 1)
+                if len(data) != member.size or len(data) > MAX_AGE_MEMBER_BYTES:
+                    raise FixtureBuildError("age archive member size is invalid")
+                extracted[targets[member.name]] = data
+    except (tarfile.TarError, OSError, EOFError) as error:
+        raise FixtureBuildError("age archive is invalid") from error
+    if set(extracted) != set(targets.values()):
+        raise FixtureBuildError("age archive lacks required tools")
+    for name in sorted(extracted):
+        _exclusive_write(tools / name, extracted[name], final_mode=0o700)
+    environment = {"LC_ALL": "C", "PATH": os.defpath}
+    for name in sorted(extracted):
+        result = _run_child(
+            [os.fspath(tools / name), "--version"],
+            environment=environment,
+            maximum_stdout=32,
+            maximum_stderr=32,
+        )
+        if result != (0, AGE_VERSION, b""):
+            raise FixtureBuildError("age tooling version binding is invalid")
+    return extracted
+
+
+def _validate_age_inspection(data: bytes) -> None:
+    try:
+        document = json.loads(data.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError, RecursionError) as error:
+        raise FixtureBuildError("age inspection is invalid") from error
+    sizes = document.get("sizes") if isinstance(document, dict) else None
+    if (
+        not isinstance(document, dict)
+        or set(document) != {"armor", "postquantum", "sizes", "stanza_types", "version"}
+        or document["version"] != "age-encryption.org/v1"
+        or document["postquantum"] != "yes"
+        or type(document["armor"]) is not bool
+        or document["stanza_types"] != ["mlkem768x25519"]
+        or not isinstance(sizes, dict)
+        or set(sizes)
+        != {
+            "armor",
+            "header",
+            "max_padding",
+            "max_payload",
+            "min_padding",
+            "min_payload",
+            "overhead",
+        }
+        or any(type(value) is not int or value < 0 for value in sizes.values())
+    ):
+        raise FixtureBuildError("age inspection does not prove one PQ recipient")
+
+
+def _generate_age_material(
+    tools: Path, private: Path
+) -> tuple[bytes, str, bytes, bytes]:
+    environment = {"LC_ALL": "C", "PATH": os.defpath}
+    identity_marker = b"AGE-" + b"SECRET-KEY-PQ-1"
+    status, identity, _ = _run_child(
+        [os.fspath(tools / "age-keygen"), "-pq"],
+        environment=environment,
+        maximum_stdout=64 * 1024,
+        maximum_stderr=64 * 1024,
+    )
+    if status != 0 or identity_marker not in identity or b"\0" in identity:
+        raise FixtureBuildError("disposable age identity generation failed")
+    identity_path = private / "age-identity.txt"
+    _exclusive_write(identity_path, identity, final_mode=0o600)
+    status, recipient, stderr = _run_child(
+        [os.fspath(tools / "age-keygen"), "-y", os.fspath(identity_path)],
+        environment=environment,
+        maximum_stdout=4 * 1024,
+        maximum_stderr=4 * 1024,
+    )
+    if status != 0 or stderr or PQ_RECIPIENT.fullmatch(recipient) is None:
+        raise FixtureBuildError("disposable age recipient derivation failed")
+    recipient_text = recipient[:-1].decode("ascii")
+
+    ciphertexts: list[bytes] = []
+    for plaintext in (
+        b"issue286 synthetic provider fixture base\n",
+        b"issue286 synthetic provider fixture head\n",
+    ):
+        status, ciphertext, stderr = _run_child(
+            [os.fspath(tools / "age"), "--encrypt", "--recipient", recipient_text],
+            environment=environment,
+            input_data=plaintext,
+            maximum_stdout=4 * 1024 * 1024,
+            maximum_stderr=64 * 1024,
+        )
+        if status != 0 or stderr or not ciphertext:
+            raise FixtureBuildError("disposable age encryption failed")
+        status, inspection, stderr = _run_child(
+            [os.fspath(tools / "age-inspect"), "--json", "-"],
+            environment=environment,
+            input_data=ciphertext,
+            maximum_stdout=1024 * 1024,
+            maximum_stderr=64 * 1024,
+        )
+        if status != 0 or stderr:
+            raise FixtureBuildError("disposable age inspection failed")
+        _validate_age_inspection(inspection)
+        status, decrypted, stderr = _run_child(
+            [
+                os.fspath(tools / "age"),
+                "--decrypt",
+                "--identity",
+                os.fspath(identity_path),
+                "-",
+            ],
+            environment=environment,
+            input_data=ciphertext,
+            maximum_stdout=1024,
+            maximum_stderr=64 * 1024,
+        )
+        if status != 0 or stderr or decrypted != plaintext:
+            raise FixtureBuildError("disposable age decryption check failed")
+        ciphertexts.append(ciphertext)
+    if ciphertexts[0] == ciphertexts[1]:
+        raise FixtureBuildError("synthetic age transition is not distinct")
+    return identity, recipient_text, ciphertexts[0], ciphertexts[1]
+
+
+def _parse_signer_public_key(data: bytes) -> tuple[bytes, str]:
+    if not data.endswith(b"\n") or data.count(b"\n") != 1 or b"\0" in data:
+        raise FixtureBuildError("signer public key is not one canonical line")
+    fields = data[:-1].split(b" ", 2)
+    if len(fields) < 2 or fields[0] != b"ssh-ed25519" or not fields[1]:
+        raise FixtureBuildError("signer public key is not SSH Ed25519")
+    if len(fields) == 3 and (
+        not fields[2] or any(byte < 0x20 or byte > 0x7E for byte in fields[2])
+    ):
+        raise FixtureBuildError("signer public key comment is invalid")
+    try:
+        decoded = base64.b64decode(fields[1], validate=True)
+    except (binascii.Error, ValueError) as error:
+        raise FixtureBuildError("signer public key encoding is invalid") from error
+    if base64.b64encode(decoded) != fields[1]:
+        raise FixtureBuildError("signer public key encoding is not canonical")
+
+    def ssh_string(offset: int) -> tuple[bytes, int]:
+        if offset + 4 > len(decoded):
+            raise FixtureBuildError("signer public key blob is truncated")
+        size = struct.unpack(">I", decoded[offset : offset + 4])[0]
+        start = offset + 4
+        end = start + size
+        if end > len(decoded):
+            raise FixtureBuildError("signer public key blob is truncated")
+        return decoded[start:end], end
+
+    algorithm, offset = ssh_string(0)
+    key, offset = ssh_string(offset)
+    if algorithm != b"ssh-ed25519" or len(key) != 32 or offset != len(decoded):
+        raise FixtureBuildError("signer public key blob is invalid")
+    fingerprint = "SHA256:" + base64.b64encode(hashlib.sha256(decoded).digest()).decode(
+        "ascii"
+    ).rstrip("=")
+    canonical = (
+        f'{ADMISSION_PRINCIPAL} namespaces="{ADMISSION_NAMESPACE}" '.encode("ascii")
+        + fields[0]
+        + b" "
+        + fields[1]
+        + b"\n"
+    )
+    return canonical, fingerprint
+
+
+def _age_manifest(ciphertext: bytes) -> bytes:
+    document = {
+        "version": "privacy-age-envelopes/v1",
+        "envelopes": [
+            {
+                "path": "home/private.age",
+                "sha256": "sha256:" + _sha256(ciphertext),
+            }
+        ],
+    }
+    return (json.dumps(document, ensure_ascii=True, indent=2) + "\n").encode("ascii")
+
+
+def _fixture_files(
+    sources: dict[str, bytes],
+    allowed_signers: bytes,
+    ciphertext: bytes,
+) -> tuple[dict[str, tuple[bytes, str, str]], bytes]:
+    manifest = _age_manifest(ciphertext)
+    files: dict[str, tuple[bytes, str, str]] = {
+        path: (data, SOURCE_MODES[path], "reviewed-source")
+        for path, data in sources.items()
+    }
+    files.update(
+        {
+            ".github/age-admission/allowed_signers": (
+                allowed_signers,
+                "100644",
+                "generated",
+            ),
+            ".github/workflows/privacy-age-integrity.yml": (
+                (
+                    b"name: Synthetic privacy boundary fixture\n"
+                    b"# Protected admission activation sentinel: owner-signed-age-v1\n"
+                ),
+                "100644",
+                "fixture-only-stub",
+            ),
+            ".privacy-age-envelopes.json": (manifest, "100644", "generated"),
+            "docs/ENCRYPTION.md": (
+                b"# Synthetic fixture-only encryption policy stub\n",
+                "100644",
+                "fixture-only-stub",
+            ),
+            "home/.chezmoi.toml.tmpl": (
+                b"# Synthetic fixture-only chezmoi configuration stub\n",
+                "100644",
+                "fixture-only-stub",
+            ),
+            "home/private.age": (ciphertext, "100644", "generated"),
+            "home/private_dot_local/lib/agent-equipment/agent_equipment/secrets.py": (
+                (
+                    b'"""Synthetic fixture-only public-data classifier stub."""\n'
+                    b"def contains_literal_credential(_value): return False\n"
+                    b"def serialized_syntax(_value): return None\n"
+                    b"def string_looks_like_credential(_value): return False\n"
+                    b"def string_looks_like_private_key(_value): return False\n"
+                ),
+                "100644",
+                "fixture-only-stub",
+            ),
+        }
+    )
+    return files, manifest
+
+
+def _write_repository_file(
+    root: Path,
+    relative: str,
+    data: bytes,
+    mode: str,
+) -> None:
+    destination = root.joinpath(*relative.split("/"))
+    _mkdir_parents(root, destination.parent)
+    _exclusive_write(destination, data, final_mode=0o755 if mode == "100755" else 0o644)
+
+
+def _commit_environment(day: int) -> dict[str, str]:
+    timestamp = f"2000-01-{day:02d}T00:00:00Z"
+    return {
+        "GIT_AUTHOR_DATE": timestamp,
+        "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
+        "GIT_AUTHOR_NAME": "Issue 286 Synthetic Fixture",
+        "GIT_COMMITTER_DATE": timestamp,
+        "GIT_COMMITTER_EMAIL": "fixture@example.invalid",
+        "GIT_COMMITTER_NAME": "Issue 286 Synthetic Fixture",
+    }
+
+
+def _initialize_repository(
+    repository: Path,
+    files: dict[str, tuple[bytes, str, str]],
+    git_template: Path,
+) -> str:
+    _mkdir(repository)
+    _git(
+        repository,
+        "init",
+        "--quiet",
+        "--object-format=sha1",
+        "--shared=0600",
+        f"--template={git_template}",
+    )
+    for relative in sorted(files):
+        data, mode, _ = files[relative]
+        _write_repository_file(repository, relative, data, mode)
+    _git(repository, "add", "--all")
+    _git(
+        repository,
+        "commit",
+        "--quiet",
+        "-m",
+        "synthetic fixture base",
+        environment_overrides=_commit_environment(1),
+    )
+    return (
+        _git(repository, "rev-parse", "HEAD", maximum_stdout=64).decode("ascii").strip()
+    )
+
+
+def _replace_repository_file(path: Path, data: bytes, *, final_mode: int) -> None:
+    pending = path.with_name(f".{path.name}.pending")
+    try:
+        info = path.lstat()
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid():
+            raise FixtureBuildError("repository fixture file is not authoritative")
+        _exclusive_write(pending, data, final_mode=final_mode)
+        os.replace(pending, path)
+        _fsync_directory(path.parent)
+    except OSError as error:
+        raise FixtureBuildError(
+            "repository fixture file could not be replaced"
+        ) from error
+
+
+def _inventory(files: dict[str, tuple[bytes, str, str]]) -> list[dict[str, str]]:
+    return [
+        {"mode": mode, "origin": origin, "path": path, "sha256": _sha256(data)}
+        for path, (data, mode, origin) in sorted(files.items())
+    ]
+
+
+def _build_repositories(
+    repositories: Path,
+    git_template: Path,
+    sources: dict[str, bytes],
+    allowed_signers: bytes,
+    base_ciphertext: bytes,
+    head_ciphertext: bytes,
+) -> tuple[dict[str, object], Path, Path]:
+    base_files, _ = _fixture_files(sources, allowed_signers, base_ciphertext)
+    head_files, head_manifest = _fixture_files(
+        sources, allowed_signers, head_ciphertext
+    )
+    base = repositories / "base"
+    head = repositories / "head"
+    base_commit = _initialize_repository(base, base_files, git_template)
+    head_base_commit = _initialize_repository(head, base_files, git_template)
+    if head_base_commit != base_commit:
+        raise FixtureBuildError("synthetic repositories do not share an exact base")
+    _replace_repository_file(
+        head / "home/private.age", head_ciphertext, final_mode=0o644
+    )
+    _replace_repository_file(
+        head / ".privacy-age-envelopes.json",
+        head_manifest,
+        final_mode=0o644,
+    )
+    _git(head, "add", "--", ".privacy-age-envelopes.json", "home/private.age")
+    _git(
+        head,
+        "commit",
+        "--quiet",
+        "-m",
+        "synthetic fixture protected transition",
+        environment_overrides=_commit_environment(2),
+    )
+    head_commit = (
+        _git(head, "rev-parse", "HEAD", maximum_stdout=64).decode("ascii").strip()
+    )
+    base_tree = (
+        _git(base, "rev-parse", "HEAD^{tree}", maximum_stdout=64)
+        .decode("ascii")
+        .strip()
+    )
+    head_tree = (
+        _git(head, "rev-parse", "HEAD^{tree}", maximum_stdout=64)
+        .decode("ascii")
+        .strip()
+    )
+    for repository in (base, head):
+        if _git(repository, "remote") or _git(repository, "status", "--porcelain"):
+            raise FixtureBuildError("synthetic repository is not clean and remote-free")
+    changed = _git(
+        head,
+        "diff",
+        "--name-only",
+        base_commit,
+        head_commit,
+        maximum_stdout=1024,
+    )
+    if changed != b".privacy-age-envelopes.json\nhome/private.age\n":
+        raise FixtureBuildError("synthetic protected transition is not exact")
+    binding = {
+        "base": {
+            "commit": base_commit,
+            "files": _inventory(base_files),
+            "path": "repositories/base",
+            "tree": base_tree,
+        },
+        "head": {
+            "commit": head_commit,
+            "files": _inventory(head_files),
+            "path": "repositories/head",
+            "tree": head_tree,
+        },
+    }
+    return binding, base, head
+
+
+def _stage_source_tools(
+    tools: Path, sources: dict[str, bytes]
+) -> dict[str, dict[str, str]]:
+    selections = {
+        "provider_adapter": (
+            "proton-pass-age-admission",
+            "home/private_dot_local/bin/executable_proton-pass-age-admission",
+        ),
+        "provider_readiness": (
+            "proton-pass-ensure-ready",
+            "home/private_dot_local/bin/executable_proton-pass-ensure-ready",
+        ),
+        "trusted_launcher": (
+            "run-trusted-age-admission",
+            "scripts/run-trusted-age-admission",
+        ),
+    }
+    bindings: dict[str, dict[str, str]] = {}
+    for label, (name, source_path) in selections.items():
+        data = sources[source_path]
+        final_mode = 0o755 if label == "trusted_launcher" else 0o700
+        _exclusive_write(tools / name, data, final_mode=final_mode)
+        bindings[label] = {"path": f"tools/{name}", "sha256": _sha256(data)}
+    return bindings
+
+
+def _preflight_environment(
+    git_directory: Path,
+    temporary_directory: Path,
+) -> dict[str, str]:
+    environment = _git_environment()
+    for name in tuple(environment):
+        if name.startswith("PROTON_PASS_") or name in {
+            "PYTHONHOME",
+            "PYTHONINSPECT",
+            "PYTHONPATH",
+            "PYTHONSTARTUP",
+            "PYTHONUSERBASE",
+            "PYTHONWARNINGS",
+        }:
+            environment.pop(name, None)
+    environment.update(
+        {
+            "PATH": os.fspath(git_directory),
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PYTHONNOUSERSITE": "1",
+            "TEMP": os.fspath(temporary_directory),
+            "TMP": os.fspath(temporary_directory),
+            "TMPDIR": os.fspath(temporary_directory),
+        }
+    )
+    return environment
+
+
+def _run_preflight(
+    tools: Path,
+    base: Path,
+    head: Path,
+    repositories: dict[str, object],
+) -> None:
+    base_binding = repositories["base"]
+    head_binding = repositories["head"]
+    if not isinstance(base_binding, dict) or not isinstance(head_binding, dict):
+        raise FixtureBuildError("repository fixture binding is invalid")
+    git = shutil.which("git")
+    if git is None:
+        raise FixtureBuildError("Git is unavailable")
+    command = [
+        sys.executable,
+        "-I",
+        "-B",
+        "-S",
+        os.fspath(tools / "run-trusted-age-admission"),
+        "--base-repository",
+        os.fspath(base),
+        "--base-commit",
+        str(base_binding["commit"]),
+        "--",
+        "--operation",
+        "preflight",
+        "--base-repository",
+        os.fspath(base),
+        "--base-commit",
+        str(base_binding["commit"]),
+        "--head-repository",
+        os.fspath(head),
+        "--head-commit",
+        str(head_binding["commit"]),
+    ]
+    result = _run_child(
+        command,
+        environment=_preflight_environment(Path(git).parent, tools.parent / "private"),
+        timeout=PREFLIGHT_TIMEOUT_SECONDS,
+        maximum_stdout=MAX_PREFLIGHT_CHANNEL_BYTES,
+        maximum_stderr=MAX_PREFLIGHT_CHANNEL_BYTES,
+    )
+    if result != (0, b"required\n", b""):
+        raise FixtureBuildError(
+            "trusted preflight did not prove the exact required triple"
+        )
+
+
+def _publish_fixture(path: Path, document: dict[str, object]) -> None:
+    pending = path.parent / ".fixture.json.pending"
+    _exclusive_write(pending, _canonical_json(document), final_mode=0o600)
+    _raise_if_interrupted()
+    pthread_sigmask = getattr(signal, "pthread_sigmask", None)
+    if pthread_sigmask is None:
+        raise FixtureBuildError("safe fixture publication is unavailable")
+    try:
+        previous = pthread_sigmask(signal.SIG_BLOCK, _TERMINATION_SIGNALS)
+    except OSError as error:
+        raise FixtureBuildError("safe fixture publication is unavailable") from error
+    try:
+        _raise_if_interrupted()
+        os.link(pending, path, follow_symlinks=False)
+        pending.unlink()
+        _fsync_directory(path.parent)
+    except BaseException as error:
+        try:
+            pthread_sigmask(signal.SIG_SETMASK, previous)
+        except OSError as mask_error:
+            raise FixtureBuildError(
+                "fixture signal mask could not be restored"
+            ) from mask_error
+        if isinstance(error, FixtureBuildInterrupted):
+            raise
+        raise FixtureBuildError("fixture binding could not be published") from error
+    # This is the commit point. Keep catchable termination blocked for the few
+    # remaining Python instructions so a complete durable binding cannot be
+    # reported as an interrupted, cleaned-up build.
+
+
+def _build(arguments: argparse.Namespace) -> None:
+    global _CREATED_OPERATION, _CREATED_OPERATION_IDENTITY
+    global _OPERATION_STATE, _PRIVATE_TEMP_DIRECTORY
+    request_path = _absolute_path(os.fspath(arguments.request))
+    operation = _absolute_path(os.fspath(arguments.operation_directory))
+    request_data = _read_regular(
+        request_path,
+        maximum=MAX_REQUEST_BYTES,
+        required_mode=0o600,
+        private_parent=True,
+        require_single_link=True,
+    )
+    request = _validate_request(_parse_canonical_json(request_data))
+    _validate_private_parent(operation)
+    try:
+        operation.lstat()
+    except FileNotFoundError:
+        pass
+    except OSError as error:
+        raise FixtureBuildError("operation directory cannot be inspected") from error
+    else:
+        raise FixtureBuildError("operation directory already exists")
+
+    manifest_data = _read_regular(
+        request["manifest"],
+        maximum=MAX_MANIFEST_BYTES,
+        required_mode=0o600,
+        private_parent=True,
+        require_single_link=True,
+    )
+    if _sha256(manifest_data) != request["manifest_sha256"]:
+        raise FixtureBuildError("reviewed source manifest digest does not match")
+    manifest_document = _parse_canonical_json(manifest_data)
+    manifest = _validate_manifest(manifest_document, commit=request["commit"])
+    signer_data = _read_regular(
+        request["signer_public_key"],
+        maximum=MAX_PUBLIC_KEY_BYTES,
+        required_mode=0o600,
+        private_parent=True,
+        require_single_link=True,
+    )
+    allowed_signers, fingerprint = _parse_signer_public_key(signer_data)
+    archive_data = _read_regular(
+        request["archive"],
+        maximum=MAX_AGE_ARCHIVE_BYTES,
+    )
+    if _sha256(archive_data) != request["archive_sha256"]:
+        raise FixtureBuildError("age tooling archive digest does not match")
+    sources = _read_reviewed_sources(
+        request["repository"],
+        request["commit"],
+        manifest,
+    )
+
+    _acquire_operation(operation)
+    _raise_if_interrupted()
+    tools = operation / "tools"
+    private = operation / "private"
+    repositories_root = operation / "repositories"
+    for directory in (tools, private, repositories_root):
+        _mkdir(directory)
+    _PRIVATE_TEMP_DIRECTORY = private
+    git_template = private / "git-template"
+    _mkdir(git_template)
+
+    age_tools = _extract_age_tools(archive_data, tools)
+    staged_tools = {
+        name.replace("-", "_"): {
+            "path": f"tools/{name}",
+            "sha256": _sha256(data),
+        }
+        for name, data in age_tools.items()
+    }
+    staged_tools.update(_stage_source_tools(tools, sources))
+
+    identity, recipient, base_ciphertext, head_ciphertext = _generate_age_material(
+        tools,
+        private,
+    )
+    repositories, base, head = _build_repositories(
+        repositories_root,
+        git_template,
+        sources,
+        allowed_signers,
+        base_ciphertext,
+        head_ciphertext,
+    )
+    _run_preflight(tools, base, head, repositories)
+
+    fixture: dict[str, object] = {
+        "age_identity": {
+            "path": "private/age-identity.txt",
+            "recipient": recipient,
+            "sha256": _sha256(identity),
+        },
+        "authority": {
+            "publication_permitted": False,
+            "purpose": "offline-synthetic-provider-qualification",
+            "real_transition_authority": False,
+            "repository": FIXTURE_REPOSITORY,
+        },
+        "preflight": {
+            "status": 0,
+            "stderr_utf8": "",
+            "stdout_utf8": "required\n",
+        },
+        "repositories": repositories,
+        "schema": FIXTURE_SCHEMA,
+        "signer": {
+            "fingerprint": fingerprint,
+            "public_key_sha256": _sha256(signer_data),
+        },
+        "source": {
+            "commit": request["commit"],
+            "entries": manifest,
+            "manifest_sha256": _sha256(manifest_data),
+        },
+        "staged_tools": staged_tools,
+    }
+    _publish_fixture(operation / "fixture.json", fixture)
+    _OPERATION_STATE = "committed"
+    _CREATED_OPERATION = None
+    _CREATED_OPERATION_IDENTITY = None
+    _PRIVATE_TEMP_DIRECTORY = None
+
+
+def _cleanup_created_operation() -> bool:
+    global _CREATED_OPERATION, _CREATED_OPERATION_IDENTITY
+    global _OPERATION_STATE, _PRIVATE_TEMP_DIRECTORY
+    operation = _CREATED_OPERATION
+    identity = _CREATED_OPERATION_IDENTITY
+    if operation is None:
+        return _OPERATION_STATE in {"unowned", "released", "committed"}
+    if identity is None or _OPERATION_STATE != "owned":
+        _OPERATION_STATE = "unverified"
+        return False
+    _OPERATION_STATE = "finalizing"
+    parent = operation.parent
+    deadline = time.monotonic() + TERMINATION_GRACE_SECONDS
+    while True:
+        try:
+            info = operation.lstat()
+        except FileNotFoundError:
+            try:
+                _fsync_directory(parent)
+            except FixtureBuildError:
+                _OPERATION_STATE = "unverified"
+                return False
+            _CREATED_OPERATION = None
+            _CREATED_OPERATION_IDENTITY = None
+            _PRIVATE_TEMP_DIRECTORY = None
+            _OPERATION_STATE = "released"
+            return True
+        except OSError:
+            pass
+        else:
+            if (
+                not stat.S_ISDIR(info.st_mode)
+                or stat.S_ISLNK(info.st_mode)
+                or info.st_uid != os.geteuid()
+                or stat.S_IMODE(info.st_mode) != 0o700
+                or (info.st_dev, info.st_ino) != identity
+            ):
+                _OPERATION_STATE = "unverified"
+                return False
+            try:
+                shutil.rmtree(operation)
+            except FileNotFoundError:
+                pass
+            except OSError:
+                pass
+        try:
+            operation.lstat()
+        except FileNotFoundError:
+            try:
+                _fsync_directory(parent)
+            except FixtureBuildError:
+                _OPERATION_STATE = "unverified"
+                return False
+            _CREATED_OPERATION = None
+            _CREATED_OPERATION_IDENTITY = None
+            _PRIVATE_TEMP_DIRECTORY = None
+            _OPERATION_STATE = "released"
+            return True
+        except OSError:
+            pass
+        if time.monotonic() >= deadline:
+            _OPERATION_STATE = "unverified"
+            return False
+        time.sleep(0.01)
+
+
+class _ClosedArgumentParser(argparse.ArgumentParser):
+    def error(self, _message: str) -> None:
+        raise FixtureBuildError("command arguments are invalid")
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = _ClosedArgumentParser(add_help=True)
+    parser.add_argument("--request", type=Path, required=True)
+    parser.add_argument("--operation-directory", type=Path, required=True)
+    return parser
+
+
+def main() -> int:
+    _install_signal_handlers()
+    try:
+        arguments = _parser().parse_args()
+        _build(arguments)
+    except FixtureBuildInterrupted as interrupted:
+        finalization_verified = True
+        process = _ACTIVE_PROCESS
+        if process is not None:
+            try:
+                _terminate_process(process)
+            except (FixtureBuildError, OSError):
+                finalization_verified = False
+        if not _cleanup_created_operation():
+            finalization_verified = False
+        if not finalization_verified:
+            print(_FAILURE, file=sys.stderr)
+            return 1
+        print(_INTERRUPTED, file=sys.stderr)
+        return 128 + interrupted.signum
+    except (
+        FixtureBuildError,
+        OSError,
+        UnicodeError,
+        ValueError,
+        TypeError,
+        OverflowError,
+        RecursionError,
+    ):
+        process = _ACTIVE_PROCESS
+        if process is not None:
+            try:
+                _terminate_process(process)
+            except (FixtureBuildError, OSError):
+                pass
+        _cleanup_created_operation()
+        print(_FAILURE, file=sys.stderr)
+        return 1
+    print("fixture-ready")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

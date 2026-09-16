@@ -1,8 +1,19 @@
 ---
-status: accepted
+status: superseded
 ---
 
 # Owner-Signed Admission For Protected Age Transitions
+
+> **Historical decision.** This ADR records the original bootstrap and retired
+> admission-App rationale. It is superseded by [Sign age admissions and recover
+> a lost signer](../secret-injection/PROTON_PASS_AGE_ADMISSION.md), the current
+> post-bootstrap operating procedure. The receipt protocol and trusted-base
+> verifier remain in use; the admission App and bootstrap route do not.
+
+## Historical rationale—do not implement
+
+The text below is preserved as the superseded decision record, not as current
+operating instruction.
 
 The hosted privacy boundary remains fail-closed for protected source changes and executes only trusted-base code. Local identity-backed ciphertext validation therefore produces a detached SSH-signed receipt bound to the repository, base and candidate commits, protected tree entries, expiry, and nonce; the receipt travels in the pull-request body and is verified from the trusted base. This keeps the age identity and plaintext local, rejects candidate-authored authority, and avoids treating a broad branch-protection bypass as the ordinary rotation path.
 
@@ -24,6 +35,10 @@ a new receipt. Expiry is evaluated whenever the trusted boundary workflow runs.
 GitHub does not reevaluate a successful check when wall time advances, so the
 owner must trigger a fresh trusted run immediately before merging; the signed
 receipt's expiry is not, by itself, a merge-time revocation mechanism.
+
+> **Superseded implementation note.** The bootstrap exception and admission
+> App described below are historical rationale. Do not execute or install
+> either route; use the maintained post-bootstrap procedure linked above.
 
 The initial bootstrap is necessarily exceptional because the pre-bootstrap
 trusted base cannot know the v1 receipt format, signer, or external launcher

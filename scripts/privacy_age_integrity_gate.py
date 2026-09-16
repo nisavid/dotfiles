@@ -46,6 +46,9 @@ COMMIT_ID = re.compile(r"[0-9a-f]{40}\Z", re.ASCII)
 MAX_GIT_TREE_BYTES = 8 * 1024 * 1024
 MAX_GIT_TREE_ENTRIES = 10_000
 MAX_GIT_OBJECT_BYTES = 16 * 1024 * 1024
+ADMISSION_SIGNING_ADAPTER_PATH = (
+    b"home/private_dot_local/bin/executable_proton-pass-age-admission"
+)
 
 # Changes to these paths require a signed owner admission after local
 # identity-backed validation. The pull_request_target workflow executes this
@@ -56,6 +59,7 @@ PROTECTED_EXACT_PATHS = frozenset(
         b".privacy-age-envelopes.json",
         b"docs/ENCRYPTION.md",
         b"home/.chezmoi.toml.tmpl",
+        ADMISSION_SIGNING_ADAPTER_PATH,
         b"home/private_dot_local/lib/agent-equipment/agent_equipment/secrets.py",
         b"scripts/admit-age-envelopes",
         b"scripts/agent_equipment_public_data.py",
@@ -102,12 +106,19 @@ BOOTSTRAP_REQUIRED_ENTRIES = {
     # bootstrap replacement.
     b"scripts/agent_equipment_public_data.py": (b"blob", b"100644"),
 }
+# The adapter was added after the one-time bootstrap. Keep it outside the
+# bootstrap replacement manifest while requiring it for every active head once
+# installed.
+POST_BOOTSTRAP_REQUIRED_ENTRIES = {
+    ADMISSION_SIGNING_ADAPTER_PATH: (b"blob", b"100644"),
+}
 # Once activated, every trusted verifier, scanner, parser, launcher, and the
 # protected workflow remains a required regular entry. A signed receipt may
 # authorize its content change, but it cannot silently remove a seam and leave
 # the next run without the code that enforces the boundary.
+ACTIVE_REQUIRED_ENTRIES = BOOTSTRAP_REQUIRED_ENTRIES | POST_BOOTSTRAP_REQUIRED_ENTRIES
 ACTIVE_REQUIRED_PATHS = BOOTSTRAP_REQUIRED_PATHS | frozenset(
-    {b"scripts/agent_equipment_public_data.py"}
+    {b"scripts/agent_equipment_public_data.py", *POST_BOOTSTRAP_REQUIRED_ENTRIES}
 )
 # The first verifier key is an authority root, not merely bootstrap collateral.
 # Pin its exact reviewed blob so the one-time owner exception cannot install a
@@ -406,8 +417,11 @@ def _protected_transition(
     base_tree = _tree(base, base_commit)
     head_tree = _tree(head, head_commit)
 
+    migratable_protected_paths = ADMISSION_INFRASTRUCTURE_PATHS | frozenset(
+        POST_BOOTSTRAP_REQUIRED_ENTRIES
+    )
     missing_base_paths = sorted(
-        (PROTECTED_EXACT_PATHS - ADMISSION_INFRASTRUCTURE_PATHS) - base_tree.keys()
+        (PROTECTED_EXACT_PATHS - migratable_protected_paths) - base_tree.keys()
     )
     if missing_base_paths:
         raise IntegrityGateError("trusted base is missing a protected path")
@@ -532,9 +546,8 @@ def _require_active_head_complete(transition: ProtectedTransition) -> None:
     missing = ACTIVE_REQUIRED_PATHS - transition.head_tree.keys()
     malformed = {
         path
-        for path, expected in BOOTSTRAP_REQUIRED_ENTRIES.items()
-        if path in ACTIVE_REQUIRED_PATHS
-        and (
+        for path, expected in ACTIVE_REQUIRED_ENTRIES.items()
+        if (
             path not in transition.head_tree
             or (
                 transition.head_tree[path].kind,
@@ -693,6 +706,31 @@ def verify_integrity_boundary(
             allowed_signers=allowed_signers,
             repository=repository,
         )
+
+
+def classify_admission_requirement(
+    *,
+    base_repository: Path,
+    base_commit: str,
+    head_repository: Path,
+    head_commit: str,
+) -> str:
+    """Classify one exact transition without executing candidate code."""
+
+    try:
+        transition = _protected_transition(
+            base_repository=base_repository,
+            base_commit=base_commit,
+            head_repository=head_repository,
+            head_commit=head_commit,
+        )
+        _require_admission_boundary_ready(
+            transition,
+            require_bootstrap=bool(transition.changed),
+        )
+    except (IntegrityGateError, OSError, UnicodeError, ValueError, TypeError):
+        return "indeterminate"
+    return "required" if transition.changed else "not-required"
 
 
 def build_admission_payload(
