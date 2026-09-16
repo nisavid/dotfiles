@@ -3,23 +3,19 @@
   "envelopes": [
     {
       "path": "home/.private-agents.md.age",
-      "sha256": "sha256:07ad318d9f7ea7a82d53b28f0c0308b3d278f446d70b1f5cccdb58a8a9648191"
+      "sha256": "sha256:5e5d72217c437dab2f5367c3bb377d1e17cf2dfd8b1ac4d5e1b3aaba9d465ebc"
     },
     {
       "path": "home/.private-codex-work.toml.age",
-      "sha256": "sha256:ffe3297e65694a413a25d3fe08264a1f9f262dafdcbc2704f4b42d34a8d3c4d6"
+      "sha256": "sha256:bc420d1b6ec371a1d0e12fe2b58d46a461eff93e7045a12e736cc7c638c1d5f0"
     },
     {
       "path": "home/.private-daybreak-account-bindings.md.age",
-      "sha256": "sha256:75feab50a5e9975943ccc78d07c154f5b1b7e75a3cb4b847ff99c971babe3800"
+      "sha256": "sha256:f2e37471972a0159447024008221e672ea1e942f07840b21d99d05982d1ae62e"
     },
     {
       "path": "home/.private-git-identities.toml.age",
-      "sha256": "sha256:384bfe56039d4f6c1ff916960fb328c994d5c240d8309d7febe3cc7ba1d1d896"
-    },
-    {
-      "path": "home/.private-hindsight.toml.age",
-      "sha256": "sha256:b9b468d356dea4ea11f58193366b1d08ff0a3b6926e915713c0aaa48a8e53715"
+      "sha256": "sha256:eb87dbf991f172d5d7fa997deb33d185b4a9f0fefaecd428cd104845bbb7040f"
     },
     {
       "path": "home/.private-machine.toml.age",
@@ -27,7 +23,7 @@
     },
     {
       "path": "home/.private-prd-01.toml.age",
-      "sha256": "sha256:c18a2ba660403058d86a052b315544b30776d6e28243374890d870d5e5748b05"
+      "sha256": "sha256:e6ac9523b6c9070834ff8cb95696cd048498be78262957c8ea0da34f6571310a"
     },
     {
       "path": "home/.private-privacy-denylist.txt.age",
@@ -36,22 +32,6 @@
     {
       "path": "home/.private-secret-exec.toml.age",
       "sha256": "sha256:f1555d4aa30b06bf1ad099b4cea03657dc3753ded9b3d4fcdc7b33e4dc822da0"
-    },
-    {
-      "path": "home/.private-skill-01-body.age",
-      "sha256": "sha256:19f221d4a4ec3a5df6ed088ee356716847797b540b6f00e05913f24198e20813"
-    },
-    {
-      "path": "home/.private-skill-01-path.age",
-      "sha256": "sha256:c24451c5894a81b3860c387bbcedfacecfb4531f86ce353d47ed24103e283150"
-    },
-    {
-      "path": "home/.private-skill-02-body.age",
-      "sha256": "sha256:2aca6f08d1d819e7e6e08b9be4077aca1b2de9ee6761940cf7617a4e43d1e26a"
-    },
-    {
-      "path": "home/.private-skill-02-path.age",
-      "sha256": "sha256:332f2f4279e95fed7f6a98a0ea11434a75127105d27896fa142bc8c9be844ff2"
     }
   ]
 }
