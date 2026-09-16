@@ -98,6 +98,8 @@ for latest_ready_reason in existing-session concurrent-repair repaired; do
 done
 rm -f -- "$latest_readiness_probe"
 test_process_fixture_run_signal_probe_mode
+zsh "$repo_root/tests/github-identity-binding.zsh" >/dev/null ||
+  fail 'GitHub identity binding checks must pass'
 zsh "$repo_root/tests/proton-pass-agent-readiness.zsh" >/dev/null ||
   fail 'the agent readiness consumer/helper seam must pass'
 kill_audit_library=
