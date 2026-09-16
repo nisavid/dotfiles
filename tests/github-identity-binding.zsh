@@ -71,8 +71,14 @@ done
 [[ $wrong_output != *target-ran* ]] ||
   { print -u2 -r -- 'mismatched GitHub identity must not start the consumer'; exit 1; }
 
-mv -- "$bin_dir/gh" "$bin_dir/gh-real"
-ln -s -- "$bin_dir/gh-real" "$bin_dir/gh"
+homebrew_bin=$test_dir/homebrew/Cellar/gh/1.0.0/bin
+mkdir -p -- "$homebrew_bin"
+mv -- "$bin_dir/gh" "$homebrew_bin/gh"
+ln -s -- ../homebrew/Cellar/gh/1.0.0/bin/gh "$bin_dir/gh"
+[[ $(run_launcher) == target-ran ]] ||
+  { print -u2 -r -- 'a trusted Homebrew GitHub checker must start the consumer'; exit 1; }
+
+chmod 720 "$homebrew_bin/gh"
 set +e
 untrusted_output=$(run_launcher 2>&1)
 untrusted_status=$?
