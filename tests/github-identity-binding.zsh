@@ -64,6 +64,10 @@ set -e
   { print -u2 -r -- 'mismatched GitHub identity must fail closed'; exit 1; }
 [[ $wrong_output == *'GitHub identity self-check failed'* ]] ||
   { print -u2 -r -- 'mismatched GitHub identity must report a redacted failure'; exit 1; }
+for confidential_value in fixture-token fixture-personal fixture-other; do
+  [[ $wrong_output != *${confidential_value}* ]] ||
+    { print -u2 -r -- 'identity failure must not disclose credentials or logins'; exit 1; }
+done
 [[ $wrong_output != *target-ran* ]] ||
   { print -u2 -r -- 'mismatched GitHub identity must not start the consumer'; exit 1; }
 
