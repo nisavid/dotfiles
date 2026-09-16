@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 MESSAGE_SHA256 = "6be8c2fe3154649151aacd41f35dd6a212881e627acca131fe3f0101b14f4337"
-PROTOCOL_SHA256 = "111643f12bde30782c15447f11df8e5bc3a90f9dda6e259c30f02525ab20ed33"
+PROTOCOL_SHA256 = "0a542bed779baa5ec0ce98fbd80611819f44913b8e878cfaf66e677e831fc2e0"
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 IDENTITY_RE = re.compile(r"sha256:[0-9a-f]{64}")
 SESSION_RE = re.compile(r"[0-9a-f]{64}")
@@ -306,15 +306,12 @@ def parse_certificate_inspection(output: str) -> dict[str, Any]:
             raise ProcedureError("certificate does not have the required composite key shape")
     return {
         "primary_fingerprint": primary["fingerprint"],
-        "primary_version": 6,
         "primary_algorithm": primary["Public-key algo"],
         "primary_capabilities": ["certification"],
         "signing_fingerprint": signing["fingerprint"],
-        "signing_version": 6,
         "signing_algorithm": signing["Public-key algo"],
         "signing_capabilities": ["signing"],
         "encryption_fingerprint": encryption["fingerprint"],
-        "encryption_version": 6,
         "encryption_algorithm": encryption["Public-key algo"],
         "encryption_capabilities": [
             "transport encryption",
@@ -322,6 +319,49 @@ def parse_certificate_inspection(output: str) -> dict[str, Any]:
         ],
         "authentication_capable": False,
     }
+
+
+def parse_key_packet_inspection(output: str) -> dict[str, dict[str, Any]]:
+    packets: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
+    for line in output.splitlines():
+        heading = re.match(r"^(Public-Key|Public-Subkey) Packet(?:,|$)", line)
+        if heading:
+            current = {
+                "role": "primary" if heading.group(1) == "Public-Key" else "subkey"
+            }
+            packets.append(current)
+            continue
+        if current is None:
+            continue
+        value = re.match(
+            r"^[\s│]*(Version|Pk algo|Fingerprint):\s*(.+?)\s*$", line
+        )
+        if value:
+            current[value.group(1)] = value.group(2)
+
+    if len(packets) != 3:
+        raise ProcedureError("certificate key packet set mismatch")
+    by_fingerprint: dict[str, dict[str, Any]] = {}
+    for packet in packets:
+        fingerprint = packet.get("Fingerprint")
+        version = packet.get("Version")
+        algorithm = packet.get("Pk algo")
+        if (
+            not isinstance(fingerprint, str)
+            or re.fullmatch(r"[0-9A-F]{64}", fingerprint) is None
+            or not isinstance(version, str)
+            or re.fullmatch(r"[0-9]+", version) is None
+            or not isinstance(algorithm, str)
+            or fingerprint in by_fingerprint
+        ):
+            raise ProcedureError("certificate key packet observation mismatch")
+        by_fingerprint[fingerprint] = {
+            "role": packet["role"],
+            "version": int(version),
+            "algorithm": algorithm,
+        }
+    return by_fingerprint
 
 
 def validate_signature_inspection(output: str, expected_issuer: str) -> dict[str, Any]:
@@ -346,10 +386,51 @@ def validate_signature_inspection(output: str, expected_issuer: str) -> dict[str
 def inspect_certificate(
     sq: Path, certificate: Path, environment: dict[str, str]
 ) -> dict[str, Any]:
-    output = run_command(
+    inspection_output = run_command(
         [str(sq), "inspect", str(certificate)], environment=environment
     ).stdout.decode("utf-8", errors="replace")
-    return parse_certificate_inspection(output)
+    packet_output = run_command(
+        [str(sq), "packet", "dump", str(certificate)], environment=environment
+    ).stdout.decode("utf-8", errors="replace")
+    shape = parse_certificate_inspection(inspection_output)
+    packets = parse_key_packet_inspection(packet_output)
+    expected_packets = (
+        (
+            "primary",
+            shape["primary_fingerprint"],
+            shape["primary_algorithm"],
+            "primary_version",
+        ),
+        (
+            "subkey",
+            shape["signing_fingerprint"],
+            shape["signing_algorithm"],
+            "signing_version",
+        ),
+        (
+            "subkey",
+            shape["encryption_fingerprint"],
+            shape["encryption_algorithm"],
+            "encryption_version",
+        ),
+    )
+    for role, fingerprint, algorithm, version_field in expected_packets:
+        packet = packets.get(fingerprint)
+        if packet is None or packet["role"] != role or packet["algorithm"] != algorithm:
+            raise ProcedureError("certificate key packet identity mismatch")
+        if packet["version"] != 6:
+            raise ProcedureError("certificate key packet version mismatch")
+        shape[version_field] = packet["version"]
+    return shape
+
+
+def inspect_certificate_command(arguments: argparse.Namespace) -> None:
+    sq = arguments.sq.resolve(strict=True)
+    certificate = arguments.certificate.resolve(strict=True)
+    with tempfile.TemporaryDirectory(prefix="pq-sequoia-inspect-") as directory:
+        environment = command_environment(Path(directory))
+        shape = inspect_certificate(sq, certificate, environment)
+    write_json(arguments.output, shape)
 
 
 def inspect_signature(
@@ -1124,10 +1205,38 @@ def write_public_payload(path: Path, content: bytes) -> None:
     path.write_bytes(content)
 
 
+def validate_runtime_closure(
+    value: object, expected_candidate_identity: str
+) -> dict[str, Any]:
+    required = {
+        "schema_version",
+        "candidate_identity",
+        "workflow",
+        "runner",
+        "build_tools",
+        "versions",
+        "tap",
+        "shared_cache_observation",
+        "closures",
+    }
+    if not isinstance(value, dict) or set(value) != required:
+        raise ProcedureError("runtime closure fields mismatch")
+    if (
+        value.get("schema_version") != "pq-sequoia-runtime-closure/v1"
+        or value.get("candidate_identity") != expected_candidate_identity
+    ):
+        raise ProcedureError("runtime closure candidate identity mismatch")
+    return value
+
+
 def interop_open(arguments: argparse.Namespace) -> None:
     root = arguments.root.resolve()
     validate_static(root)
-    candidate_closure = closure_digest(arguments.candidate_identity)
+    closure_digest(arguments.candidate_identity)
+    validate_runtime_closure(
+        read_json(arguments.producer_closure), arguments.candidate_identity
+    )
+    producer_closure = sha256_file(arguments.producer_closure)
     peer, peer_payloads = validate_envelope_file(
         arguments.peer_envelope,
         "hatchery-phase-a",
@@ -1253,7 +1362,7 @@ def interop_open(arguments: argparse.Namespace) -> None:
             "phase": "macos-ci-phase-b",
             "session_id": arguments.session_id,
             "protocol_sha256": PROTOCOL_SHA256,
-            "producer_closure_sha256": candidate_closure,
+            "producer_closure_sha256": producer_closure,
             "parent_envelope_sha256": sha256_file(arguments.peer_envelope),
             "message_sha256": MESSAGE_SHA256,
             "payloads": {
@@ -1284,7 +1393,7 @@ def interop_open(arguments: argparse.Namespace) -> None:
             envelope,
             "macos-ci-phase-b",
             arguments.session_id,
-            expected_producer_closure=candidate_closure,
+            expected_producer_closure=producer_closure,
             expected_parent=sha256_file(arguments.peer_envelope),
         )
         write_json(arguments.output, envelope)
@@ -1306,7 +1415,7 @@ def interop_open(arguments: argparse.Namespace) -> None:
             state / "state.json",
             {
                 "session_id": arguments.session_id,
-                "candidate_closure_sha256": candidate_closure,
+                "producer_closure_sha256": producer_closure,
                 "peer_closure_sha256": peer["producer_closure_sha256"],
                 "phase_a_sha256": sha256_file(arguments.peer_envelope),
                 "phase_b_sha256": sha256_file(arguments.output),
@@ -1369,7 +1478,7 @@ def interop_close(arguments: argparse.Namespace) -> None:
         peer_result,
         expected_session=arguments.session_id,
         expected_producer_closure=state_record["peer_closure_sha256"],
-        expected_peer_closure=state_record["candidate_closure_sha256"],
+        expected_peer_closure=state_record["producer_closure_sha256"],
         observed_artifacts=artifacts,
     )
     relay_metadata = read_json(arguments.relay_metadata)
@@ -1419,7 +1528,7 @@ def interop_close(arguments: argparse.Namespace) -> None:
         "producer": "macos-ci",
         "session_id": arguments.session_id,
         "protocol_sha256": PROTOCOL_SHA256,
-        "producer_closure_sha256": state_record["candidate_closure_sha256"],
+        "producer_closure_sha256": state_record["producer_closure_sha256"],
         "peer_closure_sha256": state_record["peer_closure_sha256"],
         "message_sha256": MESSAGE_SHA256,
         "artifact_map": artifacts,
@@ -1485,8 +1594,8 @@ def tool_output(command: list[str]) -> str:
     return result.stdout.decode("utf-8", errors="replace").strip()
 
 
-def macho_rpaths(path: Path) -> list[str]:
-    output = tool_output(["otool", "-l", str(path)])
+def macho_rpaths(path: Path, otool: Path) -> list[str]:
+    output = tool_output([str(otool), "-l", str(path)])
     lines = output.splitlines()
     values: list[str] = []
     for index, line in enumerate(lines):
@@ -1523,17 +1632,47 @@ def resolve_macho_dependency(
     return None
 
 
-def is_apple_shared_cache_reference(dependency: str) -> bool:
-    return dependency.startswith(
-        (
-            "/usr/lib/",
-            "/System/Library/Frameworks/",
-            "/System/Library/PrivateFrameworks/",
-        )
+def file_identity(path: Path) -> dict[str, Any]:
+    content = path.read_bytes()
+    return {
+        "path": str(path),
+        "realpath": str(path.resolve(strict=True)),
+        "size": len(content),
+        "sha256": sha256_bytes(content),
+    }
+
+
+def shared_cache_membership(
+    dyld_shared_cache_util: Path,
+) -> tuple[set[str], dict[str, Any]]:
+    result = subprocess.run(
+        [str(dyld_shared_cache_util), "-list"],
+        check=False,
+        capture_output=True,
+        timeout=120,
     )
+    if result.returncode != 0:
+        raise ProcedureError("dyld shared-cache membership query failed")
+    try:
+        lines = result.stdout.decode("utf-8").splitlines()
+    except UnicodeError as error:
+        raise ProcedureError("dyld shared-cache membership output is invalid") from error
+    members = set(lines)
+    if not members or any(not member.startswith("/") for member in members):
+        raise ProcedureError("dyld shared-cache membership output is invalid")
+    observation = {
+        "command": [str(dyld_shared_cache_util), "-list"],
+        "tool": file_identity(dyld_shared_cache_util),
+        "listing_sha256": sha256_bytes(result.stdout),
+        "listing_size": len(result.stdout),
+        "listed_name_count": len(members),
+    }
+    return members, observation
 
 
-def record_macho_closure(executable: Path) -> dict[str, Any]:
+def record_macho_closure(
+    executable: Path, otool: Path, apple_shared_cache_members: set[str]
+) -> dict[str, Any]:
     queue: list[tuple[Path, Path, list[str]]] = [(executable, executable, [])]
     visited_contexts: set[tuple[Path, tuple[str, ...]]] = set()
     objects: dict[Path, dict[str, Any]] = {}
@@ -1543,7 +1682,7 @@ def record_macho_closure(executable: Path) -> dict[str, Any]:
         path, root_executable, inherited_rpaths = queue.pop(0)
         realpath = path.resolve(strict=True)
         effective_rpaths = list(
-            dict.fromkeys([*macho_rpaths(realpath), *inherited_rpaths])
+            dict.fromkeys([*macho_rpaths(realpath, otool), *inherited_rpaths])
         )
         context = (realpath, tuple(effective_rpaths))
         if context in visited_contexts:
@@ -1557,7 +1696,7 @@ def record_macho_closure(executable: Path) -> dict[str, Any]:
                 "size": len(content),
                 "sha256": sha256_bytes(content),
             }
-        output = tool_output(["otool", "-L", str(realpath)])
+        output = tool_output([str(otool), "-L", str(realpath)])
         for line in output.splitlines()[1:]:
             dependency = line.strip().split(" ", 1)[0]
             if not dependency:
@@ -1566,7 +1705,7 @@ def record_macho_closure(executable: Path) -> dict[str, Any]:
                 dependency, realpath, root_executable, effective_rpaths
             )
             if resolved is None:
-                if is_apple_shared_cache_reference(dependency):
+                if dependency in apple_shared_cache_members:
                     apple_shared_cache.add(dependency)
                 else:
                     unresolved.add(dependency)
@@ -1574,7 +1713,8 @@ def record_macho_closure(executable: Path) -> dict[str, Any]:
                 queue.append((resolved, root_executable, effective_rpaths))
     if unresolved:
         raise ProcedureError(
-            "unresolved non-system Mach-O dependency: " + ", ".join(sorted(unresolved))
+            "unresolved Mach-O dependency absent from the live Apple shared cache: "
+            + ", ".join(sorted(unresolved))
         )
     return {
         "root": str(executable),
@@ -1583,10 +1723,162 @@ def record_macho_closure(executable: Path) -> dict[str, Any]:
     }
 
 
+def record_macho_closure_command(arguments: argparse.Namespace) -> None:
+    executable = arguments.executable.resolve(strict=True)
+    otool = arguments.otool.resolve(strict=True)
+    cache_tool = arguments.dyld_shared_cache_util.resolve(strict=True)
+    members, observation = shared_cache_membership(cache_tool)
+    write_json(
+        arguments.output,
+        {
+            "schema_version": "pq-sequoia-macho-closure/v1",
+            "shared_cache_observation": observation,
+            "closure": record_macho_closure(executable, otool, members),
+        },
+    )
+
+
+def tap_git_output(tap_root: Path, arguments: list[str]) -> bytes:
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith("GIT_CONFIG_")
+    }
+    environment["GIT_CONFIG_NOSYSTEM"] = "1"
+    environment["GIT_CONFIG_GLOBAL"] = os.devnull
+    result = subprocess.run(
+        ["git", "-C", str(tap_root), *arguments],
+        check=False,
+        capture_output=True,
+        env=environment,
+        timeout=30,
+    )
+    if result.returncode != 0:
+        raise ProcedureError("ephemeral tap Git operation failed")
+    return result.stdout
+
+
+def tap_closure(root: Path, tap_root: Path) -> dict[str, Any]:
+    validate_static(root)
+    candidate_path = root / "packaging/homebrew/pq-sequoia-macos/v1/candidate.json"
+    candidate = read_json(candidate_path)
+    status = tap_git_output(
+        tap_root, ["status", "--porcelain=v1", "--untracked-files=all"]
+    )
+    if status:
+        raise ProcedureError("ephemeral tap worktree must be clean")
+    commit = tap_git_output(
+        tap_root, ["rev-parse", "--verify", "HEAD^{commit}"]
+    ).decode("ascii").strip()
+    tree = tap_git_output(tap_root, ["rev-parse", "HEAD^{tree}"]).decode(
+        "ascii"
+    ).strip()
+    if re.fullmatch(r"[0-9a-f]{40}", commit) is None or re.fullmatch(
+        r"[0-9a-f]{40}", tree
+    ) is None:
+        raise ProcedureError("ephemeral tap commit identity is invalid")
+
+    formulae: dict[str, dict[str, Any]] = {}
+    applications = candidate.get("applications", {})
+    for application_name in ("sq", "sqv"):
+        application = applications.get(application_name, {})
+        source = safe_relative(root, str(application.get("formula_path", "")))
+        expected = application.get("formula_sha256")
+        formula_name = source.name
+        tap_formula = tap_root / "Formula" / formula_name
+        if not isinstance(expected, str) or not SHA256_RE.fullmatch(expected):
+            raise ProcedureError("candidate formula digest is invalid")
+        try:
+            working_content = tap_formula.read_bytes()
+        except OSError as error:
+            raise ProcedureError("ephemeral tap formula is missing") from error
+        committed_content = tap_git_output(
+            tap_root, ["show", f"{commit}:Formula/{formula_name}"]
+        )
+        if (
+            sha256_bytes(source.read_bytes()) != expected
+            or sha256_bytes(working_content) != expected
+            or sha256_bytes(committed_content) != expected
+            or working_content != committed_content
+        ):
+            raise ProcedureError("ephemeral tap formula identity mismatch")
+        blob = tap_git_output(
+            tap_root, ["rev-parse", f"{commit}:Formula/{formula_name}"]
+        ).decode("ascii").strip()
+        if re.fullmatch(r"[0-9a-f]{40}", blob) is None:
+            raise ProcedureError("ephemeral tap formula blob identity is invalid")
+        formulae[formula_name] = {
+            "git_blob": blob,
+            "sha256": expected,
+            "size": len(committed_content),
+        }
+    return {
+        "schema_version": "pq-sequoia-tap-closure/v1",
+        "candidate_sha256": sha256_file(candidate_path),
+        "commit": commit,
+        "tree": tree,
+        "formulae": formulae,
+    }
+
+
+def record_tap(arguments: argparse.Namespace) -> None:
+    write_json(
+        arguments.output,
+        tap_closure(arguments.root.resolve(), arguments.tap_root.resolve(strict=True)),
+    )
+
+
+def prepare_tap(arguments: argparse.Namespace) -> None:
+    root = arguments.root.resolve()
+    tap_root = arguments.tap_root.resolve(strict=True)
+    if tap_git_output(
+        tap_root, ["status", "--porcelain=v1", "--untracked-files=all"]
+    ):
+        raise ProcedureError("ephemeral tap worktree must be clean before preparation")
+    candidate = read_json(
+        root / "packaging/homebrew/pq-sequoia-macos/v1/candidate.json"
+    )
+    relative_formulae: list[str] = []
+    for application_name in ("sq", "sqv"):
+        source = safe_relative(
+            root, candidate["applications"][application_name]["formula_path"]
+        )
+        destination = tap_root / "Formula" / source.name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
+        relative_formulae.append(f"Formula/{source.name}")
+    tap_git_output(tap_root, ["add", "--", *relative_formulae])
+    tap_git_output(
+        tap_root,
+        [
+            "-c",
+            "user.name=PQ qualification",
+            "-c",
+            "user.email=pq-qualification.invalid@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "core.hooksPath=/dev/null",
+            "commit",
+            "--no-gpg-sign",
+            "--message",
+            "Build exact PQ Sequoia qualification formulae",
+            "--",
+            *relative_formulae,
+        ],
+    )
+    write_json(arguments.output, tap_closure(root, tap_root))
+
+
 def record_runtime(arguments: argparse.Namespace) -> None:
+    root = arguments.root.resolve()
     sq = arguments.sq.resolve(strict=True)
     sqv = arguments.sqv.resolve(strict=True)
     openssl = arguments.openssl.resolve(strict=True)
+    otool = arguments.otool.resolve(strict=True)
+    cache_tool = arguments.dyld_shared_cache_util.resolve(strict=True)
+    closure_digest(arguments.candidate_identity)
+    cache_members, cache_observation = shared_cache_membership(cache_tool)
     record = {
         "schema_version": "pq-sequoia-runtime-closure/v1",
         "candidate_identity": arguments.candidate_identity,
@@ -1619,10 +1911,12 @@ def record_runtime(arguments: argparse.Namespace) -> None:
             "sqv": tool_output([str(sqv), "--version"]),
             "openssl": tool_output([str(openssl), "version", "-a"]),
         },
+        "tap": tap_closure(root, arguments.tap_root.resolve(strict=True)),
+        "shared_cache_observation": cache_observation,
         "closures": {
-            "sq": record_macho_closure(sq),
-            "sqv": record_macho_closure(sqv),
-            "openssl": record_macho_closure(openssl),
+            "sq": record_macho_closure(sq, otool, cache_members),
+            "sqv": record_macho_closure(sqv, otool, cache_members),
+            "openssl": record_macho_closure(openssl, otool, cache_members),
         },
     }
     write_json(arguments.output, record)
@@ -1681,6 +1975,7 @@ def build_parser() -> argparse.ArgumentParser:
     open_parser.add_argument("--sq", type=Path, required=True)
     open_parser.add_argument("--sqv", type=Path, required=True)
     open_parser.add_argument("--candidate-identity", required=True)
+    open_parser.add_argument("--producer-closure", type=Path, required=True)
     open_parser.add_argument("--expected-peer-closure-sha256", required=True)
     open_parser.add_argument("--session-id", required=True)
     open_parser.add_argument("--peer-envelope", type=Path, required=True)
@@ -1709,11 +2004,32 @@ def build_parser() -> argparse.ArgumentParser:
     select_parser.add_argument("--output", type=Path, required=True)
 
     runtime_parser = subparsers.add_parser("record-runtime")
+    runtime_parser.add_argument("--root", type=Path, default=Path.cwd())
+    runtime_parser.add_argument("--tap-root", type=Path, required=True)
+    runtime_parser.add_argument("--otool", type=Path, required=True)
+    runtime_parser.add_argument("--dyld-shared-cache-util", type=Path, required=True)
     runtime_parser.add_argument("--sq", type=Path, required=True)
     runtime_parser.add_argument("--sqv", type=Path, required=True)
     runtime_parser.add_argument("--openssl", type=Path, required=True)
     runtime_parser.add_argument("--candidate-identity", required=True)
     runtime_parser.add_argument("--output", type=Path, required=True)
+
+    for name in ("record-tap", "prepare-tap"):
+        tap_parser = subparsers.add_parser(name)
+        tap_parser.add_argument("--root", type=Path, default=Path.cwd())
+        tap_parser.add_argument("--tap-root", type=Path, required=True)
+        tap_parser.add_argument("--output", type=Path, required=True)
+
+    macho_parser = subparsers.add_parser("record-macho-closure")
+    macho_parser.add_argument("--executable", type=Path, required=True)
+    macho_parser.add_argument("--otool", type=Path, required=True)
+    macho_parser.add_argument("--dyld-shared-cache-util", type=Path, required=True)
+    macho_parser.add_argument("--output", type=Path, required=True)
+
+    inspect_parser = subparsers.add_parser("inspect-certificate")
+    inspect_parser.add_argument("--sq", type=Path, required=True)
+    inspect_parser.add_argument("--certificate", type=Path, required=True)
+    inspect_parser.add_argument("--output", type=Path, required=True)
 
     relay_parser = subparsers.add_parser("validate-relay")
     relay_parser.add_argument("--metadata", type=Path, required=True)
@@ -1754,6 +2070,14 @@ def main() -> int:
             select_kegs(arguments)
         elif arguments.command == "record-runtime":
             record_runtime(arguments)
+        elif arguments.command == "record-tap":
+            record_tap(arguments)
+        elif arguments.command == "prepare-tap":
+            prepare_tap(arguments)
+        elif arguments.command == "record-macho-closure":
+            record_macho_closure_command(arguments)
+        elif arguments.command == "inspect-certificate":
+            inspect_certificate_command(arguments)
         elif arguments.command == "validate-relay":
             validate_relay(arguments)
         elif arguments.command == "cleanup":

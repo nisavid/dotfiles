@@ -4,6 +4,7 @@ import base64
 import hashlib
 import importlib.util
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -413,6 +414,43 @@ class QualificationProcedureTests(unittest.TestCase):
                 signature_dump.replace("ML-DSA-65+Ed25519", "Ed25519"), signing
             )
 
+    def test_certificate_versions_come_from_packet_dump(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            certificate = root / "certificate.pgp"
+            certificate.write_bytes(b"public certificate fixture")
+            output = root / "inspection.json"
+
+            version_four = _write_sq_inspection_fixture(root / "sq-v4", 4)
+            rejected = self.run_cli(
+                "inspect-certificate",
+                "--sq",
+                str(version_four),
+                "--certificate",
+                str(certificate),
+                "--output",
+                str(output),
+            )
+            self.assertEqual(1, rejected.returncode)
+            self.assertIn("key packet version mismatch", rejected.stderr)
+            self.assertFalse(output.exists())
+
+            version_six = _write_sq_inspection_fixture(root / "sq-v6", 6)
+            accepted = self.run_cli(
+                "inspect-certificate",
+                "--sq",
+                str(version_six),
+                "--certificate",
+                str(certificate),
+                "--output",
+                str(output),
+            )
+            self.assertEqual(0, accepted.returncode, accepted.stderr)
+            shape = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(6, shape["primary_version"])
+            self.assertEqual(6, shape["signing_version"])
+            self.assertEqual(6, shape["encryption_version"])
+
     def test_phase_c_requires_signed_parent_and_hatchery_result(self) -> None:
         module = _load_cli()
         envelope = {
@@ -595,11 +633,100 @@ class QualificationProcedureTests(unittest.TestCase):
             self.assertEqual(1, rejected.returncode)
             self.assertFalse(output.exists())
 
+    def test_phase_b_binds_exact_runtime_closure_through_public_cli(self) -> None:
+        module = _load_cli()
+        session = "a" * 64
+        peer_closure = "b" * 64
+        candidate_digest = _sha256(CANDIDATE)
+        phase_a = _envelope(
+            module,
+            phase="hatchery-phase-a",
+            session=session,
+            closure=peer_closure,
+            parent="0" * 64,
+            payloads={
+                "hatchery-cert.pgp": _payload(b"public certificate fixture"),
+                "hatchery-message.sig": _payload(b"public signature fixture"),
+            },
+            results={
+                "local_revocation_results": _revocations(),
+                "local_cleanup_pending": True,
+            },
+        )
+        phase_a["control_signature"] = _payload(b"public control signature fixture")
+        local_result = {
+            "schema_version": "pq-sequoia-local-result/v1",
+            "candidate_identity": "sha256:" + candidate_digest,
+            "message_sha256": module.MESSAGE_SHA256,
+            "local_cleanup_complete": True,
+            "local_revocation_results": _revocations(),
+        }
+        runtime_closure = {
+            "schema_version": "pq-sequoia-runtime-closure/v1",
+            "candidate_identity": "sha256:" + candidate_digest,
+            "workflow": {"workflow_sha": "c" * 40},
+            "runner": {"image_version": "fixture-a"},
+            "build_tools": {},
+            "versions": {},
+            "tap": {"commit": "d" * 40},
+            "shared_cache_observation": {"listing_sha256": "e" * 64},
+            "closures": {},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sq, sqv = _write_interop_tool_fixtures(root)
+            phase_a_path = root / "phase-a.json"
+            local_result_path = root / "local-result.json"
+            runtime_closure_path = root / "runtime-closure.json"
+            phase_b_path = root / "phase-b.json"
+            state = root / "state"
+            _write_json(phase_a_path, phase_a)
+            _write_json(local_result_path, local_result)
+            _write_json(runtime_closure_path, runtime_closure)
+
+            opened = self.run_cli(
+                "interop-open",
+                "--root",
+                str(ROOT),
+                "--sq",
+                str(sq),
+                "--sqv",
+                str(sqv),
+                "--candidate-identity",
+                "sha256:" + candidate_digest,
+                "--producer-closure",
+                str(runtime_closure_path),
+                "--expected-peer-closure-sha256",
+                peer_closure,
+                "--session-id",
+                session,
+                "--peer-envelope",
+                str(phase_a_path),
+                "--local-result",
+                str(local_result_path),
+                "--state-dir",
+                str(state),
+                "--output",
+                str(phase_b_path),
+            )
+            self.assertEqual(0, opened.returncode, opened.stderr)
+            phase_b = json.loads(phase_b_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                _sha256(runtime_closure_path), phase_b["producer_closure_sha256"]
+            )
+            self.assertNotEqual(
+                candidate_digest, phase_b["producer_closure_sha256"]
+            )
+
+            cleaned = self.run_cli("cleanup", "--state-dir", str(state))
+            self.assertEqual(0, cleaned.returncode, cleaned.stderr)
+            self.assertFalse(state.exists())
+
     def test_open_and_close_execute_authenticated_reconciled_exchange(self) -> None:
         module = _load_cli()
         session = "a" * 64
         peer_closure = "b" * 64
-        local_closure = _sha256(CANDIDATE)
+        candidate_digest = _sha256(CANDIDATE)
         phase_a = _envelope(
             module,
             phase="hatchery-phase-a",
@@ -618,7 +745,7 @@ class QualificationProcedureTests(unittest.TestCase):
         phase_a["control_signature"] = _payload(b"hatchery control signature")
         local_result = {
             "schema_version": "pq-sequoia-local-result/v1",
-            "candidate_identity": "sha256:" + local_closure,
+            "candidate_identity": "sha256:" + candidate_digest,
             "message_sha256": module.MESSAGE_SHA256,
             "local_cleanup_complete": True,
             "local_revocation_results": _revocations(),
@@ -634,10 +761,26 @@ class QualificationProcedureTests(unittest.TestCase):
             root = Path(directory)
             phase_a_path = root / "phase-a.json"
             local_result_path = root / "local-result.json"
+            runtime_closure_path = root / "runtime-closure.json"
             state = root / "state"
             phase_b_path = root / "phase-b.json"
             _write_json(phase_a_path, phase_a)
             _write_json(local_result_path, local_result)
+            _write_json(
+                runtime_closure_path,
+                {
+                    "schema_version": "pq-sequoia-runtime-closure/v1",
+                    "candidate_identity": "sha256:" + candidate_digest,
+                    "workflow": {},
+                    "runner": {},
+                    "build_tools": {},
+                    "versions": {},
+                    "tap": {},
+                    "shared_cache_observation": {},
+                    "closures": {},
+                },
+            )
+            local_closure = _sha256(runtime_closure_path)
 
             originals = (
                 module.generate_key,
@@ -677,7 +820,8 @@ class QualificationProcedureTests(unittest.TestCase):
                         root=ROOT,
                         sq=Path("/bin/true"),
                         sqv=Path("/bin/true"),
-                        candidate_identity="sha256:" + local_closure,
+                        candidate_identity="sha256:" + candidate_digest,
+                        producer_closure=runtime_closure_path,
                         expected_peer_closure_sha256=peer_closure,
                         session_id=session,
                         peer_envelope=phase_a_path,
@@ -688,6 +832,8 @@ class QualificationProcedureTests(unittest.TestCase):
                 )
                 phase_b = json.loads(phase_b_path.read_text(encoding="utf-8"))
                 self.assertEqual(_sha256(phase_a_path), phase_b["parent_envelope_sha256"])
+                self.assertEqual(local_closure, phase_b["producer_closure_sha256"])
+                self.assertNotEqual(candidate_digest, phase_b["producer_closure_sha256"])
                 self.assertIn("control_signature", phase_b)
 
                 state_record = json.loads((state / "state.json").read_text())
@@ -864,38 +1010,82 @@ class QualificationProcedureTests(unittest.TestCase):
             self.assertTrue(result["local_cleanup_complete"])
             self.assertEqual([], list(work_root.iterdir()))
 
-    def test_record_runtime_retains_only_closed_macho_observations(self) -> None:
-        module = _load_cli()
+    def test_record_runtime_binds_tap_and_shared_cache_observations(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            output = Path(directory) / "runtime.json"
-            closure = {
-                "root": "/candidate/bin",
-                "objects": [
-                    {"path": "/candidate/bin", "realpath": "/candidate/bin", "size": 1, "sha256": "a" * 64}
+            root = Path(directory)
+            tap = root / "tap"
+            (tap / "Formula").mkdir(parents=True)
+            subprocess.run(["git", "init", "--quiet", str(tap)], check=True)
+            tap_record = root / "tap.json"
+            prepared = self.run_cli(
+                "prepare-tap",
+                "--root",
+                str(ROOT),
+                "--tap-root",
+                str(tap),
+                "--output",
+                str(tap_record),
+            )
+            self.assertEqual(0, prepared.returncode, prepared.stderr)
+
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            for name in ("sw_vers", "xcodebuild", "brew", "gpg", "rustc", "cargo", "capnp"):
+                _write_any_output_tool(bin_dir / name, f"{name} fixture\n")
+            sq = _write_any_output_tool(bin_dir / "sq", "sq fixture\n")
+            sqv = _write_any_output_tool(bin_dir / "sqv", "sqv fixture\n")
+            openssl = _write_any_output_tool(bin_dir / "openssl", "openssl fixture\n")
+            otool = _write_otool_fixture(
+                bin_dir / "otool", sq, "/usr/lib/libSystem.B.dylib"
+            )
+            cache_tool = _write_output_tool(
+                bin_dir / "dyld_shared_cache_util",
+                "/usr/lib/libSystem.B.dylib\n",
+            )
+            output = root / "runtime.json"
+            environment = os.environ.copy()
+            environment["PATH"] = str(bin_dir) + os.pathsep + environment["PATH"]
+            result = subprocess.run(
+                [
+                    str(CLI),
+                    "record-runtime",
+                    "--root",
+                    str(ROOT),
+                    "--tap-root",
+                    str(tap),
+                    "--otool",
+                    str(otool),
+                    "--dyld-shared-cache-util",
+                    str(cache_tool),
+                    "--sq",
+                    str(sq),
+                    "--sqv",
+                    str(sqv),
+                    "--openssl",
+                    str(openssl),
+                    "--candidate-identity",
+                    "sha256:" + _sha256(CANDIDATE),
+                    "--output",
+                    str(output),
                 ],
-                "apple_shared_cache": ["/usr/lib/libSystem.B.dylib"],
-            }
-            original_output = module.tool_output
-            original_closure = module.record_macho_closure
-            module.tool_output = lambda command: "public tool identity"
-            module.record_macho_closure = lambda executable: closure
-            try:
-                module.record_runtime(
-                    SimpleNamespace(
-                        sq=Path("/bin/true"),
-                        sqv=Path("/bin/true"),
-                        openssl=Path("/bin/true"),
-                        candidate_identity="sha256:" + _sha256(CANDIDATE),
-                        output=output,
-                    )
+                cwd=ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+            self.assertEqual(0, result.returncode, result.stderr)
+            record = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual("pq-sequoia-runtime-closure/v1", record["schema_version"])
+            self.assertRegex(record["tap"]["commit"], r"^[0-9a-f]{40}$")
+            self.assertEqual(
+                1, record["shared_cache_observation"]["listed_name_count"]
+            )
+            for closure in record["closures"].values():
+                self.assertEqual(
+                    ["/usr/lib/libSystem.B.dylib"], closure["apple_shared_cache"]
                 )
-            finally:
-                module.tool_output = original_output
-                module.record_macho_closure = original_closure
-            result = json.loads(output.read_text())
-            self.assertEqual("pq-sequoia-runtime-closure/v1", result["schema_version"])
-            self.assertEqual(closure, result["closures"]["sq"])
-            self.assertNotIn("shared_cache_or_unresolved", json.dumps(result))
+            self.assertNotIn("shared_cache_or_unresolved", json.dumps(record))
 
     def test_validate_relay_command_writes_only_exact_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -965,11 +1155,173 @@ class QualificationProcedureTests(unittest.TestCase):
             module.tool_output = fake_tool_output
             try:
                 with self.assertRaisesRegex(
-                    module.ProcedureError, "unresolved non-system Mach-O dependency"
+                    module.ProcedureError, "unresolved Mach-O dependency"
                 ):
-                    module.record_macho_closure(executable)
+                    module.record_macho_closure(
+                        executable,
+                        Path("otool"),
+                        {"/usr/lib/libSystem.B.dylib"},
+                    )
             finally:
                 module.tool_output = original
+
+    def test_apple_shared_cache_requires_exact_live_membership(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            executable = root / "candidate-bin"
+            executable.write_bytes(b"fake Mach-O fixture")
+            otool = _write_otool_fixture(
+                root / "otool",
+                executable,
+                "/usr/lib/lib-not-in-any-shared-cache.dylib",
+            )
+            cache_tool = _write_output_tool(
+                root / "dyld_shared_cache_util",
+                "/usr/lib/libSystem.B.dylib\n",
+            )
+            output = root / "macho-closure.json"
+            rejected = self.run_cli(
+                "record-macho-closure",
+                "--executable",
+                str(executable),
+                "--otool",
+                str(otool),
+                "--dyld-shared-cache-util",
+                str(cache_tool),
+                "--output",
+                str(output),
+            )
+            self.assertEqual(1, rejected.returncode)
+            self.assertIn("unresolved Mach-O dependency", rejected.stderr)
+            self.assertFalse(output.exists())
+
+            _write_otool_fixture(
+                otool,
+                executable,
+                "/usr/lib/libSystem.B.dylib",
+            )
+            accepted = self.run_cli(
+                "record-macho-closure",
+                "--executable",
+                str(executable),
+                "--otool",
+                str(otool),
+                "--dyld-shared-cache-util",
+                str(cache_tool),
+                "--output",
+                str(output),
+            )
+            self.assertEqual(0, accepted.returncode, accepted.stderr)
+            record = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(
+                ["/usr/lib/libSystem.B.dylib"],
+                record["closure"]["apple_shared_cache"],
+            )
+            self.assertEqual(
+                hashlib.sha256(b"/usr/lib/libSystem.B.dylib\n").hexdigest(),
+                record["shared_cache_observation"]["listing_sha256"],
+            )
+            self.assertEqual(1, record["shared_cache_observation"]["listed_name_count"])
+
+    def test_ephemeral_tap_requires_an_exact_committed_formula_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            tap = root / "tap"
+            formula_dir = tap / "Formula"
+            formula_dir.mkdir(parents=True)
+            subprocess.run(["git", "init", "--quiet", str(tap)], check=True)
+            formula_sources = sorted((PACKAGE_ROOT / "Formula").glob("*.rb"))
+            for source in formula_sources:
+                shutil.copyfile(source, formula_dir / source.name)
+
+            output = root / "tap-closure.json"
+            uncommitted = self.run_cli(
+                "record-tap",
+                "--root",
+                str(ROOT),
+                "--tap-root",
+                str(tap),
+                "--output",
+                str(output),
+            )
+            self.assertEqual(1, uncommitted.returncode)
+            self.assertIn("tap worktree must be clean", uncommitted.stderr)
+            self.assertFalse(output.exists())
+
+            for formula in formula_dir.iterdir():
+                formula.unlink()
+            prepared = self.run_cli(
+                "prepare-tap",
+                "--root",
+                str(ROOT),
+                "--tap-root",
+                str(tap),
+                "--output",
+                str(output),
+            )
+            self.assertEqual(0, prepared.returncode, prepared.stderr)
+            record = json.loads(output.read_text(encoding="utf-8"))
+            commit = record["commit"]
+            self.assertRegex(commit, r"^[0-9a-f]{40}$")
+            self.assertEqual(
+                {source.name for source in formula_sources}, set(record["formulae"])
+            )
+            for source in formula_sources:
+                self.assertEqual(
+                    _sha256(source), record["formulae"][source.name]["sha256"]
+                )
+                committed = subprocess.run(
+                    ["git", "-C", str(tap), "show", f"{commit}:Formula/{source.name}"],
+                    check=True,
+                    capture_output=True,
+                ).stdout
+                self.assertEqual(source.read_bytes(), committed)
+
+            changed_formula = formula_dir / formula_sources[0].name
+            changed_formula.write_bytes(b"different formula\n")
+            closed_git_environment = os.environ.copy()
+            closed_git_environment["GIT_CONFIG_NOSYSTEM"] = "1"
+            closed_git_environment["GIT_CONFIG_GLOBAL"] = os.devnull
+            subprocess.run(
+                ["git", "-C", str(tap), "add", "--", f"Formula/{changed_formula.name}"],
+                check=True,
+                env=closed_git_environment,
+            )
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(tap),
+                    "-c",
+                    "user.name=PQ qualification test",
+                    "-c",
+                    "user.email=pq-test.invalid@example.invalid",
+                    "-c",
+                    "commit.gpgsign=false",
+                    "-c",
+                    "core.hooksPath=/dev/null",
+                    "commit",
+                    "--quiet",
+                    "--no-gpg-sign",
+                    "--message",
+                    "Commit different formula bytes",
+                ],
+                check=True,
+                env=closed_git_environment,
+            )
+            output.unlink()
+            wrong_commit = self.run_cli(
+                "record-tap",
+                "--root",
+                str(ROOT),
+                "--tap-root",
+                str(tap),
+                "--output",
+                str(output),
+            )
+            self.assertEqual(1, wrong_commit.returncode)
+            self.assertIn("tap formula identity mismatch", wrong_commit.stderr)
+            self.assertFalse(output.exists())
 
 
 def _payload(content: bytes) -> dict[str, object]:
@@ -1032,6 +1384,179 @@ def _certificate_shape() -> dict[str, object]:
         "encryption_capabilities": ["transport encryption", "data-at-rest encryption"],
         "authentication_capable": False,
     }
+
+
+def _write_sq_inspection_fixture(path: Path, version: int) -> Path:
+    primary = "A" * 64
+    signing = "B" * 64
+    encryption = "C" * 64
+    inspection = f"""OpenPGP Certificate.
+
+      Fingerprint: {primary}
+  Public-key algo: ML-DSA-65+Ed25519
+         Key flags: certification
+
+           Subkey: {signing}
+  Public-key algo: ML-DSA-65+Ed25519
+         Key flags: signing
+
+           Subkey: {encryption}
+  Public-key algo: ML-KEM-768+X25519
+         Key flags: transport encryption, data-at-rest encryption
+"""
+    packet_dump = f"""Public-Key Packet, new CTB
+  Version: {version}
+  Pk algo: ML-DSA-65+Ed25519
+  Fingerprint: {primary}
+Public-Subkey Packet, new CTB
+  Version: {version}
+  Pk algo: ML-DSA-65+Ed25519
+  Fingerprint: {signing}
+Public-Subkey Packet, new CTB
+  Version: {version}
+  Pk algo: ML-KEM-768+X25519
+  Fingerprint: {encryption}
+"""
+    path.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        f"inspection = {inspection!r}\n"
+        f"packet_dump = {packet_dump!r}\n"
+        "if sys.argv[1] == 'inspect':\n"
+        "    print(inspection, end='')\n"
+        "elif sys.argv[1:3] == ['packet', 'dump']:\n"
+        "    print(packet_dump, end='')\n"
+        "else:\n"
+        "    raise SystemExit(2)\n",
+        encoding="utf-8",
+    )
+    path.chmod(0o700)
+    return path
+
+
+def _write_output_tool(path: Path, output: str) -> Path:
+    path.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "if sys.argv[1:] != ['-list']:\n"
+        "    raise SystemExit(2)\n"
+        f"print({output!r}, end='')\n",
+        encoding="utf-8",
+    )
+    path.chmod(0o700)
+    return path
+
+
+def _write_any_output_tool(path: Path, output: str) -> Path:
+    path.write_text(
+        "#!/usr/bin/env python3\n"
+        f"print({output!r}, end='')\n",
+        encoding="utf-8",
+    )
+    path.chmod(0o700)
+    return path
+
+
+def _write_interop_tool_fixtures(root: Path) -> tuple[Path, Path]:
+    sq = root / "sq"
+    sqv = root / "sqv"
+    primary = "A" * 64
+    signing = "B" * 64
+    encryption = "C" * 64
+    inspection = f"""OpenPGP Certificate.
+
+      Fingerprint: {primary}
+  Public-key algo: ML-DSA-65+Ed25519
+         Key flags: certification
+
+           Subkey: {signing}
+  Public-key algo: ML-DSA-65+Ed25519
+         Key flags: signing
+
+           Subkey: {encryption}
+  Public-key algo: ML-KEM-768+X25519
+         Key flags: transport encryption, data-at-rest encryption
+"""
+    packet_dump = f"""Public-Key Packet, new CTB
+  Version: 6
+  Pk algo: ML-DSA-65+Ed25519
+  Fingerprint: {primary}
+Public-Subkey Packet, new CTB
+  Version: 6
+  Pk algo: ML-DSA-65+Ed25519
+  Fingerprint: {signing}
+Public-Subkey Packet, new CTB
+  Version: 6
+  Pk algo: ML-KEM-768+X25519
+  Fingerprint: {encryption}
+"""
+    signature_dump = f"""Signature Packet
+  Version: 6
+  Pk algo: ML-DSA-65+Ed25519
+  Issuer Fingerprint: {signing}
+"""
+    message = base64.b64encode(MESSAGE.read_bytes()).decode("ascii")
+    sq.write_text(
+        "#!/usr/bin/env python3\n"
+        "import base64\n"
+        "import pathlib\n"
+        "import sys\n"
+        f"inspection = {inspection!r}\n"
+        f"packet_dump = {packet_dump!r}\n"
+        f"signature_dump = {signature_dump!r}\n"
+        f"message = base64.b64decode({message!r})\n"
+        "args = sys.argv[1:]\n"
+        "if args[0] == 'inspect':\n"
+        "    print(inspection, end='')\n"
+        "elif args[:2] == ['packet', 'dump']:\n"
+        "    print(signature_dump if args[-1].endswith('.sig') else packet_dump, end='')\n"
+        "elif args[:2] == ['key', 'generate']:\n"
+        "    pathlib.Path(args[args.index('--output') + 1]).write_bytes(b'public test key placeholder')\n"
+        "    pathlib.Path(args[args.index('--rev-cert') + 1]).write_bytes(b'public test revocation placeholder')\n"
+        "elif args[:2] == ['key', 'delete']:\n"
+        "    pathlib.Path(args[args.index('--output') + 1]).write_bytes(b'public test certificate placeholder')\n"
+        "elif args[0] == 'sign':\n"
+        "    pathlib.Path(args[args.index('--signature-file') + 1]).write_bytes(b'public test signature placeholder')\n"
+        "elif args[0] == 'encrypt':\n"
+        "    pathlib.Path(args[args.index('--output') + 1]).write_bytes(b'public test ciphertext placeholder')\n"
+        "elif args[0] == 'decrypt':\n"
+        "    if 'tampered' in args[-1]:\n"
+        "        raise SystemExit(1)\n"
+        "    pathlib.Path(args[args.index('--output') + 1]).write_bytes(message)\n"
+        "else:\n"
+        "    raise SystemExit(2)\n",
+        encoding="utf-8",
+    )
+    sqv.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "raise SystemExit(1 if 'altered-message.bin' in sys.argv[-1] else 0)\n",
+        encoding="utf-8",
+    )
+    sq.chmod(0o700)
+    sqv.chmod(0o700)
+    return sq, sqv
+
+
+def _write_otool_fixture(path: Path, executable: Path, dependency: str) -> Path:
+    listing = (
+        f"{executable}:\n"
+        f"\t{dependency} (compatibility version 1.0.0, current version 1.0.0)\n"
+    )
+    path.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        f"listing = {listing!r}\n"
+        "if sys.argv[1] == '-l':\n"
+        "    pass\n"
+        "elif sys.argv[1] == '-L':\n"
+        "    print(listing, end='')\n"
+        "else:\n"
+        "    raise SystemExit(2)\n",
+        encoding="utf-8",
+    )
+    path.chmod(0o700)
+    return path
 
 
 if __name__ == "__main__":

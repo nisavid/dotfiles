@@ -5,10 +5,11 @@ candidate on a fresh GitHub-hosted `macos-15` runner. It records public,
 value-free evidence; it does not install a runtime on a personal Mac or grant
 production, custody, publication, or acceptance authority.
 
-Use it when an immutable application, lock, formula, OpenSSL, bottle,
-executable, linked-library, runner-image, or procedure identity changes. The
-candidate remains disabled until the complete local and live bidirectional
-matrix succeeds at one reviewed revision and receives separate acceptance.
+Use it when an immutable application, lock, formula, tap commit, OpenSSL,
+bottle, executable, linked-library, dyld shared-cache membership, runner-image,
+protocol, or procedure identity changes. The candidate remains disabled until
+the complete local and live bidirectional matrix succeeds at one reviewed
+revision and receives separate acceptance.
 
 ## Maintained inputs
 
@@ -18,12 +19,13 @@ matrix succeeds at one reviewed revision and receives separate acceptance.
   the Homebrew/core formula revision, and the Apple Silicon Sequoia bottle.
 - [`interop-v1.json`](interop-v1.json) defines the four-phase exchange with
   dotfiles #148. Its review-candidate SHA-256 is
-  `111643f12bde30782c15447f11df8e5bc3a90f9dda6e259c30f02525ab20ed33`.
+  `0a542bed779baa5ec0ce98fbd80611819f44913b8e878cfaf66e677e831fc2e0`.
   Its fixed [message](fixtures/v1/message.bin) is exactly 51 bytes and has SHA-256
   `6be8c2fe3154649151aacd41f35dd6a212881e627acca131fe3f0101b14f4337`.
 - [`pq-sequoia-macos`](../../../scripts/pq-sequoia-macos) validates those
-  inputs, executes the local matrix, controls exact-keg selection, records the
-  Mach-O closure, and opens and closes the live exchange.
+  inputs, commits and verifies the ephemeral tap, inspects key-packet versions,
+  controls exact-keg selection, records the Mach-O and runtime closures, and
+  opens and closes the live exchange.
 - [`pq-sequoia-macos.yml`](../../../.github/workflows/pq-sequoia-macos.yml) is
   manual-only. It has no push, pull-request, schedule, or release trigger.
 
@@ -60,6 +62,10 @@ signing-only subkey, and a version-6 ML-KEM-768+X25519 encryption-only subkey.
 There must be no authentication capability or additional subkey. It similarly
 inspects each detached signature and requires version 6,
 ML-DSA-65+Ed25519, and the exact signing-subkey issuer fingerprint.
+Certificate algorithms and capabilities come from `sq inspect`; each key
+version comes from the corresponding fingerprinted `Public-Key Packet` or
+`Public-Subkey Packet` emitted by `sq packet dump`. The receiver rejects a
+missing, duplicated, mismatched, or non-version-6 packet observation.
 
 `hatchery-phase-a.json` contains the disposable public certificate, its
 detached signature over the fixed message, the protocol digest, reviewed
@@ -137,33 +143,43 @@ The qualification job then:
    retained patches, final 2.4.1 locks, OpenSSL signature and source, pinned
    Homebrew formula, and OpenSSL bottle;
 3. runs the complete upstream `sq` and `sqv` suites against OpenSSL 3.5.8;
-4. builds and bottles both keg-only formulae, proves the backend and API from
-   executable output, records every on-disk Mach-O dependency digest, allows
-   unresolved names only in the absolute `/usr/lib/`,
-   `/System/Library/Frameworks/`, and
-   `/System/Library/PrivateFrameworks/` shared-cache namespaces, and rejects
-   every other unresolved dependency;
+4. copies both exact formulae into the ephemeral tap, creates a local unsigned
+   Git commit, and requires the clean committed blobs and working-tree bytes to
+   match `candidate.json` before building and bottling either formula;
 5. proves that a wrong executable digest leaves the selector absent, then
    selects only exact Cellar paths;
-6. runs generation, exact key and signature packet-shape inspection, lint,
+6. records every on-disk Mach-O dependency digest and queries the live cache
+   with `/usr/bin/dyld_shared_cache_util -list`; an unresolved install name is
+   accepted only by exact membership in that listing, and the evidence retains
+   the utility identity, listing digest, listed-name count, and used members;
+7. runs generation, exact key and signature packet-shape inspection, lint,
    detached `sq` and independent `sqv` verification,
    altered-message rejection, encryption/decryption, tampered-ciphertext
    rejection without recovered output, emergency and explicit certificate
    revocation, signing- and encryption-subkey retirement, and 200 sequential
    clean lifecycles of each executable; and
-7. authenticates phase A, signs a parent-chained phase-B transcript, and
-   uploads `macos-ci-phase-b.json` while keeping the macOS secret certificate
-   only in the still-running job.
+8. records `runtime-closure.json`, including the tap commit and live-cache
+   observation, signs its exact SHA-256 as phase B's producer closure, and
+   uploads the unchanged closure beside `macos-ci-phase-b.json` while keeping
+   the macOS secret certificate only in the still-running job.
 
 ## Complete the live return
 
-While the original macOS job is waiting, #148 downloads the phase-B artifact
-whose name contains the exact qualifier run ID. It verifies the phase-B
-control signature, reviewed macOS closure, protocol, fresh session, phase-A
-parent digest, exact composite certificate/signature shapes, and message
-signature before encryption. Using the same retained Hatchery secret from its
-open phase, it decrypts and tamper-tests `ciphertext-to-hatchery.pgp`, then
-encrypts the fixed message to the inspected macOS certificate.
+While the original macOS job is waiting, the coordinator downloads the
+phase-B artifact whose name contains the exact qualifier run ID. It reviews the
+sibling `runtime-closure.json` against the candidate revision, runner, tap,
+tools, executable and dylib identities, and shared-cache observations, then
+gives #148 that file's exact SHA-256 as the expected macOS closure. The
+coordinator never derives the expected value from the envelope field alone.
+
+#148 loads the same exact closure bytes and requires their SHA-256 to equal
+both the coordinator-supplied value and phase B's signed
+`producer_closure_sha256`. It then verifies the control signature, protocol,
+fresh session, phase-A parent digest, exact composite certificate/signature
+shapes, and message signature before encryption. Using the same retained
+Hatchery secret from its open phase, it decrypts and tamper-tests
+`ciphertext-to-hatchery.pgp`, then encrypts the fixed message to the inspected
+macOS certificate.
 
 #148 creates `results/hatchery.json` with exact SHA-256 and size records for
 all seven finite exchange artifacts: the fixed message, both public
@@ -214,9 +230,11 @@ diagnostics.
 
 The final macOS artifact contains the candidate and protocol, fixed message,
 all three envelopes, both peer results with identical seven-artifact maps,
-exact relay-run metadata, local results, bottle metadata, runtime closure, and
-`SHA256SUMS`. Envelope, result, and index digests are retained separately from
-the reciprocal map because a container cannot contain its own digest.
+exact relay-run metadata, local results, bottle metadata, the tap closure, the
+runtime closure, and `SHA256SUMS`. The runtime closure does not contain its own
+digest; phase B and the peer results bind that digest. Envelope, result,
+closure, and index digests remain separate from the reciprocal map because a
+container cannot contain its own digest.
 Acceptance still requires #258 to reconcile the #147 and #148 evidence, a
 fresh independent review tied to the executed revision, the exact workflow
 run and runner image, and a fresh #149 decision.
@@ -226,6 +244,16 @@ persistent installation, keychain or vault behavior, physical hardware,
 custody, concurrent OpenSSL shutdown behavior beyond upstream tests, or
 production authority. System libraries resident only in Apple's dyld shared
 cache have names but no on-disk bytes for the workflow to hash.
+
+The evidence consumers are the coordinator for source/runtime reconciliation,
+dotfiles #148 for the reviewed protocol and independent expected-closure
+comparison, and dotfiles #149 for fresh acceptance after both runtime lanes
+deliver. A source test, preflight, or successful workflow is evidence only at
+its tested layer. Root hands #148 the reviewed source revision, exact protocol
+digest, exact phase-B companion closure, and invocation condition only after a
+fresh independent review is clean; #149 remains blocked until the two live
+runtime results reconcile. This ordering has no dependency back from #147 to a
+#148 or #149 acceptance result.
 
 ## Public references
 

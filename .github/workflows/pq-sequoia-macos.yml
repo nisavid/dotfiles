@@ -302,7 +302,10 @@ jobs:
           export HOMEBREW_NO_AUTO_UPDATE=1
           brew tap-new qualification/pq-sequoia >/dev/null
           tap_root=$(brew --repository qualification/pq-sequoia)
-          cp packaging/homebrew/pq-sequoia-macos/v1/Formula/*.rb "$tap_root/Formula/"
+          scripts/pq-sequoia-macos prepare-tap \
+            --root . --tap-root "$tap_root" \
+            --output "$PQ_SCRATCH/evidence/tap-closure.json"
+          printf 'PQ_TAP_ROOT=%s\n' "$tap_root" >>"$GITHUB_ENV"
           brew install --build-bottle qualification/pq-sequoia/sequoia-sq-pqc@1.4.0
           brew install --build-bottle qualification/pq-sequoia/sequoia-sqv-pqc@1.5.0
           mkdir -p "$PQ_SCRATCH/evidence/bottles"
@@ -341,10 +344,17 @@ jobs:
             --expected-sqv-sha256 "$sqv_digest" \
             --output "$PQ_SCRATCH/public/selector.env"
           scripts/pq-sequoia-macos record-runtime \
+            --root . --tap-root "$PQ_TAP_ROOT" \
+            --otool /usr/bin/otool \
+            --dyld-shared-cache-util /usr/bin/dyld_shared_cache_util \
             --sq "$PQ_SQ" --sqv "$PQ_SQV" \
             --openssl "$PQ_OPENSSL_PREFIX/bin/openssl" \
             --candidate-identity "$PQ_CANDIDATE_IDENTITY" \
             --output "$PQ_SCRATCH/evidence/runtime-closure.json"
+          producer_closure_sha256=$(shasum -a 256 \
+            "$PQ_SCRATCH/evidence/runtime-closure.json" | awk '{print $1}')
+          printf 'PQ_PRODUCER_CLOSURE_SHA256=%s\n' "$producer_closure_sha256" \
+            >>"$GITHUB_ENV"
 
       - name: Run the local RFC 9980 matrix
         shell: bash
@@ -366,12 +376,16 @@ jobs:
           scripts/pq-sequoia-macos interop-open \
             --root . --sq "$PQ_SQ" --sqv "$PQ_SQV" \
             --candidate-identity "$PQ_CANDIDATE_IDENTITY" \
+            --producer-closure "$PQ_SCRATCH/evidence/runtime-closure.json" \
             --expected-peer-closure-sha256 "$PQ_PEER_CLOSURE_SHA256" \
             --session-id "$PQ_SESSION_ID" \
             --peer-envelope "$PQ_SCRATCH/public/hatchery-phase-a.json" \
             --local-result "$PQ_SCRATCH/evidence/local-result.json" \
             --state-dir "$PQ_SCRATCH/private/live" \
             --output "$PQ_SCRATCH/evidence/macos-ci-phase-b.json"
+          [[ "$(jq -r '.producer_closure_sha256' \
+            "$PQ_SCRATCH/evidence/macos-ci-phase-b.json")" \
+            == "$PQ_PRODUCER_CLOSURE_SHA256" ]]
           phase_b_sha256=$(shasum -a 256 \
             "$PQ_SCRATCH/evidence/macos-ci-phase-b.json" | awk '{print $1}')
           printf 'PQ_PHASE_B_SHA256=%s\n' "$phase_b_sha256" >>"$GITHUB_ENV"
@@ -380,7 +394,9 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: pq-sequoia-macos-phase-b-${{ inputs.session_id }}-${{ github.run_id }}
-          path: ${{ runner.temp }}/pq-sequoia-${{ inputs.session_id }}/evidence/macos-ci-phase-b.json
+          path: |
+            ${{ runner.temp }}/pq-sequoia-${{ inputs.session_id }}/evidence/macos-ci-phase-b.json
+            ${{ runner.temp }}/pq-sequoia-${{ inputs.session_id }}/evidence/runtime-closure.json
           if-no-files-found: error
           retention-days: 7
 
