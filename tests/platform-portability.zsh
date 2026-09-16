@@ -293,13 +293,21 @@ chezmoi -S "$repo_root/home" execute-template \
   --override-data '{"chezmoi":{"os":"darwin"}}' \
   <"$ignore_template" >"$test_root/darwin-ignore"
 
-typeset -a linux_only_patterns=(
+typeset -a retired_patterns=(
   '.agents/skills/hindsight-*'
   '.config/hindsight-*'
-  '.docker'
   '.hindsight*'
   '.local/bin/hindsight-*'
   '.local/lib/hindsight-*'
+)
+
+for pattern in $retired_patterns; do
+  assert_line "$pattern" "$test_root/linux-ignore"
+  assert_line "$pattern" "$test_root/darwin-ignore"
+done
+
+typeset -a linux_only_patterns=(
+  '.docker'
   '.local/libexec'
   'Library'
 )
