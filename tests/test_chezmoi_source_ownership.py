@@ -378,6 +378,8 @@ class ChezmoiSourceOwnershipTests(unittest.TestCase):
                     "-S",
                     str(SOURCE),
                     *arguments,
+                    "--override-data",
+                    '{"chezmoi":{"hostname":"test-host"}}',
                     "--override-data-file",
                     str(SECRET_EXEC_FIXTURE),
                     "--source-path",
