@@ -1,0 +1,1247 @@
+#!/usr/bin/env python3
+"""Validate and execute the public macOS PQ Sequoia qualification procedure."""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import binascii
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any
+
+MESSAGE_SHA256 = "6be8c2fe3154649151aacd41f35dd6a212881e627acca131fe3f0101b14f4337"
+SHA256_RE = re.compile(r"[0-9a-f]{64}")
+IDENTITY_RE = re.compile(r"sha256:[0-9a-f]{64}")
+SESSION_RE = re.compile(r"[0-9a-f]{64}")
+MAX_ENVELOPE_BYTES = 2 * 1024 * 1024
+MAX_PAYLOAD_BYTES = 1024 * 1024
+DISPATCH_ENVELOPE_MAX_BYTES = 46000
+STATE_MARKER = ".pq-sequoia-disposable-state"
+STATE_MARKER_CONTENT = "pq-sequoia-disposable-state/v1\n"
+PHASE_PAYLOADS = {
+    "hatchery-phase-a": {"hatchery-cert.pgp", "hatchery-message.sig"},
+    "macos-ci-phase-b": {
+        "macos-ci-cert.pgp",
+        "macos-ci-message.sig",
+        "ciphertext-to-hatchery.pgp",
+    },
+    "hatchery-phase-c": {"ciphertext-to-macos-ci.pgp"},
+}
+PHASE_RESULTS = {
+    "hatchery-phase-a": {
+        "local_revocation_results",
+        "local_cleanup_pending",
+    },
+    "macos-ci-phase-b": {
+        "local_revocation_results",
+        "local_cleanup_pending",
+        "peer_signature_verified",
+        "altered_message_rejected",
+    },
+    "hatchery-phase-c": {
+        "peer_signature_verified",
+        "altered_message_rejected",
+        "ciphertext_decrypted_byte_identical",
+        "tampered_ciphertext_rejected_without_output",
+        "local_cleanup_complete",
+    },
+}
+REVOCATION_CASES = {
+    "emergency_certificate",
+    "retired_certificate",
+    "retired_signing_subkey",
+    "retired_encryption_subkey",
+}
+
+
+class ProcedureError(Exception):
+    pass
+
+
+def sha256_bytes(content: bytes) -> str:
+    return hashlib.sha256(content).hexdigest()
+
+
+def sha256_file(path: Path) -> str:
+    return sha256_bytes(path.read_bytes())
+
+
+def read_json(path: Path) -> dict[str, Any]:
+    try:
+        if path.stat().st_size > MAX_ENVELOPE_BYTES:
+            raise ProcedureError("JSON input exceeds the size limit")
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise ProcedureError("invalid JSON input") from error
+    if not isinstance(value, dict):
+        raise ProcedureError("JSON input must be an object")
+    return value
+
+
+def write_json(path: Path, value: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(
+        json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    temporary.replace(path)
+
+
+def safe_relative(root: Path, relative: str) -> Path:
+    if Path(relative).is_absolute():
+        raise ProcedureError("manifest path must be relative")
+    resolved = (root / relative).resolve()
+    try:
+        resolved.relative_to(root.resolve())
+    except ValueError as error:
+        raise ProcedureError("manifest path escapes the repository") from error
+    return resolved
+
+
+def validate_static(root: Path) -> None:
+    surface = root / "docs/crypto/pq-sequoia-macos"
+    message_path = surface / "fixtures/v1/message.bin"
+    protocol_path = surface / "interop-v1.json"
+    candidate_path = root / "packaging/homebrew/pq-sequoia-macos/v1/candidate.json"
+    message = message_path.read_bytes()
+    protocol = read_json(protocol_path)
+    candidate = read_json(candidate_path)
+
+    if len(message) != 51 or sha256_bytes(message) != MESSAGE_SHA256:
+        raise ProcedureError("fixed interoperability message identity mismatch")
+    if protocol.get("schema_version") != "pq-sequoia-interop/v1":
+        raise ProcedureError("protocol version mismatch")
+    if protocol.get("message", {}).get("sha256") != MESSAGE_SHA256:
+        raise ProcedureError("protocol message binding mismatch")
+    if candidate.get("schema_version") != "pq-sequoia-macos-candidate/v1":
+        raise ProcedureError("candidate version mismatch")
+    openssl = candidate.get("openssl", {})
+    if (
+        openssl.get("version") != "3.5.8"
+        or openssl.get("support_line") != "LTS"
+        or openssl.get("supported_until") != "2030-04-08"
+    ):
+        raise ProcedureError(
+            "candidate does not select the frozen OpenSSL 3.5 LTS closure"
+        )
+
+    applications = candidate.get("applications")
+    if not isinstance(applications, dict) or set(applications) != {"sq", "sqv"}:
+        raise ProcedureError("candidate application set mismatch")
+    for name, application in applications.items():
+        if not isinstance(application, dict):
+            raise ProcedureError(f"{name} candidate must be an object")
+        for path_field, digest_field in (
+            ("formula_path", "formula_sha256"),
+            ("patch_path", "patch_sha256"),
+        ):
+            path = safe_relative(root, str(application.get(path_field, "")))
+            expected = application.get(digest_field)
+            if not isinstance(expected, str) or not SHA256_RE.fullmatch(expected):
+                raise ProcedureError(f"{name} {digest_field} is invalid")
+            if sha256_file(path) != expected:
+                raise ProcedureError(f"{name} {path_field} digest mismatch")
+        formula = safe_relative(root, application["formula_path"]).read_bytes()
+        marker = b"\n__END__\n"
+        if marker not in formula:
+            raise ProcedureError(
+                f"{name} formula does not embed its reviewed lock patch"
+            )
+        embedded = formula.split(marker, 1)[1]
+        patch = safe_relative(root, application["patch_path"]).read_bytes()
+        if embedded != patch:
+            raise ProcedureError(f"{name} embedded and retained lock patches differ")
+        if b'depends_on "openssl@3.5"' not in formula or b"head " in formula.lower():
+            raise ProcedureError(f"{name} formula dependency policy mismatch")
+
+
+def payload_record(content: bytes) -> dict[str, Any]:
+    if len(content) > MAX_PAYLOAD_BYTES:
+        raise ProcedureError("public payload exceeds the size limit")
+    return {
+        "encoding": "base64",
+        "size": len(content),
+        "sha256": sha256_bytes(content),
+        "data": base64.b64encode(content).decode("ascii"),
+    }
+
+
+def decode_payload(name: str, record: object) -> bytes:
+    if not isinstance(record, dict):
+        raise ProcedureError(f"{name}: payload record must be an object")
+    if set(record) != {"encoding", "size", "sha256", "data"}:
+        raise ProcedureError(f"{name}: payload record fields mismatch")
+    if record.get("encoding") != "base64":
+        raise ProcedureError(f"{name}: unsupported payload encoding")
+    size = record.get("size")
+    digest = record.get("sha256")
+    encoded = record.get("data")
+    if not isinstance(size, int) or not 0 < size <= MAX_PAYLOAD_BYTES:
+        raise ProcedureError(f"{name}: payload size is invalid")
+    if not isinstance(digest, str) or not SHA256_RE.fullmatch(digest):
+        raise ProcedureError(f"{name}: payload digest is invalid")
+    if not isinstance(encoded, str):
+        raise ProcedureError(f"{name}: payload data is invalid")
+    try:
+        content = base64.b64decode(encoded, validate=True)
+    except (ValueError, binascii.Error) as error:
+        raise ProcedureError(f"{name}: payload base64 is invalid") from error
+    if len(content) != size:
+        raise ProcedureError(f"{name}: payload size mismatch")
+    if sha256_bytes(content) != digest:
+        raise ProcedureError(f"{name}: payload digest mismatch")
+    return content
+
+
+def validate_revocations(results: object) -> None:
+    if not isinstance(results, dict) or set(results) != REVOCATION_CASES:
+        raise ProcedureError("local revocation result set mismatch")
+    for name, result in results.items():
+        if not isinstance(result, dict) or set(result) != {"passed", "sha256", "size"}:
+            raise ProcedureError(f"{name}: revocation result fields mismatch")
+        if result.get("passed") is not True:
+            raise ProcedureError(f"{name}: revocation check did not pass")
+        if not isinstance(result.get("size"), int) or result["size"] <= 0:
+            raise ProcedureError(f"{name}: revocation size is invalid")
+        if not isinstance(result.get("sha256"), str) or not SHA256_RE.fullmatch(
+            result["sha256"]
+        ):
+            raise ProcedureError(f"{name}: revocation digest is invalid")
+
+
+def validate_envelope(
+    envelope: dict[str, Any], expected_phase: str, expected_session: str
+) -> dict[str, bytes]:
+    if expected_phase not in PHASE_PAYLOADS:
+        raise ProcedureError("unsupported protocol phase")
+    if set(envelope) != {
+        "schema_version",
+        "phase",
+        "session_id",
+        "candidate_identity",
+        "message_sha256",
+        "payloads",
+        "results",
+    }:
+        raise ProcedureError("envelope fields mismatch")
+    if envelope.get("schema_version") != "pq-sequoia-interop-envelope/v1":
+        raise ProcedureError("envelope version mismatch")
+    if envelope.get("phase") != expected_phase:
+        raise ProcedureError("envelope phase mismatch")
+    if envelope.get("session_id") != expected_session or not SESSION_RE.fullmatch(
+        expected_session
+    ):
+        raise ProcedureError("envelope session mismatch")
+    identity = envelope.get("candidate_identity")
+    if not isinstance(identity, str) or not IDENTITY_RE.fullmatch(identity):
+        raise ProcedureError("envelope candidate identity is invalid")
+    if envelope.get("message_sha256") != MESSAGE_SHA256:
+        raise ProcedureError("envelope message identity mismatch")
+    payloads = envelope.get("payloads")
+    if (
+        not isinstance(payloads, dict)
+        or set(payloads) != PHASE_PAYLOADS[expected_phase]
+    ):
+        raise ProcedureError("envelope payload set mismatch")
+    decoded = {name: decode_payload(name, value) for name, value in payloads.items()}
+
+    results = envelope.get("results")
+    if not isinstance(results, dict) or set(results) != PHASE_RESULTS[expected_phase]:
+        raise ProcedureError("envelope result fields mismatch")
+    if expected_phase in {"hatchery-phase-a", "macos-ci-phase-b"}:
+        validate_revocations(results.get("local_revocation_results"))
+        if results.get("local_cleanup_pending") is not True:
+            raise ProcedureError("open phase must retain local cleanup responsibility")
+    if expected_phase == "macos-ci-phase-b":
+        for field in ("peer_signature_verified", "altered_message_rejected"):
+            if results.get(field) is not True:
+                raise ProcedureError(f"{field} did not pass")
+    if expected_phase == "hatchery-phase-c":
+        for field in (
+            "peer_signature_verified",
+            "altered_message_rejected",
+            "ciphertext_decrypted_byte_identical",
+            "tampered_ciphertext_rejected_without_output",
+            "local_cleanup_complete",
+        ):
+            if results.get(field) is not True:
+                raise ProcedureError(f"{field} did not pass")
+    return decoded
+
+
+def validate_envelope_file(
+    path: Path, expected_phase: str, expected_session: str
+) -> tuple[dict[str, Any], dict[str, bytes]]:
+    if (
+        expected_phase in {"hatchery-phase-a", "hatchery-phase-c"}
+        and path.stat().st_size > DISPATCH_ENVELOPE_MAX_BYTES
+    ):
+        raise ProcedureError("dispatched envelope exceeds the protocol size limit")
+    envelope = read_json(path)
+    return envelope, validate_envelope(envelope, expected_phase, expected_session)
+
+
+def command_environment(sequoia_home: Path) -> dict[str, str]:
+    environment = os.environ.copy()
+    environment["SEQUOIA_HOME"] = str(sequoia_home)
+    environment["LC_ALL"] = "C"
+    return environment
+
+
+def run_command(
+    command: list[str],
+    *,
+    environment: dict[str, str],
+    expected_success: bool = True,
+) -> subprocess.CompletedProcess[bytes]:
+    result = subprocess.run(
+        command,
+        check=False,
+        capture_output=True,
+        env=environment,
+        timeout=120,
+    )
+    succeeded = result.returncode == 0
+    if succeeded != expected_success:
+        label = Path(command[0]).name
+        expectation = "success" if expected_success else "rejection"
+        raise ProcedureError(f"{label} did not produce the expected {expectation}")
+    return result
+
+
+def generate_key(sq: Path, workspace: Path, environment: dict[str, str]) -> None:
+    run_command(
+        [
+            str(sq),
+            "key",
+            "generate",
+            "--profile",
+            "rfc9580",
+            "--signing-algorithm",
+            "mldsa65-ed25519",
+            "--encryption-algorithm",
+            "mlkem768-x25519",
+            "--cannot-authenticate",
+            "--can-sign",
+            "--can-encrypt",
+            "universal",
+            "--without-password",
+            "--expiration",
+            "1d",
+            "--no-userids",
+            "--own-key",
+            "--output",
+            str(workspace / "key.pgp"),
+            "--rev-cert",
+            str(workspace / "emergency-revocation.pgp"),
+        ],
+        environment=environment,
+    )
+    run_command(
+        [
+            str(sq),
+            "key",
+            "delete",
+            "--cert-file",
+            str(workspace / "key.pgp"),
+            "--output",
+            str(workspace / "cert.pgp"),
+        ],
+        environment=environment,
+    )
+
+
+def inspect_key(
+    sq: Path, key: Path, environment: dict[str, str]
+) -> tuple[str, str, str]:
+    output = run_command(
+        [str(sq), "inspect", str(key)], environment=environment
+    ).stdout.decode("utf-8", errors="replace")
+    fingerprint_match = re.search(
+        r"^\s*Fingerprint\s*:\s*([0-9A-F]+)\s*$", output, re.MULTILINE
+    )
+    if fingerprint_match is None:
+        raise ProcedureError("sq inspect did not expose the certificate fingerprint")
+    subkeys: dict[str, str] = {}
+    current: str | None = None
+    for line in output.splitlines():
+        match = re.match(r"^\s*Subkey\s*:\s*([0-9A-F]+)\s*$", line)
+        if match:
+            current = match.group(1)
+            continue
+        flags = re.match(r"^\s*Key flags\s*:\s*(.+)$", line)
+        if current is not None and flags:
+            value = flags.group(1)
+            if "signing" in value:
+                subkeys["signing"] = current
+            if "encryption" in value:
+                subkeys["encryption"] = current
+    if set(subkeys) != {"signing", "encryption"}:
+        raise ProcedureError("sq inspect did not expose both required subkeys")
+    return fingerprint_match.group(1), subkeys["signing"], subkeys["encryption"]
+
+
+def assert_rejected_without_output(
+    command: list[str], output: Path, environment: dict[str, str]
+) -> None:
+    run_command(command, environment=environment, expected_success=False)
+    if output.exists() and output.stat().st_size != 0:
+        raise ProcedureError("rejected operation recovered output")
+
+
+def revocation_record(path: Path) -> dict[str, Any]:
+    content = path.read_bytes()
+    return {"passed": True, "sha256": sha256_bytes(content), "size": len(content)}
+
+
+def merge_revocation(
+    sq: Path,
+    key: Path,
+    revocation: Path,
+    output: Path,
+    environment: dict[str, str],
+) -> None:
+    run_command(
+        [
+            str(sq),
+            "keyring",
+            "merge",
+            "--output",
+            str(output),
+            str(key),
+            str(revocation),
+        ],
+        environment=environment,
+    )
+
+
+def exercise_revocations(
+    sq: Path,
+    sqv: Path,
+    workspace: Path,
+    environment: dict[str, str],
+) -> dict[str, Any]:
+    key = workspace / "key.pgp"
+    cert = workspace / "cert.pgp"
+    message = workspace / "message.bin"
+    signature = workspace / "message.sig"
+    ciphertext = workspace / "message.pgp"
+    fingerprint, signing_subkey, encryption_subkey = inspect_key(sq, key, environment)
+    timeline_base = datetime.now(timezone.utc)
+    before_revocation = (timeline_base + timedelta(minutes=1)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+    revocation_time = (timeline_base + timedelta(minutes=2)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+    after_revocation = (timeline_base + timedelta(minutes=3)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+
+    retired = workspace / "retired-certificate.pgp"
+    run_command(
+        [
+            str(sq),
+            "--time",
+            revocation_time,
+            "key",
+            "revoke",
+            "--cert-file",
+            str(key),
+            "--reason",
+            "retired",
+            "--message",
+            "Disposable qualification certificate retired",
+            "--output",
+            str(retired),
+        ],
+        environment=environment,
+    )
+
+    signing_revocation = workspace / "signing-subkey-revocation.pgp"
+    run_command(
+        [
+            str(sq),
+            "--time",
+            revocation_time,
+            "key",
+            "subkey",
+            "revoke",
+            "--cert-file",
+            str(key),
+            "--key",
+            signing_subkey,
+            "--reason",
+            "retired",
+            "--message",
+            "Disposable signing subkey retired",
+            "--output",
+            str(signing_revocation),
+        ],
+        environment=environment,
+    )
+    signing_revoked = workspace / "signing-subkey-retired-key.pgp"
+    merge_revocation(sq, key, signing_revocation, signing_revoked, environment)
+    run_command(
+        [
+            str(sqv),
+            "--time",
+            before_revocation,
+            "--keyring",
+            str(signing_revoked),
+            "--signature-file",
+            str(signature),
+            str(message),
+        ],
+        environment=environment,
+    )
+    run_command(
+        [
+            str(sq),
+            "--time",
+            after_revocation,
+            "sign",
+            "--signer-file",
+            str(signing_revoked),
+            "--signature-file",
+            str(workspace / "post-retirement.sig"),
+            str(message),
+        ],
+        environment=environment,
+        expected_success=False,
+    )
+
+    encryption_revocation = workspace / "encryption-subkey-revocation.pgp"
+    run_command(
+        [
+            str(sq),
+            "--time",
+            revocation_time,
+            "key",
+            "subkey",
+            "revoke",
+            "--cert-file",
+            str(key),
+            "--key",
+            encryption_subkey,
+            "--reason",
+            "retired",
+            "--message",
+            "Disposable encryption subkey retired",
+            "--output",
+            str(encryption_revocation),
+        ],
+        environment=environment,
+    )
+    encryption_revoked = workspace / "encryption-subkey-retired-key.pgp"
+    merge_revocation(sq, key, encryption_revocation, encryption_revoked, environment)
+    run_command(
+        [
+            str(sq),
+            "--time",
+            after_revocation,
+            "decrypt",
+            "--recipient-file",
+            str(encryption_revoked),
+            "--output",
+            str(workspace / "pre-retirement-decrypted.bin"),
+            str(ciphertext),
+        ],
+        environment=environment,
+    )
+    run_command(
+        [
+            str(sq),
+            "--time",
+            after_revocation,
+            "encrypt",
+            "--profile",
+            "rfc9580",
+            "--for-file",
+            str(encryption_revoked),
+            "--without-signature",
+            "--output",
+            str(workspace / "post-retirement.pgp"),
+            str(message),
+        ],
+        environment=environment,
+        expected_success=False,
+    )
+
+    for name, revocation in (
+        ("emergency", workspace / "emergency-revocation.pgp"),
+        ("retired", retired),
+    ):
+        store = workspace / f"store-{name}"
+        store.mkdir(mode=0o700)
+        store_environment = command_environment(store)
+        run_command(
+            [str(sq), "cert", "import", str(cert)], environment=store_environment
+        )
+        run_command(
+            [
+                str(sq),
+                "--time",
+                after_revocation,
+                "cert",
+                "list",
+                "--cert",
+                fingerprint,
+            ],
+            environment=store_environment,
+        )
+        run_command(
+            [str(sq), "cert", "import", str(revocation)], environment=store_environment
+        )
+        run_command(
+            [
+                str(sq),
+                "--time",
+                after_revocation,
+                "cert",
+                "list",
+                "--cert",
+                fingerprint,
+            ],
+            environment=store_environment,
+            expected_success=False,
+        )
+        run_command(
+            [
+                str(sq),
+                "--time",
+                after_revocation,
+                "cert",
+                "list",
+                "--gossip",
+                "--unusable",
+                "--cert",
+                fingerprint,
+            ],
+            environment=store_environment,
+        )
+
+    return {
+        "emergency_certificate": revocation_record(
+            workspace / "emergency-revocation.pgp"
+        ),
+        "retired_certificate": revocation_record(retired),
+        "retired_signing_subkey": revocation_record(signing_revocation),
+        "retired_encryption_subkey": revocation_record(encryption_revocation),
+    }
+
+
+def qualify_local(arguments: argparse.Namespace) -> None:
+    root = arguments.root.resolve()
+    validate_static(root)
+    sq = arguments.sq.resolve(strict=True)
+    sqv = arguments.sqv.resolve(strict=True)
+    message_source = root / "docs/crypto/pq-sequoia-macos/fixtures/v1/message.bin"
+    work_root = arguments.work_root.resolve()
+    work_root.mkdir(parents=True, exist_ok=True)
+    os.chmod(work_root, 0o700)
+    result: dict[str, Any]
+    with tempfile.TemporaryDirectory(prefix="local-", dir=work_root) as directory:
+        workspace = Path(directory)
+        os.chmod(workspace, 0o700)
+        sequoia_home = workspace / "sequoia-home"
+        sequoia_home.mkdir(mode=0o700)
+        environment = command_environment(sequoia_home)
+        shutil.copyfile(message_source, workspace / "message.bin")
+        generate_key(sq, workspace, environment)
+        run_command(
+            [str(sq), "cert", "lint", "--cert-file", str(workspace / "cert.pgp")],
+            environment=environment,
+        )
+        run_command(
+            [
+                str(sq),
+                "sign",
+                "--signer-file",
+                str(workspace / "key.pgp"),
+                "--signature-file",
+                str(workspace / "message.sig"),
+                str(workspace / "message.bin"),
+            ],
+            environment=environment,
+        )
+        run_command(
+            [
+                str(sq),
+                "verify",
+                "--signer-file",
+                str(workspace / "cert.pgp"),
+                "--signature-file",
+                str(workspace / "message.sig"),
+                str(workspace / "message.bin"),
+            ],
+            environment=environment,
+        )
+        run_command(
+            [
+                str(sqv),
+                "--keyring",
+                str(workspace / "cert.pgp"),
+                "--signature-file",
+                str(workspace / "message.sig"),
+                str(workspace / "message.bin"),
+            ],
+            environment=environment,
+        )
+        altered = (workspace / "message.bin").read_bytes() + b"altered\n"
+        (workspace / "altered-message.bin").write_bytes(altered)
+        run_command(
+            [
+                str(sqv),
+                "--keyring",
+                str(workspace / "cert.pgp"),
+                "--signature-file",
+                str(workspace / "message.sig"),
+                str(workspace / "altered-message.bin"),
+            ],
+            environment=environment,
+            expected_success=False,
+        )
+        run_command(
+            [
+                str(sq),
+                "encrypt",
+                "--profile",
+                "rfc9580",
+                "--for-file",
+                str(workspace / "cert.pgp"),
+                "--without-signature",
+                "--output",
+                str(workspace / "message.pgp"),
+                str(workspace / "message.bin"),
+            ],
+            environment=environment,
+        )
+        run_command(
+            [
+                str(sq),
+                "decrypt",
+                "--recipient-file",
+                str(workspace / "key.pgp"),
+                "--output",
+                str(workspace / "decrypted.bin"),
+                str(workspace / "message.pgp"),
+            ],
+            environment=environment,
+        )
+        if (workspace / "decrypted.bin").read_bytes() != message_source.read_bytes():
+            raise ProcedureError("local decryption changed the fixed message")
+        ciphertext = bytearray((workspace / "message.pgp").read_bytes())
+        ciphertext[len(ciphertext) // 2] ^= 1
+        (workspace / "tampered-message.pgp").write_bytes(ciphertext)
+        assert_rejected_without_output(
+            [
+                str(sq),
+                "decrypt",
+                "--recipient-file",
+                str(workspace / "key.pgp"),
+                "--output",
+                str(workspace / "tampered-output.bin"),
+                str(workspace / "tampered-message.pgp"),
+            ],
+            workspace / "tampered-output.bin",
+            environment,
+        )
+        revocations = exercise_revocations(sq, sqv, workspace, environment)
+        for _ in range(200):
+            run_command([str(sq), "version"], environment=environment)
+            run_command([str(sqv), "--version"], environment=environment)
+        result = {
+            "schema_version": "pq-sequoia-local-result/v1",
+            "candidate_identity": arguments.candidate_identity,
+            "message_sha256": MESSAGE_SHA256,
+            "certificate_lint": True,
+            "sq_signature_verified": True,
+            "sqv_signature_verified": True,
+            "altered_message_rejected": True,
+            "ciphertext_decrypted_byte_identical": True,
+            "tampered_ciphertext_rejected_without_output": True,
+            "sequential_lifecycles": {"sq": 200, "sqv": 200},
+            "local_revocation_results": revocations,
+            "local_cleanup_complete": False,
+        }
+    result["local_cleanup_complete"] = True
+    write_json(arguments.output, result)
+
+
+def write_public_payload(path: Path, content: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(content)
+
+
+def interop_open(arguments: argparse.Namespace) -> None:
+    validate_static(arguments.root.resolve())
+    peer, peer_payloads = validate_envelope_file(
+        arguments.peer_envelope, "hatchery-phase-a", arguments.session_id
+    )
+    local_result = read_json(arguments.local_result)
+    if (
+        local_result.get("schema_version") != "pq-sequoia-local-result/v1"
+        or local_result.get("candidate_identity") != arguments.candidate_identity
+        or local_result.get("message_sha256") != MESSAGE_SHA256
+        or local_result.get("local_cleanup_complete") is not True
+    ):
+        raise ProcedureError("local qualification result identity mismatch")
+    validate_revocations(local_result.get("local_revocation_results"))
+    state = arguments.state_dir.resolve()
+    if state.exists():
+        raise ProcedureError("interop state directory already exists")
+    state.mkdir(parents=True, mode=0o700)
+    os.chmod(state, 0o700)
+    (state / STATE_MARKER).write_text(STATE_MARKER_CONTENT, encoding="utf-8")
+    try:
+        home = state / "sequoia-home"
+        home.mkdir(mode=0o700)
+        environment = command_environment(home)
+        message = (
+            arguments.root.resolve()
+            / "docs/crypto/pq-sequoia-macos/fixtures/v1/message.bin"
+        )
+        write_public_payload(
+            state / "peer-cert.pgp", peer_payloads["hatchery-cert.pgp"]
+        )
+        write_public_payload(
+            state / "peer-message.sig", peer_payloads["hatchery-message.sig"]
+        )
+        run_command(
+            [
+                str(arguments.sqv.resolve(strict=True)),
+                "--keyring",
+                str(state / "peer-cert.pgp"),
+                "--signature-file",
+                str(state / "peer-message.sig"),
+                str(message),
+            ],
+            environment=environment,
+        )
+        (state / "altered-message.bin").write_bytes(message.read_bytes() + b"altered\n")
+        run_command(
+            [
+                str(arguments.sqv.resolve(strict=True)),
+                "--keyring",
+                str(state / "peer-cert.pgp"),
+                "--signature-file",
+                str(state / "peer-message.sig"),
+                str(state / "altered-message.bin"),
+            ],
+            environment=environment,
+            expected_success=False,
+        )
+        generate_key(arguments.sq.resolve(strict=True), state, environment)
+        sq = str(arguments.sq.resolve(strict=True))
+        run_command(
+            [
+                sq,
+                "sign",
+                "--signer-file",
+                str(state / "key.pgp"),
+                "--signature-file",
+                str(state / "macos-ci-message.sig"),
+                str(message),
+            ],
+            environment=environment,
+        )
+        run_command(
+            [
+                sq,
+                "encrypt",
+                "--profile",
+                "rfc9580",
+                "--for-file",
+                str(state / "peer-cert.pgp"),
+                "--without-signature",
+                "--output",
+                str(state / "ciphertext-to-hatchery.pgp"),
+                str(message),
+            ],
+            environment=environment,
+        )
+        envelope = {
+            "schema_version": "pq-sequoia-interop-envelope/v1",
+            "phase": "macos-ci-phase-b",
+            "session_id": arguments.session_id,
+            "candidate_identity": arguments.candidate_identity,
+            "message_sha256": MESSAGE_SHA256,
+            "payloads": {
+                "macos-ci-cert.pgp": payload_record((state / "cert.pgp").read_bytes()),
+                "macos-ci-message.sig": payload_record(
+                    (state / "macos-ci-message.sig").read_bytes()
+                ),
+                "ciphertext-to-hatchery.pgp": payload_record(
+                    (state / "ciphertext-to-hatchery.pgp").read_bytes()
+                ),
+            },
+            "results": {
+                "peer_signature_verified": True,
+                "altered_message_rejected": True,
+                "local_revocation_results": local_result["local_revocation_results"],
+                "local_cleanup_pending": True,
+            },
+        }
+        validate_envelope(envelope, "macos-ci-phase-b", arguments.session_id)
+        write_json(arguments.output, envelope)
+        write_json(
+            state / "state.json",
+            {
+                "session_id": arguments.session_id,
+                "candidate_identity": arguments.candidate_identity,
+                "peer_candidate_identity": peer["candidate_identity"],
+            },
+        )
+    except Exception:
+        shutil.rmtree(state, ignore_errors=True)
+        raise
+
+
+def interop_close(arguments: argparse.Namespace) -> None:
+    state = arguments.state_dir.resolve()
+    state_record = read_json(state / "state.json")
+    if state_record.get("session_id") != arguments.session_id:
+        raise ProcedureError("local interop state does not match the session")
+    response, payloads = validate_envelope_file(
+        arguments.peer_envelope, "hatchery-phase-c", arguments.session_id
+    )
+    if response.get("candidate_identity") != state_record.get(
+        "peer_candidate_identity"
+    ):
+        raise ProcedureError("peer candidate changed during the live session")
+    home = state / "sequoia-home"
+    environment = command_environment(home)
+    ciphertext = state / "ciphertext-to-macos-ci.pgp"
+    write_public_payload(ciphertext, payloads["ciphertext-to-macos-ci.pgp"])
+    recovered = state / "recovered.bin"
+    sq = str(arguments.sq.resolve(strict=True))
+    run_command(
+        [
+            sq,
+            "decrypt",
+            "--recipient-file",
+            str(state / "key.pgp"),
+            "--output",
+            str(recovered),
+            str(ciphertext),
+        ],
+        environment=environment,
+    )
+    message = (
+        arguments.root.resolve()
+        / "docs/crypto/pq-sequoia-macos/fixtures/v1/message.bin"
+    )
+    if recovered.read_bytes() != message.read_bytes():
+        raise ProcedureError("peer ciphertext did not recover the fixed message")
+    tampered = bytearray(ciphertext.read_bytes())
+    tampered[len(tampered) // 2] ^= 1
+    (state / "tampered-peer-ciphertext.pgp").write_bytes(tampered)
+    assert_rejected_without_output(
+        [
+            sq,
+            "decrypt",
+            "--recipient-file",
+            str(state / "key.pgp"),
+            "--output",
+            str(state / "tampered-peer-output.bin"),
+            str(state / "tampered-peer-ciphertext.pgp"),
+        ],
+        state / "tampered-peer-output.bin",
+        environment,
+    )
+    result = {
+        "schema_version": "pq-sequoia-interop-result/v1",
+        "session_id": arguments.session_id,
+        "candidate_identity": state_record["candidate_identity"],
+        "peer_candidate_identity": state_record["peer_candidate_identity"],
+        "message_sha256": MESSAGE_SHA256,
+        "peer_ciphertext_sha256": sha256_file(ciphertext),
+        "peer_ciphertext_size": ciphertext.stat().st_size,
+        "ciphertext_decrypted_byte_identical": True,
+        "tampered_ciphertext_rejected_without_output": True,
+        "local_cleanup_complete": False,
+    }
+    shutil.rmtree(state)
+    result["local_cleanup_complete"] = True
+    write_json(arguments.output, result)
+
+
+def select_kegs(arguments: argparse.Namespace) -> None:
+    sq = arguments.sq.resolve(strict=True)
+    sqv = arguments.sqv.resolve(strict=True)
+    if sha256_file(sq) != arguments.expected_sq_sha256:
+        raise ProcedureError(
+            "sq executable identity mismatch; selector remains disabled"
+        )
+    if sha256_file(sqv) != arguments.expected_sqv_sha256:
+        raise ProcedureError(
+            "sqv executable identity mismatch; selector remains disabled"
+        )
+    environment = os.environ.copy()
+    environment["LC_ALL"] = "C"
+    sq_version = run_command([str(sq), "version"], environment=environment).stdout
+    sqv_version = run_command([str(sqv), "--version"], environment=environment).stdout
+    for label, output, values in (
+        ("sq", sq_version, (b"sq 1.4.0", b"sequoia-openpgp 2.4.1", b"OpenSSL 3.5.8")),
+        (
+            "sqv",
+            sqv_version,
+            (b"sqv 1.5.0", b"sequoia-openpgp 2.4.1", b"OpenSSL 3.5.8"),
+        ),
+    ):
+        if not all(value in output for value in values):
+            raise ProcedureError(
+                f"{label} version/backend identity mismatch; selector remains disabled"
+            )
+    arguments.output.parent.mkdir(parents=True, exist_ok=True)
+    arguments.output.write_text(f"SQ={sq}\nSQV={sqv}\n", encoding="utf-8")
+
+
+def tool_output(command: list[str]) -> str:
+    result = subprocess.run(command, check=False, capture_output=True, timeout=30)
+    if result.returncode != 0:
+        raise ProcedureError(f"{Path(command[0]).name} identity query failed")
+    return result.stdout.decode("utf-8", errors="replace").strip()
+
+
+def macho_rpaths(path: Path) -> list[str]:
+    output = tool_output(["otool", "-l", str(path)])
+    lines = output.splitlines()
+    values: list[str] = []
+    for index, line in enumerate(lines):
+        if line.strip() == "cmd LC_RPATH":
+            for candidate in lines[index + 1 : index + 5]:
+                match = re.match(r"\s*path\s+(\S+)\s+\(offset", candidate)
+                if match:
+                    values.append(match.group(1))
+                    break
+    return values
+
+
+def expand_loader(value: str, loader: Path, executable: Path) -> Path:
+    value = value.replace("@loader_path", str(loader.parent))
+    value = value.replace("@executable_path", str(executable.parent))
+    return Path(value)
+
+
+def resolve_macho_dependency(
+    dependency: str, loader: Path, executable: Path, rpaths: list[str]
+) -> Path | None:
+    if dependency.startswith("/"):
+        candidate = Path(dependency)
+        return candidate if candidate.exists() else None
+    if dependency.startswith(("@loader_path", "@executable_path")):
+        candidate = expand_loader(dependency, loader, executable)
+        return candidate if candidate.exists() else None
+    if dependency.startswith("@rpath/"):
+        suffix = dependency.removeprefix("@rpath/")
+        for rpath in rpaths:
+            candidate = expand_loader(rpath, loader, executable) / suffix
+            if candidate.exists():
+                return candidate
+    return None
+
+
+def record_macho_closure(executable: Path) -> dict[str, Any]:
+    queue: list[tuple[Path, Path, list[str]]] = [(executable, executable, [])]
+    visited_contexts: set[tuple[Path, tuple[str, ...]]] = set()
+    objects: dict[Path, dict[str, Any]] = {}
+    unresolved: set[str] = set()
+    while queue:
+        path, root_executable, inherited_rpaths = queue.pop(0)
+        realpath = path.resolve(strict=True)
+        effective_rpaths = list(
+            dict.fromkeys([*macho_rpaths(realpath), *inherited_rpaths])
+        )
+        context = (realpath, tuple(effective_rpaths))
+        if context in visited_contexts:
+            continue
+        visited_contexts.add(context)
+        if realpath not in objects:
+            content = realpath.read_bytes()
+            objects[realpath] = {
+                "path": str(path),
+                "realpath": str(realpath),
+                "size": len(content),
+                "sha256": sha256_bytes(content),
+            }
+        output = tool_output(["otool", "-L", str(realpath)])
+        for line in output.splitlines()[1:]:
+            dependency = line.strip().split(" ", 1)[0]
+            if not dependency:
+                continue
+            resolved = resolve_macho_dependency(
+                dependency, realpath, root_executable, effective_rpaths
+            )
+            if resolved is None:
+                unresolved.add(dependency)
+            else:
+                queue.append((resolved, root_executable, effective_rpaths))
+    return {
+        "root": str(executable),
+        "objects": sorted(objects.values(), key=lambda value: value["realpath"]),
+        "shared_cache_or_unresolved": sorted(unresolved),
+    }
+
+
+def record_runtime(arguments: argparse.Namespace) -> None:
+    sq = arguments.sq.resolve(strict=True)
+    sqv = arguments.sqv.resolve(strict=True)
+    openssl = arguments.openssl.resolve(strict=True)
+    record = {
+        "schema_version": "pq-sequoia-runtime-closure/v1",
+        "candidate_identity": arguments.candidate_identity,
+        "workflow": {
+            "repository": os.environ.get("GITHUB_REPOSITORY", "unavailable"),
+            "run_id": os.environ.get("GITHUB_RUN_ID", "unavailable"),
+            "run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT", "unavailable"),
+            "workflow_sha": os.environ.get("GITHUB_WORKFLOW_SHA", "unavailable"),
+        },
+        "runner": {
+            "environment": os.environ.get("RUNNER_ENVIRONMENT", "unavailable"),
+            "os": os.environ.get("RUNNER_OS", "unavailable"),
+            "arch": os.environ.get("RUNNER_ARCH", "unavailable"),
+            "image_os": os.environ.get("ImageOS", "unavailable"),
+            "image_version": os.environ.get("ImageVersion", "unavailable"),
+            "sw_vers": tool_output(["sw_vers"]),
+            "hardware_arch": tool_output(["uname", "-m"]),
+            "xcode": tool_output(["xcodebuild", "-version"]),
+        },
+        "build_tools": {
+            "homebrew": tool_output(["brew", "--version"]),
+            "git": tool_output(["git", "--version"]),
+            "gpg": tool_output(["gpg", "--version"]).splitlines()[0],
+            "rustc": tool_output(["rustc", "--version"]),
+            "cargo": tool_output(["cargo", "--version"]),
+            "capnp": tool_output(["capnp", "--version"]),
+        },
+        "versions": {
+            "sq": tool_output([str(sq), "version"]),
+            "sqv": tool_output([str(sqv), "--version"]),
+            "openssl": tool_output([str(openssl), "version", "-a"]),
+        },
+        "closures": {
+            "sq": record_macho_closure(sq),
+            "sqv": record_macho_closure(sqv),
+            "openssl": record_macho_closure(openssl),
+        },
+    }
+    write_json(arguments.output, record)
+
+
+def cleanup(arguments: argparse.Namespace) -> None:
+    path = arguments.state_dir.resolve()
+    if path.exists():
+        marker = path / STATE_MARKER
+        if (
+            not marker.is_file()
+            or marker.is_symlink()
+            or marker.read_text(encoding="utf-8") != STATE_MARKER_CONTENT
+        ):
+            raise ProcedureError("refusing to remove an unmarked state directory")
+        shutil.rmtree(path)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="pq-sequoia-macos")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    static_parser = subparsers.add_parser("validate-static")
+    static_parser.add_argument("--root", type=Path, default=Path.cwd())
+
+    envelope_parser = subparsers.add_parser("validate-envelope")
+    envelope_parser.add_argument(
+        "--phase", choices=sorted(PHASE_PAYLOADS), required=True
+    )
+    envelope_parser.add_argument("--session-id", required=True)
+    envelope_parser.add_argument("envelope", type=Path)
+
+    local_parser = subparsers.add_parser("qualify-local")
+    local_parser.add_argument("--root", type=Path, default=Path.cwd())
+    local_parser.add_argument("--sq", type=Path, required=True)
+    local_parser.add_argument("--sqv", type=Path, required=True)
+    local_parser.add_argument("--candidate-identity", required=True)
+    local_parser.add_argument("--work-root", type=Path, required=True)
+    local_parser.add_argument("--output", type=Path, required=True)
+
+    open_parser = subparsers.add_parser("interop-open")
+    open_parser.add_argument("--root", type=Path, default=Path.cwd())
+    open_parser.add_argument("--sq", type=Path, required=True)
+    open_parser.add_argument("--sqv", type=Path, required=True)
+    open_parser.add_argument("--candidate-identity", required=True)
+    open_parser.add_argument("--session-id", required=True)
+    open_parser.add_argument("--peer-envelope", type=Path, required=True)
+    open_parser.add_argument("--local-result", type=Path, required=True)
+    open_parser.add_argument("--state-dir", type=Path, required=True)
+    open_parser.add_argument("--output", type=Path, required=True)
+
+    close_parser = subparsers.add_parser("interop-close")
+    close_parser.add_argument("--root", type=Path, default=Path.cwd())
+    close_parser.add_argument("--sq", type=Path, required=True)
+    close_parser.add_argument("--session-id", required=True)
+    close_parser.add_argument("--peer-envelope", type=Path, required=True)
+    close_parser.add_argument("--state-dir", type=Path, required=True)
+    close_parser.add_argument("--output", type=Path, required=True)
+
+    select_parser = subparsers.add_parser("select-kegs")
+    select_parser.add_argument("--sq", type=Path, required=True)
+    select_parser.add_argument("--sqv", type=Path, required=True)
+    select_parser.add_argument("--expected-sq-sha256", required=True)
+    select_parser.add_argument("--expected-sqv-sha256", required=True)
+    select_parser.add_argument("--output", type=Path, required=True)
+
+    runtime_parser = subparsers.add_parser("record-runtime")
+    runtime_parser.add_argument("--sq", type=Path, required=True)
+    runtime_parser.add_argument("--sqv", type=Path, required=True)
+    runtime_parser.add_argument("--openssl", type=Path, required=True)
+    runtime_parser.add_argument("--candidate-identity", required=True)
+    runtime_parser.add_argument("--output", type=Path, required=True)
+
+    cleanup_parser = subparsers.add_parser("cleanup")
+    cleanup_parser.add_argument("--state-dir", type=Path, required=True)
+    return parser
+
+
+def main() -> int:
+    arguments = build_parser().parse_args()
+    try:
+        if arguments.command == "validate-static":
+            validate_static(arguments.root.resolve())
+            print("pq-sequoia-macos static surface: valid")
+        elif arguments.command == "validate-envelope":
+            validate_envelope_file(
+                arguments.envelope, arguments.phase, arguments.session_id
+            )
+            print(f"{arguments.phase} envelope: valid")
+        elif arguments.command == "qualify-local":
+            qualify_local(arguments)
+        elif arguments.command == "interop-open":
+            interop_open(arguments)
+        elif arguments.command == "interop-close":
+            interop_close(arguments)
+        elif arguments.command == "select-kegs":
+            select_kegs(arguments)
+        elif arguments.command == "record-runtime":
+            record_runtime(arguments)
+        elif arguments.command == "cleanup":
+            cleanup(arguments)
+        else:
+            raise ProcedureError("unsupported command")
+    except (ProcedureError, OSError, subprocess.SubprocessError) as error:
+        print(f"pq-sequoia-macos: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

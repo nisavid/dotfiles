@@ -1,0 +1,38 @@
+diff --git i/Cargo.lock w/Cargo.lock
+index 53e2bae..9fbeaf9 100644
+--- i/Cargo.lock
++++ w/Cargo.lock
+@@ -590,0 +591,10 @@ dependencies = [
++[[package]]
++name = "ctor"
++version = "1.0.13"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "914a755b7c2d4af2bdcff7ce1739e2db9a1b81a9b07123d8015786ae03c0980d"
++dependencies = [
++ "link-section",
++ "linktime-proc-macro",
++]
++
+@@ -1374,0 +1385,12 @@ checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
++[[package]]
++name = "link-section"
++version = "0.19.3"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "39c29a617ce3df32c08497bdc1ab6e2376e0b17948ac166a2fbe5977c5954cd9"
++
++[[package]]
++name = "linktime-proc-macro"
++version = "0.2.3"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "7e57c38c1e860fd37c604281cdfb1dd2216977fd76a50f85ba2f388ef3219616"
++
+@@ -2105 +2127 @@ name = "sequoia-openpgp"
+-version = "2.4.0"
++version = "2.4.1"
+@@ -2107 +2129 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "e421679c8175ef4674d913af7fdb8ad0078c8a2599db633ad0b4d02a06b2cb3c"
++checksum = "0fbc8f9818a6fad141d85993777ba298ee52c80a09bd23d45dda461a6b7c83cb"
+@@ -2124,0 +2147 @@ dependencies = [
++ "ctor",
+@@ -2150,0 +2174 @@ dependencies = [
++ "openssl-sys",

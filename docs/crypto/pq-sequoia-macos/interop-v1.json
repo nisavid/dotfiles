@@ -1,0 +1,281 @@
+{
+  "schema_version": "pq-sequoia-interop/v1",
+  "status": "frozen-protocol",
+  "producer": "dotfiles#147",
+  "consumer": "dotfiles#148",
+  "convergence_owner": "dotfiles#258",
+  "acceptance_owner": "dotfiles#149",
+  "message": {
+    "path": "fixtures/v1/message.bin",
+    "media_type": "application/octet-stream",
+    "encoding": "UTF-8",
+    "line_endings": "LF",
+    "size": 51,
+    "sha256": "6be8c2fe3154649151aacd41f35dd6a212881e627acca131fe3f0101b14f4337"
+  },
+  "session": {
+    "id_format": "64 lowercase hexadecimal characters",
+    "transport": "GitHub Actions artifacts from two manually dispatched runs of pq-sequoia-macos.yml",
+    "workflow_dispatch_total_input_max_characters": 65535,
+    "dispatched_envelope_max_bytes": 46000,
+    "dispatched_envelope_base64_max_characters": 61500,
+    "relay_wait_minutes": 45,
+    "rule": "The macOS secret certificate exists only in the original running macOS job. The peer response must arrive before that job exits; no later job may resume decryption."
+  },
+  "phases": [
+    {
+      "id": "hatchery-open",
+      "owner": "dotfiles#148",
+      "inputs": [
+        "message.bin",
+        "accepted Hatchery sq and sqv closure"
+      ],
+      "operations": [
+        "generate one disposable RFC 9580 version-6 certificate with RFC 9980 composite signing and encryption subkeys",
+        "sign message.bin",
+        "exercise certificate and signing and encryption subkey revocation against local copies"
+      ],
+      "outputs": [
+        "hatchery-phase-a.json"
+      ],
+      "secret_lifetime": {
+        "location": "Hatchery isolated temporary storage",
+        "retain_through": "hatchery-return",
+        "cleanup_after": "hatchery-return result is recorded"
+      }
+    },
+    {
+      "id": "macos-ci-live",
+      "owner": "dotfiles#147",
+      "inputs": [
+        "message.bin",
+        "hatchery-phase-a.json",
+        "reviewed macOS candidate closure"
+      ],
+      "operations": [
+        "verify Hatchery public certificate and detached signature with exact-keg sqv",
+        "reject a locally altered message",
+        "generate one disposable RFC 9580 version-6 certificate with RFC 9980 composite signing and encryption subkeys",
+        "sign message.bin",
+        "encrypt message.bin to the Hatchery public certificate",
+        "exercise certificate and signing and encryption subkey revocation against local copies",
+        "publish macos-ci-phase-b.json",
+        "wait for the matching peer-response artifact"
+      ],
+      "outputs": [
+        "macos-ci-phase-b.json"
+      ],
+      "requires_same_live_job_as": "macos-ci-close",
+      "secret_lifetime": {
+        "location": "one GitHub-hosted macOS runner temporary directory",
+        "retain_through": "macos-ci-close",
+        "cleanup_after": "macos-ci-close succeeds or the job exits"
+      }
+    },
+    {
+      "id": "hatchery-return",
+      "owner": "dotfiles#148",
+      "inputs": [
+        "message.bin",
+        "macos-ci-phase-b.json",
+        "retained local Hatchery disposable secret certificate"
+      ],
+      "operations": [
+        "verify the macOS public certificate and detached signature with exact sqv",
+        "reject a locally altered message",
+        "decrypt ciphertext-to-hatchery.pgp and compare all 51 message bytes",
+        "reject a locally tampered ciphertext with no recovered output",
+        "encrypt message.bin to the macOS public certificate",
+        "publish hatchery-phase-c.json through the peer-response workflow mode",
+        "record cleanup of the retained Hatchery disposable secret material"
+      ],
+      "outputs": [
+        "hatchery-phase-c.json"
+      ],
+      "secret_lifetime": {
+        "location": "Hatchery isolated temporary storage",
+        "retain_through": "hatchery-return",
+        "cleanup_after": "hatchery-phase-c.json is finalized"
+      }
+    },
+    {
+      "id": "macos-ci-close",
+      "owner": "dotfiles#147",
+      "inputs": [
+        "message.bin",
+        "hatchery-phase-c.json",
+        "the still-running macOS job's local disposable secret certificate"
+      ],
+      "operations": [
+        "decrypt ciphertext-to-macos-ci.pgp and compare all 51 message bytes",
+        "reject a locally tampered ciphertext with no recovered output",
+        "record matching sender and receiver artifact sizes and SHA-256 values",
+        "record cleanup and remove all runner-local secret and plaintext derivatives"
+      ],
+      "outputs": [
+        "results/macos-ci.json",
+        "SHA256SUMS"
+      ],
+      "requires_same_live_job_as": "macos-ci-live",
+      "secret_lifetime": {
+        "location": "one GitHub-hosted macOS runner temporary directory",
+        "retain_through": "macos-ci-close",
+        "cleanup_after": "the final result is serialized"
+      }
+    }
+  ],
+  "envelopes": {
+    "hatchery-phase-a.json": {
+      "required_envelope_fields": [
+        "schema_version",
+        "phase",
+        "session_id",
+        "candidate_identity",
+        "message_sha256",
+        "payloads",
+        "results"
+      ],
+      "required_payload_record_fields": [
+        "encoding",
+        "size",
+        "sha256",
+        "data"
+      ],
+      "required_public_payloads": [
+        "hatchery-cert.pgp",
+        "hatchery-message.sig"
+      ],
+      "required_result_fields": [
+        "local_revocation_results",
+        "local_cleanup_pending"
+      ]
+    },
+    "macos-ci-phase-b.json": {
+      "required_envelope_fields": [
+        "schema_version",
+        "phase",
+        "session_id",
+        "candidate_identity",
+        "message_sha256",
+        "payloads",
+        "results"
+      ],
+      "required_payload_record_fields": [
+        "encoding",
+        "size",
+        "sha256",
+        "data"
+      ],
+      "required_public_payloads": [
+        "macos-ci-cert.pgp",
+        "macos-ci-message.sig",
+        "ciphertext-to-hatchery.pgp"
+      ],
+      "required_result_fields": [
+        "peer_signature_verified",
+        "altered_message_rejected",
+        "local_revocation_results",
+        "local_cleanup_pending"
+      ]
+    },
+    "hatchery-phase-c.json": {
+      "required_envelope_fields": [
+        "schema_version",
+        "phase",
+        "session_id",
+        "candidate_identity",
+        "message_sha256",
+        "payloads",
+        "results"
+      ],
+      "required_payload_record_fields": [
+        "encoding",
+        "size",
+        "sha256",
+        "data"
+      ],
+      "required_public_payloads": [
+        "ciphertext-to-macos-ci.pgp"
+      ],
+      "required_result_fields": [
+        "peer_signature_verified",
+        "altered_message_rejected",
+        "ciphertext_decrypted_byte_identical",
+        "tampered_ciphertext_rejected_without_output",
+        "local_cleanup_complete"
+      ]
+    }
+  },
+  "artifact_policy": {
+    "transferred": [
+      "message.bin",
+      "hatchery-cert.pgp",
+      "hatchery-message.sig",
+      "macos-ci-cert.pgp",
+      "macos-ci-message.sig",
+      "ciphertext-to-hatchery.pgp",
+      "ciphertext-to-macos-ci.pgp",
+      "hatchery-phase-a.json",
+      "macos-ci-phase-b.json",
+      "hatchery-phase-c.json",
+      "results/hatchery.json",
+      "results/macos-ci.json",
+      "SHA256SUMS"
+    ],
+    "local_only": [
+      "secret keys",
+      "secret certificates",
+      "passwords",
+      "Sequoia homes",
+      "revocation packets",
+      "recovered plaintext copies",
+      "altered message copies",
+      "tampered ciphertext copies"
+    ],
+    "revocation_transfer_decision": "Do not transfer revocation packets. Each peer exercises emergency certificate, explicit retired certificate, retired signing-subkey, and retired encryption-subkey transitions locally; only value-free result classifications, packet SHA-256 values, sizes, and scrubbed diagnostics enter its result JSON.",
+    "forbidden": [
+      "counterpart private keys",
+      "mutable fixture corpora",
+      "production or custody material",
+      "real credentials",
+      "protected inputs"
+    ]
+  },
+  "failure_semantics": {
+    "identity_or_digest_mismatch": "reject the session without invoking an unqualified shared command path",
+    "relay_timeout": "reject the incomplete session and clean both local secret workspaces; never resume with a new macOS job",
+    "operation_failure": "retain only value-free failure classification and scrubbed diagnostics, then clean local secret material",
+    "rollback": "disable the candidate workflow; there is no accepted earlier macOS CI closure"
+  },
+  "identity_binding": {
+    "rule": "Every envelope uses the same session_id and message_sha256. Each producer keeps one candidate_identity for every phase it emits; the macOS close rejects a Hatchery candidate_identity that differs from the opening phase.",
+    "payload_rule": "Payload maps and result maps are closed schemas. Every payload record is base64 with an exact decoded size and lowercase SHA-256; extra envelope, payload, or result fields are rejected."
+  },
+  "acceptance": {
+    "required_observations": [
+      "both peers verify the other's detached signature with exact sqv",
+      "both peers reject altered messages",
+      "hatchery decrypts macos-ci ciphertext byte-for-byte",
+      "macos-ci decrypts hatchery ciphertext byte-for-byte",
+      "both peers reject tampered ciphertext with no recovered output",
+      "both peers exercise certificate and subkey revocation locally",
+      "both peers report matching transferred-artifact SHA-256 values and sizes",
+      "both peers report local secret cleanup complete"
+    ],
+    "does_not_establish": [
+      "production authority",
+      "persistent installation",
+      "personal Mac behavior",
+      "hardware custody",
+      "runtime acceptance"
+    ]
+  },
+  "references": [
+    "https://github.com/nisavid/dotfiles/issues/144",
+    "https://github.com/nisavid/dotfiles/issues/146",
+    "https://github.com/nisavid/dotfiles/issues/147",
+    "https://github.com/nisavid/dotfiles/issues/148",
+    "https://github.com/nisavid/dotfiles/issues/149",
+    "https://www.rfc-editor.org/rfc/rfc9980.html"
+  ]
+}
