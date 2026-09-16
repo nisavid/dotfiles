@@ -314,13 +314,13 @@ grep -Fx '# secret-exec-github-login=fixture-personal' "$github_personal_profile
 grep -Fx 'GITHUB_PERSONAL_ACCESS_TOKEN=pass://fixture-vault/item-d/password' "$github_personal_profile" >/dev/null || \
   fail 'the fixture host must render the personal GitHub locator'
 
-github_systalyze_profile=$test_dir/github-systalyze.env
-render_github_profile stlz-fixture "$github_systalyze_profile"
-grep -Fx '# secret-exec-github-profile=github-fixture-systalyze' "$github_systalyze_profile" >/dev/null || \
-  fail 'the second fixture host must select the Systalyze GitHub profile'
-grep -Fx '# secret-exec-github-login=fixture-systalyze' "$github_systalyze_profile" >/dev/null || \
-  fail 'the second fixture host must carry the Systalyze GitHub identity marker'
-grep -Fx 'GITHUB_PERSONAL_ACCESS_TOKEN=pass://fixture-vault/item-f/password' "$github_systalyze_profile" >/dev/null || \
+github_secondary_profile=$test_dir/github-secondary.env
+render_github_profile second-host "$github_secondary_profile"
+grep -Fx '# secret-exec-github-profile=github-fixture-secondary' "$github_secondary_profile" >/dev/null || \
+  fail 'the second fixture host must select the secondary GitHub profile'
+grep -Fx '# secret-exec-github-login=fixture-secondary' "$github_secondary_profile" >/dev/null || \
+  fail 'the second fixture host must carry the secondary GitHub identity marker'
+grep -Fx 'GITHUB_PERSONAL_ACCESS_TOKEN=pass://fixture-vault/item-f/password' "$github_secondary_profile" >/dev/null || \
   fail 'the second fixture host must render its distinct GitHub locator'
 
 if render_github_profile unknown-fixture "$test_dir/github-unknown.env" 2> "$test_dir/github-unknown.err"; then
