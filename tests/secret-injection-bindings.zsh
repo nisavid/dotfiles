@@ -328,6 +328,13 @@ if render_github_profile unknown-fixture "$test_dir/github-unknown.env" 2> "$tes
 fi
 grep -F 'no GitHub credential binding for host' "$test_dir/github-unknown.err" >/dev/null || \
   fail 'an unbound host must report a value-free profile-selection failure'
+for confidential_value in github-fixture-personal github-fixture-secondary \
+  fixture-personal fixture-secondary fixture-vault 'pass://'; do
+  if grep -F -- "$confidential_value" "$test_dir/github-unknown.env" \
+    "$test_dir/github-unknown.err" >/dev/null; then
+    fail 'an unbound host must not disclose profile, identity, or locator data'
+  fi
+done
 
 commands_template=home/dot_config/private_secret-exec/private_commands.env.tmpl
 rendered_commands=$test_dir/rendered-commands.env
