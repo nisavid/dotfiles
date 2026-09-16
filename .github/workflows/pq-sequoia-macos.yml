@@ -1,5 +1,5 @@
 name: PQ Sequoia macOS qualification
-run-name: pq-sequoia-${{ inputs.mode }}-${{ inputs.session_id }}
+run-name: pq-sequoia-${{ inputs.mode }}-${{ inputs.session_id }}-${{ inputs.qualifier_run_id }}-${{ inputs.parent_envelope_sha256 }}
 
 on:
   workflow_dispatch:
@@ -27,6 +27,20 @@ on:
       peer_envelope_sha256:
         description: SHA-256 of the decoded peer envelope bytes
         required: true
+        type: string
+      peer_closure_sha256:
+        description: Reviewed SHA-256 closure digest for the Hatchery producer
+        required: true
+        type: string
+      qualifier_run_id:
+        description: Qualifier run ID; required only for publish-peer-response
+        required: false
+        default: ''
+        type: string
+      parent_envelope_sha256:
+        description: Phase-B envelope SHA-256; required only for publish-peer-response
+        required: false
+        default: ''
         type: string
 
 concurrency:
@@ -57,12 +71,14 @@ jobs:
           PQ_SESSION_ID: ${{ inputs.session_id }}
           PQ_PEER_ENVELOPE_BASE64: ${{ inputs.peer_envelope_base64 }}
           PQ_PEER_ENVELOPE_SHA256: ${{ inputs.peer_envelope_sha256 }}
+          PQ_PEER_CLOSURE_SHA256: ${{ inputs.peer_closure_sha256 }}
         run: |
           set -euo pipefail
           umask 077
           [[ "$PQ_CANDIDATE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
           [[ "$PQ_SESSION_ID" =~ ^[0-9a-f]{64}$ ]]
           [[ "$PQ_PEER_ENVELOPE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$PQ_PEER_CLOSURE_SHA256" =~ ^[0-9a-f]{64}$ ]]
           (( ${#PQ_PEER_ENVELOPE_BASE64} <= 61500 ))
           [[ "$(git rev-parse HEAD)" == "$PQ_CANDIDATE_COMMIT" ]]
           [[ "$GITHUB_WORKFLOW_SHA" == "$PQ_CANDIDATE_COMMIT" ]]
@@ -91,6 +107,8 @@ jobs:
           scripts/pq-sequoia-macos validate-envelope \
             --phase hatchery-phase-a \
             --session-id "$PQ_SESSION_ID" \
+            --expected-producer-closure-sha256 "$PQ_PEER_CLOSURE_SHA256" \
+            --expected-parent-sha256 "$(printf '0%.0s' {1..64})" \
             "$scratch/public/hatchery-phase-a.json"
 
       - name: Verify signed sources, locks, and the LTS closure
@@ -342,21 +360,26 @@ jobs:
         shell: bash
         env:
           PQ_SESSION_ID: ${{ inputs.session_id }}
+          PQ_PEER_CLOSURE_SHA256: ${{ inputs.peer_closure_sha256 }}
         run: |
           set -euo pipefail
           scripts/pq-sequoia-macos interop-open \
             --root . --sq "$PQ_SQ" --sqv "$PQ_SQV" \
             --candidate-identity "$PQ_CANDIDATE_IDENTITY" \
+            --expected-peer-closure-sha256 "$PQ_PEER_CLOSURE_SHA256" \
             --session-id "$PQ_SESSION_ID" \
             --peer-envelope "$PQ_SCRATCH/public/hatchery-phase-a.json" \
             --local-result "$PQ_SCRATCH/evidence/local-result.json" \
             --state-dir "$PQ_SCRATCH/private/live" \
             --output "$PQ_SCRATCH/evidence/macos-ci-phase-b.json"
+          phase_b_sha256=$(shasum -a 256 \
+            "$PQ_SCRATCH/evidence/macos-ci-phase-b.json" | awk '{print $1}')
+          printf 'PQ_PHASE_B_SHA256=%s\n' "$phase_b_sha256" >>"$GITHUB_ENV"
 
       - name: Upload the public phase for Hatchery
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: pq-sequoia-macos-phase-b-${{ inputs.session_id }}
+          name: pq-sequoia-macos-phase-b-${{ inputs.session_id }}-${{ github.run_id }}
           path: ${{ runner.temp }}/pq-sequoia-${{ inputs.session_id }}/evidence/macos-ci-phase-b.json
           if-no-files-found: error
           retention-days: 7
@@ -366,41 +389,67 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PQ_SESSION_ID: ${{ inputs.session_id }}
+          PQ_CANDIDATE_COMMIT: ${{ inputs.candidate_commit }}
+          PQ_PEER_CLOSURE_SHA256: ${{ inputs.peer_closure_sha256 }}
         run: |
           set -euo pipefail
-          target="pq-sequoia-publish-peer-response-$PQ_SESSION_ID"
+          target="pq-sequoia-publish-peer-response-$PQ_SESSION_ID-$GITHUB_RUN_ID-$PQ_PHASE_B_SHA256"
           response_run=
           for _ in {1..90}; do
-            response_run=$(gh run list \
+            gh run list \
               --workflow pq-sequoia-macos.yml \
               --event workflow_dispatch \
               --limit 100 \
-              --json databaseId,displayTitle,status,conclusion \
-              --jq ".[] | select(.displayTitle == \"$target\" and .status == \"completed\" and .conclusion == \"success\") | .databaseId" \
-              | head -n 1)
+              --json databaseId,displayTitle,event,headSha,status,conclusion \
+              >"$PQ_SCRATCH/public/relay-runs.json"
+            jq --arg target "$target" \
+              '[.[] | select(.displayTitle == $target and .status == "completed" and .conclusion == "success")]' \
+              "$PQ_SCRATCH/public/relay-runs.json" \
+              >"$PQ_SCRATCH/public/matching-relay-runs.json"
+            count=$(jq 'length' "$PQ_SCRATCH/public/matching-relay-runs.json")
+            (( count <= 1 ))
+            if (( count == 1 )); then
+              jq '.[0]' "$PQ_SCRATCH/public/matching-relay-runs.json" \
+                >"$PQ_SCRATCH/public/relay-run.json"
+              response_run=$(jq -r '.databaseId' "$PQ_SCRATCH/public/relay-run.json")
+            fi
             [[ -z "$response_run" ]] || break
             sleep 30
           done
           [[ -n "$response_run" ]]
+          scripts/pq-sequoia-macos validate-relay \
+            --metadata "$PQ_SCRATCH/public/relay-run.json" \
+            --expected-run-id "$response_run" \
+            --expected-title "$target" \
+            --expected-commit "$PQ_CANDIDATE_COMMIT" \
+            --output "$PQ_SCRATCH/evidence/relay-run.json"
           mkdir -p "$PQ_SCRATCH/public/peer-response"
           gh run download "$response_run" \
-            --name "pq-sequoia-peer-response-$PQ_SESSION_ID" \
+            --name "pq-sequoia-peer-response-$PQ_SESSION_ID-$GITHUB_RUN_ID-$PQ_PHASE_B_SHA256" \
             --dir "$PQ_SCRATCH/public/peer-response"
           scripts/pq-sequoia-macos validate-envelope \
             --phase hatchery-phase-c \
             --session-id "$PQ_SESSION_ID" \
+            --expected-producer-closure-sha256 "$PQ_PEER_CLOSURE_SHA256" \
+            --expected-parent-sha256 "$PQ_PHASE_B_SHA256" \
             "$PQ_SCRATCH/public/peer-response/hatchery-phase-c.json"
 
       - name: Close the live interoperability phase
         shell: bash
         env:
           PQ_SESSION_ID: ${{ inputs.session_id }}
+          PQ_CANDIDATE_COMMIT: ${{ inputs.candidate_commit }}
         run: |
           set -euo pipefail
           scripts/pq-sequoia-macos interop-close \
-            --root . --sq "$PQ_SQ" --session-id "$PQ_SESSION_ID" \
+            --root . --sq "$PQ_SQ" --sqv "$PQ_SQV" \
+            --session-id "$PQ_SESSION_ID" \
             --peer-envelope "$PQ_SCRATCH/public/peer-response/hatchery-phase-c.json" \
             --state-dir "$PQ_SCRATCH/private/live" \
+            --relay-metadata "$PQ_SCRATCH/evidence/relay-run.json" \
+            --expected-relay-run-id "$(jq -r '.databaseId' "$PQ_SCRATCH/evidence/relay-run.json")" \
+            --expected-relay-title "pq-sequoia-publish-peer-response-$PQ_SESSION_ID-$GITHUB_RUN_ID-$PQ_PHASE_B_SHA256" \
+            --candidate-commit "$PQ_CANDIDATE_COMMIT" \
             --output "$PQ_SCRATCH/evidence/results/macos-ci.json"
 
       - name: Finalize value-free evidence
@@ -466,12 +515,18 @@ jobs:
           PQ_SESSION_ID: ${{ inputs.session_id }}
           PQ_PEER_ENVELOPE_BASE64: ${{ inputs.peer_envelope_base64 }}
           PQ_PEER_ENVELOPE_SHA256: ${{ inputs.peer_envelope_sha256 }}
+          PQ_PEER_CLOSURE_SHA256: ${{ inputs.peer_closure_sha256 }}
+          PQ_QUALIFIER_RUN_ID: ${{ inputs.qualifier_run_id }}
+          PQ_PARENT_ENVELOPE_SHA256: ${{ inputs.parent_envelope_sha256 }}
         run: |
           set -euo pipefail
           umask 077
           [[ "$PQ_CANDIDATE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
           [[ "$PQ_SESSION_ID" =~ ^[0-9a-f]{64}$ ]]
           [[ "$PQ_PEER_ENVELOPE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$PQ_PEER_CLOSURE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$PQ_QUALIFIER_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$PQ_PARENT_ENVELOPE_SHA256" =~ ^[0-9a-f]{64}$ ]]
           (( ${#PQ_PEER_ENVELOPE_BASE64} <= 61500 ))
           [[ "$(git rev-parse HEAD)" == "$PQ_CANDIDATE_COMMIT" ]]
           [[ "$GITHUB_WORKFLOW_SHA" == "$PQ_CANDIDATE_COMMIT" ]]
@@ -483,12 +538,15 @@ jobs:
           scripts/pq-sequoia-macos validate-static --root .
           python3 -m unittest tests.test_pq_sequoia_macos
           scripts/pq-sequoia-macos validate-envelope \
-            --phase hatchery-phase-c --session-id "$PQ_SESSION_ID" "$response"
+            --phase hatchery-phase-c --session-id "$PQ_SESSION_ID" \
+            --expected-producer-closure-sha256 "$PQ_PEER_CLOSURE_SHA256" \
+            --expected-parent-sha256 "$PQ_PARENT_ENVELOPE_SHA256" \
+            "$response"
 
       - name: Publish the public response for the live macOS job
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: pq-sequoia-peer-response-${{ inputs.session_id }}
+          name: pq-sequoia-peer-response-${{ inputs.session_id }}-${{ inputs.qualifier_run_id }}-${{ inputs.parent_envelope_sha256 }}
           path: ${{ runner.temp }}/hatchery-phase-c.json
           if-no-files-found: error
           retention-days: 7

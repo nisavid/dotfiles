@@ -1,6 +1,6 @@
 {
   "schema_version": "pq-sequoia-interop/v1",
-  "status": "frozen-protocol",
+  "status": "review-candidate",
   "producer": "dotfiles#147",
   "consumer": "dotfiles#148",
   "convergence_owner": "dotfiles#258",
@@ -15,260 +15,156 @@
   },
   "session": {
     "id_format": "64 lowercase hexadecimal characters",
+    "generation": "The coordinator draws 32 bytes from a cryptographically secure random generator and lowercase-hex encodes them.",
+    "freshness": "The coordinator must not reuse an identifier from any attempted or completed exchange. Each peer rejects an envelope whose identifier differs from the current exchange.",
     "transport": "GitHub Actions artifacts from two manually dispatched runs of pq-sequoia-macos.yml",
     "workflow_dispatch_total_input_max_characters": 65535,
     "dispatched_envelope_max_bytes": 46000,
     "dispatched_envelope_base64_max_characters": 61500,
     "relay_wait_minutes": 45,
-    "rule": "The macOS secret certificate exists only in the original running macOS job. The peer response must arrive before that job exits; no later job may resume decryption."
+    "lifecycle": "The macOS secret certificate exists only in the original running macOS job. The peer response must arrive before that job exits; no later job may resume decryption. Hatchery retains its opening secret through phase C signing, removes it before releasing the already signed phase C bytes, and releases nothing if cleanup fails."
+  },
+  "cryptographic_shape": {
+    "certificate": {
+      "primary": {"version": 6, "algorithm": "ML-DSA-65+Ed25519", "capabilities": ["certification"]},
+      "signing_subkey": {"version": 6, "algorithm": "ML-DSA-65+Ed25519", "capabilities": ["signing"]},
+      "encryption_subkey": {"version": 6, "algorithm": "ML-KEM-768+X25519", "capabilities": ["transport encryption", "data-at-rest encryption"]},
+      "authentication_capable": false,
+      "additional_subkeys": 0
+    },
+    "detached_signatures": {
+      "version": 6,
+      "algorithm": "ML-DSA-65+Ed25519",
+      "issuer": "the exact signing subkey fingerprint in the accompanying inspected certificate"
+    },
+    "receiver_rule": "Inspect and enforce this shape before accepting a message signature, a transcript signature, or encrypting to the certificate. Verification success alone is insufficient."
+  },
+  "authenticated_transcript": {
+    "canonicalization": "Remove control_signature from the complete envelope object, then serialize the remaining JSON recursively with object keys sorted by Unicode code point, ensure_ascii=true, separators ',' and ':', UTF-8 encoding, and no terminal newline.",
+    "signature": "control_signature is a detached version-6 ML-DSA-65+Ed25519 signature over the canonical bytes, issued by the exact signing subkey of that phase producer's disposable public certificate.",
+    "continuity": "Phase A uses 64 zeroes as parent_envelope_sha256. Phase B names the SHA-256 of the exact received phase-A envelope bytes. Phase C names the SHA-256 of the exact received phase-B envelope bytes and verifies under the same Hatchery certificate authenticated in phase A.",
+    "closure_binding": "producer_closure_sha256 is the coordinator-supplied digest of the reviewed producer closure. A receiver compares it with that expected digest; an envelope never establishes its own expected closure.",
+    "protocol_binding": "protocol_sha256 is the SHA-256 of this exact file. The maintained validator embeds and enforces it."
   },
   "phases": [
     {
       "id": "hatchery-open",
       "owner": "dotfiles#148",
-      "inputs": [
-        "message.bin",
-        "accepted Hatchery sq and sqv closure"
-      ],
+      "inputs": ["message.bin", "reviewed Hatchery closure digest"],
       "operations": [
-        "generate one disposable RFC 9580 version-6 certificate with RFC 9980 composite signing and encryption subkeys",
-        "sign message.bin",
-        "exercise certificate and signing and encryption subkey revocation against local copies"
+        "generate and inspect one disposable certificate with the exact cryptographic shape",
+        "sign message.bin and inspect the exact signature algorithm and issuer",
+        "exercise certificate and signing and encryption subkey revocation against local copies",
+        "sign the canonical phase-A transcript with the same disposable signing key"
       ],
-      "outputs": [
-        "hatchery-phase-a.json"
-      ],
-      "secret_lifetime": {
-        "location": "Hatchery isolated temporary storage",
-        "retain_through": "hatchery-return",
-        "cleanup_after": "hatchery-return result is recorded"
-      }
+      "outputs": ["hatchery-phase-a.json"],
+      "secret_lifetime": {"location": "Hatchery isolated temporary storage", "retain_through": "hatchery-return", "cleanup_after": "phase C is signed and before phase C is released"}
     },
     {
       "id": "macos-ci-live",
       "owner": "dotfiles#147",
-      "inputs": [
-        "message.bin",
-        "hatchery-phase-a.json",
-        "reviewed macOS candidate closure"
-      ],
+      "inputs": ["message.bin", "hatchery-phase-a.json", "reviewed macOS closure digest"],
       "operations": [
-        "verify Hatchery public certificate and detached signature with exact-keg sqv",
-        "reject a locally altered message",
-        "generate one disposable RFC 9580 version-6 certificate with RFC 9980 composite signing and encryption subkeys",
-        "sign message.bin",
-        "encrypt message.bin to the Hatchery public certificate",
-        "exercise certificate and signing and encryption subkey revocation against local copies",
-        "publish macos-ci-phase-b.json",
-        "wait for the matching peer-response artifact"
+        "enforce the phase-A transcript signature, parent, protocol, Hatchery closure, certificate shape, and message-signature issuer and algorithm",
+        "verify the Hatchery message signature and reject a locally altered message",
+        "generate and inspect one disposable certificate with the exact cryptographic shape",
+        "sign message.bin, encrypt it to the inspected Hatchery certificate, and exercise local revocations",
+        "sign and publish the parent-chained canonical phase-B transcript",
+        "wait for one exact response run bound to this qualifier run, phase-B digest, and reviewed commit"
       ],
-      "outputs": [
-        "macos-ci-phase-b.json"
-      ],
+      "outputs": ["macos-ci-phase-b.json"],
       "requires_same_live_job_as": "macos-ci-close",
-      "secret_lifetime": {
-        "location": "one GitHub-hosted macOS runner temporary directory",
-        "retain_through": "macos-ci-close",
-        "cleanup_after": "macos-ci-close succeeds or the job exits"
-      }
+      "secret_lifetime": {"location": "one GitHub-hosted macOS runner temporary directory", "retain_through": "macos-ci-close", "cleanup_after": "macos-ci-close succeeds or the job exits"}
     },
     {
       "id": "hatchery-return",
       "owner": "dotfiles#148",
-      "inputs": [
-        "message.bin",
-        "macos-ci-phase-b.json",
-        "retained local Hatchery disposable secret certificate"
-      ],
+      "inputs": ["message.bin", "macos-ci-phase-b.json", "retained opening secret"],
       "operations": [
-        "verify the macOS public certificate and detached signature with exact sqv",
-        "reject a locally altered message",
-        "decrypt ciphertext-to-hatchery.pgp and compare all 51 message bytes",
-        "reject a locally tampered ciphertext with no recovered output",
-        "encrypt message.bin to the macOS public certificate",
-        "publish hatchery-phase-c.json through the peer-response workflow mode",
-        "record cleanup of the retained Hatchery disposable secret material"
+        "enforce the phase-B transcript signature, parent, protocol, macOS closure, certificate shape, and message-signature issuer and algorithm",
+        "verify the macOS message signature, reject an altered message, decrypt and tamper-test ciphertext-to-hatchery.pgp",
+        "encrypt message.bin to the inspected macOS certificate",
+        "create results/hatchery.json with the complete seven-artifact reciprocal digest map",
+        "sign the parent-chained canonical phase-C transcript with the retained opening signing key",
+        "remove all Hatchery disposable secret material before releasing the unchanged signed phase-C bytes"
       ],
-      "outputs": [
-        "hatchery-phase-c.json"
-      ],
-      "secret_lifetime": {
-        "location": "Hatchery isolated temporary storage",
-        "retain_through": "hatchery-return",
-        "cleanup_after": "hatchery-phase-c.json is finalized"
-      }
+      "outputs": ["hatchery-phase-c.json", "results/hatchery.json"],
+      "secret_lifetime": {"location": "Hatchery isolated temporary storage", "retain_through": "phase C transcript signing", "cleanup_after": "signing and before release"}
     },
     {
       "id": "macos-ci-close",
       "owner": "dotfiles#147",
-      "inputs": [
-        "message.bin",
-        "hatchery-phase-c.json",
-        "the still-running macOS job's local disposable secret certificate"
-      ],
+      "inputs": ["message.bin", "hatchery-phase-c.json", "the still-running macOS job's local secret"],
       "operations": [
-        "decrypt ciphertext-to-macos-ci.pgp and compare all 51 message bytes",
-        "reject a locally tampered ciphertext with no recovered output",
-        "record matching sender and receiver artifact sizes and SHA-256 values",
-        "record cleanup and remove all runner-local secret and plaintext derivatives"
+        "enforce the phase-C signature under the phase-A certificate and the exact phase-B parent digest",
+        "validate and retain results/hatchery.json and require its complete artifact map to equal macOS observations",
+        "decrypt and byte-compare ciphertext-to-macos-ci.pgp and reject its tampered copy without output",
+        "retain exact relay-run metadata and write results/macos-ci.json with the same complete artifact map",
+        "remove all runner-local secret and plaintext derivatives before serializing cleanup_complete=true"
       ],
-      "outputs": [
-        "results/macos-ci.json",
-        "SHA256SUMS"
-      ],
-      "requires_same_live_job_as": "macos-ci-live",
-      "secret_lifetime": {
-        "location": "one GitHub-hosted macOS runner temporary directory",
-        "retain_through": "macos-ci-close",
-        "cleanup_after": "the final result is serialized"
-      }
+      "outputs": ["results/macos-ci.json", "SHA256SUMS"],
+      "requires_same_live_job_as": "macos-ci-live"
     }
   ],
   "envelopes": {
-    "hatchery-phase-a.json": {
-      "required_envelope_fields": [
-        "schema_version",
-        "phase",
-        "session_id",
-        "candidate_identity",
-        "message_sha256",
-        "payloads",
-        "results"
-      ],
-      "required_payload_record_fields": [
-        "encoding",
-        "size",
-        "sha256",
-        "data"
-      ],
-      "required_public_payloads": [
-        "hatchery-cert.pgp",
-        "hatchery-message.sig"
-      ],
-      "required_result_fields": [
-        "local_revocation_results",
-        "local_cleanup_pending"
-      ]
+    "schema_version": "pq-sequoia-interop-envelope/v1",
+    "required_envelope_fields": ["schema_version", "phase", "session_id", "protocol_sha256", "producer_closure_sha256", "parent_envelope_sha256", "message_sha256", "payloads", "results", "control_signature"],
+    "required_payload_record_fields": ["encoding", "size", "sha256", "data"],
+    "phase_payloads": {
+      "hatchery-phase-a": ["hatchery-cert.pgp", "hatchery-message.sig"],
+      "macos-ci-phase-b": ["macos-ci-cert.pgp", "macos-ci-message.sig", "ciphertext-to-hatchery.pgp"],
+      "hatchery-phase-c": ["ciphertext-to-macos-ci.pgp", "results/hatchery.json"]
     },
-    "macos-ci-phase-b.json": {
-      "required_envelope_fields": [
-        "schema_version",
-        "phase",
-        "session_id",
-        "candidate_identity",
-        "message_sha256",
-        "payloads",
-        "results"
-      ],
-      "required_payload_record_fields": [
-        "encoding",
-        "size",
-        "sha256",
-        "data"
-      ],
-      "required_public_payloads": [
-        "macos-ci-cert.pgp",
-        "macos-ci-message.sig",
-        "ciphertext-to-hatchery.pgp"
-      ],
-      "required_result_fields": [
-        "peer_signature_verified",
-        "altered_message_rejected",
-        "local_revocation_results",
-        "local_cleanup_pending"
-      ]
+    "phase_results": {
+      "hatchery-phase-a": ["local_revocation_results", "local_cleanup_pending"],
+      "macos-ci-phase-b": ["peer_signature_verified", "altered_message_rejected", "local_revocation_results", "local_cleanup_pending"],
+      "hatchery-phase-c": ["local_cleanup_complete"]
     },
-    "hatchery-phase-c.json": {
-      "required_envelope_fields": [
-        "schema_version",
-        "phase",
-        "session_id",
-        "candidate_identity",
-        "message_sha256",
-        "payloads",
-        "results"
-      ],
-      "required_payload_record_fields": [
-        "encoding",
-        "size",
-        "sha256",
-        "data"
-      ],
-      "required_public_payloads": [
-        "ciphertext-to-macos-ci.pgp"
-      ],
-      "required_result_fields": [
-        "peer_signature_verified",
-        "altered_message_rejected",
-        "ciphertext_decrypted_byte_identical",
-        "tampered_ciphertext_rejected_without_output",
-        "local_cleanup_complete"
-      ]
-    }
+    "bounds": "Envelope and decoded payload sizes are checked before cryptographic use. Payload and result maps are closed; extra fields are rejected."
+  },
+  "reciprocal_artifact_map": {
+    "schema_version": "pq-sequoia-peer-result/v1",
+    "artifacts": ["message.bin", "hatchery-cert.pgp", "hatchery-message.sig", "macos-ci-cert.pgp", "macos-ci-message.sig", "ciphertext-to-hatchery.pgp", "ciphertext-to-macos-ci.pgp"],
+    "record_fields": ["sha256", "size"],
+    "rule": "The seven finite cryptographic transfer artifacts are the complete reciprocal map. Both peers can observe all seven before phase C. Transport envelopes, result JSON files, and SHA256SUMS are indexed separately because including a container's own digest inside itself is impossible. macOS rejects any missing, extra, or unequal Hatchery record."
+  },
+  "relay_binding": {
+    "selection": "The relay run title contains the exact qualifier run ID and phase-B envelope digest. The qualifier requires exactly one successful run with that title, then validates its exact database ID, event, status, conclusion, and head SHA against the reviewed qualifier commit before download.",
+    "retention": "The validated relay metadata is copied into results/macos-ci.json and the final evidence artifact."
   },
   "artifact_policy": {
-    "transferred": [
-      "message.bin",
-      "hatchery-cert.pgp",
-      "hatchery-message.sig",
-      "macos-ci-cert.pgp",
-      "macos-ci-message.sig",
-      "ciphertext-to-hatchery.pgp",
-      "ciphertext-to-macos-ci.pgp",
-      "hatchery-phase-a.json",
-      "macos-ci-phase-b.json",
-      "hatchery-phase-c.json",
-      "results/hatchery.json",
-      "results/macos-ci.json",
-      "SHA256SUMS"
-    ],
-    "local_only": [
-      "secret keys",
-      "secret certificates",
-      "passwords",
-      "Sequoia homes",
-      "revocation packets",
-      "recovered plaintext copies",
-      "altered message copies",
-      "tampered ciphertext copies"
-    ],
-    "revocation_transfer_decision": "Do not transfer revocation packets. Each peer exercises emergency certificate, explicit retired certificate, retired signing-subkey, and retired encryption-subkey transitions locally; only value-free result classifications, packet SHA-256 values, sizes, and scrubbed diagnostics enter its result JSON.",
-    "forbidden": [
-      "counterpart private keys",
-      "mutable fixture corpora",
-      "production or custody material",
-      "real credentials",
-      "protected inputs"
-    ]
+    "transferred": ["message.bin", "hatchery-cert.pgp", "hatchery-message.sig", "macos-ci-cert.pgp", "macos-ci-message.sig", "ciphertext-to-hatchery.pgp", "ciphertext-to-macos-ci.pgp", "hatchery-phase-a.json", "macos-ci-phase-b.json", "hatchery-phase-c.json", "results/hatchery.json", "results/macos-ci.json", "SHA256SUMS"],
+    "local_only": ["secret keys", "secret certificates", "passwords", "Sequoia homes", "revocation packets", "recovered plaintext copies", "altered message copies", "tampered ciphertext copies"],
+    "revocation_transfer_decision": "Do not transfer revocation packets. Each peer exercises emergency certificate, explicit retired certificate, retired signing-subkey, and retired encryption-subkey transitions locally; only value-free result classifications, packet SHA-256 values, sizes, and scrubbed diagnostics enter result JSON.",
+    "forbidden": ["counterpart private keys", "mutable fixture corpora", "production or custody material", "real credentials", "protected inputs"]
+  },
+  "macho_closure": {
+    "hashed": "Every resolved executable and dylib in the recursive closure, including Homebrew and candidate-keg objects.",
+    "apple_shared_cache_namespaces": ["/usr/lib/", "/System/Library/Frameworks/", "/System/Library/PrivateFrameworks/"],
+    "failure": "Any unresolved dependency outside those absolute Apple system namespaces rejects closure recording; unresolved @rpath, @loader_path, @executable_path, Homebrew, and other user-space dependencies never qualify as shared-cache entries."
   },
   "failure_semantics": {
-    "identity_or_digest_mismatch": "reject the session without invoking an unqualified shared command path",
-    "relay_timeout": "reject the incomplete session and clean both local secret workspaces; never resume with a new macOS job",
+    "identity_digest_signature_or_shape_mismatch": "reject the session before using an unqualified shared command path",
+    "relay_timeout_or_ambiguity": "reject and clean both local secret workspaces; never resume with a new macOS job",
     "operation_failure": "retain only value-free failure classification and scrubbed diagnostics, then clean local secret material",
     "rollback": "disable the candidate workflow; there is no accepted earlier macOS CI closure"
   },
-  "identity_binding": {
-    "rule": "Every envelope uses the same session_id and message_sha256. Each producer keeps one candidate_identity for every phase it emits; the macOS close rejects a Hatchery candidate_identity that differs from the opening phase.",
-    "payload_rule": "Payload maps and result maps are closed schemas. Every payload record is base64 with an exact decoded size and lowercase SHA-256; extra envelope, payload, or result fields are rejected."
-  },
   "acceptance": {
     "required_observations": [
+      "both peers enforce the exact RFC 9980 certificate and signature shape",
+      "all three canonical phase transcripts verify with exact closure, protocol, session, phase, parent, message, payload, and result bindings",
+      "phase C proves continuity with the Hatchery signing key authenticated in phase A",
       "both peers verify the other's detached signature with exact sqv",
       "both peers reject altered messages",
       "hatchery decrypts macos-ci ciphertext byte-for-byte",
       "macos-ci decrypts hatchery ciphertext byte-for-byte",
       "both peers reject tampered ciphertext with no recovered output",
       "both peers exercise certificate and subkey revocation locally",
-      "both peers report matching transferred-artifact SHA-256 values and sizes",
-      "both peers report local secret cleanup complete"
+      "both peers report the same complete seven-artifact digest map",
+      "both peers report local secret cleanup complete",
+      "the final evidence retains one exact relay run bound to the reviewed commit"
     ],
-    "does_not_establish": [
-      "production authority",
-      "persistent installation",
-      "personal Mac behavior",
-      "hardware custody",
-      "runtime acceptance"
-    ]
+    "does_not_establish": ["production authority", "persistent installation", "personal Mac behavior", "hardware custody", "runtime acceptance"]
   },
   "references": [
     "https://github.com/nisavid/dotfiles/issues/144",
