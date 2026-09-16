@@ -101,6 +101,7 @@ for profile_template in "$repo_root"/home/dot_config/private_secret-exec/private
   profile_name=${${profile_template:t}#private_}
   profile_name=${profile_name%.tmpl}
   chezmoi -S "$repo_root/home" execute-template \
+    --override-data '{"chezmoi":{"hostname":"test-host"}}' \
     --override-data-file "$repo_root/tests/fixtures/secret-exec-public.toml" \
     < "$profile_template" > "$fixture_home/.config/secret-exec/profiles/$profile_name"
   chmod 600 "$fixture_home/.config/secret-exec/profiles/$profile_name"
