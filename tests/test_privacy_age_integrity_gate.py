@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import shutil
 import subprocess
 import sys
 import textwrap
@@ -20,17 +21,37 @@ from scripts.privacy_age_admission import (
     encode_receipt,
 )
 from scripts.privacy_age_integrity_gate import (
+    ACTIVE_REQUIRED_ENTRIES,
     ACTIVE_REQUIRED_PATHS,
     ADMISSION_ACTIVATION_MARKER,
+    BOOTSTRAP_REQUIRED_PATHS,
     BOOTSTRAP_REVIEWED_AUTHORITY_ENTRIES,
     BOOTSTRAP_REVIEWED_SIGNER_ENTRY,
     BOOTSTRAP_REVIEWED_SUPPORT_ENTRIES,
+    PROTECTED_EXACT_PATHS,
+    classify_admission_requirement,
     verify_integrity_boundary,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
 GATE = ROOT / "scripts/privacy_age_integrity_gate.py"
 WORKFLOW = ROOT / ".github/workflows/privacy-age-integrity.yml"
+TRUSTED_LAUNCHER = ROOT / "scripts/run-trusted-age-admission"
+BOOTSTRAP_AUTHORITY_TREE_FIXTURE = (
+    ROOT / "tests/fixtures/age-admission-bootstrap/authority-tree.txt"
+)
+BOOTSTRAP_AUTHORITY_REVISION = "5c037de7462d9e4a52af4b95b69c37eae7b33343"
+BOOTSTRAP_AUTHORITY_SOURCE_FIXTURE = (
+    ROOT / "tests/fixtures/age-admission-bootstrap"
+)
+BOOTSTRAP_HISTORICAL_SOURCE_PATHS = (
+    "scripts/admit-age-envelopes",
+    "scripts/create-age-admission-receipt",
+    "scripts/privacy-scan",
+    "scripts/privacy_age_admission.py",
+    "scripts/privacy_age_envelopes.py",
+    "scripts/run-trusted-age-admission",
+)
 
 UNTRUSTED_HEAD_EXECUTION = re.compile(
     r"(?mx)^\s*(?:"
@@ -65,6 +86,7 @@ REAL_SOURCE_FILES = (
     "scripts/privacy_age_envelopes.py",
     "scripts/run-trusted-age-admission",
     "scripts/privacy_age_integrity_gate.py",
+    "home/private_dot_local/bin/executable_proton-pass-age-admission",
     ".github/workflows/platform-portability.yml",
     ".github/workflows/privacy-age-integrity.yml",
     "docs/ENCRYPTION.md",
@@ -116,6 +138,19 @@ def write_files(root: Path) -> None:
         (root / relative).chmod(mode)
 
 
+def historical_bootstrap_source(relative: str) -> Path:
+    if relative in BOOTSTRAP_HISTORICAL_SOURCE_PATHS:
+        return BOOTSTRAP_AUTHORITY_SOURCE_FIXTURE / relative
+    return ROOT / relative
+
+
+def write_historical_bootstrap_authority(root: Path) -> None:
+    for relative in BOOTSTRAP_HISTORICAL_SOURCE_PATHS:
+        destination = root / relative
+        destination.write_bytes(historical_bootstrap_source(relative).read_bytes())
+        destination.chmod(BOOTSTRAP_REQUIRED_MODES[relative])
+
+
 def commit_all(root: Path, message: str) -> str:
     run("git", "add", "--all", cwd=root)
     run(
@@ -137,6 +172,13 @@ def commit_all(root: Path, message: str) -> str:
 
 
 class PrivacyAgeIntegrityGateTests(TestCase):
+    def test_signing_key_adapter_is_protected_after_activation(self) -> None:
+        adapter = b"home/private_dot_local/bin/executable_proton-pass-age-admission"
+
+        self.assertIn(adapter, PROTECTED_EXACT_PATHS)
+        self.assertIn(adapter, ACTIVE_REQUIRED_PATHS)
+        self.assertNotIn(adapter, BOOTSTRAP_REQUIRED_PATHS)
+
     def make_checkouts(self) -> tuple[TemporaryDirectory[str], Path, Path, str]:
         temporary = TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -156,6 +198,138 @@ class PrivacyAgeIntegrityGateTests(TestCase):
             cwd=Path(temporary.name),
         )
         return temporary, base, head, base_commit
+
+    def test_trusted_launcher_preflight_exposes_all_provider_free_outcomes(self) -> None:
+        temporary, base, head, base_commit = self.make_checkouts()
+        root = Path(temporary.name)
+        marker = root / "candidate-code-ran"
+        candidate_gate = head / "scripts/privacy_age_integrity_gate.py"
+        candidate_gate.write_text(
+            "from pathlib import Path\n"
+            f"Path({os.fspath(marker)!r}).write_text('ran')\n",
+            encoding="utf-8",
+        )
+        (head / "home/private.age").write_text(
+            "candidate ciphertext fixture\n",
+            encoding="utf-8",
+        )
+        head_commit = commit_all(head, "protected candidate")
+
+        wrapper = root / "trusted-run-trusted-age-admission"
+        shutil.copy2(TRUSTED_LAUNCHER, wrapper)
+        wrapper.chmod(0o755)
+        provider_marker = root / "provider-ran"
+        tools = root / "tools"
+        tools.mkdir(mode=0o700)
+        provider = tools / "pass-cli"
+        provider.write_text(
+            "#!/bin/sh\n"
+            f"printf ran > {os.fspath(provider_marker)!r}\n"
+            "exit 97\n",
+            encoding="ascii",
+        )
+        provider.chmod(0o700)
+        environment = os.environ.copy()
+        environment.update(
+            {
+                "GIT_CONFIG_GLOBAL": os.devnull,
+                "GIT_CONFIG_NOSYSTEM": "1",
+                "GIT_TERMINAL_PROMPT": "0",
+                "PATH": os.pathsep.join(
+                    (os.fspath(tools), environment.get("PATH", ""))
+                ),
+            }
+        )
+
+        def preflight(
+            head_repository: Path,
+            expected_head_commit: str,
+        ) -> subprocess.CompletedProcess[str]:
+            return subprocess.run(
+                [
+                    sys.executable,
+                    "-I",
+                    "-B",
+                    "-S",
+                    os.fspath(wrapper),
+                    "--base-repository",
+                    os.fspath(base),
+                    "--base-commit",
+                    base_commit,
+                    "--",
+                    "--operation",
+                    "preflight",
+                    "--base-repository",
+                    os.fspath(base),
+                    "--base-commit",
+                    base_commit,
+                    "--head-repository",
+                    os.fspath(head_repository),
+                    "--head-commit",
+                    expected_head_commit,
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+                timeout=30,
+            )
+
+        required = preflight(head, head_commit)
+        not_required = preflight(base, base_commit)
+        indeterminate = preflight(head, base_commit)
+
+        self.assertEqual(
+            (required.returncode, required.stdout, required.stderr),
+            (0, "required\n", ""),
+        )
+        self.assertEqual(
+            (not_required.returncode, not_required.stdout, not_required.stderr),
+            (10, "not-required\n", ""),
+        )
+        self.assertEqual(
+            (indeterminate.returncode, indeterminate.stdout, indeterminate.stderr),
+            (11, "indeterminate\n", ""),
+        )
+        self.assertFalse(marker.exists())
+        self.assertFalse(provider_marker.exists())
+
+    def test_admission_requirement_classifier_matches_transition_state(self) -> None:
+        _, base, head, base_commit = self.make_checkouts()
+
+        self.assertEqual(
+            classify_admission_requirement(
+                base_repository=base,
+                base_commit=base_commit,
+                head_repository=head,
+                head_commit=base_commit,
+            ),
+            "not-required",
+        )
+
+        (head / "home/private.age").write_text(
+            "candidate ciphertext fixture\n",
+            encoding="utf-8",
+        )
+        head_commit = commit_all(head, "protected candidate")
+        self.assertEqual(
+            classify_admission_requirement(
+                base_repository=base,
+                base_commit=base_commit,
+                head_repository=head,
+                head_commit=head_commit,
+            ),
+            "required",
+        )
+        self.assertEqual(
+            classify_admission_requirement(
+                base_repository=base,
+                base_commit=base_commit,
+                head_repository=head,
+                head_commit=base_commit,
+            ),
+            "indeterminate",
+        )
 
     def verify(
         self,
@@ -236,35 +410,64 @@ class PrivacyAgeIntegrityGateTests(TestCase):
             (b"blob", staged.split(maxsplit=1)[0].encode()),
         )
 
-    def test_bootstrap_authority_allowlist_matches_reviewed_tree(self) -> None:
+    def test_bootstrap_authority_allowlist_matches_frozen_historical_tree(
+        self,
+    ) -> None:
         self.assertTrue(BOOTSTRAP_REVIEWED_AUTHORITY_ENTRIES)
-        for raw_path, (kind, mode, object_id) in BOOTSTRAP_REVIEWED_AUTHORITY_ENTRIES.items():
-            path = ROOT / os.fsdecode(raw_path)
-            staged = run(
-                "git",
-                "ls-files",
-                "--stage",
-                "--",
-                os.fspath(path.relative_to(ROOT)),
-                cwd=ROOT,
-            )
-            self.assertTrue(staged, f"reviewed authority path is not tracked: {path}")
-            self.assertEqual((kind, mode), (b"blob", staged.split(maxsplit=1)[0].encode()))
-            # Deliberately hash candidate bytes so a precommit run detects an
-            # unstaged reviewed-blob change before the manifest can be rebuilt.
-            self.assertEqual(
-                object_id.decode("ascii"),
-                run("git", "hash-object", "--", os.fspath(path), cwd=ROOT),
-            )
+        records = BOOTSTRAP_AUTHORITY_TREE_FIXTURE.read_bytes().splitlines()
+        self.assertEqual(
+            records[0],
+            f"revision {BOOTSTRAP_AUTHORITY_REVISION}".encode("ascii"),
+        )
+        reviewed_fixture: dict[bytes, tuple[bytes, bytes, bytes]] = {}
+        for record in records[1:]:
+            metadata, raw_path = record.split(b"\t", 1)
+            mode, kind, object_id = metadata.split(b" ", 2)
+            self.assertNotIn(raw_path, reviewed_fixture)
+            self.assertRegex(object_id.decode("ascii"), r"\A[0-9a-f]{40}\Z")
+            reviewed_fixture[raw_path] = (kind, mode, object_id)
+        self.assertEqual(
+            BOOTSTRAP_REVIEWED_AUTHORITY_ENTRIES.keys(),
+            reviewed_fixture.keys(),
+        )
+        self.assertEqual(
+            {os.fsencode(relative) for relative in BOOTSTRAP_HISTORICAL_SOURCE_PATHS},
+            reviewed_fixture.keys(),
+        )
+        for raw_path, expected in reviewed_fixture.items():
+            with self.subTest(path=os.fsdecode(raw_path)):
+                self.assertEqual(
+                    BOOTSTRAP_REVIEWED_AUTHORITY_ENTRIES[raw_path],
+                    expected,
+                )
+        for relative in BOOTSTRAP_HISTORICAL_SOURCE_PATHS:
+            with self.subTest(source=relative):
+                fixture = historical_bootstrap_source(relative)
+                object_id = run(
+                    "git",
+                    "hash-object",
+                    "--no-filters",
+                    "--",
+                    os.fspath(fixture.relative_to(ROOT)),
+                    cwd=ROOT,
+                )
+                self.assertEqual(
+                    object_id,
+                    reviewed_fixture[os.fsencode(relative)][2].decode("ascii"),
+                )
 
-    def test_bootstrap_required_modes_match_reviewed_tree(self) -> None:
-        for relative, expected_mode in BOOTSTRAP_REQUIRED_MODES.items():
+    def test_active_required_entries_match_current_tooling_tree(self) -> None:
+        for raw_relative, expected in ACTIVE_REQUIRED_ENTRIES.items():
+            relative = os.fsdecode(raw_relative)
             with self.subTest(relative=relative):
                 staged = run("git", "ls-files", "--stage", "--", relative, cwd=ROOT)
-                self.assertTrue(staged, f"required path is not tracked: {relative}")
+                self.assertTrue(staged, f"active path is not tracked: {relative}")
+                mode, object_id, stage_and_path = staged.split(maxsplit=2)
+                self.assertEqual(stage_and_path.split("\t", 1)[0], "0")
+                kind = run("git", "cat-file", "-t", object_id, cwd=ROOT)
                 self.assertEqual(
-                    expected_mode,
-                    int(staged.split(maxsplit=1)[0], 8) & 0o777,
+                    (kind.encode("ascii"), mode.encode("ascii")),
+                    expected,
                 )
 
     def test_activation_marker_is_present_in_the_protected_workflow(self) -> None:
@@ -304,6 +507,17 @@ class PrivacyAgeIntegrityGateTests(TestCase):
         with self.assertRaisesRegex(RuntimeError, "activation sentinel"):
             self.verify(base, head, base_commit, head_commit)
 
+    def test_active_sentinel_keeps_bootstrap_authority_changes_on_signed_path(
+        self,
+    ) -> None:
+        _, base, head, base_commit = self.make_checkouts()
+        write_historical_bootstrap_authority(head)
+        head_commit = commit_all(head, "replace active bootstrap authority")
+
+        with self.assertRaisesRegex(RuntimeError, "without admission") as raised:
+            self.verify(base, head, base_commit, head_commit)
+        self.assertNotIn("bootstrap owner exception", str(raised.exception))
+
     def test_active_boundary_cannot_remove_admission_infrastructure(self) -> None:
         _, base, head, base_commit = self.make_checkouts()
         (head / "scripts/run-trusted-age-admission").unlink()
@@ -334,6 +548,7 @@ class PrivacyAgeIntegrityGateTests(TestCase):
 
     def test_prebootstrap_base_requires_the_explicit_owner_exception(self) -> None:
         _, base, head, _ = self.make_checkouts()
+        write_historical_bootstrap_authority(head)
         (base / ".github/workflows/privacy-age-integrity.yml").write_text(
             "name: boundary\n",
             encoding="ascii",
@@ -383,6 +598,7 @@ class PrivacyAgeIntegrityGateTests(TestCase):
         for name, mutation, expected_error in cases:
             with self.subTest(name=name):
                 _, base, head, _ = self.make_checkouts()
+                write_historical_bootstrap_authority(head)
                 reviewed_support_entries = BOOTSTRAP_REVIEWED_SUPPORT_ENTRIES
                 (base / ".github/workflows/privacy-age-integrity.yml").write_text(
                     "name: boundary\n",
@@ -485,7 +701,7 @@ class PrivacyAgeIntegrityGateTests(TestCase):
                 base_commit = commit_all(base, f"pre-bootstrap {malformed}")
                 for relative, mode in BOOTSTRAP_REQUIRED_MODES.items():
                     path = head / relative
-                    path.write_bytes((ROOT / relative).read_bytes())
+                    path.write_bytes(historical_bootstrap_source(relative).read_bytes())
                     path.chmod(mode)
                 malformed_path = head / "scripts/create-age-admission-receipt"
                 if malformed == "mode":
@@ -692,7 +908,7 @@ class PrivacyAgeIntegrityGateTests(TestCase):
         for executable in (GATE, ROOT / "scripts/privacy-scan"):
             with self.subTest(executable=os.fspath(executable)):
                 result = subprocess.run(
-                    [sys.executable, "-I", os.fspath(executable), "--help"],
+                    [sys.executable, "-I", "-B", os.fspath(executable), "--help"],
                     check=False,
                     capture_output=True,
                     text=True,
@@ -829,6 +1045,10 @@ class PrivacyAgeIntegrityGateTests(TestCase):
             "changed classifier": lambda root: (
                 root / "scripts/agent_equipment_public_data.py"
             ).write_text("changed\n", encoding="utf-8"),
+            "changed signing-key adapter": lambda root: (
+                root
+                / "home/private_dot_local/bin/executable_proton-pass-age-admission"
+            ).write_text("changed\n", encoding="utf-8"),
             "changed gate": lambda root: (
                 root / "scripts/privacy_age_integrity_gate.py"
             ).write_text("changed\n", encoding="utf-8"),
@@ -867,6 +1087,16 @@ class PrivacyAgeIntegrityGateTests(TestCase):
         scanner = head / "scripts/privacy-scan"
         scanner.chmod(0o644)
         head_commit = commit_all(head, "mode")
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "active admission infrastructure must remain complete",
+        ):
+            self.verify(base, head, base_commit, head_commit)
+
+        _, base, head, base_commit = self.make_checkouts()
+        adapter = head / "home/private_dot_local/bin/executable_proton-pass-age-admission"
+        adapter.chmod(0o755)
+        head_commit = commit_all(head, "adapter mode")
         with self.assertRaisesRegex(
             RuntimeError,
             "active admission infrastructure must remain complete",

@@ -31,7 +31,6 @@ CREATOR_VALUE_OPTIONS = frozenset(
         "--trusted-admitter",
         "--output",
         "--lifetime-seconds",
-        "--operation",
     }
 )
 
