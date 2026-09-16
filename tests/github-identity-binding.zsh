@@ -26,6 +26,7 @@ EOF
 cat > "$bin_dir/gh" <<'EOF'
 #!/bin/zsh -f
 [[ $GH_TOKEN == fixture-token ]] || exit 71
+[[ $* == 'api --hostname github.com user --jq .login' ]] || exit 73
 print -r -- "${FAKE_GITHUB_LOGIN:-fixture-personal}"
 EOF
 cat > "$bin_dir/target" <<'EOF'
@@ -47,6 +48,7 @@ run_launcher() {
   XDG_CONFIG_HOME=$fixture_home/.config \
   XDG_STATE_HOME=$test_dir/state \
   PATH=$bin_dir:/usr/bin:/bin \
+  GH_HOST=enterprise.invalid \
   FAKE_GITHUB_LOGIN=${1:-fixture-personal} \
   "$launcher" github -- target
 }
@@ -55,12 +57,23 @@ run_launcher() {
   { print -u2 -r -- 'matching GitHub identity must start the consumer'; exit 1; }
 
 set +e
-wrong_output=$(run_launcher fixture-systalyze 2>&1)
+wrong_output=$(run_launcher fixture-other 2>&1)
 wrong_status=$?
 set -e
 (( wrong_status != 0 )) ||
   { print -u2 -r -- 'mismatched GitHub identity must fail closed'; exit 1; }
 [[ $wrong_output == *'GitHub identity self-check failed'* ]] ||
   { print -u2 -r -- 'mismatched GitHub identity must report a redacted failure'; exit 1; }
+[[ $wrong_output != *target-ran* ]] ||
+  { print -u2 -r -- 'mismatched GitHub identity must not start the consumer'; exit 1; }
+
+mv -- "$bin_dir/gh" "$bin_dir/gh-real"
+ln -s -- "$bin_dir/gh-real" "$bin_dir/gh"
+set +e
+untrusted_output=$(run_launcher 2>&1)
+untrusted_status=$?
+set -e
+(( untrusted_status != 0 )) && [[ $untrusted_output != *target-ran* ]] ||
+  { print -u2 -r -- 'an untrusted GitHub checker must not start the consumer'; exit 1; }
 
 print -r -- 'github identity binding checks passed'
