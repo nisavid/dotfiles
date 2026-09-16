@@ -32,5 +32,5 @@ chezmoi apply
 
 ## Services
 
-- [Hindsight](docs/HINDSIGHT.md): pin the reusable release and render an
-  encrypted Darwin-only consumer binding.
+- [Hindsight](docs/HINDSIGHT.md): retain reusable templates and a reviewed
+  release pin, with no active consumer binding.
