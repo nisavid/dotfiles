@@ -1,3 +1,9 @@
+{{ if not (get (default (dict) (get . "secretExec")) "publicFixture") }}
+# AWS has no consumer binding; only explicit public fixtures render it.
+.aws
+.config/secret-exec/profiles/aws.env
+{{ end }}
+
 # Never manage the age identity (private key) — it is machine-local and must not be committed.
 .config/age
 
