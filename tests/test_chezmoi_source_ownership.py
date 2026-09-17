@@ -259,6 +259,71 @@ class ChezmoiSourceOwnershipTests(unittest.TestCase):
                 (source / "dot_config/bat/config").read_bytes(),
             )
 
+    def test_unbound_hindsight_is_ignored_and_preserves_existing_targets(self) -> None:
+        sources = [
+            *HINDSIGHT_SOURCE_ROOT.rglob("*.tmpl"),
+            *(SOURCE / "private_dot_local/bin").glob("*hindsight*.tmpl"),
+            *(SOURCE / "private_dot_local/lib/hindsight-runtime").rglob("*.tmpl"),
+            *(SOURCE / "dot_agents/skills").glob("*hindsight*.tmpl"),
+            *(SOURCE / ".chezmoitemplates").glob("*hindsight*.tmpl"),
+            SOURCE / ".chezmoiignore",
+            SOURCE / ".chezmoidata/hindsight.toml",
+        ]
+        for platform in ("linux", "darwin"):
+            with self.subTest(platform=platform), tempfile.TemporaryDirectory(
+                dir=TEMP_ROOT,
+            ) as temporary:
+                root = Path(temporary)
+                source = root / "source"
+                destination = root / "home"
+                for original in sources:
+                    copied = source / original.relative_to(SOURCE)
+                    copied.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(original, copied)
+
+                existing = (
+                    destination / ".config/hindsight-control-plane/installation.json"
+                )
+                existing.parent.mkdir(parents=True)
+                existing.write_bytes(b"unmanaged fixture\n")
+                existing.chmod(0o600)
+                environment, arguments = self.environment(root, destination)
+                command = [
+                    "chezmoi",
+                    "-S",
+                    str(source),
+                    *arguments,
+                    "--override-data",
+                    '{"chezmoi":{"os":"' + platform + '"}}',
+                    "--refresh-externals=never",
+                ]
+                managed = subprocess.run(
+                    [*command, "managed"],
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+                self.assertNotIn("hindsight", managed.stdout)
+                applied = subprocess.run(
+                    [*command, "apply"],
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(applied.returncode, 0, applied.stderr)
+                self.assertEqual(existing.read_bytes(), b"unmanaged fixture\n")
+                self.assertEqual(stat.S_IMODE(existing.stat().st_mode), 0o600)
+                self.assertEqual(
+                    {
+                        path
+                        for path in destination.rglob("*")
+                        if path.is_file() or path.is_symlink()
+                    },
+                    {existing},
+                )
+
     def test_hindsight_keeps_paths_bytes_and_private_modes(self) -> None:
         with tempfile.TemporaryDirectory(dir=TEMP_ROOT) as temporary:
             root = Path(temporary)

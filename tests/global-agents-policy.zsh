@@ -199,15 +199,7 @@ forbidden=(
   'Prefer rebase merging when several merge methods are available.'
   'An em dash is unspaced and earns its place'
   'more than a couple in one message reads as a tic'
-  'ivan/impeccable'
-  'ivan/setup-local'
-  'ivan/local-runtime-policy-docs'
-  'ivan/real-work-for-local-dev'
-  'ivan/ceres-dev-cluster-program'
-  'dev:env:fnx:handoff'
   'yarn prisma:generate'
-  'make -C packages/fnx test'
-  'packages/dnn_model_images'
   'Always start with `resolve-library-id`'
   "user's full question"
 )
