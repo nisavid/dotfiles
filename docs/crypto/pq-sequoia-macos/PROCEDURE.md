@@ -66,6 +66,16 @@ Certificate algorithms and capabilities come from `sq inspect`; each key
 version comes from the corresponding fingerprinted `Public-Key Packet` or
 `Public-Subkey Packet` emitted by `sq packet dump`. The receiver rejects a
 missing, duplicated, mismatched, or non-version-6 packet observation.
+Treat the text dump as packet records: every packet heading ends the active
+key record, and only a public-key or public-subkey heading starts another one.
+Never use `Version`, `Pk algo`, or `Fingerprint` fields from a following
+signature, user ID, or other packet to complete or replace a key observation.
+The maintained public-entrypoint fixture recreates the pinned `sq` 1.4.0 dump
+shape with a direct self-signature, a positive certification self-signature,
+and subkey-binding signatures. It also requires malformed and wrong-version
+key records to fail closed. These recreated cases are new source-test evidence,
+not a generated certificate, built `sq` observation, independent review, or
+hosted macOS result.
 
 `hatchery-phase-a.json` contains the disposable public certificate, its
 detached signature over the fixed message, the protocol digest, reviewed

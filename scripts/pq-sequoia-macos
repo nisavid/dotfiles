@@ -325,10 +325,18 @@ def parse_key_packet_inspection(output: str) -> dict[str, dict[str, Any]]:
     packets: list[dict[str, Any]] = []
     current: dict[str, Any] | None = None
     for line in output.splitlines():
-        heading = re.match(r"^(Public-Key|Public-Subkey) Packet(?:,|$)", line)
-        if heading:
+        packet_heading = re.match(r"^\S.* Packet(?:,|$)", line)
+        if packet_heading:
+            current = None
+            key_heading = re.match(
+                r"^(Public-Key|Public-Subkey) Packet(?:,|$)", line
+            )
+            if key_heading is None:
+                continue
             current = {
-                "role": "primary" if heading.group(1) == "Public-Key" else "subkey"
+                "role": (
+                    "primary" if key_heading.group(1) == "Public-Key" else "subkey"
+                )
             }
             packets.append(current)
             continue

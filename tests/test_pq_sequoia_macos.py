@@ -451,6 +451,56 @@ class QualificationProcedureTests(unittest.TestCase):
             self.assertEqual(6, shape["signing_version"])
             self.assertEqual(6, shape["encryption_version"])
 
+    def test_certificate_key_fields_stay_with_their_packet_records(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            certificate = root / "certificate.pgp"
+            certificate.write_bytes(b"public certificate fixture")
+            output = root / "inspection.json"
+
+            # New evidence recreated from the pinned sq 1.4.0 packet-dump
+            # interface and RFC 9980's transferable-public-key structure.
+            sq = _write_sq_inspection_fixture(root / "sq", 6)
+            accepted = self.run_cli(
+                "inspect-certificate",
+                "--sq",
+                str(sq),
+                "--certificate",
+                str(certificate),
+                "--output",
+                str(output),
+            )
+
+            self.assertEqual(0, accepted.returncode, accepted.stderr)
+            shape = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual("ML-DSA-65+Ed25519", shape["primary_algorithm"])
+            self.assertEqual("ML-DSA-65+Ed25519", shape["signing_algorithm"])
+            self.assertEqual("ML-KEM-768+X25519", shape["encryption_algorithm"])
+
+    def test_certificate_rejects_malformed_key_packet_record(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            certificate = root / "certificate.pgp"
+            certificate.write_bytes(b"public certificate fixture")
+            output = root / "inspection.json"
+
+            sq = _write_sq_inspection_fixture(
+                root / "sq-malformed", 6, omit_encryption_fingerprint=True
+            )
+            rejected = self.run_cli(
+                "inspect-certificate",
+                "--sq",
+                str(sq),
+                "--certificate",
+                str(certificate),
+                "--output",
+                str(output),
+            )
+
+            self.assertEqual(1, rejected.returncode)
+            self.assertIn("key packet observation mismatch", rejected.stderr)
+            self.assertFalse(output.exists())
+
     def test_phase_c_requires_signed_parent_and_hatchery_result(self) -> None:
         module = _load_cli()
         envelope = {
@@ -1386,7 +1436,9 @@ def _certificate_shape() -> dict[str, object]:
     }
 
 
-def _write_sq_inspection_fixture(path: Path, version: int) -> Path:
+def _write_sq_inspection_fixture(
+    path: Path, version: int, *, omit_encryption_fingerprint: bool = False
+) -> Path:
     primary = "A" * 64
     signing = "B" * 64
     encryption = "C" * 64
@@ -1404,18 +1456,42 @@ def _write_sq_inspection_fixture(path: Path, version: int) -> Path:
   Public-key algo: ML-KEM-768+X25519
          Key flags: transport encryption, data-at-rest encryption
 """
+    encryption_fingerprint = (
+        "" if omit_encryption_fingerprint else f"  Fingerprint: {encryption}\n"
+    )
     packet_dump = f"""Public-Key Packet, new CTB
   Version: {version}
   Pk algo: ML-DSA-65+Ed25519
   Fingerprint: {primary}
+Signature Packet, new CTB
+  Version: {version}
+  Type: DirectKey
+  Pk algo: ML-DSA-65+Ed25519
+  Issuer Fingerprint: {primary}
+User ID Packet, new CTB
+  Value: PQ qualification fixture
+Signature Packet, new CTB
+  Version: {version}
+  Type: PositiveCertification
+  Pk algo: ML-DSA-65+Ed25519
+  Issuer Fingerprint: {primary}
 Public-Subkey Packet, new CTB
   Version: {version}
   Pk algo: ML-DSA-65+Ed25519
   Fingerprint: {signing}
+Signature Packet, new CTB
+  Version: {version}
+  Type: SubkeyBinding
+  Pk algo: ML-DSA-65+Ed25519
+  Issuer Fingerprint: {primary}
 Public-Subkey Packet, new CTB
   Version: {version}
   Pk algo: ML-KEM-768+X25519
-  Fingerprint: {encryption}
+{encryption_fingerprint}Signature Packet, new CTB
+  Version: {version}
+  Type: SubkeyBinding
+  Pk algo: ML-DSA-65+Ed25519
+  Issuer Fingerprint: {primary}
 """
     path.write_text(
         "#!/usr/bin/env python3\n"
