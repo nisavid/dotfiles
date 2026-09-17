@@ -23,15 +23,15 @@
     },
     {
       "path": "home/.private-prd-01.toml.age",
-      "sha256": "sha256:e6ac9523b6c9070834ff8cb95696cd048498be78262957c8ea0da34f6571310a"
+      "sha256": "sha256:e34fd4a2fef069046ee870f9e7e9ca6a2890cab610bdb3c6bc09f13d5d859b1e"
     },
     {
       "path": "home/.private-privacy-denylist.txt.age",
-      "sha256": "sha256:223696a820e1a4c44b311a64c303f2bf7a91c6156b9664779898a9645cbf86a2"
+      "sha256": "sha256:bd54f9493ba4af1e481b7792255bde2b58305d6b177d40a10fc4027aa72d8654"
     },
     {
       "path": "home/.private-secret-exec.toml.age",
-      "sha256": "sha256:f1555d4aa30b06bf1ad099b4cea03657dc3753ded9b3d4fcdc7b33e4dc822da0"
+      "sha256": "sha256:8d6f2ac37a32f72214da110ef22d9efc7ad3753269ae83481883636fec3d7f04"
     }
   ]
 }

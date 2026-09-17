@@ -15,7 +15,7 @@ Dot-prefixed ciphertext files are source-only data. Chezmoi ignores them as targ
 - `home/.private-daybreak-account-bindings.md.age` supplies exact Codex account-home bindings to the mode-`0600` `~/.agents/daybreak-account-bindings.md` target. Public policy may name only this neutral target path; exact account homes, authenticated identities, classifications, and other properties remain private. The local/private catalog may be read and correlated for routing and actionable per-account status, while any nonlocal or public persistence or transmission must scrub account homes, account IDs, stable per-account labels, and derived identifiers; use only a generic non-stable marker or redacted status there. Credentials, tokens, decrypted secrets, and task data remain excluded.
 - `home/.private-git-identities.toml.age` supplies hostname selection, identity records, editor preference, branch prefix, and tracking policy to generated configuration targets. Public data contains only a synthetic fixture and the allowed personal fallback.
 - `home/.private-machine.toml.age` supplies machine-local checkout paths and identity-bearing GnuPG configuration.
-- `home/.private-secret-exec.toml.age` supplies secret-provider locators and command-to-profile bindings. It never contains credential values.
+- `home/.private-secret-exec.toml.age` supplies secret-provider locators and command-to-profile bindings. It never contains credential values. No AWS profile or command mapping is selected; the reusable AWS templates render only with explicit public fixtures.
 - `home/.private-privacy-denylist.txt.age` supplies exact private identifiers to the local privacy scan. Hosted CI runs the generic scan without decrypting this file.
 - `home/.private-prd-01.toml.age` is a source-only private requirements catalog with no plaintext target. Its model, migration, repository, and workflow selections are empty; disclosure guards remain encrypted.
 
@@ -584,10 +584,16 @@ path. Catalogs with an explicit target listed above may render only to that docu
 
 When retiring a consumer, trace its encrypted selections through host bindings,
 rendered targets, scripts, and fixtures. Preserve shared machinery and unrelated
-records. Keep disclosure guards for retired identifiers: removing an active
-binding does not make its private values safe to publish. Verify the surviving
-payloads, render both active and dormant paths, and run identity-backed envelope
-admission before publishing the replacement sources.
+records. Review encrypted disclosure guards with the operator when their identifiers
+are also in the retirement scope. Verify the surviving payloads, render both
+active and dormant paths, and run identity-backed envelope admission before
+publishing the replacement sources.
+
+Source removal does not remove live files, appended configuration tables, or
+private skills. Inventory the current targets and their harness projections,
+remove only the retired entries, and verify the live configuration after the
+source change. Inspect command shims and their encrypted command mappings
+together. A complete retirement includes both source and deployed-state checks.
 
 ## Retiring The Daybreak Catalog
 
