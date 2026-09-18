@@ -1,6 +1,6 @@
 ---
 name: choosing-agent-models
-description: Use when selecting a model for an agent, subagent, task, or agent definition; adding a model fallback; or routing cybersecurity-related or cybersecurity-adjacent work.
+description: Use when selecting a model for an agent, subagent, task, or agent definition; adding a model fallback; classifying work or a continuation for Daybreak; or diagnosing a model-routing block or refusal.
 ---
 
 # Choosing Agent Models
@@ -23,6 +23,8 @@ Use the matrix below as the source of truth for model and reasoning-effort selec
 Do not use this for product runtime model routing, AI feature configuration, or deciding whether a subagent should exist.
 
 ## Daybreak Routing For Cybersecurity Work
+
+Before execution and every dispatch or continuation, [classify the current scope](references/classifying-security-work.md) by the judgment its result requires. Use that reference to reclassify follow-up reviews and diagnose blocks or refusals before considering another route. A safety refusal is not a capability failure that authorizes fallback.
 
 Treat cybersecurity-related and cybersecurity-adjacent whole tasks and bounded subtasks as Daybreak-routed work. This section overrides the general matrix and fallback rules for that scope.
 
