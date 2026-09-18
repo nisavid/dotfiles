@@ -209,6 +209,10 @@ This producer does not delete source skills, thin global instructions, prune
 old artifacts/backups, or retire another provider. Record the retirement result
 in the owning adoption record; keep `retirements` empty here.
 
+For the native Skills-managed standalone `resolving-merge-conflicts` route,
+use [the focused retirement procedure](retiring-resolving-merge-conflicts.md)
+after accepting its Versionkeeping replacement in the affected clients.
+
 ## Verification and downstream use
 
 Run the public fixtures and isolated chezmoi deployment checks:
