@@ -566,6 +566,7 @@ def native_status(
                 native_require(
                     adapter.get("name") == member, "unrecognized native Codex adapter"
                 )
+            if native.name == "codex":
                 previous = receipt["native_additions"].get(member)
                 native_require(
                     previous is None or previous == additions,
