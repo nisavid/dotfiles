@@ -29,9 +29,11 @@ python3 tests/fixtures/provingkit-installations/regenerate.py \
 `native-probes.json` preserves the native control experiments from 2026-09-18.
 Each case records its cleared environment, command arguments, return status,
 stdout/stderr, and observations. `${CASE}` replaces its disposable directory;
-executable placeholders replace the resolved binaries. The normalization field
-states the substitution, and each executable has its SHA-256 digest. The native
-binaries were:
+`${CASE_HOME}` replaces that directory's `home` subdirectory and expands exactly
+to `${CASE}/home`. Executable placeholders replace the resolved binaries. These
+path substitutions preserve every other output byte and return status. The
+normalization field states the substitutions, and each executable has its
+SHA-256 digest. The native binaries were:
 
 | Client | Version | SHA-256 |
 | --- | --- | --- |

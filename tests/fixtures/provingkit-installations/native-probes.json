@@ -1,5 +1,5 @@
 {
-  "normalization": "${CASE} is the disposable case directory; ${CODEX_EXECUTABLE} and ${CLAUDE_EXECUTABLE} are the frozen executables identified by digest. No other output or return status is changed. Each command ran under /usr/bin/env -i with the case environment and cwd ${CASE}/cwd.",
+  "normalization": "${CASE} is the disposable case directory; ${CASE_HOME} is its home subdirectory and expands exactly to ${CASE}/home; ${CODEX_EXECUTABLE} and ${CLAUDE_EXECUTABLE} are the frozen executables identified by digest. No other output or return status is changed. Each command ran under /usr/bin/env -i with the case environment and cwd ${CASE}/cwd.",
   "cases": {
     "all-selected/claude": {
       "executable": {
@@ -7,14 +7,14 @@
         "sha256": "6c752e2cc7c110c9df15f26d8d134d438c5ae95dbd610efc1a308bf7f9c5f6c1"
       },
       "environment": {
-        "HOME": "${CASE}/home",
-        "XDG_CONFIG_HOME": "${CASE}/home/.config",
-        "XDG_DATA_HOME": "${CASE}/home/.local/share",
-        "XDG_STATE_HOME": "${CASE}/home/.local/state",
-        "XDG_CACHE_HOME": "${CASE}/home/.cache",
-        "CODEX_HOME": "${CASE}/home/.codex",
-        "CLAUDE_CONFIG_DIR": "${CASE}/home/.claude",
-        "NODE_COMPILE_CACHE": "${CASE}/home/.cache/node-compile",
+        "HOME": "${CASE_HOME}",
+        "XDG_CONFIG_HOME": "${CASE_HOME}/.config",
+        "XDG_DATA_HOME": "${CASE_HOME}/.local/share",
+        "XDG_STATE_HOME": "${CASE_HOME}/.local/state",
+        "XDG_CACHE_HOME": "${CASE_HOME}/.cache",
+        "CODEX_HOME": "${CASE_HOME}/.codex",
+        "CLAUDE_CONFIG_DIR": "${CASE_HOME}/.claude",
+        "NODE_COMPILE_CACHE": "${CASE_HOME}/.cache/node-compile",
         "TMPDIR": "${CASE}/tmp",
         "PATH": "/usr/bin:/bin:/usr/local/bin",
         "LANG": "C.UTF-8"
@@ -58,7 +58,7 @@
             "plugin",
             "marketplace",
             "add",
-            "${CASE}/home/.local/share/provingkit/artifacts/claude/e37ae6b40d426c21bd5e178582bdcf1195d20fe574770c914f9e7b02287e5bba",
+            "${CASE_HOME}/.local/share/provingkit/artifacts/claude/e37ae6b40d426c21bd5e178582bdcf1195d20fe574770c914f9e7b02287e5bba",
             "--scope",
             "user"
           ],
@@ -130,7 +130,7 @@
             "--json"
           ],
           "returncode": 0,
-          "stdout": "[\n  {\n    \"id\": \"mergecraft@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/mergecraft/1.0.0\",\n    \"installedAt\": \"2026-09-18T05:49:04.957Z\",\n    \"lastUpdated\": \"2026-09-18T05:49:04.957Z\"\n  },\n  {\n    \"id\": \"proseweaving@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/proseweaving/1.0.0\",\n    \"installedAt\": \"2026-09-18T05:49:04.119Z\",\n    \"lastUpdated\": \"2026-09-18T05:49:04.119Z\"\n  },\n  {\n    \"id\": \"versionkeeping@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": false,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/versionkeeping/1.0.0\",\n    \"installedAt\": \"2026-09-18T05:49:04.530Z\",\n    \"lastUpdated\": \"2026-09-18T05:49:04.530Z\"\n  }\n]\n",
+          "stdout": "[\n  {\n    \"id\": \"mergecraft@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/mergecraft/1.0.0\",\n    \"installedAt\": \"2026-09-18T05:49:04.957Z\",\n    \"lastUpdated\": \"2026-09-18T05:49:04.957Z\"\n  },\n  {\n    \"id\": \"proseweaving@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/proseweaving/1.0.0\",\n    \"installedAt\": \"2026-09-18T05:49:04.119Z\",\n    \"lastUpdated\": \"2026-09-18T05:49:04.119Z\"\n  },\n  {\n    \"id\": \"versionkeeping@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": false,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/versionkeeping/1.0.0\",\n    \"installedAt\": \"2026-09-18T05:49:04.530Z\",\n    \"lastUpdated\": \"2026-09-18T05:49:04.530Z\"\n  }\n]\n",
           "stderr": ""
         },
         {
@@ -209,7 +209,7 @@
             "plugin",
             "marketplace",
             "add",
-            "${CASE}/home/.local/share/provingkit/artifacts/claude/b4b2ed7fcedd67b751dd1df6d10c4e84edce45adb8176de24c30f6d263f80140",
+            "${CASE_HOME}/.local/share/provingkit/artifacts/claude/b4b2ed7fcedd67b751dd1df6d10c4e84edce45adb8176de24c30f6d263f80140",
             "--scope",
             "user"
           ],
@@ -281,7 +281,7 @@
             "--json"
           ],
           "returncode": 0,
-          "stdout": "[\n  {\n    \"id\": \"mergecraft@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/mergecraft/1.0.0\",\n    \"installedAt\": \"2026-09-18T05:49:09.126Z\",\n    \"lastUpdated\": \"2026-09-18T05:49:09.126Z\"\n  },\n  {\n    \"id\": \"proseweaving@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/proseweaving/1.0.0\",\n    \"installedAt\": \"2026-09-18T05:49:08.173Z\",\n    \"lastUpdated\": \"2026-09-18T05:49:08.173Z\"\n  },\n  {\n    \"id\": \"versionkeeping@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": false,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/versionkeeping/1.0.0\",\n    \"installedAt\": \"2026-09-18T05:49:08.635Z\",\n    \"lastUpdated\": \"2026-09-18T05:49:08.635Z\"\n  }\n]\n",
+          "stdout": "[\n  {\n    \"id\": \"mergecraft@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/mergecraft/1.0.0\",\n    \"installedAt\": \"2026-09-18T05:49:09.126Z\",\n    \"lastUpdated\": \"2026-09-18T05:49:09.126Z\"\n  },\n  {\n    \"id\": \"proseweaving@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/proseweaving/1.0.0\",\n    \"installedAt\": \"2026-09-18T05:49:08.173Z\",\n    \"lastUpdated\": \"2026-09-18T05:49:08.173Z\"\n  },\n  {\n    \"id\": \"versionkeeping@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": false,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/versionkeeping/1.0.0\",\n    \"installedAt\": \"2026-09-18T05:49:08.635Z\",\n    \"lastUpdated\": \"2026-09-18T05:49:08.635Z\"\n  }\n]\n",
           "stderr": ""
         }
       ],
@@ -293,7 +293,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": true,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/mergecraft/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/mergecraft/1.0.0",
               "installedAt": "2026-09-18T05:49:04.957Z",
               "lastUpdated": "2026-09-18T05:49:04.957Z"
             },
@@ -302,7 +302,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": true,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/proseweaving/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/proseweaving/1.0.0",
               "installedAt": "2026-09-18T05:49:04.119Z",
               "lastUpdated": "2026-09-18T05:49:04.119Z"
             },
@@ -311,7 +311,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": false,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/versionkeeping/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/versionkeeping/1.0.0",
               "installedAt": "2026-09-18T05:49:04.530Z",
               "lastUpdated": "2026-09-18T05:49:04.530Z"
             }
@@ -481,7 +481,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": true,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/mergecraft/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/mergecraft/1.0.0",
               "installedAt": "2026-09-18T05:49:09.126Z",
               "lastUpdated": "2026-09-18T05:49:09.126Z"
             },
@@ -490,7 +490,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": true,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/proseweaving/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/proseweaving/1.0.0",
               "installedAt": "2026-09-18T05:49:08.173Z",
               "lastUpdated": "2026-09-18T05:49:08.173Z"
             },
@@ -499,7 +499,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": false,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/versionkeeping/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/versionkeeping/1.0.0",
               "installedAt": "2026-09-18T05:49:08.635Z",
               "lastUpdated": "2026-09-18T05:49:08.635Z"
             }
@@ -581,14 +581,14 @@
         "sha256": "660e159a49e823ac8e5986cb238f73158ce4b957d40d9292f8de90862644b501"
       },
       "environment": {
-        "HOME": "${CASE}/home",
-        "XDG_CONFIG_HOME": "${CASE}/home/.config",
-        "XDG_DATA_HOME": "${CASE}/home/.local/share",
-        "XDG_STATE_HOME": "${CASE}/home/.local/state",
-        "XDG_CACHE_HOME": "${CASE}/home/.cache",
-        "CODEX_HOME": "${CASE}/home/.codex",
-        "CLAUDE_CONFIG_DIR": "${CASE}/home/.claude",
-        "NODE_COMPILE_CACHE": "${CASE}/home/.cache/node-compile",
+        "HOME": "${CASE_HOME}",
+        "XDG_CONFIG_HOME": "${CASE_HOME}/.config",
+        "XDG_DATA_HOME": "${CASE_HOME}/.local/share",
+        "XDG_STATE_HOME": "${CASE_HOME}/.local/state",
+        "XDG_CACHE_HOME": "${CASE_HOME}/.cache",
+        "CODEX_HOME": "${CASE_HOME}/.codex",
+        "CLAUDE_CONFIG_DIR": "${CASE_HOME}/.claude",
+        "NODE_COMPILE_CACHE": "${CASE_HOME}/.cache/node-compile",
         "TMPDIR": "${CASE}/tmp",
         "PATH": "/usr/bin:/bin:/usr/local/bin",
         "LANG": "C.UTF-8"
@@ -634,11 +634,11 @@
             "plugin",
             "marketplace",
             "add",
-            "${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d",
+            "${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d",
             "--json"
           ],
           "returncode": 0,
-          "stdout": "{\n  \"marketplaceName\": \"provingkit\",\n  \"installedRoot\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d\",\n  \"alreadyAdded\": false\n}\n",
+          "stdout": "{\n  \"marketplaceName\": \"provingkit\",\n  \"installedRoot\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d\",\n  \"alreadyAdded\": false\n}\n",
           "stderr": ""
         },
         {
@@ -650,7 +650,7 @@
             "--json"
           ],
           "returncode": 0,
-          "stdout": "{\n  \"pluginId\": \"proseweaving@provingkit\",\n  \"name\": \"proseweaving\",\n  \"marketplaceName\": \"provingkit\",\n  \"version\": \"local\",\n  \"installedPath\": \"${CASE}/home/.codex/plugins/cache/provingkit/proseweaving/local\",\n  \"authPolicy\": \"ON_INSTALL\"\n}\n",
+          "stdout": "{\n  \"pluginId\": \"proseweaving@provingkit\",\n  \"name\": \"proseweaving\",\n  \"marketplaceName\": \"provingkit\",\n  \"version\": \"local\",\n  \"installedPath\": \"${CASE_HOME}/.codex/plugins/cache/provingkit/proseweaving/local\",\n  \"authPolicy\": \"ON_INSTALL\"\n}\n",
           "stderr": ""
         },
         {
@@ -662,7 +662,7 @@
             "--json"
           ],
           "returncode": 0,
-          "stdout": "{\n  \"pluginId\": \"versionkeeping@provingkit\",\n  \"name\": \"versionkeeping\",\n  \"marketplaceName\": \"provingkit\",\n  \"version\": \"local\",\n  \"installedPath\": \"${CASE}/home/.codex/plugins/cache/provingkit/versionkeeping/local\",\n  \"authPolicy\": \"ON_INSTALL\"\n}\n",
+          "stdout": "{\n  \"pluginId\": \"versionkeeping@provingkit\",\n  \"name\": \"versionkeeping\",\n  \"marketplaceName\": \"provingkit\",\n  \"version\": \"local\",\n  \"installedPath\": \"${CASE_HOME}/.codex/plugins/cache/provingkit/versionkeeping/local\",\n  \"authPolicy\": \"ON_INSTALL\"\n}\n",
           "stderr": ""
         },
         {
@@ -674,7 +674,7 @@
             "--json"
           ],
           "returncode": 0,
-          "stdout": "{\n  \"pluginId\": \"mergecraft@provingkit\",\n  \"name\": \"mergecraft\",\n  \"marketplaceName\": \"provingkit\",\n  \"version\": \"local\",\n  \"installedPath\": \"${CASE}/home/.codex/plugins/cache/provingkit/mergecraft/local\",\n  \"authPolicy\": \"ON_INSTALL\"\n}\n",
+          "stdout": "{\n  \"pluginId\": \"mergecraft@provingkit\",\n  \"name\": \"mergecraft\",\n  \"marketplaceName\": \"provingkit\",\n  \"version\": \"local\",\n  \"installedPath\": \"${CASE_HOME}/.codex/plugins/cache/provingkit/mergecraft/local\",\n  \"authPolicy\": \"ON_INSTALL\"\n}\n",
           "stderr": ""
         },
         {
@@ -687,7 +687,7 @@
             "--json"
           ],
           "returncode": 0,
-          "stdout": "{\n  \"installed\": [\n    {\n      \"pluginId\": \"proseweaving@provingkit\",\n      \"name\": \"proseweaving\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d/plugins/proseweaving\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    },\n    {\n      \"pluginId\": \"versionkeeping@provingkit\",\n      \"name\": \"versionkeeping\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d/plugins/versionkeeping\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    },\n    {\n      \"pluginId\": \"mergecraft@provingkit\",\n      \"name\": \"mergecraft\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d/plugins/mergecraft\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    }\n  ],\n  \"available\": []\n}\n",
+          "stdout": "{\n  \"installed\": [\n    {\n      \"pluginId\": \"proseweaving@provingkit\",\n      \"name\": \"proseweaving\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d/plugins/proseweaving\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    },\n    {\n      \"pluginId\": \"versionkeeping@provingkit\",\n      \"name\": \"versionkeeping\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d/plugins/versionkeeping\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    },\n    {\n      \"pluginId\": \"mergecraft@provingkit\",\n      \"name\": \"mergecraft\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d/plugins/mergecraft\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    }\n  ],\n  \"available\": []\n}\n",
           "stderr": ""
         },
         {
@@ -758,11 +758,11 @@
             "plugin",
             "marketplace",
             "add",
-            "${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/c0aeb1a46f00570810c49c3861c50e6a20295a6710266429e23c35079d526400",
+            "${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/c0aeb1a46f00570810c49c3861c50e6a20295a6710266429e23c35079d526400",
             "--json"
           ],
           "returncode": 0,
-          "stdout": "{\n  \"marketplaceName\": \"provingkit\",\n  \"installedRoot\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/c0aeb1a46f00570810c49c3861c50e6a20295a6710266429e23c35079d526400\",\n  \"alreadyAdded\": false\n}\n",
+          "stdout": "{\n  \"marketplaceName\": \"provingkit\",\n  \"installedRoot\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/c0aeb1a46f00570810c49c3861c50e6a20295a6710266429e23c35079d526400\",\n  \"alreadyAdded\": false\n}\n",
           "stderr": ""
         },
         {
@@ -774,7 +774,7 @@
             "--json"
           ],
           "returncode": 0,
-          "stdout": "{\n  \"pluginId\": \"proseweaving@provingkit\",\n  \"name\": \"proseweaving\",\n  \"marketplaceName\": \"provingkit\",\n  \"version\": \"local\",\n  \"installedPath\": \"${CASE}/home/.codex/plugins/cache/provingkit/proseweaving/local\",\n  \"authPolicy\": \"ON_INSTALL\"\n}\n",
+          "stdout": "{\n  \"pluginId\": \"proseweaving@provingkit\",\n  \"name\": \"proseweaving\",\n  \"marketplaceName\": \"provingkit\",\n  \"version\": \"local\",\n  \"installedPath\": \"${CASE_HOME}/.codex/plugins/cache/provingkit/proseweaving/local\",\n  \"authPolicy\": \"ON_INSTALL\"\n}\n",
           "stderr": ""
         },
         {
@@ -786,7 +786,7 @@
             "--json"
           ],
           "returncode": 0,
-          "stdout": "{\n  \"pluginId\": \"versionkeeping@provingkit\",\n  \"name\": \"versionkeeping\",\n  \"marketplaceName\": \"provingkit\",\n  \"version\": \"local\",\n  \"installedPath\": \"${CASE}/home/.codex/plugins/cache/provingkit/versionkeeping/local\",\n  \"authPolicy\": \"ON_INSTALL\"\n}\n",
+          "stdout": "{\n  \"pluginId\": \"versionkeeping@provingkit\",\n  \"name\": \"versionkeeping\",\n  \"marketplaceName\": \"provingkit\",\n  \"version\": \"local\",\n  \"installedPath\": \"${CASE_HOME}/.codex/plugins/cache/provingkit/versionkeeping/local\",\n  \"authPolicy\": \"ON_INSTALL\"\n}\n",
           "stderr": ""
         },
         {
@@ -798,7 +798,7 @@
             "--json"
           ],
           "returncode": 0,
-          "stdout": "{\n  \"pluginId\": \"mergecraft@provingkit\",\n  \"name\": \"mergecraft\",\n  \"marketplaceName\": \"provingkit\",\n  \"version\": \"local\",\n  \"installedPath\": \"${CASE}/home/.codex/plugins/cache/provingkit/mergecraft/local\",\n  \"authPolicy\": \"ON_INSTALL\"\n}\n",
+          "stdout": "{\n  \"pluginId\": \"mergecraft@provingkit\",\n  \"name\": \"mergecraft\",\n  \"marketplaceName\": \"provingkit\",\n  \"version\": \"local\",\n  \"installedPath\": \"${CASE_HOME}/.codex/plugins/cache/provingkit/mergecraft/local\",\n  \"authPolicy\": \"ON_INSTALL\"\n}\n",
           "stderr": ""
         },
         {
@@ -811,7 +811,7 @@
             "--json"
           ],
           "returncode": 0,
-          "stdout": "{\n  \"installed\": [\n    {\n      \"pluginId\": \"proseweaving@provingkit\",\n      \"name\": \"proseweaving\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/c0aeb1a46f00570810c49c3861c50e6a20295a6710266429e23c35079d526400/plugins/proseweaving\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/c0aeb1a46f00570810c49c3861c50e6a20295a6710266429e23c35079d526400\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    },\n    {\n      \"pluginId\": \"versionkeeping@provingkit\",\n      \"name\": \"versionkeeping\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/c0aeb1a46f00570810c49c3861c50e6a20295a6710266429e23c35079d526400/plugins/versionkeeping\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/c0aeb1a46f00570810c49c3861c50e6a20295a6710266429e23c35079d526400\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    },\n    {\n      \"pluginId\": \"mergecraft@provingkit\",\n      \"name\": \"mergecraft\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/c0aeb1a46f00570810c49c3861c50e6a20295a6710266429e23c35079d526400/plugins/mergecraft\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/c0aeb1a46f00570810c49c3861c50e6a20295a6710266429e23c35079d526400\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    }\n  ],\n  \"available\": []\n}\n",
+          "stdout": "{\n  \"installed\": [\n    {\n      \"pluginId\": \"proseweaving@provingkit\",\n      \"name\": \"proseweaving\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/c0aeb1a46f00570810c49c3861c50e6a20295a6710266429e23c35079d526400/plugins/proseweaving\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/c0aeb1a46f00570810c49c3861c50e6a20295a6710266429e23c35079d526400\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    },\n    {\n      \"pluginId\": \"versionkeeping@provingkit\",\n      \"name\": \"versionkeeping\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/c0aeb1a46f00570810c49c3861c50e6a20295a6710266429e23c35079d526400/plugins/versionkeeping\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/c0aeb1a46f00570810c49c3861c50e6a20295a6710266429e23c35079d526400\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    },\n    {\n      \"pluginId\": \"mergecraft@provingkit\",\n      \"name\": \"mergecraft\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/c0aeb1a46f00570810c49c3861c50e6a20295a6710266429e23c35079d526400/plugins/mergecraft\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/c0aeb1a46f00570810c49c3861c50e6a20295a6710266429e23c35079d526400\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    }\n  ],\n  \"available\": []\n}\n",
           "stderr": ""
         }
       ],
@@ -827,11 +827,11 @@
               "enabled": true,
               "source": {
                 "source": "local",
-                "path": "${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d/plugins/proseweaving"
+                "path": "${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d/plugins/proseweaving"
               },
               "marketplaceSource": {
                 "sourceType": "local",
-                "source": "${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d"
+                "source": "${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d"
               },
               "installPolicy": "AVAILABLE",
               "authPolicy": "ON_INSTALL"
@@ -845,11 +845,11 @@
               "enabled": true,
               "source": {
                 "source": "local",
-                "path": "${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d/plugins/versionkeeping"
+                "path": "${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d/plugins/versionkeeping"
               },
               "marketplaceSource": {
                 "sourceType": "local",
-                "source": "${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d"
+                "source": "${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d"
               },
               "installPolicy": "AVAILABLE",
               "authPolicy": "ON_INSTALL"
@@ -863,11 +863,11 @@
               "enabled": true,
               "source": {
                 "source": "local",
-                "path": "${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d/plugins/mergecraft"
+                "path": "${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d/plugins/mergecraft"
               },
               "marketplaceSource": {
                 "sourceType": "local",
-                "source": "${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d"
+                "source": "${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d"
               },
               "installPolicy": "AVAILABLE",
               "authPolicy": "ON_INSTALL"
@@ -979,11 +979,11 @@
               "enabled": true,
               "source": {
                 "source": "local",
-                "path": "${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/c0aeb1a46f00570810c49c3861c50e6a20295a6710266429e23c35079d526400/plugins/proseweaving"
+                "path": "${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/c0aeb1a46f00570810c49c3861c50e6a20295a6710266429e23c35079d526400/plugins/proseweaving"
               },
               "marketplaceSource": {
                 "sourceType": "local",
-                "source": "${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/c0aeb1a46f00570810c49c3861c50e6a20295a6710266429e23c35079d526400"
+                "source": "${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/c0aeb1a46f00570810c49c3861c50e6a20295a6710266429e23c35079d526400"
               },
               "installPolicy": "AVAILABLE",
               "authPolicy": "ON_INSTALL"
@@ -997,11 +997,11 @@
               "enabled": true,
               "source": {
                 "source": "local",
-                "path": "${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/c0aeb1a46f00570810c49c3861c50e6a20295a6710266429e23c35079d526400/plugins/versionkeeping"
+                "path": "${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/c0aeb1a46f00570810c49c3861c50e6a20295a6710266429e23c35079d526400/plugins/versionkeeping"
               },
               "marketplaceSource": {
                 "sourceType": "local",
-                "source": "${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/c0aeb1a46f00570810c49c3861c50e6a20295a6710266429e23c35079d526400"
+                "source": "${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/c0aeb1a46f00570810c49c3861c50e6a20295a6710266429e23c35079d526400"
               },
               "installPolicy": "AVAILABLE",
               "authPolicy": "ON_INSTALL"
@@ -1015,11 +1015,11 @@
               "enabled": true,
               "source": {
                 "source": "local",
-                "path": "${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/c0aeb1a46f00570810c49c3861c50e6a20295a6710266429e23c35079d526400/plugins/mergecraft"
+                "path": "${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/c0aeb1a46f00570810c49c3861c50e6a20295a6710266429e23c35079d526400/plugins/mergecraft"
               },
               "marketplaceSource": {
                 "sourceType": "local",
-                "source": "${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/c0aeb1a46f00570810c49c3861c50e6a20295a6710266429e23c35079d526400"
+                "source": "${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/c0aeb1a46f00570810c49c3861c50e6a20295a6710266429e23c35079d526400"
               },
               "installPolicy": "AVAILABLE",
               "authPolicy": "ON_INSTALL"
@@ -1108,14 +1108,14 @@
         "sha256": "6c752e2cc7c110c9df15f26d8d134d438c5ae95dbd610efc1a308bf7f9c5f6c1"
       },
       "environment": {
-        "HOME": "${CASE}/home",
-        "XDG_CONFIG_HOME": "${CASE}/home/.config",
-        "XDG_DATA_HOME": "${CASE}/home/.local/share",
-        "XDG_STATE_HOME": "${CASE}/home/.local/state",
-        "XDG_CACHE_HOME": "${CASE}/home/.cache",
-        "CODEX_HOME": "${CASE}/home/.codex",
-        "CLAUDE_CONFIG_DIR": "${CASE}/home/.claude",
-        "NODE_COMPILE_CACHE": "${CASE}/home/.cache/node-compile",
+        "HOME": "${CASE_HOME}",
+        "XDG_CONFIG_HOME": "${CASE_HOME}/.config",
+        "XDG_DATA_HOME": "${CASE_HOME}/.local/share",
+        "XDG_STATE_HOME": "${CASE_HOME}/.local/state",
+        "XDG_CACHE_HOME": "${CASE_HOME}/.cache",
+        "CODEX_HOME": "${CASE_HOME}/.codex",
+        "CLAUDE_CONFIG_DIR": "${CASE_HOME}/.claude",
+        "NODE_COMPILE_CACHE": "${CASE_HOME}/.cache/node-compile",
         "TMPDIR": "${CASE}/tmp",
         "PATH": "/usr/bin:/bin:/usr/local/bin",
         "LANG": "C.UTF-8"
@@ -1227,7 +1227,7 @@
             "plugin",
             "marketplace",
             "add",
-            "${CASE}/home/.local/share/provingkit/artifacts/claude/e37ae6b40d426c21bd5e178582bdcf1195d20fe574770c914f9e7b02287e5bba",
+            "${CASE_HOME}/.local/share/provingkit/artifacts/claude/e37ae6b40d426c21bd5e178582bdcf1195d20fe574770c914f9e7b02287e5bba",
             "--scope",
             "user"
           ],
@@ -1257,7 +1257,7 @@
             "--json"
           ],
           "returncode": 0,
-          "stdout": "[\n  {\n    \"id\": \"proseweaving@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/proseweaving/1.0.0\",\n    \"installedAt\": \"2026-09-18T05:43:41.011Z\",\n    \"lastUpdated\": \"2026-09-18T05:43:41.011Z\"\n  }\n]\n",
+          "stdout": "[\n  {\n    \"id\": \"proseweaving@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/proseweaving/1.0.0\",\n    \"installedAt\": \"2026-09-18T05:43:41.011Z\",\n    \"lastUpdated\": \"2026-09-18T05:43:41.011Z\"\n  }\n]\n",
           "stderr": ""
         },
         {
@@ -1269,7 +1269,7 @@
             "--json"
           ],
           "returncode": 0,
-          "stdout": "[\n  {\n    \"name\": \"provingkit\",\n    \"source\": \"directory\",\n    \"path\": \"${CASE}/home/.local/share/provingkit/artifacts/claude/e37ae6b40d426c21bd5e178582bdcf1195d20fe574770c914f9e7b02287e5bba\",\n    \"installLocation\": \"${CASE}/home/.local/share/provingkit/artifacts/claude/e37ae6b40d426c21bd5e178582bdcf1195d20fe574770c914f9e7b02287e5bba\"\n  }\n]\n",
+          "stdout": "[\n  {\n    \"name\": \"provingkit\",\n    \"source\": \"directory\",\n    \"path\": \"${CASE_HOME}/.local/share/provingkit/artifacts/claude/e37ae6b40d426c21bd5e178582bdcf1195d20fe574770c914f9e7b02287e5bba\",\n    \"installLocation\": \"${CASE_HOME}/.local/share/provingkit/artifacts/claude/e37ae6b40d426c21bd5e178582bdcf1195d20fe574770c914f9e7b02287e5bba\"\n  }\n]\n",
           "stderr": ""
         },
         {
@@ -1294,7 +1294,7 @@
             "--json"
           ],
           "returncode": 0,
-          "stdout": "[\n  {\n    \"id\": \"proseweaving@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/proseweaving/1.0.0\",\n    \"installedAt\": \"2026-09-18T05:43:41.011Z\",\n    \"lastUpdated\": \"2026-09-18T05:43:41.011Z\"\n  },\n  {\n    \"id\": \"versionkeeping@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/versionkeeping/1.0.0\",\n    \"installedAt\": \"2026-09-18T05:44:40.834Z\",\n    \"lastUpdated\": \"2026-09-18T05:44:40.834Z\"\n  }\n]\n",
+          "stdout": "[\n  {\n    \"id\": \"proseweaving@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/proseweaving/1.0.0\",\n    \"installedAt\": \"2026-09-18T05:43:41.011Z\",\n    \"lastUpdated\": \"2026-09-18T05:43:41.011Z\"\n  },\n  {\n    \"id\": \"versionkeeping@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/versionkeeping/1.0.0\",\n    \"installedAt\": \"2026-09-18T05:44:40.834Z\",\n    \"lastUpdated\": \"2026-09-18T05:44:40.834Z\"\n  }\n]\n",
           "stderr": ""
         },
         {
@@ -1305,7 +1305,7 @@
             "--json"
           ],
           "returncode": 0,
-          "stdout": "[\n  {\n    \"id\": \"proseweaving@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/proseweaving/1.0.0\",\n    \"installedAt\": \"2026-09-18T05:43:41.011Z\",\n    \"lastUpdated\": \"2026-09-18T05:43:41.011Z\"\n  },\n  {\n    \"id\": \"versionkeeping@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/versionkeeping/1.0.0\",\n    \"installedAt\": \"2026-09-18T05:44:40.834Z\",\n    \"lastUpdated\": \"2026-09-18T05:44:40.834Z\"\n  }\n]\n",
+          "stdout": "[\n  {\n    \"id\": \"proseweaving@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/proseweaving/1.0.0\",\n    \"installedAt\": \"2026-09-18T05:43:41.011Z\",\n    \"lastUpdated\": \"2026-09-18T05:43:41.011Z\"\n  },\n  {\n    \"id\": \"versionkeeping@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/versionkeeping/1.0.0\",\n    \"installedAt\": \"2026-09-18T05:44:40.834Z\",\n    \"lastUpdated\": \"2026-09-18T05:44:40.834Z\"\n  }\n]\n",
           "stderr": ""
         },
         {
@@ -1331,7 +1331,7 @@
             "--json"
           ],
           "returncode": 0,
-          "stdout": "[\n  {\n    \"id\": \"versionkeeping@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/versionkeeping/1.0.0\",\n    \"installedAt\": \"2026-09-18T05:44:40.834Z\",\n    \"lastUpdated\": \"2026-09-18T05:44:40.834Z\"\n  }\n]\n",
+          "stdout": "[\n  {\n    \"id\": \"versionkeeping@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/versionkeeping/1.0.0\",\n    \"installedAt\": \"2026-09-18T05:44:40.834Z\",\n    \"lastUpdated\": \"2026-09-18T05:44:40.834Z\"\n  }\n]\n",
           "stderr": ""
         },
         {
@@ -1367,7 +1367,7 @@
             "version": "1.0.0",
             "scope": "user",
             "enabled": true,
-            "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/versionkeeping/1.0.0",
+            "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/versionkeeping/1.0.0",
             "installedAt": "2026-09-18T05:44:40.834Z",
             "lastUpdated": "2026-09-18T05:44:40.834Z"
           },
@@ -1396,7 +1396,7 @@
             "version": "1.0.0",
             "scope": "user",
             "enabled": true,
-            "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/versionkeeping/1.0.0",
+            "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/versionkeeping/1.0.0",
             "installedAt": "2026-09-18T05:44:40.834Z",
             "lastUpdated": "2026-09-18T05:44:40.834Z"
           },
@@ -1452,14 +1452,14 @@
         "sha256": "660e159a49e823ac8e5986cb238f73158ce4b957d40d9292f8de90862644b501"
       },
       "environment": {
-        "HOME": "${CASE}/home",
-        "XDG_CONFIG_HOME": "${CASE}/home/.config",
-        "XDG_DATA_HOME": "${CASE}/home/.local/share",
-        "XDG_STATE_HOME": "${CASE}/home/.local/state",
-        "XDG_CACHE_HOME": "${CASE}/home/.cache",
-        "CODEX_HOME": "${CASE}/home/.codex",
-        "CLAUDE_CONFIG_DIR": "${CASE}/home/.claude",
-        "NODE_COMPILE_CACHE": "${CASE}/home/.cache/node-compile",
+        "HOME": "${CASE_HOME}",
+        "XDG_CONFIG_HOME": "${CASE_HOME}/.config",
+        "XDG_DATA_HOME": "${CASE_HOME}/.local/share",
+        "XDG_STATE_HOME": "${CASE_HOME}/.local/state",
+        "XDG_CACHE_HOME": "${CASE_HOME}/.cache",
+        "CODEX_HOME": "${CASE_HOME}/.codex",
+        "CLAUDE_CONFIG_DIR": "${CASE_HOME}/.claude",
+        "NODE_COMPILE_CACHE": "${CASE_HOME}/.cache/node-compile",
         "TMPDIR": "${CASE}/tmp",
         "PATH": "/usr/bin:/bin:/usr/local/bin",
         "LANG": "C.UTF-8"
@@ -1472,7 +1472,7 @@
           ],
           "returncode": 0,
           "stdout": "codex-cli 0.155.0\n",
-          "stderr": "WARNING: proceeding, even though we could not create PATH aliases: CODEX_HOME points to \"${CASE}/home/.codex\", but that path does not exist\n"
+          "stderr": "WARNING: proceeding, even though we could not create PATH aliases: CODEX_HOME points to \"${CASE_HOME}/.codex\", but that path does not exist\n"
         },
         {
           "argv": [
@@ -1484,7 +1484,7 @@
           ],
           "returncode": 1,
           "stdout": "",
-          "stderr": "WARNING: proceeding, even though we could not create PATH aliases: CODEX_HOME points to \"${CASE}/home/.codex\", but that path does not exist\nError: failed to resolve CODEX_HOME\n\nCaused by:\n    CODEX_HOME points to \"${CASE}/home/.codex\", but that path does not exist\n"
+          "stderr": "WARNING: proceeding, even though we could not create PATH aliases: CODEX_HOME points to \"${CASE_HOME}/.codex\", but that path does not exist\nError: failed to resolve CODEX_HOME\n\nCaused by:\n    CODEX_HOME points to \"${CASE_HOME}/.codex\", but that path does not exist\n"
         },
         {
           "argv": [
@@ -1497,7 +1497,7 @@
           ],
           "returncode": 1,
           "stdout": "",
-          "stderr": "WARNING: proceeding, even though we could not create PATH aliases: CODEX_HOME points to \"${CASE}/home/.codex\", but that path does not exist\nError: failed to resolve CODEX_HOME\n\nCaused by:\n    CODEX_HOME points to \"${CASE}/home/.codex\", but that path does not exist\n"
+          "stderr": "WARNING: proceeding, even though we could not create PATH aliases: CODEX_HOME points to \"${CASE_HOME}/.codex\", but that path does not exist\nError: failed to resolve CODEX_HOME\n\nCaused by:\n    CODEX_HOME points to \"${CASE_HOME}/.codex\", but that path does not exist\n"
         },
         {
           "argv": [
@@ -1587,11 +1587,11 @@
             "plugin",
             "marketplace",
             "add",
-            "${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d",
+            "${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d",
             "--json"
           ],
           "returncode": 0,
-          "stdout": "{\n  \"marketplaceName\": \"provingkit\",\n  \"installedRoot\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d\",\n  \"alreadyAdded\": false\n}\n",
+          "stdout": "{\n  \"marketplaceName\": \"provingkit\",\n  \"installedRoot\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d\",\n  \"alreadyAdded\": false\n}\n",
           "stderr": ""
         },
         {
@@ -1603,7 +1603,7 @@
             "--json"
           ],
           "returncode": 0,
-          "stdout": "{\n  \"pluginId\": \"proseweaving@provingkit\",\n  \"name\": \"proseweaving\",\n  \"marketplaceName\": \"provingkit\",\n  \"version\": \"local\",\n  \"installedPath\": \"${CASE}/home/.codex/plugins/cache/provingkit/proseweaving/local\",\n  \"authPolicy\": \"ON_INSTALL\"\n}\n",
+          "stdout": "{\n  \"pluginId\": \"proseweaving@provingkit\",\n  \"name\": \"proseweaving\",\n  \"marketplaceName\": \"provingkit\",\n  \"version\": \"local\",\n  \"installedPath\": \"${CASE_HOME}/.codex/plugins/cache/provingkit/proseweaving/local\",\n  \"authPolicy\": \"ON_INSTALL\"\n}\n",
           "stderr": ""
         },
         {
@@ -1616,7 +1616,7 @@
             "--json"
           ],
           "returncode": 0,
-          "stdout": "{\n  \"installed\": [\n    {\n      \"pluginId\": \"proseweaving@provingkit\",\n      \"name\": \"proseweaving\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d/plugins/proseweaving\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    }\n  ],\n  \"available\": []\n}\n",
+          "stdout": "{\n  \"installed\": [\n    {\n      \"pluginId\": \"proseweaving@provingkit\",\n      \"name\": \"proseweaving\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d/plugins/proseweaving\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    }\n  ],\n  \"available\": []\n}\n",
           "stderr": ""
         },
         {
@@ -1628,7 +1628,7 @@
             "--json"
           ],
           "returncode": 0,
-          "stdout": "{\n  \"marketplaces\": [\n    {\n      \"name\": \"provingkit\",\n      \"root\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d\",\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d\"\n      }\n    }\n  ]\n}\n",
+          "stdout": "{\n  \"marketplaces\": [\n    {\n      \"name\": \"provingkit\",\n      \"root\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d\",\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d\"\n      }\n    }\n  ]\n}\n",
           "stderr": ""
         },
         {
@@ -1640,7 +1640,7 @@
             "--json"
           ],
           "returncode": 0,
-          "stdout": "{\n  \"pluginId\": \"versionkeeping@provingkit\",\n  \"name\": \"versionkeeping\",\n  \"marketplaceName\": \"provingkit\",\n  \"version\": \"local\",\n  \"installedPath\": \"${CASE}/home/.codex/plugins/cache/provingkit/versionkeeping/local\",\n  \"authPolicy\": \"ON_INSTALL\"\n}\n",
+          "stdout": "{\n  \"pluginId\": \"versionkeeping@provingkit\",\n  \"name\": \"versionkeeping\",\n  \"marketplaceName\": \"provingkit\",\n  \"version\": \"local\",\n  \"installedPath\": \"${CASE_HOME}/.codex/plugins/cache/provingkit/versionkeeping/local\",\n  \"authPolicy\": \"ON_INSTALL\"\n}\n",
           "stderr": ""
         },
         {
@@ -1653,7 +1653,7 @@
             "--json"
           ],
           "returncode": 0,
-          "stdout": "{\n  \"installed\": [\n    {\n      \"pluginId\": \"proseweaving@provingkit\",\n      \"name\": \"proseweaving\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d/plugins/proseweaving\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    },\n    {\n      \"pluginId\": \"versionkeeping@provingkit\",\n      \"name\": \"versionkeeping\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d/plugins/versionkeeping\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    }\n  ],\n  \"available\": []\n}\n",
+          "stdout": "{\n  \"installed\": [\n    {\n      \"pluginId\": \"proseweaving@provingkit\",\n      \"name\": \"proseweaving\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d/plugins/proseweaving\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    },\n    {\n      \"pluginId\": \"versionkeeping@provingkit\",\n      \"name\": \"versionkeeping\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d/plugins/versionkeeping\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    }\n  ],\n  \"available\": []\n}\n",
           "stderr": ""
         },
         {
@@ -1666,7 +1666,7 @@
             "--json"
           ],
           "returncode": 0,
-          "stdout": "{\n  \"installed\": [\n    {\n      \"pluginId\": \"proseweaving@provingkit\",\n      \"name\": \"proseweaving\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d/plugins/proseweaving\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    },\n    {\n      \"pluginId\": \"versionkeeping@provingkit\",\n      \"name\": \"versionkeeping\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d/plugins/versionkeeping\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    }\n  ],\n  \"available\": []\n}\n",
+          "stdout": "{\n  \"installed\": [\n    {\n      \"pluginId\": \"proseweaving@provingkit\",\n      \"name\": \"proseweaving\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d/plugins/proseweaving\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    },\n    {\n      \"pluginId\": \"versionkeeping@provingkit\",\n      \"name\": \"versionkeeping\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d/plugins/versionkeeping\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    }\n  ],\n  \"available\": []\n}\n",
           "stderr": ""
         },
         {
@@ -1691,7 +1691,7 @@
             "--json"
           ],
           "returncode": 0,
-          "stdout": "{\n  \"installed\": [\n    {\n      \"pluginId\": \"versionkeeping@provingkit\",\n      \"name\": \"versionkeeping\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d/plugins/versionkeeping\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    }\n  ],\n  \"available\": []\n}\n",
+          "stdout": "{\n  \"installed\": [\n    {\n      \"pluginId\": \"versionkeeping@provingkit\",\n      \"name\": \"versionkeeping\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d/plugins/versionkeeping\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    }\n  ],\n  \"available\": []\n}\n",
           "stderr": ""
         },
         {
@@ -1732,11 +1732,11 @@
             "enabled": true,
             "source": {
               "source": "local",
-              "path": "${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d/plugins/versionkeeping"
+              "path": "${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d/plugins/versionkeeping"
             },
             "marketplaceSource": {
               "sourceType": "local",
-              "source": "${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d"
+              "source": "${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d"
             },
             "installPolicy": "AVAILABLE",
             "authPolicy": "ON_INSTALL"
@@ -1770,11 +1770,11 @@
             "enabled": true,
             "source": {
               "source": "local",
-              "path": "${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d/plugins/versionkeeping"
+              "path": "${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d/plugins/versionkeeping"
             },
             "marketplaceSource": {
               "sourceType": "local",
-              "source": "${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d"
+              "source": "${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d"
             },
             "installPolicy": "AVAILABLE",
             "authPolicy": "ON_INSTALL"
@@ -1827,14 +1827,14 @@
         "sha256": "6c752e2cc7c110c9df15f26d8d134d438c5ae95dbd610efc1a308bf7f9c5f6c1"
       },
       "environment": {
-        "HOME": "${CASE}/home",
-        "XDG_CONFIG_HOME": "${CASE}/home/.config",
-        "XDG_DATA_HOME": "${CASE}/home/.local/share",
-        "XDG_STATE_HOME": "${CASE}/home/.local/state",
-        "XDG_CACHE_HOME": "${CASE}/home/.cache",
-        "CODEX_HOME": "${CASE}/home/.codex",
-        "CLAUDE_CONFIG_DIR": "${CASE}/home/.claude",
-        "NODE_COMPILE_CACHE": "${CASE}/home/.cache/node-compile",
+        "HOME": "${CASE_HOME}",
+        "XDG_CONFIG_HOME": "${CASE_HOME}/.config",
+        "XDG_DATA_HOME": "${CASE_HOME}/.local/share",
+        "XDG_STATE_HOME": "${CASE_HOME}/.local/state",
+        "XDG_CACHE_HOME": "${CASE_HOME}/.cache",
+        "CODEX_HOME": "${CASE_HOME}/.codex",
+        "CLAUDE_CONFIG_DIR": "${CASE_HOME}/.claude",
+        "NODE_COMPILE_CACHE": "${CASE_HOME}/.cache/node-compile",
         "TMPDIR": "${CASE}/tmp",
         "PATH": "/usr/bin:/bin:/usr/local/bin",
         "LANG": "C.UTF-8"
@@ -1890,7 +1890,7 @@
             "plugin",
             "marketplace",
             "add",
-            "${CASE}/home/.local/share/provingkit/artifacts/claude/42e4f84fb5b5b38b9fdafb7888722afdd964ca5fef0e8164ba47d7c2dda3234c",
+            "${CASE_HOME}/.local/share/provingkit/artifacts/claude/42e4f84fb5b5b38b9fdafb7888722afdd964ca5fef0e8164ba47d7c2dda3234c",
             "--scope",
             "user"
           ],
@@ -1990,7 +1990,7 @@
             "--json"
           ],
           "returncode": 0,
-          "stdout": "[\n  {\n    \"id\": \"artifact-customs@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/artifact-customs/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:11:25.713Z\",\n    \"lastUpdated\": \"2026-09-18T06:11:25.713Z\"\n  },\n  {\n    \"id\": \"mergecraft@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/mergecraft/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:11:25.205Z\",\n    \"lastUpdated\": \"2026-09-18T06:11:25.205Z\"\n  },\n  {\n    \"id\": \"proseweaving@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/proseweaving/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:11:26.158Z\",\n    \"lastUpdated\": \"2026-09-18T06:11:26.158Z\"\n  },\n  {\n    \"id\": \"rolecasting@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/rolecasting/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:11:23.823Z\",\n    \"lastUpdated\": \"2026-09-18T06:11:23.823Z\"\n  },\n  {\n    \"id\": \"tricritical@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/tricritical/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:11:24.322Z\",\n    \"lastUpdated\": \"2026-09-18T06:11:24.322Z\"\n  },\n  {\n    \"id\": \"versionkeeping@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/versionkeeping/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:11:24.738Z\",\n    \"lastUpdated\": \"2026-09-18T06:11:24.738Z\"\n  }\n]\n",
+          "stdout": "[\n  {\n    \"id\": \"artifact-customs@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/artifact-customs/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:11:25.713Z\",\n    \"lastUpdated\": \"2026-09-18T06:11:25.713Z\"\n  },\n  {\n    \"id\": \"mergecraft@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/mergecraft/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:11:25.205Z\",\n    \"lastUpdated\": \"2026-09-18T06:11:25.205Z\"\n  },\n  {\n    \"id\": \"proseweaving@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/proseweaving/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:11:26.158Z\",\n    \"lastUpdated\": \"2026-09-18T06:11:26.158Z\"\n  },\n  {\n    \"id\": \"rolecasting@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/rolecasting/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:11:23.823Z\",\n    \"lastUpdated\": \"2026-09-18T06:11:23.823Z\"\n  },\n  {\n    \"id\": \"tricritical@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/tricritical/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:11:24.322Z\",\n    \"lastUpdated\": \"2026-09-18T06:11:24.322Z\"\n  },\n  {\n    \"id\": \"versionkeeping@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/versionkeeping/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:11:24.738Z\",\n    \"lastUpdated\": \"2026-09-18T06:11:24.738Z\"\n  }\n]\n",
           "stderr": ""
         },
         {
@@ -1999,7 +1999,7 @@
             "plugin",
             "marketplace",
             "add",
-            "${CASE}/home/.local/share/provingkit/artifacts/claude/e37ae6b40d426c21bd5e178582bdcf1195d20fe574770c914f9e7b02287e5bba",
+            "${CASE_HOME}/.local/share/provingkit/artifacts/claude/e37ae6b40d426c21bd5e178582bdcf1195d20fe574770c914f9e7b02287e5bba",
             "--scope",
             "user"
           ],
@@ -2015,7 +2015,7 @@
             "--json"
           ],
           "returncode": 0,
-          "stdout": "[\n  {\n    \"id\": \"artifact-customs@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/artifact-customs/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:11:25.713Z\",\n    \"lastUpdated\": \"2026-09-18T06:11:25.713Z\",\n    \"errors\": [\n      \"Plugin artifact-customs not found in marketplace provingkit\"\n    ],\n    \"errorDetails\": [\n      {\n        \"type\": \"plugin-not-found\",\n        \"plugin\": \"artifact-customs\",\n        \"marketplace\": \"provingkit\"\n      }\n    ]\n  },\n  {\n    \"id\": \"mergecraft@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/mergecraft/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:11:25.205Z\",\n    \"lastUpdated\": \"2026-09-18T06:11:25.205Z\"\n  },\n  {\n    \"id\": \"proseweaving@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/proseweaving/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:11:26.158Z\",\n    \"lastUpdated\": \"2026-09-18T06:11:26.158Z\"\n  },\n  {\n    \"id\": \"rolecasting@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/rolecasting/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:11:23.823Z\",\n    \"lastUpdated\": \"2026-09-18T06:11:23.823Z\",\n    \"errors\": [\n      \"Plugin rolecasting not found in marketplace provingkit\"\n    ],\n    \"errorDetails\": [\n      {\n        \"type\": \"plugin-not-found\",\n        \"plugin\": \"rolecasting\",\n        \"marketplace\": \"provingkit\"\n      }\n    ]\n  },\n  {\n    \"id\": \"tricritical@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/tricritical/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:11:24.322Z\",\n    \"lastUpdated\": \"2026-09-18T06:11:24.322Z\",\n    \"errors\": [\n      \"Plugin tricritical not found in marketplace provingkit\"\n    ],\n    \"errorDetails\": [\n      {\n        \"type\": \"plugin-not-found\",\n        \"plugin\": \"tricritical\",\n        \"marketplace\": \"provingkit\"\n      }\n    ]\n  },\n  {\n    \"id\": \"versionkeeping@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/versionkeeping/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:11:24.738Z\",\n    \"lastUpdated\": \"2026-09-18T06:11:24.738Z\"\n  }\n]\n",
+          "stdout": "[\n  {\n    \"id\": \"artifact-customs@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/artifact-customs/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:11:25.713Z\",\n    \"lastUpdated\": \"2026-09-18T06:11:25.713Z\",\n    \"errors\": [\n      \"Plugin artifact-customs not found in marketplace provingkit\"\n    ],\n    \"errorDetails\": [\n      {\n        \"type\": \"plugin-not-found\",\n        \"plugin\": \"artifact-customs\",\n        \"marketplace\": \"provingkit\"\n      }\n    ]\n  },\n  {\n    \"id\": \"mergecraft@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/mergecraft/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:11:25.205Z\",\n    \"lastUpdated\": \"2026-09-18T06:11:25.205Z\"\n  },\n  {\n    \"id\": \"proseweaving@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/proseweaving/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:11:26.158Z\",\n    \"lastUpdated\": \"2026-09-18T06:11:26.158Z\"\n  },\n  {\n    \"id\": \"rolecasting@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/rolecasting/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:11:23.823Z\",\n    \"lastUpdated\": \"2026-09-18T06:11:23.823Z\",\n    \"errors\": [\n      \"Plugin rolecasting not found in marketplace provingkit\"\n    ],\n    \"errorDetails\": [\n      {\n        \"type\": \"plugin-not-found\",\n        \"plugin\": \"rolecasting\",\n        \"marketplace\": \"provingkit\"\n      }\n    ]\n  },\n  {\n    \"id\": \"tricritical@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/tricritical/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:11:24.322Z\",\n    \"lastUpdated\": \"2026-09-18T06:11:24.322Z\",\n    \"errors\": [\n      \"Plugin tricritical not found in marketplace provingkit\"\n    ],\n    \"errorDetails\": [\n      {\n        \"type\": \"plugin-not-found\",\n        \"plugin\": \"tricritical\",\n        \"marketplace\": \"provingkit\"\n      }\n    ]\n  },\n  {\n    \"id\": \"versionkeeping@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/versionkeeping/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:11:24.738Z\",\n    \"lastUpdated\": \"2026-09-18T06:11:24.738Z\"\n  }\n]\n",
           "stderr": ""
         },
         {
@@ -2027,7 +2027,7 @@
             "--json"
           ],
           "returncode": 0,
-          "stdout": "[\n  {\n    \"name\": \"provingkit\",\n    \"source\": \"directory\",\n    \"path\": \"${CASE}/home/.local/share/provingkit/artifacts/claude/e37ae6b40d426c21bd5e178582bdcf1195d20fe574770c914f9e7b02287e5bba\",\n    \"installLocation\": \"${CASE}/home/.local/share/provingkit/artifacts/claude/e37ae6b40d426c21bd5e178582bdcf1195d20fe574770c914f9e7b02287e5bba\"\n  }\n]\n",
+          "stdout": "[\n  {\n    \"name\": \"provingkit\",\n    \"source\": \"directory\",\n    \"path\": \"${CASE_HOME}/.local/share/provingkit/artifacts/claude/e37ae6b40d426c21bd5e178582bdcf1195d20fe574770c914f9e7b02287e5bba\",\n    \"installLocation\": \"${CASE_HOME}/.local/share/provingkit/artifacts/claude/e37ae6b40d426c21bd5e178582bdcf1195d20fe574770c914f9e7b02287e5bba\"\n  }\n]\n",
           "stderr": ""
         },
         {
@@ -2048,11 +2048,11 @@
             "plugin",
             "marketplace",
             "update",
-            "${CASE}/home/.local/share/provingkit/artifacts/claude/e37ae6b40d426c21bd5e178582bdcf1195d20fe574770c914f9e7b02287e5bba"
+            "${CASE_HOME}/.local/share/provingkit/artifacts/claude/e37ae6b40d426c21bd5e178582bdcf1195d20fe574770c914f9e7b02287e5bba"
           ],
           "returncode": 1,
-          "stdout": "Updating marketplace: ${CASE}/home/.local/share/provingkit/artifacts/claude/e37ae6b40d426c21bd5e178582bdcf1195d20fe574770c914f9e7b02287e5bba...\n",
-          "stderr": "\u2718 Failed to update marketplace(s): Marketplace '${CASE}/home/.local/share/provingkit/artifacts/claude/e37ae6b40d426c21bd5e178582bdcf1195d20fe574770c914f9e7b02287e5bba' not found. Available marketplaces: provingkit\n"
+          "stdout": "Updating marketplace: ${CASE_HOME}/.local/share/provingkit/artifacts/claude/e37ae6b40d426c21bd5e178582bdcf1195d20fe574770c914f9e7b02287e5bba...\n",
+          "stderr": "\u2718 Failed to update marketplace(s): Marketplace '${CASE_HOME}/.local/share/provingkit/artifacts/claude/e37ae6b40d426c21bd5e178582bdcf1195d20fe574770c914f9e7b02287e5bba' not found. Available marketplaces: provingkit\n"
         },
         {
           "argv": [
@@ -2062,7 +2062,7 @@
             "--json"
           ],
           "returncode": 0,
-          "stdout": "[\n  {\n    \"id\": \"artifact-customs@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/artifact-customs/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:11:25.713Z\",\n    \"lastUpdated\": \"2026-09-18T06:11:25.713Z\",\n    \"errors\": [\n      \"Plugin artifact-customs not found in marketplace provingkit\"\n    ],\n    \"errorDetails\": [\n      {\n        \"type\": \"plugin-not-found\",\n        \"plugin\": \"artifact-customs\",\n        \"marketplace\": \"provingkit\"\n      }\n    ]\n  },\n  {\n    \"id\": \"mergecraft@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/mergecraft/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:11:25.205Z\",\n    \"lastUpdated\": \"2026-09-18T06:11:25.205Z\"\n  },\n  {\n    \"id\": \"proseweaving@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/proseweaving/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:11:26.158Z\",\n    \"lastUpdated\": \"2026-09-18T06:11:26.158Z\"\n  },\n  {\n    \"id\": \"rolecasting@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/rolecasting/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:11:23.823Z\",\n    \"lastUpdated\": \"2026-09-18T06:11:23.823Z\",\n    \"errors\": [\n      \"Plugin rolecasting not found in marketplace provingkit\"\n    ],\n    \"errorDetails\": [\n      {\n        \"type\": \"plugin-not-found\",\n        \"plugin\": \"rolecasting\",\n        \"marketplace\": \"provingkit\"\n      }\n    ]\n  },\n  {\n    \"id\": \"tricritical@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/tricritical/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:11:24.322Z\",\n    \"lastUpdated\": \"2026-09-18T06:11:24.322Z\",\n    \"errors\": [\n      \"Plugin tricritical not found in marketplace provingkit\"\n    ],\n    \"errorDetails\": [\n      {\n        \"type\": \"plugin-not-found\",\n        \"plugin\": \"tricritical\",\n        \"marketplace\": \"provingkit\"\n      }\n    ]\n  },\n  {\n    \"id\": \"versionkeeping@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/versionkeeping/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:11:24.738Z\",\n    \"lastUpdated\": \"2026-09-18T06:11:24.738Z\"\n  }\n]\n",
+          "stdout": "[\n  {\n    \"id\": \"artifact-customs@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/artifact-customs/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:11:25.713Z\",\n    \"lastUpdated\": \"2026-09-18T06:11:25.713Z\",\n    \"errors\": [\n      \"Plugin artifact-customs not found in marketplace provingkit\"\n    ],\n    \"errorDetails\": [\n      {\n        \"type\": \"plugin-not-found\",\n        \"plugin\": \"artifact-customs\",\n        \"marketplace\": \"provingkit\"\n      }\n    ]\n  },\n  {\n    \"id\": \"mergecraft@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/mergecraft/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:11:25.205Z\",\n    \"lastUpdated\": \"2026-09-18T06:11:25.205Z\"\n  },\n  {\n    \"id\": \"proseweaving@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/proseweaving/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:11:26.158Z\",\n    \"lastUpdated\": \"2026-09-18T06:11:26.158Z\"\n  },\n  {\n    \"id\": \"rolecasting@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/rolecasting/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:11:23.823Z\",\n    \"lastUpdated\": \"2026-09-18T06:11:23.823Z\",\n    \"errors\": [\n      \"Plugin rolecasting not found in marketplace provingkit\"\n    ],\n    \"errorDetails\": [\n      {\n        \"type\": \"plugin-not-found\",\n        \"plugin\": \"rolecasting\",\n        \"marketplace\": \"provingkit\"\n      }\n    ]\n  },\n  {\n    \"id\": \"tricritical@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/tricritical/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:11:24.322Z\",\n    \"lastUpdated\": \"2026-09-18T06:11:24.322Z\",\n    \"errors\": [\n      \"Plugin tricritical not found in marketplace provingkit\"\n    ],\n    \"errorDetails\": [\n      {\n        \"type\": \"plugin-not-found\",\n        \"plugin\": \"tricritical\",\n        \"marketplace\": \"provingkit\"\n      }\n    ]\n  },\n  {\n    \"id\": \"versionkeeping@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/versionkeeping/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:11:24.738Z\",\n    \"lastUpdated\": \"2026-09-18T06:11:24.738Z\"\n  }\n]\n",
           "stderr": ""
         }
       ],
@@ -2074,7 +2074,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": true,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/artifact-customs/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/artifact-customs/1.0.0",
               "installedAt": "2026-09-18T06:11:25.713Z",
               "lastUpdated": "2026-09-18T06:11:25.713Z"
             },
@@ -2083,7 +2083,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": true,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/mergecraft/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/mergecraft/1.0.0",
               "installedAt": "2026-09-18T06:11:25.205Z",
               "lastUpdated": "2026-09-18T06:11:25.205Z"
             },
@@ -2092,7 +2092,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": true,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/proseweaving/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/proseweaving/1.0.0",
               "installedAt": "2026-09-18T06:11:26.158Z",
               "lastUpdated": "2026-09-18T06:11:26.158Z"
             },
@@ -2101,7 +2101,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": true,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/rolecasting/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/rolecasting/1.0.0",
               "installedAt": "2026-09-18T06:11:23.823Z",
               "lastUpdated": "2026-09-18T06:11:23.823Z"
             },
@@ -2110,7 +2110,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": true,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/tricritical/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/tricritical/1.0.0",
               "installedAt": "2026-09-18T06:11:24.322Z",
               "lastUpdated": "2026-09-18T06:11:24.322Z"
             },
@@ -2119,7 +2119,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": true,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/versionkeeping/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/versionkeeping/1.0.0",
               "installedAt": "2026-09-18T06:11:24.738Z",
               "lastUpdated": "2026-09-18T06:11:24.738Z"
             }
@@ -2242,7 +2242,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": true,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/artifact-customs/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/artifact-customs/1.0.0",
               "installedAt": "2026-09-18T06:11:25.713Z",
               "lastUpdated": "2026-09-18T06:11:25.713Z",
               "errors": [
@@ -2261,7 +2261,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": true,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/mergecraft/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/mergecraft/1.0.0",
               "installedAt": "2026-09-18T06:11:25.205Z",
               "lastUpdated": "2026-09-18T06:11:25.205Z"
             },
@@ -2270,7 +2270,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": true,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/proseweaving/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/proseweaving/1.0.0",
               "installedAt": "2026-09-18T06:11:26.158Z",
               "lastUpdated": "2026-09-18T06:11:26.158Z"
             },
@@ -2279,7 +2279,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": true,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/rolecasting/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/rolecasting/1.0.0",
               "installedAt": "2026-09-18T06:11:23.823Z",
               "lastUpdated": "2026-09-18T06:11:23.823Z",
               "errors": [
@@ -2298,7 +2298,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": true,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/tricritical/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/tricritical/1.0.0",
               "installedAt": "2026-09-18T06:11:24.322Z",
               "lastUpdated": "2026-09-18T06:11:24.322Z",
               "errors": [
@@ -2317,7 +2317,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": true,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/versionkeeping/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/versionkeeping/1.0.0",
               "installedAt": "2026-09-18T06:11:24.738Z",
               "lastUpdated": "2026-09-18T06:11:24.738Z"
             }
@@ -2440,7 +2440,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": true,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/artifact-customs/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/artifact-customs/1.0.0",
               "installedAt": "2026-09-18T06:11:25.713Z",
               "lastUpdated": "2026-09-18T06:11:25.713Z",
               "errors": [
@@ -2459,7 +2459,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": true,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/mergecraft/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/mergecraft/1.0.0",
               "installedAt": "2026-09-18T06:11:25.205Z",
               "lastUpdated": "2026-09-18T06:11:25.205Z"
             },
@@ -2468,7 +2468,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": true,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/proseweaving/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/proseweaving/1.0.0",
               "installedAt": "2026-09-18T06:11:26.158Z",
               "lastUpdated": "2026-09-18T06:11:26.158Z"
             },
@@ -2477,7 +2477,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": true,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/rolecasting/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/rolecasting/1.0.0",
               "installedAt": "2026-09-18T06:11:23.823Z",
               "lastUpdated": "2026-09-18T06:11:23.823Z",
               "errors": [
@@ -2496,7 +2496,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": true,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/tricritical/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/tricritical/1.0.0",
               "installedAt": "2026-09-18T06:11:24.322Z",
               "lastUpdated": "2026-09-18T06:11:24.322Z",
               "errors": [
@@ -2515,7 +2515,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": true,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/versionkeeping/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/versionkeeping/1.0.0",
               "installedAt": "2026-09-18T06:11:24.738Z",
               "lastUpdated": "2026-09-18T06:11:24.738Z"
             }
@@ -2639,14 +2639,14 @@
         "sha256": "660e159a49e823ac8e5986cb238f73158ce4b957d40d9292f8de90862644b501"
       },
       "environment": {
-        "HOME": "${CASE}/home",
-        "XDG_CONFIG_HOME": "${CASE}/home/.config",
-        "XDG_DATA_HOME": "${CASE}/home/.local/share",
-        "XDG_STATE_HOME": "${CASE}/home/.local/state",
-        "XDG_CACHE_HOME": "${CASE}/home/.cache",
-        "CODEX_HOME": "${CASE}/home/.codex",
-        "CLAUDE_CONFIG_DIR": "${CASE}/home/.claude",
-        "NODE_COMPILE_CACHE": "${CASE}/home/.cache/node-compile",
+        "HOME": "${CASE_HOME}",
+        "XDG_CONFIG_HOME": "${CASE_HOME}/.config",
+        "XDG_DATA_HOME": "${CASE_HOME}/.local/share",
+        "XDG_STATE_HOME": "${CASE_HOME}/.local/state",
+        "XDG_CACHE_HOME": "${CASE_HOME}/.cache",
+        "CODEX_HOME": "${CASE_HOME}/.codex",
+        "CLAUDE_CONFIG_DIR": "${CASE_HOME}/.claude",
+        "NODE_COMPILE_CACHE": "${CASE_HOME}/.cache/node-compile",
         "TMPDIR": "${CASE}/tmp",
         "PATH": "/usr/bin:/bin:/usr/local/bin",
         "LANG": "C.UTF-8"
@@ -2704,11 +2704,11 @@
             "plugin",
             "marketplace",
             "add",
-            "${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775",
+            "${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775",
             "--json"
           ],
           "returncode": 0,
-          "stdout": "{\n  \"marketplaceName\": \"provingkit\",\n  \"installedRoot\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775\",\n  \"alreadyAdded\": false\n}\n",
+          "stdout": "{\n  \"marketplaceName\": \"provingkit\",\n  \"installedRoot\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775\",\n  \"alreadyAdded\": false\n}\n",
           "stderr": ""
         },
         {
@@ -2720,7 +2720,7 @@
             "--json"
           ],
           "returncode": 0,
-          "stdout": "{\n  \"pluginId\": \"rolecasting@provingkit\",\n  \"name\": \"rolecasting\",\n  \"marketplaceName\": \"provingkit\",\n  \"version\": \"local\",\n  \"installedPath\": \"${CASE}/home/.codex/plugins/cache/provingkit/rolecasting/local\",\n  \"authPolicy\": \"ON_INSTALL\"\n}\n",
+          "stdout": "{\n  \"pluginId\": \"rolecasting@provingkit\",\n  \"name\": \"rolecasting\",\n  \"marketplaceName\": \"provingkit\",\n  \"version\": \"local\",\n  \"installedPath\": \"${CASE_HOME}/.codex/plugins/cache/provingkit/rolecasting/local\",\n  \"authPolicy\": \"ON_INSTALL\"\n}\n",
           "stderr": ""
         },
         {
@@ -2732,7 +2732,7 @@
             "--json"
           ],
           "returncode": 0,
-          "stdout": "{\n  \"pluginId\": \"tricritical@provingkit\",\n  \"name\": \"tricritical\",\n  \"marketplaceName\": \"provingkit\",\n  \"version\": \"local\",\n  \"installedPath\": \"${CASE}/home/.codex/plugins/cache/provingkit/tricritical/local\",\n  \"authPolicy\": \"ON_INSTALL\"\n}\n",
+          "stdout": "{\n  \"pluginId\": \"tricritical@provingkit\",\n  \"name\": \"tricritical\",\n  \"marketplaceName\": \"provingkit\",\n  \"version\": \"local\",\n  \"installedPath\": \"${CASE_HOME}/.codex/plugins/cache/provingkit/tricritical/local\",\n  \"authPolicy\": \"ON_INSTALL\"\n}\n",
           "stderr": ""
         },
         {
@@ -2744,7 +2744,7 @@
             "--json"
           ],
           "returncode": 0,
-          "stdout": "{\n  \"pluginId\": \"versionkeeping@provingkit\",\n  \"name\": \"versionkeeping\",\n  \"marketplaceName\": \"provingkit\",\n  \"version\": \"local\",\n  \"installedPath\": \"${CASE}/home/.codex/plugins/cache/provingkit/versionkeeping/local\",\n  \"authPolicy\": \"ON_INSTALL\"\n}\n",
+          "stdout": "{\n  \"pluginId\": \"versionkeeping@provingkit\",\n  \"name\": \"versionkeeping\",\n  \"marketplaceName\": \"provingkit\",\n  \"version\": \"local\",\n  \"installedPath\": \"${CASE_HOME}/.codex/plugins/cache/provingkit/versionkeeping/local\",\n  \"authPolicy\": \"ON_INSTALL\"\n}\n",
           "stderr": ""
         },
         {
@@ -2756,7 +2756,7 @@
             "--json"
           ],
           "returncode": 0,
-          "stdout": "{\n  \"pluginId\": \"mergecraft@provingkit\",\n  \"name\": \"mergecraft\",\n  \"marketplaceName\": \"provingkit\",\n  \"version\": \"local\",\n  \"installedPath\": \"${CASE}/home/.codex/plugins/cache/provingkit/mergecraft/local\",\n  \"authPolicy\": \"ON_INSTALL\"\n}\n",
+          "stdout": "{\n  \"pluginId\": \"mergecraft@provingkit\",\n  \"name\": \"mergecraft\",\n  \"marketplaceName\": \"provingkit\",\n  \"version\": \"local\",\n  \"installedPath\": \"${CASE_HOME}/.codex/plugins/cache/provingkit/mergecraft/local\",\n  \"authPolicy\": \"ON_INSTALL\"\n}\n",
           "stderr": ""
         },
         {
@@ -2768,7 +2768,7 @@
             "--json"
           ],
           "returncode": 0,
-          "stdout": "{\n  \"pluginId\": \"artifact-customs@provingkit\",\n  \"name\": \"artifact-customs\",\n  \"marketplaceName\": \"provingkit\",\n  \"version\": \"local\",\n  \"installedPath\": \"${CASE}/home/.codex/plugins/cache/provingkit/artifact-customs/local\",\n  \"authPolicy\": \"ON_INSTALL\"\n}\n",
+          "stdout": "{\n  \"pluginId\": \"artifact-customs@provingkit\",\n  \"name\": \"artifact-customs\",\n  \"marketplaceName\": \"provingkit\",\n  \"version\": \"local\",\n  \"installedPath\": \"${CASE_HOME}/.codex/plugins/cache/provingkit/artifact-customs/local\",\n  \"authPolicy\": \"ON_INSTALL\"\n}\n",
           "stderr": ""
         },
         {
@@ -2780,7 +2780,7 @@
             "--json"
           ],
           "returncode": 0,
-          "stdout": "{\n  \"pluginId\": \"proseweaving@provingkit\",\n  \"name\": \"proseweaving\",\n  \"marketplaceName\": \"provingkit\",\n  \"version\": \"local\",\n  \"installedPath\": \"${CASE}/home/.codex/plugins/cache/provingkit/proseweaving/local\",\n  \"authPolicy\": \"ON_INSTALL\"\n}\n",
+          "stdout": "{\n  \"pluginId\": \"proseweaving@provingkit\",\n  \"name\": \"proseweaving\",\n  \"marketplaceName\": \"provingkit\",\n  \"version\": \"local\",\n  \"installedPath\": \"${CASE_HOME}/.codex/plugins/cache/provingkit/proseweaving/local\",\n  \"authPolicy\": \"ON_INSTALL\"\n}\n",
           "stderr": ""
         },
         {
@@ -2793,7 +2793,7 @@
             "--json"
           ],
           "returncode": 0,
-          "stdout": "{\n  \"installed\": [\n    {\n      \"pluginId\": \"rolecasting@provingkit\",\n      \"name\": \"rolecasting\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775/plugins/rolecasting\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    },\n    {\n      \"pluginId\": \"tricritical@provingkit\",\n      \"name\": \"tricritical\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775/plugins/tricritical\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    },\n    {\n      \"pluginId\": \"versionkeeping@provingkit\",\n      \"name\": \"versionkeeping\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775/plugins/versionkeeping\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    },\n    {\n      \"pluginId\": \"mergecraft@provingkit\",\n      \"name\": \"mergecraft\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775/plugins/mergecraft\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    },\n    {\n      \"pluginId\": \"artifact-customs@provingkit\",\n      \"name\": \"artifact-customs\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775/plugins/artifact-customs\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    },\n    {\n      \"pluginId\": \"proseweaving@provingkit\",\n      \"name\": \"proseweaving\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775/plugins/proseweaving\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    }\n  ],\n  \"available\": []\n}\n",
+          "stdout": "{\n  \"installed\": [\n    {\n      \"pluginId\": \"rolecasting@provingkit\",\n      \"name\": \"rolecasting\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775/plugins/rolecasting\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    },\n    {\n      \"pluginId\": \"tricritical@provingkit\",\n      \"name\": \"tricritical\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775/plugins/tricritical\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    },\n    {\n      \"pluginId\": \"versionkeeping@provingkit\",\n      \"name\": \"versionkeeping\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775/plugins/versionkeeping\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    },\n    {\n      \"pluginId\": \"mergecraft@provingkit\",\n      \"name\": \"mergecraft\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775/plugins/mergecraft\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    },\n    {\n      \"pluginId\": \"artifact-customs@provingkit\",\n      \"name\": \"artifact-customs\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775/plugins/artifact-customs\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    },\n    {\n      \"pluginId\": \"proseweaving@provingkit\",\n      \"name\": \"proseweaving\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775/plugins/proseweaving\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    }\n  ],\n  \"available\": []\n}\n",
           "stderr": ""
         },
         {
@@ -2802,7 +2802,7 @@
             "plugin",
             "marketplace",
             "add",
-            "${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d",
+            "${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/5c1e596cd7b76f2804f808344d20c4360b97ab2c59f02c9561384f0eaf16708d",
             "--json"
           ],
           "returncode": 1,
@@ -2819,7 +2819,7 @@
             "--json"
           ],
           "returncode": 0,
-          "stdout": "{\n  \"installed\": [\n    {\n      \"pluginId\": \"rolecasting@provingkit\",\n      \"name\": \"rolecasting\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775/plugins/rolecasting\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    },\n    {\n      \"pluginId\": \"tricritical@provingkit\",\n      \"name\": \"tricritical\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775/plugins/tricritical\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    },\n    {\n      \"pluginId\": \"versionkeeping@provingkit\",\n      \"name\": \"versionkeeping\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775/plugins/versionkeeping\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    },\n    {\n      \"pluginId\": \"mergecraft@provingkit\",\n      \"name\": \"mergecraft\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775/plugins/mergecraft\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    },\n    {\n      \"pluginId\": \"artifact-customs@provingkit\",\n      \"name\": \"artifact-customs\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775/plugins/artifact-customs\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    },\n    {\n      \"pluginId\": \"proseweaving@provingkit\",\n      \"name\": \"proseweaving\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775/plugins/proseweaving\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    }\n  ],\n  \"available\": []\n}\n",
+          "stdout": "{\n  \"installed\": [\n    {\n      \"pluginId\": \"rolecasting@provingkit\",\n      \"name\": \"rolecasting\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775/plugins/rolecasting\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    },\n    {\n      \"pluginId\": \"tricritical@provingkit\",\n      \"name\": \"tricritical\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775/plugins/tricritical\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    },\n    {\n      \"pluginId\": \"versionkeeping@provingkit\",\n      \"name\": \"versionkeeping\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775/plugins/versionkeeping\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    },\n    {\n      \"pluginId\": \"mergecraft@provingkit\",\n      \"name\": \"mergecraft\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775/plugins/mergecraft\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    },\n    {\n      \"pluginId\": \"artifact-customs@provingkit\",\n      \"name\": \"artifact-customs\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775/plugins/artifact-customs\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    },\n    {\n      \"pluginId\": \"proseweaving@provingkit\",\n      \"name\": \"proseweaving\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775/plugins/proseweaving\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    }\n  ],\n  \"available\": []\n}\n",
           "stderr": ""
         },
         {
@@ -2831,7 +2831,7 @@
             "--json"
           ],
           "returncode": 0,
-          "stdout": "{\n  \"marketplaces\": [\n    {\n      \"name\": \"provingkit\",\n      \"root\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775\",\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775\"\n      }\n    }\n  ]\n}\n",
+          "stdout": "{\n  \"marketplaces\": [\n    {\n      \"name\": \"provingkit\",\n      \"root\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775\",\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775\"\n      }\n    }\n  ]\n}\n",
           "stderr": ""
         }
       ],
@@ -2847,11 +2847,11 @@
               "enabled": true,
               "source": {
                 "source": "local",
-                "path": "${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775/plugins/rolecasting"
+                "path": "${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775/plugins/rolecasting"
               },
               "marketplaceSource": {
                 "sourceType": "local",
-                "source": "${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775"
+                "source": "${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775"
               },
               "installPolicy": "AVAILABLE",
               "authPolicy": "ON_INSTALL"
@@ -2865,11 +2865,11 @@
               "enabled": true,
               "source": {
                 "source": "local",
-                "path": "${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775/plugins/tricritical"
+                "path": "${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775/plugins/tricritical"
               },
               "marketplaceSource": {
                 "sourceType": "local",
-                "source": "${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775"
+                "source": "${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775"
               },
               "installPolicy": "AVAILABLE",
               "authPolicy": "ON_INSTALL"
@@ -2883,11 +2883,11 @@
               "enabled": true,
               "source": {
                 "source": "local",
-                "path": "${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775/plugins/versionkeeping"
+                "path": "${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775/plugins/versionkeeping"
               },
               "marketplaceSource": {
                 "sourceType": "local",
-                "source": "${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775"
+                "source": "${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775"
               },
               "installPolicy": "AVAILABLE",
               "authPolicy": "ON_INSTALL"
@@ -2901,11 +2901,11 @@
               "enabled": true,
               "source": {
                 "source": "local",
-                "path": "${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775/plugins/mergecraft"
+                "path": "${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775/plugins/mergecraft"
               },
               "marketplaceSource": {
                 "sourceType": "local",
-                "source": "${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775"
+                "source": "${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775"
               },
               "installPolicy": "AVAILABLE",
               "authPolicy": "ON_INSTALL"
@@ -2919,11 +2919,11 @@
               "enabled": true,
               "source": {
                 "source": "local",
-                "path": "${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775/plugins/artifact-customs"
+                "path": "${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775/plugins/artifact-customs"
               },
               "marketplaceSource": {
                 "sourceType": "local",
-                "source": "${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775"
+                "source": "${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775"
               },
               "installPolicy": "AVAILABLE",
               "authPolicy": "ON_INSTALL"
@@ -2937,11 +2937,11 @@
               "enabled": true,
               "source": {
                 "source": "local",
-                "path": "${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775/plugins/proseweaving"
+                "path": "${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775/plugins/proseweaving"
               },
               "marketplaceSource": {
                 "sourceType": "local",
-                "source": "${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775"
+                "source": "${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775"
               },
               "installPolicy": "AVAILABLE",
               "authPolicy": "ON_INSTALL"
@@ -3069,11 +3069,11 @@
               "enabled": true,
               "source": {
                 "source": "local",
-                "path": "${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775/plugins/rolecasting"
+                "path": "${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775/plugins/rolecasting"
               },
               "marketplaceSource": {
                 "sourceType": "local",
-                "source": "${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775"
+                "source": "${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775"
               },
               "installPolicy": "AVAILABLE",
               "authPolicy": "ON_INSTALL"
@@ -3087,11 +3087,11 @@
               "enabled": true,
               "source": {
                 "source": "local",
-                "path": "${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775/plugins/tricritical"
+                "path": "${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775/plugins/tricritical"
               },
               "marketplaceSource": {
                 "sourceType": "local",
-                "source": "${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775"
+                "source": "${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775"
               },
               "installPolicy": "AVAILABLE",
               "authPolicy": "ON_INSTALL"
@@ -3105,11 +3105,11 @@
               "enabled": true,
               "source": {
                 "source": "local",
-                "path": "${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775/plugins/versionkeeping"
+                "path": "${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775/plugins/versionkeeping"
               },
               "marketplaceSource": {
                 "sourceType": "local",
-                "source": "${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775"
+                "source": "${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775"
               },
               "installPolicy": "AVAILABLE",
               "authPolicy": "ON_INSTALL"
@@ -3123,11 +3123,11 @@
               "enabled": true,
               "source": {
                 "source": "local",
-                "path": "${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775/plugins/mergecraft"
+                "path": "${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775/plugins/mergecraft"
               },
               "marketplaceSource": {
                 "sourceType": "local",
-                "source": "${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775"
+                "source": "${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775"
               },
               "installPolicy": "AVAILABLE",
               "authPolicy": "ON_INSTALL"
@@ -3141,11 +3141,11 @@
               "enabled": true,
               "source": {
                 "source": "local",
-                "path": "${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775/plugins/artifact-customs"
+                "path": "${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775/plugins/artifact-customs"
               },
               "marketplaceSource": {
                 "sourceType": "local",
-                "source": "${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775"
+                "source": "${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775"
               },
               "installPolicy": "AVAILABLE",
               "authPolicy": "ON_INSTALL"
@@ -3159,11 +3159,11 @@
               "enabled": true,
               "source": {
                 "source": "local",
-                "path": "${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775/plugins/proseweaving"
+                "path": "${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775/plugins/proseweaving"
               },
               "marketplaceSource": {
                 "sourceType": "local",
-                "source": "${CASE}/home/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775"
+                "source": "${CASE_HOME}/.local/share/provingkit/artifacts/agent-plugins/1ea69c5b9aa7cfe975e055920f3eb5d8ed5e9295699a3946a92494996c2ac775"
               },
               "installPolicy": "AVAILABLE",
               "authPolicy": "ON_INSTALL"
@@ -3288,14 +3288,14 @@
         "sha256": "6c752e2cc7c110c9df15f26d8d134d438c5ae95dbd610efc1a308bf7f9c5f6c1"
       },
       "environment": {
-        "HOME": "${CASE}/home",
-        "XDG_CONFIG_HOME": "${CASE}/home/.config",
-        "XDG_DATA_HOME": "${CASE}/home/.local/share",
-        "XDG_STATE_HOME": "${CASE}/home/.local/state",
-        "XDG_CACHE_HOME": "${CASE}/home/.cache",
-        "CODEX_HOME": "${CASE}/home/.codex",
-        "CLAUDE_CONFIG_DIR": "${CASE}/home/.claude",
-        "NODE_COMPILE_CACHE": "${CASE}/home/.cache/node-compile",
+        "HOME": "${CASE_HOME}",
+        "XDG_CONFIG_HOME": "${CASE_HOME}/.config",
+        "XDG_DATA_HOME": "${CASE_HOME}/.local/share",
+        "XDG_STATE_HOME": "${CASE_HOME}/.local/state",
+        "XDG_CACHE_HOME": "${CASE_HOME}/.cache",
+        "CODEX_HOME": "${CASE_HOME}/.codex",
+        "CLAUDE_CONFIG_DIR": "${CASE_HOME}/.claude",
+        "NODE_COMPILE_CACHE": "${CASE_HOME}/.cache/node-compile",
         "TMPDIR": "${CASE}/tmp",
         "PATH": "/usr/bin:/bin:/usr/local/bin",
         "LANG": "C.UTF-8"
@@ -3351,7 +3351,7 @@
             "plugin",
             "marketplace",
             "add",
-            "${CASE}/home/.local/share/provingkit/artifacts/claude/2e4cf02a1275ac7802afa5171f26918139e9ec638d5c70e0a9e7d221a1b0e45a",
+            "${CASE_HOME}/.local/share/provingkit/artifacts/claude/2e4cf02a1275ac7802afa5171f26918139e9ec638d5c70e0a9e7d221a1b0e45a",
             "--scope",
             "user"
           ],
@@ -3451,7 +3451,7 @@
             "--json"
           ],
           "returncode": 0,
-          "stdout": "[\n  {\n    \"id\": \"artifact-customs@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/artifact-customs/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:14:31.937Z\",\n    \"lastUpdated\": \"2026-09-18T06:14:31.937Z\"\n  },\n  {\n    \"id\": \"mergecraft@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/mergecraft/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:14:31.482Z\",\n    \"lastUpdated\": \"2026-09-18T06:14:31.482Z\"\n  },\n  {\n    \"id\": \"proseweaving@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/proseweaving/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:14:32.420Z\",\n    \"lastUpdated\": \"2026-09-18T06:14:32.420Z\"\n  },\n  {\n    \"id\": \"rolecasting@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/rolecasting/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:14:30.143Z\",\n    \"lastUpdated\": \"2026-09-18T06:14:30.143Z\"\n  },\n  {\n    \"id\": \"tricritical@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/tricritical/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:14:30.571Z\",\n    \"lastUpdated\": \"2026-09-18T06:14:30.571Z\"\n  },\n  {\n    \"id\": \"versionkeeping@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/versionkeeping/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:14:31.012Z\",\n    \"lastUpdated\": \"2026-09-18T06:14:31.012Z\"\n  }\n]\n",
+          "stdout": "[\n  {\n    \"id\": \"artifact-customs@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/artifact-customs/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:14:31.937Z\",\n    \"lastUpdated\": \"2026-09-18T06:14:31.937Z\"\n  },\n  {\n    \"id\": \"mergecraft@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/mergecraft/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:14:31.482Z\",\n    \"lastUpdated\": \"2026-09-18T06:14:31.482Z\"\n  },\n  {\n    \"id\": \"proseweaving@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/proseweaving/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:14:32.420Z\",\n    \"lastUpdated\": \"2026-09-18T06:14:32.420Z\"\n  },\n  {\n    \"id\": \"rolecasting@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/rolecasting/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:14:30.143Z\",\n    \"lastUpdated\": \"2026-09-18T06:14:30.143Z\"\n  },\n  {\n    \"id\": \"tricritical@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/tricritical/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:14:30.571Z\",\n    \"lastUpdated\": \"2026-09-18T06:14:30.571Z\"\n  },\n  {\n    \"id\": \"versionkeeping@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/versionkeeping/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:14:31.012Z\",\n    \"lastUpdated\": \"2026-09-18T06:14:31.012Z\"\n  }\n]\n",
           "stderr": ""
         },
         {
@@ -3460,7 +3460,7 @@
             "plugin",
             "marketplace",
             "add",
-            "${CASE}/home/.local/share/provingkit/artifacts/claude/42e4f84fb5b5b38b9fdafb7888722afdd964ca5fef0e8164ba47d7c2dda3234c",
+            "${CASE_HOME}/.local/share/provingkit/artifacts/claude/42e4f84fb5b5b38b9fdafb7888722afdd964ca5fef0e8164ba47d7c2dda3234c",
             "--scope",
             "user"
           ],
@@ -3476,7 +3476,7 @@
             "--json"
           ],
           "returncode": 0,
-          "stdout": "[\n  {\n    \"id\": \"artifact-customs@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/artifact-customs/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:14:31.937Z\",\n    \"lastUpdated\": \"2026-09-18T06:14:31.937Z\"\n  },\n  {\n    \"id\": \"mergecraft@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/mergecraft/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:14:31.482Z\",\n    \"lastUpdated\": \"2026-09-18T06:14:31.482Z\"\n  },\n  {\n    \"id\": \"proseweaving@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/proseweaving/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:14:32.420Z\",\n    \"lastUpdated\": \"2026-09-18T06:14:32.420Z\"\n  },\n  {\n    \"id\": \"rolecasting@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/rolecasting/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:14:30.143Z\",\n    \"lastUpdated\": \"2026-09-18T06:14:30.143Z\"\n  },\n  {\n    \"id\": \"tricritical@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/tricritical/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:14:30.571Z\",\n    \"lastUpdated\": \"2026-09-18T06:14:30.571Z\"\n  },\n  {\n    \"id\": \"versionkeeping@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/versionkeeping/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:14:31.012Z\",\n    \"lastUpdated\": \"2026-09-18T06:14:31.012Z\"\n  }\n]\n",
+          "stdout": "[\n  {\n    \"id\": \"artifact-customs@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/artifact-customs/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:14:31.937Z\",\n    \"lastUpdated\": \"2026-09-18T06:14:31.937Z\"\n  },\n  {\n    \"id\": \"mergecraft@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/mergecraft/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:14:31.482Z\",\n    \"lastUpdated\": \"2026-09-18T06:14:31.482Z\"\n  },\n  {\n    \"id\": \"proseweaving@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/proseweaving/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:14:32.420Z\",\n    \"lastUpdated\": \"2026-09-18T06:14:32.420Z\"\n  },\n  {\n    \"id\": \"rolecasting@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/rolecasting/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:14:30.143Z\",\n    \"lastUpdated\": \"2026-09-18T06:14:30.143Z\"\n  },\n  {\n    \"id\": \"tricritical@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/tricritical/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:14:30.571Z\",\n    \"lastUpdated\": \"2026-09-18T06:14:30.571Z\"\n  },\n  {\n    \"id\": \"versionkeeping@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/versionkeeping/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:14:31.012Z\",\n    \"lastUpdated\": \"2026-09-18T06:14:31.012Z\"\n  }\n]\n",
           "stderr": ""
         },
         {
@@ -3488,7 +3488,7 @@
             "--json"
           ],
           "returncode": 0,
-          "stdout": "[\n  {\n    \"name\": \"provingkit\",\n    \"source\": \"directory\",\n    \"path\": \"${CASE}/home/.local/share/provingkit/artifacts/claude/42e4f84fb5b5b38b9fdafb7888722afdd964ca5fef0e8164ba47d7c2dda3234c\",\n    \"installLocation\": \"${CASE}/home/.local/share/provingkit/artifacts/claude/42e4f84fb5b5b38b9fdafb7888722afdd964ca5fef0e8164ba47d7c2dda3234c\"\n  }\n]\n",
+          "stdout": "[\n  {\n    \"name\": \"provingkit\",\n    \"source\": \"directory\",\n    \"path\": \"${CASE_HOME}/.local/share/provingkit/artifacts/claude/42e4f84fb5b5b38b9fdafb7888722afdd964ca5fef0e8164ba47d7c2dda3234c\",\n    \"installLocation\": \"${CASE_HOME}/.local/share/provingkit/artifacts/claude/42e4f84fb5b5b38b9fdafb7888722afdd964ca5fef0e8164ba47d7c2dda3234c\"\n  }\n]\n",
           "stderr": ""
         },
         {
@@ -3586,7 +3586,7 @@
             "--json"
           ],
           "returncode": 0,
-          "stdout": "[\n  {\n    \"id\": \"artifact-customs@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/artifact-customs/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:14:31.937Z\",\n    \"lastUpdated\": \"2026-09-18T06:14:31.937Z\"\n  },\n  {\n    \"id\": \"mergecraft@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/mergecraft/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:14:36.365Z\",\n    \"lastUpdated\": \"2026-09-18T06:14:36.365Z\"\n  },\n  {\n    \"id\": \"proseweaving@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/proseweaving/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:14:34.538Z\",\n    \"lastUpdated\": \"2026-09-18T06:14:34.538Z\"\n  },\n  {\n    \"id\": \"rolecasting@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/rolecasting/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:14:30.143Z\",\n    \"lastUpdated\": \"2026-09-18T06:14:30.143Z\"\n  },\n  {\n    \"id\": \"tricritical@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/tricritical/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:14:30.571Z\",\n    \"lastUpdated\": \"2026-09-18T06:14:30.571Z\"\n  },\n  {\n    \"id\": \"versionkeeping@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/versionkeeping/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:14:35.449Z\",\n    \"lastUpdated\": \"2026-09-18T06:14:35.449Z\"\n  }\n]\n",
+          "stdout": "[\n  {\n    \"id\": \"artifact-customs@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/artifact-customs/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:14:31.937Z\",\n    \"lastUpdated\": \"2026-09-18T06:14:31.937Z\"\n  },\n  {\n    \"id\": \"mergecraft@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/mergecraft/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:14:36.365Z\",\n    \"lastUpdated\": \"2026-09-18T06:14:36.365Z\"\n  },\n  {\n    \"id\": \"proseweaving@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/proseweaving/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:14:34.538Z\",\n    \"lastUpdated\": \"2026-09-18T06:14:34.538Z\"\n  },\n  {\n    \"id\": \"rolecasting@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/rolecasting/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:14:30.143Z\",\n    \"lastUpdated\": \"2026-09-18T06:14:30.143Z\"\n  },\n  {\n    \"id\": \"tricritical@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/tricritical/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:14:30.571Z\",\n    \"lastUpdated\": \"2026-09-18T06:14:30.571Z\"\n  },\n  {\n    \"id\": \"versionkeeping@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/versionkeeping/1.0.0\",\n    \"installedAt\": \"2026-09-18T06:14:35.449Z\",\n    \"lastUpdated\": \"2026-09-18T06:14:35.449Z\"\n  }\n]\n",
           "stderr": ""
         }
       ],
@@ -3598,7 +3598,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": true,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/artifact-customs/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/artifact-customs/1.0.0",
               "installedAt": "2026-09-18T06:14:31.937Z",
               "lastUpdated": "2026-09-18T06:14:31.937Z"
             },
@@ -3607,7 +3607,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": true,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/mergecraft/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/mergecraft/1.0.0",
               "installedAt": "2026-09-18T06:14:31.482Z",
               "lastUpdated": "2026-09-18T06:14:31.482Z"
             },
@@ -3616,7 +3616,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": true,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/proseweaving/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/proseweaving/1.0.0",
               "installedAt": "2026-09-18T06:14:32.420Z",
               "lastUpdated": "2026-09-18T06:14:32.420Z"
             },
@@ -3625,7 +3625,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": true,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/rolecasting/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/rolecasting/1.0.0",
               "installedAt": "2026-09-18T06:14:30.143Z",
               "lastUpdated": "2026-09-18T06:14:30.143Z"
             },
@@ -3634,7 +3634,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": true,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/tricritical/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/tricritical/1.0.0",
               "installedAt": "2026-09-18T06:14:30.571Z",
               "lastUpdated": "2026-09-18T06:14:30.571Z"
             },
@@ -3643,7 +3643,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": true,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/versionkeeping/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/versionkeeping/1.0.0",
               "installedAt": "2026-09-18T06:14:31.012Z",
               "lastUpdated": "2026-09-18T06:14:31.012Z"
             }
@@ -3766,7 +3766,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": true,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/artifact-customs/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/artifact-customs/1.0.0",
               "installedAt": "2026-09-18T06:14:31.937Z",
               "lastUpdated": "2026-09-18T06:14:31.937Z"
             },
@@ -3775,7 +3775,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": true,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/mergecraft/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/mergecraft/1.0.0",
               "installedAt": "2026-09-18T06:14:31.482Z",
               "lastUpdated": "2026-09-18T06:14:31.482Z"
             },
@@ -3784,7 +3784,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": true,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/proseweaving/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/proseweaving/1.0.0",
               "installedAt": "2026-09-18T06:14:32.420Z",
               "lastUpdated": "2026-09-18T06:14:32.420Z"
             },
@@ -3793,7 +3793,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": true,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/rolecasting/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/rolecasting/1.0.0",
               "installedAt": "2026-09-18T06:14:30.143Z",
               "lastUpdated": "2026-09-18T06:14:30.143Z"
             },
@@ -3802,7 +3802,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": true,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/tricritical/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/tricritical/1.0.0",
               "installedAt": "2026-09-18T06:14:30.571Z",
               "lastUpdated": "2026-09-18T06:14:30.571Z"
             },
@@ -3811,7 +3811,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": true,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/versionkeeping/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/versionkeeping/1.0.0",
               "installedAt": "2026-09-18T06:14:31.012Z",
               "lastUpdated": "2026-09-18T06:14:31.012Z"
             }
@@ -3934,7 +3934,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": true,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/artifact-customs/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/artifact-customs/1.0.0",
               "installedAt": "2026-09-18T06:14:31.937Z",
               "lastUpdated": "2026-09-18T06:14:31.937Z"
             },
@@ -3943,7 +3943,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": true,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/mergecraft/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/mergecraft/1.0.0",
               "installedAt": "2026-09-18T06:14:36.365Z",
               "lastUpdated": "2026-09-18T06:14:36.365Z"
             },
@@ -3952,7 +3952,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": true,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/proseweaving/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/proseweaving/1.0.0",
               "installedAt": "2026-09-18T06:14:34.538Z",
               "lastUpdated": "2026-09-18T06:14:34.538Z"
             },
@@ -3961,7 +3961,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": true,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/rolecasting/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/rolecasting/1.0.0",
               "installedAt": "2026-09-18T06:14:30.143Z",
               "lastUpdated": "2026-09-18T06:14:30.143Z"
             },
@@ -3970,7 +3970,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": true,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/tricritical/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/tricritical/1.0.0",
               "installedAt": "2026-09-18T06:14:30.571Z",
               "lastUpdated": "2026-09-18T06:14:30.571Z"
             },
@@ -3979,7 +3979,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": true,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/versionkeeping/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/versionkeeping/1.0.0",
               "installedAt": "2026-09-18T06:14:35.449Z",
               "lastUpdated": "2026-09-18T06:14:35.449Z"
             }
@@ -4099,15 +4099,15 @@
           "user_declaration": {
             "source": {
               "source": "directory",
-              "path": "${CASE}/home/.local/share/provingkit/artifacts/claude/42e4f84fb5b5b38b9fdafb7888722afdd964ca5fef0e8164ba47d7c2dda3234c"
+              "path": "${CASE_HOME}/.local/share/provingkit/artifacts/claude/42e4f84fb5b5b38b9fdafb7888722afdd964ca5fef0e8164ba47d7c2dda3234c"
             }
           },
           "known_marketplace": {
             "source": {
               "source": "directory",
-              "path": "${CASE}/home/.local/share/provingkit/artifacts/claude/42e4f84fb5b5b38b9fdafb7888722afdd964ca5fef0e8164ba47d7c2dda3234c"
+              "path": "${CASE_HOME}/.local/share/provingkit/artifacts/claude/42e4f84fb5b5b38b9fdafb7888722afdd964ca5fef0e8164ba47d7c2dda3234c"
             },
-            "installLocation": "${CASE}/home/.local/share/provingkit/artifacts/claude/42e4f84fb5b5b38b9fdafb7888722afdd964ca5fef0e8164ba47d7c2dda3234c",
+            "installLocation": "${CASE_HOME}/.local/share/provingkit/artifacts/claude/42e4f84fb5b5b38b9fdafb7888722afdd964ca5fef0e8164ba47d7c2dda3234c",
             "lastUpdated": "2026-09-18T06:14:33.097Z"
           },
           "observation": "Neither entry declares autoUpdate; no interactive session was run."
@@ -4120,14 +4120,14 @@
         "sha256": "6c752e2cc7c110c9df15f26d8d134d438c5ae95dbd610efc1a308bf7f9c5f6c1"
       },
       "environment": {
-        "HOME": "${CASE}/home",
-        "XDG_CONFIG_HOME": "${CASE}/home/.config",
-        "XDG_DATA_HOME": "${CASE}/home/.local/share",
-        "XDG_STATE_HOME": "${CASE}/home/.local/state",
-        "XDG_CACHE_HOME": "${CASE}/home/.cache",
-        "CODEX_HOME": "${CASE}/home/.codex",
-        "CLAUDE_CONFIG_DIR": "${CASE}/home/.claude",
-        "NODE_COMPILE_CACHE": "${CASE}/home/.cache/node-compile",
+        "HOME": "${CASE_HOME}",
+        "XDG_CONFIG_HOME": "${CASE_HOME}/.config",
+        "XDG_DATA_HOME": "${CASE_HOME}/.local/share",
+        "XDG_STATE_HOME": "${CASE_HOME}/.local/state",
+        "XDG_CACHE_HOME": "${CASE_HOME}/.cache",
+        "CODEX_HOME": "${CASE_HOME}/.codex",
+        "CLAUDE_CONFIG_DIR": "${CASE_HOME}/.claude",
+        "NODE_COMPILE_CACHE": "${CASE_HOME}/.cache/node-compile",
         "TMPDIR": "${CASE}/tmp",
         "PATH": "/usr/bin:/bin:/usr/local/bin",
         "LANG": "C.UTF-8"
@@ -4171,7 +4171,7 @@
             "plugin",
             "marketplace",
             "add",
-            "${CASE}/home/.local/share/provingkit/marketplace/claude",
+            "${CASE_HOME}/.local/share/provingkit/marketplace/claude",
             "--scope",
             "user"
           ],
@@ -4243,7 +4243,7 @@
             "--json"
           ],
           "returncode": 0,
-          "stdout": "[\n  {\n    \"id\": \"mergecraft@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/mergecraft/1.0.0\",\n    \"installedAt\": \"2026-09-18T05:49:25.295Z\",\n    \"lastUpdated\": \"2026-09-18T05:49:25.295Z\"\n  },\n  {\n    \"id\": \"proseweaving@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/proseweaving/1.0.0\",\n    \"installedAt\": \"2026-09-18T05:49:24.456Z\",\n    \"lastUpdated\": \"2026-09-18T05:49:24.456Z\"\n  },\n  {\n    \"id\": \"versionkeeping@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": false,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/versionkeeping/1.0.0\",\n    \"installedAt\": \"2026-09-18T05:49:24.876Z\",\n    \"lastUpdated\": \"2026-09-18T05:49:24.876Z\"\n  }\n]\n",
+          "stdout": "[\n  {\n    \"id\": \"mergecraft@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/mergecraft/1.0.0\",\n    \"installedAt\": \"2026-09-18T05:49:25.295Z\",\n    \"lastUpdated\": \"2026-09-18T05:49:25.295Z\"\n  },\n  {\n    \"id\": \"proseweaving@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/proseweaving/1.0.0\",\n    \"installedAt\": \"2026-09-18T05:49:24.456Z\",\n    \"lastUpdated\": \"2026-09-18T05:49:24.456Z\"\n  },\n  {\n    \"id\": \"versionkeeping@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": false,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/versionkeeping/1.0.0\",\n    \"installedAt\": \"2026-09-18T05:49:24.876Z\",\n    \"lastUpdated\": \"2026-09-18T05:49:24.876Z\"\n  }\n]\n",
           "stderr": ""
         },
         {
@@ -4307,7 +4307,7 @@
             "--json"
           ],
           "returncode": 0,
-          "stdout": "[\n  {\n    \"id\": \"mergecraft@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/mergecraft/1.0.0\",\n    \"installedAt\": \"2026-09-18T05:49:25.295Z\",\n    \"lastUpdated\": \"2026-09-18T05:49:25.295Z\"\n  },\n  {\n    \"id\": \"proseweaving@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/proseweaving/1.0.0\",\n    \"installedAt\": \"2026-09-18T05:49:27.391Z\",\n    \"lastUpdated\": \"2026-09-18T05:49:27.391Z\"\n  },\n  {\n    \"id\": \"versionkeeping@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": false,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/versionkeeping/1.0.0\",\n    \"installedAt\": \"2026-09-18T05:49:24.876Z\",\n    \"lastUpdated\": \"2026-09-18T05:49:24.876Z\"\n  }\n]\n",
+          "stdout": "[\n  {\n    \"id\": \"mergecraft@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/mergecraft/1.0.0\",\n    \"installedAt\": \"2026-09-18T05:49:25.295Z\",\n    \"lastUpdated\": \"2026-09-18T05:49:25.295Z\"\n  },\n  {\n    \"id\": \"proseweaving@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/proseweaving/1.0.0\",\n    \"installedAt\": \"2026-09-18T05:49:27.391Z\",\n    \"lastUpdated\": \"2026-09-18T05:49:27.391Z\"\n  },\n  {\n    \"id\": \"versionkeeping@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": false,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/versionkeeping/1.0.0\",\n    \"installedAt\": \"2026-09-18T05:49:24.876Z\",\n    \"lastUpdated\": \"2026-09-18T05:49:24.876Z\"\n  }\n]\n",
           "stderr": ""
         },
         {
@@ -4318,7 +4318,7 @@
             "--json"
           ],
           "returncode": 0,
-          "stdout": "[\n  {\n    \"id\": \"mergecraft@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/mergecraft/1.0.0\",\n    \"installedAt\": \"2026-09-18T05:49:25.295Z\",\n    \"lastUpdated\": \"2026-09-18T05:49:25.295Z\"\n  },\n  {\n    \"id\": \"proseweaving@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/proseweaving/1.0.0\",\n    \"installedAt\": \"2026-09-18T05:49:27.391Z\",\n    \"lastUpdated\": \"2026-09-18T05:49:27.391Z\"\n  },\n  {\n    \"id\": \"versionkeeping@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": false,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/versionkeeping/1.0.0\",\n    \"installedAt\": \"2026-09-18T05:49:24.876Z\",\n    \"lastUpdated\": \"2026-09-18T05:49:24.876Z\"\n  }\n]\n",
+          "stdout": "[\n  {\n    \"id\": \"mergecraft@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/mergecraft/1.0.0\",\n    \"installedAt\": \"2026-09-18T05:49:25.295Z\",\n    \"lastUpdated\": \"2026-09-18T05:49:25.295Z\"\n  },\n  {\n    \"id\": \"proseweaving@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/proseweaving/1.0.0\",\n    \"installedAt\": \"2026-09-18T05:49:27.391Z\",\n    \"lastUpdated\": \"2026-09-18T05:49:27.391Z\"\n  },\n  {\n    \"id\": \"versionkeeping@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": false,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/versionkeeping/1.0.0\",\n    \"installedAt\": \"2026-09-18T05:49:24.876Z\",\n    \"lastUpdated\": \"2026-09-18T05:49:24.876Z\"\n  }\n]\n",
           "stderr": ""
         },
         {
@@ -4343,7 +4343,7 @@
             "--json"
           ],
           "returncode": 0,
-          "stdout": "[\n  {\n    \"id\": \"mergecraft@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/mergecraft/1.0.0\",\n    \"installedAt\": \"2026-09-18T05:49:25.295Z\",\n    \"lastUpdated\": \"2026-09-18T05:49:25.295Z\"\n  },\n  {\n    \"id\": \"proseweaving@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/proseweaving/1.0.0\",\n    \"installedAt\": \"2026-09-18T05:52:28.018Z\",\n    \"lastUpdated\": \"2026-09-18T05:52:28.018Z\"\n  },\n  {\n    \"id\": \"versionkeeping@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": false,\n    \"installPath\": \"${CASE}/home/.claude/plugins/cache/provingkit/versionkeeping/1.0.0\",\n    \"installedAt\": \"2026-09-18T05:49:24.876Z\",\n    \"lastUpdated\": \"2026-09-18T05:49:24.876Z\"\n  }\n]\n",
+          "stdout": "[\n  {\n    \"id\": \"mergecraft@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/mergecraft/1.0.0\",\n    \"installedAt\": \"2026-09-18T05:49:25.295Z\",\n    \"lastUpdated\": \"2026-09-18T05:49:25.295Z\"\n  },\n  {\n    \"id\": \"proseweaving@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": true,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/proseweaving/1.0.0\",\n    \"installedAt\": \"2026-09-18T05:52:28.018Z\",\n    \"lastUpdated\": \"2026-09-18T05:52:28.018Z\"\n  },\n  {\n    \"id\": \"versionkeeping@provingkit\",\n    \"version\": \"1.0.0\",\n    \"scope\": \"user\",\n    \"enabled\": false,\n    \"installPath\": \"${CASE_HOME}/.claude/plugins/cache/provingkit/versionkeeping/1.0.0\",\n    \"installedAt\": \"2026-09-18T05:49:24.876Z\",\n    \"lastUpdated\": \"2026-09-18T05:49:24.876Z\"\n  }\n]\n",
           "stderr": ""
         }
       ],
@@ -4355,7 +4355,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": true,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/mergecraft/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/mergecraft/1.0.0",
               "installedAt": "2026-09-18T05:49:25.295Z",
               "lastUpdated": "2026-09-18T05:49:25.295Z"
             },
@@ -4364,7 +4364,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": true,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/proseweaving/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/proseweaving/1.0.0",
               "installedAt": "2026-09-18T05:49:24.456Z",
               "lastUpdated": "2026-09-18T05:49:24.456Z"
             },
@@ -4373,7 +4373,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": false,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/versionkeeping/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/versionkeeping/1.0.0",
               "installedAt": "2026-09-18T05:49:24.876Z",
               "lastUpdated": "2026-09-18T05:49:24.876Z"
             }
@@ -4454,7 +4454,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": true,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/mergecraft/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/mergecraft/1.0.0",
               "installedAt": "2026-09-18T05:49:25.295Z",
               "lastUpdated": "2026-09-18T05:49:25.295Z"
             },
@@ -4463,7 +4463,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": true,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/proseweaving/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/proseweaving/1.0.0",
               "installedAt": "2026-09-18T05:49:27.391Z",
               "lastUpdated": "2026-09-18T05:49:27.391Z"
             },
@@ -4472,7 +4472,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": false,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/versionkeeping/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/versionkeeping/1.0.0",
               "installedAt": "2026-09-18T05:49:24.876Z",
               "lastUpdated": "2026-09-18T05:49:24.876Z"
             }
@@ -4553,7 +4553,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": true,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/mergecraft/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/mergecraft/1.0.0",
               "installedAt": "2026-09-18T05:49:25.295Z",
               "lastUpdated": "2026-09-18T05:49:25.295Z"
             },
@@ -4562,7 +4562,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": true,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/proseweaving/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/proseweaving/1.0.0",
               "installedAt": "2026-09-18T05:49:27.391Z",
               "lastUpdated": "2026-09-18T05:49:27.391Z"
             },
@@ -4571,7 +4571,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": false,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/versionkeeping/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/versionkeeping/1.0.0",
               "installedAt": "2026-09-18T05:49:24.876Z",
               "lastUpdated": "2026-09-18T05:49:24.876Z"
             }
@@ -4635,7 +4635,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": true,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/mergecraft/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/mergecraft/1.0.0",
               "installedAt": "2026-09-18T05:49:25.295Z",
               "lastUpdated": "2026-09-18T05:49:25.295Z"
             },
@@ -4644,7 +4644,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": true,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/proseweaving/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/proseweaving/1.0.0",
               "installedAt": "2026-09-18T05:52:28.018Z",
               "lastUpdated": "2026-09-18T05:52:28.018Z"
             },
@@ -4653,7 +4653,7 @@
               "version": "1.0.0",
               "scope": "user",
               "enabled": false,
-              "installPath": "${CASE}/home/.claude/plugins/cache/provingkit/versionkeeping/1.0.0",
+              "installPath": "${CASE_HOME}/.claude/plugins/cache/provingkit/versionkeeping/1.0.0",
               "installedAt": "2026-09-18T05:49:24.876Z",
               "lastUpdated": "2026-09-18T05:49:24.876Z"
             }
@@ -4735,14 +4735,14 @@
         "sha256": "660e159a49e823ac8e5986cb238f73158ce4b957d40d9292f8de90862644b501"
       },
       "environment": {
-        "HOME": "${CASE}/home",
-        "XDG_CONFIG_HOME": "${CASE}/home/.config",
-        "XDG_DATA_HOME": "${CASE}/home/.local/share",
-        "XDG_STATE_HOME": "${CASE}/home/.local/state",
-        "XDG_CACHE_HOME": "${CASE}/home/.cache",
-        "CODEX_HOME": "${CASE}/home/.codex",
-        "CLAUDE_CONFIG_DIR": "${CASE}/home/.claude",
-        "NODE_COMPILE_CACHE": "${CASE}/home/.cache/node-compile",
+        "HOME": "${CASE_HOME}",
+        "XDG_CONFIG_HOME": "${CASE_HOME}/.config",
+        "XDG_DATA_HOME": "${CASE_HOME}/.local/share",
+        "XDG_STATE_HOME": "${CASE_HOME}/.local/state",
+        "XDG_CACHE_HOME": "${CASE_HOME}/.cache",
+        "CODEX_HOME": "${CASE_HOME}/.codex",
+        "CLAUDE_CONFIG_DIR": "${CASE_HOME}/.claude",
+        "NODE_COMPILE_CACHE": "${CASE_HOME}/.cache/node-compile",
         "TMPDIR": "${CASE}/tmp",
         "PATH": "/usr/bin:/bin:/usr/local/bin",
         "LANG": "C.UTF-8"
@@ -4788,11 +4788,11 @@
             "plugin",
             "marketplace",
             "add",
-            "${CASE}/home/.local/share/provingkit/marketplace/agent-plugins",
+            "${CASE_HOME}/.local/share/provingkit/marketplace/agent-plugins",
             "--json"
           ],
           "returncode": 0,
-          "stdout": "{\n  \"marketplaceName\": \"provingkit\",\n  \"installedRoot\": \"${CASE}/home/.local/share/provingkit/marketplace/agent-plugins\",\n  \"alreadyAdded\": false\n}\n",
+          "stdout": "{\n  \"marketplaceName\": \"provingkit\",\n  \"installedRoot\": \"${CASE_HOME}/.local/share/provingkit/marketplace/agent-plugins\",\n  \"alreadyAdded\": false\n}\n",
           "stderr": ""
         },
         {
@@ -4804,7 +4804,7 @@
             "--json"
           ],
           "returncode": 0,
-          "stdout": "{\n  \"pluginId\": \"proseweaving@provingkit\",\n  \"name\": \"proseweaving\",\n  \"marketplaceName\": \"provingkit\",\n  \"version\": \"local\",\n  \"installedPath\": \"${CASE}/home/.codex/plugins/cache/provingkit/proseweaving/local\",\n  \"authPolicy\": \"ON_INSTALL\"\n}\n",
+          "stdout": "{\n  \"pluginId\": \"proseweaving@provingkit\",\n  \"name\": \"proseweaving\",\n  \"marketplaceName\": \"provingkit\",\n  \"version\": \"local\",\n  \"installedPath\": \"${CASE_HOME}/.codex/plugins/cache/provingkit/proseweaving/local\",\n  \"authPolicy\": \"ON_INSTALL\"\n}\n",
           "stderr": ""
         },
         {
@@ -4816,7 +4816,7 @@
             "--json"
           ],
           "returncode": 0,
-          "stdout": "{\n  \"pluginId\": \"versionkeeping@provingkit\",\n  \"name\": \"versionkeeping\",\n  \"marketplaceName\": \"provingkit\",\n  \"version\": \"local\",\n  \"installedPath\": \"${CASE}/home/.codex/plugins/cache/provingkit/versionkeeping/local\",\n  \"authPolicy\": \"ON_INSTALL\"\n}\n",
+          "stdout": "{\n  \"pluginId\": \"versionkeeping@provingkit\",\n  \"name\": \"versionkeeping\",\n  \"marketplaceName\": \"provingkit\",\n  \"version\": \"local\",\n  \"installedPath\": \"${CASE_HOME}/.codex/plugins/cache/provingkit/versionkeeping/local\",\n  \"authPolicy\": \"ON_INSTALL\"\n}\n",
           "stderr": ""
         },
         {
@@ -4828,7 +4828,7 @@
             "--json"
           ],
           "returncode": 0,
-          "stdout": "{\n  \"pluginId\": \"mergecraft@provingkit\",\n  \"name\": \"mergecraft\",\n  \"marketplaceName\": \"provingkit\",\n  \"version\": \"local\",\n  \"installedPath\": \"${CASE}/home/.codex/plugins/cache/provingkit/mergecraft/local\",\n  \"authPolicy\": \"ON_INSTALL\"\n}\n",
+          "stdout": "{\n  \"pluginId\": \"mergecraft@provingkit\",\n  \"name\": \"mergecraft\",\n  \"marketplaceName\": \"provingkit\",\n  \"version\": \"local\",\n  \"installedPath\": \"${CASE_HOME}/.codex/plugins/cache/provingkit/mergecraft/local\",\n  \"authPolicy\": \"ON_INSTALL\"\n}\n",
           "stderr": ""
         },
         {
@@ -4841,7 +4841,7 @@
             "--json"
           ],
           "returncode": 0,
-          "stdout": "{\n  \"installed\": [\n    {\n      \"pluginId\": \"proseweaving@provingkit\",\n      \"name\": \"proseweaving\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE}/home/.local/share/provingkit/marketplace/agent-plugins/plugins/proseweaving\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE}/home/.local/share/provingkit/marketplace/agent-plugins\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    },\n    {\n      \"pluginId\": \"versionkeeping@provingkit\",\n      \"name\": \"versionkeeping\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE}/home/.local/share/provingkit/marketplace/agent-plugins/plugins/versionkeeping\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE}/home/.local/share/provingkit/marketplace/agent-plugins\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    },\n    {\n      \"pluginId\": \"mergecraft@provingkit\",\n      \"name\": \"mergecraft\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE}/home/.local/share/provingkit/marketplace/agent-plugins/plugins/mergecraft\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE}/home/.local/share/provingkit/marketplace/agent-plugins\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    }\n  ],\n  \"available\": []\n}\n",
+          "stdout": "{\n  \"installed\": [\n    {\n      \"pluginId\": \"proseweaving@provingkit\",\n      \"name\": \"proseweaving\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE_HOME}/.local/share/provingkit/marketplace/agent-plugins/plugins/proseweaving\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE_HOME}/.local/share/provingkit/marketplace/agent-plugins\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    },\n    {\n      \"pluginId\": \"versionkeeping@provingkit\",\n      \"name\": \"versionkeeping\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE_HOME}/.local/share/provingkit/marketplace/agent-plugins/plugins/versionkeeping\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE_HOME}/.local/share/provingkit/marketplace/agent-plugins\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    },\n    {\n      \"pluginId\": \"mergecraft@provingkit\",\n      \"name\": \"mergecraft\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE_HOME}/.local/share/provingkit/marketplace/agent-plugins/plugins/mergecraft\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE_HOME}/.local/share/provingkit/marketplace/agent-plugins\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    }\n  ],\n  \"available\": []\n}\n",
           "stderr": ""
         },
         {
@@ -4890,7 +4890,7 @@
             "--json"
           ],
           "returncode": 0,
-          "stdout": "{\n  \"pluginId\": \"proseweaving@provingkit\",\n  \"name\": \"proseweaving\",\n  \"marketplaceName\": \"provingkit\",\n  \"version\": \"local\",\n  \"installedPath\": \"${CASE}/home/.codex/plugins/cache/provingkit/proseweaving/local\",\n  \"authPolicy\": \"ON_INSTALL\"\n}\n",
+          "stdout": "{\n  \"pluginId\": \"proseweaving@provingkit\",\n  \"name\": \"proseweaving\",\n  \"marketplaceName\": \"provingkit\",\n  \"version\": \"local\",\n  \"installedPath\": \"${CASE_HOME}/.codex/plugins/cache/provingkit/proseweaving/local\",\n  \"authPolicy\": \"ON_INSTALL\"\n}\n",
           "stderr": ""
         },
         {
@@ -4903,7 +4903,7 @@
             "--json"
           ],
           "returncode": 0,
-          "stdout": "{\n  \"installed\": [\n    {\n      \"pluginId\": \"proseweaving@provingkit\",\n      \"name\": \"proseweaving\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE}/home/.local/share/provingkit/marketplace/agent-plugins/plugins/proseweaving\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE}/home/.local/share/provingkit/marketplace/agent-plugins\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    },\n    {\n      \"pluginId\": \"versionkeeping@provingkit\",\n      \"name\": \"versionkeeping\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE}/home/.local/share/provingkit/marketplace/agent-plugins/plugins/versionkeeping\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE}/home/.local/share/provingkit/marketplace/agent-plugins\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    },\n    {\n      \"pluginId\": \"mergecraft@provingkit\",\n      \"name\": \"mergecraft\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE}/home/.local/share/provingkit/marketplace/agent-plugins/plugins/mergecraft\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE}/home/.local/share/provingkit/marketplace/agent-plugins\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    }\n  ],\n  \"available\": []\n}\n",
+          "stdout": "{\n  \"installed\": [\n    {\n      \"pluginId\": \"proseweaving@provingkit\",\n      \"name\": \"proseweaving\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE_HOME}/.local/share/provingkit/marketplace/agent-plugins/plugins/proseweaving\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE_HOME}/.local/share/provingkit/marketplace/agent-plugins\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    },\n    {\n      \"pluginId\": \"versionkeeping@provingkit\",\n      \"name\": \"versionkeeping\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE_HOME}/.local/share/provingkit/marketplace/agent-plugins/plugins/versionkeeping\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE_HOME}/.local/share/provingkit/marketplace/agent-plugins\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    },\n    {\n      \"pluginId\": \"mergecraft@provingkit\",\n      \"name\": \"mergecraft\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE_HOME}/.local/share/provingkit/marketplace/agent-plugins/plugins/mergecraft\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE_HOME}/.local/share/provingkit/marketplace/agent-plugins\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    }\n  ],\n  \"available\": []\n}\n",
           "stderr": ""
         },
         {
@@ -4916,7 +4916,7 @@
             "--json"
           ],
           "returncode": 0,
-          "stdout": "{\n  \"installed\": [\n    {\n      \"pluginId\": \"versionkeeping@provingkit\",\n      \"name\": \"versionkeeping\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE}/home/.local/share/provingkit/marketplace/agent-plugins/plugins/versionkeeping\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE}/home/.local/share/provingkit/marketplace/agent-plugins\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    },\n    {\n      \"pluginId\": \"mergecraft@provingkit\",\n      \"name\": \"mergecraft\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE}/home/.local/share/provingkit/marketplace/agent-plugins/plugins/mergecraft\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE}/home/.local/share/provingkit/marketplace/agent-plugins\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    }\n  ],\n  \"available\": []\n}\n",
+          "stdout": "{\n  \"installed\": [\n    {\n      \"pluginId\": \"versionkeeping@provingkit\",\n      \"name\": \"versionkeeping\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE_HOME}/.local/share/provingkit/marketplace/agent-plugins/plugins/versionkeeping\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE_HOME}/.local/share/provingkit/marketplace/agent-plugins\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    },\n    {\n      \"pluginId\": \"mergecraft@provingkit\",\n      \"name\": \"mergecraft\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE_HOME}/.local/share/provingkit/marketplace/agent-plugins/plugins/mergecraft\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE_HOME}/.local/share/provingkit/marketplace/agent-plugins\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    }\n  ],\n  \"available\": []\n}\n",
           "stderr": ""
         },
         {
@@ -4928,7 +4928,7 @@
             "--json"
           ],
           "returncode": 0,
-          "stdout": "{\n  \"pluginId\": \"proseweaving@provingkit\",\n  \"name\": \"proseweaving\",\n  \"marketplaceName\": \"provingkit\",\n  \"version\": \"local\",\n  \"installedPath\": \"${CASE}/home/.codex/plugins/cache/provingkit/proseweaving/local\",\n  \"authPolicy\": \"ON_INSTALL\"\n}\n",
+          "stdout": "{\n  \"pluginId\": \"proseweaving@provingkit\",\n  \"name\": \"proseweaving\",\n  \"marketplaceName\": \"provingkit\",\n  \"version\": \"local\",\n  \"installedPath\": \"${CASE_HOME}/.codex/plugins/cache/provingkit/proseweaving/local\",\n  \"authPolicy\": \"ON_INSTALL\"\n}\n",
           "stderr": ""
         },
         {
@@ -4941,7 +4941,7 @@
             "--json"
           ],
           "returncode": 0,
-          "stdout": "{\n  \"installed\": [\n    {\n      \"pluginId\": \"proseweaving@provingkit\",\n      \"name\": \"proseweaving\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE}/home/.local/share/provingkit/marketplace/agent-plugins/plugins/proseweaving\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE}/home/.local/share/provingkit/marketplace/agent-plugins\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    },\n    {\n      \"pluginId\": \"versionkeeping@provingkit\",\n      \"name\": \"versionkeeping\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE}/home/.local/share/provingkit/marketplace/agent-plugins/plugins/versionkeeping\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE}/home/.local/share/provingkit/marketplace/agent-plugins\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    },\n    {\n      \"pluginId\": \"mergecraft@provingkit\",\n      \"name\": \"mergecraft\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE}/home/.local/share/provingkit/marketplace/agent-plugins/plugins/mergecraft\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE}/home/.local/share/provingkit/marketplace/agent-plugins\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    }\n  ],\n  \"available\": []\n}\n",
+          "stdout": "{\n  \"installed\": [\n    {\n      \"pluginId\": \"proseweaving@provingkit\",\n      \"name\": \"proseweaving\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE_HOME}/.local/share/provingkit/marketplace/agent-plugins/plugins/proseweaving\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE_HOME}/.local/share/provingkit/marketplace/agent-plugins\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    },\n    {\n      \"pluginId\": \"versionkeeping@provingkit\",\n      \"name\": \"versionkeeping\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE_HOME}/.local/share/provingkit/marketplace/agent-plugins/plugins/versionkeeping\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE_HOME}/.local/share/provingkit/marketplace/agent-plugins\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    },\n    {\n      \"pluginId\": \"mergecraft@provingkit\",\n      \"name\": \"mergecraft\",\n      \"marketplaceName\": \"provingkit\",\n      \"version\": \"local\",\n      \"installed\": true,\n      \"enabled\": true,\n      \"source\": {\n        \"source\": \"local\",\n        \"path\": \"${CASE_HOME}/.local/share/provingkit/marketplace/agent-plugins/plugins/mergecraft\"\n      },\n      \"marketplaceSource\": {\n        \"sourceType\": \"local\",\n        \"source\": \"${CASE_HOME}/.local/share/provingkit/marketplace/agent-plugins\"\n      },\n      \"installPolicy\": \"AVAILABLE\",\n      \"authPolicy\": \"ON_INSTALL\"\n    }\n  ],\n  \"available\": []\n}\n",
           "stderr": ""
         }
       ],
@@ -4957,11 +4957,11 @@
               "enabled": true,
               "source": {
                 "source": "local",
-                "path": "${CASE}/home/.local/share/provingkit/marketplace/agent-plugins/plugins/proseweaving"
+                "path": "${CASE_HOME}/.local/share/provingkit/marketplace/agent-plugins/plugins/proseweaving"
               },
               "marketplaceSource": {
                 "sourceType": "local",
-                "source": "${CASE}/home/.local/share/provingkit/marketplace/agent-plugins"
+                "source": "${CASE_HOME}/.local/share/provingkit/marketplace/agent-plugins"
               },
               "installPolicy": "AVAILABLE",
               "authPolicy": "ON_INSTALL"
@@ -4975,11 +4975,11 @@
               "enabled": true,
               "source": {
                 "source": "local",
-                "path": "${CASE}/home/.local/share/provingkit/marketplace/agent-plugins/plugins/versionkeeping"
+                "path": "${CASE_HOME}/.local/share/provingkit/marketplace/agent-plugins/plugins/versionkeeping"
               },
               "marketplaceSource": {
                 "sourceType": "local",
-                "source": "${CASE}/home/.local/share/provingkit/marketplace/agent-plugins"
+                "source": "${CASE_HOME}/.local/share/provingkit/marketplace/agent-plugins"
               },
               "installPolicy": "AVAILABLE",
               "authPolicy": "ON_INSTALL"
@@ -4993,11 +4993,11 @@
               "enabled": true,
               "source": {
                 "source": "local",
-                "path": "${CASE}/home/.local/share/provingkit/marketplace/agent-plugins/plugins/mergecraft"
+                "path": "${CASE_HOME}/.local/share/provingkit/marketplace/agent-plugins/plugins/mergecraft"
               },
               "marketplaceSource": {
                 "sourceType": "local",
-                "source": "${CASE}/home/.local/share/provingkit/marketplace/agent-plugins"
+                "source": "${CASE_HOME}/.local/share/provingkit/marketplace/agent-plugins"
               },
               "installPolicy": "AVAILABLE",
               "authPolicy": "ON_INSTALL"
@@ -5089,11 +5089,11 @@
               "enabled": true,
               "source": {
                 "source": "local",
-                "path": "${CASE}/home/.local/share/provingkit/marketplace/agent-plugins/plugins/proseweaving"
+                "path": "${CASE_HOME}/.local/share/provingkit/marketplace/agent-plugins/plugins/proseweaving"
               },
               "marketplaceSource": {
                 "sourceType": "local",
-                "source": "${CASE}/home/.local/share/provingkit/marketplace/agent-plugins"
+                "source": "${CASE_HOME}/.local/share/provingkit/marketplace/agent-plugins"
               },
               "installPolicy": "AVAILABLE",
               "authPolicy": "ON_INSTALL"
@@ -5107,11 +5107,11 @@
               "enabled": true,
               "source": {
                 "source": "local",
-                "path": "${CASE}/home/.local/share/provingkit/marketplace/agent-plugins/plugins/versionkeeping"
+                "path": "${CASE_HOME}/.local/share/provingkit/marketplace/agent-plugins/plugins/versionkeeping"
               },
               "marketplaceSource": {
                 "sourceType": "local",
-                "source": "${CASE}/home/.local/share/provingkit/marketplace/agent-plugins"
+                "source": "${CASE_HOME}/.local/share/provingkit/marketplace/agent-plugins"
               },
               "installPolicy": "AVAILABLE",
               "authPolicy": "ON_INSTALL"
@@ -5125,11 +5125,11 @@
               "enabled": true,
               "source": {
                 "source": "local",
-                "path": "${CASE}/home/.local/share/provingkit/marketplace/agent-plugins/plugins/mergecraft"
+                "path": "${CASE_HOME}/.local/share/provingkit/marketplace/agent-plugins/plugins/mergecraft"
               },
               "marketplaceSource": {
                 "sourceType": "local",
-                "source": "${CASE}/home/.local/share/provingkit/marketplace/agent-plugins"
+                "source": "${CASE_HOME}/.local/share/provingkit/marketplace/agent-plugins"
               },
               "installPolicy": "AVAILABLE",
               "authPolicy": "ON_INSTALL"
@@ -5221,11 +5221,11 @@
               "enabled": true,
               "source": {
                 "source": "local",
-                "path": "${CASE}/home/.local/share/provingkit/marketplace/agent-plugins/plugins/versionkeeping"
+                "path": "${CASE_HOME}/.local/share/provingkit/marketplace/agent-plugins/plugins/versionkeeping"
               },
               "marketplaceSource": {
                 "sourceType": "local",
-                "source": "${CASE}/home/.local/share/provingkit/marketplace/agent-plugins"
+                "source": "${CASE_HOME}/.local/share/provingkit/marketplace/agent-plugins"
               },
               "installPolicy": "AVAILABLE",
               "authPolicy": "ON_INSTALL"
@@ -5239,11 +5239,11 @@
               "enabled": true,
               "source": {
                 "source": "local",
-                "path": "${CASE}/home/.local/share/provingkit/marketplace/agent-plugins/plugins/mergecraft"
+                "path": "${CASE_HOME}/.local/share/provingkit/marketplace/agent-plugins/plugins/mergecraft"
               },
               "marketplaceSource": {
                 "sourceType": "local",
-                "source": "${CASE}/home/.local/share/provingkit/marketplace/agent-plugins"
+                "source": "${CASE_HOME}/.local/share/provingkit/marketplace/agent-plugins"
               },
               "installPolicy": "AVAILABLE",
               "authPolicy": "ON_INSTALL"
@@ -5316,11 +5316,11 @@
               "enabled": true,
               "source": {
                 "source": "local",
-                "path": "${CASE}/home/.local/share/provingkit/marketplace/agent-plugins/plugins/proseweaving"
+                "path": "${CASE_HOME}/.local/share/provingkit/marketplace/agent-plugins/plugins/proseweaving"
               },
               "marketplaceSource": {
                 "sourceType": "local",
-                "source": "${CASE}/home/.local/share/provingkit/marketplace/agent-plugins"
+                "source": "${CASE_HOME}/.local/share/provingkit/marketplace/agent-plugins"
               },
               "installPolicy": "AVAILABLE",
               "authPolicy": "ON_INSTALL"
@@ -5334,11 +5334,11 @@
               "enabled": true,
               "source": {
                 "source": "local",
-                "path": "${CASE}/home/.local/share/provingkit/marketplace/agent-plugins/plugins/versionkeeping"
+                "path": "${CASE_HOME}/.local/share/provingkit/marketplace/agent-plugins/plugins/versionkeeping"
               },
               "marketplaceSource": {
                 "sourceType": "local",
-                "source": "${CASE}/home/.local/share/provingkit/marketplace/agent-plugins"
+                "source": "${CASE_HOME}/.local/share/provingkit/marketplace/agent-plugins"
               },
               "installPolicy": "AVAILABLE",
               "authPolicy": "ON_INSTALL"
@@ -5352,11 +5352,11 @@
               "enabled": true,
               "source": {
                 "source": "local",
-                "path": "${CASE}/home/.local/share/provingkit/marketplace/agent-plugins/plugins/mergecraft"
+                "path": "${CASE_HOME}/.local/share/provingkit/marketplace/agent-plugins/plugins/mergecraft"
               },
               "marketplaceSource": {
                 "sourceType": "local",
-                "source": "${CASE}/home/.local/share/provingkit/marketplace/agent-plugins"
+                "source": "${CASE_HOME}/.local/share/provingkit/marketplace/agent-plugins"
               },
               "installPolicy": "AVAILABLE",
               "authPolicy": "ON_INSTALL"
