@@ -98,6 +98,8 @@ for latest_ready_reason in existing-session concurrent-repair repaired; do
 done
 rm -f -- "$latest_readiness_probe"
 test_process_fixture_run_signal_probe_mode
+zsh "$repo_root/tests/github-identity-binding.zsh" >/dev/null ||
+  fail 'GitHub identity binding checks must pass'
 zsh "$repo_root/tests/proton-pass-agent-readiness.zsh" >/dev/null ||
   fail 'the agent readiness consumer/helper seam must pass'
 kill_audit_library=
@@ -553,6 +555,8 @@ cat > "$profile_dir/firecrawl.env" <<'EOF'
 FIRECRAWL_API_KEY=pass://cli-secrets/firecrawl/password
 EOF
 cat > "$profile_dir/github.env" <<'EOF'
+# secret-exec-github-profile=github-fixture-personal
+# secret-exec-github-login=nisavid
 GITHUB_PERSONAL_ACCESS_TOKEN=pass://cli-secrets/github-mcp/password
 EOF
 cat > "$profile_dir/greptile.env" <<'EOF'
@@ -668,6 +672,14 @@ EOF
 chmod +x "$homebrew_cellar_bin/pass-cli"
 ln -s ../Cellar/proton-pass-cli/2.3.2/bin/pass-cli \
   "$homebrew_prefix/bin/pass-cli"
+
+cat > "$fake_bin/gh" <<'EOF'
+#!/usr/bin/env zsh
+set -euo pipefail
+[[ $GH_TOKEN == github-canary ]] || exit 72
+print -r -- nisavid
+EOF
+chmod +x "$fake_bin/gh"
 
 cat > "$native_store_adapter" <<'EOF'
 #!/bin/zsh -f

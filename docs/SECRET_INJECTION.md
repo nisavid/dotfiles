@@ -14,6 +14,45 @@ Chezmoi keeps the profile catalog encrypted. Apply renders individual profile
 files into a mode-`0700` directory with mode-`0600` files. Profile names and
 credential names must be unique and syntactically valid.
 
+### Host-bound GitHub profiles
+
+The GitHub consumer is selected from an encrypted host binding. Each supported
+host renders its selected profile and expected GitHub.com login.
+There is no fallback `github` profile: an unknown or incomplete hostname
+binding fails during rendering.
+
+The rendered `github.env` file carries only the selected profile name and
+expected login as comments alongside the process-scoped token locator. Before
+the consumer starts, `secret-exec github` runs a bounded
+`gh api --hostname github.com user` check
+with the resolved token held in the child environment. It compares the login
+with the rendered expectation and reports only a generic failure, so a stale
+or cross-host credential cannot silently start the MCP process.
+
+Codex's configured `github` MCP launches GitHub's remote server through
+`secret-exec` and `mcp-remote`. A separately enabled GitHub app has its own
+authentication; its plugin label does not establish which route a tool uses.
+
+After updating a credential or profile, verify both a fresh configured MCP
+connection and the active harness's `get_me` tool. An existing process can retain
+the credential injected at startup. If necessary, reinitialize that connection
+and repeat the identity query; configuration inspection alone is not acceptance.
+
+For a launcher-only check, run `secret-exec github -- /usr/bin/true`: the launcher's
+own guard verifies the injected token. Running an unqualified `gh api user` as
+the child is not proof of that token's identity, because `gh` does not consume
+`GITHUB_PERSONAL_ACCESS_TOKEN` and may use its separately stored credentials.
+Keep credential values out of output and inspect only the returned login or
+success status. Compare the installed launcher's bytes with the managed source
+before attributing a failed check to configuration or the stored credential.
+
+If startup fails, distinguish the readiness helper's diagnostic from MCP
+initialization or provider errors. Verify failures under the intended host
+permissions before diagnosing a read-only home directory or inaccessible
+desktop keyring; a restricted tool sandbox can produce those symptoms. Once
+readiness passes, retry the actual MCP connection and query its identity before
+requesting another application restart.
+
 Each assignment uses one of these locators:
 
 - `pass://...` resolves a single field through the Proton Pass CLI.
