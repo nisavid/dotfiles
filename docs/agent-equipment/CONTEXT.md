@@ -198,23 +198,101 @@ _Avoid_: Best-effort cleanup, rollback claim
 
 **Apply authorization**:
 An externally issued, time-bounded, one-run grant to execute `apply` for one
-exact candidate, desired-state, plan, capability, capture, and expected-case
-binding tuple.
+exact candidate and implementation, plan-action set, capability set, sealed
+capture, preparation bundle, both authority-set tuples, expected-case manifest,
+operator-review package, execution domain, run, and execution nonce.
 _Avoid_: Plan approval, release attestation, candidate-authored permission
 
 **Prepared action authority set**:
 The sole authoritative, sealed, complete pre-invocation projection of every
 validated plan action's adapter-derived normalized pre-state and expected
-post-state. It is produced only after capture and adapter-context validation;
-it binds the complete plan, capability set, sealed capture, exact
-controlled-component set, and per-action operation and compensation context
-before apply authority is issued.
+post-state. The `PreparationGate` produces it only after capture and exact
+adapter-manifest validation. It binds the complete plan, capability set,
+preparation adapter manifest set, sealed capture, exact controlled-component
+set, and per-action operation and compensation context before apply authority
+is issued.
 _Avoid_: Caller state map, partial checkpoint prefix, post-mutation observation
 
 **Capture observation authority set**:
 The sealed, complete normalized pre-state projection for every action in one
-captured plan. Its exact identity and digest are granted by apply authority.
+captured plan. It binds the complete plan, capability set, preparation adapter
+manifest set, and sealed capture. The apply issuer derives its exact identity
+and digest from the authenticated preparation bundle and binds that tuple into
+apply authority.
 _Avoid_: Raw observation list, caller state map, self-authenticating capture
+
+**PreparationGate**:
+A candidate-independent, separately packaged producer that validates every
+static preparation input, invokes only the exact manifest-bound read-only
+adapter `prepare` seam, seals the resulting authority sets, and atomically
+commits a preparation bundle. It cannot issue apply authority, claim an
+execution nonce, open a checkpoint, mutate an adapter, or mutate a host.
+_Avoid_: Candidate controller, apply issuer, executor, checkpoint writer
+
+**PreparedStateFacts**:
+The closed response to one exact `PrepareRequest`. It echoes the request and
+manifest bindings and contains complete normalized captured pre-state and
+expected post-state with their self-digests. It supplies no scope, controlled
+component set, authority identity or digest, or mutation capability.
+_Avoid_: Prepared action authority, caller state map, mutation receipt
+
+**CapabilityBindingSet**:
+The canonical, exact preparation artifact that lists each admitted capability
+identity, capability digest, and manager-version-evidence digest and binds that
+list to the complete semantic capability-set digest. It is not capability
+discovery and does not carry adapter behavior or mutation authority.
+_Avoid_: Capability discovery, adapter manifest set, caller capability list
+
+**Preparation adapter manifest set**:
+The canonical, exact set of adapter implementation manifests that each bind one
+read-only `prepare` seam to `PrepareRequest` and `PreparedStateFacts`. It is
+not a capability discovery result and does not authorize `apply` or adapter
+mutation.
+_Avoid_: Capability set, adapter registry, mutation allowlist
+
+**Preparation gate manifest**:
+The exact installed runtime, code, and schema measurement for one
+`PreparationGate`. The gate identity and manifest digest bind every preparation
+bundle and receipt.
+_Avoid_: Candidate installed-implementation manifest, release launcher manifest
+
+**PreparationBundle**:
+One content-addressed, complete pre-authorization record. It binds the exact
+plan-action set, captured state, `CapabilityBindingSet`, adapter-manifest set,
+gate manifest, capture-observation authority-set bytes, prepared-action
+authority-set bytes, gate identity, and protected store identity and generation.
+_Avoid_: Apply authorization, checkpoint set, partial preparation result
+
+**PreparationReceipt**:
+Closed evidence that the producer-owned preparation store atomically committed
+one exact `PreparationBundle`. It binds the bundle's identity, semantic and byte
+digests, gate identity and manifest digest, and store identity and generation;
+it is never apply authority.
+_Avoid_: Candidate receipt, authorization, nonce claim
+
+**Preparation-store resolution**:
+The authenticated, producer-owned retrieval and byte rehash of a committed
+receipt and its exact bundle. Before issuance, the apply issuer uses it to
+derive the preparation-bundle digest and both authority-set tuples. After
+issuance, apply preclaim repeats it against the authorization-bound bundle
+digest; callers cannot supply trusted expected tuples in either stage.
+_Avoid_: Caller-selected file, receipt echo, post-claim validation
+
+**Apply preclaim**:
+The post-issuance admission performed by `ApplyPreclaimGate` before final live
+comparison or nonce claim. It validates the exact authorization against
+independent trust, resolves the authorization-bound preparation bundle through
+the producer-owned path, and revalidates the receipt, bundle, and all seven
+artifact streams without an adapter, checkpoint store, or authorization-ledger
+operation.
+_Avoid_: Apply issuance, live comparison, nonce claim, execution
+
+**Admitted apply authorization**:
+The immutable typed result of successful apply preclaim. It carries the exact
+validated authorization and authenticated preparation evidence and is the only
+authorization input the executor may accept; it is not a nonce claim or
+permission to skip final live comparison.
+_Avoid_: Raw authorization bytes, preparation receipt, execution start
 
 **Execution nonce**:
 The issuer-generated one-time identity that prevents one apply authorization
