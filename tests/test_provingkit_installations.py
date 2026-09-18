@@ -534,6 +534,42 @@ class InstallationCommandTests(unittest.TestCase):
         self.assertEqual(result["clients"]["codex"]["outcome"], "unavailable")
         self.assertEqual(json.loads(adapter.read_text())["category"], "Changed fixture")
 
+    def test_deleted_native_adapter_is_unavailable_and_preserves_its_receipt(
+        self,
+    ) -> None:
+        self.use_native_clients()
+        self.selection.write_text(
+            json.dumps(fixture_selection(self.home, clients=("codex",)))
+        )
+        installed_code, installed = self.run_command("reconcile")
+        self.assertEqual(installed_code, 0, installed)
+        path = Path(installed["clients"]["codex"]["members"]["proseweaving"]["path"])
+        adapter = path / ".codex-plugin/plugin.json"
+        self.assertTrue(adapter.resolve().is_relative_to(self.home.resolve()))
+        self.assertFalse(adapter.is_symlink())
+        receipt_path = self.home / ".local/state/provingkit/installations.json"
+        before = receipt_path.read_bytes()
+        additions = json.loads(before)["native_additions"]
+        self.assertIn(".codex-plugin/plugin.json", additions["proseweaving"])
+        adapter.unlink()
+
+        status_code, status = self.run_command("status")
+
+        self.assertEqual(status_code, 2, status)
+        self.assertEqual(status["clients"]["codex"]["outcome"], "unavailable")
+        self.assertIn("native adapter drift", status["clients"]["codex"]["message"])
+        self.assertEqual(receipt_path.read_bytes(), before)
+
+        code, result = self.run_command("reconcile")
+
+        self.assertEqual(code, 2, result)
+        self.assertEqual(result["clients"]["codex"]["outcome"], "unavailable")
+        self.assertEqual(result["clients"]["codex"]["actions"], [])
+        self.assertFalse(adapter.exists())
+        self.assertEqual(
+            json.loads(receipt_path.read_text())["native_additions"], additions
+        )
+
     def test_preview_selection_replaces_the_ad_hoc_stage_and_adds_selected_members(
         self,
     ) -> None:
