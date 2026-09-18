@@ -1,0 +1,21 @@
+{{- $selection := includeTemplate "provingkit-selection.tmpl" . | fromJson -}}
+{{- $profile := $selection.profile -}}
+{{- if and $profile (eq .chezmoi.os "linux") (eq $profile.platform.os .chezmoi.os) (eq $profile.platform.arch .chezmoi.arch) -}}
+{{- range $target, $artifact := $profile.artifacts }}
+[{{ printf ".local/share/provingkit/artifacts/%s/%s" $target $artifact.artifact_sha256 | quote }}]
+type = "archive"
+url = {{ $artifact.archive.url | quote }}
+stripComponents = 1
+checksum.sha256 = {{ $artifact.archive.sha256 | quote }}
+
+[{{ printf ".local/share/provingkit/evidence/%s/%s/RECEIPT.json" $target $artifact.artifact_sha256 | quote }}]
+type = "file"
+url = {{ $artifact.receipt.url | quote }}
+checksum.sha256 = {{ $artifact.receipt.sha256 | quote }}
+
+[{{ printf ".local/share/provingkit/evidence/%s/%s/modes.tsv" $target $artifact.artifact_sha256 | quote }}]
+type = "file"
+url = {{ $artifact.modes.url | quote }}
+checksum.sha256 = {{ $artifact.modes.sha256 | quote }}
+{{ end -}}
+{{- end -}}

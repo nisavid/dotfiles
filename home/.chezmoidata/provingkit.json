@@ -1,0 +1,9 @@
+{
+  "provingkit": {
+    "selection": {
+      "default": "",
+      "byHostname": {}
+    },
+    "profiles": {}
+  }
+}

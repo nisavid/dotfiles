@@ -3,6 +3,9 @@
 This context describes portable desired state for skills, plugins, MCPs, and
 other equipment exposed through global agent harnesses.
 
+For the focused chezmoi producer that recreates selected clean Provingkit
+installations, use [the maintained installation procedure](provingkit-installations.md).
+
 ## Language
 
 **Equipment identity**:
