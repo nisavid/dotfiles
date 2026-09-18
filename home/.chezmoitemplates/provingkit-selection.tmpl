@@ -1,0 +1,13 @@
+{{- $name := .provingkit.selection.default -}}
+{{- if hasKey .provingkit.selection.byHostname .chezmoi.hostname -}}
+{{- $name = index .provingkit.selection.byHostname .chezmoi.hostname -}}
+{{- end -}}
+{{- if and $name (not (hasKey .provingkit.profiles $name)) -}}
+{{- fail (printf "unknown Provingkit profile: %s" $name) -}}
+{{- end -}}
+{
+  "schema": "provingkit-installations-v1",
+  "profile_name": {{ if $name }}{{ $name | toJson }}{{ else }}null{{ end }},
+  "host_platform": {"os": {{ .chezmoi.os | toJson }}, "arch": {{ .chezmoi.arch | toJson }}},
+  "profile": {{ if $name }}{{ index .provingkit.profiles $name | toPrettyJson }}{{ else }}null{{ end }}
+}

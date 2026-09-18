@@ -198,6 +198,7 @@ jobs:
             home/private_dot_local/lib/agent-equipment/agent_equipment \
             home/private_dot_local/bin/executable_agent-equipment
           python3 -m unittest tests/test_chezmoi_source_ownership.py
+          python3 -m unittest tests.test_provingkit_installations tests.test_provingkit_deployment
           python3 -m unittest tests/test_agent_equipment_acceptance.py
           python3 -m unittest tests/test_agent_equipment_acceptance_evidence.py
           python3 -m unittest tests/test_agent_equipment_adapter_contract.py
