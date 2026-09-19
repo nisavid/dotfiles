@@ -146,8 +146,9 @@ class ProvisioningInputs:
         self.private.mkdir(mode=0o700)
         self.owner_session = self.private / "owner-session"
         self.primary_session = self.private / "primary-session"
-        self.owner_session.mkdir(mode=0o700)
-        self.primary_session.mkdir(mode=0o700)
+        for profile_root in (self.owner_session, self.primary_session):
+            profile_root.mkdir(mode=0o700)
+            (profile_root / ".session").mkdir(mode=0o700)
         self.source = root / "reviewed-source"
         self.source.mkdir(mode=0o700)
         self.manifest = root / "reviewed-source-manifest.json"
@@ -1532,7 +1533,43 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
             )
             self.assertFalse(state.exists())
 
-    def test_source_test_qualification_completes_and_is_production_ineligible(
+    def test_invalid_existing_profile_roots_fail_before_provider_invocation(
+        self,
+    ) -> None:
+        for field, malformed in (
+            ("owner", "session-child"),
+            ("primary_enrollment", "session-child"),
+            ("owner", "missing-session-child"),
+            ("primary_enrollment", "missing-session-child"),
+        ):
+            with self.subTest(field=field, malformed=malformed):
+                temporary, inputs = self.make_inputs()
+                try:
+                    profile_root = Path(inputs.request_document["sessions"][field])
+                    if malformed == "session-child":
+                        inputs.request_document["sessions"][field] = os.fspath(
+                            profile_root / ".session"
+                        )
+                    else:
+                        (profile_root / ".session").rmdir()
+                    inputs.rewrite_request()
+
+                    result = inputs.run()
+
+                    self.assertEqual(
+                        (result.returncode, result.stdout, result.stderr),
+                        (
+                            1,
+                            b"",
+                            b"age-admission signer provisioning failed\n",
+                        ),
+                    )
+                    self.assertEqual(inputs.log(), [])
+                    self.assertFalse(inputs.state.exists())
+                finally:
+                    temporary.cleanup()
+
+    def test_source_test_qualification_with_existing_profile_roots_completes(
         self,
     ) -> None:
         temporary, inputs = self.make_inputs()
@@ -1581,6 +1618,24 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
 
         log = inputs.log()
         self.assertGreater(len(log), 10)
+        observed_profile_roots = {record["session"] for record in log}
+        expected_profile_roots = {
+            os.fspath(inputs.owner_session),
+            os.fspath(inputs.primary_session),
+        }
+        self.assertTrue(expected_profile_roots <= observed_profile_roots)
+        self.assertTrue(
+            all((profile_root / ".session").is_dir() for profile_root in (
+                inputs.owner_session,
+                inputs.primary_session,
+            ))
+        )
+        self.assertTrue(
+            {
+                os.fspath(inputs.owner_session / ".session"),
+                os.fspath(inputs.primary_session / ".session"),
+            }.isdisjoint(observed_profile_roots)
+        )
         login = [record for record in log if record["kind"] == "agent-login"]
         self.assertEqual(len(login), 1)
         self.assertTrue(login[0]["token_present"])

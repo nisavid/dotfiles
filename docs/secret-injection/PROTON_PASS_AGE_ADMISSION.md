@@ -568,10 +568,25 @@ protection input or effect.
 
 These are prepared interfaces, not authorization to run them. The owner must
 separately authorize every disposable or production item, vault/share,
-enrollment, provider write, revocation, deletion, and retained resource. The
-later protection exception, recovery merge, restoration, and consumer receipts
-for PRs #285, #287, and #302 remain separate owner-held effects outside this
-helper.
+enrollment, provider write, revocation, deletion, and retained resource. That
+live-operation boundary must also name the exact owner and primary profile
+roots, keyring backend, ordinary startup maintenance and invalidation effects,
+timeout behavior, and preservation or incident handling. A timeout does not
+roll back a provider startup effect. The later protection exception, recovery
+merge, restoration, and consumer receipts for PRs #285, #287, and #302 remain
+separate owner-held effects outside this helper.
+
+The concrete operation plan must disclose that `pass-cli agent create --vault`
+resolves the supplied vault by name and upstream selects the first successfully
+opened match; it cannot claim global name uniqueness. Before approval,
+discovery must enumerate the provider's full returned private vault metadata
+set under hard byte and time bounds, capture both streams, reject truncation
+and nonempty standard error, expose only the selected projection, and have the
+operator confirm its vault and share IDs. Successful selected-field readback by
+the exact share ID is the final positive binding. An ambiguous or wrong
+name-resolved grant is an incident and cannot produce a success marker. If the
+operator does not accept that bounded risk, an exact-share-ID grant sequence is
+a separate source-design decision before live qualification.
 
 Stage the provisioning helper from its raw reviewed blob and retain the same
 reviewed object database, commit, manifest, and age archive bindings used by
@@ -614,17 +629,23 @@ request has this exact closed shape:
   },
   "schema": "issue286-provisioning/v2",
   "sessions": {
-    "owner": "/private-operation/sessions/owner",
-    "primary_enrollment": "/private-operation/sessions/primary",
+    "owner": "/private-operation/profiles/owner",
+    "primary_enrollment": "/private-operation/profiles/primary",
     "primary_enrollment_name": "issue286-synthetic-primary"
   }
 }
 ```
 
 Private share and item IDs, vault and agent names, enrollment names, and
-session paths stay only in the mode-`0600` request and private state. The
-request carries no executable path: each child resolves `pass-cli` through its
-ordinary runtime `PATH`. The helper binds the observed path, exact version
+profile-root paths stay only in the mode-`0600` request and private state. The
+v2 request retains the `sessions.owner` and `sessions.primary_enrollment` keys
+for compatibility, but both values are existing Proton profile roots, not their
+`.session` children. Each root and its `.session` child must already be
+caller-owned, nonsymlink, mode-`0700` directories. The helper rejects either
+malformed root before resolving or starting `pass-cli`.
+
+The request carries no executable path: each child resolves `pass-cli` through
+its ordinary runtime `PATH`. The helper binds the observed path, exact version
 output, executable SHA-256, platform, and provider command schema for that one
 operation. The observed path is not a package-location policy and need not be
 equal across hosts.
@@ -655,6 +676,7 @@ The map is limited to claims this procedure consumes:
 | Exact-ID PAT deletion acknowledgment | `pass-cli/src/main.rs`; `pass-cli/src/commands/personal_access_token/mod.rs`; `pass-cli/src/commands/personal_access_token/delete.rs`; `pass/src/personal_access_token/delete.rs` | `pass-cli pat delete --pat-id <retained_pat_id>` validates and passes that ID to the client. The client sends DELETE for that ID and applies the response success guard before the command prints `Personal access token deleted successfully`. No name lookup occurs. |
 | Exact-ID item deletion acknowledgment | `pass-cli/src/commands/item/mod.rs`; `pass-cli/src/commands/item/delete.rs`; `pass/src/item/delete.rs` | The command passes the supplied share and item IDs to the client and prints `Item <item-id> deleted successfully` only after the delete response succeeds and returns. |
 | Local logout and keyring cleanup | `pass-cli/src/main.rs`; `pass-cli/src/commands/logout.rs`; `pass-cli/src/features/keyring.rs`; `pass/src/logout.rs` | `logout --force` takes the pre-session force route, attempts cleanup of all key providers, removes local data, and then prints its success transcript. The ordinary logout route awaits remote session logout and separately attempts session-scoped key removal. |
+| Profile-root and startup behavior | `pass-cli/src/utils.rs`; `pass-cli/src/features/mod.rs`; `pass-cli/src/features/keyring.rs`; `pass-cli/src/main.rs`; `pass-cli/src/commands/info.rs`; `pass-auth/src/store.rs` | `PROTON_PASS_SESSION_DIR` is a profile root; pass-cli appends `.session`. Provider startup may maintain or invalidate profile, keyring, database, and authentication state, and may process core events, telemetry, or refreshed authentication before the requested command completes. |
 | Session-info and audit schemas | `pass-cli/src/commands/info.rs`; `pass-cli/src/commands/agent/monitor.rs`; `pass/src/monitor.rs` | JSON info distinguishes user and agent/PAT sessions through its closed optional fields. Agent monitor serializes record, vault, object, action, payload, and time fields after resolving the named agent to a PAT ID. |
 
 The v2 cleanup target is the exact retained PAT ID. The agent name remains a
@@ -821,13 +843,18 @@ remove the token and reason first. Only selected-field readback/probe children
 receive `PROTON_PASS_AGENT_REASON=age-admission signing-key retrieval`.
 
 Provider-required IDs and names may occur in the exact private child argv and
-state. Linux forces the D-Bus keyring; Darwin removes that override. Both use a
-canonical session directory, the OS keyring, update checks disabled, and the
-verified staged age directory. Independent authorization requires an existing,
-nonrepairing enrollment probe, exact recovery readback, one exact audit event,
-revocation, a direct post-revocation selected-field failure without readiness,
-and a still-successful primary readback. A separate directory alone is not
-proof; another authorized enrollment may be on the same host.
+state. Linux forces the D-Bus keyring; Darwin removes that override. Owner and
+primary inputs are existing Proton profile roots; pass-cli appends `.session` to
+each root. The recovery enrollment uses its task-created isolated profile root.
+All use the OS keyring, update checks disabled, and the verified staged age
+directory. Every provider observation may maintain or invalidate profile,
+keyring, database, and authentication state, process core events and telemetry,
+or persist refreshed authentication. Independent authorization therefore
+requires an approved effect-bearing existing-enrollment observation, exact
+recovery readback, one exact audit event, revocation, a direct post-revocation
+selected-field failure without readiness, and a still-successful primary
+readback. A separate directory alone is not proof; another authorized
+enrollment may be on the same host.
 
 The terminal results are closed and byte-exact:
 
@@ -839,6 +866,13 @@ The terminal results are closed and byte-exact:
 | Reconciliation required | 20; empty stdout; `age-admission signer provisioning requires reconciliation\n` | A create or login effect or its process-group retirement is unknown; stop as an incident |
 | Cleanup incomplete | 21; empty stdout; `age-admission signer provisioning cleanup incomplete\n` | A delete or logout effect, local cleanup, or local/read-only process-group retirement is unknown; stop as an incident |
 | Interrupted | `128 + signal`; empty stdout; `age-admission signer provisioning interrupted\n` | Every child group is absent and the provider state and retained evidence are durable |
+
+Qualified clean is limited to task-created disposable provider resources, the
+isolated recovery enrollment, and task-local sensitive artifacts. It does not
+claim that preexisting owner or primary profiles were unchanged. An unverified
+or damaged existing profile is an incident and cannot produce qualification
+success. Ordinary startup maintenance already named in the approved
+live-operation boundary is not an unknown item, agent, or login effect.
 
 The first `HUP`, `INT`, or `TERM` fixes the signal status. Later signals only
 latch: they cannot replace that status, re-enter finalization, extend either
@@ -863,12 +897,13 @@ positive returned record. Zero matches never prove absence, deletion,
 ownership, or completeness.
 
 `resume` converts durable `requesting` or `removing` state to `unknown` before
-interpretation and performs at most one appropriate read-only item, agent, or
-session observation. It never polls, retries a mutation, logs in or out,
-repairs readiness, deletes evidence, or continues to the next phase. Preserve
-the state directory and all candidate or known handles for a separately
-owner-authorized incident disposition; this helper deliberately exposes no
-incident-mutation interface.
+interpretation and performs at most one appropriate item, agent, or session
+observation. It never polls, retries the ambiguous business mutation, logs in
+or out, repairs readiness, deletes evidence, or continues to the next phase.
+The observation still has the provider startup effects covered by the approved
+live-operation boundary. Preserve the state directory and all candidate or
+known handles for a separately owner-authorized incident disposition; this
+helper deliberately exposes no incident-mutation interface.
 
 Qualification cleanup is ordered: acknowledged exact retained-PAT-ID deletion,
 direct revoked-session probe failure without readiness, successful primary

@@ -297,6 +297,13 @@ def _validate_private_directory(path: Path) -> None:
         raise ProvisioningError("private directory is not authoritative")
 
 
+def _validate_existing_profile_root(path: Path, label: str) -> None:
+    if path.name == ".session":
+        raise ProvisioningError(f"{label} profile root is a .session directory")
+    _validate_private_directory(path)
+    _validate_private_directory(path / ".session")
+
+
 def _read_regular(
     path: Path,
     *,
@@ -1189,11 +1196,9 @@ def _validate_request(
     owner = _absolute_path(sessions["owner"])
     primary = _absolute_path(sessions["primary_enrollment"])
     if owner == primary:
-        raise ProvisioningError(
-            "owner and primary enrollment sessions are not distinct"
-        )
-    _validate_private_directory(owner)
-    _validate_private_directory(primary)
+        raise ProvisioningError("owner and primary profile roots are not distinct")
+    _validate_existing_profile_root(owner, "owner")
+    _validate_existing_profile_root(primary, "primary enrollment")
     primary_name = _private_name(
         sessions["primary_enrollment_name"], "primary enrollment name"
     )
