@@ -502,6 +502,7 @@ class ProvisioningInputs:
                 {
                     "agent": False,
                     "agent_expire_time": None,
+                    "agent_pat_ids": [],
                     "item": False,
                     "logged_in": False,
                     "revoked": False,
@@ -571,6 +572,8 @@ class ProvisioningInputs:
                 kind = "agent-monitor"
             elif arguments[:2] == ["agent", "delete"]:
                 kind = "agent-delete"
+            elif arguments[:3] == ["pat", "delete", "--pat-id"]:
+                kind = "agent-delete"
             elif arguments == ["login"]:
                 kind = "agent-login"
             elif arguments == ["logout", "--force"]:
@@ -603,6 +606,21 @@ class ProvisioningInputs:
 
             state = load(STATE)
             behavior = load(CONTROL).get("behaviors", {{}}).get(kind, "success")
+            if kind == "agent-list" and behavior == "same-name-collision":
+                state["agent_pat_ids"] = ["pat_collision", "pat_issue286"]
+                state["agent"] = True
+                save(state)
+            if kind == "agent-delete" and behavior in {{
+                "same-name-collision",
+                "same-name-collision-nonzero",
+            }}:
+                if "pat_collision" not in state["agent_pat_ids"]:
+                    state["agent_pat_ids"].insert(0, "pat_collision")
+                state["agent"] = True
+                save(state)
+                if behavior == "same-name-collision-nonzero":
+                    print("synthetic provider failure", file=sys.stderr)
+                    raise SystemExit(7)
             if behavior == "resistant-descendant":
                 ready_read, ready_write = os.pipe()
                 descendant_pid = os.fork()
@@ -657,6 +675,7 @@ class ProvisioningInputs:
                     elif kind == "agent-create":
                         state["agent"] = True
                         state["agent_expire_time"] = int(time.time()) + 3600
+                        state["agent_pat_ids"] = ["pat_issue286"]
                         state["revoked"] = False
                         save(state)
                         print(json.dumps({{"token": "PROTON_PASS_PERSONAL_ACCESS_TOKEN=" + LOGIN_CREDENTIAL, "instruction": "synthetic"}}), flush=True)
@@ -750,6 +769,7 @@ class ProvisioningInputs:
             elif kind == "agent-create":
                 state["agent"] = True
                 state["agent_expire_time"] = int(time.time()) + 3600
+                state["agent_pat_ids"] = ["pat_issue286"]
                 state["revoked"] = False
                 save(state)
                 print(json.dumps({{
@@ -759,10 +779,17 @@ class ProvisioningInputs:
             elif kind == "agent-list":
                 agents = []
                 if state["agent"] and behavior != "empty":
-                    record = {{"pat_id": "pat_issue286", "name": "issue286-recovery", "expire_time": state["agent_expire_time"]}}
-                    agents.append(record)
+                    pat_ids = state["agent_pat_ids"] or ["pat_issue286"]
+                    agents = [
+                        {{
+                            "pat_id": pat_id,
+                            "name": "issue286-recovery",
+                            "expire_time": state["agent_expire_time"],
+                        }}
+                        for pat_id in pat_ids
+                    ]
                     if behavior == "duplicate":
-                        agents.append(dict(record))
+                        agents.append(dict(agents[-1]))
                 print(json.dumps(agents))
             elif kind == "agent-login":
                 if login_credential != LOGIN_CREDENTIAL:
@@ -778,10 +805,23 @@ class ProvisioningInputs:
                     "action_time": "2026-09-16T00:00:00Z",
                 }}]))
             elif kind == "agent-delete":
-                state["agent"] = False
-                state["revoked"] = True
+                if arguments[:2] == ["agent", "delete"]:
+                    pat_id = (
+                        state["agent_pat_ids"][0]
+                        if state["agent_pat_ids"]
+                        else "pat_issue286"
+                    )
+                    acknowledgment = "Agent 'issue286-recovery' deleted successfully"
+                else:
+                    pat_id = arguments[arguments.index("--pat-id") + 1]
+                    acknowledgment = "Personal access token deleted successfully"
+                if state["agent_pat_ids"]:
+                    state["agent_pat_ids"].remove(pat_id)
+                state["agent"] = bool(state["agent_pat_ids"])
+                if pat_id == "pat_issue286":
+                    state["revoked"] = True
                 save(state)
-                print("Agent 'issue286-recovery' deleted successfully")
+                print(acknowledgment)
             elif kind == "local-logout":
                 state["logged_in"] = False
                 save(state)
@@ -822,9 +862,9 @@ class ProvisioningInputs:
                 "vault_name": "Synthetic Vault",
             },
             "provider_schema": {
-                "command_schema": "issue286-pass-cli-2.3.3-provider-commands/v1",
-                "reconciliation_manifest_sha256": "1bab100ede30e745b674a5f961c1a1d7347875454685876da5e923248a330bcb",
+                "command_schema": "issue286-pass-cli-2.3.3-provider-commands/v2",
                 "source_commit": "51a4c9b110a0ffe6e81f4f5d3877b9e5a0c24112",
+                "source_manifest_sha256": "95c0f8d872b308adb741cc21541a090ca4842cb894ece48370938955cb42ae6b",
             },
             "qualification": qualification,
             "qualified_clean": qualified_clean,
@@ -1008,7 +1048,10 @@ class ProvisioningInputs:
                     child_kind = "version"
                 elif command_list[:3] == ["pass-cli", "item", "create"]:
                     child_kind = "item-create"
-                elif command_list[:3] == ["pass-cli", "agent", "delete"]:
+                elif command_list[:3] in (
+                    ["pass-cli", "agent", "delete"],
+                    ["pass-cli", "pat", "delete"],
+                ):
                     child_kind = "agent-delete"
                 else:
                     child_kind = "other"
@@ -1497,13 +1540,43 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
 
         result = inputs.run()
 
-        self.assertEqual(result.returncode, 1)
+        self.assertEqual(
+            (result.returncode, result.stdout, result.stderr),
+            (
+                21,
+                b"",
+                b"age-admission signer provisioning cleanup incomplete\n",
+            ),
+        )
         state = json.loads((inputs.state / "state.json").read_bytes())
-        self.assertEqual(state["outcome"], "rolled-back")
-        self.assertEqual(state["resources"]["agent"]["state"], "removed")
-        self.assertEqual(state["resources"]["item"]["state"], "removed")
-        kinds = [record["kind"] for record in inputs.log()]
-        self.assertNotIn("agent-login", kinds)
+        self.assertEqual(state["outcome"], "remote-cleanup-incomplete")
+        agent = state["resources"]["agent"]
+        self.assertEqual(agent["state"], "present")
+        self.assertEqual(agent["name"], "issue286-recovery")
+        self.assertIsNone(agent["pat_id"])
+        self.assertEqual(agent["candidates"], [])
+        self.assertEqual(
+            (
+                state["resources"]["item"]["state"],
+                state["resources"]["item"]["id"],
+            ),
+            ("present", "item_issue286"),
+        )
+        token_path = inputs.state / state["artifacts"]["agent_token"]
+        self.assertEqual(
+            token_path.read_bytes(),
+            (inputs.LOGIN_CREDENTIAL + "\n").encode("ascii"),
+        )
+        self.assertTrue((inputs.state / "private/admission-ed25519").exists())
+        self.assertTrue((inputs.state / "private/item-template.json").exists())
+        self.assertFalse((inputs.state / "qualified-clean.json").exists())
+        provider_log = inputs.log()
+        listing_index = max(
+            index
+            for index, record in enumerate(provider_log)
+            if record["kind"] == "agent-list"
+        )
+        self.assertEqual(provider_log[listing_index + 1 :], [])
 
     def test_malformed_audit_evidence_rolls_back_without_terminal_marker(self) -> None:
         temporary, inputs = self.make_inputs()
@@ -2336,6 +2409,211 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
         self.assertIsNone(state["pending_request"])
         resumed_log = inputs.log()[before:]
         self.assertEqual([record["kind"] for record in resumed_log], ["info"])
+
+    def test_agent_cleanup_targets_only_a_confirmed_pat_id(self) -> None:
+        scenarios = (
+            ("confirmed-collision", "success", "same-name-collision"),
+            ("zero-confirmation", "empty", "success"),
+            ("multiple-confirmation", "same-name-collision", "success"),
+            (
+                "ambiguous-exact-delete",
+                "success",
+                "same-name-collision-nonzero",
+            ),
+        )
+        exact_delete = [
+            "pat",
+            "delete",
+            "--pat-id",
+            "pat_issue286",
+        ]
+        for scenario, listing_behavior, delete_behavior in scenarios:
+            with self.subTest(scenario=scenario):
+                temporary, inputs = self.make_inputs()
+                try:
+                    behaviors = {}
+                    if listing_behavior != "success":
+                        behaviors["agent-list"] = listing_behavior
+                    if delete_behavior != "success":
+                        behaviors["agent-delete"] = delete_behavior
+                    inputs.set_behaviors(**behaviors)
+
+                    result = inputs.run()
+                    state = json.loads((inputs.state / "state.json").read_bytes())
+                    provider = inputs.provider_document()
+                    provider_log = inputs.log()
+
+                    if scenario == "confirmed-collision":
+                        self.assertEqual(
+                            (result.returncode, result.stdout, result.stderr),
+                            (0, b"qualified-clean\n", b""),
+                        )
+                        deletions = [
+                            record
+                            for record in provider_log
+                            if record["kind"] == "agent-delete"
+                        ]
+                        self.assertEqual(
+                            [record["args"] for record in deletions],
+                            [exact_delete],
+                        )
+                        self.assertEqual(
+                            state["resources"]["agent"]["state"], "removed"
+                        )
+                        self.assertEqual(
+                            provider["agent_pat_ids"], ["pat_collision"]
+                        )
+                        self.assertTrue(provider["revoked"])
+                        continue
+
+                    if scenario in {"zero-confirmation", "multiple-confirmation"}:
+                        self.assertEqual(
+                            (result.returncode, result.stdout, result.stderr),
+                            (
+                                21,
+                                b"",
+                                b"age-admission signer provisioning cleanup incomplete\n",
+                            ),
+                        )
+                        expected_ids = (
+                            []
+                            if scenario == "zero-confirmation"
+                            else ["pat_collision", "pat_issue286"]
+                        )
+                        agent = state["resources"]["agent"]
+                        self.assertEqual(agent["state"], "present")
+                        self.assertIsNone(agent["pat_id"])
+                        self.assertEqual(agent["name"], "issue286-recovery")
+                        self.assertEqual(
+                            [candidate["pat_id"] for candidate in agent["candidates"]],
+                            expected_ids,
+                        )
+                        self.assertEqual(
+                            [
+                                candidate["expire_time"]
+                                for candidate in agent["candidates"]
+                            ],
+                            [provider["agent_expire_time"]] * len(expected_ids),
+                        )
+                        self.assertEqual(state["outcome"], "remote-cleanup-incomplete")
+                        self.assertEqual(
+                            (
+                                state["resources"]["item"]["state"],
+                                state["resources"]["item"]["id"],
+                            ),
+                            ("present", "item_issue286"),
+                        )
+                        token_path = (
+                            inputs.state / state["artifacts"]["agent_token"]
+                        )
+                        self.assertEqual(
+                            token_path.read_bytes(),
+                            (inputs.LOGIN_CREDENTIAL + "\n").encode("ascii"),
+                        )
+                        self.assertTrue(
+                            (inputs.state / "private/admission-ed25519").exists()
+                        )
+                        self.assertTrue(
+                            (inputs.state / "private/item-template.json").exists()
+                        )
+                        listing_index = max(
+                            index
+                            for index, record in enumerate(provider_log)
+                            if record["kind"] == "agent-list"
+                        )
+                        self.assertEqual(provider_log[listing_index + 1 :], [])
+                        self.assertFalse(
+                            (inputs.state / "qualified-clean.json").exists()
+                        )
+                        continue
+
+                    self.assertEqual(
+                        (result.returncode, result.stdout, result.stderr),
+                        (
+                            21,
+                            b"",
+                            b"age-admission signer provisioning cleanup incomplete\n",
+                        ),
+                    )
+                    deletions = [
+                        record
+                        for record in provider_log
+                        if record["kind"] == "agent-delete"
+                    ]
+                    self.assertEqual(
+                        [record["args"] for record in deletions],
+                        [exact_delete],
+                    )
+                    agent = state["resources"]["agent"]
+                    self.assertIn(agent["state"], {"removing", "unknown"})
+                    self.assertEqual(agent["pat_id"], "pat_issue286")
+                    pending = state["pending_request"]
+                    self.assertEqual(pending["kind"], "agent-delete")
+                    self.assertEqual(pending["command"], ["pass-cli", *exact_delete])
+                    self.assertEqual(
+                        pending["targets"]["pat_id"], "pat_issue286"
+                    )
+                    capture_paths = [
+                        inputs.state / pending["captures"][channel]
+                        for channel in ("stdout", "stderr")
+                    ]
+                    self.assertTrue(all(path.exists() for path in capture_paths))
+                    self.assertEqual(
+                        provider["agent_pat_ids"],
+                        ["pat_collision", "pat_issue286"],
+                    )
+                    self.assertFalse(provider["revoked"])
+
+                    before_resume = len(provider_log)
+                    inputs.set_behaviors()
+                    resumed = inputs.run("resume")
+
+                    self.assertEqual(
+                        (resumed.returncode, resumed.stdout, resumed.stderr),
+                        (
+                            21,
+                            b"",
+                            b"age-admission signer provisioning cleanup incomplete\n",
+                        ),
+                    )
+                    resumed_state = json.loads(
+                        (inputs.state / "state.json").read_bytes()
+                    )
+                    self.assertEqual(
+                        [
+                            record["kind"]
+                            for record in inputs.log()[before_resume:]
+                        ],
+                        ["agent-list"],
+                    )
+                    self.assertEqual(
+                        sum(
+                            record["kind"] == "agent-delete"
+                            for record in inputs.log()
+                        ),
+                        1,
+                    )
+                    resumed_agent = resumed_state["resources"]["agent"]
+                    self.assertEqual(resumed_agent["state"], "unknown")
+                    self.assertEqual(resumed_agent["pat_id"], "pat_issue286")
+                    self.assertEqual(
+                        [
+                            candidate["pat_id"]
+                            for candidate in resumed_agent["candidates"]
+                        ],
+                        ["pat_issue286"],
+                    )
+                    self.assertEqual(
+                        resumed_state["pending_request"]["command"],
+                        ["pass-cli", *exact_delete],
+                    )
+                    self.assertTrue(all(path.exists() for path in capture_paths))
+                    self.assertEqual(
+                        inputs.provider_document()["agent_pat_ids"],
+                        ["pat_collision", "pat_issue286"],
+                    )
+                finally:
+                    temporary.cleanup()
 
     def test_positive_agent_after_ambiguous_delete_does_not_settle_removal(
         self,

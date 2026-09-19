@@ -598,9 +598,9 @@ request has this exact closed shape:
     "vault_name": "Synthetic Vault"
   },
   "provider_schema": {
-    "command_schema": "issue286-pass-cli-2.3.3-provider-commands/v1",
-    "reconciliation_manifest_sha256": "1bab100ede30e745b674a5f961c1a1d7347875454685876da5e923248a330bcb",
-    "source_commit": "51a4c9b110a0ffe6e81f4f5d3877b9e5a0c24112"
+    "command_schema": "issue286-pass-cli-2.3.3-provider-commands/v2",
+    "source_commit": "51a4c9b110a0ffe6e81f4f5d3877b9e5a0c24112",
+    "source_manifest_sha256": "95c0f8d872b308adb741cc21541a090ca4842cb894ece48370938955cb42ae6b"
   },
   "qualification": "source-test",
   "qualified_clean": null,
@@ -629,30 +629,60 @@ output, executable SHA-256, platform, and provider command schema for that one
 operation. The observed path is not a package-location policy and need not be
 equal across hosts.
 
-The closed provider schema is tied to pass-cli 2.3.3 source commit
-`51a4c9b110a0ffe6e81f4f5d3877b9e5a0c24112`, including
-[custom-item creation](https://github.com/ProtonPass/pass-cli/blob/51a4c9b110a0ffe6e81f4f5d3877b9e5a0c24112/pass-cli/src/commands/item/create/custom.rs),
-[metadata-only item listing](https://github.com/ProtonPass/pass-cli/blob/51a4c9b110a0ffe6e81f4f5d3877b9e5a0c24112/pass-cli/src/commands/item/list.rs),
-[item-deletion command](https://github.com/ProtonPass/pass-cli/blob/51a4c9b110a0ffe6e81f4f5d3877b9e5a0c24112/pass-cli/src/commands/item/delete.rs),
-[item-deletion client](https://github.com/ProtonPass/pass-cli/blob/51a4c9b110a0ffe6e81f4f5d3877b9e5a0c24112/pass/src/item/delete.rs),
-[agent creation](https://github.com/ProtonPass/pass-cli/blob/51a4c9b110a0ffe6e81f4f5d3877b9e5a0c24112/pass-cli/src/commands/agent/create.rs),
-[agent listing](https://github.com/ProtonPass/pass-cli/blob/51a4c9b110a0ffe6e81f4f5d3877b9e5a0c24112/pass-cli/src/commands/agent/list.rs),
-[agent monitoring](https://github.com/ProtonPass/pass-cli/blob/51a4c9b110a0ffe6e81f4f5d3877b9e5a0c24112/pass-cli/src/commands/agent/monitor.rs),
-[agent-deletion command](https://github.com/ProtonPass/pass-cli/blob/51a4c9b110a0ffe6e81f4f5d3877b9e5a0c24112/pass-cli/src/commands/agent/delete.rs),
-[session-scoped keyring names](https://github.com/ProtonPass/pass-cli/blob/51a4c9b110a0ffe6e81f4f5d3877b9e5a0c24112/pass-cli/src/features/keyring.rs),
-[logout command](https://github.com/ProtonPass/pass-cli/blob/51a4c9b110a0ffe6e81f4f5d3877b9e5a0c24112/pass-cli/src/commands/logout.rs),
-and [logout client](https://github.com/ProtonPass/pass-cli/blob/51a4c9b110a0ffe6e81f4f5d3877b9e5a0c24112/pass/src/logout.rs).
-At this revision, the item-deletion command prints
-`Item <item-id> deleted successfully` only after the client has received a
-successful delete response and returned. The agent-deletion command prints
-`Agent '<name>' deleted successfully` only after its delete request returns
-successfully. The force-logout command prints `Successfully performed force
-logout` only after key-provider cleanup has been attempted and local data
-removal succeeds. The ordinary logout client only shows that its session logout
-call is awaited; force logout follows the separate command path. These
-source-order facts establish parser and control-flow behavior for the exact
-transcripts. They do not prove durable live-provider effects or replace
-owner-authorized live-disposable-provider qualification.
+The closed
+`issue286-pass-cli-2.3.3-provider-commands/v2` provider schema binds pass-cli
+source commit `51a4c9b110a0ffe6e81f4f5d3877b9e5a0c24112` to the maintained,
+revision-wide
+`docs/secret-injection/pass-cli-2.3.3-source-manifest.json`. Its SHA-256 is
+`95c0f8d872b308adb741cc21541a090ca4842cb894ece48370938955cb42ae6b`.
+The manifest covers all 406 files at tree
+`f932a4aee404d1b45c522a8a6d39d33b7a9e50a3` and records each path, Git
+mode, Git object type and ID, byte count, and raw-byte SHA-256. The recovered
+six-command `pass-cli-reconciliation-source-manifest.json`, whose SHA-256 is
+`1bab100ede30e745b674a5f961c1a1d7347875454685876da5e923248a330bcb`,
+remains valid historical v1 schema evidence. It is not missing, and it is not
+the v2 provider-source binding.
+
+All trace paths below are relative to the
+[bound public source tree](https://github.com/ProtonPass/pass-cli/tree/51a4c9b110a0ffe6e81f4f5d3877b9e5a0c24112).
+The map is limited to claims this procedure consumes:
+
+| Claim | Required source trace | Bound source fact |
+| --- | --- | --- |
+| Applicable command routing | `pass-cli/src/main.rs`; `pass-cli/src/commands/item/mod.rs`; `pass-cli/src/commands/agent/mod.rs`; `pass-cli/src/commands/personal_access_token/mod.rs` | The top-level parser routes `item`, `agent`, `info`, `logout`, and `personal-access-token` (alias `pat`) into these handlers. The PAT delete form requires an ID through `--personal-access-token-id` or its `--pat-id` alias. |
+| Create acknowledgment | `pass-cli/src/commands/item/create/custom.rs`; `pass/src/item/create/custom.rs`; `pass/src/item/create/common.rs`; `pass-cli/src/commands/agent/create.rs`; `pass/src/personal_access_token/create.rs` | Custom-item creation prints the returned item ID after the create response. Agent creation prints token and instruction JSON only after PAT creation and Viewer grants return; it does not print the returned PAT ID. |
+| Positive-only listing and skipped records | `pass-cli/src/commands/item/list.rs`; `pass/src/item/list.rs`; `pass/src/item/open.rs`; `pass-cli/src/commands/agent/list.rs`; `pass/src/personal_access_token/list.rs` | Item listing emits successfully opened item summaries and can skip records that fail state, key, content, or payload opening. PAT listing skips records it cannot open, and agent listing filters the remaining records to the agent flag. A returned exact match is positive evidence; zero matches do not prove absence or completeness. |
+| Exact-ID PAT deletion acknowledgment | `pass-cli/src/main.rs`; `pass-cli/src/commands/personal_access_token/mod.rs`; `pass-cli/src/commands/personal_access_token/delete.rs`; `pass/src/personal_access_token/delete.rs` | `pass-cli pat delete --pat-id <retained_pat_id>` validates and passes that ID to the client. The client sends DELETE for that ID and applies the response success guard before the command prints `Personal access token deleted successfully`. No name lookup occurs. |
+| Exact-ID item deletion acknowledgment | `pass-cli/src/commands/item/mod.rs`; `pass-cli/src/commands/item/delete.rs`; `pass/src/item/delete.rs` | The command passes the supplied share and item IDs to the client and prints `Item <item-id> deleted successfully` only after the delete response succeeds and returns. |
+| Local logout and keyring cleanup | `pass-cli/src/main.rs`; `pass-cli/src/commands/logout.rs`; `pass-cli/src/features/keyring.rs`; `pass/src/logout.rs` | `logout --force` takes the pre-session force route, attempts cleanup of all key providers, removes local data, and then prints its success transcript. The ordinary logout route awaits remote session logout and separately attempts session-scoped key removal. |
+| Session-info and audit schemas | `pass-cli/src/commands/info.rs`; `pass-cli/src/commands/agent/monitor.rs`; `pass/src/monitor.rs` | JSON info distinguishes user and agent/PAT sessions through its closed optional fields. Agent monitor serializes record, vault, object, action, payload, and time fields after resolving the named agent to a PAT ID. |
+
+The v2 cleanup target is the exact retained PAT ID. The agent name remains a
+diagnostic handle. Agent-create acknowledgment establishes that the remote PAT
+exists but does not establish its ID. Before arming deletion, one listing must
+return exactly one same-name record with a syntactically valid PAT ID and the
+expected expiration interval. If the listing returns zero or multiple
+same-name records, durably retain the name, token artifact, every returned
+candidate PAT ID and expiration, item handle, and private state directory. Keep
+the acknowledged agent resource present without asserting an exact ID, set
+remote cleanup incomplete, make no delete or other provider call, skip local
+cleanup, and return status 21 with the cleanup-incomplete diagnostic.
+
+Deletion uses only
+`pass-cli pat delete --pat-id <retained_pat_id>`. Acknowledgment requires
+verified normal retirement, status 0, exact standard output
+`Personal access token deleted successfully\n`, and empty standard error. Any
+nonzero status, signal, timeout, malformed output, unverified retirement, or
+other ambiguous result retains the PAT ID, pending request, captures, and
+other handles; classifies the resource as `unknown` or `removing` under the
+existing transition contract; returns status 21; and permits no second
+mutation on resume.
+
+These source-order facts establish parser and control-flow behavior for the
+exact transcripts. The complete source manifest does not establish that the
+observed executable was built from those bytes or that a live provider durably
+applied a request. Executable binding and separately owner-authorized
+live-disposable-provider qualification remain required.
 
 The two exact commands are:
 
@@ -727,7 +757,7 @@ The terminal results are closed and byte-exact:
 
 | Result | Status and terminal bytes | Meaning |
 | --- | --- | --- |
-| Qualified clean | 0; `qualified-clean\n`; empty stderr | Disposable item and agent removed, revoked probe failed, primary readback still passed, local evidence cleaned, and every child group absent |
+| Qualified clean | 0; `qualified-clean\n`; empty stderr | Disposable item and exact retained recovery PAT removed, revoked probe failed, primary readback still passed, local evidence cleaned, and every child group absent |
 | Ready for recovery | 0; `ready-for-recovery\n`; empty stderr | Production resources verified, retained only by private handles, and every child group absent; separate recovery authorization still required |
 | Failed or rolled back | 1; empty stdout; `age-admission signer provisioning failed\n` | No success evidence; provider failure, rollback, local finalization, or durable classification failed |
 | Reconciliation required | 20; empty stdout; `age-admission signer provisioning requires reconciliation\n` | A create or login effect or its process-group retirement is unknown; stop as an incident |
@@ -764,7 +794,7 @@ the state directory and all candidate or known handles for a separately
 owner-authorized incident disposition; this helper deliberately exposes no
 incident-mutation interface.
 
-Qualification cleanup is ordered: acknowledged exact-name agent deletion,
+Qualification cleanup is ordered: acknowledged exact retained-PAT-ID deletion,
 direct revoked-session probe failure without readiness, successful primary
 readback and receipt verification, acknowledged exact-ID item deletion,
 acknowledged local logout, then bounded local cleanup and terminal evidence.

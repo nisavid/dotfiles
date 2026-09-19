@@ -46,9 +46,9 @@ READY_FOR_RECOVERY_SCHEMA = "issue286-ready-for-recovery/v1"
 STATE_SCHEMA = "issue286-provisioning-state/v1"
 FIXTURE_REQUEST_SCHEMA = "issue286-provider-fixture/v1"
 PASS_CLI_SOURCE_COMMIT = "51a4c9b110a0ffe6e81f4f5d3877b9e5a0c24112"
-PROVIDER_COMMAND_SCHEMA = "issue286-pass-cli-2.3.3-provider-commands/v1"
-RECONCILIATION_MANIFEST_SHA256 = (
-    "1bab100ede30e745b674a5f961c1a1d7347875454685876da5e923248a330bcb"
+PROVIDER_COMMAND_SCHEMA = "issue286-pass-cli-2.3.3-provider-commands/v2"
+SOURCE_MANIFEST_SHA256 = (
+    "95c0f8d872b308adb741cc21541a090ca4842cb894ece48370938955cb42ae6b"
 )
 FIXTURE_REPOSITORY = "fixture.invalid/issue286-age-admission-provider"
 AGENT_REASON = "age-admission signing-key retrieval"
@@ -1166,13 +1166,13 @@ def _validate_request(
 
     provider_schema = _exact_keys(
         document["provider_schema"],
-        {"command_schema", "reconciliation_manifest_sha256", "source_commit"},
+        {"command_schema", "source_commit", "source_manifest_sha256"},
         "provider schema request",
     )
     if provider_schema != {
         "command_schema": PROVIDER_COMMAND_SCHEMA,
-        "reconciliation_manifest_sha256": RECONCILIATION_MANIFEST_SHA256,
         "source_commit": PASS_CLI_SOURCE_COMMIT,
+        "source_manifest_sha256": SOURCE_MANIFEST_SHA256,
     }:
         raise ProvisioningError("provider schema binding is invalid")
 
@@ -2298,18 +2298,29 @@ def _agent_listing(
 
 
 def _confirm_agent_listing(
+    state_directory: Path,
     state: dict[str, Any],
     *,
     fixture_directory: Path,
     request_started: int,
     request_finished: int,
 ) -> None:
-    records = _agent_listing(state, fixture_directory=fixture_directory)
+    try:
+        records = _agent_listing(state, fixture_directory=fixture_directory)
+    except UnverifiedChildRetirement:
+        raise
+    except ProvisioningError:
+        state["outcome"] = "remote-cleanup-incomplete"
+        _atomic_state_write(state_directory, state)
+        raise ProvisioningStop(21)
     request = state["request"]
     name = request["provider"]["recovery_agent_name"]
     matches = [record for record in records if record["name"] == name]
+    state["resources"]["agent"]["candidates"] = matches
     if len(matches) != 1:
-        raise ProvisioningError("agent listing did not confirm the acknowledged agent")
+        state["outcome"] = "remote-cleanup-incomplete"
+        _atomic_state_write(state_directory, state)
+        raise ProvisioningStop(21)
     record = matches[0]
     expiration = record["expire_time"]
     requested = request["provider"]["expiration"]
@@ -2650,20 +2661,24 @@ def _perform_readback(
 def _delete_agent(
     state_directory: Path, state: dict[str, Any], fixture_directory: Path
 ) -> None:
-    name = state["resources"]["agent"]["name"]
+    agent = state["resources"]["agent"]
+    name = agent["name"]
+    pat_id = agent["pat_id"]
+    if not isinstance(pat_id, str) or IDENTIFIER.fullmatch(pat_id) is None:
+        raise ProvisioningError("retained agent PAT ID is invalid")
     _mutation(
         state_directory,
         state,
         kind="agent-delete",
         resource="agent",
-        command=["pass-cli", "agent", "delete", name],
+        command=["pass-cli", "pat", "delete", "--pat-id", pat_id],
         session=Path(state["request"]["sessions"]["owner"]),
         tools_directory=fixture_directory / "tools",
-        targets={"name": name, "pat_id": state["resources"]["agent"]["pat_id"]},
-        postcondition="exact retained agent removed",
+        targets={"name": name, "pat_id": pat_id},
+        postcondition="exact retained agent PAT removed",
         success_state="removed",
         expected_output=_expected_exact(
-            f"Agent '{name}' deleted successfully\n".encode()
+            b"Personal access token deleted successfully\n"
         ),
     )
 
@@ -3091,6 +3106,7 @@ def _execute_workflow(
     if not isinstance(login_credential, str):
         raise ProvisioningError("agent creation did not retain a token")
     _confirm_agent_listing(
+        state_directory,
         state,
         fixture_directory=fixture_directory,
         request_started=request_started,
@@ -3634,6 +3650,8 @@ def _validate_resume_state(state: dict[str, Any], state_directory: Path) -> None
     if pending["sequence"] != state["request_sequence"]:
         raise ProvisioningError("pending request sequence is invalid")
     kind = pending["kind"]
+    if kind == "agent-delete" and agent["pat_id"] is None:
+        raise ProvisioningError("pending agent deletion has no retained PAT ID")
     prior_for_kind = {
         "item-create": "absent",
         "agent-create": "absent",
@@ -3646,7 +3664,7 @@ def _validate_resume_state(state: dict[str, Any], state_directory: Path) -> None
         "item-create": "one immutable active custom item with retained ID",
         "agent-create": "one Viewer agent with retained token and exact name",
         "agent-login": "exact recovery agent existing session",
-        "agent-delete": "exact retained agent removed",
+        "agent-delete": "exact retained agent PAT removed",
         "item-delete": "exact retained item removed",
         "local-logout": "local recovery session logged out after remote cleanup",
     }
@@ -3688,9 +3706,10 @@ def _validate_resume_state(state: dict[str, Any], state_directory: Path) -> None
         "agent-login": ["pass-cli", "login"],
         "agent-delete": [
             "pass-cli",
-            "agent",
+            "pat",
             "delete",
-            request["provider"]["recovery_agent_name"],
+            "--pat-id",
+            agent["pat_id"],
         ],
         "item-delete": [
             "pass-cli",
