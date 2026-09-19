@@ -991,6 +991,8 @@ class ProvisioningInputs:
             LATER_SIGNAL = {(None if later_signal is None else int(later_signal))!r}
             triggered = False
             fault_pgid = None
+            group_probe_faulted = False
+            group_termination_sent = False
             effect_capture_descriptor = None
             effect_capture_signaled = False
             terminal_descriptor = None
@@ -1094,6 +1096,7 @@ class ProvisioningInputs:
                 process = real_popen(*args, **kwargs)
                 fault_kind = {{
                     "classification-persist-failure": "item-create",
+                    "transient-item-retirement": "item-create",
                     "unverified-agent-delete-retirement": "agent-delete",
                     "unverified-item-retirement": "item-create",
                     "unverified-version-retirement": "version",
@@ -1108,14 +1111,31 @@ class ProvisioningInputs:
                 return process
 
             def faulting_killpg(pgid, signum):
+                global group_probe_faulted, group_termination_sent
                 if (
-                    FAULT.startswith("unverified-")
-                    and pgid == fault_pgid
+                    pgid == fault_pgid
                     and signum == 0
+                    and (
+                        FAULT.startswith("unverified-")
+                        or (
+                            FAULT == "transient-item-retirement"
+                            and group_termination_sent
+                            and not group_probe_faulted
+                        )
+                    )
                 ):
+                    group_probe_faulted = True
                     record("group-probe-unverified", pgid=pgid)
                     raise PermissionError(errno.EPERM, "synthetic group probe failure")
-                return real_killpg(pgid, signum)
+                result = real_killpg(pgid, signum)
+                if (
+                    FAULT == "transient-item-retirement"
+                    and pgid == fault_pgid
+                    and signum == signal.SIGTERM
+                ):
+                    group_termination_sent = True
+                    record("group-termination-sent", pgid=pgid)
+                return result
 
             def faulting_replace(source, destination):
                 global terminal_commit_completed
@@ -2121,6 +2141,40 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
         for record in signal_observations:
             self.assertEqual(record["blocked_termination_signals"], [], record)
             self.assertEqual(record["ignored_termination_signals"], [], record)
+
+    def test_transient_group_probe_uncertainty_is_retried(self) -> None:
+        temporary, inputs = self.make_inputs()
+        self.addCleanup(temporary.cleanup)
+        inputs.set_behaviors(**{"item-create": "sleep"})
+        process = inputs.start_fault_process("transient-item-retirement")
+        child_pid = inputs.wait_for_child("item-create")
+
+        os.kill(process.pid, signal.SIGTERM)
+        stdout, stderr = process.communicate(timeout=10)
+
+        self.assertEqual(
+            (process.returncode, stdout, stderr),
+            (
+                143,
+                b"",
+                b"age-admission signer provisioning interrupted\n",
+            ),
+        )
+        trace = inputs.fault_trace("transient-item-retirement")
+        self.assertEqual(
+            [record["event"] for record in trace if "group-" in record["event"]],
+            ["group-termination-sent", "group-probe-unverified"],
+        )
+        state = json.loads((inputs.state / "state.json").read_bytes())
+        self.assertEqual(state["resources"]["item"]["state"], "unknown")
+        self.assertEqual(state["pending_request"]["kind"], "item-create")
+        self.assertEqual(
+            state["pending_request"]["targets"]["observed_result"]["outcome"],
+            "interrupted",
+        )
+        self.assertEqual(state["outcome"], "reconciliation-required")
+        with self.assertRaises(ProcessLookupError):
+            os.kill(child_pid, 0)
 
     def test_unverified_create_retirement_uses_reconciliation_status(self) -> None:
         temporary, inputs = self.make_inputs()
