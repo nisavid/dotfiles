@@ -81,7 +81,7 @@ def run_git(repository: Path, *arguments: str) -> subprocess.CompletedProcess[by
     )
 
 
-def selected_age_tooling_archive_or_skip() -> tuple[Path, str]:
+def selected_age_tooling_archive_or_skip() -> tuple[bytes, str]:
     raw_archive = os.environ.get("AGE_TOOLING_ARCHIVE")
     expected_digest = os.environ.get("AGE_TOOLING_ARCHIVE_SHA256")
     message = (
@@ -107,7 +107,7 @@ def selected_age_tooling_archive_or_skip() -> tuple[Path, str]:
         require_age_tooling_or_skip(
             "the selected age tooling archive checksum is invalid"
         )
-    return archive, expected_digest
+    return archive_data, expected_digest
 
 
 def trusted_path_ancestors_supported(path: Path) -> bool:
@@ -183,7 +183,9 @@ class ProvisioningInputs:
             self._write_fake_ssh_keygen()
             self._write_fake_age_archive()
         else:
-            self.archive, self.archive_sha256 = selected_age_tooling_archive_or_skip()
+            archive_data, self.archive_sha256 = selected_age_tooling_archive_or_skip()
+            self.archive.write_bytes(archive_data)
+            self.archive.chmod(0o600)
         self._write_support_bin()
         self._write_source_repository()
         self._write_request()
@@ -3517,6 +3519,10 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
     ) -> None:
         temporary, inputs = self.make_inputs(real_local_tools=True)
         self.addCleanup(temporary.cleanup)
+        self.assertEqual(inputs.archive.parent, inputs.root)
+        self.assertEqual(stat.S_IMODE(inputs.archive.parent.stat().st_mode), 0o700)
+        self.assertEqual(stat.S_IMODE(inputs.archive.stat().st_mode), 0o600)
+        self.assertEqual(sha256(inputs.archive.read_bytes()), inputs.archive_sha256)
         support_temporary = TemporaryDirectory(
             prefix=".age-admission-secure-support.", dir=ROOT.parent
         )
