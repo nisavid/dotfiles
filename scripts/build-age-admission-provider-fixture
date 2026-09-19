@@ -119,9 +119,33 @@ def _raise_if_interrupted() -> None:
         raise FixtureBuildInterrupted(_FIRST_TERMINATION_SIGNAL)
 
 
+def _require_unblocked_termination_signals() -> None:
+    pthread_sigmask = getattr(signal, "pthread_sigmask", None)
+    if pthread_sigmask is None:
+        raise FixtureBuildError("safe child signal handling is unavailable")
+    try:
+        blocked = pthread_sigmask(signal.SIG_BLOCK, set())
+    except OSError as error:
+        raise FixtureBuildError(
+            "safe child signal handling is unavailable"
+        ) from error
+    if any(signum in blocked for signum in _TERMINATION_SIGNALS):
+        raise FixtureBuildError("safe child signal handling is unavailable")
+
+
 def _install_signal_handlers() -> None:
     for signum in _TERMINATION_SIGNALS:
         signal.signal(signum, _signal_handler)
+    pthread_sigmask = getattr(signal, "pthread_sigmask", None)
+    if pthread_sigmask is None:
+        raise FixtureBuildError("safe child signal handling is unavailable")
+    try:
+        pthread_sigmask(signal.SIG_UNBLOCK, _TERMINATION_SIGNALS)
+    except OSError as error:
+        raise FixtureBuildError(
+            "safe child signal handling is unavailable"
+        ) from error
+    _require_unblocked_termination_signals()
 
 
 def _sha256(data: bytes) -> str:
@@ -523,6 +547,7 @@ def _run_child(
         _raise_if_interrupted()
         if _PROCESS_STATE not in {"unowned", "released"}:
             raise FixtureBuildError("child process ownership is unavailable")
+        _require_unblocked_termination_signals()
         _PROCESS_STATE = "acquiring"
         try:
             process = subprocess.Popen(
@@ -1580,8 +1605,9 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
-    _install_signal_handlers()
     try:
+        _install_signal_handlers()
+        _raise_if_interrupted()
         arguments = _parser().parse_args()
         _build(arguments)
     except FixtureBuildInterrupted as interrupted:

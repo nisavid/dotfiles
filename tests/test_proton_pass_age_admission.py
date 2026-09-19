@@ -1018,6 +1018,174 @@ pathlib.Path({os.fspath(self.wrapper_marker)!r}).write_text(
         self.assertFalse(self.provider_marker.exists())
         self.assertFalse(self.output.exists())
 
+    def test_inherited_blocked_signals_are_cleared_before_child_effects(
+        self,
+    ) -> None:
+        termination_signals = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
+        termination_signal_numbers = {int(signum) for signum in termination_signals}
+        supervisor = textwrap.dedent(
+            """\
+            import os
+            import signal
+            import sys
+
+            termination_signals = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
+            signal.pthread_sigmask(signal.SIG_BLOCK, termination_signals)
+            for signum in termination_signals:
+                signal.signal(signum, signal.SIG_IGN)
+            os.execve(sys.argv[1], sys.argv[1:], os.environ)
+            """
+        )
+
+        def process_group_exists(process_group: int) -> bool:
+            try:
+                os.killpg(process_group, 0)
+            except ProcessLookupError:
+                return False
+            return True
+
+        for signum in termination_signals:
+            with self.subTest(signal=signum.name):
+                child_state_path = self.root / f"child-state-{int(signum)}.json"
+                self.output.unlink(missing_ok=True)
+                self.wrapper.write_text(
+                    textwrap.dedent(
+                        f"""\
+                        import json
+                        import os
+                        import pathlib
+                        import signal
+                        import time
+
+                        termination_signals = (
+                            signal.SIGHUP,
+                            signal.SIGINT,
+                            signal.SIGTERM,
+                        )
+                        blocked = signal.pthread_sigmask(signal.SIG_BLOCK, set())
+                        pathlib.Path({os.fspath(child_state_path)!r}).write_text(
+                            json.dumps(
+                                {{
+                                    "blocked": sorted(int(item) for item in blocked),
+                                    "ignored": {{
+                                        str(int(item)): signal.getsignal(item)
+                                        == signal.SIG_IGN
+                                        for item in termination_signals
+                                    }},
+                                    "pgid": os.getpgrp(),
+                                    "pid": os.getpid(),
+                                    "private_root": os.environ["TMPDIR"],
+                                }},
+                                sort_keys=True,
+                            ),
+                            encoding="ascii",
+                        )
+                        time.sleep(30)
+                        """
+                    ),
+                    encoding="ascii",
+                )
+                self.wrapper.chmod(0o755)
+                process = subprocess.Popen(
+                    [
+                        sys.executable,
+                        "-I",
+                        "-B",
+                        "-S",
+                        "-c",
+                        supervisor,
+                        os.fspath(self.adapter),
+                        *self._command()[1:],
+                    ],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    env=self._environment(),
+                    start_new_session=True,
+                )
+                child_state = None
+                private_root = None
+                stdout = b""
+                stderr = b""
+                observed_status = None
+                adapter_group_survived = False
+                child_group_survived = False
+                private_root_survived = False
+                try:
+                    deadline = time.monotonic() + 5
+                    while (
+                        not child_state_path.exists()
+                        and process.poll() is None
+                        and time.monotonic() < deadline
+                    ):
+                        time.sleep(0.01)
+                    if child_state_path.exists():
+                        child_state = __import__("json").loads(
+                            child_state_path.read_bytes()
+                        )
+                        private_root = Path(child_state["private_root"])
+                        process.send_signal(signum)
+                        try:
+                            stdout, stderr = process.communicate(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            pass
+                        observed_status = process.returncode
+                        adapter_group_survived = process_group_exists(process.pid)
+                        child_group_survived = process_group_exists(
+                            child_state["pgid"]
+                        )
+                        private_root_survived = private_root.exists()
+                finally:
+                    if process.poll() is None:
+                        try:
+                            os.killpg(process.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                        process.communicate(timeout=5)
+                    if child_state is None and child_state_path.exists():
+                        child_state = __import__("json").loads(
+                            child_state_path.read_bytes()
+                        )
+                        private_root = Path(child_state["private_root"])
+                    if child_state is not None:
+                        child_group = child_state["pgid"]
+                        if process_group_exists(child_group):
+                            try:
+                                os.killpg(child_group, signal.SIGKILL)
+                            except ProcessLookupError:
+                                pass
+                        cleanup_deadline = time.monotonic() + 5
+                        while (
+                            process_group_exists(child_group)
+                            and time.monotonic() < cleanup_deadline
+                        ):
+                            time.sleep(0.01)
+                    if private_root is not None and private_root.exists():
+                        shutil.rmtree(private_root)
+
+                self.assertIsNotNone(
+                    child_state, "task-owned child did not report signal state"
+                )
+                assert child_state is not None
+                self.assertEqual(
+                    set(child_state["blocked"]).intersection(
+                        termination_signal_numbers
+                    ),
+                    set(),
+                )
+                self.assertFalse(any(child_state["ignored"].values()))
+                self.assertEqual(
+                    (observed_status, stdout, stderr),
+                    (
+                        128 + int(signum),
+                        b"",
+                        b"proton-pass age admission interrupted\n",
+                    ),
+                )
+                self.assertFalse(adapter_group_survived)
+                self.assertFalse(child_group_survived)
+                self.assertFalse(private_root_survived)
+                self.assertFalse(self.output.exists())
+
     def test_normal_child_with_resistant_descendant_is_retired_and_fails(
         self,
     ) -> None:

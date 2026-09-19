@@ -95,6 +95,29 @@ def _install_signal_handlers() -> None:
         signal.signal(signum, _signal_handler)
 
 
+def _require_termination_signals_unblocked() -> None:
+    pthread_sigmask = getattr(signal, "pthread_sigmask", None)
+    if pthread_sigmask is None:
+        raise AdmissionAdapterError("safe child execution is unavailable")
+    try:
+        blocked = pthread_sigmask(signal.SIG_BLOCK, set())
+    except OSError as error:
+        raise AdmissionAdapterError("safe child execution is unavailable") from error
+    if any(signum in blocked for signum in _TERMINATION_SIGNALS):
+        raise AdmissionAdapterError("safe child execution is unavailable")
+
+
+def _unblock_termination_signals() -> None:
+    pthread_sigmask = getattr(signal, "pthread_sigmask", None)
+    if pthread_sigmask is None:
+        raise AdmissionAdapterError("safe child execution is unavailable")
+    try:
+        pthread_sigmask(signal.SIG_UNBLOCK, _TERMINATION_SIGNALS)
+    except OSError as error:
+        raise AdmissionAdapterError("safe child execution is unavailable") from error
+    _require_termination_signals_unblocked()
+
+
 def _block_termination_signals() -> set[signal.Signals]:
     pthread_sigmask = getattr(signal, "pthread_sigmask", None)
     if pthread_sigmask is None:
@@ -210,6 +233,7 @@ def _spawn(
 ) -> subprocess.Popen[bytes]:
     global _ACTIVE_PROCESS, _ACTIVE_PROCESS_GROUP, _PROCESS_STATE
     _raise_if_interrupted()
+    _require_termination_signals_unblocked()
     if _PROCESS_STATE not in {"unowned", "released"}:
         raise AdmissionAdapterError("child process ownership is unavailable")
     _PROCESS_STATE = "acquiring"
@@ -1068,6 +1092,7 @@ def _parser() -> argparse.ArgumentParser:
 def main() -> int:
     _install_signal_handlers()
     try:
+        _unblock_termination_signals()
         create_receipt(_parser().parse_args())
     except AdmissionAdapterInterrupted as error:
         finalization_verified = True
