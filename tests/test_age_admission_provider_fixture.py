@@ -1483,7 +1483,9 @@ class AgeAdmissionProviderFixtureTests(unittest.TestCase):
                             str(int(item)): signal.getsignal(item) == signal.SIG_IGN
                             for item in termination_signals
                         }}
-                        pathlib.Path({os.fspath(child_state)!r}).write_text(
+                        state_path = pathlib.Path({os.fspath(child_state)!r})
+                        pending_state = state_path.with_name(state_path.name + ".pending")
+                        pending_state.write_text(
                             json.dumps(
                                 {{
                                     "blocked": sorted(int(item) for item in blocked),
@@ -1495,6 +1497,7 @@ class AgeAdmissionProviderFixtureTests(unittest.TestCase):
                             ),
                             encoding="ascii",
                         )
+                        os.replace(pending_state, state_path)
                         time.sleep(30)
                         print("required")
                         """
