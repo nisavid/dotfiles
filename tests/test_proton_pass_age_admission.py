@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import signal
@@ -31,351 +30,6 @@ def resolved_non_provider_support(name: str) -> Path:
 
 def _run(*arguments: str, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
     return subprocess.run(arguments, check=True, **kwargs)  # type: ignore[arg-type]
-
-
-_DIAGNOSTIC_EVENT_LIMIT = 512
-_DIAGNOSTIC_TRACE_LIMIT = 128 * 1024
-_DIAGNOSTIC_LATE_RETIREMENT_SECONDS = 2.0
-
-
-def _adapter_diagnostic_harness(trace_path: Path, body: str) -> str:
-    template = r'''\
-import json
-import os
-import pathlib
-import runpy
-import shutil
-import signal
-import subprocess
-import sys
-import time
-
-_DIAGNOSTIC_EVENT_LIMIT = 512
-_DIAGNOSTIC_TRACE_LIMIT = 128 * 1024
-_DIAGNOSTIC_TRACE_PATH = pathlib.Path(__TRACE_PATH__)
-_diagnostic_adapter_globals = None
-_diagnostic_dropped = 0
-_diagnostic_events = []
-_diagnostic_sequence = 0
-_diagnostic_started = time.monotonic()
-
-
-def _diagnostic_record(event, **fields):
-    global _diagnostic_dropped, _diagnostic_sequence
-    try:
-        observation = {
-            "elapsed_ms": round((time.monotonic() - _diagnostic_started) * 1000, 3),
-            "event": event,
-            "sequence": _diagnostic_sequence,
-        }
-        _diagnostic_sequence += 1
-        observation.update(fields)
-        _diagnostic_events.append(observation)
-        if len(_diagnostic_events) > _DIAGNOSTIC_EVENT_LIMIT:
-            del _diagnostic_events[0]
-            _diagnostic_dropped += 1
-    except BaseException:
-        pass
-
-
-def _diagnostic_classify(error, adapter_globals=None):
-    try:
-        if adapter_globals is None:
-            adapter_globals = _diagnostic_adapter_globals
-        if adapter_globals is not None:
-            interrupted = adapter_globals.get("AdmissionAdapterInterrupted")
-            if isinstance(interrupted, type) and isinstance(error, interrupted):
-                return {
-                    "classification": "adapter-interrupted",
-                    "signal": int(error.signum),
-                }
-            adapter_error = adapter_globals.get("AdmissionAdapterError")
-            if isinstance(adapter_error, type) and isinstance(error, adapter_error):
-                result = {"classification": "adapter-error"}
-                cause = getattr(error, "__cause__", None)
-                if isinstance(cause, OSError):
-                    result["cause_classification"] = "os-error"
-                    result["cause_errno"] = cause.errno
-                return result
-        if isinstance(error, subprocess.TimeoutExpired):
-            return {"classification": "subprocess-timeout"}
-        if isinstance(error, subprocess.SubprocessError):
-            return {"classification": "subprocess-error"}
-        if isinstance(error, OSError):
-            return {"classification": "os-error", "errno": error.errno}
-        if isinstance(error, SystemExit):
-            status = error.code if isinstance(error.code, int) else None
-            return {"classification": "system-exit", "status": status}
-        return {"classification": "other-base-exception"}
-    except BaseException:
-        return {"classification": "diagnostic-classification-failed"}
-
-
-def _diagnostic_adapter_state(adapter_globals):
-    try:
-        state = {}
-        for name in ("_PRIVATE_ROOT_STATE", "_PROCESS_STATE"):
-            value = adapter_globals.get(name)
-            if isinstance(value, str):
-                state[name.removeprefix("_").lower()] = value
-        process_group = adapter_globals.get("_ACTIVE_PROCESS_GROUP")
-        if isinstance(process_group, int):
-            state["active_process_group"] = process_group
-        process = adapter_globals.get("_ACTIVE_PROCESS")
-        process_pid = getattr(process, "pid", None)
-        if isinstance(process_pid, int):
-            state["active_process_pid"] = process_pid
-        return state
-    except BaseException:
-        return {"state_classification": "diagnostic-state-failed"}
-
-
-def _diagnostic_wrap_adapter_call(adapter_globals, name):
-    original = adapter_globals[name]
-
-    def diagnostic_adapter_call(*arguments, **keywords):
-        fields = _diagnostic_adapter_state(adapter_globals)
-        if name == "_terminate_process_group" and arguments:
-            pid = getattr(arguments[0], "pid", None)
-            if isinstance(pid, int):
-                fields["pid"] = pid
-        _diagnostic_record(f"adapter.{name}.start", **fields)
-        try:
-            result = original(*arguments, **keywords)
-        except BaseException as error:
-            fields = _diagnostic_adapter_state(adapter_globals)
-            fields.update(_diagnostic_classify(error, adapter_globals))
-            _diagnostic_record(f"adapter.{name}.error", **fields)
-            raise
-        fields = _diagnostic_adapter_state(adapter_globals)
-        if isinstance(result, bool):
-            fields["result"] = result
-        _diagnostic_record(f"adapter.{name}.return", **fields)
-        return result
-
-    adapter_globals[name] = diagnostic_adapter_call
-
-
-def _diagnostic_run_adapter(source, arguments):
-    global _diagnostic_adapter_globals
-    namespace = runpy.run_path(source, run_name="_synthetic_diagnostic_adapter")
-    adapter_globals = namespace["main"].__globals__
-    _diagnostic_adapter_globals = adapter_globals
-    for name in (
-        "create_receipt",
-        "_cleanup_after_failure",
-        "_cleanup_private_tree",
-        "_terminate_process_group",
-    ):
-        _diagnostic_wrap_adapter_call(adapter_globals, name)
-    sys.argv = [source, *arguments]
-    _diagnostic_record("adapter.main.start", **_diagnostic_adapter_state(adapter_globals))
-    try:
-        status = adapter_globals["main"]()
-    except BaseException as error:
-        fields = _diagnostic_adapter_state(adapter_globals)
-        fields.update(_diagnostic_classify(error, adapter_globals))
-        _diagnostic_record("adapter.main.error", **fields)
-        raise
-    _diagnostic_record(
-        "adapter.main.return",
-        status=status if isinstance(status, int) else None,
-        **_diagnostic_adapter_state(adapter_globals),
-    )
-    raise SystemExit(status)
-
-
-_real_killpg = os.killpg
-
-
-def _diagnostic_killpg(process_group, signum):
-    try:
-        result = _real_killpg(process_group, signum)
-    except OSError as error:
-        _diagnostic_record(
-            "os.killpg",
-            errno=error.errno,
-            process_group=process_group,
-            result="error",
-            signal=int(signum),
-        )
-        raise
-    _diagnostic_record(
-        "os.killpg",
-        process_group=process_group,
-        result="present" if int(signum) == 0 else "sent",
-        signal=int(signum),
-    )
-    return result
-
-
-os.killpg = _diagnostic_killpg
-_real_popen_init = subprocess.Popen.__init__
-_real_popen_poll = subprocess.Popen.poll
-_real_popen_wait = subprocess.Popen.wait
-
-
-def _diagnostic_popen_init(self, *arguments, **keywords):
-    _diagnostic_record("subprocess.Popen.start")
-    try:
-        _real_popen_init(self, *arguments, **keywords)
-    except BaseException as error:
-        fields = _diagnostic_classify(error)
-        _diagnostic_record("subprocess.Popen.error", **fields)
-        raise
-    _diagnostic_record("subprocess.Popen.return", pid=self.pid)
-
-
-def _diagnostic_popen_poll(self, *arguments, **keywords):
-    try:
-        status = _real_popen_poll(self, *arguments, **keywords)
-    except BaseException as error:
-        fields = _diagnostic_classify(error)
-        _diagnostic_record("subprocess.Popen.poll.error", pid=self.pid, **fields)
-        raise
-    _diagnostic_record(
-        "subprocess.Popen.poll",
-        pid=self.pid,
-        result="running" if status is None else "exited",
-        status=status,
-    )
-    return status
-
-
-def _diagnostic_popen_wait(self, *arguments, **keywords):
-    try:
-        status = _real_popen_wait(self, *arguments, **keywords)
-    except BaseException as error:
-        fields = _diagnostic_classify(error)
-        _diagnostic_record("subprocess.Popen.wait.error", pid=self.pid, **fields)
-        raise
-    _diagnostic_record("subprocess.Popen.wait.return", pid=self.pid, status=status)
-    return status
-
-
-subprocess.Popen.__init__ = _diagnostic_popen_init
-subprocess.Popen.poll = _diagnostic_popen_poll
-subprocess.Popen.wait = _diagnostic_popen_wait
-_real_rmtree = shutil.rmtree
-
-
-def _diagnostic_rmtree(path, *arguments, **keywords):
-    try:
-        name = pathlib.Path(path).name
-        target = "private-root" if name.startswith("proton-pass-age-admission.") else "other"
-    except BaseException:
-        target = "unclassified"
-    _diagnostic_record("shutil.rmtree.start", target=target)
-    try:
-        result = _real_rmtree(path, *arguments, **keywords)
-    except BaseException as error:
-        fields = _diagnostic_classify(error)
-        _diagnostic_record("shutil.rmtree.error", target=target, **fields)
-        raise
-    _diagnostic_record("shutil.rmtree.return", target=target)
-    return result
-
-
-shutil.rmtree = _diagnostic_rmtree
-
-
-def _diagnostic_write_trace(outcome):
-    try:
-        payload = {
-            "events": _diagnostic_events,
-            "events_dropped": _diagnostic_dropped,
-            "outcome": outcome,
-            "schema": 1,
-        }
-        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode(
-            "ascii"
-        )
-        if len(encoded) > _DIAGNOSTIC_TRACE_LIMIT:
-            payload["events"] = _diagnostic_events[-64:]
-            payload["events_dropped"] += max(0, len(_diagnostic_events) - 64)
-            payload["trace_truncated"] = True
-            encoded = json.dumps(
-                payload, sort_keys=True, separators=(",", ":")
-            ).encode("ascii")
-        if len(encoded) > _DIAGNOSTIC_TRACE_LIMIT:
-            encoded = b'{"classification":"diagnostic-trace-oversized","schema":1}'
-        _DIAGNOSTIC_TRACE_PATH.write_bytes(encoded)
-    except BaseException:
-        pass
-
-
-_diagnostic_outcome = {"classification": "body-returned"}
-try:
-__BODY__
-except BaseException as error:
-    _diagnostic_outcome = _diagnostic_classify(error)
-    _diagnostic_record("harness.error", **_diagnostic_outcome)
-    raise
-finally:
-    _diagnostic_write_trace(_diagnostic_outcome)
-'''
-    source = textwrap.dedent(template).replace(
-        "__TRACE_PATH__", repr(os.fspath(trace_path))
-    )
-    return source.replace(
-        "__BODY__", textwrap.indent(textwrap.dedent(body).strip(), "    ")
-    )
-
-
-def _synthetic_process_group_exists(process_group: int) -> bool:
-    try:
-        os.killpg(process_group, 0)
-    except ProcessLookupError:
-        return False
-    return True
-
-
-def _observe_synthetic_group_retirement(
-    process_group: int, initially_present: bool
-) -> dict[str, bool | float | None]:
-    started = time.monotonic()
-    present = initially_present
-    while (
-        present
-        and time.monotonic() - started < _DIAGNOSTIC_LATE_RETIREMENT_SECONDS
-    ):
-        time.sleep(0.01)
-        present = _synthetic_process_group_exists(process_group)
-    return {
-        "initially_present": initially_present,
-        "present_at_deadline": present,
-        "retired_after_ms": (
-            round((time.monotonic() - started) * 1000, 3)
-            if initially_present and not present
-            else None
-        ),
-    }
-
-
-def _synthetic_diagnostic_message(
-    trace_path: Path, **observations: object
-) -> str:
-    trace: object
-    try:
-        size = trace_path.stat().st_size
-        if size > _DIAGNOSTIC_TRACE_LIMIT:
-            trace = {"classification": "diagnostic-trace-oversized"}
-        else:
-            trace = json.loads(trace_path.read_bytes())
-            if not isinstance(trace, dict):
-                trace = {"classification": "diagnostic-trace-invalid"}
-    except OSError as error:
-        trace = {
-            "classification": "diagnostic-trace-unavailable",
-            "errno": error.errno,
-        }
-    except (TypeError, ValueError):
-        trace = {"classification": "diagnostic-trace-invalid"}
-    return "synthetic diagnostic: " + json.dumps(
-        {"observations": observations, "trace": trace},
-        sort_keys=True,
-        separators=(",", ":"),
-    )
 
 
 class ProtonPassAgeAdmissionTests(unittest.TestCase):
@@ -650,6 +304,85 @@ pathlib.Path({os.fspath(self.wrapper_marker)!r}).write_text(
             "TMP": os.fspath(self.root),
             "TMPDIR": os.fspath(self.root),
         }
+
+    def _run_with_group_probe_fault(
+        self, *, persistent: bool
+    ) -> tuple[tuple[int, bytes, bytes], int]:
+        self._write_wrapper(
+            """
+            import time
+            output_path.write_text("incomplete receipt\\n", encoding="ascii")
+            output_path.chmod(0o600)
+            time.sleep(30)
+            """
+        )
+        fault_marker = self.root / (
+            "persistent-group-probe-fault"
+            if persistent
+            else "transient-group-probe-fault"
+        )
+        harness = textwrap.dedent(
+            f"""\
+            import errno
+            import os
+            import pathlib
+            import runpy
+            import signal
+            import sys
+
+            real_killpg = os.killpg
+            armed = False
+            faulted = False
+
+            def faulting_killpg(process_group, signum):
+                global armed, faulted
+                if signum == 0 and armed and ({persistent!r} or not faulted):
+                    faulted = True
+                    pathlib.Path({os.fspath(fault_marker)!r}).write_text(
+                        str(process_group), encoding="ascii"
+                    )
+                    raise PermissionError(
+                        errno.EPERM, "synthetic group probe uncertainty"
+                    )
+                result = real_killpg(process_group, signum)
+                if signum == signal.SIGTERM:
+                    armed = True
+                return result
+
+            os.killpg = faulting_killpg
+            source = sys.argv[1]
+            sys.argv = [source, *sys.argv[2:]]
+            runpy.run_path(source, run_name="__main__")
+            """
+        )
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-I",
+                "-B",
+                "-S",
+                "-c",
+                harness,
+                os.fspath(self.adapter),
+                *self._command()[1:],
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=self._environment(),
+            start_new_session=True,
+        )
+        deadline = time.monotonic() + 5
+        while not self.wrapper_marker.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertTrue(self.wrapper_marker.exists(), "trusted wrapper did not start")
+
+        process.send_signal(signal.SIGTERM)
+        stdout, stderr = process.communicate(timeout=10)
+
+        self.assertTrue(fault_marker.exists(), "group probe fault was not injected")
+        process_group = int(fault_marker.read_text(encoding="ascii"))
+        assert process.returncode is not None
+        return (process.returncode, stdout, stderr), process_group
 
     def test_selected_field_creates_receipt_and_removes_private_copies(self) -> None:
         result = subprocess.run(
@@ -1362,6 +1095,30 @@ pathlib.Path({os.fspath(self.wrapper_marker)!r}).write_text(
         self.assertNotIn(self.key_bytes, stdout)
         self.assertNotIn(self.key_bytes, stderr)
 
+    def test_transient_group_probe_uncertainty_is_retried(self) -> None:
+        outcome, process_group = self._run_with_group_probe_fault(persistent=False)
+
+        self.assertEqual(
+            outcome,
+            (143, b"", b"proton-pass age admission interrupted\n"),
+        )
+        with self.assertRaises(ProcessLookupError):
+            os.killpg(process_group, 0)
+        self.assertFalse(self.output.exists())
+        self.assertEqual(list(self.root.glob("proton-pass-age-admission.*")), [])
+
+    def test_persistent_group_probe_uncertainty_fails_closed(self) -> None:
+        outcome, process_group = self._run_with_group_probe_fault(persistent=True)
+
+        self.assertEqual(
+            outcome,
+            (1, b"", b"proton-pass age admission failed\n"),
+        )
+        with self.assertRaises(ProcessLookupError):
+            os.killpg(process_group, 0)
+        self.assertFalse(self.output.exists())
+        self.assertEqual(list(self.root.glob("proton-pass-age-admission.*")), [])
+
     def test_term_during_popen_acquisition_retires_the_real_child_group(self) -> None:
         self.wrapper.write_text(
             textwrap.dedent(
@@ -1375,10 +1132,15 @@ pathlib.Path({os.fspath(self.wrapper_marker)!r}).write_text(
         )
         self.wrapper.chmod(0o755)
         boundary_child_path = self.root / "boundary-child.pid"
-        diagnostic_path = self.root / "popen-acquisition-diagnostic.json"
-        harness = _adapter_diagnostic_harness(
-            diagnostic_path,
+        harness = textwrap.dedent(
             f"""\
+            import os
+            import pathlib
+            import runpy
+            import signal
+            import subprocess
+            import sys
+
             real_popen = subprocess.Popen
             triggered = False
 
@@ -1390,19 +1152,14 @@ pathlib.Path({os.fspath(self.wrapper_marker)!r}).write_text(
                     pathlib.Path({os.fspath(boundary_child_path)!r}).write_text(
                         str(process.pid), encoding="ascii"
                     )
-                    _diagnostic_record(
-                        "synthetic.signal-injected",
-                        child_pid=process.pid,
-                        process_pid=os.getpid(),
-                        signal=int(signal.SIGTERM),
-                    )
                     os.kill(os.getpid(), signal.SIGTERM)
                 return process
 
             subprocess.Popen = signal_before_return
             source = sys.argv[1]
-            _diagnostic_run_adapter(source, sys.argv[2:])
-            """,
+            sys.argv = [source, *sys.argv[2:]]
+            runpy.run_path(source, run_name="__main__")
+            """
         )
 
         result = subprocess.run(
@@ -1424,28 +1181,20 @@ pathlib.Path({os.fspath(self.wrapper_marker)!r}).write_text(
         )
 
         child_pid = int(boundary_child_path.read_text(encoding="ascii"))
-        child_survived = _synthetic_process_group_exists(child_pid)
-        late_retirement = _observe_synthetic_group_retirement(
-            child_pid, child_survived
-        )
-        if late_retirement["present_at_deadline"]:
+        child_survived = True
+        try:
+            os.killpg(child_pid, 0)
+        except ProcessLookupError:
+            child_survived = False
+        if child_survived:
             os.killpg(child_pid, signal.SIGKILL)
-        diagnostic = _synthetic_diagnostic_message(
-            diagnostic_path,
-            child_group=late_retirement,
-            child_pid=child_pid,
-            returncode=result.returncode,
-        )
-        self.assertTrue(
-            (result.returncode, result.stdout, result.stderr)
-            == (143, b"", b"proton-pass age admission interrupted\n"),
-            diagnostic,
-        )
-        self.assertFalse(child_survived, diagnostic)
-        self.assertFalse(self.output.exists(), diagnostic)
         self.assertEqual(
-            list(self.root.glob("proton-pass-age-admission.*")), [], diagnostic
+            (result.returncode, result.stdout, result.stderr),
+            (143, b"", b"proton-pass age admission interrupted\n"),
         )
+        self.assertFalse(child_survived)
+        self.assertFalse(self.output.exists())
+        self.assertEqual(list(self.root.glob("proton-pass-age-admission.*")), [])
 
     def test_term_during_private_root_acquisition_stops_before_child_effects(
         self,
@@ -1518,28 +1267,30 @@ pathlib.Path({os.fspath(self.wrapper_marker)!r}).write_text(
     ) -> None:
         termination_signals = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
         termination_signal_numbers = {int(signum) for signum in termination_signals}
+        supervisor = textwrap.dedent(
+            """\
+            import os
+            import signal
+            import sys
+
+            termination_signals = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
+            signal.pthread_sigmask(signal.SIG_BLOCK, termination_signals)
+            for signum in termination_signals:
+                signal.signal(signum, signal.SIG_IGN)
+            os.execve(sys.argv[1], sys.argv[1:], os.environ)
+            """
+        )
+
+        def process_group_exists(process_group: int) -> bool:
+            try:
+                os.killpg(process_group, 0)
+            except ProcessLookupError:
+                return False
+            return True
 
         for signum in termination_signals:
             with self.subTest(signal=signum.name):
                 child_state_path = self.root / f"child-state-{int(signum)}.json"
-                diagnostic_path = (
-                    self.root / f"inherited-signal-{int(signum)}-diagnostic.json"
-                )
-                supervisor = _adapter_diagnostic_harness(
-                    diagnostic_path,
-                    """\
-                    termination_signals = (
-                        signal.SIGHUP,
-                        signal.SIGINT,
-                        signal.SIGTERM,
-                    )
-                    signal.pthread_sigmask(signal.SIG_BLOCK, termination_signals)
-                    for inherited_signum in termination_signals:
-                        signal.signal(inherited_signum, signal.SIG_IGN)
-                    source = sys.argv[1]
-                    _diagnostic_run_adapter(source, sys.argv[2:])
-                    """,
-                )
                 self.output.unlink(missing_ok=True)
                 self.wrapper.write_text(
                     textwrap.dedent(
@@ -1602,7 +1353,6 @@ pathlib.Path({os.fspath(self.wrapper_marker)!r}).write_text(
                 observed_status = None
                 adapter_group_survived = False
                 child_group_survived = False
-                child_group_observation = None
                 private_root_survived = False
                 try:
                     deadline = time.monotonic() + 5
@@ -1613,7 +1363,9 @@ pathlib.Path({os.fspath(self.wrapper_marker)!r}).write_text(
                     ):
                         time.sleep(0.01)
                     if child_state_path.exists():
-                        child_state = json.loads(child_state_path.read_bytes())
+                        child_state = __import__("json").loads(
+                            child_state_path.read_bytes()
+                        )
                         private_root = Path(child_state["private_root"])
                         process.send_signal(signum)
                         try:
@@ -1621,16 +1373,9 @@ pathlib.Path({os.fspath(self.wrapper_marker)!r}).write_text(
                         except subprocess.TimeoutExpired:
                             pass
                         observed_status = process.returncode
-                        adapter_group_survived = _synthetic_process_group_exists(
-                            process.pid
-                        )
-                        child_group_survived = _synthetic_process_group_exists(
+                        adapter_group_survived = process_group_exists(process.pid)
+                        child_group_survived = process_group_exists(
                             child_state["pgid"]
-                        )
-                        child_group_observation = (
-                            _observe_synthetic_group_retirement(
-                                child_state["pgid"], child_group_survived
-                            )
                         )
                         private_root_survived = private_root.exists()
                 finally:
@@ -1641,65 +1386,49 @@ pathlib.Path({os.fspath(self.wrapper_marker)!r}).write_text(
                             pass
                         process.communicate(timeout=5)
                     if child_state is None and child_state_path.exists():
-                        child_state = json.loads(child_state_path.read_bytes())
+                        child_state = __import__("json").loads(
+                            child_state_path.read_bytes()
+                        )
                         private_root = Path(child_state["private_root"])
                     if child_state is not None:
                         child_group = child_state["pgid"]
-                        if _synthetic_process_group_exists(child_group):
+                        if process_group_exists(child_group):
                             try:
                                 os.killpg(child_group, signal.SIGKILL)
                             except ProcessLookupError:
                                 pass
                         cleanup_deadline = time.monotonic() + 5
                         while (
-                            _synthetic_process_group_exists(child_group)
+                            process_group_exists(child_group)
                             and time.monotonic() < cleanup_deadline
                         ):
                             time.sleep(0.01)
                     if private_root is not None and private_root.exists():
                         shutil.rmtree(private_root)
 
-                safe_child_state = None
-                if child_state is not None:
-                    safe_child_state = {
-                        "blocked": child_state["blocked"],
-                        "ignored": child_state["ignored"],
-                        "pgid": child_state["pgid"],
-                        "pid": child_state["pid"],
-                    }
-                diagnostic = _synthetic_diagnostic_message(
-                    diagnostic_path,
-                    adapter_group_survived=adapter_group_survived,
-                    child_group=child_group_observation,
-                    child_group_survived=child_group_survived,
-                    child_state=safe_child_state,
-                    private_root_survived=private_root_survived,
-                    returncode=observed_status,
-                    signal=int(signum),
+                self.assertIsNotNone(
+                    child_state, "task-owned child did not report signal state"
                 )
-                self.assertIsNotNone(child_state, diagnostic)
                 assert child_state is not None
                 self.assertEqual(
                     set(child_state["blocked"]).intersection(
                         termination_signal_numbers
                     ),
                     set(),
-                    diagnostic,
                 )
-                self.assertFalse(any(child_state["ignored"].values()), diagnostic)
-                self.assertTrue(
-                    (observed_status, stdout, stderr)
-                    == (
+                self.assertFalse(any(child_state["ignored"].values()))
+                self.assertEqual(
+                    (observed_status, stdout, stderr),
+                    (
                         128 + int(signum),
                         b"",
                         b"proton-pass age admission interrupted\n",
                     ),
-                    diagnostic,
                 )
-                self.assertFalse(adapter_group_survived, diagnostic)
-                self.assertFalse(child_group_survived, diagnostic)
-                self.assertFalse(private_root_survived, diagnostic)
-                self.assertFalse(self.output.exists(), diagnostic)
+                self.assertFalse(adapter_group_survived)
+                self.assertFalse(child_group_survived)
+                self.assertFalse(private_root_survived)
+                self.assertFalse(self.output.exists())
 
     def test_normal_child_with_resistant_descendant_is_retired_and_fails(
         self,

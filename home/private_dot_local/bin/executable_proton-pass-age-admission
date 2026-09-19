@@ -145,15 +145,34 @@ def _registered_process_group(process: subprocess.Popen[bytes]) -> int:
     return _ACTIVE_PROCESS_GROUP
 
 
-def _process_group_exists(process_group: int) -> bool:
+def _process_group_state(process_group: int) -> str:
     try:
         os.killpg(process_group, 0)
     except ProcessLookupError:
+        return "absent"
+    except OSError:
+        return "unverified"
+    return "present"
+
+
+def _wait_for_known_group_state(process_group: int, *, deadline: float) -> str:
+    while True:
+        group_state = _process_group_state(process_group)
+        if group_state != "unverified":
+            return group_state
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return "unverified"
+        time.sleep(min(0.01, remaining))
+
+
+def _send_group_signal(process_group: int, signum: int) -> bool:
+    try:
+        os.killpg(process_group, signum)
+    except ProcessLookupError:
+        return True
+    except OSError:
         return False
-    except PermissionError as error:
-        raise AdmissionAdapterError(
-            "child process cleanup could not be verified"
-        ) from error
     return True
 
 
@@ -162,8 +181,8 @@ def _process_and_group_retired(
 ) -> bool:
     while True:
         leader_reaped = process.poll() is not None
-        group_exists = _process_group_exists(process_group)
-        if leader_reaped and not group_exists:
+        group_state = _process_group_state(process_group)
+        if leader_reaped and group_state == "absent":
             return True
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -178,35 +197,45 @@ def _terminate_process_group(process: subprocess.Popen[bytes]) -> None:
     process_group = _registered_process_group(process)
     _PROCESS_STATE = "finalizing"
     try:
-        if _process_group_exists(process_group):
-            try:
-                os.killpg(process_group, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            except OSError as error:
-                raise AdmissionAdapterError(
-                    "child process cleanup could not be verified"
-                ) from error
+        term_deadline = time.monotonic() + _TERMINATION_GRACE_SECONDS
+        group_state = _wait_for_known_group_state(
+            process_group, deadline=term_deadline
+        )
+        if group_state == "unverified":
+            raise AdmissionAdapterError(
+                "child process cleanup could not be verified"
+            )
+        if group_state == "present" and not _send_group_signal(
+            process_group, signal.SIGTERM
+        ):
+            raise AdmissionAdapterError(
+                "child process cleanup could not be verified"
+            )
         if _process_and_group_retired(
             process,
             process_group=process_group,
-            deadline=time.monotonic() + _TERMINATION_GRACE_SECONDS,
+            deadline=term_deadline,
         ):
             _release_process(process)
             return
-        if _process_group_exists(process_group):
-            try:
-                os.killpg(process_group, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            except OSError as error:
-                raise AdmissionAdapterError(
-                    "child process cleanup could not be verified"
-                ) from error
+        kill_deadline = time.monotonic() + _TERMINATION_GRACE_SECONDS
+        group_state = _wait_for_known_group_state(
+            process_group, deadline=kill_deadline
+        )
+        if group_state == "unverified":
+            raise AdmissionAdapterError(
+                "child process cleanup could not be verified"
+            )
+        if group_state == "present" and not _send_group_signal(
+            process_group, signal.SIGKILL
+        ):
+            raise AdmissionAdapterError(
+                "child process cleanup could not be verified"
+            )
         if not _process_and_group_retired(
             process,
             process_group=process_group,
-            deadline=time.monotonic() + _TERMINATION_GRACE_SECONDS,
+            deadline=kill_deadline,
         ):
             raise AdmissionAdapterError("child process cleanup could not be verified")
     except (AdmissionAdapterError, OSError):
@@ -259,13 +288,19 @@ def _retire_process(process: subprocess.Popen[bytes]) -> None:
     global _PROCESS_STATE
     try:
         process_group = _registered_process_group(process)
-        group_exists = _process_group_exists(process_group)
-    except (AdmissionAdapterError, OSError):
+    except AdmissionAdapterError:
         _PROCESS_STATE = "unverified"
         raise
-    if group_exists:
+    group_state = _wait_for_known_group_state(
+        process_group,
+        deadline=time.monotonic() + _TERMINATION_GRACE_SECONDS,
+    )
+    if group_state == "present":
         _terminate_process_group(process)
         raise AdmissionAdapterError("child process did not retire cleanly")
+    if group_state == "unverified":
+        _PROCESS_STATE = "unverified"
+        raise AdmissionAdapterError("child process cleanup could not be verified")
     try:
         process.wait()
     except (OSError, subprocess.SubprocessError) as error:

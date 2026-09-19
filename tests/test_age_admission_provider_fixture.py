@@ -580,6 +580,82 @@ class AgeAdmissionProviderFixtureTests(unittest.TestCase):
         ).encode("ascii")
         inputs.replace_age_archive(f"#!{sys.executable} -B\n".encode() + slow_body)
 
+    def _run_with_group_probe_fault(
+        self, inputs: FixtureInputs, *, persistent: bool
+    ) -> tuple[tuple[int, bytes, bytes], int]:
+        child_marker = inputs.root / (
+            "persistent-probe-child" if persistent else "transient-probe-child"
+        )
+        fault_marker = inputs.root / (
+            "persistent-group-probe-fault"
+            if persistent
+            else "transient-group-probe-fault"
+        )
+        self.configure_slow_age_child(inputs, child_marker)
+        harness = textwrap.dedent(
+            f"""\
+            import errno
+            import os
+            import pathlib
+            import runpy
+            import signal
+            import sys
+
+            real_killpg = os.killpg
+            armed = False
+            faulted = False
+
+            def faulting_killpg(process_group, signum):
+                global armed, faulted
+                if signum == 0 and armed and ({persistent!r} or not faulted):
+                    faulted = True
+                    pathlib.Path({os.fspath(fault_marker)!r}).write_text(
+                        str(process_group), encoding="ascii"
+                    )
+                    raise PermissionError(
+                        errno.EPERM, "synthetic group probe uncertainty"
+                    )
+                result = real_killpg(process_group, signum)
+                if signum == signal.SIGTERM:
+                    armed = True
+                return result
+
+            os.killpg = faulting_killpg
+            source = sys.argv[1]
+            sys.argv = [source, *sys.argv[2:]]
+            runpy.run_path(source, run_name="__main__")
+            """
+        )
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-I",
+                "-B",
+                "-S",
+                "-c",
+                harness,
+                os.fspath(BUILDER),
+                *inputs.builder_command()[5:],
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=inputs.builder_environment(),
+            start_new_session=True,
+        )
+        deadline = time.monotonic() + 5
+        while not child_marker.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertTrue(child_marker.exists(), "slow age child did not start")
+
+        process.send_signal(signal.SIGTERM)
+        stdout, stderr = process.communicate(timeout=10)
+
+        self.assertTrue(fault_marker.exists(), "group probe fault was not injected")
+        process_group = int(fault_marker.read_text(encoding="ascii"))
+        assert process.returncode is not None
+        return (process.returncode, stdout, stderr), process_group
+
     def test_builds_bound_provider_free_synthetic_fixture(self) -> None:
         temporary, inputs = self.make_inputs()
         self.addCleanup(temporary.cleanup)
@@ -1126,6 +1202,42 @@ class AgeAdmissionProviderFixtureTests(unittest.TestCase):
         self.assertFalse(inputs.provider_marker.exists())
         with self.assertRaises(ProcessLookupError):
             os.kill(child_pid, 0)
+
+    def test_transient_group_probe_uncertainty_is_retried(self) -> None:
+        temporary, inputs = self.make_inputs()
+        self.addCleanup(temporary.cleanup)
+
+        outcome, process_group = self._run_with_group_probe_fault(
+            inputs, persistent=False
+        )
+
+        self.assertEqual(
+            outcome,
+            (143, b"", b"age-admission provider fixture interrupted\n"),
+        )
+        with self.assertRaises(ProcessLookupError):
+            os.killpg(process_group, 0)
+        self.assertFalse(inputs.operation.exists())
+        self.assertFalse(inputs.provider_marker.exists())
+        self.assertFalse(inputs.network_marker.exists())
+
+    def test_persistent_group_probe_uncertainty_fails_closed(self) -> None:
+        temporary, inputs = self.make_inputs()
+        self.addCleanup(temporary.cleanup)
+
+        outcome, process_group = self._run_with_group_probe_fault(
+            inputs, persistent=True
+        )
+
+        self.assertEqual(
+            outcome,
+            (1, b"", b"age-admission provider fixture failed\n"),
+        )
+        with self.assertRaises(ProcessLookupError):
+            os.killpg(process_group, 0)
+        self.assertFalse(inputs.operation.exists())
+        self.assertFalse(inputs.provider_marker.exists())
+        self.assertFalse(inputs.network_marker.exists())
 
     def test_repeated_signals_during_operation_cleanup_keep_the_first_status(
         self,

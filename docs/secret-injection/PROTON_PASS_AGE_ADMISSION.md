@@ -434,7 +434,10 @@ trap - EXIT HUP INT TERM
   its leader already exited. It emits only
   `proton-pass age admission interrupted` and returns the fixed signal status
   after proving that the leader was reaped, the entire group is absent, the
-  failed receipt is absent, and both private staging layers are removed.
+  failed receipt is absent, and both private staging layers are removed. A
+  non-`ESRCH` group probe error remains uncertain and is retried only within
+  the current fixed retirement deadline. Only a later `ESRCH` proves absence;
+  uncertainty at the deadline uses the failure result.
 - `SIGKILL`, kernel failure, and power loss are not catchable. Cleanup does not
   run; after `SIGKILL`, a detached child process group may also continue. A
   descendant that escapes the registered process group is likewise outside
@@ -539,8 +542,10 @@ commits never become production evidence. The builder latches the first caught
 signal, retires the full registered child process group, and removes its
 uncommitted operation root before returning `128 + signal`. Later signals do
 not replace the first status, re-enter cleanup, or extend either retirement
-deadline. A surviving or unverifiable group, operation-root identity drift, or
-incomplete cleanup uses the existing failure result, retains any surviving
+deadline. A non-`ESRCH` group probe error remains uncertain and is retried only
+within the current fixed deadline; only a later `ESRCH` proves absence. A
+surviving or persistently unverifiable group, operation-root identity drift,
+or incomplete cleanup uses the existing failure result, retains any surviving
 root as non-authoritative evidence, and creates no success marker.
 
 Before publishing `fixture.json`, the builder checks the signal latch and
@@ -876,9 +881,11 @@ live-operation boundary is not an unknown item, agent, or login effect.
 
 The first `HUP`, `INT`, or `TERM` fixes the signal status. Later signals only
 latch: they cannot replace that status, re-enter finalization, extend either
-retirement deadline, or authorize another provider effect. Every child leader
-must be reaped and its process group proved absent before interruption or
-success is reported.
+retirement deadline, or authorize another provider effect. A non-`ESRCH`
+group probe error remains uncertain and is retried only within the current
+fixed deadline; only a later `ESRCH` proves absence. Every child leader must be
+reaped and its process group proved absent before interruption or success is
+reported.
 
 A signal latched after durable mutation arming but before process creation
 restores the prior resource state without a provider call and retains the local
