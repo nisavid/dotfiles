@@ -3494,9 +3494,73 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
 
         result = inputs.run(timeout=180)
 
+        fixed_result = {
+            (0, b"qualified-clean\n", b""): "qualified-clean",
+            (
+                1,
+                b"",
+                b"age-admission signer provisioning failed\n",
+            ): "failure",
+            (
+                20,
+                b"",
+                b"age-admission signer provisioning requires reconciliation\n",
+            ): "reconciliation-required",
+            (
+                21,
+                b"",
+                b"age-admission signer provisioning cleanup incomplete\n",
+            ): "cleanup-incomplete",
+        }.get(
+            (result.returncode, result.stdout, result.stderr),
+            "unexpected",
+        )
+        state_path = inputs.state / "state.json"
+        state_projection = None
+        if state_path.exists():
+            state = json.loads(state_path.read_bytes())
+            state_projection = {
+                "checks": state["checks"],
+                "outcome": state["outcome"],
+                "phase": state["phase"],
+                "resources": {
+                    name: state["resources"][name]["state"]
+                    for name in ("agent", "item", "session")
+                },
+            }
+        provider_event_kinds = (
+            "agent-create",
+            "agent-delete",
+            "agent-list",
+            "agent-login",
+            "agent-monitor",
+            "info",
+            "item-create",
+            "item-delete",
+            "item-list",
+            "item-view",
+            "local-logout",
+            "provider-adapter",
+            "readiness",
+            "version",
+        )
+        log = inputs.log()
+        diagnostic = canonical_json(
+            {
+                "provider_events": [
+                    record.get("kind")
+                    if record.get("kind") in provider_event_kinds
+                    else "unexpected"
+                    for record in log
+                ],
+                "result": fixed_result,
+                "state": state_projection,
+            }
+        ).decode("ascii").rstrip("\n")
         self.assertEqual(
             (result.returncode, result.stdout, result.stderr),
             (0, b"qualified-clean\n", b""),
+            diagnostic,
         )
         evidence = json.loads((inputs.state / "qualified-clean.json").read_bytes())
         self.assertEqual(evidence["qualification"], "source-test")
@@ -3504,7 +3568,6 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
         self.assertFalse(evidence["authority"]["real_transition_authority"])
         self.assertFalse((inputs.state / "fixture").exists())
         self.assertFalse((inputs.state / "private/admission-ed25519").exists())
-        log = inputs.log()
         self.assertGreaterEqual(sum(record["kind"] == "item-view" for record in log), 3)
         self.assertEqual(sum(record["kind"] == "agent-login" for record in log), 1)
 
