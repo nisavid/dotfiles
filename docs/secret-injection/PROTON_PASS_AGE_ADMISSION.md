@@ -575,7 +575,7 @@ helper.
 
 Stage the provisioning helper from its raw reviewed blob and retain the same
 reviewed object database, commit, manifest, and age archive bindings used by
-the fixture contract. A canonical `issue286-provisioning/v1` source-test
+the fixture contract. A canonical `issue286-provisioning/v2` source-test
 request has this exact closed shape:
 
 ```json
@@ -612,7 +612,7 @@ request has this exact closed shape:
     },
     "repository": "/private-operation/input/reviewed-object-database"
   },
-  "schema": "issue286-provisioning/v1",
+  "schema": "issue286-provisioning/v2",
   "sessions": {
     "owner": "/private-operation/sessions/owner",
     "primary_enrollment": "/private-operation/sessions/primary",
@@ -704,14 +704,72 @@ captures, prior resource state, and `requesting` or `removing` state with file
 and directory synchronization. A spawn failure restores the prior local state;
 once a child is created, an unacknowledged effect is never treated as absent.
 
-A source-test run may use only disposable fakes and ends with value-free
-`qualified-clean.json`, exact output `qualified-clean\n`, and
+A source-test run may use only disposable fakes and ends with a value-free
+`qualified-clean.json` marker, exact output `qualified-clean\n`, and
 `production_eligible=false`. It proves source behavior, not live-provider
 acceptance. A separately owner-authorized run against disposable real provider
 resources uses `qualification="live-disposable-provider"`. Only its
 schema-valid, value-free, fully cleaned result may set
 `production_eligible=true`; the label alone does not prove the provider was
 live.
+
+Terminal disposition uses these closed successors and fixed relative names:
+
+| Producer artifact | Closed schema | Fixed relative name |
+| --- | --- | --- |
+| Provisioning request | `issue286-provisioning/v2` | Owner-selected mode-`0600` request path |
+| Producer state | `issue286-provisioning-state/v2` | `state.json` |
+| Qualified-clean marker | `issue286-qualified-clean/v2` | `qualified-clean.json` |
+| Ready-for-recovery marker | `issue286-ready-for-recovery/v2` | `ready-for-recovery.json` |
+| Prepared commit record | `issue286-terminal-commit/v1` | `.terminal-commit.prepared` |
+| Final commit record | `issue286-terminal-commit/v1` | `terminal-commit.json` |
+
+Before creating either marker, the producer computes the canonical marker and
+commit-record bytes in memory. It durably adds `terminal_plan` to
+`state.json`. That object has exactly `bindings`, `commit_record`,
+`marker`, and `outcome`. `commit_record` has exactly
+`final_name="terminal-commit.json"` and `sha256`. `marker` has exactly
+`relative_path` and `sha256`. The plan's `bindings`, `marker`, and
+`outcome` equal the corresponding commit-record values. The qualified-clean
+commit record has this exact closed shape:
+
+```json
+{
+  "bindings": {
+    "pass_cli": {
+      "build_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+      "version_stdout": "Proton Pass CLI 2.3.3 (abcdef0)\n"
+    },
+    "platform": "linux",
+    "provider_schema": {
+      "command_schema": "issue286-pass-cli-2.3.3-provider-commands/v2",
+      "source_commit": "51a4c9b110a0ffe6e81f4f5d3877b9e5a0c24112",
+      "source_manifest_sha256": "95c0f8d872b308adb741cc21541a090ca4842cb894ece48370938955cb42ae6b"
+    },
+    "reviewed_source": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "manifest_sha256": "6666666666666666666666666666666666666666666666666666666666666666"
+    }
+  },
+  "marker": {
+    "relative_path": "qualified-clean.json",
+    "sha256": "7777777777777777777777777777777777777777777777777777777777777777"
+  },
+  "outcome": "qualified-clean",
+  "schema": "issue286-terminal-commit/v1"
+}
+```
+
+The ready-for-recovery form changes only `marker.relative_path` to
+`ready-for-recovery.json` and `outcome` to `ready-for-recovery`; its
+marker digest and bindings come from that production operation. Canonical JSON
+uses ASCII with escaped non-ASCII characters, two-space indentation,
+lexicographically sorted keys, and one final newline. The marker SHA-256 is
+over the exact canonical marker bytes. The commit-record SHA-256 in
+`terminal_plan` is over the exact canonical commit-record bytes. The record
+does not contain its own digest, the producer-state digest, or the prepared or
+final filename. The production request binds the complete producer-state bytes
+separately, so no digest relation is circular.
 
 Production changes the same request only as follows:
 
@@ -720,20 +778,38 @@ Production changes the same request only as follows:
   "mode": "production",
   "qualification": null,
   "qualified_clean": {
-    "path": "/private-operation/evidence/qualified-clean.json",
-    "sha256": "7777777777777777777777777777777777777777777777777777777777777777"
+    "commit_record": {
+      "path": "/private-operation/evidence/terminal-commit.json",
+      "sha256": "8888888888888888888888888888888888888888888888888888888888888888"
+    },
+    "marker": {
+      "path": "/private-operation/evidence/qualified-clean.json",
+      "sha256": "7777777777777777777777777777777777777777777777777777777777777777"
+    },
+    "producer_state": {
+      "path": "/private-operation/evidence/state.json",
+      "sha256": "9999999999999999999999999999999999999999999999999999999999999999"
+    }
   }
 }
 ```
 
 Those three values replace their qualification counterparts; every other
-required member remains. Production accepts only prior live-disposable
-qualified-clean evidence whose reviewed source, `pass-cli` version/build,
-platform, and provider schema match. It then creates a fresh internal synthetic
+required member remains. Before starting a provider child, production
+canonicalizes and validates all three bound files. They must be owner-private
+regular files in one operation directory. The producer state must carry the
+qualified-clean outcome and prepared terminal plan; the marker and final
+commit-record names and digests must match that plan; the commit record must
+have the exact closed shape above; and its bindings must match the marker,
+producer state, and current request. Missing, prepared-only, noncanonical,
+mismatched, cross-operation, or non-committed combinations are rejected.
+Production also requires prior live-disposable evidence whose reviewed source,
+`pass-cli` version/build, platform, provider schema, cleanup checks, and
+remote-resource disposition match. It then creates a fresh internal synthetic
 fixture, whose randomized commits may differ from the qualification fixture.
 No synthetic commit is a production binding. A successful production run
 removes signer/template/token/receipt and fixture bytes, retains only bounded
-private lifecycle handles, writes `ready-for-recovery.json` last, emits exact
+private lifecycle handles, commits `ready-for-recovery.json`, emits exact
 `ready-for-recovery\n`, and still grants no GitHub mutation authority.
 
 The helper gives signer private bytes only to mode-`0600` signer/template files
@@ -797,15 +873,32 @@ incident-mutation interface.
 Qualification cleanup is ordered: acknowledged exact retained-PAT-ID deletion,
 direct revoked-session probe failure without readiness, successful primary
 readback and receipt verification, acknowledged exact-ID item deletion,
-acknowledged local logout, then bounded local cleanup and terminal evidence.
-Do not advance past an unknown state. Before publishing `qualified-clean.json`
-or `ready-for-recovery.json`, the helper checks the signal latch and blocks
-catchable termination only for the no-child filesystem commit. A signal before
-that commit prevents publication. A signal after commit entry is deferred; a
-completed commit returns success. A failed mask or publication restores the
-prior state and signal mask, leaves no authoritative terminal marker, and
-returns failure. No spawn, provider call, or cleanup wait occurs under that
-mask.
+acknowledged local logout, then bounded local cleanup and terminal disposition.
+Do not advance past an unknown state.
+
+For either successful outcome, the producer first checks the signal latch and
+blocks catchable termination for the no-child filesystem commit. While signals
+remain blocked, it durably writes the prepared state plan, writes and fsyncs the
+marker and its directory, writes the canonical commit record exclusively as
+`.terminal-commit.prepared`, fsyncs that file, and syncs the directory while
+the record is still non-authoritative. It then performs exactly one atomic
+rename from `.terminal-commit.prepared` to `terminal-commit.json`. That
+rename is the publication commit point. The final name must be absent before
+entry. No cleanup, state write, directory sync, or other fallible filesystem
+work occurs after a successful rename; signals remain blocked through the
+fixed terminal bytes and process exit. A later terminal-output failure does not
+revoke or relabel the committed disposition.
+
+Any failure before the rename leaves no final commit record. The producer
+restores signal delivery, reports failure, and, when state can still be
+durably updated, records `local-cleanup-incomplete`. A complete marker or
+prepared record that survives failed cleanup remains non-authoritative
+diagnostic evidence. Production rejects it because the final commit record is
+absent or does not match the bound prepared plan. A signal before commit entry
+prevents publication; a signal deferred after entry cannot replace a completed
+commit. No spawn, provider call, or cleanup wait occurs under the mask. The
+existing SIGKILL and host-loss limits remain: recovery trusts a final record
+only when all bound files are present and validate, and absence fails closed.
 
 Once production succeeds, keep its item and authorized enrollments until a
 separately authorized replacement is accepted; never update the stored signer

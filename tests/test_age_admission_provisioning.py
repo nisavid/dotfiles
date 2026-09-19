@@ -841,7 +841,7 @@ class ProvisioningInputs:
         *,
         mode: str = "qualification",
         qualification: str | None = "source-test",
-        qualified_clean: dict[str, str] | None = None,
+        qualified_clean: dict[str, object] | None = None,
     ) -> None:
         self.request_document = {
             "age_tooling": {
@@ -876,7 +876,7 @@ class ProvisioningInputs:
                 },
                 "repository": os.fspath(self.source),
             },
-            "schema": "issue286-provisioning/v1",
+            "schema": "issue286-provisioning/v2",
             "sessions": {
                 "owner": os.fspath(self.owner_session),
                 "primary_enrollment": os.fspath(self.primary_session),
@@ -995,6 +995,16 @@ class ProvisioningInputs:
             terminal_descriptor = None
             terminal_fault_triggered = False
             terminal_write_faulted = False
+            terminal_commit_completed = False
+            terminal_marker_fsynced = False
+            terminal_prepared_fsynced = False
+            terminal_paths_by_descriptor = {{}}
+            terminal_markers = {{
+                os.path.join(STATE, "qualified-clean.json"),
+                os.path.join(STATE, "ready-for-recovery.json"),
+            }}
+            terminal_prepared = os.path.join(STATE, ".terminal-commit.prepared")
+            terminal_final = os.path.join(STATE, "terminal-commit.json")
             real_fsync = os.fsync
             real_mkdir = Path.mkdir
             real_killpg = os.killpg
@@ -1002,6 +1012,8 @@ class ProvisioningInputs:
             real_popen = subprocess.Popen
             real_replace = os.replace
             real_sigmask = signal.pthread_sigmask
+            real_stdout = sys.stdout
+            real_unlink = Path.unlink
 
             if FAULT == "inherited-signal-state":
                 for member in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
@@ -1105,9 +1117,19 @@ class ProvisioningInputs:
                 return real_killpg(pgid, signum)
 
             def faulting_replace(source, destination):
+                global terminal_commit_completed
+                source_value = os.fspath(source)
+                destination_value = os.fspath(destination)
+                is_terminal_commit = (
+                    source_value == terminal_prepared
+                    and destination_value == terminal_final
+                )
+                if is_terminal_commit and FAULT == "terminal-final-rename-failure":
+                    record("terminal-final-rename-failed")
+                    raise OSError(errno.EIO, "synthetic terminal rename failure")
                 settles_resume_capture = False
                 if (
-                    os.fspath(destination) == os.path.join(STATE, "state.json")
+                    destination_value == os.path.join(STATE, "state.json")
                     and FAULT
                     in {{
                         "classification-persist-failure",
@@ -1140,30 +1162,53 @@ class ProvisioningInputs:
                         == "present"
                     )
                 result = real_replace(source, destination)
+                if is_terminal_commit:
+                    terminal_commit_completed = True
+                    record(
+                        "terminal-renamed",
+                        destination=os.path.basename(destination_value),
+                        source=os.path.basename(source_value),
+                    )
+                elif terminal_commit_completed:
+                    record(
+                        "post-commit-replace",
+                        destination=destination_value,
+                        source=source_value,
+                    )
                 if settles_resume_capture:
                     inject_resume_signals("resume-state-commit-signals")
                 return result
 
             def faulting_open(path, flags, *args, **kwargs):
                 global effect_capture_descriptor, terminal_descriptor
+                path_value = os.fspath(path)
+                if terminal_commit_completed:
+                    record("post-commit-open", flags=flags, path=path_value)
+                if (
+                    FAULT == "terminal-prepared-create-failure"
+                    and path_value == terminal_prepared
+                    and flags & os.O_CREAT
+                ):
+                    record("terminal-prepared-create-failed")
+                    raise OSError(errno.EIO, "synthetic prepared-record create failure")
                 if (
                     FAULT == "terminal-commit-failure"
-                    and os.fspath(path) == os.path.join(STATE, "qualified-clean.json")
+                    and path_value == os.path.join(STATE, "qualified-clean.json")
                     and flags & os.O_CREAT
                 ):
                     record("terminal-open-failed")
                     raise OSError(errno.EIO, "synthetic terminal commit failure")
                 descriptor = real_open(path, flags, *args, **kwargs)
+                terminal_paths_by_descriptor[descriptor] = path_value
                 if (
                     FAULT == "post-effect-capture-fsync-signal"
-                    and os.fspath(path)
-                    == os.path.join(STATE, "captures", "0001.stdout")
+                    and path_value == os.path.join(STATE, "captures", "0001.stdout")
                     and not flags & os.O_CREAT
                 ):
                     effect_capture_descriptor = descriptor
                 if (
                     FAULT == "terminal-partial-commit-failure"
-                    and os.fspath(path) == os.path.join(STATE, "qualified-clean.json")
+                    and path_value == os.path.join(STATE, "qualified-clean.json")
                     and flags & os.O_CREAT
                 ):
                     terminal_descriptor = descriptor
@@ -1171,15 +1216,16 @@ class ProvisioningInputs:
                 if (
                     FAULT == "resume-capture-read-signal"
                     and not triggered
-                    and os.fspath(path)
-                    == os.path.join(STATE, "captures", "0001.stdout")
+                    and path_value == os.path.join(STATE, "captures", "0001.stdout")
                     and not flags & os.O_CREAT
                 ):
                     inject_resume_signals("resume-capture-read-signals")
                 return descriptor
 
             def faulting_fsync(descriptor):
-                global effect_capture_signaled, terminal_write_faulted
+                global effect_capture_signaled, terminal_marker_fsynced
+                global terminal_prepared_fsynced, terminal_write_faulted, triggered
+                path_value = terminal_paths_by_descriptor.get(descriptor)
                 if (
                     FAULT == "post-effect-capture-fsync-signal"
                     and descriptor == effect_capture_descriptor
@@ -1198,7 +1244,67 @@ class ProvisioningInputs:
                     terminal_write_faulted = True
                     record("terminal-file-fsync-failed")
                     raise OSError(errno.EIO, "synthetic terminal fsync failure")
-                return real_fsync(descriptor)
+                if (
+                    FAULT == "terminal-prepared-fsync-failure"
+                    and path_value == terminal_prepared
+                    and not triggered
+                ):
+                    triggered = True
+                    record("terminal-prepared-fsync-failed")
+                    raise OSError(errno.EIO, "synthetic prepared-record fsync failure")
+                if (
+                    FAULT == "terminal-marker-directory-fsync-cleanup-failure"
+                    and path_value == STATE
+                    and terminal_marker_fsynced
+                    and not triggered
+                ):
+                    triggered = True
+                    record("terminal-marker-directory-fsync-failed")
+                    raise OSError(errno.EIO, "synthetic marker directory fsync failure")
+                if (
+                    FAULT == "terminal-prepared-directory-fsync-failure"
+                    and path_value == STATE
+                    and terminal_prepared_fsynced
+                    and not triggered
+                ):
+                    triggered = True
+                    record("terminal-prepared-directory-fsync-failed")
+                    raise OSError(errno.EIO, "synthetic prepared-record directory fsync failure")
+                if terminal_commit_completed:
+                    record("post-commit-fsync", path=path_value)
+                result = real_fsync(descriptor)
+                if path_value in terminal_markers:
+                    terminal_marker_fsynced = True
+                elif path_value == terminal_prepared:
+                    terminal_prepared_fsynced = True
+                return result
+
+            def faulting_unlink(path, *args, **kwargs):
+                path_value = os.fspath(path)
+                if (
+                    FAULT == "terminal-marker-directory-fsync-cleanup-failure"
+                    and path_value in terminal_markers
+                    and triggered
+                ):
+                    record("terminal-marker-cleanup-failed")
+                    raise OSError(errno.EIO, "synthetic marker cleanup failure")
+                if terminal_commit_completed:
+                    record("post-commit-unlink", path=path_value)
+                return real_unlink(path, *args, **kwargs)
+
+            class FaultingStdout:
+                def write(self, data):
+                    if (
+                        FAULT == "terminal-output-failure"
+                        and terminal_commit_completed
+                        and data in {{"qualified-clean", "ready-for-recovery"}}
+                    ):
+                        record("terminal-output-failed", outcome=data)
+                        raise OSError(errno.EIO, "synthetic terminal output failure")
+                    return real_stdout.write(data)
+
+                def __getattr__(self, name):
+                    return getattr(real_stdout, name)
 
             def faulting_sigmask(how, mask):
                 global terminal_fault_triggered
@@ -1241,12 +1347,15 @@ class ProvisioningInputs:
                 return real_sigmask(how, mask)
 
             Path.mkdir = injecting_mkdir
+            Path.unlink = faulting_unlink
             os.fsync = faulting_fsync
             os.killpg = faulting_killpg
             os.open = faulting_open
             os.replace = faulting_replace
             signal.pthread_sigmask = faulting_sigmask
             subprocess.Popen = observing_popen
+            if FAULT == "terminal-output-failure":
+                sys.stdout = FaultingStdout()
             sys.argv = [TARGET, *sys.argv[1:]]
             runpy.run_path(TARGET, run_name="__main__")
             """
@@ -1299,6 +1408,75 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
         root = Path(temporary.name).resolve(strict=True)
         root.chmod(0o700)
         return temporary, ProvisioningInputs(root, real_local_tools=real_local_tools)
+
+    def assert_terminal_disposition(
+        self, inputs: ProvisioningInputs, outcome: str
+    ) -> dict[str, object]:
+        marker_name = {
+            "qualified-clean": "qualified-clean.json",
+            "ready-for-recovery": "ready-for-recovery.json",
+        }[outcome]
+        marker_path = inputs.state / marker_name
+        state_path = inputs.state / "state.json"
+        record_path = inputs.state / "terminal-commit.json"
+        prepared_path = inputs.state / ".terminal-commit.prepared"
+        marker_bytes = marker_path.read_bytes()
+        state_bytes = state_path.read_bytes()
+        record_bytes = record_path.read_bytes()
+        marker = json.loads(marker_bytes)
+        state = json.loads(state_bytes)
+        record = json.loads(record_bytes)
+
+        self.assertEqual(marker_bytes, canonical_json(marker))
+        self.assertEqual(state_bytes, canonical_json(state))
+        self.assertEqual(record_bytes, canonical_json(record))
+        self.assertEqual(
+            (state["schema"], marker["schema"], record["schema"]),
+            (
+                "issue286-provisioning-state/v2",
+                f"issue286-{outcome}/v2",
+                "issue286-terminal-commit/v1",
+            ),
+        )
+        self.assertEqual((state["phase"], state["outcome"]), (outcome, outcome))
+        plan = state["terminal_plan"]
+        self.assertEqual(
+            set(plan), {"bindings", "commit_record", "marker", "outcome"}
+        )
+        self.assertEqual(
+            set(record), {"bindings", "marker", "outcome", "schema"}
+        )
+        self.assertEqual(
+            plan["commit_record"],
+            {
+                "final_name": "terminal-commit.json",
+                "sha256": sha256(record_bytes),
+            },
+        )
+        self.assertEqual(
+            plan["marker"],
+            {"relative_path": marker_name, "sha256": sha256(marker_bytes)},
+        )
+        self.assertEqual(record["marker"], plan["marker"])
+        self.assertEqual(record["bindings"], plan["bindings"])
+        self.assertEqual(marker["bindings"], plan["bindings"])
+        self.assertEqual(record["outcome"], outcome)
+        self.assertEqual(plan["outcome"], outcome)
+        self.assertFalse(prepared_path.exists())
+        return {
+            "commit_record": {
+                "path": os.fspath(record_path),
+                "sha256": sha256(record_bytes),
+            },
+            "marker": {
+                "path": os.fspath(marker_path),
+                "sha256": sha256(marker_bytes),
+            },
+            "producer_state": {
+                "path": os.fspath(state_path),
+                "sha256": sha256(state_bytes),
+            },
+        }
 
     def test_fixture_resolves_a_symlinked_temporary_root_before_requesting(self) -> None:
         with TemporaryDirectory(
@@ -1856,7 +2034,16 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
             (0, b"qualified-clean\n", b""),
         )
         trace = inputs.fault_trace("inherited-signal-state")
-        self.assertGreater(len(trace), 10)
+        self.assertEqual(
+            trace[-1],
+            {
+                "destination": "terminal-commit.json",
+                "event": "terminal-renamed",
+                "source": ".terminal-commit.prepared",
+            },
+        )
+        child_boundaries = trace[:-1]
+        self.assertGreater(len(child_boundaries), 10)
         self.assertTrue(
             all(
                 record == {
@@ -1864,7 +2051,7 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
                     "event": "child-signal-boundary",
                     "ignored": [],
                 }
-                for record in trace
+                for record in child_boundaries
             ),
             trace,
         )
@@ -2025,8 +2212,15 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
             (0, b"qualified-clean\n", b""),
         )
         self.assertEqual(
-            inputs.fault_trace("terminal-post-block-signal")[-1],
-            {"event": "terminal-post-block-signal"},
+            inputs.fault_trace("terminal-post-block-signal"),
+            [
+                {"event": "terminal-post-block-signal"},
+                {
+                    "destination": "terminal-commit.json",
+                    "event": "terminal-renamed",
+                    "source": ".terminal-commit.prepared",
+                },
+            ],
         )
         state = json.loads((inputs.state / "state.json").read_bytes())
         self.assertEqual(state["outcome"], "qualified-clean")
@@ -2080,7 +2274,7 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
         state = json.loads((inputs.state / "state.json").read_bytes())
         self.assertEqual(
             (state["phase"], state["outcome"]),
-            ("recovery-readback-verified", "rolled-back"),
+            ("recovery-readback-verified", "local-cleanup-incomplete"),
         )
 
     def test_partial_terminal_file_is_removed_when_commit_fails(self) -> None:
@@ -2106,8 +2300,273 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
         state = json.loads((inputs.state / "state.json").read_bytes())
         self.assertEqual(
             (state["phase"], state["outcome"]),
-            ("recovery-readback-verified", "rolled-back"),
+            ("recovery-readback-verified", "local-cleanup-incomplete"),
         )
+
+    def test_terminal_evidence_requires_matching_committed_disposition(self) -> None:
+        publication_faults = (
+            (
+                "terminal-marker-directory-fsync-cleanup-failure",
+                "terminal-marker-directory-fsync-failed",
+                True,
+            ),
+            (
+                "terminal-prepared-create-failure",
+                "terminal-prepared-create-failed",
+                False,
+            ),
+            (
+                "terminal-prepared-fsync-failure",
+                "terminal-prepared-fsync-failed",
+                False,
+            ),
+            (
+                "terminal-prepared-directory-fsync-failure",
+                "terminal-prepared-directory-fsync-failed",
+                False,
+            ),
+            (
+                "terminal-final-rename-failure",
+                "terminal-final-rename-failed",
+                False,
+            ),
+        )
+        for fault, expected_event, retains_marker in publication_faults:
+            with self.subTest(publication_fault=fault):
+                temporary, inputs = self.make_inputs()
+                try:
+                    inputs.request_document["qualification"] = (
+                        "live-disposable-provider"
+                    )
+                    inputs.rewrite_request()
+                    process = inputs.start_fault_process(fault)
+                    stdout, stderr = process.communicate(timeout=40)
+                    self.assertEqual(
+                        (process.returncode, stdout, stderr),
+                        (
+                            1,
+                            b"",
+                            b"age-admission signer provisioning failed\n",
+                        ),
+                    )
+                    events = [
+                        record["event"] for record in inputs.fault_trace(fault)
+                    ]
+                    self.assertIn(expected_event, events)
+                    marker_path = inputs.state / "qualified-clean.json"
+                    surviving_marker = (
+                        marker_path.read_bytes() if retains_marker else None
+                    )
+                    if surviving_marker is not None:
+                        self.assertEqual(
+                            surviving_marker,
+                            canonical_json(json.loads(surviving_marker)),
+                        )
+                        self.assertIn("terminal-marker-cleanup-failed", events)
+                    self.assertFalse(
+                        (inputs.state / "terminal-commit.json").exists()
+                    )
+                    producer_state_path = inputs.state / "state.json"
+                    producer_state = json.loads(producer_state_path.read_bytes())
+                    before = len(inputs.log())
+                    plan = producer_state["terminal_plan"]
+                    qualified_clean = {
+                        "commit_record": {
+                            "path": os.fspath(
+                                inputs.state / "terminal-commit.json"
+                            ),
+                            "sha256": plan["commit_record"]["sha256"],
+                        },
+                        "marker": {
+                            "path": os.fspath(marker_path),
+                            "sha256": plan["marker"]["sha256"],
+                        },
+                        "producer_state": {
+                            "path": os.fspath(producer_state_path),
+                            "sha256": sha256(producer_state_path.read_bytes()),
+                        },
+                    }
+                    inputs.state = inputs.private / "production-operation"
+                    inputs.request = inputs.private / "production-request.json"
+                    inputs._write_request(
+                        mode="production",
+                        qualification=None,
+                        qualified_clean=qualified_clean,
+                    )
+                    rejected = inputs.run()
+                    self.assertEqual(
+                        (rejected.returncode, rejected.stdout, rejected.stderr),
+                        (
+                            1,
+                            b"",
+                            b"age-admission signer provisioning failed\n",
+                        ),
+                    )
+                    self.assertEqual(len(inputs.log()), before)
+                    self.assertEqual(
+                        producer_state["outcome"], "local-cleanup-incomplete"
+                    )
+                    if surviving_marker is not None:
+                        self.assertEqual(marker_path.read_bytes(), surviving_marker)
+                finally:
+                    temporary.cleanup()
+
+        with self.subTest(bundle="matching-qualified-clean-and-ready-for-recovery"):
+            temporary, inputs = self.make_inputs()
+            try:
+                inputs.request_document["qualification"] = "live-disposable-provider"
+                inputs.rewrite_request()
+                process = inputs.start_fault_process("terminal-observe")
+                stdout, stderr = process.communicate(timeout=40)
+                self.assertEqual(
+                    (process.returncode, stdout, stderr),
+                    (0, b"qualified-clean\n", b""),
+                )
+                qualified_clean = self.assert_terminal_disposition(
+                    inputs, "qualified-clean"
+                )
+                trace = inputs.fault_trace("terminal-observe")
+                self.assertEqual(
+                    [record["event"] for record in trace], ["terminal-renamed"]
+                )
+                before = len(inputs.log())
+                inputs.state = inputs.private / "production-operation"
+                inputs.request = inputs.private / "production-request.json"
+                inputs._write_request(
+                    mode="production",
+                    qualification=None,
+                    qualified_clean=qualified_clean,
+                )
+                process = inputs.start_fault_process("terminal-observe")
+                stdout, stderr = process.communicate(timeout=40)
+                self.assertEqual(
+                    (process.returncode, stdout, stderr),
+                    (0, b"ready-for-recovery\n", b""),
+                )
+                self.assert_terminal_disposition(inputs, "ready-for-recovery")
+                production_trace = inputs.fault_trace("terminal-observe")[len(trace) :]
+                self.assertEqual(
+                    [record["event"] for record in production_trace],
+                    ["terminal-renamed"],
+                )
+                self.assertGreater(len(inputs.log()), before)
+            finally:
+                temporary.cleanup()
+
+        with self.subTest(bundle="terminal-output-failure-after-commit"):
+            temporary, inputs = self.make_inputs()
+            try:
+                inputs.request_document["qualification"] = "live-disposable-provider"
+                inputs.rewrite_request()
+                process = inputs.start_fault_process("terminal-output-failure")
+                stdout, _stderr = process.communicate(timeout=40)
+                self.assertNotEqual(process.returncode, 0)
+                self.assertEqual(stdout, b"")
+                qualified_clean = self.assert_terminal_disposition(
+                    inputs, "qualified-clean"
+                )
+                self.assertEqual(
+                    [
+                        record["event"]
+                        for record in inputs.fault_trace("terminal-output-failure")
+                    ],
+                    ["terminal-renamed", "terminal-output-failed"],
+                )
+                before = len(inputs.log())
+                inputs.state = inputs.private / "production-operation"
+                inputs.request = inputs.private / "production-request.json"
+                inputs._write_request(
+                    mode="production",
+                    qualification=None,
+                    qualified_clean=qualified_clean,
+                )
+                accepted = inputs.run()
+                self.assertEqual(
+                    (accepted.returncode, accepted.stdout, accepted.stderr),
+                    (0, b"ready-for-recovery\n", b""),
+                )
+                self.assertGreater(len(inputs.log()), before)
+            finally:
+                temporary.cleanup()
+
+        for variant in (
+            "missing",
+            "mismatched",
+            "noncanonical",
+            "cross-operation",
+            "prepared-only",
+        ):
+            with self.subTest(rejected_bundle=variant):
+                temporary, inputs = self.make_inputs()
+                other_temporary = None
+                try:
+                    inputs.request_document["qualification"] = (
+                        "live-disposable-provider"
+                    )
+                    inputs.rewrite_request()
+                    qualified = inputs.run()
+                    self.assertEqual(qualified.returncode, 0)
+                    qualified_clean = self.assert_terminal_disposition(
+                        inputs, "qualified-clean"
+                    )
+                    record_path = inputs.state / "terminal-commit.json"
+                    if variant == "missing":
+                        record_path.unlink()
+                    elif variant == "mismatched":
+                        qualified_clean["marker"]["sha256"] = "0" * 64
+                    elif variant == "noncanonical":
+                        record = json.loads(record_path.read_bytes())
+                        noncanonical = (
+                            json.dumps(record, sort_keys=True, separators=(",", ":"))
+                            + "\n"
+                        ).encode("ascii")
+                        self.assertNotEqual(noncanonical, canonical_json(record))
+                        record_path.write_bytes(noncanonical)
+                        record_path.chmod(0o600)
+                        qualified_clean["commit_record"]["sha256"] = sha256(
+                            noncanonical
+                        )
+                    elif variant == "cross-operation":
+                        other_temporary, other = self.make_inputs()
+                        other.request_document["qualification"] = (
+                            "live-disposable-provider"
+                        )
+                        other.rewrite_request()
+                        self.assertEqual(other.run().returncode, 0)
+                        other_binding = self.assert_terminal_disposition(
+                            other, "qualified-clean"
+                        )
+                        qualified_clean["commit_record"] = other_binding[
+                            "commit_record"
+                        ]
+                    else:
+                        prepared_path = inputs.state / ".terminal-commit.prepared"
+                        record_path.replace(prepared_path)
+                        qualified_clean["commit_record"]["path"] = os.fspath(
+                            prepared_path
+                        )
+                    before = len(inputs.log())
+                    inputs.state = inputs.private / "production-operation"
+                    inputs.request = inputs.private / "production-request.json"
+                    inputs._write_request(
+                        mode="production",
+                        qualification=None,
+                        qualified_clean=qualified_clean,
+                    )
+                    rejected = inputs.run()
+                    self.assertEqual(
+                        (rejected.returncode, rejected.stdout, rejected.stderr),
+                        (
+                            1,
+                            b"",
+                            b"age-admission signer provisioning failed\n",
+                        ),
+                    )
+                    self.assertEqual(len(inputs.log()), before)
+                finally:
+                    if other_temporary is not None:
+                        other_temporary.cleanup()
+                    temporary.cleanup()
 
     def test_complete_create_output_can_settle_a_lost_signal_status_only(self) -> None:
         temporary, inputs = self.make_inputs()
@@ -2725,11 +3184,9 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         qualified = inputs.run()
         self.assertEqual(qualified.returncode, 0)
-        evidence_path = inputs.state / "qualified-clean.json"
-        evidence_binding = {
-            "path": os.fspath(evidence_path),
-            "sha256": sha256(evidence_path.read_bytes()),
-        }
+        evidence_binding = self.assert_terminal_disposition(
+            inputs, "qualified-clean"
+        )
         before = len(inputs.log())
         inputs.state = inputs.private / "production-operation"
         inputs.request = inputs.private / "production-request.json"
@@ -2762,10 +3219,9 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
         evidence_path = inputs.state / "qualified-clean.json"
         evidence = json.loads(evidence_path.read_bytes())
         self.assertTrue(evidence["production_eligible"])
-        evidence_binding = {
-            "path": os.fspath(evidence_path),
-            "sha256": sha256(evidence_path.read_bytes()),
-        }
+        evidence_binding = self.assert_terminal_disposition(
+            inputs, "qualified-clean"
+        )
         inputs.state = inputs.private / "production-operation"
         inputs.request = inputs.private / "production-request.json"
         inputs._write_request(
