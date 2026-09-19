@@ -1528,7 +1528,10 @@ class AgeAdmissionProviderFixtureTests(unittest.TestCase):
     ) -> None:
         age_archive, age_archive_sha256 = selected_age_tooling_archive_or_skip()
         ssh_keygen = resolved_non_provider_support("ssh-keygen")
-        temporary, inputs = self.make_inputs(real_launcher=True)
+        temporary, inputs = self.make_inputs(
+            real_launcher=True,
+            temporary_parent=ROOT.parent,
+        )
         self.addCleanup(temporary.cleanup)
         if not self.trusted_path_ancestors_supported(inputs.root):
             self.skipTest("trusted-wrapper ancestors are UID-mapped in this sandbox")
