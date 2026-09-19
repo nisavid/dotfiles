@@ -907,13 +907,25 @@ class RecoveryPreimageTests(unittest.TestCase):
         dispatcher = self.bin / "gh"
         dispatcher.write_text(
             f"#!{self.zsh}\n"
-            'for argument in "$@"; do\n'
-            "  if [[ $argument == --hostname ]]; then\n"
-            f'    exec {shlex.quote(os.fspath(collector_gh))} "$@"\n'
+            'arguments=("$@")\n'
+            "method=GET\n"
+            "while (( $# > 0 )); do\n"
+            '  if [[ $1 == --method ]]; then\n'
+            "    method=$2\n"
+            "    shift 2\n"
+            "  else\n"
+            "    shift\n"
             "  fi\n"
             "done\n"
-            f"exec {shlex.quote(os.fspath(self.zsh))} "
-            f'{shlex.quote(os.fspath(RECOVERY_GH_FIXTURE))} "$@"\n',
+            'mutation_phase=$FAKE_GH_STATE_DIR/dispatch-mutation.active\n'
+            'if [[ $method == PATCH || $method == PUT ]]; then\n'
+            '  : >"$mutation_phase"\n'
+            "fi\n"
+            'if [[ -e $mutation_phase ]]; then\n'
+            f"  exec {shlex.quote(os.fspath(self.zsh))} "
+            f'{shlex.quote(os.fspath(RECOVERY_GH_FIXTURE))} "${{arguments[@]}}"\n'
+            "fi\n"
+            f'exec {shlex.quote(os.fspath(collector_gh))} "${{arguments[@]}}"\n',
             encoding="utf-8",
         )
         dispatcher.chmod(0o700)
@@ -936,7 +948,11 @@ class RecoveryPreimageTests(unittest.TestCase):
         wrapper.chmod(0o700)
 
     def _run_recovery_procedure(
-        self, scenario: str, *, rejected_gate: str | None = None
+        self,
+        scenario: str,
+        *,
+        rejected_gate: str | None = None,
+        require_admin_api_contract: bool = False,
     ) -> tuple[subprocess.CompletedProcess[bytes], Path]:
         staged_collector = self.private / "prepare-age-admission-recovery-preimage"
         staged_collector.write_bytes(COLLECTOR.read_bytes())
@@ -1003,6 +1019,13 @@ class RecoveryPreimageTests(unittest.TestCase):
                 "RECOVERY_HEAD": HEAD_COMMIT,
             }
         )
+        if require_admin_api_contract:
+            environment.update(
+                {
+                    "FAKE_GH_REQUIRE_ADMIN_API_CONTRACT": "1",
+                    "GH_HOST": "enterprise.invalid",
+                }
+            )
         result = subprocess.run(
             [os.fspath(self.zsh), os.fspath(procedure)],
             capture_output=True,
@@ -1015,7 +1038,8 @@ class RecoveryPreimageTests(unittest.TestCase):
     def _recovery_merge_attempts(self, mutation: Path) -> int:
         calls = (mutation / "calls.log").read_text(encoding="utf-8").splitlines()
         return sum(
-            line.startswith("api --method PUT repos/nisavid/dotfiles/pulls/286/merge")
+            "--method PUT" in line
+            and "repos/nisavid/dotfiles/pulls/286/merge" in line
             for line in calls
         )
 
@@ -1031,8 +1055,12 @@ class RecoveryPreimageTests(unittest.TestCase):
         expected_protection: str,
         expected_merge_attempts: int,
         expected_restore_attempts: int,
+        *,
+        require_admin_api_contract: bool = False,
     ) -> None:
-        result, mutation = self._run_recovery_procedure(scenario)
+        result, mutation = self._run_recovery_procedure(
+            scenario, require_admin_api_contract=require_admin_api_contract
+        )
 
         if expected_status == "zero":
             self.assertEqual(
@@ -1122,6 +1150,18 @@ class RecoveryPreimageTests(unittest.TestCase):
         self,
     ) -> None:
         self._assert_recovery_outcome("success", "zero", "preimage", 1, 1)
+
+    def test_recovery_administration_pins_the_github_api_contract(
+        self,
+    ) -> None:
+        self._assert_recovery_outcome(
+            "success",
+            "zero",
+            "preimage",
+            1,
+            1,
+            require_admin_api_contract=True,
+        )
 
     def test_ambiguous_exception_request_restores_without_attempting_merge(
         self,
