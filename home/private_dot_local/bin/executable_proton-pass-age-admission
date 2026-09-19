@@ -550,6 +550,7 @@ def _capture_bounded_output(
 def _base_environment() -> dict[str, str]:
     environment = os.environ.copy()
     environment.pop(_BOOTSTRAP_TOKEN_NAME, None)
+    environment.pop("PROTON_PASS_AGENT_REASON", None)
     environment["LC_ALL"] = "C"
     return environment
 
@@ -562,7 +563,6 @@ def _provider_environment() -> dict[str, str]:
         environment.pop("PROTON_PASS_LINUX_KEYRING", None)
     else:
         raise AdmissionAdapterError("only macOS and Linux are supported")
-    environment["PROTON_PASS_AGENT_REASON"] = "age-admission signing-key retrieval"
     environment["PROTON_PASS_NO_UPDATE_CHECK"] = "1"
     return environment
 
@@ -1028,6 +1028,10 @@ def create_receipt(arguments: argparse.Namespace) -> None:
             failure="provider readiness failed",
         )
         signing_key = private_root / "signing-key"
+        retrieval_environment = provider_environment.copy()
+        retrieval_environment["PROTON_PASS_AGENT_REASON"] = (
+            "age-admission signing-key retrieval"
+        )
         _capture_private_output(
             [
                 "pass-cli",
@@ -1043,7 +1047,7 @@ def create_receipt(arguments: argparse.Namespace) -> None:
                 "human",
             ],
             signing_key,
-            environment=provider_environment,
+            environment=retrieval_environment,
             timeout=_PROVIDER_TIMEOUT_SECONDS,
         )
         public_key = _derive_public_key(signing_key, environment=provider_environment)
