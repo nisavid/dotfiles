@@ -38,12 +38,13 @@ from typing import Any
 
 os.umask(0o077)
 
-REQUEST_SCHEMA = "issue286-provisioning/v1"
+REQUEST_SCHEMA = "issue286-provisioning/v2"
 MANIFEST_SCHEMA = "issue286-reviewed-source-manifest/v1"
 FIXTURE_SCHEMA = "issue286-provider-fixture-binding/v1"
-QUALIFIED_CLEAN_SCHEMA = "issue286-qualified-clean/v1"
-READY_FOR_RECOVERY_SCHEMA = "issue286-ready-for-recovery/v1"
-STATE_SCHEMA = "issue286-provisioning-state/v1"
+QUALIFIED_CLEAN_SCHEMA = "issue286-qualified-clean/v2"
+READY_FOR_RECOVERY_SCHEMA = "issue286-ready-for-recovery/v2"
+STATE_SCHEMA = "issue286-provisioning-state/v2"
+TERMINAL_COMMIT_SCHEMA = "issue286-terminal-commit/v1"
 FIXTURE_REQUEST_SCHEMA = "issue286-provider-fixture/v1"
 PASS_CLI_SOURCE_COMMIT = "51a4c9b110a0ffe6e81f4f5d3877b9e5a0c24112"
 PROVIDER_COMMAND_SCHEMA = "issue286-pass-cli-2.3.3-provider-commands/v2"
@@ -124,6 +125,10 @@ _active_process: ProcessLease | None = None
 
 class ProvisioningError(RuntimeError):
     """The closed provisioning contract was not established."""
+
+
+class TerminalCommitFailure(ProvisioningError):
+    """Terminal publication failed before the disposition commit point."""
 
 
 class ProvisioningInterrupted(BaseException):
@@ -1208,7 +1213,7 @@ def _validate_request(
     vault_name = _private_name(provider["vault_name"], "vault name")
 
     qualification = document["qualification"]
-    qualified_clean: dict[str, str] | None
+    qualified_clean: dict[str, dict[str, str]] | None
     if mode == "qualification":
         if qualification not in {"source-test", "live-disposable-provider"}:
             raise ProvisioningError("qualification evidence class is invalid")
@@ -1222,9 +1227,15 @@ def _validate_request(
             raise ProvisioningError(
                 "production request cannot label itself qualification"
             )
-        qualified_clean = _file_binding(
-            document["qualified_clean"], "qualified-clean evidence"
+        bundle = _exact_keys(
+            document["qualified_clean"],
+            {"commit_record", "marker", "producer_state"},
+            "qualified-clean disposition",
         )
+        qualified_clean = {
+            name: _file_binding(bundle[name], f"qualified-clean {name}")
+            for name in ("commit_record", "marker", "producer_state")
+        }
 
     return {
         "age_tooling": {"archive": os.fspath(archive), "sha256": archive_sha256},
@@ -1699,21 +1710,310 @@ def _qualified_bindings(state: dict[str, Any], *, include_path: bool) -> dict[st
     }
 
 
-def _validate_prior_qualified_clean(
-    binding: dict[str, str], state: dict[str, Any]
-) -> None:
+def _validate_terminal_bindings(
+    value: object, label: str
+) -> dict[str, Any]:
+    bindings = _exact_keys(
+        value,
+        {"pass_cli", "platform", "provider_schema", "reviewed_source"},
+        label,
+    )
+    pass_cli = _exact_keys(
+        bindings["pass_cli"],
+        {"build_sha256", "version_stdout"},
+        f"{label} pass-cli",
+    )
+    build_sha256 = _digest(
+        pass_cli["build_sha256"], f"{label} pass-cli build digest"
+    )
+    version_stdout = pass_cli["version_stdout"]
+    try:
+        version_bytes = version_stdout.encode("ascii")
+    except (AttributeError, UnicodeError) as error:
+        raise ProvisioningError(f"{label} pass-cli version is invalid") from error
+    if VERSION_OUTPUT.fullmatch(version_bytes) is None:
+        raise ProvisioningError(f"{label} pass-cli version is invalid")
+    platform = bindings["platform"]
+    if platform != _platform_name():
+        raise ProvisioningError(f"{label} platform is invalid")
+    provider_schema = _exact_keys(
+        bindings["provider_schema"],
+        {"command_schema", "source_commit", "source_manifest_sha256"},
+        f"{label} provider schema",
+    )
+    if provider_schema != {
+        "command_schema": PROVIDER_COMMAND_SCHEMA,
+        "source_commit": PASS_CLI_SOURCE_COMMIT,
+        "source_manifest_sha256": SOURCE_MANIFEST_SHA256,
+    }:
+        raise ProvisioningError(f"{label} provider schema is invalid")
+    reviewed_source = _exact_keys(
+        bindings["reviewed_source"],
+        {"commit", "manifest_sha256"},
+        f"{label} reviewed source",
+    )
+    commit = reviewed_source["commit"]
+    if not isinstance(commit, str) or COMMIT_ID.fullmatch(commit) is None:
+        raise ProvisioningError(f"{label} reviewed source commit is invalid")
+    manifest_sha256 = _digest(
+        reviewed_source["manifest_sha256"],
+        f"{label} reviewed source manifest digest",
+    )
+    return {
+        "pass_cli": {
+            "build_sha256": build_sha256,
+            "version_stdout": version_stdout,
+        },
+        "platform": platform,
+        "provider_schema": dict(provider_schema),
+        "reviewed_source": {
+            "commit": commit,
+            "manifest_sha256": manifest_sha256,
+        },
+    }
+
+
+def _validate_terminal_plan(value: object, label: str) -> dict[str, Any]:
+    plan = _exact_keys(
+        value,
+        {"bindings", "commit_record", "marker", "outcome"},
+        label,
+    )
+    outcome = plan["outcome"]
+    marker_name = {
+        "qualified-clean": "qualified-clean.json",
+        "ready-for-recovery": "ready-for-recovery.json",
+    }.get(outcome)
+    if marker_name is None:
+        raise ProvisioningError(f"{label} outcome is invalid")
+    marker = _exact_keys(
+        plan["marker"], {"relative_path", "sha256"}, f"{label} marker"
+    )
+    marker_sha256 = _digest(marker["sha256"], f"{label} marker digest")
+    if marker["relative_path"] != marker_name:
+        raise ProvisioningError(f"{label} marker name is invalid")
+    commit_record = _exact_keys(
+        plan["commit_record"],
+        {"final_name", "sha256"},
+        f"{label} commit record",
+    )
+    commit_sha256 = _digest(
+        commit_record["sha256"], f"{label} commit-record digest"
+    )
+    if commit_record["final_name"] != "terminal-commit.json":
+        raise ProvisioningError(f"{label} commit-record name is invalid")
+    return {
+        "bindings": _validate_terminal_bindings(
+            plan["bindings"], f"{label} bindings"
+        ),
+        "commit_record": {
+            "final_name": "terminal-commit.json",
+            "sha256": commit_sha256,
+        },
+        "marker": {
+            "relative_path": marker_name,
+            "sha256": marker_sha256,
+        },
+        "outcome": outcome,
+    }
+
+
+def _read_disposition_file(
+    binding: dict[str, str], *, maximum: int, label: str
+) -> tuple[Path, bytes]:
     path = _absolute_path(binding["path"])
     data = _read_regular(
         path,
-        maximum=MAX_TERMINAL_BYTES,
+        maximum=maximum,
         required_mode=0o600,
         require_private_parent=True,
     )
     if _sha256(data) != binding["sha256"]:
-        raise ProvisioningError("qualified-clean evidence digest does not match")
-    evidence = _parse_canonical_json(data)
+        raise ProvisioningError(f"{label} digest does not match")
+    return path, data
+
+
+def _validate_prior_qualified_clean(
+    binding: dict[str, dict[str, str]], state: dict[str, Any]
+) -> None:
+    bundle = _exact_keys(
+        binding,
+        {"commit_record", "marker", "producer_state"},
+        "qualified-clean disposition",
+    )
+    normalized = {
+        name: _file_binding(bundle[name], f"qualified-clean {name}")
+        for name in ("commit_record", "marker", "producer_state")
+    }
+    commit_path, commit_bytes = _read_disposition_file(
+        normalized["commit_record"],
+        maximum=MAX_TERMINAL_BYTES,
+        label="qualified-clean commit record",
+    )
+    marker_path, marker_bytes = _read_disposition_file(
+        normalized["marker"],
+        maximum=MAX_TERMINAL_BYTES,
+        label="qualified-clean marker",
+    )
+    producer_path, producer_bytes = _read_disposition_file(
+        normalized["producer_state"],
+        maximum=MAX_STATE_BYTES,
+        label="qualified-clean producer state",
+    )
+    operation_directory = producer_path.parent
+    if (
+        commit_path.parent != operation_directory
+        or marker_path.parent != operation_directory
+        or commit_path.name != "terminal-commit.json"
+        or marker_path.name != "qualified-clean.json"
+        or producer_path.name != "state.json"
+    ):
+        raise ProvisioningError(
+            "qualified-clean disposition does not share one operation directory"
+        )
+
+    commit_record = _parse_canonical_json(commit_bytes)
+    marker = _parse_canonical_json(marker_bytes)
+    producer = _parse_canonical_json(producer_bytes)
     _exact_keys(
-        evidence,
+        producer,
+        {
+            "artifacts",
+            "bindings",
+            "checks",
+            "mode",
+            "outcome",
+            "pending_request",
+            "phase",
+            "request",
+            "request_sequence",
+            "resources",
+            "schema",
+            "terminal_plan",
+        },
+        "qualified-clean producer state",
+    )
+    if (
+        producer["schema"] != STATE_SCHEMA
+        or producer["mode"] != "qualification"
+        or producer["phase"] != "qualified-clean"
+        or producer["outcome"] != "qualified-clean"
+        or producer["pending_request"] is not None
+        or type(producer["request_sequence"]) is not int
+        or producer["request_sequence"] < 1
+    ):
+        raise ProvisioningError("qualified-clean producer state is invalid")
+    producer_request = _validate_request(producer["request"], operation_directory)
+    if (
+        producer_request != producer["request"]
+        or producer_request["mode"] != "qualification"
+        or producer_request["qualification"] != "live-disposable-provider"
+        or producer_request["qualified_clean"] is not None
+    ):
+        raise ProvisioningError("qualified-clean producer request is invalid")
+
+    producer_bindings = _exact_keys(
+        producer["bindings"],
+        {
+            "fixture",
+            "pass_cli",
+            "platform",
+            "provider_schema",
+            "reviewed_source",
+            "ssh_keygen",
+        },
+        "qualified-clean producer bindings",
+    )
+    producer_pass_cli = _exact_keys(
+        producer_bindings["pass_cli"],
+        {"build_sha256", "observed_path", "version_stdout"},
+        "qualified-clean producer pass-cli",
+    )
+    _absolute_path(producer_pass_cli["observed_path"])
+    producer_reviewed_source = _exact_keys(
+        producer_bindings["reviewed_source"],
+        {"commit", "entries", "manifest_sha256"},
+        "qualified-clean producer reviewed source",
+    )
+    producer_terminal_bindings = _validate_terminal_bindings(
+        {
+            "pass_cli": {
+                "build_sha256": producer_pass_cli["build_sha256"],
+                "version_stdout": producer_pass_cli["version_stdout"],
+            },
+            "platform": producer_bindings["platform"],
+            "provider_schema": producer_bindings["provider_schema"],
+            "reviewed_source": {
+                "commit": producer_reviewed_source["commit"],
+                "manifest_sha256": producer_reviewed_source["manifest_sha256"],
+            },
+        },
+        "qualified-clean producer terminal bindings",
+    )
+    current_bindings = _validate_terminal_bindings(
+        _qualified_bindings(state, include_path=False),
+        "current production terminal bindings",
+    )
+
+    expected_checks = {
+        "agent_listing": True,
+        "audit": True,
+        "item_listing": True,
+        "primary_after_revocation": True,
+        "primary_readback": True,
+        "recovery_readback": True,
+        "revoked_probe_failed": True,
+    }
+    checks = _exact_keys(
+        producer["checks"], set(expected_checks), "qualified-clean producer checks"
+    )
+    if checks != expected_checks:
+        raise ProvisioningError("qualified-clean producer checks are incomplete")
+    resources = _exact_keys(
+        producer["resources"],
+        {"agent", "item", "session"},
+        "qualified-clean producer resources",
+    )
+    agent = _exact_keys(
+        resources["agent"],
+        {"candidates", "name", "pat_id", "state"},
+        "qualified-clean producer agent",
+    )
+    item = _exact_keys(
+        resources["item"],
+        {"candidates", "id", "state"},
+        "qualified-clean producer item",
+    )
+    session = _exact_keys(
+        resources["session"],
+        {"directory", "state"},
+        "qualified-clean producer session",
+    )
+    if (
+        agent["state"] != "removed"
+        or item["state"] != "removed"
+        or session != {"directory": "private/recovery-session", "state": "removed"}
+    ):
+        raise ProvisioningError("qualified-clean producer resources are not removed")
+
+    plan = _validate_terminal_plan(
+        producer["terminal_plan"], "qualified-clean terminal plan"
+    )
+    _exact_keys(
+        commit_record,
+        {"bindings", "marker", "outcome", "schema"},
+        "qualified-clean commit record",
+    )
+    record_bindings = _validate_terminal_bindings(
+        commit_record["bindings"], "qualified-clean commit-record bindings"
+    )
+    record_marker = _exact_keys(
+        commit_record["marker"],
+        {"relative_path", "sha256"},
+        "qualified-clean commit-record marker",
+    )
+    _exact_keys(
+        marker,
         {
             "authority",
             "bindings",
@@ -1724,29 +2024,46 @@ def _validate_prior_qualified_clean(
             "remote_resources",
             "schema",
         },
-        "qualified-clean evidence",
+        "qualified-clean marker",
     )
-    expected_checks = {
-        "agent_listing": True,
-        "audit": True,
-        "item_listing": True,
-        "primary_after_revocation": True,
-        "primary_readback": True,
-        "recovery_readback": True,
-        "revoked_probe_failed": True,
-    }
+    marker_bindings = _validate_terminal_bindings(
+        marker["bindings"], "qualified-clean marker bindings"
+    )
     if (
-        evidence["schema"] != QUALIFIED_CLEAN_SCHEMA
-        or evidence["authority"]
+        commit_record["schema"] != TERMINAL_COMMIT_SCHEMA
+        or commit_record["outcome"] != "qualified-clean"
+        or commit_record["marker"] != plan["marker"]
+        or record_marker != plan["marker"]
+        or marker["schema"] != QUALIFIED_CLEAN_SCHEMA
+        or marker["authority"]
         != {"publication_permitted": False, "real_transition_authority": False}
-        or evidence["outcome"] != "qualified-clean"
-        or evidence["production_eligible"] is not True
-        or evidence["qualification"] != "live-disposable-provider"
-        or evidence["remote_resources"] != {"agent": "removed", "item": "removed"}
-        or evidence["checks"] != expected_checks
-        or evidence["bindings"] != _qualified_bindings(state, include_path=False)
+        or marker["outcome"] != "qualified-clean"
+        or marker["production_eligible"] is not True
+        or marker["qualification"] != "live-disposable-provider"
+        or marker["remote_resources"] != {"agent": "removed", "item": "removed"}
+        or marker["checks"] != expected_checks
+        or plan["outcome"] != "qualified-clean"
+        or plan["marker"]
+        != {
+            "relative_path": "qualified-clean.json",
+            "sha256": _sha256(marker_bytes),
+        }
+        or plan["commit_record"]
+        != {
+            "final_name": "terminal-commit.json",
+            "sha256": _sha256(commit_bytes),
+        }
+        or normalized["marker"]["sha256"] != plan["marker"]["sha256"]
+        or normalized["commit_record"]["sha256"]
+        != plan["commit_record"]["sha256"]
+        or producer_terminal_bindings != current_bindings
+        or plan["bindings"] != current_bindings
+        or record_bindings != current_bindings
+        or marker_bindings != current_bindings
     ):
-        raise ProvisioningError("qualified-clean evidence is not production-eligible")
+        raise ProvisioningError(
+            "qualified-clean disposition is not production-eligible"
+        )
 
 
 def _new_state(
@@ -1814,6 +2131,7 @@ def _new_state(
             "session": {"directory": "private/recovery-session", "state": "absent"},
         },
         "schema": STATE_SCHEMA,
+        "terminal_plan": None,
     }
 
 
@@ -2838,42 +3156,118 @@ def _remove_local_sensitive_artifacts(
         raise ProvisioningError("synthetic fixture could not be removed") from error
 
 
-def _publish_terminal(path: Path, document: dict[str, Any]) -> None:
-    data = _canonical_json(document)
-    if len(data) > MAX_TERMINAL_BYTES:
-        raise ProvisioningError("terminal evidence exceeds its bound")
+def _record_terminal_failure(
+    state_directory: Path, state: dict[str, Any], prior_phase: str
+) -> None:
+    state["phase"] = prior_phase
+    state["outcome"] = "local-cleanup-incomplete"
+    try:
+        _atomic_state_write(state_directory, state)
+    except (OSError, ProvisioningError):
+        pass
+
+
+def _terminal_final_absent(path: Path) -> None:
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return
+    except OSError as error:
+        raise ProvisioningError(
+            "terminal commit-record absence could not be verified"
+        ) from error
+    raise ProvisioningError("terminal commit record already exists")
+
+
+def _commit_terminal(
+    state_directory: Path,
+    state: dict[str, Any],
+    marker_name: str,
+    marker: dict[str, Any],
+    outcome: str,
+    prior_phase: str,
+) -> None:
+    marker_bytes = _canonical_json(marker)
+    marker_reference = {
+        "relative_path": marker_name,
+        "sha256": _sha256(marker_bytes),
+    }
+    bindings = _qualified_bindings(state, include_path=False)
+    commit_record = {
+        "bindings": bindings,
+        "marker": marker_reference,
+        "outcome": outcome,
+        "schema": TERMINAL_COMMIT_SCHEMA,
+    }
+    commit_bytes = _canonical_json(commit_record)
+    terminal_plan = {
+        "bindings": bindings,
+        "commit_record": {
+            "final_name": "terminal-commit.json",
+            "sha256": _sha256(commit_bytes),
+        },
+        "marker": marker_reference,
+        "outcome": outcome,
+    }
+    if (
+        len(marker_bytes) > MAX_TERMINAL_BYTES
+        or len(commit_bytes) > MAX_TERMINAL_BYTES
+    ):
+        _record_terminal_failure(state_directory, state, prior_phase)
+        raise TerminalCommitFailure("terminal disposition exceeds its bound")
+
     pthread_sigmask = getattr(signal, "pthread_sigmask", None)
     if pthread_sigmask is None:
-        raise ProvisioningError("safe terminal publication is unavailable")
+        _record_terminal_failure(state_directory, state, prior_phase)
+        raise TerminalCommitFailure("safe terminal publication is unavailable")
     _check_signal()
     try:
         saved_mask = pthread_sigmask(signal.SIG_BLOCK, _TERMINATION_SIGNALS)
     except OSError as error:
-        raise ProvisioningError(
+        _record_terminal_failure(state_directory, state, prior_phase)
+        raise TerminalCommitFailure(
             "terminal signal mask could not be established"
         ) from error
+
+    marker_path = state_directory / marker_name
+    prepared_path = state_directory / ".terminal-commit.prepared"
+    final_path = state_directory / "terminal-commit.json"
     try:
         if _caught_signal:
             raise ProvisioningInterrupted(_caught_signal)
-        _exclusive_write(path, data)
+        state["phase"] = outcome
+        state["outcome"] = outcome
+        state["terminal_plan"] = terminal_plan
+        _atomic_state_write(state_directory, state)
+        _exclusive_write(marker_path, marker_bytes)
+        _exclusive_write(prepared_path, commit_bytes)
+        _terminal_final_absent(final_path)
+        os.replace(prepared_path, final_path)
+        return
     except ProvisioningInterrupted:
         try:
             pthread_sigmask(signal.SIG_SETMASK, saved_mask)
         except OSError as error:
-            raise ProvisioningError(
+            _record_terminal_failure(state_directory, state, prior_phase)
+            raise TerminalCommitFailure(
                 "terminal signal mask could not be restored"
             ) from error
+        _record_terminal_failure(state_directory, state, prior_phase)
         raise
     except (OSError, ProvisioningError) as error:
         try:
             pthread_sigmask(signal.SIG_SETMASK, saved_mask)
         except OSError as mask_error:
-            raise ProvisioningError(
+            _record_terminal_failure(state_directory, state, prior_phase)
+            raise TerminalCommitFailure(
                 "terminal signal mask could not be restored"
             ) from mask_error
-        raise ProvisioningError("terminal evidence could not be published") from error
-    # Publication is the commit point. Catchable termination remains blocked
-    # through the final fixed status bytes.
+        _record_terminal_failure(state_directory, state, prior_phase)
+        raise TerminalCommitFailure(
+            "terminal disposition could not be committed"
+        ) from error
+    # Rename is the commit point. Catchable termination remains blocked through
+    # the final fixed status bytes, and no filesystem operation follows it.
 
 
 def _finish_qualification(state_directory: Path, state: dict[str, Any]) -> None:
@@ -2886,9 +3280,6 @@ def _finish_qualification(state_directory: Path, state: dict[str, Any]) -> None:
         raise ProvisioningError("qualified cleanup checks are incomplete")
     _remove_local_sensitive_artifacts(state_directory, state)
     prior_phase = state["phase"]
-    state["phase"] = "qualified-clean"
-    state["outcome"] = "qualified-clean"
-    _atomic_state_write(state_directory, state)
     evidence = {
         "authority": {
             "publication_permitted": False,
@@ -2903,13 +3294,14 @@ def _finish_qualification(state_directory: Path, state: dict[str, Any]) -> None:
         "remote_resources": {"agent": "removed", "item": "removed"},
         "schema": QUALIFIED_CLEAN_SCHEMA,
     }
-    try:
-        _publish_terminal(state_directory / "qualified-clean.json", evidence)
-    except (ProvisioningError, ProvisioningInterrupted):
-        state["phase"] = prior_phase
-        state["outcome"] = "local-cleanup-incomplete"
-        _atomic_state_write(state_directory, state)
-        raise
+    _commit_terminal(
+        state_directory,
+        state,
+        "qualified-clean.json",
+        evidence,
+        "qualified-clean",
+        prior_phase,
+    )
 
 
 def _finish_production(state_directory: Path, state: dict[str, Any]) -> None:
@@ -2929,9 +3321,6 @@ def _finish_production(state_directory: Path, state: dict[str, Any]) -> None:
             raise ProvisioningError("production verification checks are incomplete")
     _remove_local_sensitive_artifacts(state_directory, state)
     prior_phase = state["phase"]
-    state["phase"] = "ready-for-recovery"
-    state["outcome"] = "ready-for-recovery"
-    _atomic_state_write(state_directory, state)
     evidence = {
         "authority": {
             "github_mutation_permitted": False,
@@ -2944,13 +3333,14 @@ def _finish_production(state_directory: Path, state: dict[str, Any]) -> None:
         "private_state": "state.json",
         "schema": READY_FOR_RECOVERY_SCHEMA,
     }
-    try:
-        _publish_terminal(state_directory / "ready-for-recovery.json", evidence)
-    except (ProvisioningError, ProvisioningInterrupted):
-        state["phase"] = prior_phase
-        state["outcome"] = "local-cleanup-incomplete"
-        _atomic_state_write(state_directory, state)
-        raise
+    _commit_terminal(
+        state_directory,
+        state,
+        "ready-for-recovery.json",
+        evidence,
+        "ready-for-recovery",
+        prior_phase,
+    )
 
 
 def _rollback(
@@ -3258,6 +3648,8 @@ def _start(arguments: argparse.Namespace) -> str:
         raise
     except ProvisioningStop:
         raise
+    except TerminalCommitFailure:
+        raise
     except UnverifiedChildRetirement:
         state["outcome"] = "local-cleanup-incomplete"
         _atomic_state_write(state_directory, state)
@@ -3317,6 +3709,7 @@ def _validate_resume_state(state: dict[str, Any], state_directory: Path) -> None
             "request_sequence",
             "resources",
             "schema",
+            "terminal_plan",
         },
         "provisioning state",
     )
@@ -3347,6 +3740,25 @@ def _validate_resume_state(state: dict[str, Any], state_directory: Path) -> None
         }
     ):
         raise ProvisioningError("provisioning state identity is invalid")
+    terminal_plan = state["terminal_plan"]
+    if terminal_plan is None:
+        if state["phase"] in {"qualified-clean", "ready-for-recovery"} or state[
+            "outcome"
+        ] in {"qualified-clean", "ready-for-recovery"}:
+            raise ProvisioningError("terminal state has no disposition plan")
+    else:
+        normalized_plan = _validate_terminal_plan(
+            terminal_plan, "persisted terminal plan"
+        )
+        if normalized_plan != terminal_plan or (
+            state["outcome"] == normalized_plan["outcome"]
+            and state["phase"] != normalized_plan["outcome"]
+        ) or state["outcome"] not in {
+            normalized_plan["outcome"],
+            "local-cleanup-incomplete",
+        }:
+            raise ProvisioningError("persisted terminal plan is invalid")
+
     normalized_request = _validate_request(state["request"], state_directory)
     if (
         normalized_request != state["request"]
