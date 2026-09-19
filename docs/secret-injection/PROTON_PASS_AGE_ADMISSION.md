@@ -1502,6 +1502,13 @@ canonicalize_protection() {
   ' "$1"
 }
 
+recovery_github_api() {
+  gh api --hostname github.com \
+    --header 'Accept: application/vnd.github+json' \
+    --header 'X-GitHub-Api-Version: 2022-11-28' \
+    "$@"
+}
+
 jq --arg omitted 'Verify trusted base against candidate data' '
   .required_status_checks.contexts |= map(select(. != $omitted))
   | .required_status_checks.checks |=
@@ -1522,14 +1529,14 @@ restore_and_verify() {
   local observed_canonical=$RECOVERY_STATE_DIRECTORY/main-protection.restored.$suffix.canonical.json
   local patch_status=0
 
-  if gh api --method PATCH "$checks_endpoint" \
+  if recovery_github_api --method PATCH "$checks_endpoint" \
     --input "$restore_checks" >"$response"; then
     patch_status=0
   else
     patch_status=$?
   fi
 
-  if gh api "$protection_endpoint" >"$observed" &&
+  if recovery_github_api "$protection_endpoint" >"$observed" &&
     canonicalize_protection "$observed" >"$observed_canonical" &&
     cmp -s "$preimage_canonical" "$observed_canonical"; then
     if (( patch_status != 0 )); then
@@ -1600,7 +1607,7 @@ exception_observed_canonical=$RECOVERY_STATE_DIRECTORY/main-protection.exception
 
 restore_state=armed
 exception_patch_status=0
-if gh api --method PATCH "$checks_endpoint" \
+if recovery_github_api --method PATCH "$checks_endpoint" \
   --input "$exception_checks" >"$exception_response"; then
   exception_patch_status=0
 else
@@ -1611,7 +1618,7 @@ if (( exception_patch_status != 0 )); then
   exit 1
 fi
 
-gh api "$protection_endpoint" >"$exception_observed"
+recovery_github_api "$protection_endpoint" >"$exception_observed"
 canonicalize_protection "$exception_expected" \
   >"$exception_expected_canonical"
 canonicalize_protection "$exception_observed" \
@@ -1620,8 +1627,8 @@ cmp -s "$exception_expected_canonical" "$exception_observed_canonical"
 
 pull_before=$RECOVERY_STATE_DIRECTORY/recovery-pr.before-merge.json
 main_before=$RECOVERY_STATE_DIRECTORY/main-ref.before-merge.json
-gh api "$pull_endpoint" >"$pull_before"
-gh api "$main_ref_endpoint" >"$main_before"
+recovery_github_api "$pull_endpoint" >"$pull_before"
+recovery_github_api "$main_ref_endpoint" >"$main_before"
 jq -e --arg base "$RECOVERY_BASE" --arg head "$RECOVERY_HEAD" '
   .state == "open" and .merged == false and
   .base.ref == "main" and .base.sha == $base and .head.sha == $head
@@ -1636,7 +1643,7 @@ jq -n --arg sha "$RECOVERY_HEAD" '{
   merge_method: "squash"
 }' >"$merge_request"
 merge_command_status=0
-if gh api --method PUT "$merge_endpoint" --input "$merge_request" \
+if recovery_github_api --method PUT "$merge_endpoint" --input "$merge_request" \
   >"$merge_response" 2>"$merge_stderr"; then
   merge_command_status=0
 else
@@ -1659,8 +1666,8 @@ fi
 
 pull_after=$RECOVERY_STATE_DIRECTORY/recovery-pr.after-restore.json
 main_after=$RECOVERY_STATE_DIRECTORY/main-ref.after-restore.json
-gh api "$pull_endpoint" >"$pull_after"
-gh api "$main_ref_endpoint" >"$main_after"
+recovery_github_api "$pull_endpoint" >"$pull_after"
+recovery_github_api "$main_ref_endpoint" >"$main_after"
 main_after_sha=$(jq -er .object.sha "$main_after")
 
 if jq -e '.merged == true' "$pull_after" >/dev/null; then
