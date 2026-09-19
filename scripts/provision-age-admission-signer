@@ -3907,6 +3907,8 @@ def _resume(arguments: argparse.Namespace) -> str:
         and _capture_can_settle_lost_status(state)
         and _resume_create_capture(state_directory, state, kind)
     ):
+        if _caught_signal:
+            raise ProvisioningInterrupted(_caught_signal)
         raise ProvisioningStop(20)
 
     fixture_directory = _state_path(

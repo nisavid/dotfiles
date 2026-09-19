@@ -921,7 +921,14 @@ class ProvisioningInputs:
             env=self.environment(),
         )
 
-    def start_fault_process(self, fault: str) -> subprocess.Popen[bytes]:
+    def start_fault_process(
+        self,
+        fault: str,
+        *,
+        verb: str = "start",
+        first_signal: int = signal.SIGTERM,
+        later_signal: int | None = None,
+    ) -> subprocess.Popen[bytes]:
         runner = self.private / f"fault-runner-{fault}.py"
         trace = self.private / f"fault-trace-{fault}.jsonl"
         body = textwrap.dedent(
@@ -939,6 +946,8 @@ class ProvisioningInputs:
             STATE = {os.fspath(self.state)!r}
             TARGET = {os.fspath(PROVISIONER)!r}
             TRACE = {os.fspath(trace)!r}
+            FIRST_SIGNAL = {int(first_signal)}
+            LATER_SIGNAL = {(None if later_signal is None else int(later_signal))!r}
             triggered = False
             fault_pgid = None
             effect_capture_descriptor = None
@@ -964,6 +973,19 @@ class ProvisioningInputs:
             def record(event, **fields):
                 with open(TRACE, "a", encoding="ascii") as stream:
                     stream.write(json.dumps({{"event": event, **fields}}, sort_keys=True) + "\\n")
+
+            def inject_resume_signals(event):
+                global triggered
+                if triggered or LATER_SIGNAL is None:
+                    raise AssertionError("invalid resume signal injection")
+                triggered = True
+                os.kill(os.getpid(), FIRST_SIGNAL)
+                os.kill(os.getpid(), LATER_SIGNAL)
+                record(
+                    event,
+                    first_signal=FIRST_SIGNAL,
+                    later_signal=LATER_SIGNAL,
+                )
 
             def injecting_mkdir(path, *args, **kwargs):
                 global triggered
@@ -1040,16 +1062,22 @@ class ProvisioningInputs:
                 return real_killpg(pgid, signum)
 
             def faulting_replace(source, destination):
+                settles_resume_capture = False
                 if (
-                    FAULT == "classification-persist-failure"
-                    and os.fspath(destination) == os.path.join(STATE, "state.json")
+                    os.fspath(destination) == os.path.join(STATE, "state.json")
+                    and FAULT
+                    in {{
+                        "classification-persist-failure",
+                        "resume-state-commit-signal",
+                    }}
                 ):
                     try:
                         document = json.loads(Path(source).read_bytes())
                     except (FileNotFoundError, json.JSONDecodeError):
                         document = None
                     if (
-                        isinstance(document, dict)
+                        FAULT == "classification-persist-failure"
+                        and isinstance(document, dict)
                         and document.get("outcome") == "reconciliation-required"
                         and document.get("resources", {{}})
                         .get("item", {{}})
@@ -1058,7 +1086,20 @@ class ProvisioningInputs:
                     ):
                         record("classification-persist-failed")
                         raise OSError(errno.EIO, "synthetic classification persistence failure")
-                return real_replace(source, destination)
+                    settles_resume_capture = (
+                        FAULT == "resume-state-commit-signal"
+                        and isinstance(document, dict)
+                        and document.get("pending_request") is None
+                        and document.get("outcome") == "reconciliation-required"
+                        and document.get("resources", {{}})
+                        .get("item", {{}})
+                        .get("state")
+                        == "present"
+                    )
+                result = real_replace(source, destination)
+                if settles_resume_capture:
+                    inject_resume_signals("resume-state-commit-signals")
+                return result
 
             def faulting_open(path, flags, *args, **kwargs):
                 global effect_capture_descriptor, terminal_descriptor
@@ -1084,6 +1125,14 @@ class ProvisioningInputs:
                 ):
                     terminal_descriptor = descriptor
                     record("terminal-file-created")
+                if (
+                    FAULT == "resume-capture-read-signal"
+                    and not triggered
+                    and os.fspath(path)
+                    == os.path.join(STATE, "captures", "0001.stdout")
+                    and not flags & os.O_CREAT
+                ):
+                    inject_resume_signals("resume-capture-read-signals")
                 return descriptor
 
             def faulting_fsync(descriptor):
@@ -1168,7 +1217,7 @@ class ProvisioningInputs:
                 "-B",
                 "-S",
                 os.fspath(runner),
-                *self.command()[5:],
+                *self.command(verb)[5:],
             ],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
@@ -2086,35 +2135,52 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
             **{"item-create": ("sleep-after-output" if with_output else "sleep")}
         )
         process = inputs.start_process()
-        child_pid = inputs.wait_for_child("item-create")
-        if with_output:
+        child_pid: int | None = None
+        try:
+            child_pid = inputs.wait_for_child("item-create")
+            if with_output:
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline:
+                    try:
+                        state = json.loads((inputs.state / "state.json").read_bytes())
+                        capture = (
+                            inputs.state
+                            / state["pending_request"]["captures"]["stdout"]
+                        )
+                        if capture.stat().st_size:
+                            break
+                    except (FileNotFoundError, TypeError):
+                        pass
+                    time.sleep(0.01)
+                else:
+                    self.fail("source-ordered output was not durable before host loss")
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.communicate(timeout=5)
+            if child_pid is None:
+                try:
+                    marker = inputs.child_marker_document()
+                except (FileNotFoundError, json.JSONDecodeError):
+                    marker = {}
+                candidate = marker.get("pid")
+                if isinstance(candidate, int):
+                    child_pid = candidate
+            if child_pid is not None:
+                try:
+                    os.killpg(child_pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+        if child_pid is not None:
             deadline = time.monotonic() + 5
             while time.monotonic() < deadline:
                 try:
-                    state = json.loads((inputs.state / "state.json").read_bytes())
-                    capture = (
-                        inputs.state / state["pending_request"]["captures"]["stdout"]
-                    )
-                    if capture.stat().st_size:
-                        break
-                except (FileNotFoundError, TypeError):
-                    pass
+                    os.kill(child_pid, 0)
+                except ProcessLookupError:
+                    break
                 time.sleep(0.01)
             else:
-                self.fail("source-ordered output was not durable before host loss")
-        os.kill(process.pid, signal.SIGKILL)
-        process.communicate(timeout=5)
-        try:
-            os.killpg(child_pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline:
-            try:
-                os.kill(child_pid, 0)
-            except ProcessLookupError:
-                break
-            time.sleep(0.01)
+                self.fail("host-loss provider child did not retire")
 
     def test_resume_uses_source_ordered_capture_without_listing_or_retry(self) -> None:
         temporary, inputs = self.make_inputs()
@@ -2131,6 +2197,65 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
         kinds = [record["kind"] for record in inputs.log()]
         self.assertEqual(kinds.count("item-create"), 1)
         self.assertNotIn("item-list", kinds)
+
+    def test_resume_capture_settlement_preserves_the_first_signal(self) -> None:
+        later_signals = {
+            signal.SIGHUP: signal.SIGINT,
+            signal.SIGINT: signal.SIGTERM,
+            signal.SIGTERM: signal.SIGHUP,
+        }
+        for fault, event in (
+            ("resume-capture-read-signal", "resume-capture-read-signals"),
+            ("resume-state-commit-signal", "resume-state-commit-signals"),
+        ):
+            for first_signal, later_signal in later_signals.items():
+                with self.subTest(fault=fault, first_signal=first_signal):
+                    temporary, inputs = self.make_inputs()
+                    try:
+                        self._host_loss_at_item_create(inputs, with_output=True)
+                        provider_calls = inputs.log()
+                        process = inputs.start_fault_process(
+                            fault,
+                            verb="resume",
+                            first_signal=first_signal,
+                            later_signal=later_signal,
+                        )
+                        try:
+                            stdout, stderr = process.communicate(timeout=10)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                            process.communicate(timeout=5)
+                            raise
+
+                        self.assertEqual(
+                            (process.returncode, stdout, stderr),
+                            (
+                                128 + first_signal,
+                                b"",
+                                b"age-admission signer provisioning interrupted\n",
+                            ),
+                        )
+                        self.assertEqual(
+                            inputs.fault_trace(fault),
+                            [
+                                {
+                                    "event": event,
+                                    "first_signal": int(first_signal),
+                                    "later_signal": int(later_signal),
+                                }
+                            ],
+                        )
+                        state = json.loads((inputs.state / "state.json").read_bytes())
+                        self.assertEqual(state["resources"]["item"]["state"], "present")
+                        self.assertEqual(
+                            state["resources"]["item"]["id"], "item_issue286"
+                        )
+                        self.assertIsNone(state["pending_request"])
+                        self.assertEqual(state["outcome"], "reconciliation-required")
+                        self.assertEqual(inputs.log(), provider_calls)
+                        self.assertFalse((inputs.state / "qualified-clean.json").exists())
+                    finally:
+                        temporary.cleanup()
 
     def test_resume_retains_candidates_and_zero_matches_never_settle(self) -> None:
         for listing_behavior, expected_candidates in (
