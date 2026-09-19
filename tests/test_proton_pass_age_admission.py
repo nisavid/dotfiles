@@ -336,6 +336,147 @@ pathlib.Path({os.fspath(self.wrapper_marker)!r}).write_text(
         self.assertNotIn(self.key_bytes, result.stdout)
         self.assertNotIn(self.key_bytes, result.stderr)
 
+    @unittest.skipUnless(
+        sys.platform.startswith("linux"),
+        "Linux exposes ssh-keygen through PATH for fake-only child observation",
+    )
+    def test_agent_reason_is_scoped_to_selected_field_retrieval(self) -> None:
+        reason_log = self.root / "agent-reason.log"
+        absent = "<absent>"
+        self._write_executable(
+            "proton-pass-ensure-ready",
+            f"""
+            #!/usr/bin/env python3
+            import os
+            import pathlib
+
+            with pathlib.Path({os.fspath(reason_log)!r}).open(
+                "a", encoding="ascii"
+            ) as stream:
+                print(
+                    "readiness\\t"
+                    + os.environ.get("PROTON_PASS_AGENT_REASON", {absent!r}),
+                    file=stream,
+                )
+            """,
+        )
+        self._write_executable(
+            "pass-cli",
+            f"""
+            #!/usr/bin/env python3
+            import os
+            import pathlib
+            import sys
+
+            expected = [
+                "item", "view", "--share-id", "fixture_share_286",
+                "--item-id", "fixture_item_286", "--field", "SSH.private_key",
+                "--output", "human",
+            ]
+            if sys.argv[1:] != expected:
+                raise SystemExit(92)
+            with pathlib.Path({os.fspath(reason_log)!r}).open(
+                "a", encoding="ascii"
+            ) as stream:
+                print(
+                    "retrieval\\t"
+                    + os.environ.get("PROTON_PASS_AGENT_REASON", {absent!r}),
+                    file=stream,
+                )
+            sys.stdout.buffer.write(
+                pathlib.Path({os.fspath(self.signing_key)!r}).read_bytes()
+            )
+            """,
+        )
+        self._write_executable(
+            "ssh-keygen",
+            f"""
+            #!/usr/bin/env python3
+            import os
+            import pathlib
+            import sys
+
+            with pathlib.Path({os.fspath(reason_log)!r}).open(
+                "a", encoding="ascii"
+            ) as stream:
+                print(
+                    "ssh-keygen\\t"
+                    + os.environ.get("PROTON_PASS_AGENT_REASON", {absent!r}),
+                    file=stream,
+                )
+            real_tool = {os.fspath(self.ssh_keygen)!r}
+            os.execv(real_tool, [real_tool, *sys.argv[1:]])
+            """,
+        )
+        self.wrapper.write_text(
+            textwrap.dedent(
+                f"""\
+                import os
+                import pathlib
+                import stat
+                import sys
+
+                arguments = sys.argv[1:]
+                separator = arguments.index("--")
+                creator_arguments = arguments[separator + 1:]
+                preflight = creator_arguments[:2] == ["--operation", "preflight"]
+                role = "preflight" if preflight else "receipt"
+                with pathlib.Path({os.fspath(reason_log)!r}).open(
+                    "a", encoding="ascii"
+                ) as stream:
+                    print(
+                        role
+                        + "\\t"
+                        + os.environ.get("PROTON_PASS_AGENT_REASON", {absent!r}),
+                        file=stream,
+                    )
+                if preflight:
+                    print("required")
+                    raise SystemExit(0)
+                key_path = pathlib.Path(
+                    arguments[arguments.index("--signing-key") + 1]
+                )
+                output_path = pathlib.Path(arguments[arguments.index("--output") + 1])
+                if (
+                    key_path.read_bytes()
+                    != pathlib.Path({os.fspath(self.signing_key)!r}).read_bytes()
+                    or stat.S_IMODE(key_path.stat().st_mode) != 0o600
+                ):
+                    raise SystemExit(81)
+                output_path.write_text("fixture receipt\\n", encoding="ascii")
+                output_path.chmod(0o600)
+                """
+            ),
+            encoding="ascii",
+        )
+        self.wrapper.chmod(0o755)
+        environment = self._environment()
+        environment["PROTON_PASS_AGENT_REASON"] = "hostile inherited reason"
+
+        result = subprocess.run(
+            self._command(),
+            check=False,
+            capture_output=True,
+            env=environment,
+            timeout=30,
+        )
+
+        self.assertEqual(
+            (result.returncode, result.stdout, result.stderr),
+            (0, b"", b""),
+        )
+        self.assertEqual(self.output.read_text(encoding="ascii"), "fixture receipt\n")
+        self.assertEqual(
+            reason_log.read_text(encoding="ascii").splitlines(),
+            [
+                f"preflight\t{absent}",
+                f"readiness\t{absent}",
+                "retrieval\tage-admission signing-key retrieval",
+                f"ssh-keygen\t{absent}",
+                f"receipt\t{absent}",
+            ],
+        )
+
     def test_preflight_stops_before_provider_when_admission_is_not_required_or_indeterminate(
         self,
     ) -> None:
