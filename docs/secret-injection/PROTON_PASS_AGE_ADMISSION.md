@@ -633,12 +633,26 @@ The closed provider schema is tied to pass-cli 2.3.3 source commit
 `51a4c9b110a0ffe6e81f4f5d3877b9e5a0c24112`, including
 [custom-item creation](https://github.com/ProtonPass/pass-cli/blob/51a4c9b110a0ffe6e81f4f5d3877b9e5a0c24112/pass-cli/src/commands/item/create/custom.rs),
 [metadata-only item listing](https://github.com/ProtonPass/pass-cli/blob/51a4c9b110a0ffe6e81f4f5d3877b9e5a0c24112/pass-cli/src/commands/item/list.rs),
+[item-deletion command](https://github.com/ProtonPass/pass-cli/blob/51a4c9b110a0ffe6e81f4f5d3877b9e5a0c24112/pass-cli/src/commands/item/delete.rs),
+[item-deletion client](https://github.com/ProtonPass/pass-cli/blob/51a4c9b110a0ffe6e81f4f5d3877b9e5a0c24112/pass/src/item/delete.rs),
 [agent creation](https://github.com/ProtonPass/pass-cli/blob/51a4c9b110a0ffe6e81f4f5d3877b9e5a0c24112/pass-cli/src/commands/agent/create.rs),
 [agent listing](https://github.com/ProtonPass/pass-cli/blob/51a4c9b110a0ffe6e81f4f5d3877b9e5a0c24112/pass-cli/src/commands/agent/list.rs),
 [agent monitoring](https://github.com/ProtonPass/pass-cli/blob/51a4c9b110a0ffe6e81f4f5d3877b9e5a0c24112/pass-cli/src/commands/agent/monitor.rs),
-and [session-scoped keyring names](https://github.com/ProtonPass/pass-cli/blob/51a4c9b110a0ffe6e81f4f5d3877b9e5a0c24112/pass-cli/src/features/keyring.rs).
-Source fixtures establish parser and control-flow facts only; they do not prove
-that a live provider accepted an operation.
+[agent-deletion command](https://github.com/ProtonPass/pass-cli/blob/51a4c9b110a0ffe6e81f4f5d3877b9e5a0c24112/pass-cli/src/commands/agent/delete.rs),
+[session-scoped keyring names](https://github.com/ProtonPass/pass-cli/blob/51a4c9b110a0ffe6e81f4f5d3877b9e5a0c24112/pass-cli/src/features/keyring.rs),
+[logout command](https://github.com/ProtonPass/pass-cli/blob/51a4c9b110a0ffe6e81f4f5d3877b9e5a0c24112/pass-cli/src/commands/logout.rs),
+and [logout client](https://github.com/ProtonPass/pass-cli/blob/51a4c9b110a0ffe6e81f4f5d3877b9e5a0c24112/pass/src/logout.rs).
+At this revision, the item-deletion command prints
+`Item <item-id> deleted successfully` only after the client has received a
+successful delete response and returned. The agent-deletion command prints
+`Agent '<name>' deleted successfully` only after its delete request returns
+successfully. The force-logout command prints `Successfully performed force
+logout` only after key-provider cleanup has been attempted and local data
+removal succeeds. The ordinary logout client only shows that its session logout
+call is awaited; force logout follows the separate command path. These
+source-order facts establish parser and control-flow behavior for the exact
+transcripts. They do not prove durable live-provider effects or replace
+owner-authorized live-disposable-provider qualification.
 
 The two exact commands are:
 
