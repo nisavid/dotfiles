@@ -423,20 +423,37 @@ trap - EXIT HUP INT TERM
   a dirty checkout, failed age validation, signing failure, timeout, an
   existing output path, or a missing, empty, loose-mode, multi-link, or
   oversized receipt fails closed. The adapter emits only
-  `proton-pass age admission failed` and creates no usable receipt.
-- `HUP`, `INT`, and `TERM` are catchable. The adapter terminates and reaps its
-  active child process group, removes a failed receipt, unwinds both private
-  staging layers, emits only `proton-pass age admission interrupted`, and
-  returns `128 + signal` when cleanup succeeds.
+  `proton-pass age admission failed` and creates no usable receipt. It uses the
+  same failure result when child retirement, output removal, or private-root
+  cleanup is incomplete or cannot be verified; any surviving root or output
+  remains non-authoritative evidence.
+- `HUP`, `INT`, and `TERM` are catchable. The first signal fixes the eventual
+  `128 + signal` status; later signals only latch and cannot replace that
+  status, re-enter cleanup, or extend a cleanup deadline. The adapter sends
+  `TERM` and, when needed, `KILL` to the registered child process group even if
+  its leader already exited. It emits only
+  `proton-pass age admission interrupted` and returns the fixed signal status
+  after proving that the leader was reaped, the entire group is absent, the
+  failed receipt is absent, and both private staging layers are removed.
 - `SIGKILL`, kernel failure, and power loss are not catchable. Cleanup does not
-  run; after `SIGKILL`, a detached child process group may also continue. Keep
-  the operation blocked, identify and terminate any surviving owned child,
-  inspect only the exact mode-`0700` operation directory, remove that bounded
-  directory and any ambiguous receipt, and rerun from fresh base/head state.
-  Deletion is cleanup, not a secure-erasure guarantee for the backing storage.
+  run; after `SIGKILL`, a detached child process group may also continue. A
+  descendant that escapes the registered process group is likewise outside
+  the retirement guarantee. Keep the operation blocked, identify and terminate
+  any surviving owned child, inspect only the exact mode-`0700` operation
+  directory, remove that bounded directory and any ambiguous receipt, and
+  rerun from fresh base/head state. Deletion is cleanup, not a secure-erasure
+  guarantee for the backing storage.
 - If source bytes, the trusted public fingerprint, public refs, or the pull-
   request snapshot do not match, do not retrieve the key. Reconcile the review
   or refresh the transition first.
+
+Immediately before publishing the receipt, the adapter checks the signal latch
+and blocks catchable termination only for the no-child filesystem commit. A
+signal before commit entry prevents publication; a completed commit wins over a
+signal deferred after entry. A failed commit restores signal delivery, removes
+any caller-owned partial output when its identity still matches, and returns
+the failure result. No child, provider call, or cleanup wait runs under that
+mask.
 
 ## Build the offline synthetic fixture
 
@@ -518,8 +535,20 @@ python3 -I -B -S scripts/build-age-admission-provider-fixture \
 `real_transition_authority=false` and `publication_permitted=false`, and binds
 the synthetic repositories, signer public key, generated age identity, staged
 tools, and exact `0|required\n|empty stderr` preflight. Its randomized synthetic
-commits never become production evidence. Failure or a caught signal creates no
-success marker and grants no real-transition authority.
+commits never become production evidence. The builder latches the first caught
+signal, retires the full registered child process group, and removes its
+uncommitted operation root before returning `128 + signal`. Later signals do
+not replace the first status, re-enter cleanup, or extend either retirement
+deadline. A surviving or unverifiable group, operation-root identity drift, or
+incomplete cleanup uses the existing failure result, retains any surviving
+root as non-authoritative evidence, and creates no success marker.
+
+Before publishing `fixture.json`, the builder checks the signal latch and
+blocks catchable termination only for the no-child filesystem commit after
+every child group is absent. A signal before commit entry prevents publication;
+a completed commit wins over a signal deferred after entry. A failed commit
+restores signal delivery and returns the failure result. No child or cleanup
+wait runs under that mask. These results grant no real-transition authority.
 
 ## Qualify provider behavior and provision the signer
 
@@ -540,8 +569,9 @@ protection input or effect.
 These are prepared interfaces, not authorization to run them. The owner must
 separately authorize every disposable or production item, vault/share,
 enrollment, provider write, revocation, deletion, and retained resource. The
-later protection exception, recovery merge, restoration, and PR #285 receipt
-remain separate owner-held effects outside this helper.
+later protection exception, recovery merge, restoration, and consumer receipts
+for PRs #285, #287, and #302 remain separate owner-held effects outside this
+helper.
 
 Stage the provisioning helper from its raw reviewed blob and retain the same
 reviewed object database, commit, manifest, and age archive bindings used by
@@ -683,12 +713,26 @@ The terminal results are closed and byte-exact:
 
 | Result | Status and terminal bytes | Meaning |
 | --- | --- | --- |
-| Qualified clean | 0; `qualified-clean\n`; empty stderr | Disposable item and agent removed, revoked probe failed, primary readback still passed, and local evidence cleaned |
-| Ready for recovery | 0; `ready-for-recovery\n`; empty stderr | Production resources verified and retained only by private handles; separate recovery authorization still required |
-| Failed or rolled back | 1; empty stdout; `age-admission signer provisioning failed\n` | No success evidence |
-| Reconciliation required | 20; empty stdout; `age-admission signer provisioning requires reconciliation\n` | A create or login is unknown; stop as an incident |
-| Cleanup incomplete | 21; empty stdout; `age-admission signer provisioning cleanup incomplete\n` | A delete, logout, or local cleanup is unknown; stop as an incident |
-| Interrupted | `128 + signal`; empty stdout; `age-admission signer provisioning interrupted\n` | Retain bounded recovery evidence unless the recorded rollback completed |
+| Qualified clean | 0; `qualified-clean\n`; empty stderr | Disposable item and agent removed, revoked probe failed, primary readback still passed, local evidence cleaned, and every child group absent |
+| Ready for recovery | 0; `ready-for-recovery\n`; empty stderr | Production resources verified, retained only by private handles, and every child group absent; separate recovery authorization still required |
+| Failed or rolled back | 1; empty stdout; `age-admission signer provisioning failed\n` | No success evidence; provider failure, rollback, local finalization, or durable classification failed |
+| Reconciliation required | 20; empty stdout; `age-admission signer provisioning requires reconciliation\n` | A create or login effect or its process-group retirement is unknown; stop as an incident |
+| Cleanup incomplete | 21; empty stdout; `age-admission signer provisioning cleanup incomplete\n` | A delete or logout effect, local cleanup, or local/read-only process-group retirement is unknown; stop as an incident |
+| Interrupted | `128 + signal`; empty stdout; `age-admission signer provisioning interrupted\n` | Every child group is absent and the provider state and retained evidence are durable |
+
+The first `HUP`, `INT`, or `TERM` fixes the signal status. Later signals only
+latch: they cannot replace that status, re-enter finalization, extend either
+retirement deadline, or authorize another provider effect. Every child leader
+must be reaped and its process group proved absent before interruption or
+success is reported.
+
+A signal latched after durable mutation arming but before process creation
+restores the prior resource state without a provider call and retains the local
+evidence. After process creation, only accepted source-ordered item-create or
+agent-create output may settle that resource as present; every other ambiguous
+provider mutation remains `unknown` with its pending request, captures,
+handles, and artifacts retained. Interruption adds no retry, read, logout,
+revocation, deletion, or cleanup provider call.
 
 Only normal retirement with status 0, bounded command-specific stdout, and
 empty stderr acknowledges a provider request. The two pinned create commands
@@ -710,9 +754,18 @@ Qualification cleanup is ordered: acknowledged exact-name agent deletion,
 direct revoked-session probe failure without readiness, successful primary
 readback and receipt verification, acknowledged exact-ID item deletion,
 acknowledged local logout, then bounded local cleanup and terminal evidence.
-Do not advance past an unknown state. Once production succeeds, keep its item
-and authorized enrollments until a separately authorized replacement is
-accepted; never update the stored signer in place.
+Do not advance past an unknown state. Before publishing `qualified-clean.json`
+or `ready-for-recovery.json`, the helper checks the signal latch and blocks
+catchable termination only for the no-child filesystem commit. A signal before
+that commit prevents publication. A signal after commit entry is deferred; a
+completed commit returns success. A failed mask or publication restores the
+prior state and signal mask, leaves no authoritative terminal marker, and
+returns failure. No spawn, provider call, or cleanup wait occurs under that
+mask.
+
+Once production succeeds, keep its item and authorized enrollments until a
+separately authorized replacement is accepted; never update the stored signer
+in place.
 
 ## Recover trust when the current private signer is lost
 
@@ -992,11 +1045,24 @@ context from another app, duplicate IDs, incomplete pagination, and any
 unrelated non-success all fail closed.
 
 Record the request, helper, and ready-file digests in the reviewed operational
-handoff. Malformed, noisy, incomplete, stale, or policy-drifted evidence leaves
-no ready file and grants no mutation authority. Keep a failed bounded state
-directory only as diagnostic evidence; start a new collection in a new path.
-The entry gate below validates every recorded artifact and then repeats all
-reads immediately before it can arm restoration.
+handoff. The collector latches the first `HUP`, `INT`, or `TERM`; later signals
+cannot replace its status, re-enter finalization, or extend either retirement
+deadline. It reports interruption only after durably recording that state,
+reaping every child leader, proving every registered process group absent, and
+withholding `ready.json`. A leader that exits while a descendant remains forces
+retirement and makes a normal collection fail. An uncertain group probe or a
+group that remains present records `unverified-retirement`, exits through the
+failure route, retains the bounded state as diagnostic evidence, and cannot
+publish readiness.
+
+Malformed, noisy, incomplete, stale, or policy-drifted evidence likewise leaves
+no ready file and grants no mutation authority. Start each later collection in
+a new path. Immediately before the no-child `ready.json` commit, the collector
+checks the signal latch; a signal before entry prevents publication, a
+completed commit wins over a signal deferred after entry, and a failed commit
+restores signal delivery before finalization. The entry gate below validates
+every recorded artifact and then repeats all reads immediately before it can
+arm restoration.
 
 The minimal named exception request is:
 
@@ -1627,13 +1693,19 @@ effective-rule and ruleset reads. Keep the merge freeze until the comparison
 passes and live `main` is shown to contain the reviewed recovery tree and the
 single new allowed-signer fingerprint.
 
-The state machine technically prevents its own merge attempt after an
-ambiguous exception PATCH or failed exception comparison, attempts restoration
-on every shell exit after arming, retries once after a normal restore failure,
-and reports success only after a fresh full response matches the preimage. It
-cannot make the GitHub operations atomic, survive `SIGKILL`, power loss, host
-loss, or a sustained GitHub/network outage, or stop another authorized actor
-from merging while the required check is absent.
+The state machine prevents its own merge attempt after an ambiguous exception
+PATCH or failed exception comparison. Restoration stays armed until a fresh
+full protection response exactly matches the saved preimage. The first caught
+signal fixes the eventual status; signals received while restoration or the
+EXIT finalizer runs only latch and cannot re-enter or abort finalization. Exit
+or a signal after arming but before an explicit restore causes one EXIT restore
+attempt. An explicit restore that succeeds or observes the exact preimage uses
+one restore PATCH. A failed explicit restore receives one EXIT retry, for two
+total; a failed EXIT-initiated attempt is not recursively retried.
+
+These controls cannot make the GitHub operations atomic, survive `SIGKILL`,
+power loss, host loss, or a sustained GitHub API or network outage, or stop
+another authorized actor from merging while the required check is absent.
 
 No supported enforceable recovery-only hold is present in the recorded policy.
 During the exception window, repository protection does not technically block
@@ -1678,23 +1750,25 @@ infer or broaden that authority.
 
 ## Activate the consumers and close the issue
 
-PR [#285](https://github.com/nisavid/dotfiles/pull/285) and
-PR [#287](https://github.com/nisavid/dotfiles/pull/287) consume the reviewed
+PR [#285](https://github.com/nisavid/dotfiles/pull/285),
+PR [#287](https://github.com/nisavid/dotfiles/pull/287), and
+PR [#302](https://github.com/nisavid/dotfiles/pull/302) consume the reviewed
 procedure under their separate owning tasks. PR #285's head was
 `6a9b527e87b21967dbb8f43d2c2c15af8658e772` when this procedure was prepared;
-that value and any observed PR #287 base or head are not reusable operating
-inputs. Before any later operation, each consumer must independently load the
-published, reviewed issue #286 revision, record that revision plus the
+that value and any observed PR #287 or PR #302 base or head are not reusable
+operating inputs. Before any later operation, each consumer must independently
+load the published, reviewed issue #286 revision, record that revision plus the
 refreshed adapter, trusted-wrapper, and creator digests, and refresh its own
 then-current base and head. A local candidate, an earlier digest handoff, or
-the other consumer's transition is not an operating input.
+another consumer's transition is not an operating input.
 
-Once the new key is trusted and protection is restored, each owning task may,
-under its separate authority, create a new receipt through the routine path,
-replace that PR's prior marker, and require a fresh hosted
-`Verify trusted base against candidate data` run for that exact transition.
-This handoff changes neither pull request. It transfers no branch, source,
-receipt, review, or integration ownership.
+Once the new key is trusted, protection is restored, and operational acceptance
+is recorded, each owning task may, under its separate authority, create a new
+receipt through the routine path, replace that PR's prior marker, and require a
+fresh hosted `Verify trusted base against candidate data` run for that exact
+then-current transition. Each owner retains its work. This handoff changes none
+of those pull requests and transfers no branch, source, receipt, review, or
+integration ownership.
 
 [PR #253](https://github.com/nisavid/dotfiles/pull/253) is the public retired-key
 control. Bind later verification to these exact public bytes:
@@ -1742,8 +1816,8 @@ Before closing issue #286, retain value-free evidence of all of these outcomes:
   and the retired receipt rejected on a new transition;
 - the full restored protection response matching its preimage, including the
   app-pinned trusted-base check;
-- separate new-key receipts and fresh hosted successes for PRs #285 and #287
-  at their independently refreshed base/head transitions; and
+- separate new-key receipts and fresh hosted successes for PRs #285, #287,
+  and #302 at their independently refreshed base/head transitions; and
 - absence of adapter and receipt-creator private staging plus the operational
   handoff.
 
