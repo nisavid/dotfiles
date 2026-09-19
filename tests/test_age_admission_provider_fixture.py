@@ -1429,6 +1429,195 @@ class AgeAdmissionProviderFixtureTests(unittest.TestCase):
         self.assertFalse(inputs.provider_marker.exists())
         self.assertFalse(inputs.network_marker.exists())
 
+    def test_inherited_termination_mask_cannot_delay_first_signal_cleanup(
+        self,
+    ) -> None:
+        termination_signals = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
+        termination_numbers = {int(signum) for signum in termination_signals}
+
+        def process_exists(pid: int) -> bool:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return False
+            return True
+
+        def group_exists(process_group: int) -> bool:
+            try:
+                os.killpg(process_group, 0)
+            except ProcessLookupError:
+                return False
+            return True
+
+        for signum in termination_signals:
+            with self.subTest(signum=signum.name):
+                temporary, inputs = self.make_inputs()
+                process: subprocess.Popen[bytes] | None = None
+                child_started = False
+                state: dict[str, object] = {}
+                completion: tuple[int, bytes, bytes] | None = None
+                builder_group_survived = False
+                child_pid_survived = False
+                child_group_survived = False
+                operation_survived = False
+                fixture_published = False
+                provider_accessed = False
+                network_accessed = False
+                try:
+                    child_state = inputs.root / "masked-child.json"
+                    launcher = f"#!{sys.executable} -B\n".encode() + textwrap.dedent(
+                        f"""\
+                        import json
+                        import os
+                        import pathlib
+                        import signal
+                        import time
+
+                        termination_signals = (
+                            signal.SIGHUP,
+                            signal.SIGINT,
+                            signal.SIGTERM,
+                        )
+                        blocked = signal.pthread_sigmask(signal.SIG_BLOCK, set())
+                        ignored = {{
+                            str(int(item)): signal.getsignal(item) == signal.SIG_IGN
+                            for item in termination_signals
+                        }}
+                        pathlib.Path({os.fspath(child_state)!r}).write_text(
+                            json.dumps(
+                                {{
+                                    "blocked": sorted(int(item) for item in blocked),
+                                    "ignored": ignored,
+                                    "pgid": os.getpgrp(),
+                                    "pid": os.getpid(),
+                                }},
+                                sort_keys=True,
+                            ),
+                            encoding="ascii",
+                        )
+                        time.sleep(30)
+                        print("required")
+                        """
+                    ).encode("ascii")
+                    inputs.replace_reviewed_source(
+                        "scripts/run-trusted-age-admission",
+                        launcher,
+                    )
+                    blocked_parent = textwrap.dedent(
+                        """\
+                        import os
+                        import signal
+                        import sys
+
+                        termination_signals = (
+                            signal.SIGHUP,
+                            signal.SIGINT,
+                            signal.SIGTERM,
+                        )
+                        for item in termination_signals:
+                            signal.signal(item, signal.SIG_IGN)
+                        signal.pthread_sigmask(signal.SIG_BLOCK, termination_signals)
+                        os.execve(
+                            sys.executable,
+                            [
+                                sys.executable,
+                                "-I",
+                                "-B",
+                                "-S",
+                                *sys.argv[1:],
+                            ],
+                            os.environ,
+                        )
+                        """
+                    )
+                    process = subprocess.Popen(
+                        [
+                            sys.executable,
+                            "-I",
+                            "-B",
+                            "-S",
+                            "-c",
+                            blocked_parent,
+                            *inputs.builder_command()[4:],
+                        ],
+                        stdin=subprocess.DEVNULL,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        env=inputs.builder_environment(),
+                        start_new_session=True,
+                    )
+                    deadline = time.monotonic() + 5
+                    while not child_state.exists() and time.monotonic() < deadline:
+                        time.sleep(0.01)
+                    child_started = child_state.exists()
+                    if child_started:
+                        state = json.loads(child_state.read_bytes())
+                        process.send_signal(signum)
+                        try:
+                            stdout, stderr = process.communicate(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            pass
+                        else:
+                            if process.returncode is not None:
+                                completion = (process.returncode, stdout, stderr)
+
+                    builder_group_survived = group_exists(process.pid)
+                    child_pid = state.get("pid")
+                    child_group = state.get("pgid")
+                    if isinstance(child_pid, int):
+                        child_pid_survived = process_exists(child_pid)
+                    if isinstance(child_group, int):
+                        child_group_survived = group_exists(child_group)
+                    operation_survived = inputs.operation.exists()
+                    fixture_published = (inputs.operation / "fixture.json").exists()
+                    provider_accessed = inputs.provider_marker.exists()
+                    network_accessed = inputs.network_marker.exists()
+                finally:
+                    child_group = state.get("pgid")
+                    if isinstance(child_group, int) and group_exists(child_group):
+                        try:
+                            os.killpg(child_group, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                    if process is not None:
+                        if group_exists(process.pid):
+                            try:
+                                os.killpg(process.pid, signal.SIGKILL)
+                            except ProcessLookupError:
+                                pass
+                        if process.poll() is None:
+                            process.kill()
+                        try:
+                            process.communicate(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                            process.communicate(timeout=5)
+                    if inputs.operation.exists():
+                        shutil.rmtree(inputs.operation)
+                    temporary.cleanup()
+
+                self.assertTrue(child_started, "task-owned child did not start")
+                self.assertEqual(
+                    set(state["blocked"]).intersection(termination_numbers),
+                    set(),
+                )
+                self.assertFalse(any(state["ignored"].values()))
+                self.assertEqual(
+                    completion,
+                    (
+                        128 + signum,
+                        b"",
+                        b"age-admission provider fixture interrupted\n",
+                    ),
+                )
+                self.assertFalse(builder_group_survived)
+                self.assertFalse(child_pid_survived)
+                self.assertFalse(child_group_survived)
+                self.assertFalse(operation_survived)
+                self.assertFalse(fixture_published)
+                self.assertFalse(provider_accessed)
+                self.assertFalse(network_accessed)
+
     def test_normal_child_with_resistant_descendant_is_retired_and_fails(
         self,
     ) -> None:
