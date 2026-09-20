@@ -995,6 +995,8 @@ class ProvisioningInputs:
             fault_pgid = None
             group_probe_faulted = False
             group_termination_sent = False
+            reap_deferred_groups = set()
+            reaped_groups = set()
             effect_capture_descriptor = None
             effect_capture_signaled = False
             terminal_descriptor = None
@@ -1096,9 +1098,28 @@ class ProvisioningInputs:
                 if triggered:
                     record("post-signal-popen", command=command_list)
                 process = real_popen(*args, **kwargs)
+                real_process_poll = process.poll
+
+                def observing_poll():
+                    if (
+                        FAULT == "zombie-only-item-retirement"
+                        and process.pid == fault_pgid
+                        and not group_probe_faulted
+                    ):
+                        if process.pid not in reap_deferred_groups:
+                            reap_deferred_groups.add(process.pid)
+                            record("leader-reap-deferred", pgid=process.pid)
+                        return None
+                    result = real_process_poll()
+                    if result is not None:
+                        reaped_groups.add(process.pid)
+                    return result
+
+                process.poll = observing_poll
                 fault_kind = {{
                     "classification-persist-failure": "item-create",
                     "transient-item-retirement": "item-create",
+                    "zombie-only-item-retirement": "item-create",
                     "unverified-agent-delete-retirement": "agent-delete",
                     "unverified-item-retirement": "item-create",
                     "unverified-version-retirement": "version",
@@ -1124,6 +1145,11 @@ class ProvisioningInputs:
                             and group_termination_sent
                             and not group_probe_faulted
                         )
+                        or (
+                            FAULT == "zombie-only-item-retirement"
+                            and group_termination_sent
+                            and pgid not in reaped_groups
+                        )
                     )
                 ):
                     group_probe_faulted = True
@@ -1131,7 +1157,10 @@ class ProvisioningInputs:
                     raise PermissionError(errno.EPERM, "synthetic group probe failure")
                 result = real_killpg(pgid, signum)
                 if (
-                    FAULT == "transient-item-retirement"
+                    FAULT in {
+                        "transient-item-retirement",
+                        "zombie-only-item-retirement",
+                    }
                     and pgid == fault_pgid
                     and signum == signal.SIGTERM
                 ):
@@ -2175,6 +2204,40 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
             "interrupted",
         )
         self.assertEqual(state["outcome"], "reconciliation-required")
+        with self.assertRaises(ProcessLookupError):
+            os.kill(child_pid, 0)
+
+    def test_zombie_only_probe_uncertainty_clears_after_leader_reap(self) -> None:
+        temporary, inputs = self.make_inputs()
+        self.addCleanup(temporary.cleanup)
+        inputs.set_behaviors(**{"item-create": "sleep"})
+        process = inputs.start_fault_process("zombie-only-item-retirement")
+        child_pid = inputs.wait_for_child("item-create")
+
+        os.kill(process.pid, signal.SIGTERM)
+        stdout, stderr = process.communicate(timeout=10)
+
+        trace = inputs.fault_trace("zombie-only-item-retirement")
+        self.assertTrue(
+            any(record["event"] == "leader-reap-deferred" for record in trace)
+        )
+        self.assertTrue(
+            any(record["event"] == "group-probe-unverified" for record in trace)
+        )
+        self.assertEqual(
+            (process.returncode, stdout, stderr),
+            (
+                143,
+                b"",
+                b"age-admission signer provisioning interrupted\n",
+            ),
+        )
+        state = json.loads((inputs.state / "state.json").read_bytes())
+        self.assertEqual(state["resources"]["item"]["state"], "unknown")
+        self.assertEqual(
+            state["pending_request"]["targets"]["observed_result"]["outcome"],
+            "interrupted",
+        )
         with self.assertRaises(ProcessLookupError):
             os.kill(child_pid, 0)
 

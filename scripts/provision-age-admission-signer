@@ -591,9 +591,13 @@ def _process_group_state(pgid: int) -> str:
     return "present"
 
 
-def _wait_for_known_group_state(pgid: int, deadline: float) -> str:
+def _wait_for_known_group_state(lease: ProcessLease, deadline: float) -> str:
     while True:
-        group_state = _process_group_state(pgid)
+        try:
+            lease.process.poll()
+        except (OSError, subprocess.SubprocessError):
+            return "unverified"
+        group_state = _process_group_state(lease.pgid)
         if group_state != "unverified":
             return group_state
         remaining = deadline - time.monotonic()
@@ -634,7 +638,7 @@ def _retire_process_group(lease: ProcessLease) -> bool:
         return False
     lease.finalizing = True
     term_deadline = time.monotonic() + TERMINATION_GRACE_SECONDS
-    group_state = _wait_for_known_group_state(lease.pgid, term_deadline)
+    group_state = _wait_for_known_group_state(lease, term_deadline)
     if group_state == "unverified":
         return False
     if group_state == "present" and not _send_group_signal(lease, signal.SIGTERM):
@@ -642,7 +646,7 @@ def _retire_process_group(lease: ProcessLease) -> bool:
     if _wait_for_group_retirement(lease, term_deadline):
         return True
     kill_deadline = time.monotonic() + TERMINATION_GRACE_SECONDS
-    group_state = _wait_for_known_group_state(lease.pgid, kill_deadline)
+    group_state = _wait_for_known_group_state(lease, kill_deadline)
     if group_state == "unverified":
         return False
     if group_state == "present" and not _send_group_signal(lease, signal.SIGKILL):
