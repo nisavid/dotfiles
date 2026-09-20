@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import signal
@@ -304,6 +305,112 @@ pathlib.Path({os.fspath(self.wrapper_marker)!r}).write_text(
             "TMP": os.fspath(self.root),
             "TMPDIR": os.fspath(self.root),
         }
+
+    def _signal_cleanup_command(self, trace_path: Path) -> list[str]:
+        harness = textwrap.dedent(
+            f"""\
+            import json
+            import os
+            import pathlib
+            import runpy
+            import sys
+            import time
+
+            trace_path = pathlib.Path(sys.argv.pop(1))
+            source = sys.argv[1]
+            sys.argv = sys.argv[1:]
+            real_killpg = os.killpg
+            started = time.monotonic()
+            observations = {{"probe": {{"count": 0}}, "signal": {{"count": 0}}}}
+            armed = False
+            status = -1
+
+            def record(process_group, signum, result, error_number):
+                channel = "probe" if signum == 0 else "signal"
+                summary = observations[channel]
+                event = {{
+                    "elapsed_ms": round((time.monotonic() - started) * 1000, 3),
+                    "errno": error_number,
+                    "process_group": int(process_group),
+                    "result": result,
+                    "signal": signum,
+                }}
+                summary["count"] += 1
+                summary[result] = summary.get(result, 0) + 1
+                summary.setdefault("first", event)
+                summary["last"] = event
+
+            def tracing_killpg(process_group, signum):
+                global armed
+                signum = int(signum)
+                if signum != 0:
+                    armed = True
+                try:
+                    outcome = real_killpg(process_group, signum)
+                except ProcessLookupError as error:
+                    if armed:
+                        record(process_group, signum, "absent", int(error.errno or 0))
+                    raise
+                except OSError as error:
+                    if armed:
+                        result = "uncertain" if signum == 0 else "error"
+                        record(process_group, signum, result, int(error.errno or 0))
+                    raise
+                if armed:
+                    result = "present" if signum == 0 else "sent"
+                    record(process_group, signum, result, 0)
+                return outcome
+
+            os.killpg = tracing_killpg
+            try:
+                runpy.run_path(source, run_name="__main__")
+                status = 0
+            except SystemExit as error:
+                status = error.code if isinstance(error.code, int) else 1
+                raise
+            finally:
+                payload = {{"observations": observations, "schema": 1, "status": status}}
+                encoded = (
+                    json.dumps(payload, separators=(",", ":"), sort_keys=True) + "\\n"
+                ).encode("ascii")
+                if len(encoded) > 2048:
+                    encoded = (
+                        json.dumps(
+                            {{"overflow": True, "schema": 1, "status": status}},
+                            separators=(",", ":"),
+                            sort_keys=True,
+                        )
+                        + "\\n"
+                    ).encode("ascii")
+                trace_path.write_bytes(encoded)
+            """
+        )
+        return [
+            sys.executable,
+            "-I",
+            "-B",
+            "-S",
+            "-c",
+            harness,
+            os.fspath(trace_path),
+            *self._command(),
+        ]
+
+    def _signal_cleanup_diagnostic(
+        self, trace_path: Path, *, outer: dict[str, object]
+    ) -> str:
+        inner: dict[str, object] = {"trace_readable": False}
+        if trace_path.exists():
+            try:
+                inner = json.loads(trace_path.read_bytes())
+                inner["trace_readable"] = True
+            except (OSError, ValueError, TypeError):
+                pass
+        return "signal cleanup diagnostic: " + json.dumps(
+            {"inner": inner, "outer": outer},
+            separators=(",", ":"),
+            sort_keys=True,
+        )
 
     def _run_with_group_probe_fault(
         self, *, persistent: bool
@@ -1070,8 +1177,9 @@ pathlib.Path({os.fspath(self.wrapper_marker)!r}).write_text(
             time.sleep(30)
             """
         )
+        diagnostic_path = self.root / "signal-cleanup-term.json"
         process = subprocess.Popen(
-            self._command(),
+            self._signal_cleanup_command(diagnostic_path),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             env=self._environment(),
@@ -1085,13 +1193,29 @@ pathlib.Path({os.fspath(self.wrapper_marker)!r}).write_text(
         process.send_signal(signal.SIGTERM)
         stdout, stderr = process.communicate(timeout=10)
 
-        self.assertEqual(process.returncode, 143)
-        self.assertEqual(stdout, b"")
-        self.assertEqual(stderr, b"proton-pass age admission interrupted\n")
-        self.assertFalse(self.output.exists())
         private_paths = self.wrapper_marker.read_text(encoding="utf-8").splitlines()
+        diagnostic = self._signal_cleanup_diagnostic(
+            diagnostic_path,
+            outer={
+                "output_exists": self.output.exists(),
+                "private_paths_survived": any(
+                    Path(private_path).exists() for private_path in private_paths
+                ),
+                "status": process.returncode,
+                "stderr_failed": stderr == b"proton-pass age admission failed\n",
+                "stderr_interrupted": stderr
+                == b"proton-pass age admission interrupted\n",
+                "stdout_empty": stdout == b"",
+            },
+        )
+        self.assertEqual(process.returncode, 143, diagnostic)
+        self.assertEqual(stdout, b"", diagnostic)
+        self.assertEqual(
+            stderr, b"proton-pass age admission interrupted\n", diagnostic
+        )
+        self.assertFalse(self.output.exists(), diagnostic)
         for private_path in private_paths:
-            self.assertFalse(Path(private_path).exists())
+            self.assertFalse(Path(private_path).exists(), diagnostic)
         self.assertNotIn(self.key_bytes, stdout)
         self.assertNotIn(self.key_bytes, stderr)
 
@@ -1291,6 +1415,7 @@ pathlib.Path({os.fspath(self.wrapper_marker)!r}).write_text(
         for signum in termination_signals:
             with self.subTest(signal=signum.name):
                 child_state_path = self.root / f"child-state-{int(signum)}.json"
+                diagnostic_path = self.root / f"signal-cleanup-{int(signum)}.json"
                 self.output.unlink(missing_ok=True)
                 self.wrapper.write_text(
                     textwrap.dedent(
@@ -1338,8 +1463,7 @@ pathlib.Path({os.fspath(self.wrapper_marker)!r}).write_text(
                         "-S",
                         "-c",
                         supervisor,
-                        os.fspath(self.adapter),
-                        *self._command()[1:],
+                        *self._signal_cleanup_command(diagnostic_path),
                     ],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
@@ -1410,13 +1534,31 @@ pathlib.Path({os.fspath(self.wrapper_marker)!r}).write_text(
                     child_state, "task-owned child did not report signal state"
                 )
                 assert child_state is not None
-                self.assertEqual(
-                    set(child_state["blocked"]).intersection(
-                        termination_signal_numbers
-                    ),
-                    set(),
+                blocked_termination_signals = set(
+                    child_state["blocked"]
+                ).intersection(termination_signal_numbers)
+                ignored_termination_signal = any(child_state["ignored"].values())
+                diagnostic = self._signal_cleanup_diagnostic(
+                    diagnostic_path,
+                    outer={
+                        "adapter_group_survived": adapter_group_survived,
+                        "child_group": child_state["pgid"],
+                        "child_group_survived": child_group_survived,
+                        "output_exists": self.output.exists(),
+                        "private_root_survived": private_root_survived,
+                        "signal": int(signum),
+                        "signal_dispositions_clear": not ignored_termination_signal,
+                        "signal_mask_clear": not blocked_termination_signals,
+                        "status": observed_status,
+                        "stderr_failed": stderr
+                        == b"proton-pass age admission failed\n",
+                        "stderr_interrupted": stderr
+                        == b"proton-pass age admission interrupted\n",
+                        "stdout_empty": stdout == b"",
+                    },
                 )
-                self.assertFalse(any(child_state["ignored"].values()))
+                self.assertEqual(blocked_termination_signals, set(), diagnostic)
+                self.assertFalse(ignored_termination_signal, diagnostic)
                 self.assertEqual(
                     (observed_status, stdout, stderr),
                     (
@@ -1424,11 +1566,12 @@ pathlib.Path({os.fspath(self.wrapper_marker)!r}).write_text(
                         b"",
                         b"proton-pass age admission interrupted\n",
                     ),
+                    diagnostic,
                 )
-                self.assertFalse(adapter_group_survived)
-                self.assertFalse(child_group_survived)
-                self.assertFalse(private_root_survived)
-                self.assertFalse(self.output.exists())
+                self.assertFalse(adapter_group_survived, diagnostic)
+                self.assertFalse(child_group_survived, diagnostic)
+                self.assertFalse(private_root_survived, diagnostic)
+                self.assertFalse(self.output.exists(), diagnostic)
 
     def test_normal_child_with_resistant_descendant_is_retired_and_fails(
         self,
