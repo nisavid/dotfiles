@@ -570,9 +570,11 @@ class AgeAdmissionProviderFixtureTests(unittest.TestCase):
                 print("v1.3.1")
                 raise SystemExit(0)
             if name == "age-keygen" and arguments == ["-pq"]:
-                with open({os.fspath(marker)!r}, "w", encoding="ascii") as stream:
+                pending_marker = {os.fspath(marker.with_suffix('.pending'))!r}
+                with open(pending_marker, "w", encoding="ascii") as stream:
                     stream.write(str(os.getpid()))
                     stream.flush()
+                os.replace(pending_marker, {os.fspath(marker)!r})
                 time.sleep(60)
                 raise SystemExit(99)
             raise SystemExit(96)
