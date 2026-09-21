@@ -245,6 +245,29 @@ and consumer binding matches the canonical contract. It also rejects unexpected
 ambient credential exports and known legacy credential files. Failed validation
 or cleanup preserves the plaintext sources.
 
+## Claude MCP diagnostics
+
+Claude Code expands `${NAME}` in MCP server arguments from its own environment
+before it launches the server. The GitHub and Greptile consumer bindings pass
+`mcp-remote` an `Authorization` header built from a `${NAME}` placeholder, and
+Claude's environment does not carry those credential names, so Claude keeps the
+literal placeholder and lists the name under "Missing environment variables".
+`mcp-remote` then substitutes the value from its own environment after
+`secret-exec` injects the credential profile. The warning carries only variable
+names and confirms that Claude's own environment does not hold the credential.
+Do not export the credential into Claude's environment to silence it: Claude
+would then place the value in `mcp-remote`'s arguments.
+
+Claude also loads `.mcp.json` from the launch directory and each parent
+directory as project scope, so an unmanaged `~/.mcp.json` applies to every
+project under the home directory. Claude reports a same-name server with a
+different launch command as a scope conflict. A project server approved through
+`enabledMcpjsonServers` or `enableAllProjectMcpServers` also replaces the
+managed user-scope consumer binding. `claude mcp remove <name> -s project`
+edits only the current directory's `.mcp.json`, so run it from the directory
+that holds the file. Without `-s`, the command cannot see a parent directory's
+file and may remove the managed user-scope entry instead.
+
 ## Validation
 
 For each host:
