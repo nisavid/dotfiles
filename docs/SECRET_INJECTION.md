@@ -258,15 +258,18 @@ names and confirms that Claude's own environment does not hold the credential.
 Do not export the credential into Claude's environment to silence it: Claude
 would then place the value in `mcp-remote`'s arguments.
 
-Claude also loads `.mcp.json` from the launch directory and each parent
-directory as project scope, so an unmanaged `~/.mcp.json` applies to every
-project under the home directory. Claude reports a same-name server with a
-different launch command as a scope conflict. A project server approved through
-`enabledMcpjsonServers` or `enableAllProjectMcpServers` also replaces the
-managed user-scope consumer binding. `claude mcp remove <name> -s project`
-edits only the current directory's `.mcp.json`, so run it from the directory
-that holds the file. Without `-s`, the command cannot see a parent directory's
-file and may remove the managed user-scope entry instead.
+As of Claude Code 2.1.278, Claude also loads `.mcp.json` from the launch
+directory and each parent directory as project scope, so an unmanaged
+`~/.mcp.json` applies to every project under the home directory. Anthropic's
+MCP documentation describes only the project-root `.mcp.json`, so recheck this
+behavior after each Claude Code upgrade. Claude reports a same-name server with
+a different launch command as a scope conflict. A project server approved
+through `enabledMcpjsonServers` or `enableAllProjectMcpServers` also replaces
+the managed user-scope consumer binding. In that version,
+`claude mcp remove <name> -s project` edits only the current directory's
+`.mcp.json`, so run it from the directory that holds the file. Without `-s`,
+the command cannot see a parent directory's file and may remove the managed
+user-scope entry instead.
 
 ## Validation
 
