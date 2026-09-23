@@ -153,7 +153,7 @@ scoped_log() {
   fi
   probe_log
   print -r -- \
-    "systemd-run [--user] [--scope] [--quiet] [--collect] [--expand-environment=no] [--slice=builds.slice] [--] ${restore}[$bin/choom] [-n] [$adj] [--] [$bin/ninja] $bracketed_args"
+    "systemd-run [--user] [--scope] [--quiet] [--collect] [--expand-environment=no] [--property=OOMPolicy=continue] [--slice=builds.slice] [--] ${restore}[$bin/choom] [-n] [$adj] [--] [$bin/ninja] $bracketed_args"
   print -r -- 'systemd-run LD_PRELOAD unset'
   print -r -- "choom [-n] [$adj] [--] [$bin/ninja] $bracketed_args"
   print -r -- "ninja $bracketed_args"

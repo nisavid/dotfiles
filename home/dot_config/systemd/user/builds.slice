@@ -12,6 +12,7 @@
 # indefinitely instead of failing it.
 #
 # Inspect:        systemctl --user status builds.slice
+# Cap kills:      journalctl --user -g 'OOM killer'
 # Temporary cap:  systemctl --user set-property --runtime builds.slice MemoryMax=16G
 # Undo that:      systemctl --user revert builds.slice
 
