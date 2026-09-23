@@ -12,8 +12,8 @@
 # The cap leaves headroom for GPU (GTT) memory held by local inference servers,
 # which no cgroup accounts for.
 #
-# No MemoryHigh: with swap disabled, throttling at MemoryHigh stalls a build
-# indefinitely instead of failing it.
+# No MemoryHigh: with swap disabled, throttling at MemoryHigh slows a build to a
+# crawl instead of failing it.
 #
 # Inspect:        systemctl --user status builds.slice
 # Cap kills:      journalctl --user -g 'OOM killer'
