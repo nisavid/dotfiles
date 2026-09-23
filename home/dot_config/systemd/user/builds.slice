@@ -1,0 +1,23 @@
+# Memory-capped slice for agent-launched and makepkg builds.
+#
+# ~/.local/bin/ninja runs each Ninja build in a transient scope under this
+# slice. A build that outgrows MemoryMax is OOM-killed here instead of pushing
+# the host into a global OOM, which on 2026-09-23 killed the Claude Desktop
+# renderer and, through the app scope's OOMPolicy, every Claude thread.
+#
+# The cap leaves headroom for GPU (GTT) memory held by local inference servers,
+# which no cgroup accounts for.
+#
+# No MemoryHigh: with swap disabled, throttling at MemoryHigh stalls a build
+# indefinitely instead of failing it.
+#
+# Inspect:        systemctl --user status builds.slice
+# Temporary cap:  systemctl --user set-property --runtime builds.slice MemoryMax=16G
+# Undo that:      systemctl --user revert builds.slice
+
+[Unit]
+Description=Memory-capped slice for builds
+
+[Slice]
+MemoryMax=32G
+MemorySwapMax=0

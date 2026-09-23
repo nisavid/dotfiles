@@ -1,0 +1,89 @@
+#!/bin/sh
+# Run the system Ninja inside the memory-capped builds.slice.
+#
+# Each Ninja build (CMake, Meson, makepkg, agents) runs in its own transient
+# systemd user scope under builds.slice (~/.config/systemd/user/builds.slice).
+# A build that outgrows the slice's MemoryMax is OOM-killed there instead of
+# starting a host-wide OOM. choom raises the build's OOM score to at least 500,
+# so in a host-wide OOM the kernel kills compilers before desktop app processes
+# such as Electron renderers (300).
+#
+# Every path ends in exec, so Ninja keeps this process's PID, stdio, signals,
+# exit status, and environment. A Ninja that already runs inside builds.slice,
+# such as one a build step starts, stays in the outer build's scope. Without a
+# reachable systemd user manager, systemd-run, or choom, the shim warns once
+# and runs Ninja without the cap.
+
+set -eu
+
+ninja=/usr/bin/ninja
+systemd_run=/usr/bin/systemd-run
+choom=/usr/bin/choom
+env=/usr/bin/env
+slice=builds.slice
+min_oom_score_adj=500
+self_cgroup=/proc/self/cgroup
+self_oom_score_adj=/proc/self/oom_score_adj
+
+in_slice() {
+  [ -r "$self_cgroup" ] || return 1
+  while IFS= read -r line; do
+    case $line in
+      0::*/"$slice"/*) return 0 ;;
+    esac
+  done <"$self_cgroup"
+  return 1
+}
+
+user_manager_reachable() {
+  # test -O keeps real root away from another user's manager. POSIX leaves it
+  # undefined, but the Linux sh implementations (bash, dash, BusyBox) have it.
+  # shellcheck disable=SC3067
+  [ -n "${XDG_RUNTIME_DIR-}" ] && [ -O "$XDG_RUNTIME_DIR" ] || return 1
+  [ -S "$XDG_RUNTIME_DIR/systemd/private" ] || [ -S "$XDG_RUNTIME_DIR/bus" ]
+}
+
+main() {
+  if in_slice; then
+    exec "$ninja" "$@"
+  fi
+
+  reason=
+  if [ ! -x "$systemd_run" ]; then
+    reason="$systemd_run is unavailable"
+  elif [ ! -x "$choom" ]; then
+    reason="$choom is unavailable"
+  elif ! user_manager_reachable; then
+    reason='the systemd user manager is unreachable'
+  fi
+  if [ -n "$reason" ]; then
+    printf 'ninja: warning: %s; running %s without the %s memory cap\n' \
+      "$reason" "$ninja" "$slice" >&2
+    exec "$ninja" "$@"
+  fi
+
+  # Raise the OOM score, never lower it: the caller may already have marked
+  # this process as more expendable.
+  oom_score_adj=$min_oom_score_adj
+  current=
+  read -r current 2>/dev/null <"$self_oom_score_adj" || :
+  case ${current#-} in
+    '' | *[!0-9]*) ;;
+    *) [ "$current" -le "$oom_score_adj" ] || oom_score_adj=$current ;;
+  esac
+
+  set -- "$choom" -n "$oom_score_adj" -- "$ninja" "$@"
+  if [ -n "${LD_PRELOAD+set}" ]; then
+    # Preloaded libraries such as fakeroot's fake the caller's UID, and the
+    # user manager then refuses systemd-run. Start the scope without them and
+    # restore LD_PRELOAD for choom and Ninja.
+    set -- "$env" "LD_PRELOAD=$LD_PRELOAD" "$@"
+    unset LD_PRELOAD
+  fi
+  # Without --expand-environment=no, systemd-run expands "$VAR" and "$$" in
+  # Ninja's arguments.
+  exec "$systemd_run" --user --scope --quiet --collect --expand-environment=no \
+    --slice="$slice" -- "$@"
+}
+
+main "$@"
