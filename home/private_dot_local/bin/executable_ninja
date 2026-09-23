@@ -10,14 +10,16 @@
 #
 # Every path ends in exec, so Ninja keeps this process's PID, stdio, signals,
 # exit status, and environment. A Ninja that already runs inside builds.slice,
-# such as one a build step starts, stays in the outer build's scope. Without a
-# reachable systemd user manager, systemd-run, or choom, the shim warns once
-# and runs Ninja without the cap.
+# such as one a build step starts, stays in the outer build's scope. When
+# systemd-run, systemctl, or choom is missing, the systemd user manager does not
+# answer, or builds.slice has no unit file, the shim warns once and runs Ninja
+# without the cap.
 
 set -eu
 
 ninja=/usr/bin/ninja
 systemd_run=/usr/bin/systemd-run
+systemctl=/usr/bin/systemctl
 choom=/usr/bin/choom
 env=/usr/bin/env
 slice=builds.slice
@@ -43,6 +45,17 @@ user_manager_reachable() {
   [ -S "$XDG_RUNTIME_DIR/systemd/private" ] || [ -S "$XDG_RUNTIME_DIR/bus" ]
 }
 
+# Print the slice's unit file path, or nothing when it has none, or fail when
+# the user manager does not answer. The sockets can exist while the manager
+# refuses the caller, as inside a PID namespace (bwrap --unshare-pid), and
+# systemd-run would then fail after the exec, too late to fall back. A slice
+# without a unit file would run the build in an uncapped stub slice. The query
+# drops LD_PRELOAD for the reason given at the systemd-run call.
+query_slice_fragment() (
+  unset LD_PRELOAD
+  "$systemctl" --user show -P FragmentPath "$slice" 2>/dev/null
+)
+
 main() {
   if in_slice; then
     exec "$ninja" "$@"
@@ -51,10 +64,16 @@ main() {
   reason=
   if [ ! -x "$systemd_run" ]; then
     reason="$systemd_run is unavailable"
+  elif [ ! -x "$systemctl" ]; then
+    reason="$systemctl is unavailable"
   elif [ ! -x "$choom" ]; then
     reason="$choom is unavailable"
   elif ! user_manager_reachable; then
     reason='the systemd user manager is unreachable'
+  elif ! fragment=$(query_slice_fragment); then
+    reason='the systemd user manager is unreachable'
+  elif [ -z "$fragment" ]; then
+    reason="$slice has no unit file"
   fi
   if [ -n "$reason" ]; then
     printf 'ninja: warning: %s; running %s without the %s memory cap\n' \

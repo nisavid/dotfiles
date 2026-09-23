@@ -1,5 +1,6 @@
 #!/usr/bin/env zsh
-# Exercise the ninja shim against fake systemd-run, choom, and ninja binaries.
+# Exercise the ninja shim against fake systemd-run, systemctl, choom, and ninja
+# binaries.
 emulate -L zsh
 setopt errexit nounset pipefail
 
@@ -27,11 +28,12 @@ mkdir -m 700 -p "$bin" "$runtime/systemd"
 sed \
   -e "s#^ninja=/usr/bin/ninja\$#ninja=$bin/ninja#" \
   -e "s#^systemd_run=/usr/bin/systemd-run\$#systemd_run=$bin/systemd-run#" \
+  -e "s#^systemctl=/usr/bin/systemctl\$#systemctl=$bin/systemctl#" \
   -e "s#^choom=/usr/bin/choom\$#choom=$bin/choom#" \
   -e "s#^self_cgroup=/proc/self/cgroup\$#self_cgroup=$cgroup#" \
   -e "s#^self_oom_score_adj=/proc/self/oom_score_adj\$#self_oom_score_adj=$oom#" \
   "$shim_source" >"$shim"
-for fixture in "$bin/ninja" "$bin/systemd-run" "$bin/choom" "$cgroup" "$oom"; do
+for fixture in "$bin/ninja" "$bin/systemd-run" "$bin/systemctl" "$bin/choom" "$cgroup" "$oom"; do
   grep -Fq -- "=$fixture" "$shim" || fail "shim fixture path was not substituted: $fixture"
 done
 chmod 700 "$shim"
@@ -72,6 +74,26 @@ while [ "$#" -gt 0 ]; do
 done
 exit 99
 EOF
+# Answers the shim's FragmentPath query like the user manager, or fails like
+# systemctl does when the manager refuses the caller.
+cat >"$bin/systemctl" <<'EOF'
+#!/bin/sh
+{
+  printf 'systemctl'
+  printf ' [%s]' "$@"
+  printf '\n'
+  if [ -n "${LD_PRELOAD+set}" ]; then
+    printf 'systemctl LD_PRELOAD set\n'
+  else
+    printf 'systemctl LD_PRELOAD unset\n'
+  fi
+} >>"$FAKE_LOG"
+if [ -n "${FAKE_SYSTEMCTL_STATUS-}" ]; then
+  printf 'Failed to connect to user scope bus via local transport: No data available\n' >&2
+  exit "$FAKE_SYSTEMCTL_STATUS"
+fi
+printf '%s\n' "${FAKE_FRAGMENT-/fixture/builds.slice}"
+EOF
 cat >"$bin/choom" <<'EOF'
 #!/bin/sh
 {
@@ -83,7 +105,7 @@ cat >"$bin/choom" <<'EOF'
 shift 3
 exec "$@"
 EOF
-chmod 700 "$bin/ninja" "$bin/systemd-run" "$bin/choom"
+chmod 700 "$bin/ninja" "$bin/systemd-run" "$bin/systemctl" "$bin/choom"
 
 # Bind relative to the directory: macOS limits socket paths to 104 bytes.
 python3 -c '
@@ -116,6 +138,12 @@ expect_log() {
   }
 }
 
+# The shim asks the user manager for the slice's unit file without LD_PRELOAD.
+probe_log() {
+  print -r -- 'systemctl [--user] [show] [-P] [FragmentPath] [builds.slice]'
+  print -r -- 'systemctl LD_PRELOAD unset'
+}
+
 # Expected log of a scoped run. A second argument is the caller's LD_PRELOAD.
 scoped_log() {
   local adj=$1 restore='' ninja_preload='ninja LD_PRELOAD unset'
@@ -123,6 +151,7 @@ scoped_log() {
     restore="[/usr/bin/env] [LD_PRELOAD=$2] "
     ninja_preload="ninja LD_PRELOAD=[$2]"
   fi
+  probe_log
   print -r -- \
     "systemd-run [--user] [--scope] [--quiet] [--collect] [--expand-environment=no] [--slice=builds.slice] [--] ${restore}[$bin/choom] [-n] [$adj] [--] [$bin/ninja] $bracketed_args"
   print -r -- 'systemd-run LD_PRELOAD unset'
@@ -132,9 +161,14 @@ scoped_log() {
   print -r -- 'ninja MARKER=[kept]'
 }
 
+# Expected log of Ninja run directly. An argument is the caller's LD_PRELOAD.
 direct_log() {
   print -r -- "ninja $bracketed_args"
-  print -r -- 'ninja LD_PRELOAD unset'
+  if (( $# )); then
+    print -r -- "ninja LD_PRELOAD=[$1]"
+  else
+    print -r -- 'ninja LD_PRELOAD unset'
+  fi
   print -r -- 'ninja MARKER=[kept]'
 }
 
@@ -181,28 +215,40 @@ expect_log "$(direct_log)" 'in-slice run execs Ninja directly'
 [[ ! -s $err ]] || fail "in-slice run wrote to stderr: $(<"$err")"
 print -r -- "$outside_slice" >"$cgroup"
 
-# Fallbacks warn exactly once, run Ninja directly, and keep its status.
+# Fallbacks warn exactly once, run Ninja directly, and keep its status. The
+# third argument is the expected log.
 expect_fallback() {
-  local description=$1 reason=$2
-  shift 2
+  local description=$1 reason=$2 expected=$3
+  shift 3
   local rc=0
   run_shim FAKE_NINJA_STATUS=5 "$@" || rc=$?
   (( rc == 5 )) || fail "$description returned $rc instead of Ninja's 5"
-  expect_log "$(direct_log)" "$description runs Ninja directly"
+  expect_log "$expected" "$description runs Ninja directly"
   [[ $(wc -l <"$err") -eq 1 ]] || fail "$description did not warn exactly once: $(<"$err")"
   grep -Fq -- "ninja: warning: $reason; running $bin/ninja without the builds.slice memory cap" "$err" ||
     fail "$description warning is wrong: $(<"$err")"
 }
 
-expect_fallback 'missing XDG_RUNTIME_DIR' 'the systemd user manager is unreachable'
+unreachable='the systemd user manager is unreachable'
+expect_fallback 'missing XDG_RUNTIME_DIR' "$unreachable" "$(direct_log)"
 mkdir -m 700 "$test_root/empty-runtime"
-expect_fallback 'runtime directory without a manager socket' \
-  'the systemd user manager is unreachable' XDG_RUNTIME_DIR="$test_root/empty-runtime"
-chmod -x "$bin/systemd-run"
-expect_fallback 'missing systemd-run' "$bin/systemd-run is unavailable" XDG_RUNTIME_DIR="$runtime"
-chmod +x "$bin/systemd-run"
-chmod -x "$bin/choom"
-expect_fallback 'missing choom' "$bin/choom is unavailable" XDG_RUNTIME_DIR="$runtime"
-chmod +x "$bin/choom"
+expect_fallback 'runtime directory without a manager socket' "$unreachable" "$(direct_log)" \
+  XDG_RUNTIME_DIR="$test_root/empty-runtime"
+# The sockets exist but the manager refuses the caller, as in a PID namespace.
+expect_fallback 'manager that does not answer' "$unreachable" "$(probe_log; direct_log)" \
+  XDG_RUNTIME_DIR="$runtime" FAKE_SYSTEMCTL_STATUS=1
+# The query drops LD_PRELOAD only for itself. An empty value keeps the dynamic
+# loader quiet and still tells "set" from "unset".
+expect_fallback 'manager that does not answer under LD_PRELOAD' "$unreachable" \
+  "$(probe_log; direct_log '')" \
+  XDG_RUNTIME_DIR="$runtime" FAKE_SYSTEMCTL_STATUS=1 LD_PRELOAD=
+expect_fallback 'builds.slice without a unit file' 'builds.slice has no unit file' \
+  "$(probe_log; direct_log)" XDG_RUNTIME_DIR="$runtime" FAKE_FRAGMENT=
+for tool in systemd-run systemctl choom; do
+  chmod -x "$bin/$tool"
+  expect_fallback "missing $tool" "$bin/$tool is unavailable" "$(direct_log)" \
+    XDG_RUNTIME_DIR="$runtime"
+  chmod +x "$bin/$tool"
+done
 
 print -r -- 'build memory guards: PASS'
