@@ -1,12 +1,19 @@
 #!/bin/sh
 # Run the system Ninja inside the memory-capped builds.slice.
 #
-# Each Ninja build (CMake, Meson, makepkg, agents) runs in its own transient
+# Every Ninja run that finds ninja through PATH runs in its own transient
 # systemd user scope under builds.slice (~/.config/systemd/user/builds.slice).
-# A build that outgrows the slice's MemoryMax is OOM-killed there instead of
-# starting a host-wide OOM. choom raises the build's OOM score to at least 500,
-# so in a host-wide OOM the kernel kills compilers before desktop app processes
-# such as Electron renderers (300).
+# That covers interactive, IDE, agent, CMake, Meson, and makepkg builds, and
+# CMake's try_compile checks, and all of them share the slice's one MemoryMax.
+# A build that outgrows it is OOM-killed there instead of starting a host-wide
+# OOM. choom raises the build's OOM score to at least 500, so in a host-wide
+# OOM the kernel kills compilers before desktop app processes such as Electron
+# renderers (300).
+#
+# CMake stores the Ninja path when it first configures a build tree. A tree
+# configured before this shim was on PATH keeps running /usr/bin/ninja without
+# the cap, even after a reconfigure. Re-point such a tree once:
+#   cmake -DCMAKE_MAKE_PROGRAM="$HOME/.local/bin/ninja" <builddir>
 #
 # A cap kill fails the build step it hits, and Ninja stops as it does for any
 # failed step. To confirm that the cap was the cause:
@@ -19,6 +26,9 @@
 # systemd-run, systemctl, or choom is missing, the systemd user manager does not
 # answer, or builds.slice has no unit file, the shim warns once and runs Ninja
 # without the cap.
+#
+# To skip the cap for one build, run /usr/bin/ninja, or configure CMake with
+# -DCMAKE_MAKE_PROGRAM=/usr/bin/ninja. builds.slice says how to disable it.
 
 set -eu
 
