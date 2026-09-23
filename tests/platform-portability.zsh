@@ -322,6 +322,11 @@ for pattern in $darwin_only_patterns; do
     fail "Linux unexpectedly ignores $pattern"
 done
 
+# The ninja shim deploys only on Linux, but its behavior test runs it against
+# fake systemd and Ninja binaries, so it runs on every platform.
+zsh -f "$repo_root/tests/build-memory-guards.zsh" ||
+  fail 'ninja shim behavior test failed'
+
 gui_source_inventory=$(
   find \
     "$repo_root/home/private_Library" \

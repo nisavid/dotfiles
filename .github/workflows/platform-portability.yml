@@ -141,14 +141,12 @@ jobs:
         run: |
           set -euo pipefail
           bash -n \
-            home/private_dot_local/bin/executable_ninja \
             home/run_after_restore-acl.sh \
             home/run_before_save-acl.sh \
             scripts/private-skill-transaction \
             scripts/private-skill-transaction.d/*.bash
           zsh -n \
             home/run_after_sync-global-agent-skills-to-claude.zsh \
-            tests/build-memory-guards.zsh \
             tests/claude-skill-sync.zsh \
             tests/container-runtime-bindings.zsh \
             tests/global-agents-policy.zsh \
@@ -174,7 +172,6 @@ jobs:
           set -euo pipefail
           zsh -f tests/claude-skill-sync.zsh
           zsh -f tests/platform-portability.zsh
-          zsh -f tests/build-memory-guards.zsh
           zsh -f tests/container-runtime-bindings.zsh
           zsh -f tests/privacy-scan.zsh
           python3 scripts/privacy-scan --root . --require-age-manifest
