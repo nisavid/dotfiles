@@ -65,6 +65,8 @@ Prefer squash merging when several merge methods are available. Use rebase mergi
 
 Read operator-owned and work-contract checklists before planning or editing. Change a checklist only when the operator owns the checklist and the active task authorizes changing the issue, pull request, or comment. Update each authorized item when its work is complete. Bot controls, reviewer-owned lists, and unrelated checklists are not agent work unless the operator adds them to the task.
 
+{{ includeTemplate "ticket-tracker-preflight.tmpl" . | trim }}
+
 ## Delegation
 
 Use native subagents when the expected savings in time or context clearly exceed coordination cost. Strong candidates include independent investigation, disjoint implementation, browser or computer-use QA, long waits, and isolated worktree execution. Use the least-permissive agent shape, keep leadership and integration local, and review delegated output.
