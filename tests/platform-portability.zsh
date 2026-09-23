@@ -313,7 +313,10 @@ done
 typeset -a darwin_only_patterns=(
   '.config/environment.d/98-proton-pass.conf'
   '.config/systemd'
+  '.local/bin/cmake'
+  '.local/bin/makepkg'
   '.local/bin/ninja'
+  '.local/lib/builds-slice'
 )
 
 for pattern in $darwin_only_patterns; do
@@ -322,10 +325,10 @@ for pattern in $darwin_only_patterns; do
     fail "Linux unexpectedly ignores $pattern"
 done
 
-# The ninja shim deploys only on Linux, but its behavior test runs it against
-# fake systemd and Ninja binaries, so it runs on every platform.
+# The build-tool shims deploy only on Linux, but their behavior test runs them
+# against fake systemd and build-tool binaries, so it runs on every platform.
 zsh -f "$repo_root/tests/build-memory-guards.zsh" ||
-  fail 'ninja shim behavior test failed'
+  fail 'build-tool shim behavior test failed'
 
 gui_source_inventory=$(
   find \

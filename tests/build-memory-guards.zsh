@@ -1,11 +1,12 @@
 #!/usr/bin/env zsh
-# Exercise the ninja shim against fake systemd-run, systemctl, choom, and ninja
-# binaries.
+# Exercise the build-tool shims against fake systemd-run, systemctl, choom, and
+# build-tool binaries.
 emulate -L zsh
 setopt errexit nounset pipefail
 
 repo_root=${0:A:h:h}
-shim_source=$repo_root/home/private_dot_local/bin/executable_ninja
+source_home=$repo_root/home/private_dot_local
+dispatcher_source=$source_home/lib/builds-slice/executable_builds-slice-command
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/build-memory-guards.XXXXXX")
 trap 'rm -rf -- "$test_root"' EXIT HUP INT TERM
 
@@ -14,7 +15,7 @@ fail() {
   return 1
 }
 
-sh -n "$shim_source" || fail 'ninja shim has a syntax error'
+sh -n "$dispatcher_source" || fail 'build-tool dispatcher has a syntax error'
 
 bin=$test_root/bin
 runtime=$test_root/runtime
@@ -22,37 +23,51 @@ log=$test_root/log
 err=$test_root/err
 cgroup=$test_root/cgroup
 oom=$test_root/oom_score_adj
-shim=$test_root/ninja
-mkdir -m 700 -p "$bin" "$runtime/systemd"
+# Mirror ~/.local so the symlinks resolve through their deployed relative targets.
+shims=$test_root/local/bin
+dispatcher=$test_root/local/lib/builds-slice/builds-slice-command
+mkdir -m 700 -p "$bin" "$runtime/systemd" "$shims" "${dispatcher:h}"
 
 sed \
-  -e "s#^ninja=/usr/bin/ninja\$#ninja=$bin/ninja#" \
-  -e "s#^systemd_run=/usr/bin/systemd-run\$#systemd_run=$bin/systemd-run#" \
-  -e "s#^systemctl=/usr/bin/systemctl\$#systemctl=$bin/systemctl#" \
-  -e "s#^choom=/usr/bin/choom\$#choom=$bin/choom#" \
+  -e "s#^usr_bin=/usr/bin\$#usr_bin=$bin#" \
   -e "s#^self_cgroup=/proc/self/cgroup\$#self_cgroup=$cgroup#" \
   -e "s#^self_oom_score_adj=/proc/self/oom_score_adj\$#self_oom_score_adj=$oom#" \
-  "$shim_source" >"$shim"
-for fixture in "$bin/ninja" "$bin/systemd-run" "$bin/systemctl" "$bin/choom" "$cgroup" "$oom"; do
-  grep -Fq -- "=$fixture" "$shim" || fail "shim fixture path was not substituted: $fixture"
+  "$dispatcher_source" >"$dispatcher"
+for line in "usr_bin=$bin" "self_cgroup=$cgroup" "self_oom_score_adj=$oom"; do
+  grep -Fqx -- "$line" "$dispatcher" ||
+    fail "dispatcher fixture path was not substituted: $line"
 done
-chmod 700 "$shim"
+chmod 700 "$dispatcher"
 
-cat >"$bin/ninja" <<'EOF'
+typeset -a tool_names=(cmake makepkg ninja)
+for tool_name in $tool_names; do
+  ln -s -- "$(<"$source_home/bin/symlink_$tool_name")" "$shims/$tool_name"
+  [[ $shims/$tool_name -ef $dispatcher ]] ||
+    fail "the $tool_name symlink does not resolve to the dispatcher"
+done
+
+# Each fake build tool logs the name it was run as, its arguments, and the
+# parts of its environment the shims must preserve.
+cat >"$bin/fake-tool" <<'EOF'
 #!/bin/sh
+name=${0##*/}
 {
-  printf 'ninja'
+  printf '%s' "$name"
   printf ' [%s]' "$@"
   printf '\n'
   if [ -n "${LD_PRELOAD+set}" ]; then
-    printf 'ninja LD_PRELOAD=[%s]\n' "$LD_PRELOAD"
+    printf '%s LD_PRELOAD=[%s]\n' "$name" "$LD_PRELOAD"
   else
-    printf 'ninja LD_PRELOAD unset\n'
+    printf '%s LD_PRELOAD unset\n' "$name"
   fi
-  printf 'ninja MARKER=[%s]\n' "${MARKER-}"
+  printf '%s MARKER=[%s]\n' "$name" "${MARKER-}"
 } >>"$FAKE_LOG"
-exit "${FAKE_NINJA_STATUS:-0}"
+exit "${FAKE_TOOL_STATUS:-0}"
 EOF
+for tool_name in $tool_names; do
+  cp -- "$bin/fake-tool" "$bin/$tool_name"
+done
+ln -s -- "${commands[env]}" "$bin/env"
 cat >"$bin/systemd-run" <<'EOF'
 #!/bin/sh
 {
@@ -74,8 +89,8 @@ while [ "$#" -gt 0 ]; do
 done
 exit 99
 EOF
-# Answers the shim's FragmentPath query like the user manager, or fails like
-# systemctl does when the manager refuses the caller.
+# Answers the dispatcher's FragmentPath query like the user manager, or fails
+# like systemctl does when the manager refuses the caller.
 cat >"$bin/systemctl" <<'EOF'
 #!/bin/sh
 {
@@ -105,7 +120,7 @@ cat >"$bin/choom" <<'EOF'
 shift 3
 exec "$@"
 EOF
-chmod 700 "$bin/ninja" "$bin/systemd-run" "$bin/systemctl" "$bin/choom"
+chmod 700 "$bin"/*(.)
 
 # Bind relative to the directory: macOS limits socket paths to 104 bytes.
 python3 -c '
@@ -118,15 +133,17 @@ socket.socket(socket.AF_UNIX).bind("private")
 outside_slice='0::/user.slice/manager/app.slice/app-fixture.scope'
 inside_slice='0::/user.slice/manager/builds.slice/run-r1.scope'
 near_miss='0::/user.slice/manager/app.slice/mybuilds.slice/run-r1.scope'
-ninja_args=(-C 'dir with space' 'target$HOME' '${MARKER}' '$$' '%h')
+tool_args=(-C 'dir with space' 'target$HOME' '${MARKER}' '$$' '%h')
 bracketed_args='[-C] [dir with space] [target$HOME] [${MARKER}] [$$] [%h]'
 
-# Run the shim with a minimal environment. Callers pass extra NAME=value pairs.
+# Run the shim named by $tool_name with a minimal environment. Callers pass
+# extra NAME=value pairs.
+tool_name=ninja
 run_shim() {
   local rc=0
   : >"$log"
   env -i PATH=/usr/bin:/bin FAKE_LOG="$log" MARKER=kept "$@" \
-    "$shim" "${ninja_args[@]}" 2>"$err" || rc=$?
+    "$shims/$tool_name" "${tool_args[@]}" 2>"$err" || rc=$?
   return $rc
 }
 
@@ -138,7 +155,8 @@ expect_log() {
   }
 }
 
-# The shim asks the user manager for the slice's unit file without LD_PRELOAD.
+# The dispatcher asks the user manager for the slice's unit file without
+# LD_PRELOAD.
 probe_log() {
   print -r -- 'systemctl [--user] [show] [-P] [FragmentPath] [builds.slice]'
   print -r -- 'systemctl LD_PRELOAD unset'
@@ -146,41 +164,73 @@ probe_log() {
 
 # Expected log of a scoped run. A second argument is the caller's LD_PRELOAD.
 scoped_log() {
-  local adj=$1 restore='' ninja_preload='ninja LD_PRELOAD unset'
+  local adj=$1 restore='' tool_preload="$tool_name LD_PRELOAD unset"
   if (( $# > 1 )); then
-    restore="[/usr/bin/env] [LD_PRELOAD=$2] "
-    ninja_preload="ninja LD_PRELOAD=[$2]"
+    restore="[$bin/env] [LD_PRELOAD=$2] "
+    tool_preload="$tool_name LD_PRELOAD=[$2]"
   fi
   probe_log
   print -r -- \
-    "systemd-run [--user] [--scope] [--quiet] [--collect] [--expand-environment=no] [--property=OOMPolicy=continue] [--slice=builds.slice] [--] ${restore}[$bin/choom] [-n] [$adj] [--] [$bin/ninja] $bracketed_args"
+    "systemd-run [--user] [--scope] [--quiet] [--collect] [--expand-environment=no] [--property=OOMPolicy=continue] [--slice=builds.slice] [--] ${restore}[$bin/choom] [-n] [$adj] [--] [$bin/$tool_name] $bracketed_args"
   print -r -- 'systemd-run LD_PRELOAD unset'
-  print -r -- "choom [-n] [$adj] [--] [$bin/ninja] $bracketed_args"
-  print -r -- "ninja $bracketed_args"
-  print -r -- "$ninja_preload"
-  print -r -- 'ninja MARKER=[kept]'
+  print -r -- "choom [-n] [$adj] [--] [$bin/$tool_name] $bracketed_args"
+  print -r -- "$tool_name $bracketed_args"
+  print -r -- "$tool_preload"
+  print -r -- "$tool_name MARKER=[kept]"
 }
 
-# Expected log of Ninja run directly. An argument is the caller's LD_PRELOAD.
+# Expected log of the tool run directly. An argument is the caller's LD_PRELOAD.
 direct_log() {
-  print -r -- "ninja $bracketed_args"
+  print -r -- "$tool_name $bracketed_args"
   if (( $# )); then
-    print -r -- "ninja LD_PRELOAD=[$1]"
+    print -r -- "$tool_name LD_PRELOAD=[$1]"
   else
-    print -r -- 'ninja LD_PRELOAD unset'
+    print -r -- "$tool_name LD_PRELOAD unset"
   fi
-  print -r -- 'ninja MARKER=[kept]'
+  print -r -- "$tool_name MARKER=[kept]"
 }
 
-# Scoped run: exact argv, literal "$" and "%", environment, and status.
+# Fallbacks warn exactly once, run the tool directly, and keep its status. The
+# third argument is the expected log.
+expect_fallback() {
+  local description=$1 reason=$2 expected=$3
+  shift 3
+  local rc=0
+  run_shim FAKE_TOOL_STATUS=5 "$@" || rc=$?
+  (( rc == 5 )) || fail "$description returned $rc instead of the tool's 5"
+  expect_log "$expected" "$description runs $tool_name directly"
+  [[ $(wc -l <"$err") -eq 1 ]] || fail "$description did not warn exactly once: $(<"$err")"
+  grep -Fq -- "$tool_name: warning: $reason; running $bin/$tool_name without the builds.slice memory cap" "$err" ||
+    fail "$description warning is wrong: $(<"$err")"
+}
+
+# Refusals run nothing, print one line, and return the expected status.
+expect_refusal() {
+  local description=$1 expected_rc=$2 message=$3
+  shift 3
+  local rc=0
+  : >"$log"
+  env -i PATH=/usr/bin:/bin FAKE_LOG="$log" XDG_RUNTIME_DIR="$runtime" \
+    "$@" "${tool_args[@]}" 2>"$err" || rc=$?
+  (( rc == expected_rc )) || fail "$description returned $rc instead of $expected_rc"
+  [[ ! -s $log ]] || fail "$description ran something: $(<"$log")"
+  [[ $(<"$err") == "$message" ]] || fail "$description message is wrong: $(<"$err")"
+}
+
+unreachable='the systemd user manager is unreachable'
 print -r -- "$outside_slice" >"$cgroup"
 print -r -- 200 >"$oom"
+
+# The full matrix runs through the ninja symlink.
+tool_name=ninja
+
+# Scoped run: exact argv, literal "$" and "%", environment, and status.
 run_shim XDG_RUNTIME_DIR="$runtime" || fail 'scoped run failed'
 expect_log "$(scoped_log 500)" 'scoped run passes exact arguments through systemd-run and choom'
 [[ ! -s $err ]] || fail "scoped run wrote to stderr: $(<"$err")"
 
 rc=0
-run_shim XDG_RUNTIME_DIR="$runtime" FAKE_NINJA_STATUS=3 || rc=$?
+run_shim XDG_RUNTIME_DIR="$runtime" FAKE_TOOL_STATUS=3 || rc=$?
 (( rc == 3 )) || fail "scoped run returned $rc instead of Ninja's 3"
 
 # A process under a path merely ending in "builds.slice" is not in the slice.
@@ -215,21 +265,6 @@ expect_log "$(direct_log)" 'in-slice run execs Ninja directly'
 [[ ! -s $err ]] || fail "in-slice run wrote to stderr: $(<"$err")"
 print -r -- "$outside_slice" >"$cgroup"
 
-# Fallbacks warn exactly once, run Ninja directly, and keep its status. The
-# third argument is the expected log.
-expect_fallback() {
-  local description=$1 reason=$2 expected=$3
-  shift 3
-  local rc=0
-  run_shim FAKE_NINJA_STATUS=5 "$@" || rc=$?
-  (( rc == 5 )) || fail "$description returned $rc instead of Ninja's 5"
-  expect_log "$expected" "$description runs Ninja directly"
-  [[ $(wc -l <"$err") -eq 1 ]] || fail "$description did not warn exactly once: $(<"$err")"
-  grep -Fq -- "ninja: warning: $reason; running $bin/ninja without the builds.slice memory cap" "$err" ||
-    fail "$description warning is wrong: $(<"$err")"
-}
-
-unreachable='the systemd user manager is unreachable'
 expect_fallback 'missing XDG_RUNTIME_DIR' "$unreachable" "$(direct_log)"
 mkdir -m 700 "$test_root/empty-runtime"
 expect_fallback 'runtime directory without a manager socket' "$unreachable" "$(direct_log)" \
@@ -250,5 +285,33 @@ for tool in systemd-run systemctl choom; do
     XDG_RUNTIME_DIR="$runtime"
   chmod +x "$bin/$tool"
 done
+
+# The cmake and makepkg symlinks run their own tools through the same paths.
+for tool_name in cmake makepkg; do
+  run_shim XDG_RUNTIME_DIR="$runtime" || fail "scoped $tool_name run failed"
+  expect_log "$(scoped_log 500)" "scoped $tool_name run passes exact arguments"
+  [[ ! -s $err ]] || fail "scoped $tool_name run wrote to stderr: $(<"$err")"
+
+  print -r -- "$inside_slice" >"$cgroup"
+  run_shim XDG_RUNTIME_DIR="$runtime" || fail "in-slice $tool_name run failed"
+  expect_log "$(direct_log)" "in-slice $tool_name run execs the tool directly"
+  print -r -- "$outside_slice" >"$cgroup"
+
+  expect_fallback "$tool_name with missing XDG_RUNTIME_DIR" "$unreachable" "$(direct_log)"
+
+  # A missing tool fails like a missing command, before any systemd query.
+  chmod -x "$bin/$tool_name"
+  expect_refusal "$tool_name without its tool" 127 \
+    "$tool_name: $bin/$tool_name is not installed" "$shims/$tool_name"
+  chmod +x "$bin/$tool_name"
+done
+
+# The dispatcher refuses its own name and names it has no tool for.
+ln -s -- ../lib/builds-slice/builds-slice-command "$shims/make"
+expect_refusal 'a make symlink' 2 \
+  'make: run this through a cmake, makepkg, or ninja symlink' "$shims/make"
+expect_refusal 'the dispatcher run by its own name' 2 \
+  'builds-slice-command: run this through a cmake, makepkg, or ninja symlink' \
+  "$dispatcher"
 
 print -r -- 'build memory guards: PASS'
