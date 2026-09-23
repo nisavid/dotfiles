@@ -20,12 +20,19 @@
 # Temporary cap:  systemctl --user set-property --runtime builds.slice MemoryMax=16G
 # Undo that:      systemctl --user revert builds.slice
 #
-# chezmoi manages this unit, the three symlinks, the script they run, and the
-# Claude app-scope drop-in app-com.anthropic.Claude-.scope.d/50-oom-continue.conf.
-# A file deleted only from $HOME comes back on the next apply. To disable one
-# for good, delete its chezmoi source file or add its target to
-# home/.chezmoiignore, then delete the live file and run:
+# chezmoi manages this unit, the three symlinks, the script they run,
+# ~/.config/pacman/makepkg.conf, and the Claude app-scope drop-in
+# app-com.anthropic.Claude-.scope.d/50-oom-continue.conf. A file deleted only
+# from $HOME comes back on the next apply. To disable one for good, delete its
+# chezmoi source file or add its target to home/.chezmoiignore, then delete the
+# live file and run:
 #   systemctl --user daemon-reload
+#
+# To turn off only the cap, remove this unit alone. The build tools then warn
+# and run uncapped, and build trees keep working. Removing ~/.local/bin/ninja
+# instead breaks `cmake --build`, and even a plain reconfigure, in every tree
+# configured while it existed, because CMake stores that path. Re-point each
+# such tree with: cmake -DCMAKE_MAKE_PROGRAM=/usr/bin/ninja <builddir>
 
 [Unit]
 Description=Memory-capped slice for builds

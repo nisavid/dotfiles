@@ -10,9 +10,11 @@ dispatcher_source=$source_home/lib/builds-slice/executable_builds-slice-command
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/build-memory-guards.XXXXXX")
 trap 'rm -rf -- "$test_root"' EXIT HUP INT TERM
 
+# exit, not return: zsh skips the EXIT trap when errexit fires on a function's
+# status, and the temporary directory would stay behind.
 fail() {
   print -u2 -r -- "FAIL: $*"
-  return 1
+  exit 1
 }
 
 sh -n "$dispatcher_source" || fail 'build-tool dispatcher has a syntax error'
@@ -62,6 +64,7 @@ name=${0##*/}
   fi
   printf '%s MARKER=[%s]\n' "$name" "${MARKER-}"
 } >>"$FAKE_LOG"
+printf '%s\n' "$PPID" >"$FAKE_LOG.ppid"
 exit "${FAKE_TOOL_STATUS:-0}"
 EOF
 for tool_name in $tool_names; do
@@ -142,6 +145,7 @@ tool_name=ninja
 run_shim() {
   local rc=0
   : >"$log"
+  rm -f -- "$log.ppid"
   env -i PATH=/usr/bin:/bin FAKE_LOG="$log" MARKER=kept "$@" \
     "$shims/$tool_name" "${tool_args[@]}" 2>"$err" || rc=$?
   return $rc
@@ -153,6 +157,8 @@ expect_log() {
     print -u2 -rl -- "--- expected ($description)" "$expected" '--- actual' "$(<"$log")"
     fail "$description"
   }
+  # Every hop execs, so the tool is still the test shell's own child.
+  [[ $(<"$log.ppid") == $$ ]] || fail "$description: the tool is not the caller's child"
 }
 
 # The dispatcher asks the user manager for the slice's unit file without
@@ -263,6 +269,10 @@ print -r -- "$inside_slice" >"$cgroup"
 run_shim XDG_RUNTIME_DIR="$runtime" || fail 'in-slice run failed'
 expect_log "$(direct_log)" 'in-slice run execs Ninja directly'
 [[ ! -s $err ]] || fail "in-slice run wrote to stderr: $(<"$err")"
+# makepkg's package() runs under fakeroot, so the tools it starts inside the
+# slice arrive with LD_PRELOAD set and must keep it.
+run_shim XDG_RUNTIME_DIR="$runtime" LD_PRELOAD= || fail 'in-slice LD_PRELOAD run failed'
+expect_log "$(direct_log '')" 'in-slice run keeps LD_PRELOAD for Ninja'
 print -r -- "$outside_slice" >"$cgroup"
 
 expect_fallback 'missing XDG_RUNTIME_DIR' "$unreachable" "$(direct_log)"
@@ -286,6 +296,15 @@ for tool in systemd-run systemctl choom; do
   chmod +x "$bin/$tool"
 done
 
+# The warning is best-effort: with stderr closed, the tool still runs.
+rc=0
+: >"$log"
+rm -f -- "$log.ppid"
+env -i PATH=/usr/bin:/bin FAKE_LOG="$log" MARKER=kept FAKE_TOOL_STATUS=5 \
+  "$shims/$tool_name" "${tool_args[@]}" 2>&- || rc=$?
+(( rc == 5 )) || fail "fallback with stderr closed returned $rc instead of the tool's 5"
+expect_log "$(direct_log)" 'fallback with stderr closed runs Ninja directly'
+
 # The cmake and makepkg symlinks run their own tools through the same paths.
 for tool_name in cmake makepkg; do
   run_shim XDG_RUNTIME_DIR="$runtime" || fail "scoped $tool_name run failed"
@@ -295,6 +314,9 @@ for tool_name in cmake makepkg; do
   print -r -- "$inside_slice" >"$cgroup"
   run_shim XDG_RUNTIME_DIR="$runtime" || fail "in-slice $tool_name run failed"
   expect_log "$(direct_log)" "in-slice $tool_name run execs the tool directly"
+  run_shim XDG_RUNTIME_DIR="$runtime" LD_PRELOAD= ||
+    fail "in-slice $tool_name LD_PRELOAD run failed"
+  expect_log "$(direct_log '')" "in-slice $tool_name run keeps LD_PRELOAD"
   print -r -- "$outside_slice" >"$cgroup"
 
   expect_fallback "$tool_name with missing XDG_RUNTIME_DIR" "$unreachable" "$(direct_log)"
@@ -313,5 +335,13 @@ expect_refusal 'a make symlink' 2 \
 expect_refusal 'the dispatcher run by its own name' 2 \
   'builds-slice-command: run this through a cmake, makepkg, or ninja symlink' \
   "$dispatcher"
+
+# makepkg.conf runs the pacman that makepkg starts through sudo at OOM score 0.
+makepkg_auth=$(
+  bash -c 'source "$1" && printf "[%s]" "${PACMAN_AUTH[@]}"' _ \
+    "$repo_root/home/dot_config/pacman/makepkg.conf"
+)
+[[ $makepkg_auth == '[sudo][-k][choom][-n][0][--]' ]] ||
+  fail "makepkg.conf sets PACMAN_AUTH to $makepkg_auth"
 
 print -r -- 'build memory guards: PASS'
