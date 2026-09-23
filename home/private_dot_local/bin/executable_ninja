@@ -8,6 +8,11 @@
 # so in a host-wide OOM the kernel kills compilers before desktop app processes
 # such as Electron renderers (300).
 #
+# A cap kill fails the build step it hits, and Ninja stops as it does for any
+# failed step. To confirm that the cap was the cause:
+#   journalctl --user -g 'OOM killer'
+#   journalctl -k -g 'Memory cgroup out of memory'
+#
 # Every path ends in exec, so Ninja keeps this process's PID, stdio, signals,
 # exit status, and environment. A Ninja that already runs inside builds.slice,
 # such as one a build step starts, stays in the outer build's scope. When
@@ -100,9 +105,12 @@ main() {
     unset LD_PRELOAD
   fi
   # Without --expand-environment=no, systemd-run expands "$VAR" and "$$" in
-  # Ninja's arguments.
+  # Ninja's arguments. With the default OOMPolicy=stop, one cap kill makes
+  # systemd stop the whole scope, and Ninja misreports that as "interrupted by
+  # user" with exit 130. With OOMPolicy=continue, Ninja reports the killed step
+  # as FAILED, with its output and status.
   exec "$systemd_run" --user --scope --quiet --collect --expand-environment=no \
-    --slice="$slice" -- "$@"
+    --property=OOMPolicy=continue --slice="$slice" -- "$@"
 }
 
 main "$@"
