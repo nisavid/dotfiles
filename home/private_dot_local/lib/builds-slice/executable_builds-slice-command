@@ -44,10 +44,10 @@
 # `PATH=/usr/bin:$PATH makepkg ...`, so the cmake and ninja that the build
 # starts through PATH skip it too. That also puts /usr/bin ahead of any other
 # PATH entry that precedes it. Running /usr/bin/<tool> directly skips the cap
-# only for that one process. A tree configured through ~/.local/bin/cmake
-# stores ~/.local/bin/ninja, so an uncapped CMake build also needs a tree
-# configured with -DCMAKE_MAKE_PROGRAM=/usr/bin/ninja. builds.slice says how to
-# disable the cap.
+# only for that one process. A tree configured while ~/.local/bin came first in
+# PATH, by either cmake, stores ~/.local/bin/ninja, so an uncapped CMake build
+# also needs a tree configured with -DCMAKE_MAKE_PROGRAM=/usr/bin/ninja.
+# builds.slice says how to disable the cap.
 
 set -eu
 
