@@ -1,9 +1,11 @@
-# Memory-capped slice for agent-launched and makepkg builds.
+# Memory-capped slice for Ninja builds.
 #
-# ~/.local/bin/ninja runs each Ninja build in a transient scope under this
-# slice. A build that outgrows MemoryMax is OOM-killed here instead of pushing
-# the host into a global OOM, which on 2026-09-23 killed the Claude Desktop
-# renderer and, through the app scope's OOMPolicy, every Claude thread.
+# ~/.local/bin/ninja runs each Ninja build that finds ninja through PATH in a
+# transient scope under this slice, so all concurrent Ninja builds share one
+# MemoryMax. Builds that do not run Ninja, such as make or cargo builds, are
+# not capped. A build that outgrows MemoryMax is OOM-killed here instead of
+# pushing the host into a global OOM, which on 2026-09-23 killed the Claude
+# Desktop renderer and, through the app scope's OOMPolicy, every Claude thread.
 #
 # The cap leaves headroom for GPU (GTT) memory held by local inference servers,
 # which no cgroup accounts for.
@@ -15,6 +17,12 @@
 # Cap kills:      journalctl --user -g 'OOM killer'
 # Temporary cap:  systemctl --user set-property --runtime builds.slice MemoryMax=16G
 # Undo that:      systemctl --user revert builds.slice
+#
+# chezmoi manages this unit, ~/.local/bin/ninja, and the Claude app-scope
+# drop-in app-com.anthropic.Claude-.scope.d/50-oom-continue.conf. A file
+# deleted only from $HOME comes back on the next apply. To disable one for
+# good, delete its chezmoi source file or add its target to home/.chezmoiignore,
+# then delete the live file and run: systemctl --user daemon-reload
 
 [Unit]
 Description=Memory-capped slice for builds
