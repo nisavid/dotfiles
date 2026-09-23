@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 SKILL_DIR = Path(__file__).resolve().parents[1]
@@ -15,6 +16,27 @@ sys.path.insert(0, str(SCRIPTS))
 
 import git_publication.adapter as adapter
 from git_publication.adapter import MalformedRequest, parse_request, plan_repository
+
+
+def setUpModule():
+    # Fixtures, the in-process adapter, and the CLI all inherit os.environ. Drop
+    # inherited GIT_* state and host config so only fixture-local config applies.
+    home = tempfile.TemporaryDirectory()
+    unittest.addModuleCleanup(home.cleanup)
+    environment = {
+        name: value for name, value in os.environ.items() if not name.startswith("GIT_")
+    }
+    environment.update(
+        {
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "HOME": home.name,
+            "XDG_CONFIG_HOME": home.name,
+        }
+    )
+    patcher = mock.patch.dict(os.environ, environment, clear=True)
+    patcher.start()
+    unittest.addModuleCleanup(patcher.stop)
 
 
 def git(repo, *args, env=None):
@@ -155,6 +177,13 @@ class RepositoryPlanningTests(unittest.TestCase):
 
     def plan(self, request):
         return plan_repository(self.repo, request)
+
+    def test_fixture_reads_only_repository_local_git_config(self):
+        scopes = {
+            line.split("\t", 1)[0]
+            for line in git(self.repo, "config", "--list", "--show-scope").splitlines()
+        }
+        self.assertEqual(scopes, {"local"})
 
     def test_existing_fast_forward_and_terminal_verified(self):
         source = commit(self.repo, "change")
