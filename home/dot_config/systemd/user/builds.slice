@@ -1,11 +1,13 @@
-# Memory-capped slice for Ninja builds.
+# Memory-capped slice for builds.
 #
-# ~/.local/bin/ninja runs each Ninja build that finds ninja through PATH in a
-# transient scope under this slice, so all concurrent Ninja builds share one
-# MemoryMax. Builds that do not run Ninja, such as make or cargo builds, are
-# not capped. A build that outgrows MemoryMax is OOM-killed here instead of
-# pushing the host into a global OOM, which on 2026-09-23 killed the Claude
-# Desktop renderer and, through the app scope's OOMPolicy, every Claude thread.
+# ~/.local/bin/cmake, ~/.local/bin/makepkg, and ~/.local/bin/ninja run each
+# build that finds them through PATH in a transient scope under this slice, so
+# all concurrent builds share one MemoryMax. The script those symlinks run,
+# ~/.local/lib/builds-slice/builds-slice-command, explains the details. Builds
+# started without these tools, such as a bare make, cargo, or npm build, are not
+# capped. A build that outgrows MemoryMax is OOM-killed here instead of pushing
+# the host into a global OOM, which on 2026-09-23 killed the Claude Desktop
+# renderer and, through the app scope's OOMPolicy, every Claude thread.
 #
 # The cap leaves headroom for GPU (GTT) memory held by local inference servers,
 # which no cgroup accounts for.
@@ -18,11 +20,12 @@
 # Temporary cap:  systemctl --user set-property --runtime builds.slice MemoryMax=16G
 # Undo that:      systemctl --user revert builds.slice
 #
-# chezmoi manages this unit, ~/.local/bin/ninja, and the Claude app-scope
-# drop-in app-com.anthropic.Claude-.scope.d/50-oom-continue.conf. A file
-# deleted only from $HOME comes back on the next apply. To disable one for
-# good, delete its chezmoi source file or add its target to home/.chezmoiignore,
-# then delete the live file and run: systemctl --user daemon-reload
+# chezmoi manages this unit, the three symlinks, the script they run, and the
+# Claude app-scope drop-in app-com.anthropic.Claude-.scope.d/50-oom-continue.conf.
+# A file deleted only from $HOME comes back on the next apply. To disable one
+# for good, delete its chezmoi source file or add its target to
+# home/.chezmoiignore, then delete the live file and run:
+#   systemctl --user daemon-reload
 
 [Unit]
 Description=Memory-capped slice for builds
