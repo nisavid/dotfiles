@@ -3,14 +3,16 @@
 #
 # ~/.local/bin/cmake, ~/.local/bin/makepkg, and ~/.local/bin/ninja are symlinks
 # to this script, which runs the /usr/bin tool that the symlink names. Every run
-# that finds one of these tools through PATH gets its own transient systemd user
-# scope under builds.slice (~/.config/systemd/user/builds.slice). That covers
-# interactive, IDE, agent, Meson, pip, and makepkg builds, and CMake configure
-# runs with their try_compile checks, and all of them share the slice's one
-# MemoryMax. A build that outgrows it is OOM-killed there instead of starting a
-# host-wide OOM. choom raises the build's OOM score to at least 500, so in a
-# host-wide OOM the kernel kills compilers before desktop app processes such as
-# Electron renderers (300).
+# whose PATH lookup reaches one of these symlinks gets its own transient systemd
+# user scope under builds.slice (~/.config/systemd/user/builds.slice). That
+# covers interactive, agent, Meson, and makepkg builds, and CMake configure runs
+# with their try_compile checks, and all of them share the slice's one
+# MemoryMax. A cmake or ninja found earlier in PATH, such as a virtualenv's, a
+# pip build environment's, or an IDE's bundled copy, is not capped. A build that
+# outgrows the cap is OOM-killed there instead of starting a host-wide OOM.
+# choom raises the build's OOM score to at least 500, so a host-wide OOM favors
+# compilers over desktop app processes with lower scores, such as Electron
+# renderers (300).
 #
 # A tool that already runs inside builds.slice, such as the Ninja that
 # `cmake --build` starts or the CMake that a PKGBUILD's build() runs, runs
@@ -35,8 +37,8 @@
 #
 # choom raises everything the tool starts, including the `sudo pacman` that
 # makepkg -s, -r, and -i run, and pacman's hooks. ~/.config/pacman/makepkg.conf
-# sets that pacman's score back to 0, so a host-wide OOM does not pick it in the
-# middle of a transaction.
+# sets that pacman's score back to 0, so a host-wide OOM no longer favors it in
+# the middle of a transaction.
 #
 # To skip the cap for one run, put /usr/bin first in PATH, for example
 # `PATH=/usr/bin:$PATH makepkg ...`, so the cmake and ninja that the build
