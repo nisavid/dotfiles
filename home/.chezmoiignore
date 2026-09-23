@@ -23,9 +23,11 @@ Library
 {{ end }}
 
 {{ if ne .chezmoi.os "linux" }}
-# The provider selector and readiness unit are Linux session integrations.
+# The provider selector, the systemd user units, and the ninja shim that runs
+# builds in builds.slice are Linux session integrations.
 .config/environment.d/98-proton-pass.conf
 .config/systemd
+.local/bin/ninja
 
 # Only Linux desktops read freedesktop desktop entries; this tree currently
 # holds only the protonpass:// scheme handler. The inventory test requires an

@@ -310,6 +310,18 @@ for pattern in $linux_only_patterns; do
     fail "Darwin unexpectedly ignores $pattern"
 done
 
+typeset -a darwin_only_patterns=(
+  '.config/environment.d/98-proton-pass.conf'
+  '.config/systemd'
+  '.local/bin/ninja'
+)
+
+for pattern in $darwin_only_patterns; do
+  assert_line "$pattern" "$test_root/darwin-ignore"
+  ! grep -Fqx -- "$pattern" "$test_root/linux-ignore" ||
+    fail "Linux unexpectedly ignores $pattern"
+done
+
 gui_source_inventory=$(
   find \
     "$repo_root/home/private_Library" \
@@ -339,6 +351,8 @@ linux_source_inventory=$(
 )
 expected_linux_source_inventory=$(
   printf '%s\n' \
+    'dot_config/systemd/user/app-com.anthropic.Claude-.scope.d/50-oom-continue.conf' \
+    'dot_config/systemd/user/builds.slice' \
     'dot_config/systemd/user/plasma-workspace.target.wants/symlink_proton-pass-ensure-ready.service' \
     'dot_config/systemd/user/proton-pass-ensure-ready.service' \
     'private_dot_local/private_share/applications/proton-pass-url-handler.desktop'
