@@ -33,10 +33,19 @@
 # file, this script warns once and runs the tool without the cap. When the tool
 # itself is missing, it fails with status 127, like a missing command.
 #
-# To skip the cap for one run, run /usr/bin/<tool> directly. `cmake --build`
-# still runs the Ninja that the build tree stores, so an uncapped CMake build
-# also needs a tree configured with -DCMAKE_MAKE_PROGRAM=/usr/bin/ninja.
-# builds.slice says how to disable the cap.
+# choom raises everything the tool starts, including the `sudo pacman` that
+# makepkg -s, -r, and -i run, and pacman's hooks. ~/.config/pacman/makepkg.conf
+# sets that pacman's score back to 0, so a host-wide OOM does not pick it in the
+# middle of a transaction.
+#
+# To skip the cap for one run, put /usr/bin first in PATH, for example
+# `PATH=/usr/bin:$PATH makepkg ...`, so the cmake and ninja that the build
+# starts through PATH skip it too. That also puts /usr/bin ahead of any other
+# PATH entry that precedes it. Running /usr/bin/<tool> directly skips the cap
+# only for that one process. A tree configured through ~/.local/bin/cmake
+# stores ~/.local/bin/ninja, so an uncapped CMake build also needs a tree
+# configured with -DCMAKE_MAKE_PROGRAM=/usr/bin/ninja. builds.slice says how to
+# disable the cap.
 
 set -eu
 
@@ -116,8 +125,10 @@ main() {
     reason="$slice has no unit file"
   fi
   if [ -n "$reason" ]; then
+    # The warning is best-effort: a closed or full stderr must not stop the
+    # tool from running.
     printf '%s: warning: %s; running %s without the %s memory cap\n' \
-      "$name" "$reason" "$tool" "$slice" >&2
+      "$name" "$reason" "$tool" "$slice" >&2 || :
     exec "$tool" "$@"
   fi
 

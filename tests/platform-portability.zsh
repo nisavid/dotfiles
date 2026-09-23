@@ -312,6 +312,7 @@ done
 
 typeset -a darwin_only_patterns=(
   '.config/environment.d/98-proton-pass.conf'
+  '.config/pacman/makepkg.conf'
   '.config/systemd'
   '.local/bin/cmake'
   '.local/bin/makepkg'

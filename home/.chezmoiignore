@@ -24,8 +24,10 @@ Library
 
 {{ if ne .chezmoi.os "linux" }}
 # The provider selector, the systemd user units, and the build-tool shims that
-# run builds in builds.slice are Linux session integrations.
+# run builds in builds.slice, with the makepkg setting that goes with them, are
+# Linux session integrations.
 .config/environment.d/98-proton-pass.conf
+.config/pacman/makepkg.conf
 .config/systemd
 .local/bin/cmake
 .local/bin/makepkg
