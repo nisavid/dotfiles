@@ -742,6 +742,23 @@ classify_session_state() {
   fi
 }
 
+force_local_logout() {
+  emulate -L zsh
+
+  local backend=$1
+  integer logout_status=0
+  run_bounded "$PROTON_PASS_LOGOUT_TIMEOUT_SECONDS" discard -- \
+    "$backend" logout --force || logout_status=$?
+  local logout_waiter_stage=$PROTON_PASS_LAST_WAITER_STAGE
+  (( logout_status != 0 )) || return 0
+  if (( logout_status == 124 )) && [[ $logout_waiter_stage != child-status ]]; then
+    fail_readiness logout-timeout 'provider-session cleanup timed out' \
+      "$logout_waiter_stage"
+  fi
+  fail_readiness logout-failed 'provider-session cleanup failed' \
+    "$logout_waiter_stage"
+}
+
 classify_login_failure() {
   emulate -L zsh
 
@@ -923,18 +940,7 @@ main() {
   # Stored local authentication blocks login, so remove it only after a
   # positive classification and a validated bootstrap value.
   if [[ $session_state == (orphaned|invalidated) ]]; then
-    integer logout_status=0
-    run_bounded "$PROTON_PASS_LOGOUT_TIMEOUT_SECONDS" discard -- \
-      "$backend" logout --force || logout_status=$?
-    local logout_waiter_stage=$PROTON_PASS_LAST_WAITER_STAGE
-    if (( logout_status != 0 )); then
-      if (( logout_status == 124 )) && [[ $logout_waiter_stage != child-status ]]; then
-        fail_readiness logout-timeout 'provider-session cleanup timed out' \
-          "$logout_waiter_stage"
-      fi
-      fail_readiness logout-failed 'provider-session cleanup failed' \
-        "$logout_waiter_stage"
-    fi
+    force_local_logout "$backend"
   fi
 
   # Login stderr goes only to a private unlinked file; stdout carries account
@@ -949,22 +955,35 @@ main() {
   wait_bounded_child "$PROTON_PASS_LOGIN_TIMEOUT_SECONDS" || login_status=$?
   local login_waiter_stage=$PROTON_PASS_LAST_WAITER_STAGE
   if (( login_status != 0 )); then
+    local login_failure_reason login_failure_message
     if (( login_status == 124 )) && [[ $login_waiter_stage != child-status ]]; then
       remove_diagnostic_file
-      fail_readiness login-timeout 'provider-session repair timed out' \
-        "$login_waiter_stage"
+      login_failure_reason=login-timeout
+      login_failure_message='provider-session repair timed out'
+    else
+      # Only a reported provider exit is classified, and only by exact text.
+      local login_diagnostic=
+      if [[ $login_waiter_stage == child-status ]] && consume_diagnostic_file; then
+        login_diagnostic=$PROTON_PASS_DIAGNOSTIC_TEXT
+      fi
+      remove_diagnostic_file
+      typeset -g PROTON_PASS_DIAGNOSTIC_TEXT=
+      classify_login_failure "$login_diagnostic"
+      unset login_diagnostic
+      login_failure_reason=$PROTON_PASS_LOGIN_FAILURE_REASON
+      login_failure_message=$PROTON_PASS_LOGIN_FAILURE_MESSAGE
     fi
-    # Only a reported provider exit is classified, and only by exact text.
-    local login_diagnostic=
-    if [[ $login_waiter_stage == child-status ]] && consume_diagnostic_file; then
-      login_diagnostic=$PROTON_PASS_DIAGNOSTIC_TEXT
-    fi
-    remove_diagnostic_file
-    typeset -g PROTON_PASS_DIAGNOSTIC_TEXT=
-    classify_login_failure "$login_diagnostic"
-    unset login_diagnostic
-    fail_readiness "$PROTON_PASS_LOGIN_FAILURE_REASON" \
-      "$PROTON_PASS_LOGIN_FAILURE_MESSAGE" "$login_waiter_stage"
+    # Info rejected any local authentication before login, so what a failed
+    # login leaves is unusable to this helper: often partial state that info
+    # accepts while item reads fail. The cleanup cannot tell that from a
+    # complete login behind a failed waiter, or from a session another process
+    # stored outside the lock, and deliberately discards either rather than
+    # report an unusable session as ready. Only an exact refusal, which stored
+    # nothing, keeps what it found.
+    [[ $login_failure_reason == login-already-authenticated ]] ||
+      force_local_logout "$backend"
+    fail_readiness "$login_failure_reason" "$login_failure_message" \
+      "$login_waiter_stage"
   fi
   remove_diagnostic_file
   if session_ready "$backend" "$PROTON_PASS_VERIFY_TIMEOUT_SECONDS"; then

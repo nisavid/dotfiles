@@ -564,6 +564,8 @@ bootstrap_field=PROTON_PASS_PERSONAL_ACCESS
 bootstrap_field+=_TOKEN
 hang_forever() {
   print -r -- $$ > "$FAKE_HANGING_CHILD_PID"
+  [[ -z ${FAKE_HANGING_CHILD_PIDS:-} ]] ||
+    print -r -- $$ >> "$FAKE_HANGING_CHILD_PIDS"
   zmodload zsh/zselect
   trap 'exit 143' TERM
   while true; do
@@ -913,6 +915,13 @@ case $1 in
       print -u2 -r -- 'Error: Already authenticated'
       exit 1
     fi
+    # pass-cli writes local authentication before its private token key, so
+    # an interrupted login passes info while every item read fails.
+    if [[ -e $FAKE_PASS_LOGIN_PARTIAL_HANG ]]; then
+      : > "$FAKE_PASS_LOCAL_SESSION"
+      : > "$FAKE_PASS_REMOTE_SESSION"
+      hang_forever
+    fi
     if [[ -e $FAKE_PASS_LOGIN_DIAGNOSTIC ]]; then
       login_flow_lines=(
         'Error: Error in personal access token login flow'
@@ -1132,6 +1141,7 @@ export FAKE_PASS_LOGOUT_FAIL=$test_dir/logout-fail
 export FAKE_PASS_LOGOUT_HANG=$test_dir/logout-hang
 export FAKE_PASS_LOGIN_EXIT_124=$test_dir/login-exit-124
 export FAKE_PASS_LOGIN_HANG=$test_dir/login-hang
+export FAKE_PASS_LOGIN_PARTIAL_HANG=$test_dir/login-partial-hang
 export FAKE_PASS_LOGIN_DESCENDANT=$test_dir/login-descendant
 export FAKE_PASS_LOCAL_SESSION=$test_dir/local-session
 export FAKE_PASS_REMOTE_SESSION=$test_dir/remote-session
@@ -1151,6 +1161,8 @@ export FAKE_NATIVE_STORE_LOCKED=$test_dir/native-store-locked
 export FAKE_NATIVE_STORE_HANG=$test_dir/native-store-hang
 export FAKE_NATIVE_STORE_DESCENDANT=$test_dir/native-store-descendant
 export FAKE_HANGING_CHILD_PID=$test_dir/hanging-child.pid
+# Set only by tests that expect more than one hanging child in a call.
+export FAKE_HANGING_CHILD_PIDS=
 export FAKE_DESCENDANT_PID=$test_dir/descendant.pid
 export FAKE_DESCENDANT_TOKEN_MARKER=$test_dir/descendant-inherited-bootstrap
 export FAKE_NATIVE_STORE_BAD_VALUE=$test_dir/native-store-bad-value
@@ -1270,8 +1282,12 @@ run_waiter_stage_mapping() {
     fail "the $mode waiter-stage fixture must prove its exact trigger"
   [[ $(<"$provider_start") == provider-started ]] ||
     fail "the $mode waiter-stage fixture must prove provider execution"
-  [[ $(<"$FAKE_PASS_LOG") == $'info\ninfo\nlogin' ]] ||
-    fail "the $mode waiter-stage fixture must target the direct login waiter"
+  # The helper cannot tell how far a login got past a failed waiter, so it
+  # forces out whatever local authentication that login stored.
+  [[ $(<"$FAKE_PASS_LOG") == $'info\ninfo\nlogin\nlogout --force' ]] ||
+    fail "the $mode waiter-stage fixture must target the direct login waiter and clear its local state"
+  [[ ! -e $FAKE_PASS_LOCAL_SESSION ]] ||
+    fail "the $mode waiter-stage fixture must not leave the failed login's local authentication"
   case $completion_expectation in
     completed)
       [[ $(<"$provider_completion") == provider-completed ]] ||
@@ -2175,8 +2191,8 @@ for login_diagnostic in ${(ko)login_diagnostic_reasons}; do
     fail "the $login_diagnostic login diagnostic must record $expected_login_reason"
   grep -Fqx 'waiter-stage=child-status' "$status_file" ||
     fail "the $login_diagnostic login diagnostic must record child-status"
-  [[ $(<"$FAKE_PASS_LOG") == $'info\ninfo\nlogin' ]] ||
-    fail "the $login_diagnostic login diagnostic must follow one absent repair"
+  [[ $(<"$FAKE_PASS_LOG") == $'info\ninfo\nlogin\nlogout --force' ]] ||
+    fail "the $login_diagnostic login diagnostic must follow one absent repair and clear the failed login"
   assert_no_private_diagnostics "the $login_diagnostic login diagnostic"
   ! print -r -- "$login_diagnostic_output" |
     /usr/bin/grep -F -e "$fixture_token" -e 'Already authenticated' >/dev/null ||
@@ -2185,6 +2201,143 @@ done
 ! /usr/bin/grep -RF -e "$fixture_token" -e 'Already authenticated' \
   "$state_home" "$FAKE_PASS_LOG" >/dev/null ||
   fail 'provider login diagnostics must never persist in state or logs'
+
+# An interrupted login leaves local authentication that passes info while item
+# reads fail. The helper must force it out, or every later readiness check
+# reports the unusable session as ready and repair never runs again.
+rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION" \
+  "$FAKE_HANGING_CHILD_PID" "$FAKE_PASS_LOGIN_DIAGNOSTIC"
+: > "$FAKE_PASS_LOG"
+: > "$FAKE_PASS_LOGIN_PARTIAL_HANG"
+test_process_fixture_track_pid_file "$FAKE_HANGING_CHILD_PID"
+set +e
+partial_login_output=$(zsh "$ensure_ready" 2>&1)
+partial_login_status=$?
+set -e
+rm -f -- "$FAKE_PASS_LOGIN_PARTIAL_HANG"
+hanging_child_pid=$(<"$FAKE_HANGING_CHILD_PID")
+test_process_fixture_wait_for_pid_exit $hanging_child_pid 100 ||
+  fail 'a timed-out partial login child must be terminated and reaped'
+test_process_fixture_untrack_pid_file "$FAKE_HANGING_CHILD_PID"
+(( partial_login_status != 0 )) ||
+  fail 'a timed-out partial login must fail readiness'
+[[ $partial_login_output ==
+  'proton-pass-ensure-ready: provider-session repair timed out' ]] ||
+  fail "a timed-out partial login must report its timeout: $partial_login_output"
+grep -Fqx 'reason=login-timeout' "$status_file" ||
+  fail 'a timed-out partial login must record login-timeout'
+[[ $(<"$FAKE_PASS_LOG") == $'info\ninfo\nlogin\nlogout --force' ]] ||
+  fail 'a timed-out login must force out its partial local authentication'
+[[ ! -e $FAKE_PASS_LOCAL_SESSION ]] ||
+  fail 'a timed-out login must not leave partial local authentication'
+assert_no_private_diagnostics 'a timed-out partial login'
+: > "$FAKE_PASS_LOG"
+zsh "$ensure_ready" ||
+  fail 'readiness must recover once a partial login has been forced out'
+grep -Fqx 'reason=repaired' "$status_file" ||
+  fail 'the call after a forced-out partial login must repair, not reuse it'
+[[ $(<"$FAKE_PASS_LOG") == $'info\ninfo\nlogin\ninfo' ]] ||
+  fail 'the call after a forced-out partial login must log in again'
+
+# When that cleanup fails, the unusable session may survive, so the cleanup
+# failure is the reported reason.
+rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION" \
+  "$FAKE_HANGING_CHILD_PID"
+: > "$FAKE_PASS_LOG"
+: > "$FAKE_PASS_LOGIN_PARTIAL_HANG"
+: > "$FAKE_PASS_LOGOUT_FAIL"
+test_process_fixture_track_pid_file "$FAKE_HANGING_CHILD_PID"
+set +e
+partial_cleanup_output=$(zsh "$ensure_ready" 2>&1)
+partial_cleanup_status=$?
+set -e
+rm -f -- "$FAKE_PASS_LOGIN_PARTIAL_HANG" "$FAKE_PASS_LOGOUT_FAIL"
+hanging_child_pid=$(<"$FAKE_HANGING_CHILD_PID")
+test_process_fixture_wait_for_pid_exit $hanging_child_pid 100 ||
+  fail 'a partial login child must be reaped when its cleanup fails'
+test_process_fixture_untrack_pid_file "$FAKE_HANGING_CHILD_PID"
+(( partial_cleanup_status != 0 )) ||
+  fail 'a failed partial-login cleanup must fail readiness'
+[[ $partial_cleanup_output ==
+  'proton-pass-ensure-ready: provider-session cleanup failed' ]] ||
+  fail "a failed partial-login cleanup must report it: $partial_cleanup_output"
+grep -Fqx 'reason=logout-failed' "$status_file" ||
+  fail 'a failed partial-login cleanup must record logout-failed'
+# The recorded stage is the cleanup's reported exit, not the login's timeout.
+grep -Fqx 'waiter-stage=child-status' "$status_file" ||
+  fail 'a failed partial-login cleanup must record its own waiter stage'
+[[ $(<"$FAKE_PASS_LOG") == $'info\ninfo\nlogin\nlogout --force' ]] ||
+  fail 'a failed partial-login cleanup must run exactly once after login'
+[[ -e $FAKE_PASS_LOCAL_SESSION ]] ||
+  fail 'the fixture must model the unusable session surviving a failed cleanup'
+assert_no_private_diagnostics 'a failed partial-login cleanup'
+rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION"
+
+# When login and its cleanup both hang, the cleanup timeout is reported, both
+# children are reaped, and the call ends within the two production deadlines.
+rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION" \
+  "$FAKE_HANGING_CHILD_PID"
+export FAKE_HANGING_CHILD_PIDS=$test_dir/hanging-children.pids
+: > "$FAKE_HANGING_CHILD_PIDS"
+: > "$FAKE_PASS_LOG"
+: > "$FAKE_PASS_LOGIN_PARTIAL_HANG"
+: > "$FAKE_PASS_LOGOUT_HANG"
+test_process_fixture_track_pid_list_file "$FAKE_HANGING_CHILD_PIDS"
+typeset -F partial_cleanup_hang_started=$EPOCHREALTIME
+set +e
+partial_cleanup_hang_output=$(zsh "$ensure_ready" 2>&1)
+partial_cleanup_hang_status=$?
+set -e
+typeset -F partial_cleanup_hang_elapsed=$((
+  EPOCHREALTIME - partial_cleanup_hang_started ))
+rm -f -- "$FAKE_PASS_LOGIN_PARTIAL_HANG" "$FAKE_PASS_LOGOUT_HANG"
+typeset -a partial_cleanup_hang_pids=(${(f)"$(<"$FAKE_HANGING_CHILD_PIDS")"})
+(( ${#partial_cleanup_hang_pids} == 2 )) ||
+  fail 'a hanging login and its hanging cleanup must each start one child'
+for hanging_child_pid in $partial_cleanup_hang_pids; do
+  test_process_fixture_wait_for_pid_exit $hanging_child_pid 100 ||
+    fail 'a hanging login and its hanging cleanup must both be reaped'
+done
+(( partial_cleanup_hang_status != 0 )) ||
+  fail 'a hanging partial-login cleanup must fail readiness'
+(( partial_cleanup_hang_elapsed >= 10.5 &&
+  partial_cleanup_hang_elapsed < 12.0 )) ||
+  fail "a hanging login and cleanup must use both production deadlines: elapsed=$partial_cleanup_hang_elapsed"
+[[ $partial_cleanup_hang_output ==
+  'proton-pass-ensure-ready: provider-session cleanup timed out' ]] ||
+  fail "a hanging partial-login cleanup must report it: $partial_cleanup_hang_output"
+grep -Fqx 'reason=logout-timeout' "$status_file" ||
+  fail 'a hanging partial-login cleanup must record logout-timeout'
+[[ $(<"$FAKE_PASS_LOG") == $'info\ninfo\nlogin\nlogout --force' ]] ||
+  fail 'a hanging partial-login cleanup must run exactly once after login'
+assert_no_private_diagnostics 'a hanging partial-login cleanup'
+rm -f -- "$FAKE_HANGING_CHILD_PIDS"
+export FAKE_HANGING_CHILD_PIDS=
+rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION"
+
+# Stored local authentication that info already reported absent is not usable,
+# so a failed login forces it out along with anything the login stored.
+rm -f -- "$FAKE_PASS_REMOTE_SESSION"
+: > "$FAKE_PASS_LOCAL_SESSION"
+: > "$FAKE_PASS_LOGIN_FAIL"
+: > "$FAKE_PASS_LOG"
+set +e
+absent_stored_output=$(zsh "$ensure_ready" 2>&1)
+absent_stored_status=$?
+set -e
+rm -f -- "$FAKE_PASS_LOGIN_FAIL"
+(( absent_stored_status != 0 )) ||
+  fail 'a failed login over absent stored authentication must fail readiness'
+[[ $absent_stored_output ==
+  'proton-pass-ensure-ready: provider-session repair failed' ]] ||
+  fail "a failed login over absent stored authentication must report it: $absent_stored_output"
+grep -Fqx 'reason=login-failed' "$status_file" ||
+  fail 'a failed login over absent stored authentication must record login-failed'
+[[ $(<"$FAKE_PASS_LOG") == $'info\ninfo\nlogin\nlogout --force' ]] ||
+  fail 'a failed login over absent stored authentication must force it out'
+[[ ! -e $FAKE_PASS_LOCAL_SESSION ]] ||
+  fail 'a failed login must not leave absent stored authentication behind'
+assert_no_private_diagnostics 'a failed login over absent stored authentication'
 
 # A recognized refusal is not classified when the waiter times out.
 rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION" \
@@ -2199,8 +2352,9 @@ recognized_hang_status=$?
 set -e
 typeset -F recognized_hang_elapsed=$(( EPOCHREALTIME - recognized_hang_started ))
 rm -f -- "$FAKE_PASS_LOGIN_DIAGNOSTIC"
-(( recognized_hang_status != 0 && recognized_hang_elapsed < 9.0 )) ||
-  fail 'a hanging login must fail within its production deadline'
+# The login deadline; the instant forced cleanup adds well under a second.
+(( recognized_hang_status != 0 && recognized_hang_elapsed < 9.5 )) ||
+  fail 'a hanging login must fail within its production deadlines'
 [[ $recognized_hang_output ==
   'proton-pass-ensure-ready: provider-session repair timed out' ]] ||
   fail 'a hanging login must remain a timeout despite recognized diagnostics'
@@ -2302,8 +2456,9 @@ test_process_fixture_untrack_pid_file "$FAKE_DESCENDANT_PID"
 rm -f -- "$FAKE_PASS_LOGIN_DESCENDANT"
 (( login_timeout_status != 0 )) ||
   fail 'a provider login with a surviving descendant must fail readiness'
-(( login_timeout_elapsed < 9.0 )) ||
-  fail 'a provider-login process group must fail within the production deadline'
+# The login deadline; the instant forced cleanup adds well under a second.
+(( login_timeout_elapsed < 9.5 )) ||
+  fail 'a provider-login process group must fail within the production deadlines'
 [[ $login_timeout_output ==
   'proton-pass-ensure-ready: provider-session repair timed out' ]] ||
   fail 'a provider-login timeout must report one value-free error'

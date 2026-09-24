@@ -146,9 +146,10 @@ startup budget, including cleanup and bounded polling overhead: a takeover
 followed by forced cleanup and login and the extended concurrent wait each
 need at most 34.6 seconds.
 `secret-exec` and its shims call the helper without an outer deadline, so a
-lazy consumer can wait up to that bound before its first value resolves. The
-helper logs out only when the provider reports the complete recognized
-invalidated-session diagnostic or the byte-exact orphaned-session diagnostic.
+lazy consumer can wait up to that bound before its first value resolves.
+Before login, the helper logs out only when the provider reports the complete
+recognized invalidated-session diagnostic or the byte-exact orphaned-session
+diagnostic. After a failed login, it logs out as described below.
 The readiness and secret-resolution controllers disable Zsh background-job
 priority adjustment before creating their PTY sessions, so a denied
 `setpriority` operation cannot enter the private status channel.
@@ -167,6 +168,30 @@ orphaned-session diagnostic accepts no framing record, styling, or trailing
 line; other forms of the same error, such as the user-account variant or a
 failed token refresh, remain unclassified. The forced local cleanup must
 succeed before login.
+
+A login that fails or times out can leave local authentication behind:
+`pass-cli` stores its session before its private token key, so an interrupted
+login passes `pass-cli info` while every item read fails, and later readiness
+checks would report that session as ready. When login starts, `pass-cli info`
+has already rejected any stored local authentication, so none of it is usable.
+After any failed login except `login-already-authenticated`, the helper
+therefore runs the same forced local logout and records the login's reason.
+If that cleanup fails or times out, the helper records `logout-failed` or
+`logout-timeout` instead, because the unusable session may survive. The
+cleanup's three-second deadline replaces the five-second verification on that
+path, so the per-call budget is unchanged.
+
+The cleanup removes whatever local authentication exists when it runs, and the
+helper cannot tell how far a failed login got. After a failed waiter, the
+login may have completed; the cleanup then discards a complete session and
+leaves its provider-side session behind, and the next call logs in again. A
+`pass-cli login` run outside the lock between classification and the end of
+login can also lose its session. The provider's exact, prompt refusal keeps
+that session, but a refusal that times out or arrives with any other text is
+unclassified and triggers the cleanup. The helper accepts both outcomes so it
+never reports an unusable session as ready. A helper killed during login, or
+one that stops because its login child became unmanageable, cannot run the
+cleanup; `pass-cli logout --force` clears what it leaves.
 
 Login writes its standard error only to a fresh mode-`0600` file in the
 private state directory; its standard output, which names the account, is
