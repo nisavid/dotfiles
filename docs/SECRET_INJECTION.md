@@ -64,24 +64,48 @@ by its group or other users. Readiness status housekeeping also uses fixed
 system utility paths instead of ambient `PATH` resolution.
 
 When readiness fails, `secret-exec` preserves the readiness helper's fixed,
-value-free diagnostic. It does not replace an unknown, timeout, lock, login,
-verification, or native-store failure with inferred unlock guidance.
+value-free diagnostic. It does not replace an unknown, timeout, lock,
+stale-session cleanup, login, verification, or native-store failure with
+inferred unlock guidance.
 
 When repair is needed, the helper serializes callers and classifies a second
-bounded readiness check from a private diagnostic file. A positively identified
-unauthenticated state proceeds directly to login. A positively identified
-invalidated session first requires a successful `pass-cli logout --force`;
-unknown or transient failures preserve the local session and fail closed. The
-helper then retrieves the fixed bootstrap item from the native credential store
-and gives the value only to a background subshell that immediately replaces
-itself with the trusted `pass-cli login` backend. The controller clears its
-non-exported copy immediately after the fork, the caller clears its shell value
-after registering the process group, and readiness verifies the repaired
-session before returning.
+bounded readiness check from a private diagnostic file. Unknown or transient
+failures preserve the local session and fail closed. For a positively
+classified state, the helper retrieves the fixed bootstrap item from the native
+credential store and validates it before changing anything:
+
+- An unauthenticated state, with no stored local authentication, proceeds
+  directly to login.
+- An orphaned session is one the provider no longer recognizes while
+  `pass-cli` still stores local authentication. The provider reports it with
+  the byte-exact non-existent-session error chain, and `pass-cli` refuses login
+  locally while that authentication remains. The same chain appears when a
+  concurrent `pass-cli` process wins a token-refresh race, and the helper
+  cannot tell the two apart. It accepts that trade-off: two independent
+  readiness checks must both report the chain, and the worst outcome replaces
+  a still-valid local session with a fresh one.
+- An invalidated session is the automatic-logout report of older `pass-cli`
+  releases.
+
+Orphaned and invalidated sessions both require a successful
+`pass-cli logout --force` before login. Forced logout is local only: it removes
+the provider's local session directory, its session-scoped keyring key, and any
+legacy shared `cli-local-key` keyring entry, and it never contacts the
+provider. Readiness checks that other callers make before taking the lock, and
+consumers already resolving values, are not serialized with that cleanup and
+the following login. In that brief window one of them can observe the removed
+session or recreate a local key and make this repair fail closed. The helper
+gives the bootstrap value only to a background subshell that immediately
+replaces itself with the trusted `pass-cli login` backend. The
+controller clears its non-exported copy immediately after the fork, the caller
+clears its shell value after registering the process group, and readiness
+verifies the repaired session before returning.
 The lock uses zsh's `zsystem flock`, so the repair path has no external `flock`
 dependency. The helper rejects symbolic-link, non-regular, wrong-owner, or
 replaced lock files and compares the locked descriptor with the published
-device and inode before using it. Lock acquisition waits at most five seconds.
+device and inode before using it. Lock acquisition allows a six-second
+takeover window, plus up to twenty more seconds while a valid repair is in
+progress.
 The bootstrap item identity is:
 
 - Linux Secret Service: `application=secret-exec`,
@@ -105,19 +129,26 @@ proton-pass-ensure-ready
 The helper accepts no arguments and does not accept an ambient token as a
 bootstrap source. An unclassified readiness failure, failed stale-session
 cleanup, failed native-store lookup, failed login, or failed verification stops
-before the consumer starts. A remote info check, stale-session cleanup,
-native-store read, and verification each have a three-second deadline; login
-has an eight-second deadline. Each bounded operation and all of its descendants
-run in a dedicated process group. Timeout cleanup sends `TERM`, then `KILL`
-within a 100-millisecond cleanup window and reaps the managed child. Provider
-output bypasses the process-group controller through inherited anonymous descriptors;
-the controller receives only an exit-status marker. The lock grants a
-five-second takeover window when no repair succeeds. A caller that finds a valid
-repair still in progress can wait another thirteen seconds, then rechecks
-readiness without starting a second repair. The takeover path and the extended
-concurrent-wait path each remain below the 26-second per-call startup budget,
-including cleanup and bounded polling overhead. The helper logs out only when
-the provider reports the complete recognized invalidated-session diagnostic.
+before the consumer starts. The first remote info check, forced stale-session
+cleanup, and native-store read each have a three-second deadline; the
+classifying info check and post-login verification each have five seconds;
+login has eight. Each bounded operation and all of its descendants run in a
+dedicated process group. Timeout cleanup sends `TERM`, then `KILL` within a
+100-millisecond cleanup window and reaps the managed child. Provider output
+bypasses the process-group controller through inherited anonymous
+descriptors; the controller receives only an exit-status marker. The lock
+grants a six-second takeover window when no repair succeeds; it outlasts a
+timed-out classifying check, so a caller that began waiting as that check
+started can still take over. A caller that finds a valid repair still in
+progress can wait another twenty seconds, then rechecks readiness without
+starting a second repair. Every path remains below the 36-second per-call
+startup budget, including cleanup and bounded polling overhead: a takeover
+followed by forced cleanup and login and the extended concurrent wait each
+need at most 34.6 seconds.
+`secret-exec` and its shims call the helper without an outer deadline, so a
+lazy consumer can wait up to that bound before its first value resolves. The
+helper logs out only when the provider reports the complete recognized
+invalidated-session diagnostic or the byte-exact orphaned-session diagnostic.
 The readiness and secret-resolution controllers disable Zsh background-job
 priority adjustment before creating their PTY sessions, so a denied
 `setpriority` operation cannot enter the private status channel.
@@ -130,11 +161,33 @@ SGR decoration emitted by the supported CLI around its timestamp, severity,
 source path, separator, and colon-terminated line number. A diagnostic cannot
 mix the two forms. The recognized terminal diagnostic remains byte-exact and
 unstyled.
-Empty framing, blank records, other controls or structured logs, arbitrary prefixes or
-suffixes, and diagnostic fragments remain unclassified. The forced local
-cleanup must succeed before login.
+Empty framing, blank records, other controls or structured logs, arbitrary
+prefixes or suffixes, and diagnostic fragments remain unclassified. The
+orphaned-session diagnostic accepts no framing record, styling, or trailing
+line; other forms of the same error, such as the user-account variant or a
+failed token refresh, remain unclassified. The forced local cleanup must
+succeed before login.
+
+Login writes its standard error only to a fresh mode-`0600` file in the
+private state directory; its standard output, which names the account, is
+discarded. The helper opens that file and unlinks it before login starts, so
+the captured text is reachable only through the helper's and the provider's
+descriptors, and not even an uncatchable kill leaves a named copy. Catchable
+signals and unmanageable-child escapes close those descriptors before child
+teardown. The classifying readiness check captures its diagnostic the same
+way. Only after the bounded controller reports a nonzero provider exit does the
+helper read, stopping one byte past 4,096 bytes, and compare the text
+byte-exactly with fixed provider texts. A match
+selects an enumerated status reason and a fixed message; anything else remains
+`login-failed`. Captured text never reaches the status file, logs, or
+messages.
+
 Platform selection uses zsh's `OSTYPE`, so no external platform probe runs
-ahead of the first bounded info call. Unknown provider failures never read the
+ahead of the first bounded info call. Every readiness info check runs with
+provider telemetry disabled, and the helper removes inherited Rust backtrace
+requests and `PASS_LOG_LEVEL` and `MUON_LOG_LEVEL` overrides, so no scheduled
+telemetry request, appended backtrace, or extra log record can change the text
+being classified. Unknown provider failures never read the
 bootstrap item or mutate local authentication state, preserving a potentially
 usable session during a network failure.
 
@@ -163,12 +216,16 @@ Both startup targets call `proton-pass-startup`, which uses a fixed finite
 two-attempt schedule with a five-second backoff around the shared readiness
 helper. On macOS, the controlled PATH-policy phase allows three seconds, one
 50-millisecond polling interval, and 100 milliseconds of termination grace.
-Two 26-second attempts, the backoff, that 3.15-second controlled phase, and a
-2.15-second notification ceiling total 62.30 seconds. Process-group creation
+Two 36-second attempts, the backoff, that 3.15-second controlled phase, and a
+2.15-second notification ceiling total 82.30 seconds. Process-group creation
 and other fixed local handling use the remaining 7.70-second margin under the
-Linux service's 70-second startup ceiling. Exhaustion records the underlying
-value-free failure when available, emits a best-effort notification, and leaves
-lazy consumer recovery enabled.
+Linux service's 90-second startup ceiling. The PATH phase runs only on macOS,
+so the Linux worst case is 79.15 seconds; because the service runs before
+desktop autostart, double exhaustion delays autostart by up to that long. The
+Linux activation hook starts the oneshot service synchronously, so the same
+double exhaustion can hold `chezmoi apply` for up to that long.
+Exhaustion records the underlying value-free failure when available, emits a
+best-effort notification, and leaves lazy consumer recovery enabled.
 
 ### Status and locked stores
 
@@ -176,12 +233,37 @@ Readiness publishes an atomic mode-`0600` status file beneath
 `$XDG_STATE_HOME/secret-exec`, defaulting to
 `~/.local/state/secret-exec/proton-pass-readiness.status`. It contains only
 `state`, an enumerated `reason`, an enumerated `waiter-stage`, and an update
-timestamp. `waiter-stage` is `record`, `identity`, `liveness-retry`,
+timestamp. `state` is `ready` or `unavailable`. A ready `reason` is
+`existing-session`, `concurrent-repair`, or `repaired`. An unavailable
+`reason` is one of:
+
+- `unsafe-lock`, `lock-timeout`, or `concurrent-repair-failed`;
+- `session-probe-timeout` or `session-state-unknown`;
+- `native-store-timeout`, `native-store-unavailable`, or
+  `invalid-bootstrap-value`;
+- `logout-timeout` or `logout-failed`;
+- `login-timeout`, `login-failed`, `login-already-authenticated`,
+  `login-token-rejected`, `login-token-malformed`, or `login-session-refused`;
+- `verify-timeout` or `verify-failed`.
+
+Any other value is recorded as `unrecorded`. The specific `login-*` reasons
+come only from the private byte-exact comparison of a reported provider exit.
+`login-already-authenticated` means `pass-cli` still stores local
+authentication. `login-token-rejected` means the provider rejected the
+bootstrap token as invalid, expired, or deleted. `login-token-malformed` means
+the bootstrap value is not a well-formed personal access token.
+`login-session-refused` means the provider refused to open the preliminary
+login session, for example because of rate limiting or a human-verification
+challenge. Every other login failure remains `login-failed`.
+
+`waiter-stage` is `record`, `identity`, `liveness-retry`,
 `child-status`, `retirement`, or `unrecorded`; `child-status` means the bounded
 controller reported a nonzero status and does not imply a natural provider
 exit. The atomic `reason`/`waiter-stage` tuple is last-writer-wins shared
 readiness state; it identifies the latest recorded outcome and is not correlated
-to an individual concurrent consumer attempt. The file never contains provider
+to an individual concurrent consumer attempt. A later attempt therefore
+replaces an earlier, more specific failure: preserving it would require trusting
+and correlating a previous status file. The file never contains provider
 output, account metadata, locators, or credential values.
 
 If the native store is locked or unavailable, unlock it through the operating

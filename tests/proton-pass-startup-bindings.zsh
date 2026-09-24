@@ -26,6 +26,9 @@ ignore_template=$repo_root/home/.chezmoiignore
 [[ -f $wants_source ]] || fail 'the Plasma target wants link must be managed'
 [[ -f $agent_template ]] || fail 'the macOS LaunchAgent must be managed'
 [[ -f $activation_template ]] || fail 'the provider-readiness activation hook must be managed'
+# Two 36-second readiness attempts plus backoff, PATH, and notification
+# phases need 82.30 seconds; the ceiling keeps a 7.70-second margin.
+assert_line 'TimeoutStartSec=90s' "$unit_source"
 
 if [[ $OSTYPE == linux* ]]; then
   systemd_test_bin=

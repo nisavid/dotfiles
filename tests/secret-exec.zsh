@@ -48,10 +48,14 @@ classify_latest_readiness_status() {
       case $readiness_status_line in
         reason=existing-session|reason=concurrent-repair|reason=repaired|\
         reason=unsafe-lock|reason=lock-timeout|reason=concurrent-repair-failed|\
+        reason=session-probe-timeout|reason=session-state-unknown|\
         reason=native-store-timeout|\
         reason=native-store-unavailable|reason=invalid-bootstrap-value|\
-        reason=login-timeout|reason=login-failed|reason=verify-timeout|\
-        reason=verify-failed)
+        reason=logout-timeout|reason=logout-failed|\
+        reason=login-timeout|reason=login-failed|\
+        reason=login-already-authenticated|reason=login-token-rejected|\
+        reason=login-token-malformed|reason=login-session-refused|\
+        reason=verify-timeout|reason=verify-failed)
           readiness_reason=${readiness_status_line#reason=}
           ;;
         waiter-stage=record|waiter-stage=identity|\
@@ -957,10 +961,14 @@ if (( lazy_repair_status != 0 )); then
     while IFS= read -r readiness_status_line || [[ -n $readiness_status_line ]]; do
       case $readiness_status_line in
         reason=unsafe-lock|reason=lock-timeout|reason=concurrent-repair-failed|\
+        reason=session-probe-timeout|reason=session-state-unknown|\
         reason=native-store-timeout|\
         reason=native-store-unavailable|reason=invalid-bootstrap-value|\
-        reason=login-timeout|reason=login-failed|reason=verify-timeout|\
-        reason=verify-failed)
+        reason=logout-timeout|reason=logout-failed|\
+        reason=login-timeout|reason=login-failed|\
+        reason=login-already-authenticated|reason=login-token-rejected|\
+        reason=login-token-malformed|reason=login-session-refused|\
+        reason=verify-timeout|reason=verify-failed)
           repair_reason=${readiness_status_line#reason=}
           ;;
       esac
