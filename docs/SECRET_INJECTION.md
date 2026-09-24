@@ -319,7 +319,9 @@ contract.
 The encrypted catalog may also map command names to profiles. Apply renders the
 map privately and manages a shim for each command. A shim resolves the first
 later executable with the same name, then launches it through the mapped
-profile.
+profile. The shim launches that executable by its `PATH` location without
+resolving symbolic links, so a symlinked multi-call binary still receives the
+command name it dispatches on.
 
 The dispatcher rejects missing, duplicate, malformed, and recursive mappings.
 An absolute executable path bypasses command lookup and therefore bypasses the

@@ -144,6 +144,20 @@ exit_code=$?
 set -e
 (( exit_code == 37 )) || fail 'the shim must preserve the real executable exit status'
 
+multicall_bin=$test_dir/multicall-bin
+mkdir -- "$multicall_bin"
+cat > "$multicall_bin/multicall" <<'EOF'
+#!/usr/bin/env zsh
+print -r -- "${0:t}"
+EOF
+chmod +x "$multicall_bin/multicall"
+rm -- "$real_bin/tool-a"
+ln -s ../multicall-bin/multicall "$real_bin/tool-a"
+output=$(tool-a)
+[[ $output == tool-a ]] ||
+  fail 'the shim must preserve the invoked name of a symlinked multi-call executable'
+rm -- "$real_bin/tool-a"
+
 cp "$real_bin/exit-0" "$real_bin/tool-a"
 launcher=$fixture_home/.local/bin/secret-exec
 mv "$launcher" "$test_dir/secret-exec"
