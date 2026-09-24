@@ -599,6 +599,7 @@ case $1 in
     (( $# == 1 )) || fail_stage info-argv 64
     [[ ${PROTON_PASS_NO_UPDATE_CHECK:-} == 1 ]] || fail_stage info-update-check 65
     [[ -z ${${(P)bootstrap_field}:-} ]] || fail_stage info-bootstrap-scrub 72
+    [[ -z ${SECRET_EXEC_INJECTED_PROFILES+set} ]] || fail_stage info-marker-scrub 77
     print -r -- info >> "$FAKE_PASS_SESSION_LOG"
     print -r -- 'account-metadata-canary'
     if [[ -e $FAKE_PASS_SESSION ]]; then
@@ -630,6 +631,7 @@ case $1 in
     [[ $2 == view && $3 == --output && $4 == human && $# == 5 ]] || fail_stage item-argv 68
     [[ -e $FAKE_PASS_SESSION ]] || fail_stage item-session 69
     [[ -z ${${(P)bootstrap_field}:-} ]] || fail_stage item-bootstrap-scrub 72
+    [[ -z ${SECRET_EXEC_INJECTED_PROFILES+set} ]] || fail_stage item-marker-scrub 77
     [[ ${PROTON_PASS_AGENT_REASON:-} == 'secret-exec credential resolution' ]] || fail_stage item-reason 73
     [[ ${PROTON_PASS_NO_UPDATE_CHECK:-} == 1 ]] || fail_stage item-update-check 74
     case $(/usr/bin/uname -s) in
@@ -766,6 +768,13 @@ esac
 EOF
 chmod +x "$fake_bin/check-selected"
 
+cat > "$fake_bin/print-marker" <<'EOF'
+#!/usr/bin/env zsh
+print -r -- "marker=${SECRET_EXEC_INJECTED_PROFILES-unset}" \
+  "context7=${CONTEXT7_API_KEY:+set} firecrawl=${FIRECRAWL_API_KEY:+set}"
+EOF
+chmod +x "$fake_bin/print-marker"
+
 cat > "$fake_bin/exit-37" <<'EOF'
 #!/usr/bin/env zsh
 exit 37
@@ -835,9 +844,11 @@ if (( launcher_status != 0 )); then
     provider_diagnostic=$(<"$FAKE_PASS_DIAGNOSTIC_LOG")
     case $provider_diagnostic in
       info:start|info:ready|info-argv:exit=64|info-update-check:exit=65|\
-      info-bootstrap-scrub:exit=72|info-session:exit=1|login:start|login:ready|\
+      info-bootstrap-scrub:exit=72|info-marker-scrub:exit=77|info-session:exit=1|\
+      login:start|login:ready|\
       login-argv:exit=66|login-bootstrap:exit=67|item:start|item:ready|\
       item-argv:exit=68|item-session:exit=69|item-bootstrap-scrub:exit=72|\
+      item-marker-scrub:exit=77|\
       item-reason:exit=73|item-update-check:exit=74|item-keyring:exit=75|\
       item-platform:exit=76|command:exit=71)
         ;;
@@ -934,6 +945,44 @@ mv "$test_dir/proton-session.env" "$profile_dir/proton-session.env"
 for profile in context7 firecrawl github greptile aws; do
   zsh "$launcher" "$profile" -- check-selected "$profile"
 done
+
+output=$(SECRET_EXEC_INJECTED_PROFILES='stale context7 firecrawl' \
+  zsh "$launcher" context7 -- print-marker)
+[[ $output == 'marker=context7 context7=set firecrawl=' ]] ||
+  fail 'the launcher must replace an inherited marker with the injected profile'
+output=$(zsh "$launcher" context7 -- zsh "$launcher" firecrawl -- print-marker)
+[[ $output == 'marker=firecrawl context7= firecrawl=set' ]] ||
+  fail 'a nested launcher must name only the profile whose values survive its scrub'
+# An inherited marker for the selected profile reuses its present value: no
+# readiness or provider call, but every other managed name is still scrubbed.
+: > "$FAKE_PASS_LOG"
+: > "$FAKE_PASS_SESSION_LOG"
+output=$(env SECRET_EXEC_INJECTED_PROFILES='stale context7' \
+  "$context7_field=inherited-context7" "$firecrawl_field=inherited-firecrawl" \
+  zsh "$launcher" context7 -- print-marker)
+[[ $output == 'marker=context7 context7=set firecrawl=' ]] ||
+  fail "an injected profile must keep its value and scrub other profiles: $output"
+[[ ! -s $FAKE_PASS_LOG && ! -s $FAKE_PASS_SESSION_LOG ]] ||
+  fail 'an injected profile must skip readiness and resolution'
+aws_reuse_json=$(env SECRET_EXEC_INJECTED_PROFILES=aws \
+  "$aws_access_field=AKIAINHERITED" "$aws_secret_field=inherited" \
+  zsh "$launcher" aws-credential-process aws)
+[[ $aws_reuse_json == *'"AKIACANARY123"'* && -s $FAKE_PASS_LOG ]] ||
+  fail 'aws-credential-process must always resolve through the provider'
+: > "$FAKE_PASS_LOG"
+rm -f -- "$TARGET_MARKER"
+: > "$FAKE_PASS_ITEM_EXIT_124"
+set +e
+stale_marker_output=$(unset "$context7_field"
+  SECRET_EXEC_INJECTED_PROFILES=context7 zsh "$launcher" context7 -- mark-target 2>&1)
+stale_marker_status=$?
+set -e
+rm -f -- "$FAKE_PASS_ITEM_EXIT_124"
+(( stale_marker_status != 0 )) && [[ ! -e $TARGET_MARKER ]] ||
+  fail 'a failed launch must not start the target'
+[[ $stale_marker_output == 'secret-exec: failed to resolve CONTEXT7_API_KEY' &&
+  $(<"$FAKE_PASS_LOG") == pass://cli-secrets/context7/password ]] ||
+  fail 'the launcher must drop an inherited marker before readiness and resolution'
 
 rm -f -- "$FAKE_PASS_SESSION"
 : > "$FAKE_PASS_SESSION_LOG"
@@ -1213,6 +1262,17 @@ mv "$test_dir/context7.env" "$profile_dir/context7.env"
 chmod 644 "$profile_dir/context7.env"
 assert_invalid_profiles 'a group-readable profile'
 chmod 600 "$profile_dir/context7.env"
+
+for marker_mapping in \
+  'SECRET_EXEC_INJECTED_PROFILES=pass://cli-secrets/context7/password' \
+  '!SECRET_EXEC_INJECTED_PROFILES' \
+  'SECRET_EXEC_INHERITED_PROFILES=pass://cli-secrets/context7/password' \
+  '!SECRET_EXEC_FUTURE_INTERNAL'; do
+  print -r -- "$marker_mapping" > "$profile_dir/marker.env"
+  chmod 600 "$profile_dir/marker.env"
+  assert_invalid_profiles "a profile that manages a launcher-internal name ($marker_mapping)"
+  rm -- "$profile_dir/marker.env"
+done
 
 trace_output=$(zsh -x "$launcher" context7 -- check-context 'argument with spaces' 2>&1)
 [[ $trace_output != *context7-canary* ]] || fail 'xtrace must not expose a retrieved canary'

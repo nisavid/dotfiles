@@ -43,7 +43,11 @@ cat > "$profile_dir/member.env" <<'EOF'
 MEMBER_TOKEN=pass://fixture-store/member/token
 !UNRELATED_SECRET
 EOF
-chmod 600 "$config_dir/commands.env" "$profile_dir/member.env"
+cat > "$profile_dir/other.env" <<'EOF'
+OTHER_TOKEN=pass://fixture-store/other/token
+EOF
+chmod 600 "$config_dir/commands.env" "$profile_dir/member.env" \
+  "$profile_dir/other.env"
 
 cat > "$fixture_home/.local/bin/pass-cli" <<'EOF'
 #!/usr/bin/env zsh
@@ -57,14 +61,18 @@ case $1 in
     ;;
   item)
     [[ $2 == view && $3 == --output && $4 == human && $# == 5 ]] || exit 66
-    [[ $5 == pass://fixture-store/member/token ]] || exit 67
+    case $5 in
+      pass://fixture-store/member/token) fixture_value=member-canary ;;
+      pass://fixture-store/other/token) fixture_value=other-canary ;;
+      *) exit 67 ;;
+    esac
     [[ ${PROTON_PASS_AGENT_REASON:-} == 'secret-exec credential resolution' ]] || exit 68
     [[ ${PROTON_PASS_NO_UPDATE_CHECK:-} == 1 ]] || exit 69
     case $(/usr/bin/uname -s) in
       Linux) [[ ${PROTON_PASS_LINUX_KEYRING:-} == dbus ]] || exit 71 ;;
       Darwin) [[ -z ${PROTON_PASS_LINUX_KEYRING:-} ]] || exit 71 ;;
     esac
-    print -r -- 'member-canary'
+    print -r -- "$fixture_value"
     ;;
   *)
     exit 72
@@ -158,18 +166,101 @@ output=$(tool-a)
   fail 'the shim must preserve the invoked name of a symlinked multi-call executable'
 rm -- "$real_bin/tool-a"
 
-cp "$real_bin/exit-0" "$real_bin/tool-a"
+# Provenance marker: an already-injected profile skips the provider lookup, but
+# the launcher still scrubs every other managed name.
 launcher=$fixture_home/.local/bin/secret-exec
+counted_launcher=$fixture_home/.local/bin/secret-exec-counted
+launcher_log=$test_dir/launcher-calls.log
+cp "$launcher" "$counted_launcher"
+mv "$launcher" "$test_dir/secret-exec"
+cat > "$launcher" <<'EOF'
+#!/usr/bin/env zsh
+print -r -- "$1" >> "$LAUNCHER_LOG"
+exec "${0:h}/secret-exec-counted" "$@"
+EOF
+chmod +x "$launcher"
+export LAUNCHER_LOG=$launcher_log
+cat > "$real_bin/tool-a" <<'EOF'
+#!/usr/bin/env zsh
+print -r -- "marker=${SECRET_EXEC_INJECTED_PROFILES-unset}" \
+  "member=${MEMBER_TOKEN-unset} other=${OTHER_TOKEN-unset}" \
+  "unrelated=${UNRELATED_SECRET-unset}"
+EOF
+chmod +x "$real_bin/tool-a"
+injected_output='marker=member member=inherited-member other=unset unrelated=unset'
+resolved_output='marker=member member=member-canary other=unset unrelated=unset'
+
+for injected_marker in member 'other member' 'member other'; do
+  : > "$launcher_log"
+  : > "$FAKE_PASS_LOG"
+  output=$(OTHER_TOKEN=inherited-other \
+    SECRET_EXEC_INJECTED_PROFILES=$injected_marker tool-a)
+  [[ $output == "$injected_output" ]] ||
+    fail "an injected profile must keep its value and scrub the rest ('$injected_marker'): $output"
+  [[ $(<"$launcher_log") == member && ! -s $FAKE_PASS_LOG ]] ||
+    fail "an injected profile must pass through the launcher without a provider call ('$injected_marker')"
+done
+
+for spoofed_value in unset empty multiline; do
+  : > "$launcher_log"
+  : > "$FAKE_PASS_LOG"
+  case $spoofed_value in
+    unset) output=$(unset MEMBER_TOKEN; SECRET_EXEC_INJECTED_PROFILES=member tool-a) ;;
+    empty) output=$(MEMBER_TOKEN= SECRET_EXEC_INJECTED_PROFILES=member tool-a) ;;
+    multiline)
+      output=$(MEMBER_TOKEN=$'first\nsecond' SECRET_EXEC_INJECTED_PROFILES=member tool-a)
+      ;;
+  esac
+  [[ $output == "$resolved_output" && $(<"$FAKE_PASS_LOG") == $'info\nitem' ]] ||
+    fail "a marker without a usable value must resolve through the provider ($spoofed_value): $output"
+done
+
+for spoof_marker in member-extra xmember mem member.x 'other member-extra' ''; do
+  : > "$launcher_log"
+  : > "$FAKE_PASS_LOG"
+  output=$(SECRET_EXEC_INJECTED_PROFILES=$spoof_marker tool-a)
+  [[ $output == "$resolved_output" && $(<"$FAKE_PASS_LOG") == $'info\nitem' ]] ||
+    fail "a non-matching marker must resolve through the provider: '$spoof_marker'"
+  [[ $(<"$launcher_log") == member ]] ||
+    fail "a non-matching marker must invoke the launcher once: '$spoof_marker'"
+done
+
+: > "$launcher_log"
+output=$(unset SECRET_EXEC_INJECTED_PROFILES; tool-a)
+[[ $output == "$resolved_output" && $(<"$launcher_log") == member ]] ||
+  fail 'an absent marker must inject through the launcher'
+
+: > "$launcher_log"
+output=$(OTHER_TOKEN=inherited-other "$launcher" other -- tool-a)
+[[ $output == "$resolved_output" ]] ||
+  fail 'a shim inside another profile must replace the marker and scrub its values'
+[[ $(<"$launcher_log") == $'other\nmember' ]] ||
+  fail 'a shim inside another profile must invoke the launcher again'
+
+output=$("$launcher" member -- "$launcher" other -- "$real_bin/tool-a")
+[[ $output == 'marker=other member=unset other=other-canary unrelated=unset' ]] ||
+  fail 'a nested launcher must name exactly the profile whose values are present'
+
+rm -- "$launcher" "$counted_launcher" "$real_bin/tool-a"
+mv "$test_dir/secret-exec" "$launcher"
+unset LAUNCHER_LOG
+
+cp "$real_bin/exit-0" "$real_bin/tool-a"
 mv "$launcher" "$test_dir/secret-exec"
 mkdir "$launcher"
 chmod +x "$launcher"
 set +e
 tool-a > /dev/null 2>&1
 exit_code=$?
+MEMBER_TOKEN=member-canary SECRET_EXEC_INJECTED_PROFILES=member \
+  tool-a > /dev/null 2>&1
+injected_exit_code=$?
 set -e
 rmdir "$launcher"
 mv "$test_dir/secret-exec" "$launcher"
 (( exit_code == 1 )) || fail 'the dispatcher must reject an executable launcher directory'
+(( injected_exit_code == 1 )) ||
+  fail 'the dispatcher must reject a launcher directory inside an injected process tree'
 
 print -r -- 'tool-a=unknown' > "$config_dir/commands.env"
 set +e

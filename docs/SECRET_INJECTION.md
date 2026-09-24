@@ -31,6 +31,32 @@ descendants run in a dedicated process group; timeout cleanup sends `TERM`,
 then `KILL`, and reaps the managed child before the launcher returns. Resolved
 values travel only through inherited anonymous descriptors and shell memory.
 
+The launcher also exports `SECRET_EXEC_INJECTED_PROFILES`, a non-secret
+provenance marker that names the profile whose values the target received. The
+launcher drops any inherited marker before it resolves anything, so readiness
+checks, providers, and failed launches never see a stale one. Because the scrub
+removes every other profile's credentials, a nested launch replaces the marker
+rather than appending to it: after `secret-exec A -- secret-exec B -- cmd`, the
+marker names only `B`. The marker never carries a value. Profiles must not map
+or unset it or any other `SECRET_EXEC_*` name, which the launcher reserves for
+its own state.
+
+When the inherited marker names the selected profile as a whole
+space-separated word and every value that profile maps is present, non-empty,
+and a single line, the launcher reuses those values. It skips readiness and
+resolution, still removes every other managed name, including names the profile
+unsets with `!`, and then execs the target with the marker set to that profile.
+A marker that merely contains the name, such as `typesafe-extra` for
+`typesafe`, does not match. If any value is missing, the launcher resolves the
+profile normally. `aws-credential-process` always resolves.
+
+The marker is not authenticated, and reuse trusts the inherited value. A
+process that sets the marker next to its own value for a mapped name gets that
+value passed through in place of the managed one, exactly as if it had run the
+target directly. A spoofed marker cannot make the launcher fetch, reveal, or
+widen access to any value: it only suppresses a lookup whose result would have
+replaced the caller's own value.
+
 Proton Pass sessions are local to each host and can become unauthenticated
 while local session files remain. A successful remote `pass-cli info` call,
 with its output suppressed, is the readiness signal. Local files, a running
@@ -322,6 +348,11 @@ later executable with the same name, then launches it through the mapped
 profile. The shim launches that executable by its `PATH` location without
 resolving symbolic links, so a symlinked multi-call binary still receives the
 command name it dispatches on.
+
+Every shim goes through the launcher. Inside a process tree that already
+carries the mapped profile, the launcher reuses the injected values instead of
+repeating the provider lookup (see [Profile contract](#profile-contract)), so a
+shimmed command still receives only its profile's credentials.
 
 The dispatcher rejects missing, duplicate, malformed, and recursive mappings.
 An absolute executable path bypasses command lookup and therefore bypasses the
