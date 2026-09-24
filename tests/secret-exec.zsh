@@ -1023,7 +1023,7 @@ wait_for_notify_log() {
   integer polls=500
   zmodload zsh/zselect
   while (( polls-- > 0 )); do
-    if [[ $(<"$FAKE_NOTIFY_LOG") == *'Unlock the credential store and restart it.'* ]]; then
+    if [[ $(<"$FAKE_NOTIFY_LOG") == *'Restart it once the credential provider is available.'* ]]; then
       zselect -t 50 2>/dev/null || true
       return 0
     fi

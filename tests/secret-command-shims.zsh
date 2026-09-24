@@ -146,7 +146,7 @@ wait_for_notification() {
 expected_notification() {
   local platform=$1 command_name=$2 profile=$3
   local title='Credentials unavailable'
-  local body="$command_name started without its $profile credentials. Unlock the credential store and restart it."
+  local body="$command_name started without its $profile credentials. Restart it once the credential provider is available."
   case $platform in
     linux*)
       print -rl -- notify-send '--app-name=Secret-backed tools' "$title" "$body"

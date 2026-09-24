@@ -99,7 +99,10 @@ launch status.
 
 The notification's title is `Credentials unavailable`. Its body names only the
 profile and the command's base name, or `A command` when that name contains
-unusual characters. It never includes a value, locator, or provider output. Linux sends it with `notify-send`; macOS passes the text to
+unusual characters. It never includes a value, locator, or provider output,
+and it does not guess at a cause: it asks only for a restart once the
+credential provider is available, while stderr and the readiness status keep
+the value-free reason. Linux sends it with `notify-send`; macOS passes the text to
 `osascript` as arguments, not as script source. Either command is found on
 `PATH`, like `pass-cli`, and a missing notifier skips the notification. It runs
 detached with its output discarded and is killed after two seconds, so it
