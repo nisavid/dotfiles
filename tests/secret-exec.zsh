@@ -1,5 +1,8 @@
 #!/usr/bin/env zsh
 set -euo pipefail
+# The launcher rejects group- or world-writable commands, so fixtures must not
+# inherit a permissive caller umask such as a user-private-group 002.
+umask 022
 
 repo_root=${0:A:h:h}
 launcher_source=$repo_root/home/private_dot_local/bin/executable_secret-exec
