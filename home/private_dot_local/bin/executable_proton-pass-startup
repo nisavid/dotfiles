@@ -5,6 +5,11 @@ typeset bootstrap_field=PROTON_PASS_PERSONAL_ACCESS
 bootstrap_field+=_TOKEN
 unset "$bootstrap_field"
 unset bootstrap_field
+# Startup state is computed here; inherited copies never reach a message.
+unset PROTON_PASS_UNMET_PREREQUISITE PROTON_PASS_CAPTURED_LINE \
+  PROTON_PASS_UPTIME PROTON_PASS_RENDERED_RUNTIME_PATH \
+  PROTON_PASS_STATUS_TEXT PROTON_PASS_STATUS_STATE PROTON_PASS_STATUS_REASON \
+  PROTON_PASS_STATUS_LAST_FAILURE 2>/dev/null || true
 set -euo pipefail
 umask 077
 
@@ -14,6 +19,13 @@ readonly PROTON_PASS_PATH_POLICY_TIMEOUT_SECONDS=3
 readonly PROTON_PASS_READINESS_TIMEOUT_SECONDS=35.85
 readonly PROTON_PASS_RETRY_BACKOFF_CENTISECONDS=500
 readonly PROTON_PASS_NOTIFICATION_TIMEOUT_SECONDS=2
+# Login-time prerequisites: the wallet that PAM unlocks, and a network that
+# may still be coming up.
+readonly PROTON_PASS_PREREQUISITE_WAIT_SECONDS=60
+readonly PROTON_PASS_PREREQUISITE_PROBE_TIMEOUT_SECONDS=2
+readonly PROTON_PASS_PREREQUISITE_POLL_CENTISECONDS=100
+readonly PROTON_PASS_BUSCTL=/usr/bin/busctl
+readonly PROTON_PASS_UPTIME_FILE=/proc/uptime
 readonly PROTON_PASS_CHILD_POLL_CENTISECONDS=5
 readonly PROTON_PASS_CHILD_TERMINATION_GRACE_CENTISECONDS=10
 typeset -g PROTON_PASS_ACTIVE_CHILD_NAME=
@@ -268,27 +280,57 @@ trap 'terminate_active_child; exit 129' HUP
 trap 'terminate_active_child; exit 130' INT
 trap 'terminate_active_child; exit 143' TERM
 
-render_darwin_runtime_path() {
+# Runs one bounded child whose output goes only to a private unlinked
+# transport, and accepts exactly one non-empty line from it. Returns 2 when the
+# transport itself is unavailable, so each caller decides whether that is
+# fatal.
+capture_bounded_line() {
   emulate -L zsh
 
-  local startup_file=$1
+  local timeout_seconds=$1
+  shift
+  typeset -g PROTON_PASS_CAPTURED_LINE=
   zmodload zsh/system || die 'zsh/system is required'
   integer output_fd=0 create_attempt
   local output_file=
   for (( create_attempt = 1; create_attempt <= 4; ++create_attempt )); do
-    output_file=/tmp/proton-pass-startup-path.${sysparams[pid]}.$RANDOM
+    output_file=/tmp/proton-pass-startup-capture.${sysparams[pid]}.$RANDOM
     if sysopen -rw -m 600 -o creat,excl,nofollow \
       -u output_fd "$output_file"; then
       break
     fi
     output_fd=0
   done
-  (( output_fd > 2 )) || die 'cannot create private GUI PATH transport'
+  (( output_fd > 2 )) || return 2
   if ! /bin/rm -- "$output_file"; then
     exec {output_fd}>&-
-    die 'cannot unlink private GUI PATH transport'
+    return 2
   fi
 
+  integer child_status=0
+  run_bounded_child "$timeout_seconds" "$@" \
+    >&$output_fd 2>/dev/null || child_status=$?
+  if (( child_status != 0 )) || ! sysseek -u $output_fd 0; then
+    exec {output_fd}>&-
+    return 1
+  fi
+
+  local captured_line= extra_output=
+  if ! IFS= read -r captured_line <&$output_fd ||
+    IFS= read -r extra_output <&$output_fd || [[ -n $extra_output ]]; then
+    exec {output_fd}>&-
+    return 1
+  fi
+  exec {output_fd}>&-
+  [[ -n $captured_line && $captured_line != *$'\n'* &&
+    $captured_line != *$'\r'* ]] || return 1
+  typeset -g PROTON_PASS_CAPTURED_LINE=$captured_line
+}
+
+render_darwin_runtime_path() {
+  emulate -L zsh
+
+  local startup_file=$1
   local path_renderer='
 set -euo pipefail
 typeset bootstrap_field=PROTON_PASS_PERSONAL_ACCESS
@@ -299,25 +341,86 @@ path=( /usr/bin /bin /usr/sbin /sbin )
 source "$1" launcher darwin >/dev/null 2>&1
 [[ -n $PATH && $PATH != *$'\''\n'\''* && $PATH != *$'\''\r'\''* ]] || exit 65
 builtin print -r -- "$PATH"'
-  integer render_status=0
-  run_bounded_child "$PROTON_PASS_PATH_POLICY_TIMEOUT_SECONDS" \
-    /bin/zsh -f -c "$path_renderer" proton-pass-path "$startup_file" \
-    >&$output_fd 2>/dev/null || render_status=$?
-  if (( render_status != 0 )) || ! sysseek -u $output_fd 0; then
-    exec {output_fd}>&-
+  capture_bounded_line "$PROTON_PASS_PATH_POLICY_TIMEOUT_SECONDS" \
+    /bin/zsh -f -c "$path_renderer" proton-pass-path "$startup_file" ||
     return 1
-  fi
+  typeset -g PROTON_PASS_RENDERED_RUNTIME_PATH=$PROTON_PASS_CAPTURED_LINE
+  typeset -g PROTON_PASS_CAPTURED_LINE=
+}
 
-  local rendered_path= extra_output=
-  if ! IFS= read -r rendered_path <&$output_fd ||
-    IFS= read -r extra_output <&$output_fd || [[ -n $extra_output ]]; then
-    exec {output_fd}>&-
+# Read-only property reads: neither prompts for an unlock nor starts a login.
+# Returns 2 when the probe cannot run at all.
+secret_service_unlocked() {
+  emulate -L zsh
+
+  integer capture_status=0
+  capture_bounded_line "$PROTON_PASS_PREREQUISITE_PROBE_TIMEOUT_SECONDS" \
+    "$PROTON_PASS_BUSCTL" --user --no-pager get-property \
+    org.freedesktop.secrets /org/freedesktop/secrets/aliases/default \
+    org.freedesktop.Secret.Collection Locked || capture_status=$?
+  (( capture_status != 2 )) || return 2
+  (( capture_status == 0 )) || return 1
+  [[ $PROTON_PASS_CAPTURED_LINE == 'b false' ]]
+}
+
+# Only NetworkManager's own report of a missing global connection holds
+# startup; without NetworkManager the network is not awaited.
+network_connected() {
+  emulate -L zsh
+
+  capture_bounded_line "$PROTON_PASS_PREREQUISITE_PROBE_TIMEOUT_SECONDS" \
+    "$PROTON_PASS_BUSCTL" --system --no-pager get-property \
+    org.freedesktop.NetworkManager /org/freedesktop/NetworkManager \
+    org.freedesktop.NetworkManager State || return 0
+  # NM_STATE_CONNECTED_GLOBAL
+  [[ $PROTON_PASS_CAPTURED_LINE == 'u 70' ]]
+}
+
+# Seconds since boot. Unlike the wall clock, which NTP can step backwards
+# during login, it only moves forward.
+read_uptime() {
+  emulate -L zsh
+
+  typeset -g PROTON_PASS_UPTIME=
+  local uptime_line=
+  # The shell reports a failed redirection itself, so silence the whole group.
+  { IFS= read -r uptime_line < "$PROTON_PASS_UPTIME_FILE" } 2>/dev/null ||
     return 1
-  fi
-  exec {output_fd}>&-
-  [[ -n $rendered_path && $rendered_path != *$'\n'* &&
-    $rendered_path != *$'\r'* ]] || return 1
-  typeset -g PROTON_PASS_RENDERED_RUNTIME_PATH=$rendered_path
+  uptime_line=${uptime_line%% *}
+  [[ $uptime_line == <->(|.<->) ]] || return 1
+  typeset -g PROTON_PASS_UPTIME=$uptime_line
+}
+
+# A readiness attempt before both prerequisites hold only spends its budget.
+# The wait is bounded; afterwards, or when a probe cannot run, the attempts
+# run regardless.
+await_prerequisites() {
+  emulate -L zsh
+
+  typeset -g PROTON_PASS_UNMET_PREREQUISITE=
+  [[ $OSTYPE == linux* && -x $PROTON_PASS_BUSCTL ]] || return 0
+  zmodload zsh/zselect || die 'zsh/zselect is required'
+  read_uptime || return 0
+  local -F deadline=$(( PROTON_PASS_UPTIME + PROTON_PASS_PREREQUISITE_WAIT_SECONDS ))
+  local unmet
+  integer probe_status
+  while true; do
+    unmet=
+    probe_status=0
+    secret_service_unlocked || probe_status=$?
+    (( probe_status != 2 )) || return 0
+    if (( probe_status != 0 )); then
+      unmet=native-store-locked
+    elif ! network_connected; then
+      unmet=network-offline
+    fi
+    [[ -n $unmet ]] || return 0
+    if ! read_uptime || (( PROTON_PASS_UPTIME >= deadline )); then
+      typeset -g PROTON_PASS_UNMET_PREREQUISITE=$unmet
+      return 0
+    fi
+    zselect -t "$PROTON_PASS_PREREQUISITE_POLL_CENTISECONDS" 2>/dev/null || true
+  done
 }
 
 configure_runtime_path() {
@@ -352,9 +455,42 @@ resolve_readiness_adapter() {
   die 'proton-pass-ensure-ready is required'
 }
 
+# Reads the readiness status the helper writes. Only values shaped like its
+# enumerated reasons and integer times are kept.
+read_status_snapshot() {
+  emulate -L zsh
+
+  typeset -g PROTON_PASS_STATUS_TEXT= PROTON_PASS_STATUS_STATE=
+  typeset -g PROTON_PASS_STATUS_REASON= PROTON_PASS_STATUS_LAST_FAILURE=
+  local status_file=${XDG_STATE_HOME:-$HOME/.local/state}/secret-exec/proton-pass-readiness.status
+  [[ -f $status_file && ! -L $status_file ]] || return 0
+  local status_line text= state= reason= last_reason= last_at=
+  integer status_lines=0
+  while (( status_lines++ < 8 )) && IFS= read -r status_line; do
+    text+=$status_line$'\n'
+    case $status_line in
+      state=*) state=${status_line#*=} ;;
+      reason=*) reason=${status_line#*=} ;;
+      last-failure-reason=*) last_reason=${status_line#*=} ;;
+      last-failure-at=*) last_at=${status_line#*=} ;;
+    esac
+  done < "$status_file" 2>/dev/null || true
+  local reason_pattern='^[a-z]+(-[a-z]+)*$'
+  typeset -g PROTON_PASS_STATUS_TEXT=$text
+  [[ $state != (ready|unavailable) ]] || typeset -g PROTON_PASS_STATUS_STATE=$state
+  if [[ ${#reason} -le 40 && $reason =~ $reason_pattern ]]; then
+    typeset -g PROTON_PASS_STATUS_REASON=$reason
+  fi
+  if [[ $last_at == <-> && ${#last_reason} -le 40 &&
+    $last_reason =~ $reason_pattern ]]; then
+    typeset -g PROTON_PASS_STATUS_LAST_FAILURE=$last_reason@$last_at
+  fi
+}
+
 notify_unavailable() {
   emulate -L zsh
 
+  local body=$1
   case $OSTYPE in
     linux*)
       local notify_send=/usr/bin/notify-send
@@ -363,30 +499,109 @@ notify_unavailable() {
         "$notify_send" \
         --app-name='Secret-backed tools' \
         'Credential provider unavailable' \
-        'Unlock the native credential store. Secret-backed tools will retry when used.' \
+        "$body" \
         >/dev/null 2>&1 || true
       ;;
     darwin*)
       local osascript=/usr/bin/osascript
       [[ -x $osascript ]] || return 0
       run_bounded_child "$PROTON_PASS_NOTIFICATION_TIMEOUT_SECONDS" \
-        "$osascript" -e \
-        'display notification "Unlock the login keychain. Secret-backed tools will retry when used." with title "Credential provider unavailable"' \
+        "$osascript" -e 'on run argv' \
+        -e 'display notification (item 1 of argv) with title (item 2 of argv)' \
+        -e 'end run' "$body" 'Credential provider unavailable' \
         >/dev/null 2>&1 || true
       ;;
   esac
+}
+
+# Names why startup gave up. Status values count as this run's only if they
+# changed since startup read the file, so no clock ordering is involved.
+report_unavailable() {
+  emulate -L zsh
+
+  local status_before=$1
+  local last_failure_before=$2
+  read_status_snapshot
+  local specific_reason= recorded_reason=
+  if [[ -n $PROTON_PASS_STATUS_LAST_FAILURE &&
+    $PROTON_PASS_STATUS_LAST_FAILURE != "$last_failure_before" ]]; then
+    specific_reason=${PROTON_PASS_STATUS_LAST_FAILURE%@*}
+  fi
+  if [[ $PROTON_PASS_STATUS_TEXT != "$status_before" &&
+    $PROTON_PASS_STATUS_STATE == unavailable ]]; then
+    recorded_reason=$PROTON_PASS_STATUS_REASON
+  fi
+  # A specific failure from this run is newer evidence than the prerequisite
+  # verdict sampled before the attempts, so it wins. The helper's catch-alls,
+  # login-failed and verify-failed, name no cause, though, and being offline
+  # explains them better than they explain themselves. A locked wallet cannot:
+  # those attempts had already read the bootstrap item from it.
+  local reason=$specific_reason
+  local unmet=${PROTON_PASS_UNMET_PREREQUISITE:-}
+  if [[ $unmet == network-offline &&
+    $reason == (login-failed|verify-failed) ]]; then
+    reason=$unmet
+  fi
+  # An unmet prerequisite also explains a generic timeout or unclassified
+  # state better than that state does.
+  [[ -n $reason ]] || reason=$unmet
+  [[ -n $reason ]] || reason=$recorded_reason
+  local guidance body
+  case $reason in
+    native-store-locked|native-store-unavailable|native-store-timeout)
+      case $OSTYPE in
+        darwin*)
+          guidance='unlock the login keychain and retry'
+          body='Unlock the login keychain.'
+          ;;
+        *)
+          guidance='unlock the native credential store and retry'
+          body='Unlock the native credential store.'
+          ;;
+      esac
+      body+=' Secret-backed tools will retry when used.'
+      ;;
+    network-offline|session-probe-timeout|login-timeout|verify-timeout)
+      guidance='check the network; secret-backed tools retry when used'
+      body='Proton Pass could not be reached. Secret-backed tools will retry when used.'
+      ;;
+    login-token-rejected|login-token-malformed|invalid-bootstrap-value)
+      guidance='replace the Proton Pass bootstrap token'
+      body='The Proton Pass bootstrap token is invalid or was rejected. Replace it; secret-backed tools cannot recover until then.'
+      ;;
+    *)
+      guidance='secret-backed tools retry when used'
+      body='Proton Pass is unavailable'
+      [[ -z $reason ]] || body+=" ($reason)"
+      body+='. Secret-backed tools will retry when used.'
+      ;;
+  esac
+  notify_unavailable "$body"
+  if [[ -n $reason ]]; then
+    die "credential provider remains unavailable ($reason); $guidance"
+  fi
+  die "credential provider remains unavailable; $guidance"
 }
 
 main() {
   emulate -L zsh
   setopt local_options err_return no_unset pipe_fail
 
-  (( $# == 0 )) || die 'this operation takes no arguments'
+  integer await_login_prerequisites=0
+  if (( $# == 1 )) && [[ $1 == --await-prerequisites ]]; then
+    await_login_prerequisites=1
+  elif (( $# != 0 )); then
+    die 'usage: proton-pass-startup [--await-prerequisites]'
+  fi
 
   configure_runtime_path
 
   local readiness_adapter
   readiness_adapter=$(resolve_readiness_adapter)
+  read_status_snapshot
+  local status_before=$PROTON_PASS_STATUS_TEXT
+  local last_failure_before=$PROTON_PASS_STATUS_LAST_FAILURE
+  (( ! await_login_prerequisites )) || await_prerequisites
   integer attempt
   for (( attempt = 1; attempt <= PROTON_PASS_STARTUP_ATTEMPTS; ++attempt )); do
     (( attempt == 1 )) || wait_retry_backoff
@@ -396,8 +611,7 @@ main() {
     fi
   done
 
-  notify_unavailable
-  die 'credential provider remains unavailable; unlock the native credential store and retry'
+  report_unavailable "$status_before" "$last_failure_before"
 }
 
 main "$@"

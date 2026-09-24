@@ -26,9 +26,11 @@ ignore_template=$repo_root/home/.chezmoiignore
 [[ -f $wants_source ]] || fail 'the Plasma target wants link must be managed'
 [[ -f $agent_template ]] || fail 'the macOS LaunchAgent must be managed'
 [[ -f $activation_template ]] || fail 'the provider-readiness activation hook must be managed'
-# Two 36-second readiness attempts plus backoff, PATH, and notification
-# phases need 82.30 seconds; the ceiling keeps a 7.70-second margin.
-assert_line 'TimeoutStartSec=90s' "$unit_source"
+# The Linux unit awaits login prerequisites for up to 65.30 seconds, then two
+# 36-second readiness attempts, backoff, and notification need 79.15 more:
+# 144.45 seconds in all. The ceiling keeps a 15.55-second margin.
+assert_line 'ExecStart=%h/.local/bin/proton-pass-startup --await-prerequisites' "$unit_source"
+assert_line 'TimeoutStartSec=160s' "$unit_source"
 
 if [[ $OSTYPE == linux* ]]; then
   systemd_test_bin=

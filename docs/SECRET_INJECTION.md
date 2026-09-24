@@ -364,15 +364,55 @@ two-attempt schedule with a five-second backoff around the shared readiness
 helper. On macOS, the controlled PATH-policy phase allows three seconds, one
 50-millisecond polling interval, and 100 milliseconds of termination grace.
 Two 36-second attempts, the backoff, that 3.15-second controlled phase, and a
-2.15-second notification ceiling total 82.30 seconds. Process-group creation
-and other fixed local handling use the remaining 7.70-second margin under the
-Linux service's 90-second startup ceiling. The PATH phase runs only on macOS,
-so the Linux worst case is 79.15 seconds; because the service runs before
-desktop autostart, double exhaustion delays autostart by up to that long. The
-Linux activation hook starts the oneshot service synchronously, so the same
-double exhaustion can hold `chezmoi apply` for up to that long.
-Exhaustion records the underlying value-free failure when available, emits a
-best-effort notification, and leaves lazy consumer recovery enabled.
+2.15-second notification ceiling total 82.30 seconds. The PATH phase runs only
+on macOS, so that part of the Linux worst case is 79.15 seconds.
+
+The Linux unit passes `--await-prerequisites`. Before its attempts, startup then
+waits up to 60 seconds for the Secret Service default collection to report
+unlocked and for NetworkManager to report a global connection, polling once a
+second. The deadline follows the boot clock in `/proc/uptime`, which only moves
+forward, so an NTP step during login cannot stretch the wait; if that clock
+cannot be read, startup does not wait. Each probe is a read-only D-Bus property
+read through the fixed `/usr/bin/busctl`, bounded at two seconds and captured
+the way the macOS PATH phase is. A probe that fails or returns anything else
+counts as locked for the wallet; if its private transport cannot be created,
+startup stops waiting. For the network, only NetworkManager's own report of a
+non-global state holds startup; without NetworkManager the network is not
+awaited. The wait never prompts for an unlock, and after it expires the attempts
+run regardless. The last one-second sleep can begin just before the deadline and
+be followed by one more round of both probes, so the wait can end 65.30 seconds
+after it began, and the Linux worst case is 144.45 seconds. Process-group
+creation and other fixed local handling use the remaining 15.55-second margin
+under the service's 160-second startup ceiling. Because the service runs before
+desktop autostart, a wait plus double exhaustion delays autostart by up to that
+long. The Linux activation hook starts the oneshot service synchronously, so
+the same worst case can hold `chezmoi apply` for up to that long. The macOS
+LaunchAgent and direct invocations do not wait.
+
+Exhaustion emits a best-effort notification and one fixed-form diagnostic
+naming the reason and what to do: unlock the credential store, check the
+network, or replace the bootstrap token. Startup reads the readiness status
+when it begins and again when it gives up. A value counts as this run's only if
+it changed in between, whether its own attempts or a concurrent consumer
+changed it, so no clock ordering is involved, and only values in an enumerated
+shape are read. Startup names:
+
+1. the status's `last-failure-reason`, if it changed during this run. A
+   specific failure is newer evidence than the prerequisite verdict sampled
+   before the attempts. The exceptions are the helper's catch-alls,
+   `login-failed` and `verify-failed`, which name no cause: `network-offline`
+   replaces them, because an offline `pass-cli login` fails with text the
+   helper does not recognize. `native-store-locked` does not, because those
+   attempts had already read the bootstrap item from the store.
+2. otherwise, an unmet prerequisite, `native-store-locked` or
+   `network-offline`, which also explains a generic timeout or unclassified
+   state better than that state does;
+3. otherwise, the status's current reason, if the status changed during this
+   run and reports `unavailable`.
+
+Without any of them, the diagnostic names no reason. Startup clears any
+inherited copy of its own state before it runs, so only values it computed
+reach a message. Lazy consumer recovery stays enabled.
 
 ### Status and locked stores
 

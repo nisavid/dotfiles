@@ -7,8 +7,8 @@ Before=xdg-desktop-autostart.target
 
 [Service]
 Type=oneshot
-ExecStart=%h/.local/bin/proton-pass-startup
-TimeoutStartSec=90s
+ExecStart=%h/.local/bin/proton-pass-startup --await-prerequisites
+TimeoutStartSec=160s
 UMask=0077
 NoNewPrivileges=yes
 

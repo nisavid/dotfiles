@@ -3,6 +3,9 @@ set -euo pipefail
 
 repo_root=${0:A:h:h}
 startup_source=$repo_root/home/private_dot_local/bin/executable_proton-pass-startup
+# The fixture adapter writes status through the helper's real writer, so the
+# format startup reads cannot drift from the one the helper writes.
+export FAKE_STARTUP_HELPER_SOURCE=$repo_root/home/private_dot_local/bin/executable_proton-pass-ensure-ready
 
 fail() {
   print -u2 -r -- "$1"
@@ -83,6 +86,8 @@ cat >"$startup_home/.config/zsh/startup.zsh" <<'EOF'
 path=( /usr/bin /bin /usr/sbin /sbin )
 EOF
 export HOME=$startup_home
+# Startup reads the readiness status on failure; never the operator's.
+export XDG_STATE_HOME=$test_dir/state
 test_process_fixture_init "$test_dir" || fail 'could not initialize process-fixture cleanup'
 trap test_process_fixture_cleanup EXIT
 trap 'exit 129' HUP
@@ -504,6 +509,20 @@ case $FAKE_STARTUP_SCENARIO in
   retry)
     (( attempt >= 2 ))
     ;;
+  fail-status)
+    # Records the reason through the readiness helper's own status writer,
+    # then fails.
+    if [[ -n ${FAKE_STARTUP_STATUS_REASON:-} ]]; then
+      /bin/zsh -f -c '
+        source_text=$(<"$1")
+        source_text=${source_text%$'"'"'\nmain "$@"'"'"'}
+        eval "$source_text"
+        trap - EXIT HUP INT TERM
+        write_status unavailable "$2" unrecorded
+      ' -- "$FAKE_STARTUP_HELPER_SOURCE" "$FAKE_STARTUP_STATUS_REASON"
+    fi
+    return 1
+    ;;
   hang)
     /bin/zsh -f -c '
       trap "" HUP INT TERM
@@ -863,9 +882,367 @@ test_process_fixture_stop_all
 (( descendant_survived == 0 )) ||
   fail 'startup must terminate both timed-out readiness adapter descendants'
 [[ $(<"$test_dir/deadline-output") ==
-  'proton-pass-startup: credential provider remains unavailable; unlock the native credential store and retry' ]] ||
-  fail 'exhausted startup must report one fixed actionable error'
+  'proton-pass-startup: credential provider remains unavailable; secret-backed tools retry when used' ]] ||
+  fail "exhausted startup without a recorded reason must report the generic error: $(<"$test_dir/deadline-output")"
 [[ ! -s $FAKE_STARTUP_BOOTSTRAP_LEAK_LOG ]] ||
   fail 'startup must scrub an inherited bootstrap token before readiness children'
+
+set +e
+usage_output=$("$fixture_bin/proton-pass-startup" --unknown 2>&1)
+usage_status=$?
+set -e
+(( usage_status == 1 )) &&
+  [[ $usage_output ==
+    'proton-pass-startup: usage: proton-pass-startup [--await-prerequisites]' ]] ||
+  fail "startup must reject unknown arguments: $usage_output"
+
+# Writes a status through the helper's own writer, as an earlier run would.
+write_helper_status() {
+  emulate -L zsh
+
+  /bin/zsh -f -c '
+    source_text=$(<"$1")
+    source_text=${source_text%$'"'"'\nmain "$@"'"'"'}
+    eval "$source_text"
+    trap - EXIT HUP INT TERM
+    write_status "$2" "$3" unrecorded
+  ' -- "$FAKE_STARTUP_HELPER_SOURCE" "$@"
+}
+
+# Exhaustion names a reason recorded during this run: one that changed the
+# status after startup read it. A status that was already there is not.
+export FAKE_STARTUP_SCENARIO=fail-status
+for reason_case in \
+  'login-token-rejected:replace the Proton Pass bootstrap token' \
+  'native-store-unavailable:unlock the native credential store and retry' \
+  'session-probe-timeout:check the network; secret-backed tools retry when used' \
+  'session-state-unknown:secret-backed tools retry when used'; do
+  reset_fixture
+  rm -rf -- "$XDG_STATE_HOME"
+  export FAKE_STARTUP_STATUS_REASON=${reason_case%%:*}
+  set +e
+  (
+    unset DISPLAY DBUS_SESSION_BUS_ADDRESS XDG_RUNTIME_DIR
+    run_with_test_deadline "$test_dir/reason-output" 12 \
+      "$fixture_bin/proton-pass-startup"
+  )
+  reason_status=$?
+  set -e
+  (( reason_status == 1 )) ||
+    fail "startup must fail after two recorded $FAKE_STARTUP_STATUS_REASON attempts"
+  [[ $(<"$test_dir/reason-output") ==
+    "proton-pass-startup: credential provider remains unavailable ($FAKE_STARTUP_STATUS_REASON); ${reason_case#*:}" ]] ||
+    fail "startup must name the recorded $FAKE_STARTUP_STATUS_REASON: $(<"$test_dir/reason-output")"
+done
+# An earlier specific failure, then attempts that record nothing: neither the
+# old reason nor the old last failure is named.
+reset_fixture
+rm -rf -- "$XDG_STATE_HOME"
+write_helper_status unavailable login-token-rejected
+unset FAKE_STARTUP_STATUS_REASON
+set +e
+(
+  unset DISPLAY DBUS_SESSION_BUS_ADDRESS XDG_RUNTIME_DIR
+  run_with_test_deadline "$test_dir/stale-reason-output" 12 \
+    "$fixture_bin/proton-pass-startup"
+)
+set -e
+[[ $(<"$test_dir/stale-reason-output") ==
+  'proton-pass-startup: credential provider remains unavailable; secret-backed tools retry when used' ]] ||
+  fail "startup must not attribute an earlier status to this run: $(<"$test_dir/stale-reason-output")"
+
+# A resolved failure lingers as the last failure under a later ready status.
+# Its timestamp must not make it this run's, even if the clock is behind.
+reset_fixture
+rm -rf -- "$XDG_STATE_HOME"
+write_helper_status unavailable login-token-rejected
+write_helper_status ready repaired
+# As if that failure was recorded while the clock ran an hour ahead.
+zmodload zsh/datetime
+resolved_status=$XDG_STATE_HOME/secret-exec/proton-pass-readiness.status
+resolved_text=$(<"$resolved_status")
+[[ $resolved_text == *$'\nlast-failure-at='<->* ]] ||
+  fail 'the helper must keep the resolved failure under its ready status'
+print -r -- "${resolved_text/last-failure-at=<->/last-failure-at=$(( EPOCHSECONDS + 3600 ))}" \
+  >"$resolved_status"
+export FAKE_STARTUP_STATUS_REASON=session-probe-timeout
+set +e
+(
+  unset DISPLAY DBUS_SESSION_BUS_ADDRESS XDG_RUNTIME_DIR
+  run_with_test_deadline "$test_dir/resolved-reason-output" 12 \
+    "$fixture_bin/proton-pass-startup"
+)
+set -e
+[[ $(<"$test_dir/resolved-reason-output") ==
+  'proton-pass-startup: credential provider remains unavailable (session-probe-timeout); check the network; secret-backed tools retry when used' ]] ||
+  fail "startup must not name a resolved earlier failure: $(<"$test_dir/resolved-reason-output")"
+
+# Without the flag no prerequisite is awaited, and an inherited verdict never
+# reaches a message.
+reset_fixture
+rm -rf -- "$XDG_STATE_HOME"
+export FAKE_STARTUP_STATUS_REASON=session-state-unknown
+set +e
+(
+  unset DISPLAY DBUS_SESSION_BUS_ADDRESS XDG_RUNTIME_DIR
+  export PROTON_PASS_UNMET_PREREQUISITE=$'inherited\nverdict'
+  run_with_test_deadline "$test_dir/inherited-verdict-output" 12 \
+    "$fixture_bin/proton-pass-startup"
+)
+set -e
+[[ $(<"$test_dir/inherited-verdict-output") ==
+  'proton-pass-startup: credential provider remains unavailable (session-state-unknown); secret-backed tools retry when used' ]] ||
+  fail "startup must ignore an inherited prerequisite verdict: $(<"$test_dir/inherited-verdict-output")"
+unset FAKE_STARTUP_STATUS_REASON
+rm -rf -- "$XDG_STATE_HOME"
+
+# Login-time prerequisites. Only the fixed busctl path and the wait bound are
+# substituted; the probes, private capture, and wait loop run as shipped.
+fake_busctl=$test_dir/fake-busctl
+cat >"$fake_busctl" <<'EOF'
+#!/bin/zsh -f
+set -euo pipefail
+
+print -r -- "$*" >>"$FAKE_BUSCTL_LOG"
+wallet_query='--user --no-pager get-property org.freedesktop.secrets'
+wallet_query+=' /org/freedesktop/secrets/aliases/default'
+wallet_query+=' org.freedesktop.Secret.Collection Locked'
+network_query='--system --no-pager get-property org.freedesktop.NetworkManager'
+network_query+=' /org/freedesktop/NetworkManager org.freedesktop.NetworkManager State'
+case $* in
+  "$wallet_query")
+    integer wallet_calls=0
+    [[ ! -s $FAKE_BUSCTL_WALLET_CALLS ]] ||
+      wallet_calls=$(<"$FAKE_BUSCTL_WALLET_CALLS")
+    (( ++wallet_calls ))
+    print -r -- "$wallet_calls" >"$FAKE_BUSCTL_WALLET_CALLS"
+    # Advances a fake boot clock by a fixed step per wallet probe.
+    if [[ -n ${FAKE_UPTIME_STEP:-} ]]; then
+      IFS=' ' read -r uptime_now uptime_idle <"$FAKE_STARTUP_UPTIME_FILE"
+      print -r -- "$(( ${uptime_now%.*} + FAKE_UPTIME_STEP )).00 $uptime_idle" \
+        >"$FAKE_STARTUP_UPTIME_FILE"
+    fi
+    case $FAKE_BUSCTL_WALLET in
+      unlocked) print -r -- 'b false' ;;
+      locked) print -r -- 'b true' ;;
+      unlocks-on-third)
+        if (( wallet_calls >= 3 )); then
+          print -r -- 'b false'
+        else
+          print -r -- 'b true'
+        fi
+        ;;
+      unreachable) exit 1 ;;
+      extra-line) print -rl -- 'b false' 'b false' ;;
+      *) exit 64 ;;
+    esac
+    ;;
+  "$network_query")
+    case $FAKE_BUSCTL_NETWORK in
+      global) print -r -- 'u 70' ;;
+      site) print -r -- 'u 60' ;;
+      absent) exit 1 ;;
+      *) exit 64 ;;
+    esac
+    ;;
+  *) exit 64 ;;
+esac
+EOF
+chmod -- 700 "$fake_busctl"
+export FAKE_BUSCTL_LOG=$test_dir/busctl.log
+export FAKE_BUSCTL_WALLET_CALLS=$test_dir/busctl-wallet-calls
+
+fake_notifier=$test_dir/fake-notifier
+cat >"$fake_notifier" <<'EOF'
+#!/bin/zsh -f
+set -euo pipefail
+
+print -r -- "${0:t} ${(j:|:)@}" >>"$FAKE_NOTIFY_LOG"
+EOF
+chmod -- 700 "$fake_notifier"
+ln -s -- fake-notifier "$test_dir/notify-send"
+ln -s -- fake-notifier "$test_dir/osascript"
+export FAKE_NOTIFY_LOG=$test_dir/notify.log
+export FAKE_STARTUP_UPTIME_FILE=
+
+# Only fixed paths and the wait bound are substituted, each at an anchor that
+# must exist; the probes, capture, wait, and reporting run as shipped.
+run_startup_functions() {
+  emulate -L zsh
+
+  local ostype=$1
+  shift
+  /bin/zsh -f -c '
+    source_text=$(<"$1")
+    source_text=${source_text%$'"'"'\nmain "$@"'"'"'}
+    typeset -A substitutions=(
+      "readonly PROTON_PASS_BUSCTL=/usr/bin/busctl"
+        "readonly PROTON_PASS_BUSCTL=$2"
+      "readonly PROTON_PASS_PREREQUISITE_WAIT_SECONDS=60"
+        "readonly PROTON_PASS_PREREQUISITE_WAIT_SECONDS=3"
+      "local notify_send=/usr/bin/notify-send"
+        "local notify_send=$4/notify-send"
+      "local osascript=/usr/bin/osascript"
+        "local osascript=$4/osascript"
+    )
+    uptime_anchor="readonly PROTON_PASS_UPTIME_FILE=/proc/uptime"
+    [[ -z $FAKE_STARTUP_UPTIME_FILE ]] ||
+      substitutions[$uptime_anchor]="readonly PROTON_PASS_UPTIME_FILE=$FAKE_STARTUP_UPTIME_FILE"
+    for anchor in "${(@k)substitutions}"; do
+      [[ $source_text == *"$anchor"* ]] || exit 90
+      source_text=${source_text/$anchor/$substitutions[$anchor]}
+      [[ $source_text != *"$anchor"* ]] || exit 91
+    done
+    # No other use of a substituted fixed path may escape the fixtures.
+    typeset -a substituted_paths=(
+      /usr/bin/busctl /usr/bin/notify-send /usr/bin/osascript
+    )
+    [[ -z $FAKE_STARTUP_UPTIME_FILE ]] || substituted_paths+=(/proc/uptime)
+    for fixed_path in $substituted_paths; do
+      [[ $source_text != *"$fixed_path"* ]] || exit 92
+    done
+    fixture_ostype=$3
+    shift 4
+    eval "$source_text"
+    [[ -z $fixture_ostype ]] || OSTYPE=$fixture_ostype
+    eval "$@"
+  ' "$fixture_bin/proton-pass-startup" "$startup_source" "$fake_busctl" \
+    "$ostype" "$test_dir" "$@"
+}
+
+typeset -a prerequisite_cases=(
+  'unlocked:global::none:0:0'
+  'unlocks-on-third:global::none:1:3'
+  'unlocked:site::network-offline:3:5'
+  'locked:global::native-store-locked:3:5'
+  'unreachable:global::native-store-locked:3:5'
+  'extra-line:global::native-store-locked:3:5'
+  'unlocked:absent::none:0:0'
+  'locked:site:darwin23.0:none:0:0'
+)
+for prerequisite_case in $prerequisite_cases; do
+  typeset -a case_fields=( "${(@s/:/)prerequisite_case}" )
+  export FAKE_BUSCTL_WALLET=$case_fields[1] FAKE_BUSCTL_NETWORK=$case_fields[2]
+  : >"$FAKE_BUSCTL_LOG"
+  rm -f -- "$FAKE_BUSCTL_WALLET_CALLS"
+  prerequisite_output=$(
+    run_startup_functions "$case_fields[3]" '
+      zmodload zsh/datetime
+      typeset -F started=$EPOCHREALTIME
+      await_prerequisites
+      integer elapsed=$(( EPOCHREALTIME - started ))
+      print -r -- "${PROTON_PASS_UNMET_PREREQUISITE:-none} $elapsed"'
+  ) || fail "the prerequisite wait must run for $prerequisite_case"
+  unmet=${prerequisite_output%% *}
+  integer elapsed=${prerequisite_output##* }
+  [[ $unmet == $case_fields[4] ]] ||
+    fail "prerequisites $prerequisite_case must report $case_fields[4], not $unmet"
+  (( elapsed >= case_fields[5] && elapsed <= case_fields[6] )) ||
+    fail "prerequisites $prerequisite_case must wait ${case_fields[5]}-${case_fields[6]} s, not $elapsed"
+done
+[[ ! -s $FAKE_BUSCTL_LOG ]] ||
+  fail 'the prerequisite wait must not probe outside Linux'
+
+# The deadline follows the boot clock, not the wall clock: a boot clock that
+# races ahead ends the wait at once, and an unreadable one skips the wait.
+fake_uptime=$test_dir/fake-uptime
+print -r -- '100.00 50.00' >"$fake_uptime"
+export FAKE_STARTUP_UPTIME_FILE=$fake_uptime FAKE_UPTIME_STEP=30
+export FAKE_BUSCTL_WALLET=locked FAKE_BUSCTL_NETWORK=global
+rm -f -- "$FAKE_BUSCTL_WALLET_CALLS"
+uptime_output=$(
+  run_startup_functions '' '
+    zmodload zsh/datetime
+    typeset -F started=$EPOCHREALTIME
+    await_prerequisites
+    integer elapsed=$(( EPOCHREALTIME - started ))
+    print -r -- "${PROTON_PASS_UNMET_PREREQUISITE:-none} $elapsed"'
+) || fail 'the boot-clock wait must run'
+[[ $uptime_output == 'native-store-locked 0' &&
+  $(<"$FAKE_BUSCTL_WALLET_CALLS") == 1 ]] ||
+  fail "the prerequisite deadline must follow the boot clock: $uptime_output"
+rm -f -- "$fake_uptime" "$FAKE_BUSCTL_WALLET_CALLS"
+unset FAKE_UPTIME_STEP
+uptime_output=$(
+  run_startup_functions '' '
+    await_prerequisites
+    print -r -- "${PROTON_PASS_UNMET_PREREQUISITE:-none}"'
+) || fail 'the wait must survive an unreadable boot clock'
+[[ $uptime_output == none && ! -e $FAKE_BUSCTL_WALLET_CALLS ]] ||
+  fail "an unreadable boot clock must skip the prerequisite wait: $uptime_output"
+export FAKE_STARTUP_UPTIME_FILE=
+
+# The flag opts in: plain startup never probes.
+reset_fixture
+export FAKE_STARTUP_SCENARIO=ready FAKE_BUSCTL_WALLET=locked FAKE_BUSCTL_NETWORK=site
+: >"$FAKE_BUSCTL_LOG"
+run_startup_functions '' main ||
+  fail 'startup without the prerequisite flag must reach readiness'
+[[ ! -s $FAKE_BUSCTL_LOG ]] ||
+  fail 'startup without the prerequisite flag must not probe prerequisites'
+
+# A specific failure recorded during this run wins over the prerequisite
+# verdict, except that being offline replaces the helper's catch-alls. A
+# locked wallet cannot, since login had already read the bootstrap item. An
+# unmet prerequisite still replaces a generic recorded reason.
+for precedence_case in \
+  'unlocked:site:session-probe-timeout:network-offline:check the network; secret-backed tools retry when used' \
+  'unlocked:site:login-failed:network-offline:check the network; secret-backed tools retry when used' \
+  'unlocked:site:verify-failed:network-offline:check the network; secret-backed tools retry when used' \
+  'locked:global:login-failed:login-failed:secret-backed tools retry when used' \
+  'unlocked:site:login-token-rejected:login-token-rejected:replace the Proton Pass bootstrap token' \
+  'locked:global:login-token-rejected:login-token-rejected:replace the Proton Pass bootstrap token'; do
+  typeset -a case_fields=( "${(@s/:/)precedence_case}" )
+  reset_fixture
+  rm -rf -- "$XDG_STATE_HOME"
+  : >"$FAKE_BUSCTL_LOG" >"$FAKE_NOTIFY_LOG"
+  export FAKE_STARTUP_SCENARIO=fail-status
+  export FAKE_BUSCTL_WALLET=$case_fields[1] FAKE_BUSCTL_NETWORK=$case_fields[2]
+  export FAKE_STARTUP_STATUS_REASON=$case_fields[3]
+  set +e
+  prerequisite_failure_output=$(
+    run_startup_functions '' main --await-prerequisites 2>&1
+  )
+  prerequisite_failure_status=$?
+  set -e
+  (( prerequisite_failure_status == 1 )) ||
+    fail "startup must fail for $precedence_case"
+  [[ $prerequisite_failure_output ==
+    "proton-pass-startup: credential provider remains unavailable ($case_fields[4]); $case_fields[5]" ]] ||
+    fail "startup must name $case_fields[4] for $precedence_case: $prerequisite_failure_output"
+  [[ $(<"$FAKE_STARTUP_ATTEMPTS") == $'1\n2' ]] ||
+    fail 'an unmet prerequisite must still leave both readiness attempts'
+  [[ -s $FAKE_BUSCTL_LOG ]] ||
+    fail 'the prerequisite flag must probe prerequisites'
+done
+unset FAKE_STARTUP_STATUS_REASON
+rm -rf -- "$XDG_STATE_HOME"
+
+# The notification carries the same verdict as the diagnostic. macOS passes
+# the text to its script as arguments, never inside the script source.
+typeset -a notification_cases=(
+  ':native-store-locked::notify-send --app-name=Secret-backed tools|Credential provider unavailable|Unlock the native credential store. Secret-backed tools will retry when used.'
+  ':network-offline::notify-send --app-name=Secret-backed tools|Credential provider unavailable|Proton Pass could not be reached. Secret-backed tools will retry when used.'
+  '::login-token-malformed:notify-send --app-name=Secret-backed tools|Credential provider unavailable|The Proton Pass bootstrap token is invalid or was rejected. Replace it; secret-backed tools cannot recover until then.'
+  '::session-state-unknown:notify-send --app-name=Secret-backed tools|Credential provider unavailable|Proton Pass is unavailable (session-state-unknown). Secret-backed tools will retry when used.'
+  ':::notify-send --app-name=Secret-backed tools|Credential provider unavailable|Proton Pass is unavailable. Secret-backed tools will retry when used.'
+  'darwin23.0:native-store-locked::osascript -e|on run argv|-e|display notification (item 1 of argv) with title (item 2 of argv)|-e|end run|Unlock the login keychain. Secret-backed tools will retry when used.|Credential provider unavailable'
+)
+for notification_case in $notification_cases; do
+  typeset -a case_fields=( "${(@s/:/)notification_case}" )
+  rm -rf -- "$XDG_STATE_HOME"
+  : >"$FAKE_NOTIFY_LOG"
+  [[ -z $case_fields[3] ]] ||
+    write_helper_status unavailable "$case_fields[3]"
+  # An empty before-snapshot attributes whatever status exists to this run.
+  set +e
+  run_startup_functions "$case_fields[1]" \
+    "PROTON_PASS_UNMET_PREREQUISITE=${(q)case_fields[2]}; report_unavailable '' ''" \
+    >/dev/null 2>&1
+  set -e
+  [[ $(<"$FAKE_NOTIFY_LOG") == "${(j.:.)case_fields[4,-1]}" ]] ||
+    fail "the notification must carry the verdict for $notification_case: $(<"$FAKE_NOTIFY_LOG")"
+done
+rm -rf -- "$XDG_STATE_HOME"
 
 print -r -- 'Proton Pass startup behavior checks passed'
