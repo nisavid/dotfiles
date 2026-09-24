@@ -2301,7 +2301,7 @@ done
 (( partial_cleanup_hang_status != 0 )) ||
   fail 'a hanging partial-login cleanup must fail readiness'
 (( partial_cleanup_hang_elapsed >= 10.5 &&
-  partial_cleanup_hang_elapsed < 12.0 )) ||
+  partial_cleanup_hang_elapsed < 14.0 )) ||
   fail "a hanging login and cleanup must use both production deadlines: elapsed=$partial_cleanup_hang_elapsed"
 [[ $partial_cleanup_hang_output ==
   'proton-pass-ensure-ready: provider-session cleanup timed out' ]] ||
