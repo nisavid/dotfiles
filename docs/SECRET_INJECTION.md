@@ -160,15 +160,30 @@ credential store and validates it before changing anything:
   next call repairs.
 - An invalidated session is the automatic-logout report of older `pass-cli`
   releases.
+- An undecryptable local store is one the stored local key cannot open:
+  `pass-cli` reports the byte-exact database error chain that ends by
+  recommending `pass-cli logout --force`. Even an unauthenticated `pass-cli
+  info` creates the local database under the local key it resolves, so two
+  processes that each create a key for an empty session can leave the database
+  under one key and the keyring holding the other. The local data is
+  unreadable either way, and login rebuilds it.
+- An interrupted repair is one whose login marker (below) survives. The
+  session it left may pass `pass-cli info`, so the helper treats a positively
+  ready, absent, orphaned, invalidated, or undecryptable state the same way
+  behind a marker: it resets the local state and logs in again.
 
-Orphaned and invalidated sessions both require a successful
-`pass-cli logout --force` before login. Forced logout is local only: it removes
-the provider's local session directory, its session-scoped keyring key, and any
-legacy shared `cli-local-key` keyring entry, and it never contacts the
-provider. Readiness checks that other callers make before taking the lock, and
-consumers already resolving values, are not serialized with that cleanup and
-the following login. In that brief window one of them can observe the removed
-session or recreate a local key and make this repair fail closed. The helper
+Orphaned, invalidated, and undecryptable states, and every state behind an
+interrupted repair, require a successful `pass-cli logout --force` before login.
+Forced logout is local only: it removes the provider's local session directory,
+its session-scoped keyring key, and any legacy shared `cli-local-key` keyring
+entry, and it never contacts the provider. The login marker, recorded before
+that cleanup, sends readiness checks that start afterwards to the lock. Checks
+already in flight, and consumers already resolving values, are not serialized
+with the cleanup and the following login
+([#314](https://github.com/nisavid/dotfiles/issues/314)). In that brief window
+one of them can observe the removed session or recreate a local key and make
+this repair fail closed, or leave an undecryptable store that the next call
+resets. The helper
 gives the bootstrap value only to a background subshell that immediately
 replaces itself with the trusted `pass-cli login` backend. The
 controller clears its non-exported copy immediately after the fork, the caller
@@ -222,8 +237,9 @@ need at most 34.6 seconds.
 `secret-exec` and its shims call the helper without an outer deadline, so a
 lazy consumer can wait up to that bound before its first value resolves.
 Before login, the helper logs out only when the provider reports the complete
-recognized invalidated-session diagnostic or the byte-exact orphaned-session
-diagnostic. After a failed login, it logs out as described below.
+recognized invalidated-session diagnostic, the byte-exact orphaned-session
+diagnostic, or the byte-exact undecryptable-store diagnostic, or when a login
+marker survives. After a failed login, it logs out as described below.
 The readiness and secret-resolution controllers disable Zsh background-job
 priority adjustment before creating their PTY sessions, so a denied
 `setpriority` operation cannot enter the private status channel.
@@ -240,8 +256,12 @@ Empty framing, blank records, other controls or structured logs, arbitrary
 prefixes or suffixes, and diagnostic fragments remain unclassified. The
 orphaned-session diagnostic accepts no framing record, styling, or trailing
 line; other forms of the same error, such as the user-account variant or a
-failed token refresh, remain unclassified. The forced local cleanup must
-succeed before login.
+failed token refresh, remain unclassified. The undecryptable-store diagnostic
+may be preceded only by the local database engine's plain records, each of the
+form `YYYY-MM-DD HH:MM:SS.mmm: ERROR CORE <text>` with no control characters;
+styled, blank, or `pass-cli` main-command framing, a trailing line, or a
+truncated chain remain unclassified. The forced local cleanup must succeed
+before login.
 
 A login that fails or times out can leave local authentication behind:
 `pass-cli` stores its session before its private token key, so an interrupted
@@ -263,9 +283,37 @@ leaves its provider-side session behind, and the next call logs in again. A
 login can also lose its session. The provider's exact, prompt refusal keeps
 that session, but a refusal that times out or arrives with any other text is
 unclassified and triggers the cleanup. The helper accepts both outcomes so it
-never reports an unusable session as ready. A helper killed during login, or
-one that stops because its login child became unmanageable, cannot run the
-cleanup; `pass-cli logout --force` clears what it leaves.
+never reports an unusable session as ready.
+
+A helper killed during login, one stopped by a signal, or one whose login child
+became unmanageable cannot run that cleanup. Once the bootstrap value is
+validated, and before any forced logout and the login, the helper therefore
+records a login marker, `proton-pass-login.pending`, holding only its start
+time, as a mode-`0600` file in the private state directory. It removes the
+marker once the repaired session verifies, or once the cleanup after a failed
+login succeeds. It also removes it after an exact
+`login-already-authenticated` refusal, which stored nothing. A failed forced
+logout, a failed cleanup, a failed verification, or any exit that skips all of
+them leaves the marker in place. Every repair runs under the readiness lock,
+and the lock dies with its holder, so a marker found while holding the lock
+belongs to a repair that never finished.
+
+While a marker exists, callers skip the unlocked readiness check. A caller
+whose unlocked check was already running when a repair recorded its marker
+checks again after it, and defers to the locked path rather than report the
+half-written session ready. The locked path forces a local reset and logs in
+again, unless its classifying check times out or stays unclassified, which
+keeps both the session and the marker. A caller that waited for another repair
+fails as `concurrent-repair-failed` behind a marker, like any waiter, and the
+next call repairs. A marker that is not a regular file, such as a symbolic link
+or a directory, is never followed or replaced: the locked path fails as
+`login-marker-failed` before it classifies or changes anything, until the
+operator removes it. A marker that outlives a repair that did complete costs one
+extra login. So does a forced logout that fails without deleting anything: the
+next call resets even a session that was still valid, and if that login fails,
+readiness is lost where it would otherwise have held. A `pass-cli login` run
+by hand outside the helper leaves no marker, and `pass-cli logout --force`
+still clears what such a login leaves.
 
 Login writes its standard error only to a fresh mode-`0600` file in the
 private state directory; its standard output, which names the account, is
@@ -331,8 +379,9 @@ best-effort notification, and leaves lazy consumer recovery enabled.
 Readiness publishes an atomic mode-`0600` status file beneath
 `$XDG_STATE_HOME/secret-exec`, defaulting to
 `~/.local/state/secret-exec/proton-pass-readiness.status`. It contains only
-`state`, an enumerated `reason`, an enumerated `waiter-stage`, and an update
-timestamp. `state` is `ready` or `unavailable`. A ready `reason` is
+`state`, an enumerated `reason`, an enumerated `waiter-stage`, an update
+timestamp, and, once a specific failure has occurred, `last-failure-reason` and
+`last-failure-at`. `state` is `ready` or `unavailable`. A ready `reason` is
 `existing-session`, `concurrent-repair`, or `repaired`. An unavailable
 `reason` is one of:
 
@@ -343,7 +392,8 @@ timestamp. `state` is `ready` or `unavailable`. A ready `reason` is
 - `logout-timeout` or `logout-failed`;
 - `login-timeout`, `login-failed`, `login-already-authenticated`,
   `login-token-rejected`, `login-token-malformed`, or `login-session-refused`;
-- `verify-timeout` or `verify-failed`.
+- `verify-timeout` or `verify-failed`;
+- `login-marker-failed`, when the login marker cannot be recorded or cleared.
 
 Any other value is recorded as `unrecorded`. The specific `login-*` reasons
 come only from the private byte-exact comparison of a reported provider exit.
@@ -360,10 +410,20 @@ challenge. Every other login failure remains `login-failed`.
 controller reported a nonzero status and does not imply a natural provider
 exit. The atomic `reason`/`waiter-stage` tuple is last-writer-wins shared
 readiness state; it identifies the latest recorded outcome and is not correlated
-to an individual concurrent consumer attempt. A later attempt therefore
-replaces an earlier, more specific failure: preserving it would require trusting
-and correlating a previous status file. The file never contains provider
-output, account metadata, locators, or credential values.
+to an individual concurrent consumer attempt.
+
+So that a later generic outcome cannot hide the evidence, `last-failure-reason`
+and `last-failure-at` keep the most recent specific failure. They cover
+`unsafe-lock`, `native-store-unavailable`, `invalid-bootstrap-value`,
+`logout-failed`, every `login-*` failure except `login-timeout`,
+`verify-failed`, and `login-marker-failed`. Timeouts, lock waits,
+`concurrent-repair-failed`, and `session-state-unknown` never replace them,
+and later ready writes keep them. Each write carries them over from the
+previous file only when that file is a regular file, the carried reason is one
+of those enumerated values, and the carried time is an integer. Anything else
+is dropped. Concurrent writers can still race, so the fields record the latest
+specific failure one writer saw, not a complete history. The file never
+contains provider output, account metadata, locators, or credential values.
 
 If the native store is locked or unavailable, unlock it through the operating
 system and retry the consumer. The lazy path will attempt recovery again; no

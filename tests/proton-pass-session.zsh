@@ -91,7 +91,7 @@ mkdir -p -- "$status_allowlist_state"
     logout-timeout logout-failed login-timeout login-failed \
     login-already-authenticated login-token-rejected \
     login-token-malformed login-session-refused \
-    verify-timeout verify-failed \
+    verify-timeout verify-failed login-marker-failed \
     bogus-reason $'"'"'login-failed\nreason=repaired'"'"'; do
     write_status unavailable "$reason" unrecorded
     while IFS= read -r status_line; do
@@ -103,8 +103,59 @@ mkdir -p -- "$status_allowlist_state"
     [[ $status_line != state=* ]] || print -r -- "${status_line#state=}"
   done < "$status_file"
 ' -- "$ensure_ready_source" "$status_allowlist_state" >"$status_allowlist_log"
-[[ $(<"$status_allowlist_log") == $'existing-session\nconcurrent-repair\nrepaired\nunsafe-lock\nlock-timeout\nconcurrent-repair-failed\nsession-probe-timeout\nsession-state-unknown\nnative-store-timeout\nnative-store-unavailable\ninvalid-bootstrap-value\nlogout-timeout\nlogout-failed\nlogin-timeout\nlogin-failed\nlogin-already-authenticated\nlogin-token-rejected\nlogin-token-malformed\nlogin-session-refused\nverify-timeout\nverify-failed\nunrecorded\nunrecorded\nunavailable' ]] ||
+[[ $(<"$status_allowlist_log") == $'existing-session\nconcurrent-repair\nrepaired\nunsafe-lock\nlock-timeout\nconcurrent-repair-failed\nsession-probe-timeout\nsession-state-unknown\nnative-store-timeout\nnative-store-unavailable\ninvalid-bootstrap-value\nlogout-timeout\nlogout-failed\nlogin-timeout\nlogin-failed\nlogin-already-authenticated\nlogin-token-rejected\nlogin-token-malformed\nlogin-session-refused\nverify-timeout\nverify-failed\nlogin-marker-failed\nunrecorded\nunrecorded\nunavailable' ]] ||
   fail "readiness status must admit only enumerated states and reasons: $(<"$status_allowlist_log")"
+
+# A specific failure stays visible after later generic outcomes and ready
+# writes; only enumerated values carry over from the previous file.
+last_failure_state=$test_dir/last-failure-state
+last_failure_log=$test_dir/last-failure.log
+mkdir -p -- "$last_failure_state"
+/bin/zsh -f -c '
+  source_text=$(<"$1")
+  source_text=${source_text%$'"'"'\nmain "$@"'"'"'}
+  eval "$source_text"
+  trap - EXIT HUP INT TERM
+  XDG_STATE_HOME=$2
+  status_file=$XDG_STATE_HOME/secret-exec/proton-pass-readiness.status
+  record_last_failure() {
+    local line reason=none at=none
+    while IFS= read -r line; do
+      case $line in
+        last-failure-reason=*) reason=${line#*=} ;;
+        last-failure-at=*) at=${line#*=} ;;
+      esac
+    done < "$status_file"
+    [[ $at == none || $at == <-> ]] || at=invalid
+    [[ $at == none || $at == invalid ]] || at=digits
+    print -r -- "$1 $reason $at"
+  }
+  write_status unavailable session-probe-timeout unrecorded
+  record_last_failure generic-first
+  write_status unavailable login-token-rejected child-status
+  record_last_failure specific
+  first_at=$(grep "^last-failure-at=" "$status_file")
+  write_status unavailable session-probe-timeout unrecorded
+  record_last_failure generic-after
+  write_status ready repaired unrecorded
+  record_last_failure ready-after
+  [[ $(grep "^last-failure-at=" "$status_file") == "$first_at" ]] ||
+    print -r -- "timestamp-changed"
+  write_status unavailable logout-failed child-status
+  record_last_failure replaced
+  write_status unavailable lock-timeout unrecorded
+  record_last_failure lock-timeout-after
+  print -rl -- state=unavailable reason=lock-timeout \
+    last-failure-reason=bogus-reason last-failure-at=12 >"$status_file"
+  write_status unavailable session-state-unknown unrecorded
+  record_last_failure bogus-reason-dropped
+  print -rl -- state=unavailable reason=lock-timeout \
+    last-failure-reason=login-failed "last-failure-at=12 34" >"$status_file"
+  write_status unavailable session-state-unknown unrecorded
+  record_last_failure bogus-time-dropped
+' -- "$ensure_ready_source" "$last_failure_state" >"$last_failure_log"
+[[ $(<"$last_failure_log") == $'generic-first none none\nspecific login-token-rejected digits\ngeneric-after login-token-rejected digits\nready-after login-token-rejected digits\nreplaced logout-failed digits\nlock-timeout-after logout-failed digits\nbogus-reason-dropped none none\nbogus-time-dropped none none' ]] ||
+  fail "readiness status must keep the latest specific failure: $(<"$last_failure_log")"
 
 survivor_probe_root=$test_dir/survivor-probe
 survivor_probe_error=$test_dir/survivor-probe.err
@@ -679,6 +730,22 @@ case $1 in
       done
       (( await_lock_polls >= 0 )) || exit 81
     fi
+    # Hold this caller's first check, well inside its three-second deadline,
+    # until a concurrent login stores a session, and record whether it did.
+    if [[ -n ${FAKE_PASS_INFO_AWAIT_SESSION_ONCE:-} &&
+      ! -e $FAKE_PASS_INFO_AWAIT_SESSION_ONCE ]]; then
+      zmodload zsh/zselect
+      integer await_session_polls=150
+      while (( await_session_polls-- > 0 )) &&
+        [[ ! -e $FAKE_PASS_LOCAL_SESSION || ! -e $FAKE_PASS_REMOTE_SESSION ]]; do
+        zselect -t 1 || true
+      done
+      if [[ -e $FAKE_PASS_LOCAL_SESSION && -e $FAKE_PASS_REMOTE_SESSION ]]; then
+        print -r -- seen > "$FAKE_PASS_INFO_AWAIT_SESSION_ONCE"
+      else
+        print -r -- missed > "$FAKE_PASS_INFO_AWAIT_SESSION_ONCE"
+      fi
+    fi
     [[ -z ${FAKE_PASS_INFO_DELAY_SECONDS:-} ]] ||
       /bin/sleep "$FAKE_PASS_INFO_DELAY_SECONDS"
     if [[ -e $FAKE_PASS_VERIFY_HANG && -e $FAKE_PASS_REMOTE_SESSION ]]; then
@@ -845,6 +912,53 @@ case $1 in
         *) exit 64 ;;
       esac
       exit 78
+    fi
+    # Captured from pass-cli 2.3.3 opening its database under another local key.
+    if [[ -e $FAKE_PASS_INFO_UNDECRYPTABLE ]]; then
+      store_detail='Failed to open encrypted database: file is not a database. '
+      store_detail+='The encryption key may not match or the database may be corrupted. '
+      store_detail+="Try running 'pass-cli logout --force' to reset local state."
+      core_records=(
+        '2026-09-24 16:12:00.774: ERROR CORE sqlcipher_page_cipher: hmac check failed for pgno=1'
+        '2026-09-24 16:12:00.774: ERROR CORE sqlite3Codec: error decrypting page 1 data: 1'
+        '2026-09-24 16:12:00.774: ERROR CORE sqlcipher_codec_ctx_set_error 1'
+      )
+      undecryptable_lines=(
+        'Error: Error creating client features'
+        ''
+        'Caused by:'
+        '    0: Failed to initialize database'
+        '    1: Failed to get database connection'
+        "    2: Error occurred while creating a new object: $store_detail"
+        "    3: $store_detail"
+        '    4: Error code 0: not an error'
+      )
+      case $(<"$FAKE_PASS_INFO_UNDECRYPTABLE") in
+        framed)
+          print -u2 -rl -- "${core_records[@]}" "${undecryptable_lines[@]}"
+          ;;
+        unframed)
+          print -u2 -rl -- "${undecryptable_lines[@]}"
+          ;;
+        main-record-framed)
+          print -u2 -rl -- "$plain_absent_record" "${undecryptable_lines[@]}"
+          ;;
+        styled-core-framed)
+          print -u2 -rl -- $'\e[31m'"${core_records[1]}"$'\e[0m' \
+            "${undecryptable_lines[@]}"
+          ;;
+        blank-framed)
+          print -u2 -rl -- "${core_records[1]}" '' "${undecryptable_lines[@]}"
+          ;;
+        trailing-blank)
+          print -u2 -rl -- "${core_records[@]}" "${undecryptable_lines[@]}" ''
+          ;;
+        truncated)
+          print -u2 -rl -- "${core_records[@]}" "${(@)undecryptable_lines[1,-2]}"
+          ;;
+        *) exit 64 ;;
+      esac
+      exit 1
     fi
     if [[ -e $FAKE_PASS_INFO_MULTI_RECORD && ! -e $FAKE_PASS_REMOTE_SESSION ]]; then
       case $(<"$FAKE_PASS_INFO_MULTI_RECORD") in
@@ -1026,7 +1140,9 @@ case $1 in
     [[ -z ${FAKE_PASS_LOGOUT_DELAY_SECONDS:-} ]] ||
       /bin/sleep "$FAKE_PASS_LOGOUT_DELAY_SECONDS"
     [[ ! -e $FAKE_PASS_LOGOUT_FAIL ]] || exit 79
-    /bin/rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION"
+    # Forced logout also removes the local database that could not be opened.
+    /bin/rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION" \
+      "$FAKE_PASS_INFO_UNDECRYPTABLE"
     ;;
   *)
     exit 68
@@ -1157,6 +1273,7 @@ export FAKE_PASS_INFO_MALFORMED_FRAMING=$test_dir/info-malformed-framing
 export FAKE_PASS_INFO_MULTI_RECORD=$test_dir/info-multi-record
 export FAKE_PASS_INFO_INVALIDATED=$test_dir/info-invalidated
 export FAKE_PASS_INFO_ORPHANED=$test_dir/info-orphaned
+export FAKE_PASS_INFO_UNDECRYPTABLE=$test_dir/info-undecryptable
 export FAKE_PASS_LOGIN_DIAGNOSTIC=$test_dir/login-diagnostic
 export FAKE_PASS_LOGIN_STDERR_LOG=$test_dir/login-stderr.log
 export FAKE_PASS_INFO_ALTERNATE_ABSENT=$test_dir/info-alternate-absent
@@ -1455,6 +1572,9 @@ assert_no_private_diagnostics 'a successful repair'
   'proton-bootstrap' ]] ||
   fail 'ensure-ready must resolve the fixed native bootstrap item'
 status_file=$state_home/secret-exec/proton-pass-readiness.status
+login_marker=$state_home/secret-exec/proton-pass-login.pending
+[[ ! -e $login_marker ]] ||
+  fail 'a verified repair must clear its login marker'
 if [[ -n $status_fragment_library ]]; then
   run_waiter_stage_mapping record \
     $'login-controller-targeted\nrecord-corrupted' completed ''
@@ -1624,6 +1744,10 @@ rm -f -- \
   fail 'a failed stale-session cleanup must not attempt provider login'
 grep -Fqx 'reason=logout-failed' "$status_file" ||
   fail 'a failed stale-session cleanup must record its value-free reason'
+# The marker covers the forced logout too, so a failed one leaves it behind.
+[[ -f $login_marker ]] ||
+  fail 'a failed stale-session cleanup must keep the login marker'
+rm -f -- "$login_marker"
 
 rm -f -- "$FAKE_PASS_REMOTE_SESSION" "$FAKE_HANGING_CHILD_PID"
 : > "$FAKE_PASS_REQUIRE_LOGOUT"
@@ -1651,6 +1775,9 @@ rm -f -- \
   fail 'a stale-session cleanup timeout must not attempt provider login'
 grep -Fqx 'reason=logout-timeout' "$status_file" ||
   fail 'a stale-session cleanup timeout must record its value-free reason'
+[[ -f $login_marker ]] ||
+  fail 'a stale-session cleanup timeout must keep the login marker'
+rm -f -- "$login_marker"
 hanging_child_pid=$(<"$FAKE_HANGING_CHILD_PID")
 ! kill -0 $hanging_child_pid 2>/dev/null ||
   fail 'a timed-out stale-session cleanup child must be terminated and reaped'
@@ -1700,6 +1827,10 @@ rm -f -- "$FAKE_PASS_LOGOUT_FAIL"
   fail 'a failed orphaned-session cleanup must not attempt provider login'
 grep -Fqx 'reason=logout-failed' "$status_file" ||
   fail 'a failed orphaned-session cleanup must record its value-free reason'
+# The marker covers the forced logout too, so a failed one leaves it behind.
+[[ -f $login_marker ]] ||
+  fail 'a failed orphaned-session cleanup must keep the login marker'
+rm -f -- "$login_marker"
 assert_no_private_diagnostics 'a failed orphaned-session cleanup'
 
 rm -f -- "$FAKE_PASS_REMOTE_SESSION" "$FAKE_HANGING_CHILD_PID"
@@ -1726,6 +1857,9 @@ rm -f -- "$FAKE_PASS_LOGOUT_HANG"
   fail 'an orphaned-session cleanup timeout must not attempt provider login'
 grep -Fqx 'reason=logout-timeout' "$status_file" ||
   fail 'an orphaned-session cleanup timeout must record its value-free reason'
+[[ -f $login_marker ]] ||
+  fail 'a timed-out orphaned-session cleanup must keep the login marker'
+rm -f -- "$login_marker"
 assert_no_private_diagnostics 'a timed-out orphaned-session cleanup'
 hanging_child_pid=$(<"$FAKE_HANGING_CHILD_PID")
 ! kill -0 $hanging_child_pid 2>/dev/null ||
@@ -1754,6 +1888,54 @@ rm -f -- "$FAKE_NATIVE_STORE_LOCKED" "$FAKE_PASS_REQUIRE_LOGOUT" \
   fail 'an orphaned session must keep local authentication while the native store is locked'
 grep -Fqx 'reason=native-store-unavailable' "$status_file" ||
   fail 'an orphaned session with a locked native store must record its reason'
+
+# The 2026-09-24 incident: the local database no longer matched the stored
+# local key, so every info failed and nothing repaired it. The exact chain,
+# optionally after the database engine's plain records, forces a local reset.
+for undecryptable_variant in framed unframed; do
+  rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION"
+  print -r -- "$undecryptable_variant" >"$FAKE_PASS_INFO_UNDECRYPTABLE"
+  : > "$FAKE_PASS_LOG"
+  : > "$FAKE_SECRET_TOOL_LOG"
+  set +e
+  undecryptable_output=$(zsh "$ensure_ready" 2>&1)
+  undecryptable_status=$?
+  set -e
+  (( undecryptable_status == 0 )) ||
+    fail "an undecryptable $undecryptable_variant local store must be repaired: $undecryptable_output"
+  [[ $(<"$FAKE_PASS_LOG") == $'info\ninfo\nlogout --force\nlogin\ninfo' ]] ||
+    fail "an undecryptable $undecryptable_variant local store must be reset before one login"
+  [[ $(<"$FAKE_SECRET_TOOL_LOG") == proton-bootstrap ]] ||
+    fail 'an undecryptable local store repair must use the fixed bootstrap item'
+  grep -Fqx 'reason=repaired' "$status_file" ||
+    fail 'an undecryptable local store repair must record its value-free reason'
+  assert_no_private_diagnostics "an undecryptable $undecryptable_variant local store"
+done
+
+for undecryptable_variant in main-record-framed styled-core-framed \
+  blank-framed trailing-blank truncated; do
+  rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION"
+  print -r -- "$undecryptable_variant" >"$FAKE_PASS_INFO_UNDECRYPTABLE"
+  : > "$FAKE_PASS_LOG"
+  : > "$FAKE_SECRET_TOOL_LOG"
+  set +e
+  undecryptable_output=$(zsh "$ensure_ready" 2>&1)
+  undecryptable_status=$?
+  set -e
+  rm -f -- "$FAKE_PASS_INFO_UNDECRYPTABLE"
+  (( undecryptable_status != 0 )) ||
+    fail "a $undecryptable_variant store diagnostic must not be classified"
+  [[ $undecryptable_output ==
+    'proton-pass-ensure-ready: provider-session readiness could not be classified' ]] ||
+    fail "a $undecryptable_variant store diagnostic must remain unknown: $undecryptable_output"
+  [[ $(<"$FAKE_PASS_LOG") == $'info\ninfo' ]] ||
+    fail "a $undecryptable_variant store diagnostic must not reset local state"
+  [[ ! -s $FAKE_SECRET_TOOL_LOG ]] ||
+    fail "a $undecryptable_variant store diagnostic must not read the bootstrap item"
+  grep -Fqx 'reason=session-state-unknown' "$status_file" ||
+    fail "a $undecryptable_variant store diagnostic must record session-state-unknown"
+  assert_no_private_diagnostics "a $undecryptable_variant store diagnostic"
+done
 
 rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION"
 : > "$FAKE_PASS_LOG"
@@ -2234,6 +2416,8 @@ grep -Fqx 'reason=login-timeout' "$status_file" ||
   fail 'a timed-out login must force out its partial local authentication'
 [[ ! -e $FAKE_PASS_LOCAL_SESSION ]] ||
   fail 'a timed-out login must not leave partial local authentication'
+[[ ! -e $login_marker ]] ||
+  fail 'a login whose cleanup succeeded must clear its login marker'
 assert_no_private_diagnostics 'a timed-out partial login'
 : > "$FAKE_PASS_LOG"
 zsh "$ensure_ready" ||
@@ -2274,7 +2458,19 @@ grep -Fqx 'waiter-stage=child-status' "$status_file" ||
   fail 'a failed partial-login cleanup must run exactly once after login'
 [[ -e $FAKE_PASS_LOCAL_SESSION ]] ||
   fail 'the fixture must model the unusable session surviving a failed cleanup'
+[[ -f $login_marker ]] ||
+  fail 'a failed partial-login cleanup must keep its login marker'
 assert_no_private_diagnostics 'a failed partial-login cleanup'
+# The next call forces out what the failed cleanup left, then logs in again.
+: > "$FAKE_PASS_LOG"
+zsh "$ensure_ready" ||
+  fail 'readiness must recover behind a login marker left by a failed cleanup'
+[[ $(<"$FAKE_PASS_LOG") == $'info\nlogout --force\nlogin\ninfo' ]] ||
+  fail "a login marker must skip the unlocked check and force a local reset: $(<"$FAKE_PASS_LOG")"
+grep -Fqx 'reason=repaired' "$status_file" ||
+  fail 'the call behind a login marker must record a repair'
+[[ ! -e $login_marker ]] ||
+  fail 'the verified repair behind a login marker must clear it'
 rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION"
 
 # When login and its cleanup both hang, the cleanup timeout is reported, both
@@ -2314,6 +2510,9 @@ grep -Fqx 'reason=logout-timeout' "$status_file" ||
   fail 'a hanging partial-login cleanup must record logout-timeout'
 [[ $(<"$FAKE_PASS_LOG") == $'info\ninfo\nlogin\nlogout --force' ]] ||
   fail 'a hanging partial-login cleanup must run exactly once after login'
+[[ -f $login_marker ]] ||
+  fail 'a hanging partial-login cleanup must keep its login marker'
+rm -f -- "$login_marker"
 assert_no_private_diagnostics 'a hanging partial-login cleanup'
 rm -f -- "$FAKE_HANGING_CHILD_PIDS"
 export FAKE_HANGING_CHILD_PIDS=
@@ -2341,6 +2540,8 @@ grep -Fqx 'reason=login-failed' "$status_file" ||
   fail 'a failed login over absent stored authentication must force it out'
 [[ ! -e $FAKE_PASS_LOCAL_SESSION ]] ||
   fail 'a failed login must not leave absent stored authentication behind'
+[[ ! -e $login_marker ]] ||
+  fail 'a failed login whose cleanup succeeded must clear its login marker'
 assert_no_private_diagnostics 'a failed login over absent stored authentication'
 
 # A recognized refusal is not classified when the waiter times out.
@@ -2405,6 +2606,16 @@ rm -f -- "$FAKE_PASS_LOGIN_HANG"
   fail 'a hanging login must write diagnostics to one private unlinked file'
 (( login_signal_status == 143 )) ||
   fail "TERM during login must preserve status 143: status=$login_signal_status"
+# A signalled login may have stored a partial session, so its marker stays.
+zmodload zsh/stat
+typeset -A login_marker_metadata
+[[ -f $login_marker && ! -L $login_marker ]] &&
+  zstat -H login_marker_metadata -- "$login_marker" &&
+  (( (login_marker_metadata[mode] & 8#777) == 8#600 )) ||
+  fail 'a signalled login must keep one private login marker'
+[[ $(<"$login_marker") == started_at=<-> ]] ||
+  fail 'the login marker must hold only its value-free start time'
+rm -f -- "$login_marker"
 assert_no_private_diagnostics 'a signal during login'
 hanging_child_pid=$(<"$FAKE_HANGING_CHILD_PID")
 test_process_fixture_wait_for_pid_exit $hanging_child_pid 100 ||
@@ -2415,6 +2626,8 @@ test_process_fixture_untrack_pid_file "$FAKE_HANGING_CHILD_PID"
 # diagnostic capture must already have no name in the state directory.
 rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION" \
   "$FAKE_HANGING_CHILD_PID"
+[[ ! -e $login_marker ]] ||
+  fail 'the killed-login fixture must start without a login marker'
 : > "$FAKE_PASS_LOG"
 : > "$FAKE_PASS_LOGIN_HANG"
 test_process_fixture_track_pid_file "$FAKE_HANGING_CHILD_PID"
@@ -2437,6 +2650,159 @@ hanging_child_pid=$(<"$FAKE_HANGING_CHILD_PID")
 test_process_fixture_wait_for_pid_exit $hanging_child_pid 100 ||
   fail 'a killed readiness helper must not leave its login child running'
 test_process_fixture_untrack_pid_file "$FAKE_HANGING_CHILD_PID"
+[[ -f $login_marker ]] ||
+  fail 'a killed readiness helper must leave its login marker for the next call'
+
+# The #316 case: the killed login stored a session that info accepts while its
+# private token key is missing. The marker makes the next call reset it.
+: > "$FAKE_PASS_LOCAL_SESSION"
+: > "$FAKE_PASS_REMOTE_SESSION"
+: > "$FAKE_PASS_LOG"
+zsh "$ensure_ready" ||
+  fail 'readiness must repair a partial session left by a killed helper'
+[[ $(<"$FAKE_PASS_LOG") == $'info\nlogout --force\nlogin\ninfo' ]] ||
+  fail "a partial session behind a login marker must be reset, not reused: $(<"$FAKE_PASS_LOG")"
+grep -Fqx 'reason=repaired' "$status_file" ||
+  fail 'a partial session behind a login marker must record a repair'
+[[ ! -e $login_marker ]] ||
+  fail 'the repair of a partial session must clear its login marker'
+: > "$FAKE_PASS_LOG"
+zsh "$ensure_ready" ||
+  fail 'the repaired session must stay ready'
+[[ $(<"$FAKE_PASS_LOG") == info ]] ||
+  fail 'without a login marker, a ready session must take the unlocked check'
+
+# An unclassified check behind a marker keeps both the session and the marker.
+rm -f -- "$FAKE_PASS_REMOTE_SESSION" "$FAKE_HANGING_CHILD_PID"
+print -r -- started_at=1 >"$login_marker"
+: > "$FAKE_PASS_INFO_HANG"
+: > "$FAKE_PASS_LOG"
+test_process_fixture_track_pid_file "$FAKE_HANGING_CHILD_PID"
+set +e
+marker_timeout_output=$(zsh "$ensure_ready" 2>&1)
+marker_timeout_status=$?
+set -e
+rm -f -- "$FAKE_PASS_INFO_HANG"
+hanging_child_pid=$(<"$FAKE_HANGING_CHILD_PID")
+test_process_fixture_wait_for_pid_exit $hanging_child_pid 100 ||
+  fail 'a timed-out check behind a login marker must reap its child'
+test_process_fixture_untrack_pid_file "$FAKE_HANGING_CHILD_PID"
+(( marker_timeout_status != 0 )) ||
+  fail 'a timed-out check behind a login marker must fail readiness'
+[[ $marker_timeout_output ==
+  'proton-pass-ensure-ready: provider-session readiness check timed out' ]] ||
+  fail "a timed-out check behind a login marker must report the timeout: $marker_timeout_output"
+[[ $(<"$FAKE_PASS_LOG") == info ]] ||
+  fail 'a timed-out check behind a login marker must not reset local state'
+[[ -f $login_marker && -e $FAKE_PASS_LOCAL_SESSION ]] ||
+  fail 'a timed-out check must keep the login marker and the local session'
+rm -f -- "$login_marker" "$FAKE_PASS_LOCAL_SESSION"
+
+# An unusable marker is never followed or replaced, and it stops the call
+# before any check or reset touches a working session.
+login_marker_target=$test_dir/login-marker-target
+print -r -- untouched >"$login_marker_target"
+: > "$FAKE_PASS_LOCAL_SESSION"
+: > "$FAKE_PASS_REMOTE_SESSION"
+for marker_kind in symlink directory; do
+  case $marker_kind in
+    symlink) ln -s -- "$login_marker_target" "$login_marker" ;;
+    directory) mkdir -- "$login_marker" ;;
+  esac
+  : > "$FAKE_PASS_LOG"
+  : > "$FAKE_SECRET_TOOL_LOG"
+  set +e
+  marker_unusable_output=$(zsh "$ensure_ready" 2>&1)
+  marker_unusable_status=$?
+  set -e
+  (( marker_unusable_status != 0 )) ||
+    fail "a $marker_kind login marker must fail readiness"
+  [[ $marker_unusable_output ==
+    'proton-pass-ensure-ready: the login marker must be a regular file' ]] ||
+    fail "a $marker_kind login marker must report it: $marker_unusable_output"
+  [[ ! -s $FAKE_PASS_LOG && ! -s $FAKE_SECRET_TOOL_LOG ]] ||
+    fail "a $marker_kind login marker must stop before any provider or store call"
+  [[ -e $FAKE_PASS_LOCAL_SESSION && -e $FAKE_PASS_REMOTE_SESSION ]] ||
+    fail "a $marker_kind login marker must leave the session untouched"
+  grep -Fqx 'reason=login-marker-failed' "$status_file" &&
+    grep -Fqx 'last-failure-reason=login-marker-failed' "$status_file" ||
+    fail "a $marker_kind login marker must record login-marker-failed"
+  case $marker_kind in
+    symlink)
+      [[ -L $login_marker && $(<"$login_marker_target") == untouched ]] ||
+        fail 'a symbolic-link login marker must not be followed'
+      rm -f -- "$login_marker"
+      ;;
+    directory)
+      [[ -d $login_marker && -z $(print -r -- "$login_marker"/*(DN)) ]] ||
+        fail 'a directory login marker must be left as found'
+      rmdir -- "$login_marker"
+      ;;
+  esac
+done
+rm -f -- "$login_marker_target" "$FAKE_PASS_LOCAL_SESSION" \
+  "$FAKE_PASS_REMOTE_SESSION"
+
+# A repair can record its marker while an unlocked check runs. The check must
+# then defer to the locked path, not report the half-written session ready.
+# The reader's check starts before the marker exists and finishes on the
+# half-written session; it must then defer to the lock. The repair holds the
+# lock past the reader's takeover window, so the reader ends as a waiter.
+marker_race_window=$test_dir/marker-race-window
+rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION" \
+  "$FAKE_HANGING_CHILD_PID" "$marker_race_window"
+: > "$FAKE_PASS_LOG"
+: > "$FAKE_PASS_LOGIN_PARTIAL_HANG"
+test_process_fixture_track_pid_file "$FAKE_HANGING_CHILD_PID"
+FAKE_PASS_INFO_AWAIT_SESSION_ONCE=$marker_race_window zsh "$ensure_ready" \
+  >"$test_dir/marker-race-reader.out" 2>&1 &
+marker_race_reader_pid=$!
+test_process_fixture_track_pid $marker_race_reader_pid
+zmodload zsh/zselect
+integer marker_race_polls=500
+# The reader's check is running once its info call is logged.
+while (( marker_race_polls-- > 0 )) && [[ ! -s $FAKE_PASS_LOG ]]; do
+  zselect -t 1 2>/dev/null || true
+done
+zsh "$ensure_ready" >"$test_dir/marker-race-repair.out" 2>&1 &
+marker_race_repair_pid=$!
+test_process_fixture_track_pid $marker_race_repair_pid
+marker_race_polls=500
+while (( marker_race_polls-- > 0 )) && [[ ! -s $FAKE_HANGING_CHILD_PID ]]; do
+  zselect -t 1 2>/dev/null || true
+done
+[[ -s $FAKE_HANGING_CHILD_PID ]] ||
+  fail 'the racing repair must reach its login'
+# Later logins complete normally.
+rm -f -- "$FAKE_PASS_LOGIN_PARTIAL_HANG"
+set +e
+wait $marker_race_repair_pid
+marker_race_repair_status=$?
+wait $marker_race_reader_pid
+marker_race_reader_status=$?
+set -e
+test_process_fixture_untrack_pid $marker_race_repair_pid
+test_process_fixture_untrack_pid $marker_race_reader_pid
+hanging_child_pid=$(<"$FAKE_HANGING_CHILD_PID")
+test_process_fixture_wait_for_pid_exit $hanging_child_pid 100 ||
+  fail 'the racing repair must reap its hanging login'
+test_process_fixture_untrack_pid_file "$FAKE_HANGING_CHILD_PID"
+(( marker_race_repair_status != 0 )) ||
+  fail 'the racing repair fixture must time out its login'
+[[ $(<"$marker_race_window") == seen ]] ||
+  fail 'the reader fixture must finish its unlocked check on the half-written session'
+(( marker_race_reader_status != 0 )) ||
+  fail "an unlocked check that finishes behind a marker must not report ready: $(<"$test_dir/marker-race-reader.out")"
+[[ $(<"$test_dir/marker-race-reader.out") ==
+  'proton-pass-ensure-ready: the concurrent provider-session repair did not establish readiness' ]] ||
+  fail "the reader behind a marker must wait for the repair: $(<"$test_dir/marker-race-reader.out")"
+[[ $(grep -Fxc login "$FAKE_PASS_LOG") == 1 ]] ||
+  fail "the waiting reader must not start a second login: $(<"$FAKE_PASS_LOG")"
+grep -Fqx 'reason=concurrent-repair-failed' "$status_file" ||
+  fail 'the waiting reader must record concurrent-repair-failed'
+[[ ! -e $login_marker ]] ||
+  fail 'the racing repair must clear its marker after its cleanup'
+rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION"
 
 rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION" \
   "$FAKE_DESCENDANT_PID" "$FAKE_DESCENDANT_TOKEN_MARKER"
@@ -2488,7 +2854,9 @@ set -e
   fail 'a failed verification must report one value-free error'
 grep -Fqx 'reason=verify-failed' "$status_file" ||
   fail 'a failed verification must record its value-free reason'
-rm -f -- "$FAKE_PASS_SKIP_REMOTE_SESSION"
+[[ -f $login_marker ]] ||
+  fail 'a login that fails verification must keep its login marker'
+rm -f -- "$FAKE_PASS_SKIP_REMOTE_SESSION" "$login_marker"
 
 rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION" \
   "$FAKE_HANGING_CHILD_PID"
@@ -2510,6 +2878,9 @@ typeset -F verify_timeout_elapsed=$(( EPOCHREALTIME - verify_timeout_started ))
   fail 'a provider-verification timeout must report one value-free error'
 grep -Fqx 'reason=verify-timeout' "$status_file" ||
   fail 'a provider-verification timeout must record its value-free reason'
+[[ -f $login_marker ]] ||
+  fail 'a login whose verification times out must keep its login marker'
+rm -f -- "$login_marker"
 hanging_child_pid=$(<"$FAKE_HANGING_CHILD_PID")
 ! kill -0 $hanging_child_pid 2>/dev/null ||
   fail 'a timed-out provider-verification child must be terminated and reaped'

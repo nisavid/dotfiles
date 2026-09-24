@@ -41,9 +41,23 @@ PROTON_PASS_INVALIDATED_DIAGNOSTIC='Your session has been invalidated and you ha
 PROTON_PASS_INVALIDATED_DIAGNOSTIC+='been logged out automatically.'
 PROTON_PASS_INVALIDATED_DIAGNOSTIC+=$'\n'
 PROTON_PASS_INVALIDATED_DIAGNOSTIC+='Please log in again with: pass login'
+# The stored local key cannot open the local database, for example after two
+# processes each created a key for an empty session. pass-cli itself names a
+# forced local logout as the remedy.
+PROTON_PASS_UNDECRYPTABLE_STORE_DETAIL='Failed to open encrypted database: file is not a database. '
+PROTON_PASS_UNDECRYPTABLE_STORE_DETAIL+='The encryption key may not match or the database may be corrupted. '
+PROTON_PASS_UNDECRYPTABLE_STORE_DETAIL+="Try running 'pass-cli logout --force' to reset local state."
+PROTON_PASS_UNDECRYPTABLE_DIAGNOSTIC='Error: Error creating client features'
+PROTON_PASS_UNDECRYPTABLE_DIAGNOSTIC+=$'\n\nCaused by:\n'
+PROTON_PASS_UNDECRYPTABLE_DIAGNOSTIC+=$'    0: Failed to initialize database\n'
+PROTON_PASS_UNDECRYPTABLE_DIAGNOSTIC+=$'    1: Failed to get database connection\n'
+PROTON_PASS_UNDECRYPTABLE_DIAGNOSTIC+="    2: Error occurred while creating a new object: $PROTON_PASS_UNDECRYPTABLE_STORE_DETAIL"$'\n'
+PROTON_PASS_UNDECRYPTABLE_DIAGNOSTIC+="    3: $PROTON_PASS_UNDECRYPTABLE_STORE_DETAIL"$'\n'
+PROTON_PASS_UNDECRYPTABLE_DIAGNOSTIC+='    4: Error code 0: not an error'
+unset PROTON_PASS_UNDECRYPTABLE_STORE_DETAIL
 readonly PROTON_PASS_ABSENT_DIAGNOSTIC PROTON_PASS_ABSENT_STATE_RECORD \
   PROTON_PASS_ORPHANED_SESSION_DIAGNOSTIC
-readonly PROTON_PASS_INVALIDATED_DIAGNOSTIC
+readonly PROTON_PASS_INVALIDATED_DIAGNOSTIC PROTON_PASS_UNDECRYPTABLE_DIAGNOSTIC
 # Exact pass-cli login failures that name an actionable cause. Server text,
 # status-only responses, and every other variant remain generic.
 PROTON_PASS_LOGIN_ALREADY_AUTHENTICATED_DIAGNOSTIC='Error: Already authenticated'
@@ -561,6 +575,21 @@ prepare_state_directory() {
   /bin/chmod -- 700 "$state_dir" || die 'cannot secure the state directory'
 }
 
+# Specific reasons name a cause an operator can act on. Timeouts, lock waits,
+# and unclassified states stay generic, so they never displace a recorded
+# specific failure.
+specific_failure_reason() {
+  emulate -L zsh
+
+  case $1 in
+    unsafe-lock|native-store-unavailable|invalid-bootstrap-value) return 0 ;;
+    logout-failed|login-failed|login-already-authenticated) return 0 ;;
+    login-token-rejected|login-token-malformed|login-session-refused) return 0 ;;
+    verify-failed|login-marker-failed) return 0 ;;
+  esac
+  return 1
+}
+
 write_status() {
   emulate -L zsh
   setopt local_options no_unset
@@ -572,17 +601,13 @@ write_status() {
     ready|unavailable) ;;
     *) state=unavailable ;;
   esac
+  # Ready and generic reasons; every specific reason is listed only above.
   case $reason in
     existing-session|concurrent-repair|repaired) ;;
-    unsafe-lock|lock-timeout|concurrent-repair-failed) ;;
+    lock-timeout|concurrent-repair-failed) ;;
     session-probe-timeout|session-state-unknown) ;;
-    native-store-timeout|native-store-unavailable|invalid-bootstrap-value) ;;
-    logout-timeout|logout-failed) ;;
-    login-timeout|login-failed) ;;
-    login-already-authenticated|login-token-rejected) ;;
-    login-token-malformed|login-session-refused) ;;
-    verify-timeout|verify-failed) ;;
-    *) reason=unrecorded ;;
+    native-store-timeout|logout-timeout|login-timeout|verify-timeout) ;;
+    *) specific_failure_reason "$reason" || reason=unrecorded ;;
   esac
   case $waiter_stage in
     record|identity|liveness-retry|child-status|retirement|unrecorded) ;;
@@ -590,16 +615,45 @@ write_status() {
   esac
   local state_dir=${XDG_STATE_HOME:-$HOME/.local/state}/secret-exec
   prepare_state_directory "$state_dir"
+  local status_file=$state_dir/proton-pass-readiness.status
 
   zmodload zsh/datetime || die 'zsh/datetime is required'
+  # The latest specific failure survives later writes, including ready ones.
+  # Only enumerated values carry over from the previous file.
+  local last_failure_reason= last_failure_at=
+  if [[ -f $status_file && ! -L $status_file ]]; then
+    local status_line previous_reason= previous_at=
+    integer status_lines=0
+    while (( status_lines++ < 8 )) && IFS= read -r status_line; do
+      case $status_line in
+        last-failure-reason=*) previous_reason=${status_line#*=} ;;
+        last-failure-at=*) previous_at=${status_line#*=} ;;
+      esac
+    done < "$status_file" 2>/dev/null || true
+    if specific_failure_reason "$previous_reason" &&
+      [[ $previous_at == <-> ]]; then
+      last_failure_reason=$previous_reason
+      last_failure_at=$previous_at
+    fi
+  fi
+  if [[ $state == unavailable ]] && specific_failure_reason "$reason"; then
+    last_failure_reason=$reason
+    last_failure_at=$EPOCHSECONDS
+  fi
+  local -a status_lines_out=(
+    "state=$state"
+    "reason=$reason"
+    "waiter-stage=$waiter_stage"
+    "updated_at=$EPOCHSECONDS"
+  )
+  [[ -z $last_failure_reason ]] || status_lines_out+=(
+    "last-failure-reason=$last_failure_reason"
+    "last-failure-at=$last_failure_at"
+  )
   local temporary
   temporary=$(/usr/bin/mktemp "$state_dir/.proton-pass-readiness.XXXXXX") ||
     die 'cannot create the readiness status'
-  print -rl -- \
-    "state=$state" \
-    "reason=$reason" \
-    "waiter-stage=$waiter_stage" \
-    "updated_at=$EPOCHSECONDS" > "$temporary" || {
+  print -rl -- "${status_lines_out[@]}" > "$temporary" || {
       /bin/rm -f -- "$temporary"
       die 'cannot write the readiness status'
     }
@@ -607,7 +661,7 @@ write_status() {
     /bin/rm -f -- "$temporary"
     die 'cannot secure the readiness status'
   }
-  /bin/mv -f -- "$temporary" "$state_dir/proton-pass-readiness.status" || {
+  /bin/mv -f -- "$temporary" "$status_file" || {
     /bin/rm -f -- "$temporary"
     die 'cannot publish the readiness status'
   }
@@ -693,6 +747,26 @@ diagnostic_matches_state() {
   done
 }
 
+# The terminal diagnostic stays byte-exact. Only the local database engine's
+# plain `ERROR CORE` records may precede it.
+diagnostic_matches_undecryptable_store() {
+  emulate -L zsh
+
+  local diagnostic=$1
+  [[ $diagnostic == "$PROTON_PASS_UNDECRYPTABLE_DIAGNOSTIC" ]] && return 0
+  [[ $diagnostic == *$'\n'"$PROTON_PASS_UNDECRYPTABLE_DIAGNOSTIC" ]] || return 1
+
+  local framing=${diagnostic%$'\n'"$PROTON_PASS_UNDECRYPTABLE_DIAGNOSTIC"}
+  [[ -n $framing && $framing != $'\n'* && $framing != *$'\n' &&
+    $framing != *$'\n\n'* ]] || return 1
+  local core_record_pattern='^[0-9]{4}-[0-9]{2}-[0-9]{2} '
+  core_record_pattern+='[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}: ERROR CORE [^[:cntrl:]]+$'
+  local line
+  for line in "${(f)framing}"; do
+    [[ $line != *$'\0'* && $line =~ $core_record_pattern ]] || return 1
+  done
+}
+
 classify_session_state() {
   emulate -L zsh
   setopt local_options no_unset pipe_fail
@@ -739,7 +813,52 @@ classify_session_state() {
   elif diagnostic_matches_state \
     "$diagnostic" "$PROTON_PASS_INVALIDATED_DIAGNOSTIC" invalidated; then
     typeset -g PROTON_PASS_SESSION_STATE=invalidated
+  elif diagnostic_matches_undecryptable_store "$diagnostic"; then
+    typeset -g PROTON_PASS_SESSION_STATE=undecryptable
   fi
+}
+
+# Every login runs under the readiness lock, and the lock dies with its
+# holder. A marker found while holding the lock therefore belongs to a repair
+# that never reached verification or cleanup, and whatever it stored is
+# suspect: pass-cli writes its session before its private token key.
+login_marker_usable() {
+  emulate -L zsh
+
+  local login_marker=$1
+  [[ ! -L $login_marker ]] &&
+    [[ ! -e $login_marker || -f $login_marker ]]
+}
+
+record_login_marker() {
+  emulate -L zsh
+
+  local state_dir=$1
+  local login_marker=$2
+  login_marker_usable "$login_marker" ||
+    fail_readiness login-marker-failed \
+      'the login marker must be a regular file' unrecorded
+  zmodload zsh/datetime || die 'zsh/datetime is required'
+  local temporary
+  temporary=$(/usr/bin/mktemp "$state_dir/.proton-pass-login.XXXXXX") ||
+    fail_readiness login-marker-failed \
+      'cannot record the repair in progress' unrecorded
+  if ! print -r -- "started_at=$EPOCHSECONDS" > "$temporary" ||
+    ! /bin/chmod -- 600 "$temporary" ||
+    ! /bin/mv -f -- "$temporary" "$login_marker"; then
+    /bin/rm -f -- "$temporary"
+    fail_readiness login-marker-failed \
+      'cannot record the repair in progress' unrecorded
+  fi
+}
+
+clear_login_marker() {
+  emulate -L zsh
+
+  local login_marker=$1
+  /bin/rm -f -- "$login_marker" ||
+    fail_readiness login-marker-failed \
+      'cannot clear the login marker' unrecorded
 }
 
 force_local_logout() {
@@ -807,12 +926,18 @@ main() {
 
   local backend
   backend=$(select_pass_cli_command)
-  if session_ready "$backend" "$PROTON_PASS_READY_PROBE_TIMEOUT_SECONDS"; then
+  local state_dir=${XDG_STATE_HOME:-$HOME/.local/state}/secret-exec
+  local login_marker=$state_dir/proton-pass-login.pending
+  # Info accepts the partial session an interrupted login leaves, so only the
+  # locked path may judge the session while a login marker remains. A repair
+  # can record its marker while this check runs, so it is checked again after.
+  if [[ ! -e $login_marker && ! -L $login_marker ]] &&
+    session_ready "$backend" "$PROTON_PASS_READY_PROBE_TIMEOUT_SECONDS" &&
+    [[ ! -e $login_marker && ! -L $login_marker ]]; then
     write_status ready existing-session unrecorded
     return 0
   fi
 
-  local state_dir=${XDG_STATE_HOME:-$HOME/.local/state}/secret-exec
   prepare_state_directory "$state_dir"
   zmodload zsh/system ||
     fail_readiness unsafe-lock 'zsh/system is required for readiness locking' unrecorded
@@ -891,10 +1016,18 @@ main() {
     fail_readiness unsafe-lock 'readiness lock must have mode 0600' unrecorded
   }
 
+  # An unusable marker stops the call before anything is classified or reset.
+  login_marker_usable "$login_marker" || {
+    zsystem flock -u lock_fd
+    fail_readiness login-marker-failed \
+      'the login marker must be a regular file' unrecorded
+  }
+  integer interrupted_repair=0
+  [[ ! -f $login_marker ]] || interrupted_repair=1
   classify_session_state "$backend" "$state_dir"
   local session_state=$PROTON_PASS_SESSION_STATE
   local session_waiter_stage=$PROTON_PASS_SESSION_WAITER_STAGE
-  if [[ $session_state == ready ]]; then
+  if [[ $session_state == ready ]] && (( ! interrupted_repair )); then
     write_status ready concurrent-repair unrecorded
     return 0
   fi
@@ -903,8 +1036,9 @@ main() {
     fail_readiness concurrent-repair-failed \
       'the concurrent provider-session repair did not establish readiness' unrecorded
   fi
+  # A ready session reaches this point only behind an interrupted repair.
   case $session_state in
-    absent|orphaned|invalidated) ;;
+    ready|absent|orphaned|invalidated|undecryptable) ;;
     timeout)
       zsystem flock -u lock_fd
       fail_readiness session-probe-timeout \
@@ -937,9 +1071,14 @@ main() {
     fail_readiness invalid-bootstrap-value \
       'the native bootstrap item must contain one non-empty line' unrecorded
 
+  # The marker covers the forced logout as well as the login: unlocked
+  # readers stay off local state that is being replaced.
+  record_login_marker "$state_dir" "$login_marker"
   # Stored local authentication blocks login, so remove it only after a
-  # positive classification and a validated bootstrap value.
-  if [[ $session_state == (orphaned|invalidated) ]]; then
+  # positive classification and a validated bootstrap value. Whatever an
+  # interrupted repair stored is removed the same way.
+  if (( interrupted_repair )) ||
+    [[ $session_state == (orphaned|invalidated|undecryptable) ]]; then
     force_local_logout "$backend"
   fi
 
@@ -979,13 +1118,17 @@ main() {
     # complete login behind a failed waiter, or from a session another process
     # stored outside the lock, and deliberately discards either rather than
     # report an unusable session as ready. Only an exact refusal, which stored
-    # nothing, keeps what it found.
+    # nothing, keeps what it found. A failed cleanup keeps the login marker,
+    # so the next call forces out whatever survived.
     [[ $login_failure_reason == login-already-authenticated ]] ||
       force_local_logout "$backend"
+    clear_login_marker "$login_marker"
     fail_readiness "$login_failure_reason" "$login_failure_message" \
       "$login_waiter_stage"
   fi
   remove_diagnostic_file
+  # A login that fails verification keeps its marker, so the next call forces
+  # out what it stored and logs in again.
   if session_ready "$backend" "$PROTON_PASS_VERIFY_TIMEOUT_SECONDS"; then
     :
   else
@@ -994,6 +1137,7 @@ main() {
       fail_readiness verify-timeout 'repaired provider-session verification timed out' unrecorded
     fail_readiness verify-failed 'the repaired provider session did not verify' unrecorded
   fi
+  clear_login_marker "$login_marker"
   write_status ready repaired unrecorded
 }
 
