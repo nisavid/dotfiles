@@ -53,8 +53,13 @@ Description=Isolated KWallet fixture
 Type=oneshot
 ExecStart=/bin/true' >"$transaction_dir/plasma-kwallet-pam.service"
 
+  # A user-mode manager needs a runtime directory even under --test; supply a
+  # private one so the transaction never depends on the caller's session.
+  transaction_runtime_dir=$test_dir/systemd-runtime
+  mkdir -m 0700 -- "$transaction_runtime_dir"
   transaction_log=$test_dir/systemd-transaction.log
-  if ! SYSTEMD_UNIT_PATH="${transaction_dir}:${unit_source:h}" \
+  if ! XDG_RUNTIME_DIR=$transaction_runtime_dir \
+    SYSTEMD_UNIT_PATH="${transaction_dir}:${unit_source:h}" \
     SYSTEMD_GENERATOR_PATH=/dev/null \
     SYSTEMD_ENVIRONMENT_GENERATOR_PATH=/dev/null \
     SYSTEMD_LOG_LEVEL=info \
