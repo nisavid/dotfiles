@@ -81,9 +81,11 @@ credential store and validates it before changing anything:
   the byte-exact non-existent-session error chain, and `pass-cli` refuses login
   locally while that authentication remains. The same chain appears when a
   concurrent `pass-cli` process wins a token-refresh race, and the helper
-  cannot tell the two apart. It accepts that trade-off: two independent
-  readiness checks must both report the chain, and the worst outcome replaces
-  a still-valid local session with a fresh one.
+  cannot tell the two apart. It accepts that trade-off: the unlocked readiness
+  check must fail and the locked classifying check must then report the exact
+  chain. The worst outcome replaces a still-valid local session with a fresh
+  one; if that login then fails, the call fails with no local session and the
+  next call repairs.
 - An invalidated session is the automatic-logout report of older `pass-cli`
   releases.
 
