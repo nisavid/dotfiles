@@ -56,9 +56,7 @@ jobs:
         run: chezmoi --version | grep -Fq 'chezmoi version v2.71.0,'
 
       - name: Verify user-session deployment contracts
-        run: |
-          zsh tests/zsh-gui-path.zsh
-          zsh tests/proton-pass-startup-bindings.zsh
+        run: bash scripts/ci-test-group zsh-deployment
 
   ubuntu:
     name: Ubuntu
@@ -95,9 +93,7 @@ jobs:
         run: chezmoi --version | grep -Fq 'chezmoi version v2.71.0,'
 
       - name: Verify user-session deployment contracts
-        run: |
-          zsh tests/zsh-gui-path.zsh
-          zsh tests/proton-pass-startup-bindings.zsh
+        run: bash scripts/ci-test-group zsh-deployment
 
   zsh-deployment-portability:
     name: zsh deployment portability

@@ -1,117 +1,69 @@
 #!/usr/bin/env zsh
-# Keep scripts/ci-test-group in step with the GitHub Actions test steps it
-# partitions, until those workflows call the script themselves.
+# Keep every CI definition running exactly the groups in scripts/ci-test-group,
+# and keep test commands in the script rather than in the workflows.
 set -euo pipefail
-setopt extendedglob
 
 repo_root=${0:A:h:h}
 script=$repo_root/scripts/ci-test-group
+portability=$repo_root/.github/workflows/platform-portability.yml
+deployment=$repo_root/.github/workflows/zsh-deployment-portability.yml
+buildkite=$repo_root/.buildkite/pipeline.yml
 
 fail() {
   print -ru2 -- "FAIL: $*"
   exit 1
 }
 
-# Print the trimmed lines of one step's `run: |` block.
-run_block() {
+# Print the items of each `<key>:` block list in a YAML file, in order.
+list_items() {
   emulate -L zsh
-  local workflow=$1 step=$2
-  awk -v step="- name: $step" '
-    function indent(s) { match(s, /^ */); return RLENGTH }
-    !in_step && index($0, step) && substr($0, indent($0) + 1) == step {
-      in_step = 1; step_indent = indent($0); next
-    }
-    in_step && !in_run && /^ *run: \|$/ { in_run = 1; run_indent = indent($0); next }
-    in_step && !in_run && /^ *- name: / && indent($0) == step_indent { exit }
-    in_run {
-      if ($0 ~ /^ *$/) next
-      if (indent($0) <= run_indent) exit
-      sub(/^ +/, ""); print
-    }
-  ' "$workflow"
+  awk -v key="$2:" '
+    { line = $0; sub(/^ +/, "", line) }
+    line == key { in_list = 1; next }
+    in_list && line ~ /^- / { sub(/^- /, "", line); print line; next }
+    { in_list = 0 }
+  ' "$1"
 }
 
-# Lines that the script expresses differently on purpose.
-typeset -A equivalents=(
-  'set -euo pipefail' ''
-  'if [[ "$RUNNER_OS" == Linux ]]; then' 'if [[ "$(uname -s)" == Linux ]]; then'
-  'exit 1' 'return 1'
-  'captured_state_output="$({' 'captured_state_output="$({'
-)
-
-# Lines only the script needs: this check itself and a local declaration.
-typeset -A script_only=(
-  'zsh -f tests/ci-test-group.zsh' 1
-  'local captured_state_output captured_state_status' 1
-)
-
-# Print the trimmed, non-empty body lines of one group function.
-group_lines() {
+# Count the lines that run exactly this command as a step's `run:` value.
+count_runs() {
   emulate -L zsh
-  awk -v start="group_${1//-/_}() {" '
-    $0 == start { in_group = 1; next }
-    in_group && $0 == "}" { exit }
-    in_group { sub(/^ +/, ""); if ($0 != "") print }
-  ' "$script"
+  awk -v run="run: $2" '
+    { line = $0; sub(/^ +/, "", line) }
+    line == run { n++ }
+    END { print n + 0 }
+  ' "$1"
 }
 
-# Compare a workflow's test steps with the groups that partition them, in both
-# directions, so neither side can gain or lose a command unnoticed.
-integer checked=0
-typeset -a partitioned_groups
-check_partition() {
-  local label=$1 step_list=$2 group_list=$3 step group line
-  local workflow=$repo_root/.github/workflows/$label
-  local -a steps groups lines
-  local -A expected actual
-  steps=("${(@s:|:)step_list}")
-  groups=("${(@s: :)group_list}")
-  partitioned_groups+=("${groups[@]}")
-  for step in "${steps[@]}"; do
-    lines=("${(@f)$(run_block "$workflow" "$step")}")
-    (( ${#lines} > 1 )) || fail "no run block found for $label: $step"
-    for line in "${lines[@]}"; do
-      if (( ${+equivalents[$line]} )); then
-        line=${equivalents[$line]}
-        [[ -z $line ]] && continue
-      fi
-      expected[$line]=1
-    done
-  done
-  for group in "${groups[@]}"; do
-    lines=("${(@f)$(group_lines "$group")}")
-    (( ${#lines} > 0 )) || fail "group $group has no commands"
-    for line in "${lines[@]}"; do
-      (( ${+script_only[$line]} )) || actual[$line]=1
-    done
-  done
-  for line in "${(@k)expected}"; do
-    (( ${+actual[$line]} )) ||
-      fail "groups ($group_list) are missing a command from $label: $line"
-    (( ++checked ))
-  done
-  for line in "${(@k)actual}"; do
-    (( ${+expected[$line]} )) ||
-      fail "groups ($group_list) run a command that $label does not: $line"
-  done
-}
-
-check_partition platform-portability.yml \
-  'Verify shell syntax|Verify platform bindings|Verify private-skill transaction' \
-  'shell-bindings proton-pass discover python-checks'
-check_partition zsh-deployment-portability.yml \
-  'Verify user-session deployment contracts' \
-  'zsh-deployment'
-
-listed=("${(@f)$(bash "$script" --list)}")
-[[ ${(j: :)${(o)listed}} == ${(j: :)${(o)partitioned_groups}} ]] ||
-  fail 'every group must partition exactly one workflow'
-[[ ${(j: :)listed} == 'shell-bindings proton-pass discover python-checks zsh-deployment' ]] ||
-  fail "unexpected group list: ${(j: :)listed}"
-for group in "${listed[@]}"; do
+groups=("${(@f)$(bash "$script" --list)}")
+[[ ${(j: :)groups} == 'shell-bindings proton-pass discover python-checks zsh-deployment' ]] ||
+  fail "unexpected group list: ${(j: :)groups}"
+for group in "${groups[@]}"; do
   grep -Eq "^group_${group//-/_}\(\) \{$" "$script" ||
     fail "group $group has no function"
 done
 bash "$script" no-such-group >/dev/null 2>&1 && fail 'an unknown group must fail'
 
-print -r -- "ci test group checks passed ($checked workflow lines)"
+# GitHub Actions: platform-portability runs every group except zsh-deployment
+# in its matrix, and zsh-deployment-portability runs zsh-deployment on each OS.
+matrix=("${(@f)$(list_items "$portability" group)}")
+[[ ${(j: :)matrix} == ${(j: :)groups[1,-2]} ]] ||
+  fail "platform-portability.yml matrix groups: ${(j: :)matrix}"
+(( $(count_runs "$portability" 'bash scripts/ci-test-group "$GROUP"') == 1 )) ||
+  fail 'platform-portability.yml must run its matrix group in one step'
+(( $(count_runs "$deployment" 'bash scripts/ci-test-group zsh-deployment') == 2 )) ||
+  fail 'zsh-deployment-portability.yml must run zsh-deployment on macOS and Ubuntu'
+
+# A test command added to a workflow directly would skip Buildkite and, in the
+# platform matrix, run once per group.
+for workflow in $portability $deployment; do
+  stray=$(grep -En '(tests|scripts)/' "$workflow" | grep -Fv 'scripts/ci-test-group') &&
+    fail "${workflow:t} runs a command outside scripts/ci-test-group:"$'\n'"$stray"
+done
+
+# Buildkite: the Linux and macOS matrices each run every group.
+matrix=("${(@f)$(list_items "$buildkite" matrix)}")
+[[ ${(j: :)matrix} == "${(j: :)groups} ${(j: :)groups}" ]] ||
+  fail "Buildkite matrix groups: ${(j: :)matrix}"
+
+print -r -- 'ci test group checks passed'
