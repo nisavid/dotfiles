@@ -490,6 +490,23 @@ pathlib.Path({os.fspath(self.wrapper_marker)!r}).write_text(
         self.assertNotIn(self.key_bytes, result.stdout)
         self.assertNotIn(self.key_bytes, result.stderr)
 
+    def test_valid_provider_read_taking_four_seconds_creates_receipt(self) -> None:
+        self._write_provider(self.signing_key, delay_seconds=4)
+
+        result = subprocess.run(
+            self._command(),
+            check=False,
+            capture_output=True,
+            env=self._environment(),
+            timeout=15,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", "replace"))
+        self.assertEqual(result.stdout, b"")
+        self.assertEqual(result.stderr, b"")
+        self.assertEqual(self.output.read_text(encoding="ascii"), "fixture receipt\n")
+        self.assertEqual(list(self.root.glob("proton-pass-age-admission.*")), [])
+
     def test_real_shaped_ids_with_either_leading_punctuation_reach_the_provider(
         self,
     ) -> None:
@@ -969,14 +986,14 @@ pathlib.Path({os.fspath(self.wrapper_marker)!r}).write_text(
                     self.assertNotIn(payload_bytes, result.stderr)
 
     def test_provider_timeout_removes_partial_private_file(self) -> None:
-        self._write_provider(self.signing_key, delay_seconds=10)
+        self._write_provider(self.signing_key, delay_seconds=35)
 
         result = subprocess.run(
             self._command(),
             check=False,
             capture_output=True,
             env=self._environment(),
-            timeout=10,
+            timeout=40,
         )
 
         self.assertEqual(result.returncode, 1)

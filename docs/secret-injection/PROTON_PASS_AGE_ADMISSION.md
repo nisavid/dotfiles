@@ -67,8 +67,9 @@ field with human output, using the same `proton-pass-ensure-ready` route as
 the caller's environment selects: `PROTON_PASS_SESSION_DIR`, or pass-cli's
 default root when that is unset. It removes an inherited Proton bootstrap
 token before starting provider or receipt children. Current source selects the
-D-Bus keyring on Linux and the platform default on macOS. It gives readiness 45 seconds, provider retrieval 3 seconds, key validation 15
-seconds, and receipt creation 180 seconds by default with a 300-second maximum.
+D-Bus keyring on Linux and the platform default on macOS. It gives readiness
+45 seconds, provider retrieval 30 seconds, key validation 15 seconds, and
+receipt creation 180 seconds by default with a 300-second maximum.
 Real-provider qualification must confirm that the selected CLI returns only
 the field bytes and its final line terminator for this item shape.
 
