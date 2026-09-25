@@ -12,7 +12,8 @@
 ## Relationships
 
 - **Hindsight → managed dotfiles**: `nisavid/agents` supplies reusable code;
-  this repository supplies an encrypted consumer binding.
+  this repository retains templates and a release pin with no active consumer
+  binding.
 - **Global Agent Equipment → managed dotfiles**: the equipment catalog selects
   provider routes; chezmoi deploys their portable source and narrow overlays.
 - **Global Agent Equipment → GitHub Issues**: [#44–#61](https://github.com/nisavid/dotfiles/issues?q=is%3Aissue+label%3Aagent-equipment)

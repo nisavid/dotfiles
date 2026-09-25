@@ -47,6 +47,9 @@ def modifier_python(*, darwin: bool = False) -> str:
     return code.replace(
         'if {{ if eq .chezmoi.os "darwin" }}True{{ else }}False{{ end }} else []',
         f"if {darwin} else []",
+    ).replace(
+        'if {{ if eq .chezmoi.os "linux" }}True{{ else }}False{{ end }} else []',
+        f"if {not darwin} else []",
     )
 
 
@@ -173,13 +176,16 @@ class DynamicSkillDisableModifierTests(unittest.TestCase):
         parsed = tomllib.loads(self.apply(config))
 
         self.assertNotIn("serena", parsed["mcp_servers"])
-        self.assertEqual(
-            parsed["sandbox_workspace_write"]["writable_roots"],
-            ["/tmp/keep", str(self.home / ".serena/memories")],
-        )
+        roots = parsed["sandbox_workspace_write"]["writable_roots"]
+        self.assertIn("/tmp/keep", roots)
+        self.assertIn(str(self.home / ".serena/memories"), roots)
 
     def test_adds_approved_darwin_writable_roots(self) -> None:
+        self.work = base64.b64encode(
+            b'writable_roots = ["src/private-project/.git"]\nprojects = []\n'
+        ).decode()
         expected = {
+            "src/private-project/.git",
             ".local/share/chezmoi.wt",
             ".config/docker/buildx",
             ".config/containers/podman/machine",
@@ -203,6 +209,49 @@ class DynamicSkillDisableModifierTests(unittest.TestCase):
         roots = set(parsed["sandbox_workspace_write"]["writable_roots"])
 
         self.assertTrue({str(self.home / path) for path in expected} <= roots)
+
+    def test_adds_linux_roots_and_explicit_private_paths(self) -> None:
+        self.work = base64.b64encode(
+            b'writable_roots = ["src/private-project/.git"]\n'
+            b'projects = ["src/private-project", "src/existing-project"]\n'
+        ).decode()
+        config = textwrap.dedent(
+            f"""
+            [sandbox_workspace_write]
+            writable_roots = ["/tmp/keep", "{self.home}/src/private-project/.git"]
+
+            [projects."{self.home}/src/existing-project"]
+            trust_level = "untrusted"
+
+            [hooks.state]
+            fixture_hash = "keep"
+            """
+        )
+        result = self.apply(config)
+        parsed = tomllib.loads(result)
+        roots = set(parsed["sandbox_workspace_write"]["writable_roots"])
+
+        self.assertEqual(
+            roots,
+            {
+                "/tmp/keep",
+                str(self.home / "src/private-project/.git"),
+                str(self.home / ".codex/worktrees"),
+                str(self.home / ".t3/worktrees"),
+                str(self.home / ".local/share/chezmoi"),
+                str(self.home / ".local/share/chezmoi.wt"),
+            },
+        )
+        self.assertEqual(
+            parsed["projects"][str(self.home / "src/private-project")],
+            {"trust_level": "trusted"},
+        )
+        self.assertEqual(
+            parsed["projects"][str(self.home / "src/existing-project")],
+            {"trust_level": "untrusted"},
+        )
+        self.assertEqual(parsed["hooks"]["state"], {"fixture_hash": "keep"})
+        self.assertEqual(self.apply(result), result)
 
 
 if __name__ == "__main__":
