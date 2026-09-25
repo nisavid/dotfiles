@@ -226,6 +226,29 @@ for dotdot_entry in "$dotdot_dir/link/.." link/..; do
   [[ $output == checked ]] ||
     fail "a symlink-then-.. PATH entry must exec the checked file ($dotdot_entry): $output"
 done
+
+# The same entry form can reach the shim directory itself; the dispatcher must
+# skip it like the shim directory, not re-dispatch to its own shim in a loop.
+zmodload zsh/zselect
+mkdir -- "$shim_dir/nested"
+ln -s "$shim_dir/nested" "$dotdot_dir/shim-link"
+PATH=$shim_dir:$dotdot_dir/shim-link/..:$dotdot_dir/link/..:$real_bin:$backend_bin:$fixture_home/.local/bin:/usr/bin:/bin
+tool-a > "$test_dir/shim-loop.out" 2>&1 &
+shim_loop_pid=$!
+integer shim_loop_polls=500
+while (( shim_loop_polls-- > 0 )) && kill -0 $shim_loop_pid 2>/dev/null; do
+  zselect -t 1 2>/dev/null || true
+done
+if kill -0 $shim_loop_pid 2>/dev/null; then
+  kill -KILL $shim_loop_pid 2>/dev/null || true
+  fail 'a symlink-then-.. PATH entry into the shim directory must not re-dispatch the shim'
+fi
+wait $shim_loop_pid ||
+  fail "a symlink-then-.. PATH entry into the shim directory must be skipped: status $?"
+[[ $(<"$test_dir/shim-loop.out") == checked ]] ||
+  fail "a symlink-then-.. PATH entry into the shim directory must be skipped: $(<"$test_dir/shim-loop.out")"
+rm -- "$dotdot_dir/shim-link"
+rmdir -- "$shim_dir/nested"
 PATH=$shim_dir:$real_bin:$backend_bin:$fixture_home/.local/bin:/usr/bin:/bin
 cd "$original_directory"
 
