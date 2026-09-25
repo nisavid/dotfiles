@@ -27,6 +27,9 @@ handoff must record all of these value-free facts:
   commit;
 - the SHA-256 of `scripts/run-trusted-age-admission` used by that revision;
 - the SHA-256 of `scripts/create-age-admission-receipt` used by that revision;
+- the SHA-256 of the canonical `issue286-reviewed-source-manifest/v1` for that
+  commit, whose entries bind the staged provisioning helper and recovery
+  collector;
 - the accepted public signer fingerprint and the source/test results; and
 - the admission-specific live-provider qualification result.
 
@@ -47,19 +50,23 @@ creator digests; a handoff from before that revision is stale.
 The adapter supports one input shape:
 
 - Linux or macOS in an authorized trusted user session;
-- a custom item selected by stable share ID and item ID, each matching
-  `[A-Za-z0-9_-]{1,128}`;
+- a custom item selected by stable share ID and item ID, each exactly 86
+  URL-safe base64 characters (`[A-Za-z0-9_-]`) followed by `==`, the
+  88-character shape pass-cli's `is_id` accepts; because an ID may begin with
+  `-`, each is passed attached, as `--share-id=<id>` and `--item-id=<id>`;
 - the hidden field `SSH.private_key` only;
 - one unencrypted OpenSSH Ed25519 private key no larger than 64 KiB;
 - a pinned `SHA256:...` SSH public fingerprint;
 - lowercase 40-character base and head commit IDs; and
 - an unused receipt-output path outside both checkouts.
 
-It calls `pass-cli item view` for only that field with human output, using the
-same `proton-pass-ensure-ready` route as `secret-exec`. It removes an inherited
-Proton bootstrap token before starting provider or receipt children. Current
-source selects the D-Bus keyring on Linux and the platform default on macOS. It
-gives readiness 45 seconds, provider retrieval 3 seconds, key validation 15
+It calls `pass-cli item view --share-id=<id> --item-id=<id>` for only that
+field with human output, using the same `proton-pass-ensure-ready` route as
+`secret-exec`. It reads through the provider session in the profile root that
+the caller's environment selects: `PROTON_PASS_SESSION_DIR`, or pass-cli's
+default root when that is unset. It removes an inherited Proton bootstrap
+token before starting provider or receipt children. Current source selects the
+D-Bus keyring on Linux and the platform default on macOS. It gives readiness 45 seconds, provider retrieval 3 seconds, key validation 15
 seconds, and receipt creation 180 seconds by default with a 300-second maximum.
 Real-provider qualification must confirm that the selected CLI returns only
 the field bytes and its final line terminator for this item shape.
@@ -352,7 +359,9 @@ test "$actual_fingerprint" = "$EXPECTED_SIGNER_FINGERPRINT"
 Invoke the adapter with identifiers, paths, and public values only. The private
 key travels from the selected provider field into the adapter's exclusive
 mode-`0600` file. It is never placed in an argument, environment variable,
-checkout file, log, or output. The adapter reruns the same trusted preflight
+checkout file, log, or output. Pass both IDs in attached `--option=<id>` form;
+the adapter's argument parser, like pass-cli's, reads a separate value that
+begins with `-` as an option. The adapter reruns the same trusted preflight
 immediately before readiness and permits provider access only for its exact
 `required` result:
 
@@ -361,8 +370,8 @@ receipt=$operation_dir/receipt.marker
 TMPDIR="$operation_dir" \
 AGE_TOOLING_DIRECTORY="$AGE_TOOLING_DIRECTORY" \
 python3 -I -B -S "$ADMISSION_ADAPTER" \
-  --share-id "$PROTON_PASS_SHARE_ID" \
-  --item-id "$PROTON_PASS_ITEM_ID" \
+  --share-id="$PROTON_PASS_SHARE_ID" \
+  --item-id="$PROTON_PASS_ITEM_ID" \
   --expected-fingerprint "$EXPECTED_SIGNER_FINGERPRINT" \
   --trusted-launcher "$trusted_wrapper" \
   --base-repository "$TRUSTED_MAIN_CHECKOUT" \
@@ -574,12 +583,30 @@ protection input or effect.
 These are prepared interfaces, not authorization to run them. The owner must
 separately authorize every disposable or production item, vault/share,
 enrollment, provider write, revocation, deletion, and retained resource. That
-live-operation boundary must also name the exact owner and primary profile
-roots, keyring backend, ordinary startup maintenance and invalidation effects,
-timeout behavior, and preservation or incident handling. A timeout does not
-roll back a provider startup effect. The later protection exception, recovery
-merge, restoration, and consumer receipts for PRs #285, #287, and #302 remain
-separate owner-held effects outside this helper.
+live-operation boundary must also name the routine reader (`sessions.primary`),
+the exact owner profile root and, for `existing-agent`, the primary enrollment
+root and name, the keyring backend, ordinary startup maintenance and
+invalidation effects, the shared legacy keyring credential deletion described
+below, timeout
+behavior, and preservation or incident handling. A timeout does not roll back a
+provider startup effect. The later protection exception, recovery merge,
+restoration, and consumer receipts for PRs #285, #287, #302, #303, and #323
+remain separate owner-held effects outside this helper.
+
+Every pass-cli logout route deletes two keyring credentials under service
+`ProtonPassCLI`. One is the profile root's own scoped credential,
+`cli-local-key:` followed by the SHA-256 of the canonical `.session` path. The
+other is the host-wide legacy credential `cli-local-key`, which no single
+profile root owns. Both ordinary `logout` and `logout --force` do this. That
+includes this helper's recovery-profile `logout --force` in qualification
+cleanup and rollback, and the readiness helper's `logout --force` before it
+repairs an invalidated provider session. A profile root whose scoped
+credential is missing reads and copies the legacy credential when it exists,
+including a new task-created root. If neither credential exists and the root
+holds local data, pass-cli forces a logout that deletes its `.session` data.
+A separate profile root therefore does not isolate the legacy credential.
+Pinned pass-cli 2.3.3 never writes the legacy name, so an absence observed at
+discovery persists while that version binding holds.
 
 The concrete operation plan must disclose that `pass-cli agent create --vault`
 resolves the supplied vault by name and upstream selects the first successfully
@@ -593,10 +620,131 @@ name-resolved grant is an incident and cannot produce a success marker. If the
 operator does not accept that bounded risk, an exact-share-ID grant sequence is
 a separate source-design decision before live qualification.
 
+The same effect-bearing discovery also observes the existing profile root and
+the keyring before any provisioning request is written:
+
+1. Before any pass-cli child starts against that root, run a metadata-only
+   check in the keyring backend the helper selects. It must not retrieve or
+   print a secret, which rules out `secret-tool search` and
+   `secret-tool lookup`. Before approval, match its attribute mapping to the
+   store crate pinned by pass-cli's `Cargo.lock`; for D-Bus that is
+   `zbus-secret-service-keyring-store` 1.0.0, whose source is outside the
+   bound tree. Report only whether the root's scoped credential exists and
+   whether the legacy `cli-local-key` credential exists. Stop if the scoped
+   credential is missing, and delete nothing.
+2. Run `pass-cli info --output json` once on that root and classify the
+   provider session without assuming its role. An owner-account session
+   reports an ID other than `N/A`, a username, and an email, with no token
+   name. An agent session reports ID `N/A` and token name `[Agent] <name>`.
+   Any other result stops.
+
+Proceed to qualification only if the legacy credential is absent, or if the
+owner explicitly accepts its deletion after confirming that every pass-cli
+profile root on the host has its own scoped credential.
+
 Stage the provisioning helper from its raw reviewed blob and retain the same
 reviewed object database, commit, manifest, and age archive bindings used by
-the fixture contract. A canonical `issue286-provisioning/v2` source-test
-request has this exact closed shape:
+the fixture contract. The helper refuses to run unless its own file is exactly
+mode `0755` and byte-equal to its manifest entry, but that check runs inside
+the staged bytes, so it cannot vouch for them. Take the manifest SHA-256 from
+the issue #286 handoff and the expected blob digest from that manifest, never
+from the staged file. The block verifies the blob under a temporary name and
+moves it to the run path only after it matches, so a failed staging leaves
+nothing there for the run commands below to execute:
+
+```zsh
+set -euo pipefail
+umask 077
+: "${REVIEWED_SOURCE_REPOSITORY:?set the reviewed object database}"
+: "${REVIEWED_SOURCE_COMMIT:?set the reviewed source commit from issue 286}"
+: "${REVIEWED_SOURCE_MANIFEST:?set the private reviewed source manifest}"
+: "${REVIEWED_SOURCE_MANIFEST_SHA256:?set the manifest SHA-256 from issue 286}"
+: "${PROVISIONING_STAGING_ROOT:?set a new private staging root}"
+
+file_mode() {
+  stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1"
+}
+file_uid() {
+  stat -c '%u' "$1" 2>/dev/null || stat -f '%u' "$1"
+}
+file_sha256() {
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk 'NR == 1 { print $1 }'
+  else
+    sha256sum "$1" | awk 'NR == 1 { print $1 }'
+  fi
+}
+reviewed_manifest_entry() {
+  python3 -I -B -S - "$REVIEWED_SOURCE_MANIFEST" "$1" "$2" <<'PY'
+import json
+import re
+import sys
+
+path, commit, name = sys.argv[1:]
+with open(path, encoding="ascii") as stream:
+    document = json.load(stream)
+entries = document.get("entries") if isinstance(document, dict) else None
+if (
+    not isinstance(entries, list)
+    or set(document) != {"commit", "entries", "schema"}
+    or document["schema"] != "issue286-reviewed-source-manifest/v1"
+    or document["commit"] != commit
+):
+    raise SystemExit("reviewed source manifest binding is invalid")
+matches = [
+    entry
+    for entry in entries
+    if isinstance(entry, dict) and entry.get("path") == name
+]
+if (
+    len(matches) != 1
+    or set(matches[0]) != {"mode", "path", "sha256"}
+    or matches[0]["mode"] not in {"100644", "100755"}
+    or not isinstance(matches[0]["sha256"], str)
+    or re.fullmatch(r"[0-9a-f]{64}", matches[0]["sha256"], re.ASCII) is None
+):
+    raise SystemExit("reviewed source manifest entry is invalid")
+print(matches[0]["mode"], matches[0]["sha256"])
+PY
+}
+
+test "$(file_sha256 "$REVIEWED_SOURCE_MANIFEST")" = \
+  "$REVIEWED_SOURCE_MANIFEST_SHA256"
+provisioner_source=scripts/provision-age-admission-signer
+provisioner_entry=$(reviewed_manifest_entry "$REVIEWED_SOURCE_COMMIT" \
+  "$provisioner_source")
+provisioner_record=$(git -C "$REVIEWED_SOURCE_REPOSITORY" ls-tree \
+  "$REVIEWED_SOURCE_COMMIT" -- "$provisioner_source")
+test -n "$provisioner_record"
+test "${provisioner_record%% *}" = "${provisioner_entry%% *}"
+provisioner_object=${${provisioner_record#* }#* }
+provisioner_object=${provisioner_object%%$'\t'*}
+
+staging_parent=$(cd -P -- "${PROVISIONING_STAGING_ROOT:h}" && pwd -P)
+PROVISIONING_STAGING_ROOT=$staging_parent/${PROVISIONING_STAGING_ROOT:t}
+test ! -e "$PROVISIONING_STAGING_ROOT"
+test ! -L "$PROVISIONING_STAGING_ROOT"
+mkdir -m 0700 -- "$PROVISIONING_STAGING_ROOT"
+mkdir -m 0700 -- "$PROVISIONING_STAGING_ROOT/scripts"
+staged_provisioner=$PROVISIONING_STAGING_ROOT/$provisioner_source
+unverified_provisioner=$staged_provisioner.unverified
+(
+  set -C
+  git -C "$REVIEWED_SOURCE_REPOSITORY" cat-file blob "$provisioner_object" \
+    >"$unverified_provisioner"
+)
+test "$(file_sha256 "$unverified_provisioner")" = "${provisioner_entry#* }"
+chmod 0755 "$unverified_provisioner"
+mv -- "$unverified_provisioner" "$staged_provisioner"
+test -f "$staged_provisioner"
+test ! -L "$staged_provisioner"
+test "$(file_mode "$staged_provisioner")" = 755
+test "$(file_uid "$staged_provisioner")" = "$EUID"
+test "$(file_sha256 "$staged_provisioner")" = "${provisioner_entry#* }"
+```
+
+A canonical `issue286-provisioning/v3` source-test request has this exact
+closed shape:
 
 ```json
 {
@@ -614,11 +762,11 @@ request has this exact closed shape:
     "expiration": "1h",
     "item_title": "issue286-synthetic-item",
     "recovery_agent_name": "issue286-synthetic-recovery",
-    "share_id": "synthetic_share",
+    "share_id": "-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
     "vault_name": "Synthetic Vault"
   },
   "provider_schema": {
-    "command_schema": "issue286-pass-cli-2.3.3-provider-commands/v2",
+    "command_schema": "issue286-pass-cli-2.3.3-provider-commands/v3",
     "source_commit": "51a4c9b110a0ffe6e81f4f5d3877b9e5a0c24112",
     "source_manifest_sha256": "95c0f8d872b308adb741cc21541a090ca4842cb894ece48370938955cb42ae6b"
   },
@@ -632,22 +780,65 @@ request has this exact closed shape:
     },
     "repository": "/private-operation/input/reviewed-object-database"
   },
-  "schema": "issue286-provisioning/v2",
+  "schema": "issue286-provisioning/v3",
   "sessions": {
     "owner": "/private-operation/profiles/owner",
-    "primary_enrollment": "/private-operation/profiles/primary",
-    "primary_enrollment_name": "issue286-synthetic-primary"
+    "primary": "owner"
   }
 }
 ```
 
 Private share and item IDs, vault and agent names, enrollment names, and
-profile-root paths stay only in the mode-`0600` request and private state. The
-v2 request retains the `sessions.owner` and `sessions.primary_enrollment` keys
-for compatibility, but both values are existing Proton profile roots, not their
-`.session` children. Each root and its `.session` child must already be
-caller-owned, nonsymlink, mode-`0700` directories. The helper rejects either
-malformed root before resolving or starting `pass-cli`.
+profile-root paths stay only in the mode-`0600` request and private state.
+`sessions.primary` explicitly names the routine reader and closes the rest of
+`sessions`. `"owner"` allows exactly `owner` and `primary`. `"existing-agent"`
+requires exactly `owner`, `primary`, `primary_enrollment`, and
+`primary_enrollment_name`, for example:
+
+```json
+{
+  "owner": "/private-operation/profiles/owner",
+  "primary": "existing-agent",
+  "primary_enrollment": "/private-operation/profiles/primary",
+  "primary_enrollment_name": "issue286-synthetic-primary"
+}
+```
+
+A missing or unknown selector, or any extra or missing key, is rejected. The
+helper never infers the reader from paths: an `existing-agent` request whose
+owner and primary enrollment roots are equal is rejected. Every named root is
+an existing Proton profile root, not its `.session` child; each root and its
+`.session` child must already be caller-owned, nonsymlink, mode-`0700`
+directories. A malformed root is rejected before `pass-cli` is resolved or
+started.
+
+Every role acts under the owner's single Proton account; no second account is
+needed. A profile root holds at most one provider session. An owner-account
+session is logged in to that account directly. An agent session is logged in
+with a personal access token the owner account created, and `info` names it
+`[Agent] <name>`. An enrollment in this procedure is such an agent.
+
+`sessions.owner` names a profile root with an owner-account session. It runs
+the version and `info` checks, item creation and listing, agent creation and
+listing, the audit read, and every deletion. With `"owner"`, both routine
+readbacks use that same root, which must be the profile routine signing uses.
+The first owner `info` must report a user login with a present ID other than
+`N/A`. The helper stores that ID as `state.json` `bindings.owner_id` before its
+first provider mutation. Before each routine readback, it runs `info` on the
+owner root again and requires a user login with the same ID. A different
+answer fails before readiness or the adapter and takes the ordinary rollback.
+Routine signing in this mode uses the owner account's full authority.
+
+With `"existing-agent"`, both routine readbacks use the named enrollment in
+a different profile root. Its `info` must report
+`[Agent] <primary_enrollment_name>` before each readback. Routine signing in
+this mode uses the selected enrollment. In both modes, the recovery agent is
+a new enrollment in the task-created `private/recovery-session` root. Resume
+rejects a state whose `bindings.owner_id` is absent, null, or `N/A`.
+Terminal markers and commit records do not carry that ID. The routine
+readbacks stand in for routine signing and demonstrate access through the
+selected reader. Discovery identifies the existing root's login; use the
+matching mode and provide a separate owner root for `"existing-agent"`.
 
 The request carries no executable path: each child resolves `pass-cli` through
 its ordinary runtime `PATH`. The helper binds the observed path, exact version
@@ -656,7 +847,7 @@ operation. The observed path is not a package-location policy and need not be
 equal across hosts.
 
 The closed
-`issue286-pass-cli-2.3.3-provider-commands/v2` provider schema binds pass-cli
+`issue286-pass-cli-2.3.3-provider-commands/v3` provider schema binds pass-cli
 source commit `51a4c9b110a0ffe6e81f4f5d3877b9e5a0c24112` to the maintained,
 revision-wide
 `docs/secret-injection/pass-cli-2.3.3-source-manifest.json`. Its SHA-256 is
@@ -667,7 +858,19 @@ mode, Git object type and ID, byte count, and raw-byte SHA-256. The recovered
 six-command `pass-cli-reconciliation-source-manifest.json`, whose SHA-256 is
 `1bab100ede30e745b674a5f961c1a1d7347875454685876da5e923248a330bcb`,
 remains valid historical v1 schema evidence. It is not missing, and it is not
-the v2 provider-source binding.
+the v3 provider-source binding.
+
+v3 changes only the closed command shape from v2. Every provider ID is attached
+to its option (`--share-id=<id>`, `--item-id=<id>`, `--pat-id=<id>`) and must
+be exactly 86 URL-safe base64 characters followed by `==`. The same rule
+covers every ID the helper reads from provider output. Pinned source rejects
+other shapes outright only for PAT deletion; live-disposable qualification
+must confirm the shape of the other ID fields, and the helper fails closed if
+they differ. The source-manifest binding and marker schemas are unchanged
+by that provider-command revision. Requests, states, and qualified-clean
+evidence bound to
+the v2 command schema are rejected, so earlier qualification evidence cannot
+qualify a v3 run.
 
 All trace paths below are relative to the
 [bound public source tree](https://github.com/ProtonPass/pass-cli/tree/51a4c9b110a0ffe6e81f4f5d3877b9e5a0c24112).
@@ -675,28 +878,30 @@ The map is limited to claims this procedure consumes:
 
 | Claim | Required source trace | Bound source fact |
 | --- | --- | --- |
-| Applicable command routing | `pass-cli/src/main.rs`; `pass-cli/src/commands/item/mod.rs`; `pass-cli/src/commands/agent/mod.rs`; `pass-cli/src/commands/personal_access_token/mod.rs` | The top-level parser routes `item`, `agent`, `info`, `logout`, and `personal-access-token` (alias `pat`) into these handlers. The PAT delete form requires an ID through `--personal-access-token-id` or its `--pat-id` alias. |
+| Applicable command routing | `pass-cli/src/main.rs`; `pass-cli/src/commands/item/mod.rs`; `pass-cli/src/commands/agent/mod.rs`; `pass-cli/src/commands/personal_access_token/mod.rs` | The top-level parser routes `item`, `agent`, `info`, `logout`, and `personal-access-token` (alias `pat`) into these handlers. The PAT delete form requires an ID through `--personal-access-token-id` or its `--pat-id` alias; the helper passes it as `--pat-id=<id>`. pass-cli uses clap 4.5 (`pass-cli/Cargo.toml`) without `allow_hyphen_values`, so a separate value beginning with `-` would parse as a flag, not as the ID. That parser behavior is general clap knowledge; clap's source is outside the bound tree. |
 | Create acknowledgment | `pass-cli/src/commands/item/create/custom.rs`; `pass/src/item/create/custom.rs`; `pass/src/item/create/common.rs`; `pass-cli/src/commands/agent/create.rs`; `pass/src/personal_access_token/create.rs` | Custom-item creation prints the returned item ID after the create response. Agent creation prints token and instruction JSON only after PAT creation and Viewer grants return; it does not print the returned PAT ID. |
 | Positive-only listing and skipped records | `pass-cli/src/commands/item/list.rs`; `pass/src/item/list.rs`; `pass/src/item/open.rs`; `pass-cli/src/commands/agent/list.rs`; `pass/src/personal_access_token/list.rs` | Item listing emits successfully opened item summaries and can skip records that fail state, key, content, or payload opening. PAT listing skips records it cannot open, and agent listing filters the remaining records to the agent flag. A returned exact match is positive evidence; zero matches do not prove absence or completeness. |
-| Exact-ID PAT deletion acknowledgment | `pass-cli/src/main.rs`; `pass-cli/src/commands/personal_access_token/mod.rs`; `pass-cli/src/commands/personal_access_token/delete.rs`; `pass/src/personal_access_token/delete.rs` | `pass-cli pat delete --pat-id <retained_pat_id>` validates and passes that ID to the client. The client sends DELETE for that ID and applies the response success guard before the command prints `Personal access token deleted successfully`. No name lookup occurs. |
-| Exact-ID item deletion acknowledgment | `pass-cli/src/commands/item/mod.rs`; `pass-cli/src/commands/item/delete.rs`; `pass/src/item/delete.rs` | The command passes the supplied share and item IDs to the client and prints `Item <item-id> deleted successfully` only after the delete response succeeds and returns. |
-| Local logout and keyring cleanup | `pass-cli/src/main.rs`; `pass-cli/src/commands/logout.rs`; `pass-cli/src/features/keyring.rs`; `pass/src/logout.rs` | `logout --force` takes the pre-session force route, attempts cleanup of all key providers, removes local data, and then prints its success transcript. The ordinary logout route awaits remote session logout and separately attempts session-scoped key removal. |
+| Exact-ID PAT deletion acknowledgment | `pass-cli/src/main.rs`; `pass-cli/src/commands/personal_access_token/mod.rs`; `pass-cli/src/commands/personal_access_token/delete.rs`; `pass/src/utils.rs`; `pass/src/personal_access_token/delete.rs` | `pass-cli pat delete --pat-id=<retained_pat_id>` requires an 88-character ID ending in `==` (`is_id`), then passes that ID to the client. The client sends DELETE for that ID and applies the response success guard before the command prints `Personal access token deleted successfully`. No name lookup occurs. |
+| Exact-ID item deletion acknowledgment | `pass-cli/src/commands/item/mod.rs`; `pass-cli/src/commands/item/delete.rs`; `pass/src/item/delete.rs` | The command passes the supplied `--share-id=<id>` and `--item-id=<id>` values to the client and prints `Item <item-id> deleted successfully` only after the delete response succeeds and returns. |
+| Local logout and keyring cleanup | `pass-cli/src/main.rs`; `pass-cli/src/commands/logout.rs`; `pass-cli/src/features/mod.rs`; `pass-cli/src/features/keyring.rs`; `pass/src/logout.rs` | Both logout routes use the keyring provider's key removal, which deletes the profile root's scoped `ProtonPassCLI` credential and then the host-wide legacy `cli-local-key` credential that other profile roots may still use. `logout --force` takes the pre-session force route, attempts that cleanup for all key providers, removes local data, and then prints its success transcript. The ordinary logout route awaits remote session logout, then attempts the same key removal and removes local data. A root without its scoped credential copies the legacy credential when present; if neither exists and local data does, startup forces that logout. |
 | Profile-root and startup behavior | `pass-cli/src/utils.rs`; `pass-cli/src/features/mod.rs`; `pass-cli/src/features/keyring.rs`; `pass-cli/src/main.rs`; `pass-cli/src/commands/info.rs`; `pass-auth/src/store.rs` | `PROTON_PASS_SESSION_DIR` is a profile root; pass-cli appends `.session`. Provider startup may maintain or invalidate profile, keyring, database, and authentication state, and may process core events, telemetry, or refreshed authentication before the requested command completes. |
 | Session-info and audit schemas | `pass-cli/src/commands/info.rs`; `pass-cli/src/commands/agent/monitor.rs`; `pass/src/monitor.rs` | JSON info distinguishes user and agent/PAT sessions through its closed optional fields. Agent monitor serializes record, vault, object, action, payload, and time fields after resolving the named agent to a PAT ID. |
 
-The v2 cleanup target is the exact retained PAT ID. The agent name remains a
+The v3 cleanup target is the exact retained PAT ID. The agent name remains a
 diagnostic handle. Agent-create acknowledgment establishes that the remote PAT
 exists but does not establish its ID. Before arming deletion, one listing must
 return exactly one same-name record with a syntactically valid PAT ID and the
 expected expiration interval. If the listing returns zero or multiple
-same-name records, durably retain the name, token artifact, every returned
-candidate PAT ID and expiration, item handle, and private state directory. Keep
-the acknowledged agent resource present without asserting an exact ID, set
-remote cleanup incomplete, make no delete or other provider call, skip local
-cleanup, and return status 21 with the cleanup-incomplete diagnostic.
+same-name records, or one same-name record whose expiration is not an integer
+inside the create interval, durably retain the name, token artifact, every
+returned candidate PAT ID and expiration, item handle, and private state
+directory. Keep the acknowledged agent resource present without asserting an
+exact ID, set remote cleanup incomplete, make no delete or other provider call,
+skip local cleanup, and return status 21 with the cleanup-incomplete
+diagnostic.
 
 Deletion uses only
-`pass-cli pat delete --pat-id <retained_pat_id>`. Acknowledgment requires
+`pass-cli pat delete --pat-id=<retained_pat_id>`. Acknowledgment requires
 verified normal retirement, status 0, exact standard output
 `Personal access token deleted successfully\n`, and empty standard error. Any
 nonzero status, signal, timeout, malformed output, unverified retirement, or
@@ -711,7 +916,7 @@ observed executable was built from those bytes or that a live provider durably
 applied a request. Executable binding and separately owner-authorized
 live-disposable-provider qualification remain required.
 
-The two exact commands are:
+From `$PROVISIONING_STAGING_ROOT`, the two exact commands are:
 
 ```zsh
 python3 -I -B -S scripts/provision-age-admission-signer start \
@@ -724,7 +929,8 @@ python3 -I -B -S scripts/provision-age-admission-signer resume \
 
 `start` requires a new state directory whose lexical parent equals
 `request.private_parent`. Its ordered positive phases are `validated`,
-`fixture-ready`, `item-present`, `primary-readback-verified`, `agent-present`,
+`fixture-ready`, `item-present`, `primary-readback-verified` (the
+routine-reader readback), `agent-present`,
 `session-existing`, `recovery-readback-verified`, and then one terminal phase.
 Before every provider mutation it persists the exact pending request, target,
 captures, prior resource state, and `requesting` or `removing` state with file
@@ -744,8 +950,8 @@ Terminal disposition uses these closed successors and fixed relative names:
 
 | Producer artifact | Closed schema | Fixed relative name |
 | --- | --- | --- |
-| Provisioning request | `issue286-provisioning/v2` | Owner-selected mode-`0600` request path |
-| Producer state | `issue286-provisioning-state/v2` | `state.json` |
+| Provisioning request | `issue286-provisioning/v3` | Owner-selected mode-`0600` request path |
+| Producer state | `issue286-provisioning-state/v3` | `state.json` |
 | Qualified-clean marker | `issue286-qualified-clean/v2` | `qualified-clean.json` |
 | Ready-for-recovery marker | `issue286-ready-for-recovery/v2` | `ready-for-recovery.json` |
 | Prepared commit record | `issue286-terminal-commit/v1` | `.terminal-commit.prepared` |
@@ -769,7 +975,7 @@ commit record has this exact closed shape:
     },
     "platform": "linux",
     "provider_schema": {
-      "command_schema": "issue286-pass-cli-2.3.3-provider-commands/v2",
+      "command_schema": "issue286-pass-cli-2.3.3-provider-commands/v3",
       "source_commit": "51a4c9b110a0ffe6e81f4f5d3877b9e5a0c24112",
       "source_manifest_sha256": "95c0f8d872b308adb741cc21541a090ca4842cb894ece48370938955cb42ae6b"
     },
@@ -832,49 +1038,66 @@ producer state, and current request. Missing, prepared-only, noncanonical,
 mismatched, cross-operation, or non-committed combinations are rejected.
 Production also requires prior live-disposable evidence whose reviewed source,
 `pass-cli` version/build, platform, provider schema, cleanup checks, and
-remote-resource disposition match. It then creates a fresh internal synthetic
-fixture, whose randomized commits may differ from the qualification fixture.
-No synthetic commit is a production binding. A successful production run
-removes signer/template/token/receipt and fixture bytes, retains only bounded
-private lifecycle handles, commits `ready-for-recovery.json`, emits exact
-`ready-for-recovery\n`, and still grants no GitHub mutation authority.
+remote-resource disposition match. The producer request's `sessions` must
+equal the production request's `sessions`, so evidence qualified through one
+routine reader, profile root, or enrollment cannot open production through
+another. The producer state must carry a valid `bindings.owner_id`. Requests
+and states under `issue286-provisioning/v2` or
+`issue286-provisioning-state/v2` are rejected, so earlier qualified-clean
+evidence cannot be reused; run a fresh qualification. Production then creates
+a fresh internal synthetic fixture, whose randomized commits may differ from
+the qualification fixture. No synthetic commit is a production binding. A successful production run
+removes the signer private key, item template, agent token, receipts, builder
+inputs, and fixture bytes. It retains bounded private lifecycle handles and one
+public artifact: the mode-`0600` `private/admission-ed25519.pub` named by
+`state.json` `artifacts.signer_public`. Before commit it verifies that file's
+SHA-256 and SSH fingerprint against
+`bindings.fixture.document.signer.public_key_sha256` and `.fingerprint`. It
+then commits `ready-for-recovery.json`, emits exact `ready-for-recovery\n`, and
+still grants no GitHub mutation authority. Qualification and rollback also
+remove the public key, and no private-key bytes are retained locally.
 
 The helper gives signer private bytes only to mode-`0600` signer/template files
 and provider storage; they never enter argv, any environment, state JSON,
 terminal evidence, standard output, or standard error. The agent token remains
 in its private file and enters only the single `pass-cli login` child
-environment with the assignment prefix removed. Other child environments
-remove the token and reason first. Only selected-field readback/probe children
-receive `PROTON_PASS_AGENT_REASON=age-admission signing-key retrieval`.
+environment with the assignment prefix removed. Other child environments,
+including Git, remove the token and reason first. Only selected-field
+readback/probe children receive
+`PROTON_PASS_AGENT_REASON=age-admission signing-key retrieval`.
 
 Provider-required IDs and names may occur in the exact private child argv and
-state. Linux forces the D-Bus keyring; Darwin removes that override. Owner and
-primary inputs are existing Proton profile roots; pass-cli appends `.session` to
-each root. The recovery enrollment uses its task-created isolated profile root.
-All use the OS keyring, update checks disabled, and the verified staged age
-directory. Every provider observation may maintain or invalidate profile,
+state. Linux forces the D-Bus keyring; Darwin removes that override. The
+owner root and, for `existing-agent`, the primary enrollment root are existing
+Proton profile roots; pass-cli appends `.session` to each root. The recovery
+enrollment uses its own task-created profile root,
+which does not isolate the shared legacy keyring credential. All use the OS
+keyring, update checks disabled, and the verified staged age directory. Every
+provider observation may maintain or invalidate profile,
 keyring, database, and authentication state, process core events and telemetry,
 or persist refreshed authentication. Independent authorization therefore
-requires an approved effect-bearing existing-enrollment observation, exact
-recovery readback, one exact audit event, revocation, a direct post-revocation
-selected-field failure without readiness, and a still-successful primary
-readback. A separate directory alone is not proof; another authorized
-enrollment may be on the same host.
+requires an approved effect-bearing observation of the existing routine-reader
+profile, exact recovery readback, one exact audit event, revocation, a direct
+post-revocation selected-field failure without readiness, and a
+still-successful routine-reader readback. A separate directory alone is not
+proof; another authorized enrollment may be on the same host.
 
 The terminal results are closed and byte-exact:
 
 | Result | Status and terminal bytes | Meaning |
 | --- | --- | --- |
-| Qualified clean | 0; `qualified-clean\n`; empty stderr | Disposable item and exact retained recovery PAT removed, revoked probe failed, primary readback still passed, local evidence cleaned, and every child group absent |
-| Ready for recovery | 0; `ready-for-recovery\n`; empty stderr | Production resources verified, retained only by private handles, and every child group absent; separate recovery authorization still required |
+| Qualified clean | 0; `qualified-clean\n`; empty stderr | Disposable item and exact retained recovery PAT removed, revoked probe failed, routine-reader readback still passed, local evidence cleaned, and every child group absent |
+| Ready for recovery | 0; `ready-for-recovery\n`; empty stderr | Production resources verified, retained only by private handles and the bound signer public key, and every child group absent; separate recovery authorization still required |
 | Failed or rolled back | 1; empty stdout; `age-admission signer provisioning failed\n` | No success evidence; provider failure, rollback, local finalization, or durable classification failed |
 | Reconciliation required | 20; empty stdout; `age-admission signer provisioning requires reconciliation\n` | A create or login effect or its process-group retirement is unknown; stop as an incident |
 | Cleanup incomplete | 21; empty stdout; `age-admission signer provisioning cleanup incomplete\n` | A delete or logout effect, local cleanup, or local/read-only process-group retirement is unknown; stop as an incident |
 | Interrupted | `128 + signal`; empty stdout; `age-admission signer provisioning interrupted\n` | Every child group is absent and the provider state and retained evidence are durable |
 
 Qualified clean is limited to task-created disposable provider resources, the
-isolated recovery enrollment, and task-local sensitive artifacts. It does not
-claim that preexisting owner or primary profiles were unchanged. An unverified
+task-created recovery enrollment, and task-local sensitive artifacts. It does not
+claim that preexisting owner or selected routine-reader profiles were
+unchanged. An unchanged owner ID shows only that the same user login answered
+each owner check. An unverified
 or damaged existing profile is an incident and cannot produce qualification
 success. Ordinary startup maintenance already named in the approved
 live-operation boundary is not an unknown item, agent, or login effect.
@@ -895,6 +1118,15 @@ provider mutation remains `unknown` with its pending request, captures,
 handles, and artifacts retained. Interruption adds no retry, read, logout,
 revocation, deletion, or cleanup provider call.
 
+A signal that arrives while a failed run is rolling back is handled the same
+way. If it arrives after a rollback deletion is durably armed and before that
+process exists, the helper restores the resource, records
+`remote-cleanup-incomplete`, and makes no provider call. If it arrives during
+rollback's local cleanup, that cleanup finishes and records `rolled-back`.
+Once the rollback classification is durable, the helper returns
+`128 + first signal` with the interrupted diagnostic. If it cannot write the
+classification durably, it returns 1.
+
 Only normal retirement with status 0, bounded command-specific stdout, and
 empty stderr acknowledges a provider request. The two pinned create commands
 may also be settled by a complete source-ordered schema-valid stdout capture
@@ -913,8 +1145,9 @@ known handles for a separately owner-authorized incident disposition; this
 helper deliberately exposes no incident-mutation interface.
 
 Qualification cleanup is ordered: acknowledged exact retained-PAT-ID deletion,
-direct revoked-session probe failure without readiness, successful primary
-readback and receipt verification, acknowledged exact-ID item deletion,
+direct revoked-session probe failure without readiness, successful
+routine-reader readback (for `owner`, after the owner-ID check) and receipt
+verification, acknowledged exact-ID item deletion,
 acknowledged local logout, then bounded local cleanup and terminal disposition.
 Do not advance past an unknown state.
 
@@ -942,9 +1175,10 @@ commit. No spawn, provider call, or cleanup wait occurs under the mask. The
 existing SIGKILL and host-loss limits remain: recovery trusts a final record
 only when all bound files are present and validate, and absence fails closed.
 
-Once production succeeds, keep its item and authorized enrollments until a
-separately authorized replacement is accepted; never update the stored signer
-in place.
+Once production succeeds, keep its item, authorized enrollments, and state
+directory until a separately authorized replacement is accepted; the recovery
+steps below read the retained public key from that directory. Never update the
+stored signer in place.
 
 ## Recover trust when the current private signer is lost
 
@@ -955,15 +1189,141 @@ principal `repository-owner`, namespace
 `nisavid/dotfiles/age-admission/v1`, key type `ssh-ed25519`, and the public half
 whose fingerprint is `NEW_SIGNER_FINGERPRINT`.
 
+Derive that record from the public key retained by the production run, and
+require the candidate file to be byte-equal to it. The record uses the fixture
+builder's canonical allowed-signers format. The block first requires the
+committed production `ready-for-recovery` disposition: the final commit record
+and marker must match the `terminal_plan` in `state.json`, and the marker's
+listing, readback, and audit checks must all be true.
+
+```zsh
+set -euo pipefail
+umask 077
+: "${PROVISIONING_STATE_DIR:?set the production provisioning state directory}"
+: "${NEW_SIGNER_FINGERPRINT:?set the accepted new signer fingerprint}"
+: "${RECOVERY_CHECKOUT:?set a checkout containing the recovery head}"
+: "${RECOVERY_HEAD:?set the reviewed recovery pull request head commit}"
+
+file_mode() {
+  stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1"
+}
+file_uid() {
+  stat -c '%u' "$1" 2>/dev/null || stat -f '%u' "$1"
+}
+file_sha256() {
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk 'NR == 1 { print $1 }'
+  else
+    sha256sum "$1" | awk 'NR == 1 { print $1 }'
+  fi
+}
+
+test -d "$PROVISIONING_STATE_DIR"
+test ! -L "$PROVISIONING_STATE_DIR"
+test "$(file_mode "$PROVISIONING_STATE_DIR")" = 700
+test "$(file_uid "$PROVISIONING_STATE_DIR")" = "$EUID"
+for name in state.json terminal-commit.json ready-for-recovery.json; do
+  test -f "$PROVISIONING_STATE_DIR/$name"
+  test ! -L "$PROVISIONING_STATE_DIR/$name"
+  test "$(file_mode "$PROVISIONING_STATE_DIR/$name")" = 600
+  test "$(file_uid "$PROVISIONING_STATE_DIR/$name")" = "$EUID"
+done
+production_signer_binding() {
+  python3 -I -B -S - "$PROVISIONING_STATE_DIR" <<'PY'
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+state_directory = Path(sys.argv[1])
+
+
+def load(name):
+    data = (state_directory / name).read_bytes()
+    return data, json.loads(data.decode("ascii"))
+
+
+def digest(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+_state_bytes, state = load("state.json")
+commit_bytes, commit = load("terminal-commit.json")
+marker_bytes, marker = load("ready-for-recovery.json")
+plan = state["terminal_plan"]
+required_checks = (
+    "agent_listing",
+    "audit",
+    "item_listing",
+    "primary_readback",
+    "recovery_readback",
+)
+if (
+    state["mode"] != "production"
+    or state["outcome"] != "ready-for-recovery"
+    or state["artifacts"]["signer_public"] != "private/admission-ed25519.pub"
+    or plan["outcome"] != "ready-for-recovery"
+    or plan["commit_record"]
+    != {"final_name": "terminal-commit.json", "sha256": digest(commit_bytes)}
+    or plan["marker"]
+    != {"relative_path": "ready-for-recovery.json", "sha256": digest(marker_bytes)}
+    or commit["schema"] != "issue286-terminal-commit/v1"
+    or commit["outcome"] != "ready-for-recovery"
+    or commit["marker"] != plan["marker"]
+    or commit["bindings"] != plan["bindings"]
+    or marker["schema"] != "issue286-ready-for-recovery/v2"
+    or marker["outcome"] != "ready-for-recovery"
+    or marker["checks"] != state["checks"]
+    or any(marker["checks"][name] is not True for name in required_checks)
+):
+    raise SystemExit("production ready-for-recovery disposition is invalid")
+signer = state["bindings"]["fixture"]["document"]["signer"]
+print(signer["fingerprint"], signer["public_key_sha256"])
+PY
+}
+provisioning_signer=$(production_signer_binding)
+
+signer_public=$PROVISIONING_STATE_DIR/private/admission-ed25519.pub
+test -f "$signer_public"
+test ! -L "$signer_public"
+test "$(file_mode "$signer_public")" = 600
+test "$(file_uid "$signer_public")" = "$EUID"
+test "$(file_sha256 "$signer_public")" = "${provisioning_signer#* }"
+actual_fingerprint=$(ssh-keygen -lf "$signer_public" -E sha256 |
+  awk 'NR == 1 { print $2 }')
+test "$actual_fingerprint" = "${provisioning_signer%% *}"
+test "$actual_fingerprint" = "$NEW_SIGNER_FINGERPRINT"
+read -r key_type key_blob key_comment <"$signer_public"
+test "$key_type" = ssh-ed25519
+
+signers_path=.github/age-admission/allowed_signers
+signers_record=$(git -C "$RECOVERY_CHECKOUT" ls-tree "$RECOVERY_HEAD" -- \
+  "$signers_path")
+expected_object=$(printf \
+  'repository-owner namespaces="nisavid/dotfiles/age-admission/v1" %s %s\n' \
+  "$key_type" "$key_blob" | git -C "$RECOVERY_CHECKOUT" hash-object --stdin)
+test "$signers_record" = "100644 blob $expected_object"$'\t'"$signers_path"
+```
+
+Git computes the expected object ID from standard input without writing an
+object or applying filters, so an equal tree record means the candidate file
+is exactly that one record, stored with mode `100644`. The integrity gate
+requires that mode of the trusted base's allowed-signers entry, so any other
+mode would block every admission after the merge.
+
 Before requesting an exception:
 
 1. Refresh `main` and the recovery pull request. Record the exact base and head,
    public pull ref, reviewed changed-path allowlist, tree/object IDs, source
    digests, new signer fingerprint, and all test/review results.
-2. Verify locally that the new private key signs a disposable payload in the
-   existing namespace and that the candidate allowed-signers file accepts it
-   for `repository-owner`. Keep the private path out of logs and remove the
-   payload/signature fixture afterward.
+2. Do not extract the private key. The block above requires the committed
+   production disposition with true primary and recovery readbacks. Each
+   readback retrieved the stored key through the reviewed adapter, signed in
+   the existing namespace for `repository-owner`, and verified the signature
+   against an allowed-signers record built from the public key bytes bound by
+   `bindings.fixture.document.signer.public_key_sha256`. With the byte
+   equality above, this shows that the candidate allowed-signers file accepts
+   the stored private key.
 3. Require every unrelated hosted check to pass at the recovery head, at least
    one current approving review, resolved conversations, and a linear merge.
    The trusted age check is expected to reject the candidate because the base
@@ -971,6 +1331,109 @@ Before requesting an exception:
 4. Verify that the activation sentinel and existing admission paths are already
    present on live `main`. That proves the one-time bootstrap path is
    inapplicable.
+
+### Stage the reviewed recovery collector
+
+Stage `scripts/prepare-age-admission-recovery-preimage` from its raw blob at
+the reviewed source commit in the verified source manifest. Do not invoke the
+candidate or worktree pathname, and do not fetch implicitly. Take the manifest
+SHA-256 from the issue #286 handoff. The collector's expected SHA-256 is its
+manifest entry, never a hash of the staged file. The staged copy stays mode
+`0600` in a new mode-`0700` directory, and `python3` runs it. Run the preimage
+launcher below in the same shell, or carry both collector variables into it
+unchanged.
+
+```zsh
+set -euo pipefail
+umask 077
+: "${REVIEWED_SOURCE_REPOSITORY:?set the reviewed object database}"
+: "${RECOVERY_REVIEWED_SOURCE:?set the reviewed source commit}"
+: "${REVIEWED_SOURCE_MANIFEST:?set the private reviewed source manifest}"
+: "${REVIEWED_SOURCE_MANIFEST_SHA256:?set the manifest SHA-256 from issue 286}"
+: "${RECOVERY_COLLECTOR_STAGING:?set a new private collector directory}"
+
+file_mode() {
+  stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1"
+}
+file_sha256() {
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk 'NR == 1 { print $1 }'
+  else
+    sha256sum "$1" | awk 'NR == 1 { print $1 }'
+  fi
+}
+reviewed_manifest_entry() {
+  python3 -I -B -S - "$REVIEWED_SOURCE_MANIFEST" "$1" "$2" <<'PY'
+import json
+import re
+import sys
+
+path, commit, name = sys.argv[1:]
+with open(path, encoding="ascii") as stream:
+    document = json.load(stream)
+entries = document.get("entries") if isinstance(document, dict) else None
+if (
+    not isinstance(entries, list)
+    or set(document) != {"commit", "entries", "schema"}
+    or document["schema"] != "issue286-reviewed-source-manifest/v1"
+    or document["commit"] != commit
+):
+    raise SystemExit("reviewed source manifest binding is invalid")
+matches = [
+    entry
+    for entry in entries
+    if isinstance(entry, dict) and entry.get("path") == name
+]
+if (
+    len(matches) != 1
+    or set(matches[0]) != {"mode", "path", "sha256"}
+    or matches[0]["mode"] not in {"100644", "100755"}
+    or not isinstance(matches[0]["sha256"], str)
+    or re.fullmatch(r"[0-9a-f]{64}", matches[0]["sha256"], re.ASCII) is None
+):
+    raise SystemExit("reviewed source manifest entry is invalid")
+print(matches[0]["mode"], matches[0]["sha256"])
+PY
+}
+
+test "$(file_sha256 "$REVIEWED_SOURCE_MANIFEST")" = \
+  "$REVIEWED_SOURCE_MANIFEST_SHA256"
+collector_source=scripts/prepare-age-admission-recovery-preimage
+collector_entry=$(reviewed_manifest_entry "$RECOVERY_REVIEWED_SOURCE" \
+  "$collector_source")
+collector_record=$(git -C "$REVIEWED_SOURCE_REPOSITORY" ls-tree \
+  "$RECOVERY_REVIEWED_SOURCE" -- "$collector_source")
+test -n "$collector_record"
+test "${collector_record%% *}" = "${collector_entry%% *}"
+collector_object=${${collector_record#* }#* }
+collector_object=${collector_object%%$'\t'*}
+
+staging_parent=$(cd -P -- "${RECOVERY_COLLECTOR_STAGING:h}" && pwd -P)
+RECOVERY_COLLECTOR_STAGING=$staging_parent/${RECOVERY_COLLECTOR_STAGING:t}
+test ! -e "$RECOVERY_COLLECTOR_STAGING"
+test ! -L "$RECOVERY_COLLECTOR_STAGING"
+mkdir -m 0700 -- "$RECOVERY_COLLECTOR_STAGING"
+RECOVERY_PREIMAGE_COLLECTOR=$RECOVERY_COLLECTOR_STAGING/${collector_source:t}
+RECOVERY_PREIMAGE_COLLECTOR_SHA256=${collector_entry#* }
+unverified_collector=$RECOVERY_PREIMAGE_COLLECTOR.unverified
+(
+  set -C
+  git -C "$REVIEWED_SOURCE_REPOSITORY" cat-file blob "$collector_object" \
+    >"$unverified_collector"
+)
+chmod 0600 "$unverified_collector"
+test "$(file_sha256 "$unverified_collector")" = \
+  "$RECOVERY_PREIMAGE_COLLECTOR_SHA256"
+mv -- "$unverified_collector" "$RECOVERY_PREIMAGE_COLLECTOR"
+test "$(file_mode "$RECOVERY_COLLECTOR_STAGING")" = 700
+test "$(file_mode "$RECOVERY_PREIMAGE_COLLECTOR")" = 600
+test "$(file_sha256 "$RECOVERY_PREIMAGE_COLLECTOR")" = \
+  "$RECOVERY_PREIMAGE_COLLECTOR_SHA256"
+```
+
+A collector whose bytes differ from the reviewed blob fails here, before it
+runs, and never reaches `RECOVERY_PREIMAGE_COLLECTOR`. The launcher and entry
+gate below repeat that comparison against the same manifest digest.
 
 ### Revalidate the administrative preimage
 
@@ -981,17 +1444,16 @@ query over `POST` to paginate review-thread resolution. It cannot accept a
 caller query, send a GraphQL mutation, call a REST mutation, merge, enable
 auto-merge, or change protection.
 
-Stage the helper from its raw blob at the reviewed source commit in the
-verified source manifest. Do not invoke the candidate or worktree pathname,
-and do not fetch implicitly. Record the staged blob's SHA-256 as
-`RECOVERY_PREIMAGE_COLLECTOR_SHA256`; the entry gate checks both that digest and
-the digest embedded in `ready.json`.
+Use the collector staged above. `RECOVERY_PREIMAGE_COLLECTOR_SHA256` is its
+reviewed manifest digest, not a hash taken from the staged file; the entry gate
+checks both that digest and the digest embedded in `ready.json`.
 
 The frozen planning input observed these classic `main` protections:
 
 | Setting | Observed value |
 | --- | --- |
 | Required checks | `check conventional commit compliance` (`15368`), `CodeRabbit` (`347564`), `zsh deployment portability` (`15368`), and `Verify trusted base against candidate data` (`15368`) |
+| Required-check sources | `CodeRabbit` reports a commit status created by `coderabbitai[bot]` (`136622811`); the other three report check runs from app `15368` |
 | Strict checks | enabled |
 | Pull-request review | one approval; stale reviews dismissed |
 | Administrator enforcement | enabled |
@@ -1001,12 +1463,13 @@ The frozen planning input observed these classic `main` protections:
 | Required signatures, branch lock, and fork syncing | disabled |
 | Effective rules and rulesets | none observed |
 
-This snapshot is only a planning precondition. Build the canonical request in
-a caller-owned mode-`0700` private parent outside both checkouts. The request
-contains only public repository evidence, but its mode and path rules are the
-same as the bounded recovery evidence. `RECOVERY_REVIEWED_SOURCE` is the
-reviewed source commit that must occur in the pull request's complete commit
-list; it is not a candidate-supplied authority.
+This snapshot is only a planning precondition. Establish the merge freeze and
+the repository-wide quiescence described below before this collection. Build
+the canonical request in a caller-owned mode-`0700` private parent outside both
+checkouts. The request contains only public repository evidence, but its mode
+and path rules are the same as the bounded recovery evidence.
+`RECOVERY_REVIEWED_SOURCE` is the reviewed source commit that must occur in the
+pull request's complete commit list; it is not a candidate-supplied authority.
 
 ```zsh
 set -euo pipefail
@@ -1083,6 +1546,30 @@ checks = [
         "app_id": 15368,
     },
 ]
+sources = [
+    {
+        "context": "check conventional commit compliance",
+        "source": "check-run",
+        "app_id": 15368,
+    },
+    {
+        "context": "CodeRabbit",
+        "source": "commit-status",
+        "creator_id": 136622811,
+        "creator_login": "coderabbitai[bot]",
+    },
+    {
+        "context": "zsh deployment portability",
+        "source": "check-run",
+        "app_id": 15368,
+    },
+    {
+        "context": "Verify trusted base against candidate data",
+        "source": "check-run",
+        "app_id": 15368,
+    },
+]
+reviewers = [{"id": 136622811, "login": "coderabbitai[bot]"}]
 protection = {
     "url": root,
     "required_status_checks": {
@@ -1113,7 +1600,7 @@ protection = {
     "allow_fork_syncing": {"enabled": False},
 }
 request = {
-    "schema": "issue286-recovery-preimage-request/v1",
+    "schema": "issue286-recovery-preimage-request/v2",
     "repository": "nisavid/dotfiles",
     "branch": "main",
     "pull_request_number": int(number),
@@ -1121,6 +1608,8 @@ request = {
     "head_commit": head,
     "reviewed_source_commit": source,
     "required_checks": checks,
+    "required_check_sources": sources,
+    "trusted_reviewers": reviewers,
     "expected_protection": protection,
     "expected_effective_rules": [],
     "expected_rulesets": [],
@@ -1214,24 +1703,67 @@ aggregate capture limits remain separate.
 
 The expected failure of `Verify trusted base against candidate data` is the
 sole prepared exception; an old-key receipt is neither required nor valid for
-this recovery candidate. Its check-run read explicitly requests GitHub's
-API-defined `filter=latest`. For each app-pinned required context, it retains
-the complete nonempty set and accepts repeated runs only when every member is
-complete for the exact head with the required conclusion. It never selects a
-newest ID or infers workflow lineage. Mixed or pending results, a required
-context from another app, duplicate IDs, incomplete pagination, and any
-unrelated non-success all fail closed.
+this recovery candidate. The request declares one source for each required
+context. A check-run context is pinned by `app_id`, which must equal the
+protection's app ID for that context. A commit-status context is pinned by its
+creator's ID and login. The protection app ID and the status creator are
+separate GitHub identities and are never compared. The exception context must
+be a check run.
+
+Both observations read check runs and commit statuses. The check-run read
+explicitly requests GitHub's API-defined `filter=latest`. For each check-run
+context, it retains the complete nonempty set and accepts repeated runs only
+when every member is complete for the exact head with the required conclusion.
+It never selects a newest ID or infers workflow lineage. The status read pages
+through `commits/{head}/statuses` under the same page bounds and keeps the
+full list in GitHub's order. Every status must name the exact head in its
+`url`, and every status for a status-sourced context must carry the pinned
+creator ID and login. The first status listed for a context is its latest only
+when it is also strictly newest by `created_at` and by ID, and its
+`updated_at` equals its `created_at`; any tie or disagreement fails. The
+latest status of every context, required or unrelated, must be `success`;
+superseded statuses may have any state. If CodeRabbit posts pending and success
+within the same second, collection fails until a newer status appears. A
+required context reported by the other source, a missing required result,
+mixed or pending results, a foreign app or creator, a change between
+observations, duplicate IDs, incomplete pagination, and any unrelated
+non-success all fail closed.
+
+The request's `trusted_reviewers` list pins App bot reviewers by exact ID and
+login, and `ready.json` binds it. Each login must end in `[bot]`, because a
+person with write access always has a repository association. A final-commit
+`APPROVED` review with a submission time counts only when it is not from the
+pull request's author and either GitHub reports its association as `OWNER`,
+`MEMBER`, or `COLLABORATOR`, or its reviewer ID and login exactly match a
+pinned bot. Only `coderabbitai[bot]` (`136622811`) is pinned. GitHub reports
+its association as `NONE`, and no other `NONE`-association reviewer or bot is
+trusted. Any other final-commit approval fails collection, so an unpinned bot's
+approval of the head blocks readiness while it stands. A `PENDING` or
+`CHANGES_REQUESTED` review from any reviewer, including the pinned bot, also
+fails, as do approvals of earlier commits only and any unresolved thread.
 
 Record the request, helper, and ready-file digests in the reviewed operational
 handoff. The collector latches the first `HUP`, `INT`, or `TERM`; later signals
 cannot replace its status, re-enter finalization, or extend either retirement
-deadline. It reports interruption only after durably recording that state,
-reaping every child leader, proving every registered process group absent, and
-withholding `ready.json`. A leader that exits while a descendant remains forces
-retirement and makes a normal collection fail. An uncertain group probe or a
-group that remains present records `unverified-retirement`, exits through the
-failure route, retains the bounded state as diagnostic evidence, and cannot
-publish readiness.
+window. Retirement sends `TERM` to each registered process group, waits one
+fixed grace window, sends `KILL`, and waits one more. Only `ESRCH` observed
+after the leader is reaped proves a group absent. `EPERM`, which macOS returns
+while a group holds only exiting or unreaped members, proves neither presence
+nor absence, so retirement keeps waiting within those windows. The collector
+reports interruption only after reaping every child leader, proving every
+registered process group absent, and withholding `ready.json`. Once its state
+directory exists, it also durably writes the mode-`0600` record
+`interrupted.json` before returning `128 + first signal`:
+`{"caught_signal":N,"outcome":"interrupted","schema":"issue286-recovery-preimage-interrupted/v1"}`.
+The collector writes it through a synced temporary file and a rename, then
+syncs the directory. If it cannot make the record durable, it removes the
+record and exits 1. A leader that exits while a descendant remains forces
+retirement and makes a normal collection fail. A group not proven absent after
+the second window, or any signal-delivery error other than `EPERM` or `ESRCH`,
+records `unverified-retirement`. That outcome writes no interruption record,
+exits 1, retains the bounded state as diagnostic evidence, and cannot publish
+readiness. A signal deferred after a completed `ready.json` commit leaves that
+success in place and writes no record.
 
 Malformed, noisy, incomplete, stale, or policy-drifted evidence likewise leaves
 no ready file and grants no mutation authority. Start each later collection in
@@ -1256,6 +1788,20 @@ all other `main` merges, identify the sole operator, and verify no bot or person
 will merge concurrently. Re-read live `main`, the protection digest, recovery
 PR base/head, public pull ref, reviews, conversations, and unrelated checks
 after the freeze. Quiescence is a gate, not an assumption.
+
+The merge freeze is not enough for the replay. `ready.json` binds the raw
+digest of every capture, and the entry gate requires a fresh collection that
+reproduces `ready.json` byte for byte. GitHub responses embed volatile
+repository and app metadata: check-run app records carry `updated_at`, and
+pull responses carry repository timestamps and counters. Any repository
+activity can therefore change the bytes, including a push to any branch, a new
+check run or status, a review or comment, or a settings change. Establish
+repository-wide quiescence before the initial collection, take that collection
+after the freeze, and hold all repository activity until the replay completes.
+If the replay differs, or any activity occurs in that window, discard both
+collections. Take a new initial collection in a new path, record its new
+ready-file digest in the handoff, and obtain a fresh owner approval bound to
+that digest before arming the exception.
 
 Only the required-status-check subresource changes. Administrator enforcement,
 the current approving review and stale-review rule, conversation resolution,
@@ -1317,6 +1863,7 @@ repository, pull_text, base, head, source = sys.argv[6:11]
 uid = os.getuid()
 sha_pattern = re.compile(r"[0-9a-f]{64}\Z", re.ASCII)
 commit_pattern = re.compile(r"[0-9a-f]{40}\Z", re.ASCII)
+login_pattern = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}(?:\[bot\])?\Z", re.ASCII)
 artifact_pattern = re.compile(
     r"(?:captures|payloads)/[A-Za-z0-9._-]{1,160}\Z", re.ASCII
 )
@@ -1455,12 +2002,13 @@ try:
     request_keys = {
         "base_commit", "branch", "expected_effective_rules", "expected_protection",
         "expected_rulesets", "head_commit", "pull_request_number", "repository",
-        "required_checks", "reviewed_source_commit", "schema",
+        "required_check_sources", "required_checks", "reviewed_source_commit",
+        "schema", "trusted_reviewers",
     }
     if not isinstance(request, dict) or set(request) != request_keys:
         stop("request schema")
     if (
-        request["schema"] != "issue286-recovery-preimage-request/v1"
+        request["schema"] != "issue286-recovery-preimage-request/v2"
         or request["repository"] != repository
         or request["branch"] != "main"
         or request["pull_request_number"] != pull_number
@@ -1492,6 +2040,67 @@ try:
     if sum(record["context"] == exception_context for record in checks) != 1:
         stop("recovery exception")
     sorted_checks = sorted(checks, key=lambda record: (record["context"], record["app_id"]))
+    app_ids = {record["context"]: record["app_id"] for record in checks}
+    sources = request["required_check_sources"]
+    if not isinstance(sources, list) or len(sources) != len(checks):
+        stop("required-check sources")
+    source_contexts = set()
+    for record in sources:
+        if not isinstance(record, dict):
+            stop("required-check source schema")
+        kind = record.get("source")
+        if kind == "check-run":
+            source_keys = {"app_id", "context", "source"}
+        elif kind == "commit-status":
+            source_keys = {"context", "creator_id", "creator_login", "source"}
+        else:
+            stop("required-check source kind")
+        if set(record) != source_keys:
+            stop("required-check source schema")
+        context = record["context"]
+        if not isinstance(context, str) or context not in app_ids or context in source_contexts:
+            stop("required-check source context")
+        source_contexts.add(context)
+        if kind == "check-run":
+            if (
+                not isinstance(record["app_id"], int)
+                or isinstance(record["app_id"], bool)
+                or record["app_id"] != app_ids[context]
+            ):
+                stop("required-check source app")
+        elif (
+            context == exception_context
+            or not isinstance(record["creator_id"], int)
+            or isinstance(record["creator_id"], bool)
+            or record["creator_id"] <= 0
+            or not isinstance(record["creator_login"], str)
+            or login_pattern.fullmatch(record["creator_login"]) is None
+        ):
+            stop("required-check source creator")
+    sorted_sources = sorted(sources, key=lambda record: record["context"])
+    reviewers = request["trusted_reviewers"]
+    if not isinstance(reviewers, list):
+        stop("trusted reviewers")
+    reviewer_ids = set()
+    reviewer_logins = set()
+    for record in reviewers:
+        if not isinstance(record, dict) or set(record) != {"id", "login"}:
+            stop("trusted-reviewer schema")
+        reviewer_id, login = record["id"], record["login"]
+        if (
+            not isinstance(reviewer_id, int)
+            or isinstance(reviewer_id, bool)
+            or reviewer_id <= 0
+            or reviewer_id in reviewer_ids
+            or not isinstance(login, str)
+            or login_pattern.fullmatch(login) is None
+            or not login.endswith("[bot]")
+            or login in reviewer_logins
+        ):
+            stop("trusted-reviewer identity")
+        reviewer_ids.add(reviewer_id)
+        reviewer_logins.add(login)
+    sorted_reviewers = sorted(reviewers, key=lambda record: record["id"])
 
     ready_data = read_file(state / "ready.json", 1048576)
     if digest(ready_data) != ready_sha:
@@ -1505,7 +2114,7 @@ try:
     if not isinstance(ready, dict) or set(ready) != ready_keys:
         stop("ready schema")
     if (
-        ready["schema"] != "issue286-recovery-preimage-ready/v1"
+        ready["schema"] != "issue286-recovery-preimage-ready/v2"
         or ready["outcome"] != "ready"
         or ready["collector_sha256"] != collector_sha
         or ready["graphql_query_sha256"]
@@ -1522,6 +2131,8 @@ try:
         "head_commit": head,
         "reviewed_source_commit": source,
         "required_checks": sorted_checks,
+        "required_check_sources": sorted_sources,
+        "trusted_reviewers": sorted_reviewers,
     }
     if ready["binding"] != expected_binding:
         stop("ready request binding")
@@ -1929,28 +2540,27 @@ receipt until an authorized operator restores and verifies protection.
 
 Automation may prepare snapshots, payloads, hashes, tree comparisons, tests,
 and post-change reads. The owner retains authorization of the provider writes,
-new isolated enrollment, temporary protection patch, exact recovery merge,
+new recovery enrollment, temporary protection patch, exact recovery merge,
 restoration, incident decisions, and any second recovery. Never let a script
 infer or broaden that authority.
 
 ## Activate the consumers and close the issue
 
 PR [#285](https://github.com/nisavid/dotfiles/pull/285),
-PR [#287](https://github.com/nisavid/dotfiles/pull/287), and
-PR [#302](https://github.com/nisavid/dotfiles/pull/302) consume the reviewed
-procedure under their separate owning tasks. PR #285's head was
-`6a9b527e87b21967dbb8f43d2c2c15af8658e772` when this procedure was prepared;
-that value and any observed PR #287 or PR #302 base or head are not reusable
-operating inputs. Before any later operation, each consumer must independently
-load the published, reviewed issue #286 revision, record that revision plus the
-refreshed adapter, trusted-wrapper, and creator digests, and refresh its own
-then-current base and head. A local candidate, an earlier digest handoff, or
-another consumer's transition is not an operating input.
-
-PR [#323](https://github.com/nisavid/dotfiles/pull/323) is also registered as a
-consumer in [issue #286](https://github.com/nisavid/dotfiles/issues/286#issuecomment-5822092645).
-Its owning task follows the same reviewed-procedure and fresh-transition
-requirements.
+PR [#287](https://github.com/nisavid/dotfiles/pull/287),
+PR [#302](https://github.com/nisavid/dotfiles/pull/302),
+PR [#303](https://github.com/nisavid/dotfiles/pull/303), and
+PR [#323](https://github.com/nisavid/dotfiles/pull/323) consume the reviewed
+procedure under their separate owning tasks. PR #323's registration is recorded
+in [issue #286](https://github.com/nisavid/dotfiles/issues/286#issuecomment-5822092645).
+PR #285's head was `6a9b527e87b21967dbb8f43d2c2c15af8658e772` when this
+procedure was prepared; that value and any observed base or head of any
+consumer are not reusable operating inputs. Before any later operation, each
+consumer must independently load the published, reviewed issue #286 revision,
+record that revision plus the refreshed adapter, trusted-wrapper, and creator
+digests, and refresh its own then-current base and head. A local candidate, an
+earlier digest handoff, or another consumer's transition is not an operating
+input.
 
 Once the new key is trusted, protection is restored, and operational acceptance
 is recorded, each owning task may, under its separate authority, create a new
@@ -2006,10 +2616,14 @@ Before closing issue #286, retain value-free evidence of all of these outcomes:
   and the retired receipt rejected on a new transition;
 - the full restored protection response matching its preimage, including the
   app-pinned trusted-base check;
-- separate new-key receipts and fresh hosted successes for PRs #285, #287,
-  and #302 at their independently refreshed base/head transitions; and
+- a new-key receipt and a fresh hosted success for PR #285 at its
+  independently refreshed base/head transition; and
 - absence of adapter and receipt-creator private staging plus the operational
   handoff.
+
+PRs #287, #302, #303, and #323 are independently owned consumers, not closure
+gates for issue #286. Each still follows the fresh-revision and
+fresh-transition requirements above.
 
 The public PR #253 control settles only the historical side of that comparison.
 Static inspection of the one-key allowed-signers file is not enough to claim

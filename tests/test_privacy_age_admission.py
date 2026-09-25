@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -776,28 +777,48 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
                 encoding="ascii",
             )
             readiness.chmod(0o700)
-            share_id = "fixture_share_286"
-            item_id = "fixture_item_286"
-            provider_arguments = [
-                "item",
-                "view",
-                "--share-id",
-                share_id,
-                "--item-id",
-                item_id,
-                "--field",
-                "SSH.private_key",
-                "--output",
-                "human",
-            ]
+            # Proton IDs are 88-character URL-safe base64 and may lead with "-".
+            share_id = base64.urlsafe_b64encode(
+                bytes([0xF8]) + hashlib.sha512(b"fixture share").digest()[1:]
+            ).decode("ascii")
+            item_id = base64.urlsafe_b64encode(
+                bytes([0xFC]) + hashlib.sha512(b"fixture item").digest()[1:]
+            ).decode("ascii")
+            provider_options = {
+                "--field": "SSH.private_key",
+                "--item-id": item_id,
+                "--output": "human",
+                "--share-id": share_id,
+            }
             provider = adapter_tools / "pass-cli"
             provider.write_text(
                 "#!/usr/bin/env python3\n"
                 "import os\n"
                 "import sys\n"
-                f"expected = {provider_arguments!r}\n"
+                f"expected = {provider_options!r}\n"
                 f"key = open({os.fspath(signing_key)!r}, 'rb').read()\n"
-                "if sys.argv[1:] != expected:\n"
+                "arguments = sys.argv[1:]\n"
+                "if arguments[:2] != ['item', 'view']:\n"
+                "    raise SystemExit(92)\n"
+                "options = {}\n"
+                "index = 2\n"
+                "while index < len(arguments):\n"
+                "    name, attached, value = arguments[index].partition('=')\n"
+                "    index += 1\n"
+                "    if name not in expected or name in options:\n"
+                "        raise SystemExit(2)\n"
+                "    if not attached:\n"
+                "        # clap reads a separate '-...' token as a flag.\n"
+                "        if index == len(arguments) or arguments[index].startswith('-'):\n"
+                "            raise SystemExit(2)\n"
+                "        value = arguments[index]\n"
+                "        index += 1\n"
+                "    options[name] = value\n"
+                "for name in ('--item-id', '--share-id'):\n"
+                "    value = options.get(name, '')\n"
+                "    if len(value) != 88 or not value.endswith('=='):\n"
+                "        raise SystemExit(1)\n"
+                "if options != expected:\n"
                 "    raise SystemExit(92)\n"
                 "if 'PROTON_PASS_PERSONAL_ACCESS_TOKEN' in os.environ:\n"
                 "    raise SystemExit(93)\n"
@@ -847,10 +868,8 @@ class PrivacyAgeAdmissionReceiptTests(unittest.TestCase):
             adapter_result = subprocess.run(
                 [
                     os.fspath(adapter),
-                    "--share-id",
-                    share_id,
-                    "--item-id",
-                    item_id,
+                    f"--share-id={share_id}",
+                    f"--item-id={item_id}",
                     "--expected-fingerprint",
                     fingerprint,
                     "--trusted-launcher",

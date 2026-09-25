@@ -30,13 +30,17 @@ from typing import NoReturn
 
 os.umask(0o077)
 
-REQUEST_SCHEMA = "issue286-recovery-preimage-request/v1"
-READY_SCHEMA = "issue286-recovery-preimage-ready/v1"
+REQUEST_SCHEMA = "issue286-recovery-preimage-request/v2"
+READY_SCHEMA = "issue286-recovery-preimage-ready/v2"
+INTERRUPTED_SCHEMA = "issue286-recovery-preimage-interrupted/v1"
 REPOSITORY = "nisavid/dotfiles"
 BRANCH = "main"
 GITHUB_HOSTNAME = "github.com"
 GITHUB_API_VERSION = "2022-11-28"
 EXCEPTION_CONTEXT = "Verify trusted base against candidate data"
+CHECK_RUN_SOURCE = "check-run"
+COMMIT_STATUS_SOURCE = "commit-status"
+COMMIT_STATUS_STATES = frozenset({"error", "failure", "pending", "success"})
 GRAPHQL_QUERY = """query Issue286RecoveryReviewThreads(
   $owner: String!
   $name: String!
@@ -100,6 +104,10 @@ SAFE_LABEL = re.compile(r"[a-z0-9][a-z0-9-]{0,63}\Z", re.ASCII)
 SAFE_ARTIFACT_PATH = re.compile(
     r"(?:captures|payloads)/[A-Za-z0-9._-]{1,160}\Z", re.ASCII
 )
+GITHUB_LOGIN = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}(?:\[bot\])?\Z", re.ASCII)
+GITHUB_TIMESTAMP = re.compile(
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\Z", re.ASCII
+)
 
 REQUEST_KEYS = {
     "schema",
@@ -110,10 +118,13 @@ REQUEST_KEYS = {
     "head_commit",
     "reviewed_source_commit",
     "required_checks",
+    "required_check_sources",
+    "trusted_reviewers",
     "expected_protection",
     "expected_effective_rules",
     "expected_rulesets",
 }
+REVIEWER_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 PROTECTION_KEYS = {
     "url",
     "required_status_checks",
@@ -295,6 +306,99 @@ def _required_checks(value: object) -> list[dict[str, object]]:
     )
 
 
+def _required_check_sources(
+    value: object, checks: list[dict[str, object]]
+) -> list[dict[str, object]]:
+    if not isinstance(value, list) or len(value) != len(checks):
+        raise PreimageError("required check sources must cover each check once")
+    app_ids = {str(check["context"]): int(check["app_id"]) for check in checks}
+    sources: list[dict[str, object]] = []
+    contexts: set[str] = set()
+    for record in value:
+        kind = record.get("source") if isinstance(record, dict) else None
+        if kind == CHECK_RUN_SOURCE:
+            item = _exact_keys(
+                record, {"context", "source", "app_id"}, "required check-run source"
+            )
+        elif kind == COMMIT_STATUS_SOURCE:
+            item = _exact_keys(
+                record,
+                {"context", "source", "creator_id", "creator_login"},
+                "required commit-status source",
+            )
+        else:
+            raise PreimageError("required check source kind is invalid")
+        context = item["context"]
+        if not isinstance(context, str) or context not in app_ids or context in contexts:
+            raise PreimageError("required check source context is invalid")
+        contexts.add(context)
+        if kind == CHECK_RUN_SOURCE:
+            app_id = _require_positive_id(item["app_id"], "required check-run app ID")
+            if app_id != app_ids[context]:
+                raise PreimageError("required check-run app differs from protection")
+        else:
+            # The protection app ID and the status creator ID are distinct GitHub
+            # identities; neither is derived from or compared with the other.
+            if context == EXCEPTION_CONTEXT:
+                raise PreimageError("the recovery exception must be a check run")
+            _require_positive_id(item["creator_id"], "required status creator ID")
+            login = item["creator_login"]
+            if not isinstance(login, str) or GITHUB_LOGIN.fullmatch(login) is None:
+                raise PreimageError("required status creator login is invalid")
+        sources.append(dict(item))
+    return sorted(sources, key=lambda source: str(source["context"]))
+
+
+def _trusted_reviewers(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        raise PreimageError("trusted reviewers are invalid")
+    reviewers: list[dict[str, object]] = []
+    identifiers: set[int] = set()
+    logins: set[str] = set()
+    for record in value:
+        item = _exact_keys(record, {"id", "login"}, "trusted reviewer")
+        identifier = _require_positive_id(item["id"], "trusted reviewer ID")
+        login = item["login"]
+        # A person with write access has a repository association. Only a pinned
+        # App bot account may approve while GitHub reports its association as NONE.
+        if (
+            not isinstance(login, str)
+            or GITHUB_LOGIN.fullmatch(login) is None
+            or not login.endswith("[bot]")
+            or identifier in identifiers
+            or login in logins
+        ):
+            raise PreimageError("trusted reviewer identity is invalid")
+        identifiers.add(identifier)
+        logins.add(login)
+        reviewers.append({"id": identifier, "login": login})
+    return sorted(reviewers, key=lambda reviewer: int(reviewer["id"]))
+
+
+def _trusted_reviewer_identities(request: dict[str, object]) -> set[tuple[int, str]]:
+    reviewers = request["trusted_reviewers"]
+    if not isinstance(reviewers, list):
+        raise PreimageError("trusted reviewers are invalid")
+    return {
+        (int(reviewer["id"]), str(reviewer["login"]))
+        for reviewer in reviewers
+        if isinstance(reviewer, dict)
+    }
+
+
+def _sources_of_kind(
+    request: dict[str, object], kind: str
+) -> dict[str, dict[str, object]]:
+    sources = request["required_check_sources"]
+    if not isinstance(sources, list):
+        raise PreimageError("required check sources are invalid")
+    return {
+        str(source["context"]): source
+        for source in sources
+        if isinstance(source, dict) and source["source"] == kind
+    }
+
+
 def _url_root() -> str:
     return f"https://api.github.com/repos/{REPOSITORY}/branches/{BRANCH}/protection"
 
@@ -416,11 +520,15 @@ def _validate_request(value: object) -> dict[str, object]:
     if len({base, head}) != 2 or source == base:
         raise PreimageError("request commits do not describe a recovery transition")
     checks = _required_checks(request["required_checks"])
+    sources = _required_check_sources(request["required_check_sources"], checks)
+    reviewers = _trusted_reviewers(request["trusted_reviewers"])
     expected = _validate_protection(request["expected_protection"], checks)
     if request["expected_effective_rules"] != [] or request["expected_rulesets"] != []:
         raise PreimageError("nonempty rules require a new reviewed recovery design")
     validated = dict(request)
     validated["required_checks"] = checks
+    validated["required_check_sources"] = sources
+    validated["trusted_reviewers"] = reviewers
     validated["expected_protection"] = expected
     return validated
 
@@ -604,54 +712,30 @@ def _process_group_present(process_group: int) -> bool | None:
 
 
 def _retire_process_group(process: subprocess.Popen[bytes], process_group: int) -> bool:
-    present = _process_group_present(process_group)
-    if present is None:
-        return False
-    if present:
+    # Darwin reports EPERM, not ESRCH, while a group holds only exiting or unreaped
+    # members, so EPERM proves neither presence nor absence. Retirement keeps
+    # signalling within the fixed grace windows; only ESRCH observed after the
+    # leader is reaped proves the group absent.
+    def retired() -> bool:
+        return (
+            process.poll() is not None
+            and _process_group_present(process_group) is False
+        )
+
+    for signum in (signal.SIGTERM, signal.SIGKILL):
+        if retired():
+            return True
         try:
-            os.killpg(process_group, signal.SIGTERM)
-        except ProcessLookupError:
-            present = False
+            os.killpg(process_group, signum)
         except OSError as error:
-            if error.errno == errno.ESRCH:
-                present = False
-            else:
+            if error.errno not in {errno.EPERM, errno.ESRCH}:
                 return False
-    deadline = time.monotonic() + TERMINATE_GRACE_SECONDS
-    while time.monotonic() < deadline:
-        leader_reaped = process.poll() is not None
-        present = _process_group_present(process_group)
-        if present is None:
-            return False
-        if leader_reaped and not present:
-            return True
-        time.sleep(0.02)
-
-    present = _process_group_present(process_group)
-    if present is None:
-        return False
-    if not present:
-        return process.poll() is not None
-    try:
-        os.killpg(process_group, signal.SIGKILL)
-    except ProcessLookupError:
-        present = False
-    except OSError as error:
-        if error.errno == errno.ESRCH:
-            present = False
-        else:
-            return False
-
-    deadline = time.monotonic() + TERMINATE_GRACE_SECONDS
-    while time.monotonic() < deadline:
-        leader_reaped = process.poll() is not None
-        present = _process_group_present(process_group)
-        if present is None:
-            return False
-        if leader_reaped and not present:
-            return True
-        time.sleep(0.02)
-    return process.poll() is not None and _process_group_present(process_group) is False
+        deadline = time.monotonic() + TERMINATE_GRACE_SECONDS
+        while time.monotonic() < deadline:
+            if retired():
+                return True
+            time.sleep(0.02)
+    return retired()
 
 
 def _child_signal_setup() -> None:
@@ -1171,6 +1255,9 @@ def _collect_snapshot(
         "check_runs": _paginated_check_runs(
             runner, pass_name, f"{prefix}/commits/{head}/check-runs"
         ),
+        "statuses": _paginated_array(
+            runner, pass_name, "statuses", f"{prefix}/commits/{head}/statuses"
+        ),
         "effective_rules": _paginated_array(
             runner, pass_name, "effective-rules", f"{prefix}/rules/branches/{BRANCH}"
         ),
@@ -1256,7 +1343,9 @@ def _validate_commits(
     return value
 
 
-def _validate_reviews(value: object, head: str, author_id: int) -> list[object]:
+def _validate_reviews(
+    value: object, head: str, author_id: int, trusted: set[tuple[int, str]]
+) -> list[object]:
     if not isinstance(value, list):
         raise PreimageError("pull request reviews are invalid")
     identifiers: set[int] = set()
@@ -1279,10 +1368,14 @@ def _validate_reviews(value: object, head: str, author_id: int) -> list[object]:
             raise PreimageError("pull request reviewer identity is invalid")
         reviewer_id = _require_positive_id(user.get("id"), "reviewer ID")
         if state == "APPROVED" and record.get("commit_id") == head:
+            login = user.get("login")
+            pinned = isinstance(login, str) and (reviewer_id, login) in trusted
             if (
                 reviewer_id == author_id
-                or record.get("author_association")
-                not in {"OWNER", "MEMBER", "COLLABORATOR"}
+                or (
+                    not pinned
+                    and record.get("author_association") not in REVIEWER_ASSOCIATIONS
+                )
                 or not isinstance(record.get("submitted_at"), str)
             ):
                 raise PreimageError("exact-head approval is not independent")
@@ -1308,9 +1401,10 @@ def _validate_check_runs(
     if not isinstance(runs, list) or page["total_count"] != len(runs):
         raise PreimageError("check runs are incomplete")
     required = {
-        str(check["context"]): int(check["app_id"])
-        for check in request["required_checks"]  # type: ignore[union-attr]
+        context: int(source["app_id"])
+        for context, source in _sources_of_kind(request, CHECK_RUN_SOURCE).items()
     }
+    status_contexts = set(_sources_of_kind(request, COMMIT_STATUS_SOURCE))
     identifiers: set[int] = set()
     required_matches: dict[str, int] = {context: 0 for context in required}
     normalized: list[dict[str, object]] = []
@@ -1325,6 +1419,8 @@ def _validate_check_runs(
         app = record.get("app")
         if not isinstance(name, str) or not name or not isinstance(app, dict):
             raise PreimageError("check run identity is invalid")
+        if name in status_contexts:
+            raise PreimageError("a commit-status required context has a check run")
         app_id = _require_positive_id(app.get("id"), "check run app ID")
         if (
             record.get("head_sha") != request["head_commit"]
@@ -1350,6 +1446,67 @@ def _validate_check_runs(
     }
 
 
+def _validate_statuses(value: object, request: dict[str, object]) -> list[object]:
+    if not isinstance(value, list):
+        raise PreimageError("commit statuses are invalid")
+    creators = {
+        context: (source["creator_id"], source["creator_login"])
+        for context, source in _sources_of_kind(request, COMMIT_STATUS_SOURCE).items()
+    }
+    check_run_contexts = set(_sources_of_kind(request, CHECK_RUN_SOURCE))
+    expected_url = (
+        f"https://api.github.com/repos/{REPOSITORY}/statuses/{request['head_commit']}"
+    )
+    identifiers: set[int] = set()
+    latest: dict[str, dict[str, object]] = {}
+    for record in value:
+        if not isinstance(record, dict):
+            raise PreimageError("commit status is invalid")
+        identifier = _require_positive_id(record.get("id"), "commit status ID")
+        if identifier in identifiers:
+            raise PreimageError("commit statuses contain duplicate IDs")
+        identifiers.add(identifier)
+        context = record.get("context")
+        state = record.get("state")
+        created_at = record.get("created_at")
+        if (
+            not isinstance(context, str)
+            or not context
+            or not isinstance(state, str)
+            or state not in COMMIT_STATUS_STATES
+            or not isinstance(created_at, str)
+            or GITHUB_TIMESTAMP.fullmatch(created_at) is None
+            or record.get("updated_at") != created_at
+        ):
+            raise PreimageError("commit status identity is invalid")
+        if record.get("url") != expected_url:
+            raise PreimageError("commit status is not for the exact head")
+        if context in check_run_contexts:
+            raise PreimageError("a check-run required context has a commit status")
+        if context in creators:
+            creator = record.get("creator")
+            if (
+                not isinstance(creator, dict)
+                or not _is_int(creator.get("id"))
+                or (creator.get("id"), creator.get("login")) != creators[context]
+            ):
+                raise PreimageError("required commit status creator differs")
+        # GitHub lists statuses newest first. The first record for a context is its
+        # latest only when it is also strictly newest by creation time and by ID.
+        newest = latest.get(context)
+        if newest is None:
+            latest[context] = record
+        elif not (
+            created_at < str(newest["created_at"]) and identifier < int(newest["id"])
+        ):
+            raise PreimageError("latest commit status is ambiguous")
+    if any(context not in latest for context in creators):
+        raise PreimageError("required commit statuses are missing")
+    if any(record["state"] != "success" for record in latest.values()):
+        raise PreimageError("a latest commit status did not succeed")
+    return value
+
+
 def _validate_snapshot(
     value: dict[str, object], request: dict[str, object]
 ) -> dict[str, object]:
@@ -1363,6 +1520,7 @@ def _validate_snapshot(
         "reviews",
         "review_threads",
         "check_runs",
+        "statuses",
         "effective_rules",
         "rulesets",
     }
@@ -1393,12 +1551,16 @@ def _validate_snapshot(
     value["protection"] = protection
     value["commits"] = _validate_commits(value["commits"], commit_count, request)
     value["reviews"] = _validate_reviews(
-        value["reviews"], str(request["head_commit"]), author_id
+        value["reviews"],
+        str(request["head_commit"]),
+        author_id,
+        _trusted_reviewer_identities(request),
     )
     threads = value["review_threads"]
     if not isinstance(threads, list):
         raise PreimageError("review thread evidence is invalid")
     value["check_runs"] = _validate_check_runs(value["check_runs"], request)
+    value["statuses"] = _validate_statuses(value["statuses"], request)
     if value["effective_rules"] != [] or value["rulesets"] != []:
         raise PreimageError("repository rules differ from the reviewed empty policy")
     return value
@@ -1471,6 +1633,52 @@ def _publish_ready(state_directory: int, value: dict[str, object]) -> None:
             os.unlink(temporary, dir_fd=state_directory)
         except FileNotFoundError:
             pass
+
+
+def _record_interruption(state_directory: int, signum: int) -> None:
+    data = _json_bytes(
+        {
+            "schema": INTERRUPTED_SCHEMA,
+            "outcome": "interrupted",
+            "caught_signal": signum,
+        }
+    )
+    temporary = ".interrupted.json.tmp"
+    descriptor = -1
+    published = False
+    try:
+        descriptor = _open_new_file(state_directory, temporary)
+        _write_all(descriptor, data)
+        os.fsync(descriptor)
+        closing, descriptor = descriptor, -1
+        os.close(closing)
+        os.rename(
+            temporary,
+            "interrupted.json",
+            src_dir_fd=state_directory,
+            dst_dir_fd=state_directory,
+        )
+        published = True
+        os.fsync(state_directory)
+    except (OSError, PreimageError) as error:
+        if published:
+            try:
+                os.unlink("interrupted.json", dir_fd=state_directory)
+                os.fsync(state_directory)
+            except OSError:
+                pass
+        raise PreimageError("interruption could not be durably recorded") from error
+    finally:
+        if descriptor >= 0:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        if not published:
+            try:
+                os.unlink(temporary, dir_fd=state_directory)
+            except OSError:
+                pass
 
 
 def _publish_ready_terminal(state_directory: int, value: dict[str, object]) -> None:
@@ -1558,6 +1766,8 @@ def _prepare(request_path: Path, state_path: Path) -> None:
             "head_commit": request["head_commit"],
             "reviewed_source_commit": request["reviewed_source_commit"],
             "required_checks": request["required_checks"],
+            "required_check_sources": request["required_check_sources"],
+            "trusted_reviewers": request["trusted_reviewers"],
         }
         observations_sha = payloads["observations"]["sha256"]
         ready = {
@@ -1573,6 +1783,9 @@ def _prepare(request_path: Path, state_path: Path) -> None:
             "payloads": payloads,
         }
         _publish_ready_terminal(state_directory, ready)
+    except Interrupted as error:
+        _record_interruption(state_directory, error.signum)
+        raise
     finally:
         if payload_directory >= 0:
             os.close(payload_directory)

@@ -38,7 +38,9 @@ _MAX_SIGNING_KEY_BYTES = 64 * 1024
 _MAX_PUBLIC_KEY_BYTES = 1024
 _MAX_RECEIPT_BYTES = 256 * 1024
 _MAX_PREFLIGHT_OUTPUT_BYTES = 32
-_IDENTIFIER = re.compile(r"[A-Za-z0-9_-]{1,128}\Z", re.ASCII)
+# Proton IDs are 64-byte URL-safe base64 values; pass-cli's is_id requires 88
+# characters ending in "==". They may begin with "-", so argv attaches them.
+_IDENTIFIER = re.compile(r"[A-Za-z0-9_-]{86}==\Z", re.ASCII)
 _COMMIT = re.compile(r"[0-9a-f]{40}\Z", re.ASCII)
 _FINGERPRINT = re.compile(r"SHA256:[A-Za-z0-9+/]{43}\Z", re.ASCII)
 _BOOTSTRAP_TOKEN_NAME = "PROTON_PASS_PERSONAL_ACCESS_TOKEN"
@@ -344,8 +346,8 @@ def _run_quiet(
         environment=environment,
         stdout=subprocess.DEVNULL,
     )
-    _raise_if_interrupted()
     try:
+        _raise_if_interrupted()
         status = _wait_for_process(
             process,
             deadline=time.monotonic() + timeout,
@@ -1079,10 +1081,8 @@ def create_receipt(arguments: argparse.Namespace) -> None:
                 "pass-cli",
                 "item",
                 "view",
-                "--share-id",
-                arguments.share_id,
-                "--item-id",
-                arguments.item_id,
+                f"--share-id={arguments.share_id}",
+                f"--item-id={arguments.item_id}",
                 "--field",
                 _FIELD,
                 "--output",

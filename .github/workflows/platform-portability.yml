@@ -221,12 +221,13 @@ jobs:
           AGE_TOOLING_ARCHIVE="$AGE_TOOLING_ARCHIVE" \
           AGE_TOOLING_ARCHIVE_SHA256="$AGE_TOOLING_ARCHIVE_SHA256" \
           REQUIRE_AGE_TOOLING=1 \
-            python3 -B -m unittest tests.test_age_admission_provider_fixture
+            python3 -B -m unittest -v tests.test_age_admission_provider_fixture
           AGE_TOOLING_ARCHIVE="$AGE_TOOLING_ARCHIVE" \
           AGE_TOOLING_ARCHIVE_SHA256="$AGE_TOOLING_ARCHIVE_SHA256" \
           REQUIRE_AGE_TOOLING=1 \
-            python3 -B -m unittest tests.test_age_admission_provisioning
-          python3 -B -m unittest tests.test_age_admission_recovery_preimage
+            python3 -B -m unittest -v tests.test_age_admission_provisioning
+          python3 -B -m unittest -v tests.test_age_admission_recovery_preimage
+          python3 -B -m unittest -v tests.test_age_admission_procedure
           REQUIRE_AGE_TOOLING=1 \
             python3 -m unittest tests/test_privacy_age_admission.py
           REQUIRE_AGE_TOOLING=1 \

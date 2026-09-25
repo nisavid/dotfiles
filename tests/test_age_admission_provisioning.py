@@ -50,6 +50,54 @@ def sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def provider_id(lead: int, label: str) -> str:
+    """Return an 88-character URL-safe Proton-shaped ID with a chosen first byte."""
+    digest = hashlib.sha512(label.encode("ascii")).digest()
+    return base64.urlsafe_b64encode(bytes([lead]) + digest[1:]).decode("ascii")
+
+
+SHARE_ID = provider_id(0xF8, "issue286 share")
+ITEM_ID = provider_id(0xF9, "issue286 item")
+PAT_ID = provider_id(0xFA, "issue286 recovery PAT")
+COLLISION_PAT_ID = provider_id(0xFC, "issue286 collision PAT")
+VAULT_ID = provider_id(0xFD, "issue286 vault")
+RECORD_ID = provider_id(0x04, "issue286 monitor record")
+
+# (kind, profile) of each provider call in an owner-primary source-test
+# qualification: routine reads use the owner profile, and the recovery agent
+# uses its own new profile.
+OWNER_PRIMARY_QUALIFICATION_CALLS = [
+    ("version", "owner"),
+    ("info", "owner"),
+    ("item-create", "owner"),
+    ("item-list", "owner"),
+    ("info", "owner"),
+    ("readiness", "owner"),
+    ("provider-adapter", "owner"),
+    ("agent-create", "owner"),
+    ("agent-list", "owner"),
+    ("agent-login", "recovery"),
+    ("info", "recovery"),
+    ("info", "recovery"),
+    ("readiness", "recovery"),
+    ("provider-adapter", "recovery"),
+    ("agent-monitor", "owner"),
+    ("agent-delete", "owner"),
+    ("item-view", "recovery"),
+    ("info", "owner"),
+    ("readiness", "owner"),
+    ("provider-adapter", "owner"),
+    ("item-delete", "owner"),
+    ("local-logout", "recovery"),
+]
+
+
+def ssh_public_key_fingerprint(public_key: bytes) -> str:
+    blob = base64.b64decode(public_key.split(b" ")[1], validate=True)
+    digest = base64.b64encode(hashlib.sha256(blob).digest()).decode("ascii")
+    return "SHA256:" + digest.rstrip("=")
+
+
 def run_git(repository: Path, *arguments: str) -> subprocess.CompletedProcess[bytes]:
     environment = os.environ.copy()
     environment.update(
@@ -137,14 +185,24 @@ class ProvisioningInputs:
     )
     LOGIN_CREDENTIAL = "p" + "st_issue286" + "::synthetic-token"
 
-    def __init__(self, root: Path, *, real_local_tools: bool = False) -> None:
+    def __init__(
+        self,
+        root: Path,
+        *,
+        real_local_tools: bool = False,
+        primary: str = "existing-agent",
+    ) -> None:
         root = root.resolve(strict=True)
         self.root = root
         self.real_local_tools = real_local_tools
+        self.primary = primary
         self.private = root / "private"
         self.private.mkdir(mode=0o700)
         self.owner_session = self.private / "owner-session"
         self.primary_session = self.private / "primary-session"
+        self.routine_session = (
+            self.owner_session if primary == "owner" else self.primary_session
+        )
         for profile_root in (self.owner_session, self.primary_session):
             profile_root.mkdir(mode=0o700)
             (profile_root / ".session").mkdir(mode=0o700)
@@ -360,6 +418,8 @@ class ProvisioningInputs:
         return f"#!{sys.executable} -B\n".encode() + body
 
     def provider_adapter_stub(self) -> bytes:
+        share_argument = f"--share-id={SHARE_ID}"
+        item_argument = f"--item-id={ITEM_ID}"
         body = textwrap.dedent(
             f"""\
             import json
@@ -367,6 +427,15 @@ class ProvisioningInputs:
             import sys
 
             arguments = sys.argv[1:]
+            # argparse reads a separate "-..." token as an option, so the
+            # provisioner must attach each provider ID to its option.
+            if (
+                arguments.count({share_argument!r}) != 1
+                or arguments.count({item_argument!r}) != 1
+                or "--share-id" in arguments
+                or "--item-id" in arguments
+            ):
+                raise SystemExit(2)
             output = arguments[arguments.index("--output") + 1]
             record = {{
                 "args": arguments,
@@ -513,12 +582,23 @@ class ProvisioningInputs:
         )
         self.provider_state.chmod(0o600)
 
-    def _write_control(self, behaviors: dict[str, str]) -> None:
-        self.control.write_bytes(canonical_json({"behaviors": behaviors}))
+    def _write_control(
+        self,
+        behaviors: dict[str, str],
+        owner_drift: dict[str, object] | None = None,
+    ) -> None:
+        control: dict[str, object] = {"behaviors": behaviors}
+        if owner_drift is not None:
+            control["owner_drift"] = owner_drift
+        self.control.write_bytes(canonical_json(control))
         self.control.chmod(0o600)
 
     def set_behaviors(self, **behaviors: str) -> None:
         self._write_control(behaviors)
+
+    def set_owner_drift(self, from_call: int, info: dict[str, object]) -> None:
+        """Answer the owner profile's JSON info with ``info`` from ``from_call`` on."""
+        self._write_control({}, {"from_call": from_call, "info": info})
 
     def _write_fake_pass_cli(self) -> None:
         body = textwrap.dedent(
@@ -534,10 +614,20 @@ class ProvisioningInputs:
             CONTROL = {os.fspath(self.control)!r}
             LOG = {os.fspath(self.provider_log)!r}
             MARKER = {os.fspath(self.child_marker)!r}
+            OWNER_SESSION = {os.fspath(self.owner_session)!r}
             PRIMARY_SESSION = {os.fspath(self.primary_session)!r}
+            # Only the requested routine reader and the recovery agent read items.
+            ROUTINE_SESSION = {os.fspath(self.routine_session)!r}
             RECOVERY_SESSION = {os.fspath(self.state / "private/recovery-session")!r}
             SIGNER = {os.fspath(self.stored_signer)!r}
             LOGIN_CREDENTIAL = {self.LOGIN_CREDENTIAL!r}
+            SHARE_ID = {SHARE_ID!r}
+            ITEM_ID = {ITEM_ID!r}
+            PAT_ID = {PAT_ID!r}
+            COLLISION_PAT_ID = {COLLISION_PAT_ID!r}
+            VAULT_ID = {VAULT_ID!r}
+            RECORD_ID = {RECORD_ID!r}
+            ID_OPTIONS = ("--item-id", "--pat-id", "--share-id")
 
             def load(path):
                 with open(path, encoding="ascii") as stream:
@@ -550,6 +640,31 @@ class ProvisioningInputs:
                     stream.write("\\n")
                 os.chmod(pending, 0o600)
                 os.replace(pending, STATE)
+
+            def provider_ids(arguments):
+                values = {{}}
+                index = 0
+                while index < len(arguments):
+                    name, attached, value = arguments[index].partition("=")
+                    index += 1
+                    if name not in ID_OPTIONS:
+                        continue
+                    if not attached:
+                        # Without allow_hyphen_values, clap parses a separate
+                        # "-..." token as a flag, not as this option's value.
+                        if index == len(arguments) or arguments[index].startswith("-"):
+                            print("error: a value is required for " + name, file=sys.stderr)
+                            raise SystemExit(2)
+                        value = arguments[index]
+                        index += 1
+                    if name in values:
+                        print("error: " + name + " was used more than once", file=sys.stderr)
+                        raise SystemExit(2)
+                    if len(value) != 88 or not value.endswith("=="):
+                        print("error: not a valid ID for " + name, file=sys.stderr)
+                        raise SystemExit(1)
+                    values[name] = value
+                return values
 
             arguments = sys.argv[1:]
             session = os.environ.get("PROTON_PASS_SESSION_DIR")
@@ -574,7 +689,7 @@ class ProvisioningInputs:
                 kind = "agent-monitor"
             elif arguments[:2] == ["agent", "delete"]:
                 kind = "agent-delete"
-            elif arguments[:3] == ["pat", "delete", "--pat-id"]:
+            elif arguments[:2] == ["pat", "delete"]:
                 kind = "agent-delete"
             elif arguments == ["login"]:
                 kind = "agent-login"
@@ -606,18 +721,31 @@ class ProvisioningInputs:
             with open(LOG, "a", encoding="ascii") as stream:
                 stream.write(json.dumps(record, sort_keys=True) + "\\n")
 
+            ids = provider_ids(arguments)
+            expected_ids = {{
+                "item-create": {{"--share-id": SHARE_ID}},
+                "item-delete": {{"--item-id": ITEM_ID, "--share-id": SHARE_ID}},
+                "item-list": {{"--share-id": SHARE_ID}},
+                "item-view": {{"--item-id": ITEM_ID, "--share-id": SHARE_ID}},
+            }}.get(kind, {{}})
+            if arguments[:2] == ["pat", "delete"]:
+                expected_ids = {{"--pat-id": ids.get("--pat-id")}}
+            if ids != expected_ids:
+                print("error: unexpected provider IDs", file=sys.stderr)
+                raise SystemExit(13)
+
             state = load(STATE)
             behavior = load(CONTROL).get("behaviors", {{}}).get(kind, "success")
             if kind == "agent-list" and behavior == "same-name-collision":
-                state["agent_pat_ids"] = ["pat_collision", "pat_issue286"]
+                state["agent_pat_ids"] = [COLLISION_PAT_ID, PAT_ID]
                 state["agent"] = True
                 save(state)
             if kind == "agent-delete" and behavior in {{
                 "same-name-collision",
                 "same-name-collision-nonzero",
             }}:
-                if "pat_collision" not in state["agent_pat_ids"]:
-                    state["agent_pat_ids"].insert(0, "pat_collision")
+                if COLLISION_PAT_ID not in state["agent_pat_ids"]:
+                    state["agent_pat_ids"].insert(0, COLLISION_PAT_ID)
                 state["agent"] = True
                 save(state)
                 if behavior == "same-name-collision-nonzero":
@@ -673,11 +801,11 @@ class ProvisioningInputs:
                     if kind == "item-create":
                         state["item"] = True
                         save(state)
-                        print("item_issue286", flush=True)
+                        print(ITEM_ID, flush=True)
                     elif kind == "agent-create":
                         state["agent"] = True
                         state["agent_expire_time"] = int(time.time()) + 3600
-                        state["agent_pat_ids"] = ["pat_issue286"]
+                        state["agent_pat_ids"] = [PAT_ID]
                         state["revoked"] = False
                         save(state)
                         print(json.dumps({{"token": "PROTON_PASS_PERSONAL_ACCESS_TOKEN=" + LOGIN_CREDENTIAL, "instruction": "synthetic"}}), flush=True)
@@ -687,7 +815,7 @@ class ProvisioningInputs:
                 raise SystemExit(0)
             if behavior == "nonzero-valid":
                 if kind == "item-create":
-                    print("item_issue286")
+                    print(ITEM_ID)
                 elif kind == "agent-create":
                     print(json.dumps({{"token": "PROTON_PASS_PERSONAL_ACCESS_TOKEN=" + LOGIN_CREDENTIAL, "instruction": "synthetic"}}))
                 raise SystemExit(7)
@@ -705,13 +833,20 @@ class ProvisioningInputs:
             elif kind == "info":
                 if "--output" not in arguments:
                     print("ready")
-                elif session == {os.fspath(self.owner_session)!r}:
-                    print(json.dumps({{
+                elif session == OWNER_SESSION:
+                    owner_info = {{
                         "release_track": "stable", "id": "user_issue286",
                         "username": "Synthetic Owner", "email": "owner@example.invalid",
                         "session_has_lock": False,
-                    }}))
-                elif session == {os.fspath(self.primary_session)!r}:
+                    }}
+                    drift = load(CONTROL).get("owner_drift")
+                    if drift is not None:
+                        state["owner_info_calls"] = state.get("owner_info_calls", 0) + 1
+                        save(state)
+                        if state["owner_info_calls"] >= drift["from_call"]:
+                            owner_info = drift["info"]
+                    print(json.dumps(owner_info))
+                elif session == PRIMARY_SESSION:
                     print(json.dumps({{
                         "release_track": "stable", "id": "N/A",
                         "personal_access_token_name": "[Agent] issue286-primary",
@@ -742,13 +877,13 @@ class ProvisioningInputs:
                         stream.write(replacement)
                     os.chmod(pending, 0o755)
                     os.replace(pending, sys.argv[0])
-                print("item_issue286")
+                print(ITEM_ID)
             elif kind == "item-list":
                 items = []
                 if state["item"] and behavior != "empty":
                     record = {{
-                        "id": "item_issue286", "share_id": "share_issue286",
-                        "vault_id": "vault_issue286", "state": "Active", "flags": [],
+                        "id": ITEM_ID, "share_id": SHARE_ID,
+                        "vault_id": VAULT_ID, "state": "Active", "flags": [],
                         "create_time": "2026-09-16T00:00:00", "modify_time": "2026-09-16T00:00:00",
                         "title": "issue286-item", "item_type": "custom",
                     }}
@@ -757,7 +892,7 @@ class ProvisioningInputs:
                         items.append(dict(record))
                 print(json.dumps({{"items": items}}))
             elif kind == "item-view":
-                if session not in {{PRIMARY_SESSION, RECOVERY_SESSION}}:
+                if session not in {{ROUTINE_SESSION, RECOVERY_SESSION}}:
                     raise SystemExit(11)
                 if state["revoked"] and session == RECOVERY_SESSION:
                     print("revoked", file=sys.stderr)
@@ -767,11 +902,11 @@ class ProvisioningInputs:
             elif kind == "item-delete":
                 state["item"] = False
                 save(state)
-                print("Item item_issue286 deleted successfully")
+                print("Item " + ITEM_ID + " deleted successfully")
             elif kind == "agent-create":
                 state["agent"] = True
                 state["agent_expire_time"] = int(time.time()) + 3600
-                state["agent_pat_ids"] = ["pat_issue286"]
+                state["agent_pat_ids"] = [PAT_ID]
                 state["revoked"] = False
                 save(state)
                 print(json.dumps({{
@@ -781,7 +916,7 @@ class ProvisioningInputs:
             elif kind == "agent-list":
                 agents = []
                 if state["agent"] and behavior != "empty":
-                    pat_ids = state["agent_pat_ids"] or ["pat_issue286"]
+                    pat_ids = state["agent_pat_ids"] or [PAT_ID]
                     agents = [
                         {{
                             "pat_id": pat_id,
@@ -792,6 +927,9 @@ class ProvisioningInputs:
                     ]
                     if behavior == "duplicate":
                         agents.append(dict(agents[-1]))
+                    if behavior == "out-of-window":
+                        for agent in agents:
+                            agent["expire_time"] += 7 * 24 * 3600
                 print(json.dumps(agents))
             elif kind == "agent-login":
                 if login_credential != LOGIN_CREDENTIAL:
@@ -801,8 +939,8 @@ class ProvisioningInputs:
                 print("Successfully logged in as personal access token: issue286-recovery")
             elif kind == "agent-monitor":
                 print(json.dumps([{{
-                    "record_id": "record_issue286", "vault_id": "vault_issue286",
-                    "object_id": "item_issue286", "action": "ItemRead",
+                    "record_id": RECORD_ID, "vault_id": VAULT_ID,
+                    "object_id": ITEM_ID, "action": "ItemRead",
                     "payload": {{"reason": "age-admission signing-key retrieval", "vault_name": "Synthetic Vault", "item_name": "issue286-item"}},
                     "action_time": "2026-09-16T00:00:00Z",
                 }}]))
@@ -811,16 +949,16 @@ class ProvisioningInputs:
                     pat_id = (
                         state["agent_pat_ids"][0]
                         if state["agent_pat_ids"]
-                        else "pat_issue286"
+                        else PAT_ID
                     )
                     acknowledgment = "Agent 'issue286-recovery' deleted successfully"
                 else:
-                    pat_id = arguments[arguments.index("--pat-id") + 1]
+                    pat_id = ids["--pat-id"]
                     acknowledgment = "Personal access token deleted successfully"
                 if state["agent_pat_ids"]:
                     state["agent_pat_ids"].remove(pat_id)
                 state["agent"] = bool(state["agent_pat_ids"])
-                if pat_id == "pat_issue286":
+                if pat_id == PAT_ID:
                     state["revoked"] = True
                 save(state)
                 print(acknowledgment)
@@ -838,12 +976,23 @@ class ProvisioningInputs:
         path.chmod(0o755)
         self.pass_cli = path
 
+    def sessions_request(self, primary: str) -> dict[str, str]:
+        if primary == "owner":
+            return {"owner": os.fspath(self.owner_session), "primary": "owner"}
+        return {
+            "owner": os.fspath(self.owner_session),
+            "primary": "existing-agent",
+            "primary_enrollment": os.fspath(self.primary_session),
+            "primary_enrollment_name": "issue286-primary",
+        }
+
     def _write_request(
         self,
         *,
         mode: str = "qualification",
         qualification: str | None = "source-test",
         qualified_clean: dict[str, object] | None = None,
+        primary: str | None = None,
     ) -> None:
         self.request_document = {
             "age_tooling": {
@@ -860,11 +1009,11 @@ class ProvisioningInputs:
                 "expiration": "1h",
                 "item_title": "issue286-item",
                 "recovery_agent_name": "issue286-recovery",
-                "share_id": "share_issue286",
+                "share_id": SHARE_ID,
                 "vault_name": "Synthetic Vault",
             },
             "provider_schema": {
-                "command_schema": "issue286-pass-cli-2.3.3-provider-commands/v2",
+                "command_schema": "issue286-pass-cli-2.3.3-provider-commands/v3",
                 "source_commit": "51a4c9b110a0ffe6e81f4f5d3877b9e5a0c24112",
                 "source_manifest_sha256": "95c0f8d872b308adb741cc21541a090ca4842cb894ece48370938955cb42ae6b",
             },
@@ -878,12 +1027,8 @@ class ProvisioningInputs:
                 },
                 "repository": os.fspath(self.source),
             },
-            "schema": "issue286-provisioning/v2",
-            "sessions": {
-                "owner": os.fspath(self.owner_session),
-                "primary_enrollment": os.fspath(self.primary_session),
-                "primary_enrollment_name": "issue286-primary",
-            },
+            "schema": "issue286-provisioning/v3",
+            "sessions": self.sessions_request(primary or self.primary),
         }
         self.rewrite_request()
 
@@ -942,6 +1087,17 @@ class ProvisioningInputs:
         if not self.provider_log.exists():
             return []
         return [json.loads(line) for line in self.provider_log.read_text().splitlines()]
+
+    def session_calls(self) -> list[tuple[str, str]]:
+        labels = {
+            os.fspath(self.owner_session): "owner",
+            os.fspath(self.primary_session): "primary",
+            os.fspath(self.state / "private/recovery-session"): "recovery",
+        }
+        return [
+            (record["kind"], labels.get(record["session"], record["session"]))
+            for record in self.log()
+        ]
 
     def provider_document(self) -> dict[str, object]:
         return json.loads(self.provider_state.read_bytes())
@@ -1032,10 +1188,10 @@ class ProvisioningInputs:
                 with open(TRACE, "a", encoding="ascii") as stream:
                     stream.write(json.dumps({{"event": event, **fields}}, sort_keys=True) + "\\n")
 
-            def inject_resume_signals(event):
+            def inject_signals(event):
                 global triggered
                 if triggered or LATER_SIGNAL is None:
-                    raise AssertionError("invalid resume signal injection")
+                    raise AssertionError("invalid signal injection")
                 triggered = True
                 os.kill(os.getpid(), FIRST_SIGNAL)
                 os.kill(os.getpid(), LATER_SIGNAL)
@@ -1182,12 +1338,14 @@ class ProvisioningInputs:
                     record("terminal-final-rename-failed")
                     raise OSError(errno.EIO, "synthetic terminal rename failure")
                 settles_resume_capture = False
+                arms_rollback_delete = False
                 if (
                     destination_value == os.path.join(STATE, "state.json")
                     and FAULT
                     in {{
                         "classification-persist-failure",
                         "resume-state-commit-signal",
+                        "rollback-delete-armed-signal",
                     }}
                 ):
                     try:
@@ -1215,6 +1373,17 @@ class ProvisioningInputs:
                         .get("state")
                         == "present"
                     )
+                    arms_rollback_delete = (
+                        FAULT == "rollback-delete-armed-signal"
+                        and not triggered
+                        and isinstance(document, dict)
+                        and (document.get("pending_request") or {{}}).get("kind")
+                        == "agent-delete"
+                        and document.get("resources", {{}})
+                        .get("agent", {{}})
+                        .get("state")
+                        == "removing"
+                    )
                 result = real_replace(source, destination)
                 if is_terminal_commit:
                     terminal_commit_completed = True
@@ -1230,7 +1399,9 @@ class ProvisioningInputs:
                         source=source_value,
                     )
                 if settles_resume_capture:
-                    inject_resume_signals("resume-state-commit-signals")
+                    inject_signals("resume-state-commit-signals")
+                if arms_rollback_delete:
+                    inject_signals("rollback-delete-armed-signals")
                 return result
 
             def faulting_open(path, flags, *args, **kwargs):
@@ -1273,7 +1444,7 @@ class ProvisioningInputs:
                     and path_value == os.path.join(STATE, "captures", "0001.stdout")
                     and not flags & os.O_CREAT
                 ):
-                    inject_resume_signals("resume-capture-read-signals")
+                    inject_signals("resume-capture-read-signals")
                 return descriptor
 
             def faulting_fsync(descriptor):
@@ -1344,7 +1515,15 @@ class ProvisioningInputs:
                     raise OSError(errno.EIO, "synthetic marker cleanup failure")
                 if terminal_commit_completed:
                     record("post-commit-unlink", path=path_value)
-                return real_unlink(path, *args, **kwargs)
+                result = real_unlink(path, *args, **kwargs)
+                if (
+                    FAULT == "rollback-cleanup-signal"
+                    and not triggered
+                    and path_value
+                    == os.path.join(STATE, "private", "item-template.json")
+                ):
+                    inject_signals("rollback-cleanup-signals")
+                return result
 
             class FaultingStdout:
                 def write(self, data):
@@ -1456,12 +1635,14 @@ class ProvisioningInputs:
 
 class AgeAdmissionProvisioningTests(unittest.TestCase):
     def make_inputs(
-        self, *, real_local_tools: bool = False
+        self, *, real_local_tools: bool = False, primary: str = "existing-agent"
     ) -> tuple[TemporaryDirectory[str], ProvisioningInputs]:
         temporary = TemporaryDirectory(prefix="age-admission-provisioning.")
         root = Path(temporary.name).resolve(strict=True)
         root.chmod(0o700)
-        return temporary, ProvisioningInputs(root, real_local_tools=real_local_tools)
+        return temporary, ProvisioningInputs(
+            root, real_local_tools=real_local_tools, primary=primary
+        )
 
     def assert_terminal_disposition(
         self, inputs: ProvisioningInputs, outcome: str
@@ -1487,7 +1668,7 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
         self.assertEqual(
             (state["schema"], marker["schema"], record["schema"]),
             (
-                "issue286-provisioning-state/v2",
+                "issue286-provisioning-state/v3",
                 f"issue286-{outcome}/v2",
                 "issue286-terminal-commit/v1",
             ),
@@ -1586,17 +1767,47 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
             )
             self.assertFalse(state.exists())
 
+    def test_malformed_share_ids_fail_before_state_or_provider(self) -> None:
+        malformed = {
+            "empty": "",
+            "87 characters": SHARE_ID[1:],
+            "89 characters": "A" + SHARE_ID,
+            "missing padding": SHARE_ID[:-2] + "AA",
+            "padding inside": SHARE_ID[:85] + "===",
+            "standard alphabet plus": SHARE_ID[:10] + "+" + SHARE_ID[11:],
+            "standard alphabet slash": SHARE_ID[:10] + "/" + SHARE_ID[11:],
+        }
+        for label, share_id in malformed.items():
+            with self.subTest(label=label):
+                temporary, inputs = self.make_inputs()
+                try:
+                    inputs.request_document["provider"]["share_id"] = share_id
+                    inputs.rewrite_request()
+
+                    result = inputs.run()
+
+                    self.assertEqual(
+                        (result.returncode, result.stdout, result.stderr),
+                        (1, b"", b"age-admission signer provisioning failed\n"),
+                    )
+                    self.assertFalse(inputs.state.exists())
+                    self.assertEqual(inputs.log(), [])
+                finally:
+                    temporary.cleanup()
+
     def test_invalid_existing_profile_roots_fail_before_provider_invocation(
         self,
     ) -> None:
-        for field, malformed in (
-            ("owner", "session-child"),
-            ("primary_enrollment", "session-child"),
-            ("owner", "missing-session-child"),
-            ("primary_enrollment", "missing-session-child"),
+        for primary, field, malformed in (
+            ("existing-agent", "owner", "session-child"),
+            ("existing-agent", "primary_enrollment", "session-child"),
+            ("existing-agent", "owner", "missing-session-child"),
+            ("existing-agent", "primary_enrollment", "missing-session-child"),
+            ("owner", "owner", "session-child"),
+            ("owner", "owner", "missing-session-child"),
         ):
-            with self.subTest(field=field, malformed=malformed):
-                temporary, inputs = self.make_inputs()
+            with self.subTest(primary=primary, field=field, malformed=malformed):
+                temporary, inputs = self.make_inputs(primary=primary)
                 try:
                     profile_root = Path(inputs.request_document["sessions"][field])
                     if malformed == "session-child":
@@ -1649,6 +1860,16 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
         self.assertEqual(
             state["bindings"]["pass_cli"]["observed_path"],
             os.fspath(inputs.pass_cli.resolve()),
+        )
+        self.assertEqual(state["request"]["sessions"]["primary"], "existing-agent")
+        self.assertEqual(state["bindings"]["owner_id"], "user_issue286")
+        self.assertEqual(
+            [
+                session
+                for kind, session in inputs.session_calls()
+                if kind == "provider-adapter"
+            ],
+            ["primary", "recovery", "primary"],
         )
         self.assertTrue(all(state["checks"].values()))
         evidence_path = inputs.state / "qualified-clean.json"
@@ -1739,6 +1960,382 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
             self.assertEqual(stat.S_IMODE(directory.stat().st_mode), 0o700)
         for path in (inputs.state / "captures").iterdir():
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600, path.name)
+
+    def test_routine_reader_selection_is_explicit_and_closed(self) -> None:
+        for label in (
+            "prior request schema",
+            "prior session shape with equal roots",
+            "missing selector",
+            "unknown selector",
+            "non-string selector",
+            "owner selector with enrollment fields",
+            "existing-agent selector aliasing the owner root",
+            "existing-agent selector without enrollment name",
+        ):
+            with self.subTest(label=label):
+                temporary, inputs = self.make_inputs(primary="owner")
+                try:
+                    owner = os.fspath(inputs.owner_session)
+                    sessions = inputs.request_document["sessions"]
+                    if label == "prior request schema":
+                        inputs.request_document["schema"] = "issue286-provisioning/v2"
+                    elif label == "prior session shape with equal roots":
+                        inputs.request_document["sessions"] = {
+                            "owner": owner,
+                            "primary_enrollment": owner,
+                            "primary_enrollment_name": "issue286-primary",
+                        }
+                    elif label == "missing selector":
+                        del sessions["primary"]
+                    elif label == "unknown selector":
+                        sessions["primary"] = "agent"
+                    elif label == "non-string selector":
+                        sessions["primary"] = ["owner"]
+                    elif label == "owner selector with enrollment fields":
+                        sessions["primary_enrollment"] = owner
+                        sessions["primary_enrollment_name"] = "issue286-primary"
+                    elif label == "existing-agent selector aliasing the owner root":
+                        inputs.request_document["sessions"] = dict(
+                            inputs.sessions_request("existing-agent"),
+                            primary_enrollment=owner,
+                        )
+                    else:
+                        sessions = inputs.sessions_request("existing-agent")
+                        del sessions["primary_enrollment_name"]
+                        inputs.request_document["sessions"] = sessions
+                    inputs.rewrite_request()
+
+                    result = inputs.run()
+
+                    self.assertEqual(
+                        (result.returncode, result.stdout, result.stderr),
+                        (1, b"", b"age-admission signer provisioning failed\n"),
+                    )
+                    self.assertFalse(inputs.state.exists())
+                    self.assertEqual(inputs.log(), [])
+                finally:
+                    temporary.cleanup()
+
+    def test_owner_primary_qualification_reads_through_the_owner_profile(
+        self,
+    ) -> None:
+        temporary, inputs = self.make_inputs(primary="owner")
+        self.addCleanup(temporary.cleanup)
+
+        result = inputs.run()
+
+        self.assertEqual(
+            (result.returncode, result.stdout, result.stderr),
+            (0, b"qualified-clean\n", b""),
+        )
+        self.assertEqual(inputs.session_calls(), OWNER_PRIMARY_QUALIFICATION_CALLS)
+        disposition = self.assert_terminal_disposition(inputs, "qualified-clean")
+        state = json.loads((inputs.state / "state.json").read_bytes())
+        self.assertEqual(
+            state["request"]["sessions"],
+            {"owner": os.fspath(inputs.owner_session), "primary": "owner"},
+        )
+        self.assertEqual(state["bindings"]["owner_id"], "user_issue286")
+        self.assertTrue(all(state["checks"].values()))
+        self.assertEqual(
+            {name: resource["state"] for name, resource in state["resources"].items()},
+            {"agent": "removed", "item": "removed", "session": "removed"},
+        )
+        provider = inputs.provider_document()
+        self.assertTrue(provider["revoked"])
+        self.assertEqual(
+            (provider["agent_pat_ids"], provider["item"], provider["logged_in"]),
+            ([], False, False),
+        )
+        for name in ("commit_record", "marker"):
+            self.assertNotIn(
+                b"user_issue286", Path(disposition[name]["path"]).read_bytes()
+            )
+        login = [record for record in inputs.log() if record["kind"] == "agent-login"]
+        self.assertEqual(
+            [record["token_digest"] for record in login],
+            [sha256(inputs.LOGIN_CREDENTIAL.encode("ascii"))],
+        )
+
+    def test_owner_identity_drift_stops_before_the_routine_read(self) -> None:
+        other_user = {
+            "email": "other@example.invalid",
+            "id": "user_other",
+            "release_track": "stable",
+            "session_has_lock": False,
+            "username": "Other Owner",
+        }
+        agent_login = {
+            "id": "N/A",
+            "personal_access_token_name": "[Agent] issue286-drift",
+            "release_track": "stable",
+            "session_has_lock": False,
+        }
+        calls = OWNER_PRIMARY_QUALIFICATION_CALLS
+        item_rollback = [("item-delete", "owner")]
+        scenarios = (
+            (
+                "non-positive owner at capture",
+                1,
+                dict(other_user, id="N/A"),
+                calls[:2],
+                None,
+            ),
+            (
+                "other user before the first routine read",
+                2,
+                other_user,
+                calls[:5] + item_rollback,
+                "user_issue286",
+            ),
+            (
+                "agent login before the first routine read",
+                2,
+                agent_login,
+                calls[:5] + item_rollback,
+                "user_issue286",
+            ),
+            (
+                # The last routine read's readiness and adapter calls never run.
+                "other user after recovery revocation",
+                3,
+                other_user,
+                calls[:18] + calls[20:],
+                "user_issue286",
+            ),
+        )
+        for label, from_call, drifted, expected_calls, captured in scenarios:
+            with self.subTest(label=label):
+                temporary, inputs = self.make_inputs(primary="owner")
+                try:
+                    inputs.set_owner_drift(from_call, drifted)
+
+                    result = inputs.run()
+
+                    self.assertEqual(
+                        (result.returncode, result.stdout, result.stderr),
+                        (1, b"", b"age-admission signer provisioning failed\n"),
+                    )
+                    self.assertEqual(inputs.session_calls(), expected_calls)
+                    state = json.loads((inputs.state / "state.json").read_bytes())
+                    self.assertEqual(state["outcome"], "rolled-back")
+                    self.assertIsNone(state["pending_request"])
+                    self.assertEqual(state["bindings"]["owner_id"], captured)
+                    self.assertEqual(
+                        state["checks"]["primary_readback"], from_call > 2
+                    )
+                    self.assertFalse(state["checks"]["primary_after_revocation"])
+                    self.assertTrue(
+                        all(
+                            resource["state"] in {"absent", "removed"}
+                            for resource in state["resources"].values()
+                        ),
+                        state["resources"],
+                    )
+                    for marker in ("qualified-clean.json", "ready-for-recovery.json"):
+                        self.assertFalse((inputs.state / marker).exists(), marker)
+                finally:
+                    temporary.cleanup()
+
+    def test_owner_primary_production_reads_through_the_owner_profile(self) -> None:
+        temporary, inputs = self.make_inputs(primary="owner")
+        self.addCleanup(temporary.cleanup)
+        inputs.request_document["qualification"] = "live-disposable-provider"
+        inputs.rewrite_request()
+        self.assertEqual(inputs.run().returncode, 0)
+        evidence_binding = self.assert_terminal_disposition(
+            inputs, "qualified-clean"
+        )
+        before = len(inputs.log())
+        inputs.state = inputs.private / "production-operation"
+        inputs.request = inputs.private / "production-request.json"
+        inputs._write_request(
+            mode="production",
+            qualification=None,
+            qualified_clean=evidence_binding,
+        )
+
+        result = inputs.run()
+
+        self.assertEqual(
+            (result.returncode, result.stdout, result.stderr),
+            (0, b"ready-for-recovery\n", b""),
+        )
+        self.assert_terminal_disposition(inputs, "ready-for-recovery")
+        # Production stops after the audit check and retains its resources.
+        self.assertEqual(
+            inputs.session_calls()[before:], OWNER_PRIMARY_QUALIFICATION_CALLS[:15]
+        )
+        state = json.loads((inputs.state / "state.json").read_bytes())
+        self.assertEqual(
+            state["request"]["sessions"],
+            {"owner": os.fspath(inputs.owner_session), "primary": "owner"},
+        )
+        self.assertEqual(state["bindings"]["owner_id"], "user_issue286")
+        for resource in ("agent", "item", "session"):
+            self.assertEqual(state["resources"][resource]["state"], "present")
+        for check in (
+            "item_listing",
+            "primary_readback",
+            "agent_listing",
+            "recovery_readback",
+            "audit",
+        ):
+            self.assertTrue(state["checks"][check], check)
+
+    def test_production_rejects_qualification_from_another_routine_reader(
+        self,
+    ) -> None:
+        for qualified_primary, production_primary in (
+            ("existing-agent", "owner"),
+            ("owner", "existing-agent"),
+        ):
+            with self.subTest(
+                qualified=qualified_primary, production=production_primary
+            ):
+                temporary, inputs = self.make_inputs(primary=qualified_primary)
+                try:
+                    inputs.request_document["qualification"] = (
+                        "live-disposable-provider"
+                    )
+                    inputs.rewrite_request()
+                    self.assertEqual(inputs.run().returncode, 0)
+                    evidence_binding = self.assert_terminal_disposition(
+                        inputs, "qualified-clean"
+                    )
+                    before = len(inputs.log())
+                    inputs.state = inputs.private / "production-operation"
+                    inputs.request = inputs.private / "production-request.json"
+                    inputs._write_request(
+                        mode="production",
+                        qualification=None,
+                        qualified_clean=evidence_binding,
+                        primary=production_primary,
+                    )
+
+                    result = inputs.run()
+
+                    self.assertEqual(
+                        (result.returncode, result.stdout, result.stderr),
+                        (1, b"", b"age-admission signer provisioning failed\n"),
+                    )
+                    self.assertEqual(len(inputs.log()), before)
+                    state = json.loads((inputs.state / "state.json").read_bytes())
+                    self.assertEqual(state["outcome"], "rolled-back")
+                    self.assertEqual(
+                        state["request"]["sessions"]["primary"], production_primary
+                    )
+                    self.assertIsNone(state["bindings"]["owner_id"])
+                    self.assertFalse(
+                        (inputs.state / "ready-for-recovery.json").exists()
+                    )
+                finally:
+                    temporary.cleanup()
+
+    def test_production_rejects_prior_schema_qualification_evidence(self) -> None:
+        temporary, inputs = self.make_inputs(primary="owner")
+        self.addCleanup(temporary.cleanup)
+        inputs.request_document["qualification"] = "live-disposable-provider"
+        inputs.rewrite_request()
+        self.assertEqual(inputs.run().returncode, 0)
+        evidence_binding = self.assert_terminal_disposition(
+            inputs, "qualified-clean"
+        )
+        producer_path = Path(evidence_binding["producer_state"]["path"])
+        pristine = producer_path.read_bytes()
+        before = len(inputs.log())
+        for index, label in enumerate(
+            (
+                "prior state schema",
+                "prior request schema",
+                "missing owner binding",
+                "unbound owner binding",
+            )
+        ):
+            with self.subTest(label=label):
+                producer = json.loads(pristine)
+                if label == "prior state schema":
+                    producer["schema"] = "issue286-provisioning-state/v2"
+                elif label == "prior request schema":
+                    producer["request"]["schema"] = "issue286-provisioning/v2"
+                elif label == "missing owner binding":
+                    del producer["bindings"]["owner_id"]
+                else:
+                    producer["bindings"]["owner_id"] = None
+                tampered = canonical_json(producer)
+                producer_path.write_bytes(tampered)
+                binding = json.loads(json.dumps(evidence_binding))
+                binding["producer_state"]["sha256"] = sha256(tampered)
+                inputs.state = inputs.private / f"production-operation-{index}"
+                inputs.request = inputs.private / f"production-request-{index}.json"
+                inputs._write_request(
+                    mode="production",
+                    qualification=None,
+                    qualified_clean=binding,
+                )
+
+                result = inputs.run()
+
+                self.assertEqual(
+                    (result.returncode, result.stdout, result.stderr),
+                    (1, b"", b"age-admission signer provisioning failed\n"),
+                )
+                self.assertEqual(len(inputs.log()), before)
+                self.assertFalse((inputs.state / "ready-for-recovery.json").exists())
+
+    def test_git_children_do_not_inherit_the_token_or_agent_reason(self) -> None:
+        temporary, inputs = self.make_inputs()
+        self.addCleanup(temporary.cleanup)
+        token_name = "PROTON_PASS_PERSONAL_ACCESS" + "_TOKEN"
+        git_log = inputs.private / "git-environment.jsonl"
+        git = inputs.support_bin / "git"
+        real_git = git.resolve(strict=True)
+        git.unlink()
+        git.write_bytes(
+            f"#!{sys.executable} -B\n".encode()
+            + textwrap.dedent(
+                f"""\
+                import json
+                import os
+                import sys
+
+                with open({os.fspath(git_log)!r}, "a", encoding="ascii") as stream:
+                    stream.write(
+                        json.dumps(
+                            {{
+                                "reason_present": "PROTON_PASS_AGENT_REASON"
+                                in os.environ,
+                                "token_present": {token_name!r} in os.environ,
+                            }},
+                            sort_keys=True,
+                        )
+                        + "\\n"
+                    )
+                os.execv(
+                    {os.fspath(real_git)!r},
+                    [{os.fspath(real_git)!r}, *sys.argv[1:]],
+                )
+                """
+            ).encode("ascii")
+        )
+        git.chmod(0o755)
+
+        result = inputs.run()
+
+        self.assertEqual(
+            (result.returncode, result.stdout, result.stderr),
+            (0, b"qualified-clean\n", b""),
+        )
+        observations = [
+            json.loads(line)
+            for line in git_log.read_text(encoding="ascii").splitlines()
+        ]
+        self.assertGreater(len(observations), 0)
+        self.assertEqual(
+            observations,
+            [{"reason_present": False, "token_present": False}]
+            * len(observations),
+        )
 
     def test_known_nonzero_create_with_valid_output_remains_unknown(self) -> None:
         temporary, inputs = self.make_inputs()
@@ -1846,7 +2443,7 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
                 state["resources"]["item"]["state"],
                 state["resources"]["item"]["id"],
             ),
-            ("present", "item_issue286"),
+            ("present", ITEM_ID),
         )
         token_path = inputs.state / state["artifacts"]["agent_token"]
         self.assertEqual(
@@ -1863,6 +2460,64 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
             if record["kind"] == "agent-list"
         )
         self.assertEqual(provider_log[listing_index + 1 :], [])
+
+    def test_out_of_window_agent_listing_retains_handles_without_deletion(
+        self,
+    ) -> None:
+        temporary, inputs = self.make_inputs()
+        self.addCleanup(temporary.cleanup)
+        inputs.set_behaviors(**{"agent-list": "out-of-window"})
+
+        result = inputs.run()
+
+        self.assertEqual(
+            (result.returncode, result.stdout, result.stderr),
+            (
+                21,
+                b"",
+                b"age-admission signer provisioning cleanup incomplete\n",
+            ),
+        )
+        state = json.loads((inputs.state / "state.json").read_bytes())
+        self.assertEqual(state["outcome"], "remote-cleanup-incomplete")
+        self.assertIsNone(state["pending_request"])
+        provider = inputs.provider_document()
+        agent = state["resources"]["agent"]
+        self.assertEqual(agent["state"], "present")
+        self.assertIsNone(agent["pat_id"])
+        self.assertEqual(
+            agent["candidates"],
+            [
+                {
+                    "expire_time": provider["agent_expire_time"] + 7 * 24 * 3600,
+                    "name": "issue286-recovery",
+                    "pat_id": PAT_ID,
+                }
+            ],
+        )
+        self.assertEqual(
+            (
+                state["resources"]["item"]["state"],
+                state["resources"]["item"]["id"],
+            ),
+            ("present", ITEM_ID),
+        )
+        token_path = inputs.state / state["artifacts"]["agent_token"]
+        self.assertEqual(
+            token_path.read_bytes(),
+            (inputs.LOGIN_CREDENTIAL + "\n").encode("ascii"),
+        )
+        self.assertTrue((inputs.state / "private/admission-ed25519").exists())
+        self.assertTrue((inputs.state / "private/item-template.json").exists())
+        self.assertFalse((inputs.state / "qualified-clean.json").exists())
+        provider_log = inputs.log()
+        listing_index = max(
+            index
+            for index, record in enumerate(provider_log)
+            if record["kind"] == "agent-list"
+        )
+        self.assertEqual(provider_log[listing_index + 1 :], [])
+        self.assertNotIn("agent-delete", [record["kind"] for record in provider_log])
 
     def test_malformed_audit_evidence_rolls_back_without_terminal_marker(self) -> None:
         temporary, inputs = self.make_inputs()
@@ -2000,7 +2655,7 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
         self.assertEqual(state["phase"], "fixture-ready")
         self.assertEqual(state["outcome"], "local-cleanup-incomplete")
         self.assertEqual(state["resources"]["item"]["state"], "present")
-        self.assertEqual(state["resources"]["item"]["id"], "item_issue286")
+        self.assertEqual(state["resources"]["item"]["id"], ITEM_ID)
         self.assertIsNone(state["pending_request"])
         self.assertEqual([record["kind"] for record in inputs.log()][-1], "item-create")
         self.assertFalse((inputs.state / "qualified-clean.json").exists())
@@ -2027,7 +2682,7 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
         )
         state = json.loads((inputs.state / "state.json").read_bytes())
         self.assertEqual(state["resources"]["item"]["state"], "present")
-        self.assertEqual(state["resources"]["item"]["id"], "item_issue286")
+        self.assertEqual(state["resources"]["item"]["id"], ITEM_ID)
         self.assertIsNone(state["pending_request"])
         self.assertFalse((inputs.state / "qualified-clean.json").exists())
         for probe, label in (
@@ -2129,6 +2784,105 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
         self.assertEqual(state["resources"]["item"]["state"], "unknown")
         self.assertEqual(state["pending_request"]["kind"], "item-create")
         self.assertEqual(state["outcome"], "reconciliation-required")
+
+    def test_signal_after_rollback_delete_arming_reports_the_first_signal(
+        self,
+    ) -> None:
+        temporary, inputs = self.make_inputs()
+        self.addCleanup(temporary.cleanup)
+        inputs.set_behaviors(**{"agent-monitor": "malformed"})
+        process = inputs.start_fault_process(
+            "rollback-delete-armed-signal",
+            first_signal=signal.SIGINT,
+            later_signal=signal.SIGTERM,
+        )
+
+        stdout, stderr = process.communicate(timeout=40)
+
+        self.assertEqual(
+            (process.returncode, stdout, stderr),
+            (
+                128 + signal.SIGINT,
+                b"",
+                b"age-admission signer provisioning interrupted\n",
+            ),
+        )
+        self.assertEqual(
+            inputs.fault_trace("rollback-delete-armed-signal"),
+            [
+                {
+                    "event": "rollback-delete-armed-signals",
+                    "first_signal": int(signal.SIGINT),
+                    "later_signal": int(signal.SIGTERM),
+                }
+            ],
+        )
+        state = json.loads((inputs.state / "state.json").read_bytes())
+        self.assertEqual(state["outcome"], "remote-cleanup-incomplete")
+        self.assertIsNone(state["pending_request"])
+        self.assertEqual(state["resources"]["agent"]["state"], "present")
+        self.assertEqual(state["resources"]["agent"]["pat_id"], PAT_ID)
+        self.assertEqual(
+            (
+                state["resources"]["item"]["state"],
+                state["resources"]["item"]["id"],
+            ),
+            ("present", ITEM_ID),
+        )
+        self.assertEqual(state["resources"]["session"]["state"], "present")
+        self.assertTrue((inputs.state / "private/admission-ed25519").exists())
+        self.assertTrue((inputs.state / state["artifacts"]["agent_token"]).exists())
+        kinds = [record["kind"] for record in inputs.log()]
+        self.assertEqual(kinds[-1], "agent-monitor")
+        self.assertNotIn("agent-delete", kinds)
+
+    def test_signal_during_rollback_local_cleanup_reports_the_first_signal(
+        self,
+    ) -> None:
+        temporary, inputs = self.make_inputs()
+        self.addCleanup(temporary.cleanup)
+        inputs.set_behaviors(**{"item-list": "duplicate"})
+        process = inputs.start_fault_process(
+            "rollback-cleanup-signal",
+            first_signal=signal.SIGHUP,
+            later_signal=signal.SIGINT,
+        )
+
+        stdout, stderr = process.communicate(timeout=40)
+
+        self.assertEqual(
+            (process.returncode, stdout, stderr),
+            (
+                128 + signal.SIGHUP,
+                b"",
+                b"age-admission signer provisioning interrupted\n",
+            ),
+        )
+        self.assertEqual(
+            inputs.fault_trace("rollback-cleanup-signal"),
+            [
+                {
+                    "event": "rollback-cleanup-signals",
+                    "first_signal": int(signal.SIGHUP),
+                    "later_signal": int(signal.SIGINT),
+                }
+            ],
+        )
+        state = json.loads((inputs.state / "state.json").read_bytes())
+        self.assertEqual(state["outcome"], "rolled-back")
+        self.assertIsNone(state["pending_request"])
+        self.assertEqual(state["resources"]["item"]["state"], "removed")
+        self.assertEqual(state["resources"]["agent"]["state"], "absent")
+        for relative in (
+            "private/admission-ed25519",
+            "private/admission-ed25519.pub",
+            "private/item-template.json",
+            "fixture",
+        ):
+            self.assertFalse((inputs.state / relative).exists(), relative)
+        kinds = [record["kind"] for record in inputs.log()]
+        self.assertEqual(kinds[-1], "item-delete")
+        self.assertEqual(kinds.count("item-delete"), 1)
 
     def test_children_do_not_inherit_blocked_or_ignored_termination_signals(self) -> None:
         temporary, inputs = self.make_inputs()
@@ -2776,7 +3530,7 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
         )
         state = json.loads((inputs.state / "state.json").read_bytes())
         self.assertEqual(state["resources"]["item"]["state"], "present")
-        self.assertEqual(state["resources"]["item"]["id"], "item_issue286")
+        self.assertEqual(state["resources"]["item"]["id"], ITEM_ID)
         self.assertIsNone(state["pending_request"])
         self.assertEqual(state["outcome"], "reconciliation-required")
         self.assertEqual([record["kind"] for record in inputs.log()][-1], "item-create")
@@ -2900,7 +3654,7 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
         self.assertEqual(result.returncode, 20)
         state = json.loads((inputs.state / "state.json").read_bytes())
         self.assertEqual(state["resources"]["item"]["state"], "present")
-        self.assertEqual(state["resources"]["item"]["id"], "item_issue286")
+        self.assertEqual(state["resources"]["item"]["id"], ITEM_ID)
         self.assertIsNone(state["pending_request"])
         kinds = [record["kind"] for record in inputs.log()]
         self.assertEqual(kinds.count("item-create"), 1)
@@ -2956,7 +3710,7 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
                         state = json.loads((inputs.state / "state.json").read_bytes())
                         self.assertEqual(state["resources"]["item"]["state"], "present")
                         self.assertEqual(
-                            state["resources"]["item"]["id"], "item_issue286"
+                            state["resources"]["item"]["id"], ITEM_ID
                         )
                         self.assertIsNone(state["pending_request"])
                         self.assertEqual(state["outcome"], "reconciliation-required")
@@ -2967,7 +3721,7 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
 
     def test_resume_retains_candidates_and_zero_matches_never_settle(self) -> None:
         for listing_behavior, expected_candidates in (
-            ("success", ["item_issue286"]),
+            ("success", [ITEM_ID]),
             ("empty", []),
         ):
             with self.subTest(listing_behavior=listing_behavior):
@@ -3022,6 +3776,99 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
         self.assertEqual(retained["resources"]["item"]["state"], "unknown")
         self.assertEqual(retained["pending_request"]["kind"], "item-create")
 
+    def test_resume_rejects_split_form_provider_ids_before_observation(self) -> None:
+        temporary, inputs = self.make_inputs()
+        self.addCleanup(temporary.cleanup)
+        inputs.set_behaviors(**{"item-create": "nonzero-valid"})
+        self.assertEqual(inputs.run().returncode, 20)
+        before = inputs.log()
+        state_path = inputs.state / "state.json"
+        state = json.loads(state_path.read_bytes())
+        command = state["pending_request"]["command"]
+        index = command.index(f"--share-id={SHARE_ID}")
+        command[index : index + 1] = ["--share-id", SHARE_ID]
+        state_path.write_bytes(canonical_json(state))
+        state_path.chmod(0o600)
+
+        result = inputs.run("resume")
+
+        self.assertEqual(
+            (result.returncode, result.stdout, result.stderr),
+            (1, b"", b"age-admission signer provisioning failed\n"),
+        )
+        self.assertEqual(inputs.log(), before)
+        retained = json.loads(state_path.read_bytes())
+        self.assertEqual(retained["pending_request"]["command"], command)
+        self.assertEqual(retained["resources"]["item"]["state"], "unknown")
+
+    def test_resume_rejects_prior_or_unbound_owner_state_before_observation(
+        self,
+    ) -> None:
+        temporary, inputs = self.make_inputs(primary="owner")
+        self.addCleanup(temporary.cleanup)
+        inputs.set_behaviors(**{"item-create": "nonzero-valid"})
+        self.assertEqual(inputs.run().returncode, 20)
+        inputs.set_behaviors()
+        state_path = inputs.state / "state.json"
+        pristine = state_path.read_bytes()
+        self.assertEqual(json.loads(pristine)["bindings"]["owner_id"], "user_issue286")
+        before = inputs.log()
+        owner = os.fspath(inputs.owner_session)
+        for label in (
+            "prior state schema",
+            "prior request schema",
+            "missing owner binding",
+            "unbound owner",
+            "agent owner",
+            "owner selector with enrollment fields",
+            "existing-agent selector aliasing the owner root",
+        ):
+            with self.subTest(label=label):
+                state = json.loads(pristine)
+                if label == "prior state schema":
+                    state["schema"] = "issue286-provisioning-state/v2"
+                elif label == "prior request schema":
+                    state["request"]["schema"] = "issue286-provisioning/v2"
+                elif label == "missing owner binding":
+                    del state["bindings"]["owner_id"]
+                elif label == "unbound owner":
+                    state["bindings"]["owner_id"] = None
+                elif label == "agent owner":
+                    state["bindings"]["owner_id"] = "N/A"
+                elif label == "owner selector with enrollment fields":
+                    state["request"]["sessions"].update(
+                        primary_enrollment=owner,
+                        primary_enrollment_name="issue286-primary",
+                    )
+                else:
+                    state["request"]["sessions"] = dict(
+                        inputs.sessions_request("existing-agent"),
+                        primary_enrollment=owner,
+                    )
+                tampered = canonical_json(state)
+                state_path.write_bytes(tampered)
+                state_path.chmod(0o600)
+
+                result = inputs.run("resume")
+
+                self.assertEqual(
+                    (result.returncode, result.stdout, result.stderr),
+                    (1, b"", b"age-admission signer provisioning failed\n"),
+                )
+                self.assertEqual(inputs.log(), before)
+                self.assertEqual(state_path.read_bytes(), tampered)
+
+        with self.subTest(label="untampered control"):
+            state_path.write_bytes(pristine)
+            state_path.chmod(0o600)
+
+            result = inputs.run("resume")
+
+            self.assertEqual(result.returncode, 20)
+            self.assertEqual(
+                inputs.session_calls()[len(before) :], [("item-list", "owner")]
+            )
+
     def test_resume_positive_login_info_stops_without_readiness_or_later_mutation(
         self,
     ) -> None:
@@ -3059,8 +3906,7 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
         exact_delete = [
             "pat",
             "delete",
-            "--pat-id",
-            "pat_issue286",
+            f"--pat-id={PAT_ID}",
         ]
         for scenario, listing_behavior, delete_behavior in scenarios:
             with self.subTest(scenario=scenario):
@@ -3096,7 +3942,7 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
                             state["resources"]["agent"]["state"], "removed"
                         )
                         self.assertEqual(
-                            provider["agent_pat_ids"], ["pat_collision"]
+                            provider["agent_pat_ids"], [COLLISION_PAT_ID]
                         )
                         self.assertTrue(provider["revoked"])
                         continue
@@ -3113,7 +3959,7 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
                         expected_ids = (
                             []
                             if scenario == "zero-confirmation"
-                            else ["pat_collision", "pat_issue286"]
+                            else [COLLISION_PAT_ID, PAT_ID]
                         )
                         agent = state["resources"]["agent"]
                         self.assertEqual(agent["state"], "present")
@@ -3136,7 +3982,7 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
                                 state["resources"]["item"]["state"],
                                 state["resources"]["item"]["id"],
                             ),
-                            ("present", "item_issue286"),
+                            ("present", ITEM_ID),
                         )
                         token_path = (
                             inputs.state / state["artifacts"]["agent_token"]
@@ -3181,12 +4027,12 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
                     )
                     agent = state["resources"]["agent"]
                     self.assertIn(agent["state"], {"removing", "unknown"})
-                    self.assertEqual(agent["pat_id"], "pat_issue286")
+                    self.assertEqual(agent["pat_id"], PAT_ID)
                     pending = state["pending_request"]
                     self.assertEqual(pending["kind"], "agent-delete")
                     self.assertEqual(pending["command"], ["pass-cli", *exact_delete])
                     self.assertEqual(
-                        pending["targets"]["pat_id"], "pat_issue286"
+                        pending["targets"]["pat_id"], PAT_ID
                     )
                     capture_paths = [
                         inputs.state / pending["captures"][channel]
@@ -3195,7 +4041,7 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
                     self.assertTrue(all(path.exists() for path in capture_paths))
                     self.assertEqual(
                         provider["agent_pat_ids"],
-                        ["pat_collision", "pat_issue286"],
+                        [COLLISION_PAT_ID, PAT_ID],
                     )
                     self.assertFalse(provider["revoked"])
 
@@ -3230,13 +4076,13 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
                     )
                     resumed_agent = resumed_state["resources"]["agent"]
                     self.assertEqual(resumed_agent["state"], "unknown")
-                    self.assertEqual(resumed_agent["pat_id"], "pat_issue286")
+                    self.assertEqual(resumed_agent["pat_id"], PAT_ID)
                     self.assertEqual(
                         [
                             candidate["pat_id"]
                             for candidate in resumed_agent["candidates"]
                         ],
-                        ["pat_issue286"],
+                        [PAT_ID],
                     )
                     self.assertEqual(
                         resumed_state["pending_request"]["command"],
@@ -3245,7 +4091,7 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
                     self.assertTrue(all(path.exists() for path in capture_paths))
                     self.assertEqual(
                         inputs.provider_document()["agent_pat_ids"],
-                        ["pat_collision", "pat_issue286"],
+                        [COLLISION_PAT_ID, PAT_ID],
                     )
                 finally:
                     temporary.cleanup()
@@ -3273,13 +4119,13 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
         )
         state = json.loads((inputs.state / "state.json").read_bytes())
         self.assertEqual(state["resources"]["agent"]["state"], "unknown")
-        self.assertEqual(state["resources"]["agent"]["pat_id"], "pat_issue286")
+        self.assertEqual(state["resources"]["agent"]["pat_id"], PAT_ID)
         self.assertEqual(
             [
                 candidate["pat_id"]
                 for candidate in state["resources"]["agent"]["candidates"]
             ],
-            ["pat_issue286"],
+            [PAT_ID],
         )
         self.assertEqual(state["pending_request"]["kind"], "agent-delete")
         self.assertEqual(
@@ -3323,10 +4169,10 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
         state = json.loads((inputs.state / "state.json").read_bytes())
         self.assertEqual(state["resources"]["agent"]["state"], "removed")
         self.assertEqual(state["resources"]["item"]["state"], "unknown")
-        self.assertEqual(state["resources"]["item"]["id"], "item_issue286")
+        self.assertEqual(state["resources"]["item"]["id"], ITEM_ID)
         self.assertEqual(
             [candidate["id"] for candidate in state["resources"]["item"]["candidates"]],
-            ["item_issue286"],
+            [ITEM_ID],
         )
         self.assertEqual(
             [record["kind"] for record in inputs.log()[before:]], ["item-list"]
@@ -3426,6 +4272,50 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
         self.assertIsNotNone(state["resources"]["item"]["id"])
         self.assertIsNotNone(state["resources"]["agent"]["pat_id"])
 
+    def test_production_retains_only_the_bound_signer_public_key(self) -> None:
+        temporary, inputs = self.make_inputs()
+        self.addCleanup(temporary.cleanup)
+        inputs.request_document["qualification"] = "live-disposable-provider"
+        inputs.rewrite_request()
+        self.assertEqual(inputs.run().returncode, 0)
+        self.assertFalse((inputs.state / "private/admission-ed25519.pub").exists())
+        self.assertFalse((inputs.state / "private/admission-ed25519").exists())
+        evidence_binding = self.assert_terminal_disposition(
+            inputs, "qualified-clean"
+        )
+        inputs.state = inputs.private / "production-operation"
+        inputs.request = inputs.private / "production-request.json"
+        inputs._write_request(
+            mode="production",
+            qualification=None,
+            qualified_clean=evidence_binding,
+        )
+
+        result = inputs.run()
+
+        self.assertEqual(
+            (result.returncode, result.stdout, result.stderr),
+            (0, b"ready-for-recovery\n", b""),
+        )
+        self.assert_terminal_disposition(inputs, "ready-for-recovery")
+        state = json.loads((inputs.state / "state.json").read_bytes())
+        signer = state["bindings"]["fixture"]["document"]["signer"]
+        public_path = inputs.state / state["artifacts"]["signer_public"]
+        public_info = public_path.lstat()
+        self.assertTrue(stat.S_ISREG(public_info.st_mode))
+        self.assertEqual(stat.S_IMODE(public_info.st_mode), 0o600)
+        self.assertEqual(public_info.st_nlink, 1)
+        public = public_path.read_bytes()
+        self.assertEqual(public, inputs._public_key())
+        self.assertEqual(sha256(public), signer["public_key_sha256"])
+        self.assertEqual(ssh_public_key_fingerprint(public), signer["fingerprint"])
+        self.assertEqual(
+            sorted(path.name for path in (inputs.state / "private").iterdir()),
+            ["admission-ed25519.pub", "recovery-session"],
+        )
+        self.assertFalse((inputs.state / "fixture").exists())
+        self.assertNotIn(inputs.SIGNER, (inputs.state / "state.json").read_bytes())
+
     def test_runtime_path_digest_drift_stops_with_remote_handle_preserved(self) -> None:
         temporary, inputs = self.make_inputs()
         self.addCleanup(temporary.cleanup)
@@ -3436,7 +4326,7 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         state = json.loads((inputs.state / "state.json").read_bytes())
         self.assertEqual(state["resources"]["item"]["state"], "present")
-        self.assertEqual(state["resources"]["item"]["id"], "item_issue286")
+        self.assertEqual(state["resources"]["item"]["id"], ITEM_ID)
         self.assertEqual(state["outcome"], "local-cleanup-incomplete")
         self.assertTrue((inputs.state / "private/admission-ed25519").exists())
         kinds = [record["kind"] for record in inputs.log()]
@@ -3571,7 +4461,15 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
     def test_real_builder_adapter_wrapper_and_verifier_match_the_provisioner_contract(
         self,
     ) -> None:
-        temporary, inputs = self.make_inputs(real_local_tools=True)
+        self.assert_real_builder_contract(primary="existing-agent")
+
+    def test_real_builder_adapter_reads_through_the_owner_primary_profile(
+        self,
+    ) -> None:
+        self.assert_real_builder_contract(primary="owner")
+
+    def assert_real_builder_contract(self, *, primary: str) -> None:
+        temporary, inputs = self.make_inputs(real_local_tools=True, primary=primary)
         self.addCleanup(temporary.cleanup)
         self.assertEqual(inputs.archive.parent, inputs.root)
         self.assertEqual(stat.S_IMODE(inputs.archive.parent.stat().st_mode), 0o700)
@@ -3619,8 +4517,18 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
         self.assertFalse((inputs.state / "fixture").exists())
         self.assertFalse((inputs.state / "private/admission-ed25519").exists())
         log = inputs.log()
-        self.assertGreaterEqual(sum(record["kind"] == "item-view" for record in log), 3)
         self.assertEqual(sum(record["kind"] == "agent-login" for record in log), 1)
+        # The real adapter makes one item view per readback; the fourth view is
+        # the revoked recovery probe, which must fail.
+        routine = "owner" if primary == "owner" else "primary"
+        self.assertEqual(
+            [
+                session
+                for kind, session in inputs.session_calls()
+                if kind == "item-view"
+            ],
+            [routine, "recovery", "recovery", routine],
+        )
 
 
 if __name__ == "__main__":

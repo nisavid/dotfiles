@@ -38,16 +38,16 @@ from typing import Any
 
 os.umask(0o077)
 
-REQUEST_SCHEMA = "issue286-provisioning/v2"
+REQUEST_SCHEMA = "issue286-provisioning/v3"
 MANIFEST_SCHEMA = "issue286-reviewed-source-manifest/v1"
 FIXTURE_SCHEMA = "issue286-provider-fixture-binding/v1"
 QUALIFIED_CLEAN_SCHEMA = "issue286-qualified-clean/v2"
 READY_FOR_RECOVERY_SCHEMA = "issue286-ready-for-recovery/v2"
-STATE_SCHEMA = "issue286-provisioning-state/v2"
+STATE_SCHEMA = "issue286-provisioning-state/v3"
 TERMINAL_COMMIT_SCHEMA = "issue286-terminal-commit/v1"
 FIXTURE_REQUEST_SCHEMA = "issue286-provider-fixture/v1"
 PASS_CLI_SOURCE_COMMIT = "51a4c9b110a0ffe6e81f4f5d3877b9e5a0c24112"
-PROVIDER_COMMAND_SCHEMA = "issue286-pass-cli-2.3.3-provider-commands/v2"
+PROVIDER_COMMAND_SCHEMA = "issue286-pass-cli-2.3.3-provider-commands/v3"
 SOURCE_MANIFEST_SHA256 = (
     "95c0f8d872b308adb741cc21541a090ca4842cb894ece48370938955cb42ae6b"
 )
@@ -79,7 +79,9 @@ TERMINATION_GRACE_SECONDS = 2.0
 
 COMMIT_ID = re.compile(r"[0-9a-f]{40}\Z", re.ASCII)
 DIGEST = re.compile(r"[0-9a-f]{64}\Z", re.ASCII)
-IDENTIFIER = re.compile(r"[A-Za-z0-9_-]{1,128}\Z", re.ASCII)
+# Proton IDs are 64-byte URL-safe base64 values; pass-cli's is_id requires 88
+# characters ending in "==". They may begin with "-", so argv attaches them.
+IDENTIFIER = re.compile(r"[A-Za-z0-9_-]{86}==\Z", re.ASCII)
 FINGERPRINT = re.compile(r"SHA256:[A-Za-z0-9+/]{43}\Z", re.ASCII)
 VERSION_OUTPUT = re.compile(rb"Proton Pass CLI 2\.3\.3 \([0-9a-f]{7,40}\)\n\Z")
 TOKEN_ASSIGNMENT = re.compile(
@@ -904,6 +906,8 @@ def _run_child(
 
 def _git_environment() -> dict[str, str]:
     environment = os.environ.copy()
+    environment.pop(LOGIN_CREDENTIAL_FIELD, None)
+    environment.pop("PROTON_PASS_AGENT_REASON", None)
     for name in (
         "GIT_ALTERNATE_OBJECT_DIRECTORIES",
         "GIT_ALLOW_PROTOCOL",
@@ -1118,6 +1122,13 @@ def _digest(value: object, label: str) -> str:
     return value
 
 
+def _owner_id(value: object, label: str) -> str:
+    # Agent and token logins report "N/A"; only a user login has a positive ID.
+    if not isinstance(value, str) or not value or value == "N/A":
+        raise ProvisioningError(f"{label} is invalid")
+    return value
+
+
 def _file_binding(value: object, label: str) -> dict[str, str]:
     binding = _exact_keys(value, {"path", "sha256"}, label)
     return {
@@ -1199,20 +1210,38 @@ def _validate_request(
     }:
         raise ProvisioningError("provider schema binding is invalid")
 
-    sessions = _exact_keys(
-        document["sessions"],
-        {"owner", "primary_enrollment", "primary_enrollment_name"},
-        "session request",
+    # The routine reader is named explicitly. Equal profile roots never select
+    # the owner; an existing-agent request with equal roots is rejected.
+    raw_sessions = document["sessions"]
+    primary_kind = (
+        raw_sessions.get("primary") if isinstance(raw_sessions, dict) else None
     )
+    if primary_kind == "owner":
+        session_keys = {"owner", "primary"}
+    elif primary_kind == "existing-agent":
+        session_keys = {
+            "owner",
+            "primary",
+            "primary_enrollment",
+            "primary_enrollment_name",
+        }
+    else:
+        raise ProvisioningError("routine reader selection is invalid")
+    sessions = _exact_keys(raw_sessions, session_keys, "session request")
     owner = _absolute_path(sessions["owner"])
-    primary = _absolute_path(sessions["primary_enrollment"])
-    if owner == primary:
-        raise ProvisioningError("owner and primary profile roots are not distinct")
+    normalized_sessions = {"owner": os.fspath(owner), "primary": primary_kind}
+    if primary_kind == "existing-agent":
+        primary = _absolute_path(sessions["primary_enrollment"])
+        if owner == primary:
+            raise ProvisioningError(
+                "owner and primary profile roots are not distinct"
+            )
+        _validate_existing_profile_root(primary, "primary enrollment")
+        normalized_sessions["primary_enrollment"] = os.fspath(primary)
+        normalized_sessions["primary_enrollment_name"] = _private_name(
+            sessions["primary_enrollment_name"], "primary enrollment name"
+        )
     _validate_existing_profile_root(owner, "owner")
-    _validate_existing_profile_root(primary, "primary enrollment")
-    primary_name = _private_name(
-        sessions["primary_enrollment_name"], "primary enrollment name"
-    )
 
     provider = _exact_keys(
         document["provider"],
@@ -1277,11 +1306,7 @@ def _validate_request(
             "repository": os.fspath(repository),
         },
         "schema": REQUEST_SCHEMA,
-        "sessions": {
-            "owner": os.fspath(owner),
-            "primary_enrollment": os.fspath(primary),
-            "primary_enrollment_name": primary_name,
-        },
+        "sessions": normalized_sessions,
     }
 
 
@@ -1925,6 +1950,7 @@ def _validate_prior_qualified_clean(
         or producer_request["mode"] != "qualification"
         or producer_request["qualification"] != "live-disposable-provider"
         or producer_request["qualified_clean"] is not None
+        or producer_request["sessions"] != state["request"]["sessions"]
     ):
         raise ProvisioningError("qualified-clean producer request is invalid")
 
@@ -1932,6 +1958,7 @@ def _validate_prior_qualified_clean(
         producer["bindings"],
         {
             "fixture",
+            "owner_id",
             "pass_cli",
             "platform",
             "provider_schema",
@@ -1940,6 +1967,7 @@ def _validate_prior_qualified_clean(
         },
         "qualified-clean producer bindings",
     )
+    _owner_id(producer_bindings["owner_id"], "qualified-clean producer owner ID")
     producer_pass_cli = _exact_keys(
         producer_bindings["pass_cli"],
         {"build_sha256", "observed_path", "version_stdout"},
@@ -2104,6 +2132,7 @@ def _new_state(
         },
         "bindings": {
             "fixture": None,
+            "owner_id": None,
             "pass_cli": {
                 "build_sha256": request["pass_cli"]["build_sha256"],
                 "observed_path": os.fspath(pass_cli_path),
@@ -2186,7 +2215,7 @@ def _run_provider_read(
     return result
 
 
-def _closed_info(data: bytes, *, expected_agent: str | None) -> None:
+def _closed_info(data: bytes, *, expected_agent: str | None) -> str:
     value = _parse_json_output(data)
     if not isinstance(value, dict):
         raise ProvisioningError("provider info output is invalid")
@@ -2202,6 +2231,7 @@ def _closed_info(data: bytes, *, expected_agent: str | None) -> None:
                 isinstance(value[name], str) and value[name]
                 for name in ("id", "release_track", "email", "username")
             )
+            or value["id"] == "N/A"
         ):
             raise ProvisioningError("owner info output is invalid")
     else:
@@ -2229,6 +2259,7 @@ def _closed_info(data: bytes, *, expected_agent: str | None) -> None:
         not isinstance(value["install_source"], str) or not value["install_source"]
     ):
         raise ProvisioningError("provider info install source is invalid")
+    return value["id"]
 
 
 def _parse_item_id(data: bytes) -> str:
@@ -2459,14 +2490,14 @@ def _check_info(
     session: Path,
     tools_directory: Path,
     expected_agent: str | None,
-) -> None:
+) -> str:
     result = _run_provider_read(
         state,
         ["pass-cli", "info", "--output", "json"],
         session=session,
         tools_directory=tools_directory,
     )
-    _closed_info(
+    return _closed_info(
         _require_read_success(result, "provider info"), expected_agent=expected_agent
     )
 
@@ -2541,8 +2572,7 @@ def _item_listing(
             "pass-cli",
             "item",
             "list",
-            "--share-id",
-            request["provider"]["share_id"],
+            f"--share-id={request['provider']['share_id']}",
             "--filter-type",
             "custom",
             "--filter-state",
@@ -2651,17 +2681,18 @@ def _confirm_agent_listing(
     name = request["provider"]["recovery_agent_name"]
     matches = [record for record in records if record["name"] == name]
     state["resources"]["agent"]["candidates"] = matches
-    if len(matches) != 1:
+    requested = request["provider"]["expiration"]
+    lower = _expiration_timestamp(request_started, requested)
+    upper = _expiration_timestamp(request_finished, requested)
+    if (
+        len(matches) != 1
+        or type(matches[0]["expire_time"]) is not int
+        or not lower <= matches[0]["expire_time"] <= upper
+    ):
         state["outcome"] = "remote-cleanup-incomplete"
         _atomic_state_write(state_directory, state)
         raise ProvisioningStop(21)
     record = matches[0]
-    expiration = record["expire_time"]
-    requested = request["provider"]["expiration"]
-    lower = _expiration_timestamp(request_started, requested)
-    upper = _expiration_timestamp(request_finished, requested)
-    if type(expiration) is not int or not lower <= expiration <= upper:
-        raise ProvisioningError("agent expiration does not match the create interval")
     state["resources"]["agent"]["pat_id"] = record["pat_id"]
     state["checks"]["agent_listing"] = True
 
@@ -2868,10 +2899,8 @@ def _receipt_command(
         os.fspath(
             fixture_directory / fixture["staged_tools"]["provider_adapter"]["path"]
         ),
-        "--share-id",
-        state["request"]["provider"]["share_id"],
-        "--item-id",
-        state["resources"]["item"]["id"],
+        f"--share-id={state['request']['provider']['share_id']}",
+        f"--item-id={state['resources']['item']['id']}",
         "--expected-fingerprint",
         fixture["signer"]["fingerprint"],
         "--trusted-launcher",
@@ -2956,21 +2985,31 @@ def _verify_receipt(
         raise ProvisioningError("synthetic receipt verification failed")
 
 
+def _primary_reader(request: dict[str, Any]) -> tuple[Path, str | None]:
+    sessions = request["sessions"]
+    if sessions["primary"] == "owner":
+        return Path(sessions["owner"]), None
+    return Path(sessions["primary_enrollment"]), sessions["primary_enrollment_name"]
+
+
 def _perform_readback(
     state_directory: Path,
     state: dict[str, Any],
     *,
     fixture_directory: Path,
     session: Path,
-    expected_agent: str,
+    expected_agent: str | None,
     receipt_label: str,
 ) -> None:
-    _check_info(
+    observed_id = _check_info(
         state,
         session=session,
         tools_directory=fixture_directory / "tools",
         expected_agent=expected_agent,
     )
+    # A user-login read must still be the owner captured before any effect.
+    if expected_agent is None and observed_id != state["bindings"]["owner_id"]:
+        raise ProvisioningError("owner identity changed before routine read")
     _check_readiness(state, session=session, fixture_directory=fixture_directory)
     receipt_relative = f"private/{receipt_label}.receipt"
     if receipt_relative in state["artifacts"]["receipts"]:
@@ -3005,7 +3044,7 @@ def _delete_agent(
         state,
         kind="agent-delete",
         resource="agent",
-        command=["pass-cli", "pat", "delete", "--pat-id", pat_id],
+        command=["pass-cli", "pat", "delete", f"--pat-id={pat_id}"],
         session=Path(state["request"]["sessions"]["owner"]),
         tools_directory=fixture_directory / "tools",
         targets={"name": name, "pat_id": pat_id},
@@ -3033,10 +3072,8 @@ def _delete_item(
             "pass-cli",
             "item",
             "delete",
-            "--share-id",
-            share_id,
-            "--item-id",
-            item_id,
+            f"--share-id={share_id}",
+            f"--item-id={item_id}",
         ],
         session=Path(state["request"]["sessions"]["owner"]),
         tools_directory=fixture_directory / "tools",
@@ -3082,10 +3119,8 @@ def _confirm_revoked_probe(
             "pass-cli",
             "item",
             "view",
-            "--share-id",
-            request["provider"]["share_id"],
-            "--item-id",
-            item_id,
+            f"--share-id={request['provider']['share_id']}",
+            f"--item-id={item_id}",
             "--field",
             ITEM_FIELD,
             "--output",
@@ -3138,14 +3173,17 @@ def _remove_regular_artifact(path: Path) -> None:
 
 
 def _remove_local_sensitive_artifacts(
-    state_directory: Path, state: dict[str, Any]
+    state_directory: Path,
+    state: dict[str, Any],
+    *,
+    retain_signer_public: bool = False,
 ) -> None:
     artifacts = state["artifacts"]
     for relative in (
         artifacts["agent_token"],
         artifacts["item_template"],
         artifacts["signer_private"],
-        artifacts["signer_public"],
+        *(() if retain_signer_public else (artifacts["signer_public"],)),
         *artifacts["receipts"],
         artifacts["builder_request"],
         artifacts["builder"],
@@ -3170,6 +3208,23 @@ def _remove_local_sensitive_artifacts(
         _fsync_directory(state_directory)
     except OSError as error:
         raise ProvisioningError("synthetic fixture could not be removed") from error
+
+
+def _verify_retained_signer_public(
+    state_directory: Path, state: dict[str, Any]
+) -> None:
+    public = _read_regular(
+        _state_path(state_directory, state["artifacts"]["signer_public"]),
+        maximum=MAX_SIGNER_PUBLIC_BYTES,
+        required_mode=0o600,
+        require_private_parent=False,
+    )
+    fingerprint, public_key_sha256 = _parse_public_key(public)
+    if state["bindings"]["fixture"]["document"]["signer"] != {
+        "fingerprint": fingerprint,
+        "public_key_sha256": public_key_sha256,
+    }:
+        raise ProvisioningError("retained signer public key binding is invalid")
 
 
 def _record_terminal_failure(
@@ -3335,7 +3390,10 @@ def _finish_production(state_directory: Path, state: dict[str, Any]) -> None:
     ):
         if state["checks"][name] is not True:
             raise ProvisioningError("production verification checks are incomplete")
-    _remove_local_sensitive_artifacts(state_directory, state)
+    _remove_local_sensitive_artifacts(
+        state_directory, state, retain_signer_public=True
+    )
+    _verify_retained_signer_public(state_directory, state)
     prior_phase = state["phase"]
     evidence = {
         "authority": {
@@ -3361,12 +3419,12 @@ def _finish_production(state_directory: Path, state: dict[str, Any]) -> None:
 
 def _rollback(
     state_directory: Path, state: dict[str, Any], fixture_directory: Path | None
-) -> None:
+) -> bool:
     if state["pending_request"] is not None or any(
         resource["state"] in {"requesting", "removing", "unknown"}
         for resource in state["resources"].values()
     ):
-        return
+        return False
     if fixture_directory is not None:
         if state["resources"]["agent"]["state"] == "present":
             _delete_agent(state_directory, state, fixture_directory)
@@ -3381,6 +3439,7 @@ def _rollback(
     _remove_local_sensitive_artifacts(state_directory, state)
     state["outcome"] = "rolled-back"
     _atomic_state_write(state_directory, state)
+    return True
 
 
 def _execute_workflow(
@@ -3427,12 +3486,13 @@ def _execute_workflow(
         "version_stdout"
     ].encode("ascii"):
         raise ProvisioningError("pass-cli version observation did not match")
-    _check_info(
+    state["bindings"]["owner_id"] = _check_info(
         state,
         session=owner_session,
         tools_directory=tools,
         expected_agent=None,
     )
+    primary_session, primary_agent = _primary_reader(request)
 
     _write_item_template(state_directory, state)
     item_id = _mutation(
@@ -3449,8 +3509,7 @@ def _execute_workflow(
             os.fspath(
                 _state_path(state_directory, state["artifacts"]["item_template"])
             ),
-            "--share-id",
-            request["provider"]["share_id"],
+            f"--share-id={request['provider']['share_id']}",
         ],
         session=owner_session,
         tools_directory=tools,
@@ -3472,8 +3531,8 @@ def _execute_workflow(
         state_directory,
         state,
         fixture_directory=fixture_directory,
-        session=Path(request["sessions"]["primary_enrollment"]),
-        expected_agent=request["sessions"]["primary_enrollment_name"],
+        session=primary_session,
+        expected_agent=primary_agent,
         receipt_label="primary",
     )
     state["checks"]["primary_readback"] = True
@@ -3584,8 +3643,8 @@ def _execute_workflow(
         state_directory,
         state,
         fixture_directory=fixture_directory,
-        session=Path(request["sessions"]["primary_enrollment"]),
-        expected_agent=request["sessions"]["primary_enrollment_name"],
+        session=primary_session,
+        expected_agent=primary_agent,
         receipt_label="primary-after-revocation",
     )
     state["checks"]["primary_after_revocation"] = True
@@ -3686,7 +3745,7 @@ def _start(arguments: argparse.Namespace) -> str:
             _atomic_state_write(state_directory, state)
             raise
         try:
-            _rollback(
+            classified = _rollback(
                 state_directory,
                 state,
                 fixture_directory if fixture_directory.exists() else None,
@@ -3702,11 +3761,14 @@ def _start(arguments: argparse.Namespace) -> str:
                 state["outcome"] = "remote-cleanup-incomplete"
             elif state["outcome"] == "running":
                 state["outcome"] = "local-cleanup-incomplete"
-            if state["outcome"] in {
+            classified = state["outcome"] in {
                 "local-cleanup-incomplete",
                 "remote-cleanup-incomplete",
-            }:
+            }
+            if classified:
                 _atomic_state_write(state_directory, state)
+        if classified and _caught_signal:
+            raise ProvisioningInterrupted(_caught_signal)
         raise
 
 
@@ -3838,6 +3900,7 @@ def _validate_resume_state(state: dict[str, Any], state_directory: Path) -> None
         state["bindings"],
         {
             "fixture",
+            "owner_id",
             "pass_cli",
             "platform",
             "provider_schema",
@@ -3848,6 +3911,8 @@ def _validate_resume_state(state: dict[str, Any], state_directory: Path) -> None
     )
     if bindings["platform"] != _platform_name():
         raise ProvisioningError("state platform binding is invalid")
+    # Every provider request is armed after the owner ID is captured.
+    _owner_id(bindings["owner_id"], "state owner ID")
     pass_cli = _exact_keys(
         bindings["pass_cli"],
         {"build_sha256", "observed_path", "version_stdout"},
@@ -4118,8 +4183,7 @@ def _validate_resume_state(state: dict[str, Any], state_directory: Path) -> None
             "custom",
             "--from-template",
             os.fspath(_state_path(state_directory, artifacts["item_template"])),
-            "--share-id",
-            request["provider"]["share_id"],
+            f"--share-id={request['provider']['share_id']}",
         ],
         "agent-create": [
             "pass-cli",
@@ -4136,17 +4200,14 @@ def _validate_resume_state(state: dict[str, Any], state_directory: Path) -> None
             "pass-cli",
             "pat",
             "delete",
-            "--pat-id",
-            agent["pat_id"],
+            f"--pat-id={agent['pat_id']}",
         ],
         "item-delete": [
             "pass-cli",
             "item",
             "delete",
-            "--share-id",
-            request["provider"]["share_id"],
-            "--item-id",
-            item["id"],
+            f"--share-id={request['provider']['share_id']}",
+            f"--item-id={item['id']}",
         ],
         "local-logout": ["pass-cli", "logout", "--force"],
     }

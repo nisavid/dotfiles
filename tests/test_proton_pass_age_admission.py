@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import os
 import shutil
@@ -31,6 +33,56 @@ def resolved_non_provider_support(name: str) -> Path:
 
 def _run(*arguments: str, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
     return subprocess.run(arguments, check=True, **kwargs)  # type: ignore[arg-type]
+
+
+def provider_id(lead: int, label: str) -> str:
+    """Return an 88-character URL-safe Proton-shaped ID with a chosen first byte."""
+    digest = hashlib.sha512(label.encode("ascii")).digest()
+    return base64.urlsafe_b64encode(bytes([lead]) + digest[1:]).decode("ascii")
+
+
+SHARE_ID = provider_id(0xF8, "fixture share")
+ITEM_ID = provider_id(0xF9, "fixture item")
+
+
+def provider_argument_check(share_id: str, item_id: str) -> str:
+    """Return fake pass-cli source that parses `item view` argv like clap."""
+    return textwrap.dedent(
+        f"""\
+        import sys
+
+        arguments = sys.argv[1:]
+        if arguments[:2] != ["item", "view"]:
+            raise SystemExit(92)
+        options = {{}}
+        index = 2
+        while index < len(arguments):
+            name, attached, value = arguments[index].partition("=")
+            index += 1
+            if name not in {{"--field", "--item-id", "--output", "--share-id"}}:
+                raise SystemExit(2)
+            if not attached:
+                # Without allow_hyphen_values, clap parses a separate "-..." as a flag.
+                if index == len(arguments) or arguments[index].startswith("-"):
+                    raise SystemExit(2)
+                value = arguments[index]
+                index += 1
+            if name in options:
+                raise SystemExit(2)
+            options[name] = value
+        for name in ("--item-id", "--share-id"):
+            value = options.get(name, "")
+            if len(value) != 88 or not value.endswith("=="):
+                raise SystemExit(1)
+        if options != {{
+            "--field": "SSH.private_key",
+            "--item-id": {item_id!r},
+            "--output": "human",
+            "--share-id": {share_id!r},
+        }}:
+            raise SystemExit(92)
+        """
+    )
 
 
 class ProtonPassAgeAdmissionTests(unittest.TestCase):
@@ -133,6 +185,8 @@ class ProtonPassAgeAdmissionTests(unittest.TestCase):
         *,
         delay_seconds: int = 0,
         exit_status: int = 0,
+        share_id: str = SHARE_ID,
+        item_id: str = ITEM_ID,
     ) -> None:
         payload_statement = (
             f"data = pathlib.Path({os.fspath(payload)!r}).read_bytes()"
@@ -141,45 +195,41 @@ class ProtonPassAgeAdmissionTests(unittest.TestCase):
         )
         self._write_executable(
             "pass-cli",
-            f"""
-            #!/usr/bin/env python3
-            import os
-            import pathlib
-            import sys
-            import time
+            "#!/usr/bin/env python3\n"
+            + provider_argument_check(share_id, item_id)
+            + textwrap.dedent(
+                f"""
+                import os
+                import pathlib
+                import sys
+                import time
 
-            expected = [
-                "item", "view", "--share-id", "fixture_share_286",
-                "--item-id", "fixture_item_286", "--field", "SSH.private_key",
-                "--output", "human",
-            ]
-            if sys.argv[1:] != expected:
-                raise SystemExit(92)
-            if os.environ.get("PROTON_PASS_PERSONAL_ACCESS_TOKEN"):
-                raise SystemExit(93)
-            if sys.platform.startswith("linux") and os.environ.get(
-                "PROTON_PASS_LINUX_KEYRING"
-            ) != "dbus":
-                raise SystemExit(94)
-            if os.environ.get("PROTON_PASS_NO_UPDATE_CHECK") != "1":
-                raise SystemExit(95)
-            if os.environ.get("PROTON_PASS_AGENT_REASON") != (
-                "age-admission signing-key retrieval"
-            ):
-                raise SystemExit(96)
-            {payload_statement}
-            if data and any(data in os.fsencode(value) for value in os.environ.values()):
-                raise SystemExit(97)
-            if data and data in os.fsencode(" ".join(sys.argv)):
-                raise SystemExit(98)
-            pathlib.Path({os.fspath(self.provider_marker)!r}).write_text(
-                "selected-field", encoding="ascii"
-            )
-            sys.stdout.buffer.write(data)
-            sys.stdout.buffer.flush()
-            time.sleep({delay_seconds})
-            raise SystemExit({exit_status})
-            """,
+                if os.environ.get("PROTON_PASS_PERSONAL_ACCESS_TOKEN"):
+                    raise SystemExit(93)
+                if sys.platform.startswith("linux") and os.environ.get(
+                    "PROTON_PASS_LINUX_KEYRING"
+                ) != "dbus":
+                    raise SystemExit(94)
+                if os.environ.get("PROTON_PASS_NO_UPDATE_CHECK") != "1":
+                    raise SystemExit(95)
+                if os.environ.get("PROTON_PASS_AGENT_REASON") != (
+                    "age-admission signing-key retrieval"
+                ):
+                    raise SystemExit(96)
+                {payload_statement}
+                if data and any(data in os.fsencode(value) for value in os.environ.values()):
+                    raise SystemExit(97)
+                if data and data in os.fsencode(" ".join(sys.argv)):
+                    raise SystemExit(98)
+                pathlib.Path({os.fspath(self.provider_marker)!r}).write_text(
+                    "selected-field", encoding="ascii"
+                )
+                sys.stdout.buffer.write(data)
+                sys.stdout.buffer.flush()
+                time.sleep({delay_seconds})
+                raise SystemExit({exit_status})
+                """
+            ),
         )
 
     def _write_wrapper(self, behavior: str) -> None:
@@ -252,8 +302,8 @@ pathlib.Path({os.fspath(self.wrapper_marker)!r}).write_text(
 
     def _command(self, **overrides: str) -> list[str]:
         values = {
-            "share_id": "fixture_share_286",
-            "item_id": "fixture_item_286",
+            "share_id": SHARE_ID,
+            "item_id": ITEM_ID,
             "expected_fingerprint": self.fingerprint,
             "trusted_launcher": os.fspath(self.wrapper),
             "base_repository": os.fspath(self.base),
@@ -268,10 +318,8 @@ pathlib.Path({os.fspath(self.wrapper_marker)!r}).write_text(
         values.update(overrides)
         return [
             os.fspath(self.adapter),
-            "--share-id",
-            values["share_id"],
-            "--item-id",
-            values["item_id"],
+            f"--share-id={values['share_id']}",
+            f"--item-id={values['item_id']}",
             "--expected-fingerprint",
             values["expected_fingerprint"],
             "--trusted-launcher",
@@ -442,6 +490,82 @@ pathlib.Path({os.fspath(self.wrapper_marker)!r}).write_text(
         self.assertNotIn(self.key_bytes, result.stdout)
         self.assertNotIn(self.key_bytes, result.stderr)
 
+    def test_real_shaped_ids_with_either_leading_punctuation_reach_the_provider(
+        self,
+    ) -> None:
+        for share_lead, item_lead in ((0xFC, 0xF8), (0xF8, 0xFC)):
+            share_id = provider_id(share_lead, "alternate share")
+            item_id = provider_id(item_lead, "alternate item")
+            with self.subTest(share_id=share_id[0], item_id=item_id[0]):
+                self.provider_marker.unlink(missing_ok=True)
+                self.output.unlink(missing_ok=True)
+                self._write_provider(
+                    self.signing_key, share_id=share_id, item_id=item_id
+                )
+
+                result = subprocess.run(
+                    self._command(share_id=share_id, item_id=item_id),
+                    check=False,
+                    capture_output=True,
+                    env=self._environment(),
+                    timeout=30,
+                )
+
+                self.assertEqual(
+                    (result.returncode, result.stdout, result.stderr),
+                    (0, b"", b""),
+                )
+                self.assertEqual(
+                    self.provider_marker.read_text(encoding="ascii"),
+                    "selected-field",
+                )
+                self.assertEqual(
+                    self.output.read_text(encoding="ascii"), "fixture receipt\n"
+                )
+
+    def test_malformed_provider_ids_fail_before_any_child(self) -> None:
+        malformed = {
+            "empty": "",
+            "87 characters": SHARE_ID[1:],
+            "89 characters": "A" + SHARE_ID,
+            "missing padding": SHARE_ID[:-2] + "AA",
+            "padding inside": SHARE_ID[:85] + "===",
+            "standard alphabet plus": SHARE_ID[:10] + "+" + SHARE_ID[11:],
+            "standard alphabet slash": SHARE_ID[:10] + "/" + SHARE_ID[11:],
+        }
+        for field in ("share_id", "item_id"):
+            for label, value in malformed.items():
+                with self.subTest(field=field, label=label):
+                    for marker in (
+                        self.preflight_marker,
+                        self.readiness_marker,
+                        self.provider_marker,
+                        self.wrapper_marker,
+                        self.output,
+                    ):
+                        marker.unlink(missing_ok=True)
+
+                    result = subprocess.run(
+                        self._command(**{field: value}),
+                        check=False,
+                        capture_output=True,
+                        env=self._environment(),
+                        timeout=30,
+                    )
+
+                    self.assertEqual(
+                        (result.returncode, result.stdout, result.stderr),
+                        (1, b"", b"proton-pass age admission failed\n"),
+                    )
+                    self.assertFalse(self.preflight_marker.exists())
+                    self.assertFalse(self.readiness_marker.exists())
+                    self.assertFalse(self.provider_marker.exists())
+                    self.assertFalse(self.wrapper_marker.exists())
+                    self.assertFalse(self.output.exists())
+                    self.assertEqual(
+                        list(self.root.glob("proton-pass-age-admission.*")), []
+                    )
+
     @unittest.skipUnless(
         sys.platform.startswith("linux"),
         "Linux exposes ssh-keygen through PATH for fake-only child observation",
@@ -468,31 +592,27 @@ pathlib.Path({os.fspath(self.wrapper_marker)!r}).write_text(
         )
         self._write_executable(
             "pass-cli",
-            f"""
-            #!/usr/bin/env python3
-            import os
-            import pathlib
-            import sys
+            "#!/usr/bin/env python3\n"
+            + provider_argument_check(SHARE_ID, ITEM_ID)
+            + textwrap.dedent(
+                f"""
+                import os
+                import pathlib
+                import sys
 
-            expected = [
-                "item", "view", "--share-id", "fixture_share_286",
-                "--item-id", "fixture_item_286", "--field", "SSH.private_key",
-                "--output", "human",
-            ]
-            if sys.argv[1:] != expected:
-                raise SystemExit(92)
-            with pathlib.Path({os.fspath(reason_log)!r}).open(
-                "a", encoding="ascii"
-            ) as stream:
-                print(
-                    "retrieval\\t"
-                    + os.environ.get("PROTON_PASS_AGENT_REASON", {absent!r}),
-                    file=stream,
+                with pathlib.Path({os.fspath(reason_log)!r}).open(
+                    "a", encoding="ascii"
+                ) as stream:
+                    print(
+                        "retrieval\\t"
+                        + os.environ.get("PROTON_PASS_AGENT_REASON", {absent!r}),
+                        file=stream,
+                    )
+                sys.stdout.buffer.write(
+                    pathlib.Path({os.fspath(self.signing_key)!r}).read_bytes()
                 )
-            sys.stdout.buffer.write(
-                pathlib.Path({os.fspath(self.signing_key)!r}).read_bytes()
-            )
-            """,
+                """
+            ),
         )
         self._write_executable(
             "ssh-keygen",
@@ -1162,43 +1282,69 @@ pathlib.Path({os.fspath(self.wrapper_marker)!r}).write_text(
         self.assertFalse(self.output.exists())
         self.assertEqual(list(self.root.glob("proton-pass-age-admission.*")), [])
 
-    def test_term_during_popen_acquisition_retires_the_real_child_group(self) -> None:
-        self.wrapper.write_text(
-            textwrap.dedent(
-                """\
-                import time
-
-                time.sleep(30)
-                """
-            ),
-            encoding="ascii",
-        )
-        self.wrapper.chmod(0o755)
-        boundary_child_path = self.root / "boundary-child.pid"
+    def _assert_spawn_signal_retires_group_before_root_cleanup(
+        self, role: str
+    ) -> None:
+        boundary_child_path = self.root / f"boundary-{role}.pid"
+        cleanup_probe_path = self.root / f"boundary-{role}-cleanup.log"
         harness = textwrap.dedent(
             f"""\
             import os
             import pathlib
             import runpy
+            import shutil
             import signal
             import subprocess
             import sys
 
             real_popen = subprocess.Popen
-            triggered = False
+            real_rmtree = shutil.rmtree
+            boundary_group = None
+
+            def spawn_role(command):
+                values = [os.fspath(value) for value in command]
+                if "preflight" in values:
+                    return "preflight"
+                if os.path.basename(values[0]) == "proton-pass-ensure-ready":
+                    return "readiness"
+                if values[0] == "pass-cli":
+                    return "retrieval"
+                if "--signing-key" in values:
+                    return "wrapper"
+                return "other"
 
             def signal_before_return(*arguments, **keywords):
-                global triggered
+                global boundary_group
                 process = real_popen(*arguments, **keywords)
-                if not triggered:
-                    triggered = True
+                command = arguments[0] if arguments else keywords["args"]
+                if boundary_group is None and spawn_role(command) == {role!r}:
+                    boundary_group = process.pid
                     pathlib.Path({os.fspath(boundary_child_path)!r}).write_text(
                         str(process.pid), encoding="ascii"
                     )
                     os.kill(os.getpid(), signal.SIGTERM)
                 return process
 
+            def probing_rmtree(path, *arguments, **keywords):
+                if boundary_group is not None and pathlib.Path(path).name.startswith(
+                    "proton-pass-age-admission."
+                ):
+                    try:
+                        os.killpg(boundary_group, 0)
+                    except ProcessLookupError:
+                        observed = "absent"
+                    except OSError:
+                        observed = "unverified"
+                    else:
+                        observed = "present"
+                    with open(
+                        {os.fspath(cleanup_probe_path)!r}, "a", encoding="ascii"
+                    ) as stream:
+                        stream.write(observed + "\\n")
+                return real_rmtree(path, *arguments, **keywords)
+
             subprocess.Popen = signal_before_return
+            shutil.rmtree = probing_rmtree
             source = sys.argv[1]
             sys.argv = [source, *sys.argv[2:]]
             runpy.run_path(source, run_name="__main__")
@@ -1235,9 +1381,62 @@ pathlib.Path({os.fspath(self.wrapper_marker)!r}).write_text(
             (result.returncode, result.stdout, result.stderr),
             (143, b"", b"proton-pass age admission interrupted\n"),
         )
+        self.assertEqual(
+            cleanup_probe_path.read_text(encoding="ascii").splitlines(),
+            ["absent"],
+        )
         self.assertFalse(child_survived)
         self.assertFalse(self.output.exists())
         self.assertEqual(list(self.root.glob("proton-pass-age-admission.*")), [])
+
+    def test_term_during_popen_acquisition_retires_the_real_child_group(self) -> None:
+        self.wrapper.write_text(
+            textwrap.dedent(
+                """\
+                import time
+
+                time.sleep(30)
+                """
+            ),
+            encoding="ascii",
+        )
+        self.wrapper.chmod(0o755)
+
+        self._assert_spawn_signal_retires_group_before_root_cleanup("preflight")
+
+    def test_term_during_readiness_popen_retires_the_group_before_root_cleanup(
+        self,
+    ) -> None:
+        self._write_executable(
+            "proton-pass-ensure-ready",
+            """
+            #!/usr/bin/env python3
+            import time
+
+            time.sleep(30)
+            """,
+        )
+
+        self._assert_spawn_signal_retires_group_before_root_cleanup("readiness")
+
+    def test_term_during_retrieval_popen_retires_the_group_before_root_cleanup(
+        self,
+    ) -> None:
+        self._write_provider(self.signing_key, delay_seconds=30)
+
+        self._assert_spawn_signal_retires_group_before_root_cleanup("retrieval")
+
+    def test_term_during_wrapper_popen_retires_the_group_before_root_cleanup(
+        self,
+    ) -> None:
+        self._write_wrapper(
+            """
+            import time
+            time.sleep(30)
+            """
+        )
+
+        self._assert_spawn_signal_retires_group_before_root_cleanup("wrapper")
 
     def test_term_during_private_root_acquisition_stops_before_child_effects(
         self,
