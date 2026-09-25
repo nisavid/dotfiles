@@ -1052,6 +1052,7 @@ wait_for_notify_log || fail 'a best-effort fallback must notify'
   $(<"$FAKE_NOTIFY_LOG") != *(canary|pass://|cli-secrets)* ]] ||
   fail 'a best-effort notification must name only the command and profile'
 
+: > "$FAKE_NOTIFY_LOG"
 : > "$FAKE_PASS_ITEM_EXIT_124"
 set +e
 BEST_EFFORT_TARGET_EXIT=37 zsh "$launcher" --best-effort context7 -- \
@@ -1062,6 +1063,8 @@ rm -f -- "$FAKE_PASS_ITEM_EXIT_124"
 (( best_effort_status == 37 )) ||
   fail 'a best-effort fallback must preserve the target exit status'
 wait_for_notify_log || fail 'a best-effort fallback with a failing target must notify'
+[[ $(grep -Fc 'Credentials unavailable' "$FAKE_NOTIFY_LOG") == 1 ]] ||
+  fail 'a best-effort fallback with a failing target must notify exactly once'
 
 for invalid_aws_field in FAKE_AWS_ACCESS_KEY_ID FAKE_AWS_SECRET_ACCESS_KEY; do
   : > "$FAKE_NOTIFY_LOG"
