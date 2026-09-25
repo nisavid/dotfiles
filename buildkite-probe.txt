@@ -2,3 +2,4 @@ Scratch file for verifying the Buildkite dotfiles pipeline (issue #321). Not for
 probe 1
 probe 2
 probe 3
+probe 4
