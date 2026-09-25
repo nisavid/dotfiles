@@ -1534,7 +1534,7 @@ class RecoveryPreimageTests(unittest.TestCase):
             time.sleep(0.01)
         else:
             self.fail("fake GitHub child survived collector retirement")
-        self.assertEqual(process.returncode, 128 + signal.SIGTERM)
+        self.assertEqual(process.returncode, 128 + signal.SIGTERM, "stderr=" + repr(stderr) + "; statuses=" + repr([p.read_text() for p in sorted((self.state / "captures").glob("*.status.json"))]))
         self.assertEqual(stdout, b"")
         self.assertEqual(stderr, b"recovery preimage preparation interrupted\n")
         self.assertFalse((self.state / "ready.json").exists())
@@ -1556,7 +1556,7 @@ class RecoveryPreimageTests(unittest.TestCase):
 
         result = self._run_with_collector_fault("popen-signal")
 
-        self.assertEqual(result.returncode, 128 + signal.SIGTERM)
+        self.assertEqual(result.returncode, 128 + signal.SIGTERM, "stderr=" + repr(result.stderr) + "; statuses=" + repr([p.read_text() for p in sorted((self.state / "captures").glob("*.status.json"))]))
         self.assertEqual(result.stdout, b"")
         self.assertEqual(result.stderr, b"recovery preimage preparation interrupted\n")
         self.assertFalse((self.state / "ready.json").exists())
@@ -1666,7 +1666,7 @@ class RecoveryPreimageTests(unittest.TestCase):
         elapsed = time.monotonic() - started
 
         try:
-            self.assertEqual(process.returncode, 128 + signal.SIGTERM)
+            self.assertEqual(process.returncode, 128 + signal.SIGTERM, "stderr=" + repr(stderr) + "; statuses=" + repr([p.read_text() for p in sorted((self.state / "captures").glob("*.status.json"))]))
             self.assertEqual(stdout, b"")
             self.assertEqual(stderr, b"recovery preimage preparation interrupted\n")
             self.assertLess(elapsed, 6)
