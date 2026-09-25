@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Run one named group of the portability test battery from the repository root.
 #
-# The groups partition the commands that .github/workflows/platform-portability.yml
-# and zsh-deployment-portability.yml run serially, so CI can run them in parallel.
+# The groups split the portability test battery so CI can run it in parallel.
+# .github/workflows/platform-portability.yml runs every group but zsh-deployment
+# as a matrix, zsh-deployment-portability.yml runs zsh-deployment, and
+# .buildkite/pipeline.yml runs them all; tests/ci-test-group.zsh checks those lists.
 # Each group expects the workflow's dependencies on PATH: zsh, chezmoi, age tooling
 # (AGE_TOOLING_DIRECTORY), python3 with uv/uvx, jq, rg, bat, and flock on macOS.
 set -euo pipefail
@@ -13,7 +15,7 @@ Usage: ci-test-group GROUP
        ci-test-group --list
 
 Groups:
-  shell-bindings   group drift check, shell syntax, zsh binding tests, privacy scan,
+  shell-bindings   CI group check, shell syntax, zsh binding tests, privacy scan,
                    private-skill transaction
   proton-pass      Proton Pass startup and session behavior tests
   discover         agent-equipment unittest discovery suite
