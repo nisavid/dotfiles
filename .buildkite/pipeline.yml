@@ -9,6 +9,13 @@ steps:
         command: .buildkite/run-group.sh "{{matrix}}"
         agents:
           queue: linux-medium
+        # The hosted host image is older than GitHub's ubuntu-24.04 runner
+        # (for example, Python 3.10), so run each group in that release.
+        plugins:
+          - docker#v5.14.0:
+              image: "ubuntu:24.04"
+              workdir: /work/dotfiles
+              mount-buildkite-agent: true
         timeout_in_minutes: 25
         matrix:
           - shell-bindings

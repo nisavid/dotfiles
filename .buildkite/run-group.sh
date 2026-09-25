@@ -2,8 +2,8 @@
 # Provision a Buildkite hosted agent and run one scripts/ci-test-group group.
 #
 # Tool versions and digests match .github/workflows/platform-portability.yml.
-# Linux hosted jobs start as root, so the tests run as an unprivileged user,
-# as they do on GitHub-hosted runners.
+# Linux jobs start as root in an ubuntu:24.04 container, so the tests run as
+# an unprivileged user, as they do on GitHub-hosted runners.
 set -euo pipefail
 
 readonly CHEZMOI_VERSION=2.71.0
