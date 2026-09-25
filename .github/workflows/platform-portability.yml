@@ -184,6 +184,8 @@ jobs:
           AGE_TOOLING_DIRECTORY: ${{ runner.temp }}/chezmoi-bin
         run: |
           set -euo pipefail
+          # Deployment fixtures assert modes created with these public defaults.
+          umask 022
           zsh -f tests/claude-skill-sync.zsh
           zsh -f tests/platform-portability.zsh
           zsh -f tests/container-runtime-bindings.zsh
@@ -202,8 +204,7 @@ jobs:
           if [[ "$RUNNER_OS" == Linux ]]; then
             zsh -f tests/hindsight-agents-bindings.zsh
           fi
-          # Match the deployment modes asserted by the installation fixtures.
-          (umask 022; python3 -m unittest discover -s tests/agent_equipment -t . -p 'test_*.py')
+          python3 -m unittest discover -s tests/agent_equipment -t . -p 'test_*.py'
           uvx --from pyrefly==1.2.0 pyrefly check \
             --preset strict \
             --min-severity warn \
