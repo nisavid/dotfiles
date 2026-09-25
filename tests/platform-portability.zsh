@@ -5,6 +5,8 @@ setopt errexit nounset pipefail
 repo_root=${0:A:h:h}
 ignore_template=$repo_root/home/.chezmoiignore
 workflow=$repo_root/.github/workflows/platform-portability.yml
+# The workflow runs these test groups; they hold the test commands.
+test_groups=$repo_root/scripts/ci-test-group
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/platform-portability.XXXXXX")
 trap 'rm -rf -- "$test_root"' EXIT HUP INT TERM
 
@@ -57,34 +59,34 @@ grep -Fq 'python3 -m pip install uv==0.11.32' "$workflow" ||
   fail 'platform workflow does not install the pinned uv runtime'
 grep -Fq \
   "python3 -m unittest discover -s tests/agent_equipment -t . -p 'test_*.py'" \
-  "$workflow" ||
-  fail 'platform workflow does not discover production agent-equipment tests'
+  "$test_groups" ||
+  fail 'platform test groups do not discover production agent-equipment tests'
 expected_pyrefly_type_gate=$(
   print -rl -- \
-    '          uvx --from pyrefly==1.2.0 pyrefly check \' \
-    '            --preset strict \' \
-    '            --min-severity warn \' \
-    '            --search-path home/private_dot_local/lib/agent-equipment \' \
-    '            --progress-bar no \' \
-    '            --summary=full \' \
-    '            home/private_dot_local/lib/agent-equipment/agent_equipment \' \
-    '            home/private_dot_local/bin/executable_agent-equipment'
+    '  uvx --from pyrefly==1.2.0 pyrefly check \' \
+    '    --preset strict \' \
+    '    --min-severity warn \' \
+    '    --search-path home/private_dot_local/lib/agent-equipment \' \
+    '    --progress-bar no \' \
+    '    --summary=full \' \
+    '    home/private_dot_local/lib/agent-equipment/agent_equipment \' \
+    '    home/private_dot_local/bin/executable_agent-equipment'
 )
 workflow_type_gate=$(
   awk '
     /uvx --from (mypy|pyrefly)==/ { in_gate = 1 }
     in_gate { print }
     in_gate && /home\/private_dot_local\/bin\/executable_agent-equipment/ { exit }
-  ' "$workflow"
+  ' "$test_groups"
 )
 [[ $workflow_type_gate == "$expected_pyrefly_type_gate" ]] ||
-  fail 'platform workflow does not run the exact pinned Pyrefly gate'
-! grep -Fq 'mypy' "$workflow" ||
-  fail 'platform workflow still runs the superseded Mypy gate'
+  fail 'platform test groups do not run the exact pinned Pyrefly gate'
+! grep -Fq 'mypy' "$workflow" "$test_groups" ||
+  fail 'platform CI still runs the superseded Mypy gate'
 grep -Fq \
   'home/private_dot_local/bin/executable_agent-equipment' \
-  "$workflow" ||
-  fail 'platform workflow does not statically type-check the installed launcher'
+  "$test_groups" ||
+  fail 'platform test groups do not statically type-check the installed launcher'
 workflow_path_filter_pattern='^[[:space:]]+paths(-ignore)?:'
 ! grep -Eq "$workflow_path_filter_pattern" "$workflow" ||
   fail 'platform workflow does not run the privacy gate for every change'
@@ -94,24 +96,24 @@ for filtered_trigger in '    paths:' '    paths-ignore:'; do
 done
 grep -Fq \
   'python3 scripts/privacy-scan --root . --require-age-manifest' \
-  "$workflow" ||
-  fail 'platform workflow does not enforce the age-envelope manifest'
+  "$test_groups" ||
+  fail 'platform test groups do not enforce the age-envelope manifest'
 required_age_modules=$(
   awk '
     /REQUIRE_AGE_TOOLING=1/ { required = 1; next }
     required && /python3 -m unittest/ { print; required = 0 }
-  ' "$workflow"
+  ' "$test_groups"
 )
 [[ $required_age_modules == *'tests/test_agent_equipment_public_data.py'* ]] ||
-  fail 'platform workflow may skip public-data age-inspect coverage'
+  fail 'platform test groups may skip public-data age-inspect coverage'
 [[ $required_age_modules == *'tests/test_privacy_age_envelopes.py'* ]] ||
-  fail 'platform workflow may skip age-envelope tooling coverage'
+  fail 'platform test groups may skip age-envelope tooling coverage'
 grep -Fq 'AGE_TOOLING_DIRECTORY: ${{ runner.temp }}/chezmoi-bin' "$workflow" ||
   fail 'platform workflow does not anchor admission to the verified age install'
 grep -Fq -- \
   '--base-uri "file://$PWD/docs/agent-equipment/adapter-contract-v1.schema.json"' \
-  "$workflow" ||
-  fail 'platform workflow does not anchor adapter schema references to the local file'
+  "$test_groups" ||
+  fail 'platform test groups do not anchor adapter schema references to the local file'
 
 age_boundary_workflow=$repo_root/.github/workflows/privacy-age-integrity.yml
 admission_activation_marker=$(
