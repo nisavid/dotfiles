@@ -24,13 +24,47 @@ BASE_COMMIT = "a" * 40
 REVIEWED_SOURCE_COMMIT = "b" * 40
 HEAD_COMMIT = "c" * 40
 EXCEPTION_CONTEXT = "Verify trusted base against candidate data"
+CODERABBIT_CONTEXT = "CodeRabbit"
+CODERABBIT_APP_ID = 347564
+CODERABBIT_STATUS_CREATOR_ID = 136622811
+CODERABBIT_STATUS_CREATOR_LOGIN = "coderabbitai[bot]"
 REQUIRED_CHECKS = [
     {"context": "check conventional commit compliance", "app_id": 15368},
-    {"context": "CodeRabbit", "app_id": 347564},
+    {"context": CODERABBIT_CONTEXT, "app_id": CODERABBIT_APP_ID},
     {"context": "zsh deployment portability", "app_id": 15368},
     {"context": EXCEPTION_CONTEXT, "app_id": 15368},
 ]
+REQUIRED_CHECK_SOURCES = [
+    {
+        "context": "check conventional commit compliance",
+        "source": "check-run",
+        "app_id": 15368,
+    },
+    {
+        "context": CODERABBIT_CONTEXT,
+        "source": "commit-status",
+        "creator_id": CODERABBIT_STATUS_CREATOR_ID,
+        "creator_login": CODERABBIT_STATUS_CREATOR_LOGIN,
+    },
+    {"context": "zsh deployment portability", "source": "check-run", "app_id": 15368},
+    {"context": EXCEPTION_CONTEXT, "source": "check-run", "app_id": 15368},
+]
+# CodeRabbit's bot account also submits its reviews; the request pins that role
+# separately from the status creator.
+TRUSTED_REVIEWERS = [
+    {"id": CODERABBIT_STATUS_CREATOR_ID, "login": CODERABBIT_STATUS_CREATOR_LOGIN}
+]
 RETIRED_REQUIRED_CHECK = {"context": "Greptile Review", "app_id": 867647}
+REQUEST_SCHEMA = "issue286-recovery-preimage-request/v2"
+READY_SCHEMA = "issue286-recovery-preimage-ready/v2"
+INTERRUPTED_SCHEMA = "issue286-recovery-preimage-interrupted/v1"
+PULL_ENDPOINT = "repos/nisavid/dotfiles/pulls/286"
+RULESETS_FIRST_PAGE = (
+    "repos/nisavid/dotfiles/rulesets?includes_parents=true&per_page=100&page=1"
+)
+STATUSES_ENDPOINT = f"repos/nisavid/dotfiles/commits/{HEAD_COMMIT}/statuses"
+STATUSES_FIRST_PAGE = f"{STATUSES_ENDPOINT}?per_page=100&page=1"
+STATUS_URL = f"https://api.github.com/repos/nisavid/dotfiles/statuses/{HEAD_COMMIT}"
 GRAPHQL_QUERY = """query Issue286RecoveryReviewThreads(
   $owner: String!
   $name: String!
@@ -85,6 +119,219 @@ def _json_bytes(value: object) -> bytes:
 
 def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def _github_account(
+    login: str,
+    identifier: int,
+    node_id: str,
+    avatar_url: str,
+    html_url: str,
+    kind: str,
+) -> dict[str, object]:
+    api = "https://api.github.com/users/" + login.replace("[", "%5B").replace(
+        "]", "%5D"
+    )
+    return {
+        "login": login,
+        "id": identifier,
+        "node_id": node_id,
+        "avatar_url": avatar_url,
+        "gravatar_id": "",
+        "url": api,
+        "html_url": html_url,
+        "followers_url": f"{api}/followers",
+        "following_url": f"{api}/following{{/other_user}}",
+        "gists_url": f"{api}/gists{{/gist_id}}",
+        "starred_url": f"{api}/starred{{/owner}}{{/repo}}",
+        "subscriptions_url": f"{api}/subscriptions",
+        "organizations_url": f"{api}/orgs",
+        "repos_url": f"{api}/repos",
+        "events_url": f"{api}/events{{/privacy}}",
+        "received_events_url": f"{api}/received_events",
+        "type": kind,
+        "user_view_type": "public",
+        "site_admin": False,
+    }
+
+
+CODERABBIT_STATUS_CREATOR = _github_account(
+    CODERABBIT_STATUS_CREATOR_LOGIN,
+    CODERABBIT_STATUS_CREATOR_ID,
+    "BOT_kgDOCCSy2w",
+    f"https://avatars.githubusercontent.com/in/{CODERABBIT_APP_ID}?v=4",
+    "https://github.com/apps/coderabbitai",
+    "Bot",
+)
+FIXTURE_CI_CREATOR = _github_account(
+    "fixture-ci[bot]",
+    5_550_001,
+    "BOT_kgDOfixtureci",
+    "https://avatars.githubusercontent.com/in/555001?v=4",
+    "https://github.com/apps/fixture-ci",
+    "Bot",
+)
+IMPOSTOR_CREATOR = _github_account(
+    "fixture-impostor",
+    4_242_424,
+    "U_kgDOfixtureimpostor",
+    "https://avatars.githubusercontent.com/u/4242424?v=4",
+    "https://github.com/fixture-impostor",
+    "User",
+)
+COPILOT_REVIEWER = _github_account(
+    "copilot-pull-request-reviewer[bot]",
+    175_728_472,
+    "BOT_kgDOCnlnWA",
+    "https://avatars.githubusercontent.com/in/946600?v=4",
+    "https://github.com/apps/copilot-pull-request-reviewer",
+    "Bot",
+)
+GREPTILE_REVIEWER = _github_account(
+    "greptile-apps[bot]",
+    165_735_046,
+    "BOT_kgDOCeDqhg",
+    "https://avatars.githubusercontent.com/in/867647?v=4",
+    "https://github.com/apps/greptile-apps",
+    "Bot",
+)
+UNASSOCIATED_PERSON = _github_account(
+    "fixture-outsider",
+    4_343_434,
+    "U_kgDOfixtureoutsider",
+    "https://avatars.githubusercontent.com/u/4343434?v=4",
+    "https://github.com/fixture-outsider",
+    "User",
+)
+LATER_STATUS_ID = 54_265_861_234
+LATER_STATUS_TIME = "2026-09-16T08:02:11Z"
+
+
+def _commit_status(
+    identifier: int,
+    state: str,
+    created_at: str,
+    description: str | None,
+    *,
+    context: str = CODERABBIT_CONTEXT,
+    creator: dict[str, object] | None = None,
+    node_id: str | None = None,
+) -> dict[str, object]:
+    author = copy.deepcopy(CODERABBIT_STATUS_CREATOR if creator is None else creator)
+    return {
+        "url": STATUS_URL,
+        "avatar_url": author["avatar_url"],
+        "id": identifier,
+        "node_id": f"SC_fixture{identifier}" if node_id is None else node_id,
+        "state": state,
+        "description": description,
+        "target_url": None,
+        "context": context,
+        "created_at": created_at,
+        "updated_at": created_at,
+        "creator": author,
+    }
+
+
+def _coderabbit_status_history() -> list[dict[str, object]]:
+    # The live PR #287 head's CodeRabbit history, newest first as GitHub lists it.
+    return [
+        _commit_status(
+            54_265_797_954,
+            "success",
+            "2026-09-16T07:55:17Z",
+            "Review completed",
+            node_id="SC_kwDOLl3dHs8AAAAMon5dQg",
+        ),
+        _commit_status(
+            54_265_732_210,
+            "pending",
+            "2026-09-16T07:53:57Z",
+            "Review in progress",
+            node_id="SC_kwDOLl3dHs8AAAAMon1ccg",
+        ),
+    ]
+
+
+def _unrelated_status(
+    identifier: int, state: str, created_at: str
+) -> dict[str, object]:
+    return _commit_status(
+        identifier,
+        state,
+        created_at,
+        f"Fixture audit {state}",
+        context="fixture/external-audit",
+        creator=FIXTURE_CI_CREATOR,
+    )
+
+
+def _later_coderabbit_status(
+    state: str, description: str, *, creator: dict[str, object] | None = None
+) -> dict[str, object]:
+    return _commit_status(
+        LATER_STATUS_ID, state, LATER_STATUS_TIME, description, creator=creator
+    )
+
+
+def _review(
+    identifier: int,
+    user: dict[str, object],
+    state: str,
+    commit_id: str,
+    submitted_at: str,
+    *,
+    body: str = "",
+    association: str = "NONE",
+) -> dict[str, object]:
+    pull_html = "https://github.com/nisavid/dotfiles/pull/286"
+    html = f"{pull_html}#pullrequestreview-{identifier}"
+    pull = "https://api.github.com/repos/nisavid/dotfiles/pulls/286"
+    return {
+        "id": identifier,
+        "node_id": f"PRR_fixture{identifier}",
+        "user": copy.deepcopy(user),
+        "body": body,
+        "state": state,
+        "html_url": html,
+        "pull_request_url": pull,
+        "author_association": association,
+        "_links": {"html": {"href": html}, "pull_request": {"href": pull}},
+        "submitted_at": submitted_at,
+        "commit_id": commit_id,
+    }
+
+
+def _coderabbit_review_history() -> list[dict[str, object]]:
+    # The merged PR #322 review history, remapped onto the fixture commits: every
+    # review reports association NONE, and CodeRabbit alone approves the head.
+    return [
+        _review(
+            5_309_961_369,
+            COPILOT_REVIEWER,
+            "COMMENTED",
+            REVIEWED_SOURCE_COMMIT,
+            "2026-09-24T20:39:32Z",
+            body=(
+                "Copilot was unable to review this pull request because the user"
+                " who requested the review has reached their quota limit."
+            ),
+        ),
+        _review(
+            5_310_021_366,
+            CODERABBIT_STATUS_CREATOR,
+            "DISMISSED",
+            REVIEWED_SOURCE_COMMIT,
+            "2026-09-24T20:45:42Z",
+        ),
+        _review(
+            5_310_098_055,
+            CODERABBIT_STATUS_CREATOR,
+            "APPROVED",
+            HEAD_COMMIT,
+            "2026-09-24T20:53:03Z",
+        ),
+    ]
 
 
 class RecoveryPreimageTests(unittest.TestCase):
@@ -174,8 +421,15 @@ class RecoveryPreimageTests(unittest.TestCase):
         }
 
     def _fixture_value(self) -> dict[str, object]:
+        status_contexts = {
+            source["context"]
+            for source in REQUIRED_CHECK_SOURCES
+            if source["source"] == "commit-status"
+        }
         check_runs = []
         for index, check in enumerate(REQUIRED_CHECKS, start=1):
+            if check["context"] in status_contexts:
+                continue
             check_runs.append(
                 {
                     "id": index,
@@ -239,6 +493,7 @@ class RecoveryPreimageTests(unittest.TestCase):
             ],
             "requested_reviewers": {"users": [], "teams": []},
             "check_runs": {"total_count": len(check_runs), "check_runs": check_runs},
+            "statuses": _coderabbit_status_history(),
             "protection": self._protection(),
             "effective_rules": [],
             "rulesets": [],
@@ -472,6 +727,29 @@ class RecoveryPreimageTests(unittest.TestCase):
                         "total_count": fixture["check_runs"]["total_count"],
                         "check_runs": [],
                     }}
+                elif path == f"{{prefix}}/commits/{HEAD_COMMIT}/statuses":
+                    statuses = fixture["statuses"]
+                    if (
+                        scenario == "statuses-changed-between-observations"
+                        and counters[path] > 1
+                    ):
+                        rerun = json.loads(json.dumps(statuses[0]))
+                        rerun["id"] += 1_000
+                        rerun["node_id"] = "SC_fixture_rerun"
+                        rerun["created_at"] = "2026-09-16T08:10:00Z"
+                        rerun["updated_at"] = "2026-09-16T08:10:00Z"
+                        statuses = [rerun, *statuses]
+                    if scenario == "statuses-unbounded":
+                        value = []
+                        for index in range(100):
+                            record = json.loads(json.dumps(statuses[0]))
+                            record["id"] = 60_000_000_000 - page * 1_000 - index
+                            record["node_id"] = f"SC_fixture_unbounded_{{page}}_{{index}}"
+                            record["context"] = f"fixture/unbounded-{{page}}-{{index:02d}}"
+                            value.append(record)
+                    else:
+                        start = (page - 1) * 100
+                        value = statuses[start : start + 100]
                 elif path in paginated:
                     start = (page - 1) * 100
                     value = paginated[path][start : start + 100]
@@ -571,7 +849,7 @@ class RecoveryPreimageTests(unittest.TestCase):
 
     def _request_value(self) -> dict[str, object]:
         return {
-            "schema": "issue286-recovery-preimage-request/v1",
+            "schema": REQUEST_SCHEMA,
             "repository": "nisavid/dotfiles",
             "branch": "main",
             "pull_request_number": 286,
@@ -579,13 +857,16 @@ class RecoveryPreimageTests(unittest.TestCase):
             "head_commit": HEAD_COMMIT,
             "reviewed_source_commit": REVIEWED_SOURCE_COMMIT,
             "required_checks": REQUIRED_CHECKS,
+            "required_check_sources": REQUIRED_CHECK_SOURCES,
+            "trusted_reviewers": TRUSTED_REVIEWERS,
             "expected_protection": self._protection(),
             "expected_effective_rules": [],
             "expected_rulesets": [],
         }
 
-    def _write_request(self) -> None:
-        self.request.write_bytes(_json_bytes(self._request_value()))
+    def _write_request(self, value: dict[str, object] | None = None) -> None:
+        request = self._request_value() if value is None else value
+        self.request.write_bytes(_json_bytes(request))
         self.request.chmod(0o600)
 
     def _set_scenario(self, scenario: str) -> None:
@@ -627,9 +908,11 @@ class RecoveryPreimageTests(unittest.TestCase):
             os.umask(old_umask)
 
     def _run_with_collector_fault(
-        self, fault: str
+        self, *faults: str, state: Path | None = None
     ) -> subprocess.CompletedProcess[bytes]:
-        harness = self.private / f"collector-{fault}-fault.py"
+        target = self.state if state is None else state
+        fault_name = "-".join(faults)
+        harness = self.private / f"collector-{fault_name}-{target.name}-fault.py"
         harness.write_text(
             textwrap.dedent(f"""\
                 import errno
@@ -643,8 +926,36 @@ class RecoveryPreimageTests(unittest.TestCase):
                 real_mkdir = namespace["os"].mkdir
                 real_killpg = namespace["os"].killpg
                 real_rename = namespace["os"].rename
+                real_open = namespace["os"].open
+                real_fsync = namespace["os"].fsync
+                real_selector = namespace["selectors"].DefaultSelector
+                capture_runner = namespace["CaptureRunner"]
+                real_get = capture_runner.get
                 created = []
                 fired = False
+                record_descriptors = set()
+                record_synced = False
+                directory_fsync_failed = False
+                selector_signalled = False
+                group_signalled = False
+                probe_faulted = False
+                signal_faulted = False
+                faults = frozenset({faults!r})
+                known_faults = {{
+                    "between-capture-signal",
+                    "mkdir-signal",
+                    "popen-signal",
+                    "popen-signal-unverified",
+                    "record-directory-fsync-failure",
+                    "record-file-fsync-failure",
+                    "registered-signal",
+                    "rename-signal-failure",
+                    "rename-signal-success",
+                    "transient-probe-eperm",
+                    "transient-signal-eperm",
+                }}
+                if not faults or not faults <= known_faults:
+                    raise AssertionError(sorted(faults))
 
                 def faulting_popen(*args, **kwargs):
                     process = real_popen(*args, **kwargs)
@@ -655,7 +966,7 @@ class RecoveryPreimageTests(unittest.TestCase):
                 def faulting_mkdir(path, mode=0o777, *, dir_fd=None):
                     global fired
                     result = real_mkdir(path, mode, dir_fd=dir_fd)
-                    if not fired and dir_fd is not None and os.fspath(path) == {self.state.name!r}:
+                    if not fired and dir_fd is not None and os.fspath(path) == {target.name!r}:
                         fired = True
                         os.kill(os.getpid(), signal.SIGTERM)
                     return result
@@ -665,36 +976,105 @@ class RecoveryPreimageTests(unittest.TestCase):
                         raise PermissionError(errno.EPERM, "synthetic uncertain group probe")
                     return real_killpg(pgid, signum)
 
+                # Darwin answers EPERM while a group holds only exiting or unreaped
+                # members; each fault injects one such answer and then defers to the
+                # real group.
+                def transient_eperm_killpg(pgid, signum):
+                    global group_signalled, probe_faulted, signal_faulted
+                    if signum == 0:
+                        if (
+                            "transient-probe-eperm" in faults
+                            and group_signalled
+                            and not probe_faulted
+                        ):
+                            probe_faulted = True
+                            raise PermissionError(errno.EPERM, "synthetic transient group probe")
+                        return real_killpg(pgid, signum)
+                    if "transient-signal-eperm" in faults and not signal_faulted:
+                        signal_faulted = True
+                        raise PermissionError(errno.EPERM, "synthetic transient group signal")
+                    group_signalled = True
+                    return real_killpg(pgid, signum)
+
+                def signaling_selector(*args, **kwargs):
+                    global selector_signalled
+                    if not selector_signalled:
+                        selector_signalled = True
+                        os.kill(os.getpid(), signal.SIGTERM)
+                    return real_selector(*args, **kwargs)
+
+                def signaling_get(self, label, endpoint):
+                    value = real_get(self, label, endpoint)
+                    if label == "a-pull":
+                        os.kill(os.getpid(), signal.SIGTERM)
+                    return value
+
                 def signaling_rename(*args, **kwargs):
-                    if fault == "rename-signal-failure":
+                    if os.fspath(args[1]) != "ready.json":
+                        return real_rename(*args, **kwargs)
+                    if "rename-signal-failure" in faults:
                         os.kill(os.getpid(), signal.SIGTERM)
                         raise OSError(errno.EIO, "synthetic ready rename failure")
                     result = real_rename(*args, **kwargs)
                     os.kill(os.getpid(), signal.SIGTERM)
                     return result
 
-                fault = {fault!r}
-                if fault in {{"popen-signal", "popen-signal-unverified"}}:
+                def observing_open(path, flags, mode=0o777, *, dir_fd=None):
+                    descriptor = real_open(path, flags, mode, dir_fd=dir_fd)
+                    name = os.path.basename(os.fspath(path)).lstrip(".")
+                    if name.startswith("interrupted.json"):
+                        record_descriptors.add(descriptor)
+                    return descriptor
+
+                def faulting_fsync(descriptor):
+                    global directory_fsync_failed, record_synced
+                    if descriptor in record_descriptors:
+                        if "record-file-fsync-failure" in faults:
+                            raise OSError(errno.EIO, "synthetic record fsync failure")
+                        result = real_fsync(descriptor)
+                        record_synced = True
+                        return result
+                    if (
+                        "record-directory-fsync-failure" in faults
+                        and record_synced
+                        and not directory_fsync_failed
+                    ):
+                        directory_fsync_failed = True
+                        raise OSError(errno.EIO, "synthetic record directory fsync failure")
+                    return real_fsync(descriptor)
+
+                if faults & {{"popen-signal", "popen-signal-unverified"}}:
                     namespace["subprocess"].Popen = faulting_popen
-                elif fault == "mkdir-signal":
-                    namespace["os"].mkdir = faulting_mkdir
-                elif fault in {{"rename-signal-success", "rename-signal-failure"}}:
-                    namespace["os"].rename = signaling_rename
-                else:
-                    raise AssertionError(fault)
-                if fault == "popen-signal-unverified":
+                if "popen-signal-unverified" in faults:
                     namespace["os"].killpg = uncertain_killpg
+                if faults & {{"transient-probe-eperm", "transient-signal-eperm"}}:
+                    namespace["os"].killpg = transient_eperm_killpg
+                if "registered-signal" in faults:
+                    namespace["selectors"].DefaultSelector = signaling_selector
+                if "mkdir-signal" in faults:
+                    namespace["os"].mkdir = faulting_mkdir
+                if "between-capture-signal" in faults:
+                    capture_runner.get = signaling_get
+                if faults & {{"rename-signal-success", "rename-signal-failure"}}:
+                    namespace["os"].rename = signaling_rename
+                if faults & {{"record-directory-fsync-failure", "record-file-fsync-failure"}}:
+                    namespace["os"].open = observing_open
+                    namespace["os"].fsync = faulting_fsync
 
                 try:
                     status = namespace["main"]([
                         "--request", {os.fspath(self.request)!r},
-                        "--state-directory", {os.fspath(self.state)!r},
+                        "--state-directory", {os.fspath(target)!r},
                     ])
                 finally:
                     namespace["subprocess"].Popen = real_popen
                     namespace["os"].mkdir = real_mkdir
                     namespace["os"].killpg = real_killpg
                     namespace["os"].rename = real_rename
+                    namespace["os"].open = real_open
+                    namespace["os"].fsync = real_fsync
+                    namespace["selectors"].DefaultSelector = real_selector
+                    capture_runner.get = real_get
                     for process in created:
                         if process.poll() is None:
                             try:
@@ -702,6 +1082,10 @@ class RecoveryPreimageTests(unittest.TestCase):
                             except ProcessLookupError:
                                 pass
                             process.wait(timeout=2)
+                if ("transient-probe-eperm" in faults and not probe_faulted) or (
+                    "transient-signal-eperm" in faults and not signal_faulted
+                ):
+                    raise SystemExit(86)
                 raise SystemExit(status)
                 """),
             encoding="utf-8",
@@ -807,6 +1191,104 @@ class RecoveryPreimageTests(unittest.TestCase):
         self.assertEqual(result.stdout, b"")
         self.assertEqual(result.stderr, b"recovery preimage preparation failed\n")
         self.assertFalse((self.state / "ready.json").exists())
+        self._assert_read_only_calls()
+
+    def _call_count(self) -> int:
+        return len(self._calls()) if self.calls.exists() else 0
+
+    def _endpoints_since(self, offset: int) -> list[str]:
+        if not self.calls.exists():
+            return []
+        return [arguments[-1] for arguments in self._calls()[offset:]]
+
+    def _assert_interruption_recorded(self, state: Path, signum: int) -> None:
+        record = state / "interrupted.json"
+        self.assertEqual(
+            record.read_bytes(),
+            _json_bytes(
+                {
+                    "caught_signal": int(signum),
+                    "outcome": "interrupted",
+                    "schema": INTERRUPTED_SCHEMA,
+                }
+            ),
+        )
+        info = record.lstat()
+        self.assertTrue(stat.S_ISREG(info.st_mode))
+        self.assertEqual(stat.S_IMODE(info.st_mode), 0o600)
+        self.assertEqual(info.st_uid, os.getuid())
+        self.assertEqual(info.st_nlink, 1)
+        self.assertFalse((state / "ready.json").exists())
+        self.assertEqual([name for name in os.listdir(state) if name[0] == "."], [])
+
+    def _assert_no_interruption_record(self, state: Path) -> None:
+        self.assertFalse((state / "interrupted.json").exists())
+        self.assertEqual([name for name in os.listdir(state) if name[0] == "."], [])
+
+    def _write_status_fixture(
+        self,
+        statuses: list[dict[str, object]],
+        extra_check_runs: tuple[dict[str, object], ...] = (),
+    ) -> None:
+        fixture = self._fixture_value()
+        fixture["statuses"] = statuses
+        runs = fixture["check_runs"]["check_runs"]
+        runs.extend(copy.deepcopy(list(extra_check_runs)))
+        fixture["check_runs"]["total_count"] = len(runs)
+        self.fixture.write_bytes(_json_bytes(fixture))
+
+    def _observe_statuses(
+        self, statuses: list[dict[str, object]], state: Path
+    ) -> dict[str, object]:
+        self._write_status_fixture(statuses)
+
+        result = self._run(state)
+
+        self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", "replace"))
+        self.assertEqual(result.stdout, b"recovery preimage ready\n")
+        self._assert_read_only_calls()
+        return json.loads(self._observations_path(state).read_bytes())
+
+    def _assert_status_evidence_rejected(
+        self,
+        statuses: list[dict[str, object]],
+        state: Path,
+        *,
+        extra_check_runs: tuple[dict[str, object], ...] = (),
+    ) -> None:
+        self._write_status_fixture(statuses, extra_check_runs)
+        self._assert_first_observation_rejected(state)
+
+    def _write_review_fixture(
+        self, reviews: list[dict[str, object]], *, author_id: int | None = None
+    ) -> None:
+        fixture = self._fixture_value()
+        fixture["reviews"] = reviews
+        if author_id is not None:
+            fixture["pull"]["user"]["id"] = author_id
+        self.fixture.write_bytes(_json_bytes(fixture))
+
+    def _write_trusted_reviewers(self, reviewers: object) -> None:
+        request = self._request_value()
+        request["trusted_reviewers"] = reviewers
+        self._write_request(request)
+
+    def _assert_first_observation_rejected(self, state: Path) -> None:
+        offset = self._call_count()
+
+        result = self._run(state)
+
+        self.assertEqual(result.returncode, 1, result.stderr.decode("utf-8", "replace"))
+        self.assertEqual(result.stdout, b"")
+        self.assertEqual(result.stderr, b"recovery preimage preparation failed\n")
+        self.assertFalse((state / "ready.json").exists())
+        self.assertFalse((state / "interrupted.json").exists())
+        # The first observation read every endpoint, statuses included, and was
+        # rejected before a second observation began.
+        endpoints = self._endpoints_since(offset)
+        self.assertEqual(endpoints.count(PULL_ENDPOINT), 1)
+        self.assertEqual(endpoints.count(STATUSES_FIRST_PAGE), 1)
+        self.assertEqual(endpoints.count(RULESETS_FIRST_PAGE), 1)
         self._assert_read_only_calls()
 
     def test_harness_uses_a_physical_root_and_closed_support_path(self) -> None:
@@ -1412,6 +1894,544 @@ class RecoveryPreimageTests(unittest.TestCase):
     def test_successful_old_key_check_is_not_a_prepared_exception(self) -> None:
         self._assert_failed_without_ready("trusted-check-success")
 
+    def test_coderabbit_status_history_satisfies_its_required_context(self) -> None:
+        result = self._run()
+
+        self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", "replace"))
+        ready = json.loads((self.state / "ready.json").read_bytes())
+        self.assertEqual(
+            ready["binding"]["required_check_sources"],
+            sorted(REQUIRED_CHECK_SOURCES, key=lambda source: str(source["context"])),
+        )
+        observations = json.loads(self._observations_path(self.state).read_bytes())
+        self.assertEqual(observations["statuses"], _coderabbit_status_history())
+        self.assertEqual(
+            [status["state"] for status in observations["statuses"]],
+            ["success", "pending"],
+        )
+        self.assertNotIn(
+            CODERABBIT_CONTEXT,
+            {run["name"] for run in observations["check_runs"]["check_runs"]},
+        )
+        restore = json.loads(
+            (self.state / ready["payloads"]["restore_checks"]["path"]).read_bytes()
+        )
+        self.assertEqual(
+            restore,
+            {
+                "strict": True,
+                "checks": sorted(
+                    REQUIRED_CHECKS,
+                    key=lambda check: (str(check["context"]), int(check["app_id"])),
+                ),
+            },
+        )
+        self.assertIn(
+            {"context": CODERABBIT_CONTEXT, "app_id": CODERABBIT_APP_ID},
+            restore["checks"],
+        )
+        self._assert_read_only_calls()
+
+    def test_superseded_unrelated_status_failure_is_accepted_when_latest_succeeds(
+        self,
+    ) -> None:
+        statuses = [
+            _unrelated_status(54_265_830_000, "success", "2026-09-16T07:58:00Z"),
+            *_coderabbit_status_history(),
+            _unrelated_status(54_265_500_000, "failure", "2026-09-16T07:40:00Z"),
+        ]
+
+        observations = self._observe_statuses(statuses, self.state)
+
+        self.assertEqual(observations["statuses"], statuses)
+
+    def test_commit_statuses_are_fully_paginated_across_pages(self) -> None:
+        newer = [
+            _commit_status(
+                54_266_000_000 - index,
+                "success",
+                f"2026-09-16T08:{59 - index // 60:02d}:{59 - index % 60:02d}Z",
+                "Fixture audit success",
+                context=f"fixture/newer-{index:02d}",
+                creator=FIXTURE_CI_CREATOR,
+            )
+            for index in range(99)
+        ]
+        older = [
+            _commit_status(
+                54_265_000_000 - index,
+                "success",
+                f"2026-09-16T06:{59 - index // 60:02d}:{59 - index % 60:02d}Z",
+                "Fixture audit success",
+                context=f"fixture/older-{index:02d}",
+                creator=FIXTURE_CI_CREATOR,
+            )
+            for index in range(49)
+        ]
+        # CodeRabbit's success ends page one; its superseded pending starts page two.
+        statuses = [*newer, *_coderabbit_status_history(), *older]
+
+        observations = self._observe_statuses(statuses, self.state)
+
+        self.assertEqual(observations["statuses"], statuses)
+        endpoints = self._endpoints_since(0)
+        for page, expected in ((1, 2), (2, 2), (3, 0)):
+            self.assertEqual(
+                endpoints.count(f"{STATUSES_ENDPOINT}?per_page=100&page={page}"),
+                expected,
+            )
+
+    def test_latest_pending_required_status_leaves_no_ready_file(self) -> None:
+        self._assert_status_evidence_rejected(
+            [
+                _later_coderabbit_status("pending", "Review in progress"),
+                *_coderabbit_status_history(),
+            ],
+            self.state,
+        )
+
+    def test_latest_failed_required_status_leaves_no_ready_file(self) -> None:
+        self._assert_status_evidence_rejected(
+            [
+                _later_coderabbit_status("failure", "Review failed"),
+                *_coderabbit_status_history(),
+            ],
+            self.state,
+        )
+
+    def test_latest_errored_required_status_leaves_no_ready_file(self) -> None:
+        self._assert_status_evidence_rejected(
+            [
+                _later_coderabbit_status("error", "Review errored"),
+                *_coderabbit_status_history(),
+            ],
+            self.state,
+        )
+
+    def test_missing_required_status_leaves_no_ready_file(self) -> None:
+        cases = {
+            "no-statuses": [],
+            "unrelated-only": [
+                _unrelated_status(54_265_830_000, "success", "2026-09-16T07:58:00Z")
+            ],
+        }
+        for name, statuses in cases.items():
+            with self.subTest(name):
+                self._assert_status_evidence_rejected(statuses, self.private / name)
+
+    def test_foreign_creator_required_status_leaves_no_ready_file(self) -> None:
+        history = _coderabbit_status_history()
+        other_id = copy.deepcopy(CODERABBIT_STATUS_CREATOR)
+        other_id["id"] = CODERABBIT_STATUS_CREATOR_ID + 1
+        other_login = copy.deepcopy(CODERABBIT_STATUS_CREATOR)
+        other_login["login"] = "coderabbit[bot]"
+        anonymous = copy.deepcopy(history)
+        anonymous[0]["creator"] = None
+        cases = {
+            "foreign-latest": [
+                _later_coderabbit_status(
+                    "success", "Review completed", creator=IMPOSTOR_CREATOR
+                ),
+                *history,
+            ],
+            "pinned-login-other-id": [
+                _later_coderabbit_status(
+                    "success", "Review completed", creator=other_id
+                ),
+                *history,
+            ],
+            "pinned-id-other-login": [
+                _later_coderabbit_status(
+                    "success", "Review completed", creator=other_login
+                ),
+                *history,
+            ],
+            "foreign-superseded": [
+                *history,
+                _commit_status(
+                    54_265_700_001,
+                    "pending",
+                    "2026-09-16T07:50:00Z",
+                    "Review in progress",
+                    creator=IMPOSTOR_CREATOR,
+                ),
+            ],
+            "creator-absent": anonymous,
+        }
+        for name, statuses in cases.items():
+            with self.subTest(name):
+                self._assert_status_evidence_rejected(statuses, self.private / name)
+
+    def test_protection_app_id_is_not_accepted_as_the_status_creator(self) -> None:
+        request = self._request_value()
+        sources = copy.deepcopy(REQUIRED_CHECK_SOURCES)
+        for source in sources:
+            if source["context"] == CODERABBIT_CONTEXT:
+                source["creator_id"] = CODERABBIT_APP_ID
+        request["required_check_sources"] = sources
+        self._write_request(request)
+
+        self._assert_status_evidence_rejected(_coderabbit_status_history(), self.state)
+
+    def test_status_change_between_observations_leaves_no_ready_file(self) -> None:
+        self._set_scenario("statuses-changed-between-observations")
+
+        result = self._run()
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, b"")
+        self.assertEqual(result.stderr, b"recovery preimage preparation failed\n")
+        self.assertFalse((self.state / "ready.json").exists())
+        endpoints = self._endpoints_since(0)
+        self.assertEqual(endpoints.count(PULL_ENDPOINT), 2)
+        self.assertEqual(endpoints.count(STATUSES_FIRST_PAGE), 2)
+        captures = self.state / "captures"
+        first = json.loads(
+            next(captures.glob("*-a-statuses-p1.stdout.json")).read_bytes()
+        )
+        second = json.loads(
+            next(captures.glob("*-b-statuses-p1.stdout.json")).read_bytes()
+        )
+        self.assertEqual(first, _coderabbit_status_history())
+        self.assertEqual(second[1:], first)
+        self.assertEqual(second[0]["state"], "success")
+        self._assert_read_only_calls()
+
+    def test_duplicate_status_ids_leave_no_ready_file(self) -> None:
+        history = _coderabbit_status_history()
+        reused = copy.deepcopy(history[1])
+        reused["id"] = history[0]["id"]
+        cases = {
+            "repeated-record": [history[0], copy.deepcopy(history[0]), history[1]],
+            "reused-id": [history[0], reused],
+        }
+        for name, statuses in cases.items():
+            with self.subTest(name):
+                self._assert_status_evidence_rejected(statuses, self.private / name)
+
+    def test_incomplete_status_pagination_leaves_no_ready_file(self) -> None:
+        self._set_scenario("statuses-unbounded")
+
+        result = self._run()
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, b"")
+        self.assertEqual(result.stderr, b"recovery preimage preparation failed\n")
+        self.assertFalse((self.state / "ready.json").exists())
+        endpoints = self._endpoints_since(0)
+        self.assertEqual(
+            [
+                endpoint
+                for endpoint in endpoints
+                if endpoint.startswith(STATUSES_ENDPOINT)
+            ],
+            [f"{STATUSES_ENDPOINT}?per_page=100&page={page}" for page in range(1, 6)],
+        )
+        self.assertEqual(endpoints.count(PULL_ENDPOINT), 1)
+        self._assert_read_only_calls()
+
+    def test_unrelated_latest_non_success_status_leaves_no_ready_file(self) -> None:
+        superseded = _unrelated_status(
+            54_265_500_000, "success", "2026-09-16T07:40:00Z"
+        )
+        for state in ("pending", "failure", "error"):
+            with self.subTest(state):
+                latest = _unrelated_status(
+                    54_265_830_000, state, "2026-09-16T07:58:00Z"
+                )
+                self._assert_status_evidence_rejected(
+                    [latest, *_coderabbit_status_history(), superseded],
+                    self.private / f"unrelated-{state}",
+                )
+
+    def test_ambiguous_latest_status_leaves_no_ready_file(self) -> None:
+        history = _coderabbit_status_history()
+        tied = copy.deepcopy(history)
+        tied[0]["created_at"] = tied[0]["updated_at"] = history[1]["created_at"]
+        newer_listed_second = copy.deepcopy(history)
+        newer_listed_second[1]["created_at"] = "2026-09-16T07:56:30Z"
+        newer_listed_second[1]["updated_at"] = "2026-09-16T07:56:30Z"
+        id_inverted = copy.deepcopy(history)
+        id_inverted[0]["id"] = int(history[1]["id"]) - 1
+        updated = copy.deepcopy(history)
+        updated[0]["updated_at"] = "2026-09-16T07:56:00Z"
+        cases = {
+            "tied-creation-times": tied,
+            "oldest-listed-first": [history[1], history[0]],
+            "newer-pending-listed-second": newer_listed_second,
+            "id-order-contradicts-time": id_inverted,
+            "updated-after-creation": updated,
+        }
+        for name, statuses in cases.items():
+            with self.subTest(name):
+                self._assert_status_evidence_rejected(statuses, self.private / name)
+
+    def test_status_for_another_commit_leaves_no_ready_file(self) -> None:
+        statuses = _coderabbit_status_history()
+        statuses[0]["url"] = STATUS_URL.replace(HEAD_COMMIT, "d" * 40)
+
+        self._assert_status_evidence_rejected(statuses, self.state)
+
+    def test_required_context_from_the_other_source_leaves_no_ready_file(
+        self,
+    ) -> None:
+        coderabbit_run = {
+            "id": 5,
+            "name": CODERABBIT_CONTEXT,
+            "head_sha": HEAD_COMMIT,
+            "status": "completed",
+            "conclusion": "success",
+            "app": {"id": CODERABBIT_APP_ID},
+        }
+        with self.subTest("check-run-for-status-context"):
+            self._assert_status_evidence_rejected(
+                _coderabbit_status_history(),
+                self.private / "check-run-for-status-context",
+                extra_check_runs=(coderabbit_run,),
+            )
+        with self.subTest("status-for-check-run-context"):
+            self._assert_status_evidence_rejected(
+                [
+                    _commit_status(
+                        LATER_STATUS_ID,
+                        "success",
+                        LATER_STATUS_TIME,
+                        "Fixture audit success",
+                        context="zsh deployment portability",
+                        creator=FIXTURE_CI_CREATOR,
+                    ),
+                    *_coderabbit_status_history(),
+                ],
+                self.private / "status-for-check-run-context",
+            )
+
+    def test_malformed_status_leaves_no_ready_file(self) -> None:
+        mutations: dict[str, tuple[str, object]] = {
+            "unknown-state": ("state", "neutral"),
+            "structured-state": ("state", ["success"]),
+            "fractional-timestamp": ("created_at", "2026-09-16T07:55:17.000Z"),
+            "empty-context": ("context", ""),
+            "nonpositive-id": ("id", 0),
+            "boolean-id": ("id", True),
+        }
+        for name, (field, replacement) in mutations.items():
+            with self.subTest(name):
+                statuses = _coderabbit_status_history()
+                statuses[0][field] = replacement
+                if field == "created_at":
+                    statuses[0]["updated_at"] = replacement
+                self._assert_status_evidence_rejected(statuses, self.private / name)
+
+    def test_request_without_status_sources_fails_before_state_creation(self) -> None:
+        request = self._request_value()
+        request["schema"] = "issue286-recovery-preimage-request/v1"
+        del request["required_check_sources"]
+        self._write_request(request)
+
+        result = self._run()
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, b"")
+        self.assertEqual(result.stderr, b"recovery preimage preparation failed\n")
+        self.assertFalse(self.state.exists())
+        self.assertFalse(self.calls.exists())
+
+    def test_required_check_source_violations_fail_before_state_creation(
+        self,
+    ) -> None:
+        def sources_with(
+            context: str, *records: dict[str, object]
+        ) -> list[dict[str, object]]:
+            kept = [
+                copy.deepcopy(source)
+                for source in REQUIRED_CHECK_SOURCES
+                if source["context"] != context
+            ]
+            return [*kept, *records]
+
+        def status_source(**changes: object) -> dict[str, object]:
+            record: dict[str, object] = {
+                "context": CODERABBIT_CONTEXT,
+                "source": "commit-status",
+                "creator_id": CODERABBIT_STATUS_CREATOR_ID,
+                "creator_login": CODERABBIT_STATUS_CREATOR_LOGIN,
+            }
+            record.update(changes)
+            return record
+
+        without_login = status_source()
+        del without_login["creator_login"]
+        cases: dict[str, object] = {
+            "exception-as-commit-status": sources_with(
+                EXCEPTION_CONTEXT, status_source(context=EXCEPTION_CONTEXT)
+            ),
+            "check-run-app-differs-from-protection": sources_with(
+                "zsh deployment portability",
+                {
+                    "context": "zsh deployment portability",
+                    "source": "check-run",
+                    "app_id": 15369,
+                },
+            ),
+            "creator-id-as-check-run-app": sources_with(
+                CODERABBIT_CONTEXT,
+                {
+                    "context": CODERABBIT_CONTEXT,
+                    "source": "check-run",
+                    "app_id": CODERABBIT_STATUS_CREATOR_ID,
+                },
+            ),
+            "creator-login-missing": sources_with(CODERABBIT_CONTEXT, without_login),
+            "creator-login-invalid": sources_with(
+                CODERABBIT_CONTEXT, status_source(creator_login="coderabbitai/bot")
+            ),
+            "creator-id-nonpositive": sources_with(
+                CODERABBIT_CONTEXT, status_source(creator_id=0)
+            ),
+            "creator-id-boolean": sources_with(
+                CODERABBIT_CONTEXT, status_source(creator_id=True)
+            ),
+            "status-source-with-app-id": sources_with(
+                CODERABBIT_CONTEXT, status_source(app_id=CODERABBIT_APP_ID)
+            ),
+            "unknown-source-kind": sources_with(
+                CODERABBIT_CONTEXT, status_source(source="combined-status")
+            ),
+            "unprotected-context": sources_with(
+                CODERABBIT_CONTEXT, status_source(context="Greptile Review")
+            ),
+            "duplicate-context": sources_with(
+                "zsh deployment portability", status_source()
+            ),
+            "missing-source": sources_with("zsh deployment portability"),
+            "extra-source": [*REQUIRED_CHECK_SOURCES, status_source()],
+            "not-a-list": {CODERABBIT_CONTEXT: status_source()},
+        }
+        for name, sources in cases.items():
+            with self.subTest(name):
+                request = self._request_value()
+                request["required_check_sources"] = sources
+                self._write_request(request)
+
+                result = self._run()
+
+                self.assertEqual(result.returncode, 1)
+                self.assertEqual(result.stdout, b"")
+                self.assertEqual(
+                    result.stderr, b"recovery preimage preparation failed\n"
+                )
+                self.assertFalse(self.state.exists())
+                self.assertFalse(self.calls.exists())
+
+    def test_pinned_reviewer_approval_without_association_satisfies_review(
+        self,
+    ) -> None:
+        reviews = _coderabbit_review_history()
+        self._write_review_fixture(reviews)
+
+        result = self._run()
+
+        self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", "replace"))
+        self.assertEqual(result.stdout, b"recovery preimage ready\n")
+        ready = json.loads((self.state / "ready.json").read_bytes())
+        self.assertEqual(ready["binding"]["trusted_reviewers"], TRUSTED_REVIEWERS)
+        observations = json.loads(self._observations_path(self.state).read_bytes())
+        self.assertEqual(observations["reviews"], reviews)
+        self.assertEqual(
+            {review["author_association"] for review in observations["reviews"]},
+            {"NONE"},
+        )
+        self._assert_read_only_calls()
+
+    def test_unpinned_exact_head_approval_leaves_no_ready_file(self) -> None:
+        def with_head_approval(
+            user: dict[str, object], **changes: object
+        ) -> list[dict[str, object]]:
+            account = copy.deepcopy(user)
+            account.update(changes)
+            approval = _review(
+                5_310_200_000, account, "APPROVED", HEAD_COMMIT, "2026-09-24T21:00:00Z"
+            )
+            return [*_coderabbit_review_history(), approval]
+
+        cases = {
+            # Merged PR #304 also carried an association-NONE Greptile approval.
+            "unpinned-bot": with_head_approval(GREPTILE_REVIEWER),
+            "pinned-login-other-id": with_head_approval(
+                CODERABBIT_STATUS_CREATOR, id=CODERABBIT_STATUS_CREATOR_ID + 1
+            ),
+            "pinned-id-other-login": with_head_approval(
+                CODERABBIT_STATUS_CREATOR, login="coderabbit[bot]"
+            ),
+            "unassociated-person": with_head_approval(UNASSOCIATED_PERSON),
+        }
+        for name, reviews in cases.items():
+            with self.subTest(name):
+                self._write_review_fixture(reviews)
+                self._assert_first_observation_rejected(self.private / name)
+        with self.subTest("no-reviewer-pinned"):
+            state = self.private / "no-reviewer-pinned"
+            self._write_trusted_reviewers([])
+            self._write_review_fixture(_coderabbit_review_history())
+            self._assert_first_observation_rejected(state)
+
+    def test_pinned_reviewer_keeps_final_commit_and_change_request_rules(
+        self,
+    ) -> None:
+        history = _coderabbit_review_history()
+        earlier = copy.deepcopy(history)
+        earlier[-1]["commit_id"] = REVIEWED_SOURCE_COMMIT
+        changes = _review(
+            5_310_200_000,
+            CODERABBIT_STATUS_CREATOR,
+            "CHANGES_REQUESTED",
+            HEAD_COMMIT,
+            "2026-09-24T21:00:00Z",
+        )
+        cases = {
+            "approval-of-an-earlier-commit": (earlier, None),
+            "changes-requested-after-approval": ([*history, changes], None),
+            "pinned-reviewer-is-the-author": (history, CODERABBIT_STATUS_CREATOR_ID),
+        }
+        for name, (reviews, author_id) in cases.items():
+            with self.subTest(name):
+                self._write_review_fixture(reviews, author_id=author_id)
+                self._assert_first_observation_rejected(self.private / name)
+
+    def test_trusted_reviewer_violations_fail_before_state_creation(self) -> None:
+        coderabbit = TRUSTED_REVIEWERS[0]
+        other_id = CODERABBIT_STATUS_CREATOR_ID + 1
+        requests: dict[str, dict[str, object]] = {}
+        for name, reviewers in {
+            "not-a-list": coderabbit,
+            "extra-field": [{**coderabbit, "type": "Bot"}],
+            "missing-login": [{"id": coderabbit["id"]}],
+            "nonpositive-id": [{**coderabbit, "id": 0}],
+            "boolean-id": [{**coderabbit, "id": True}],
+            "person-login": [{**coderabbit, "login": "coderabbitai"}],
+            "invalid-login": [{**coderabbit, "login": "coderabbitai/bot[bot]"}],
+            "duplicate-id": [coderabbit, {**coderabbit, "login": "coderabbit[bot]"}],
+            "duplicate-login": [coderabbit, {**coderabbit, "id": other_id}],
+        }.items():
+            request = self._request_value()
+            request["trusted_reviewers"] = reviewers
+            requests[name] = request
+        requests["missing"] = self._request_value()
+        del requests["missing"]["trusted_reviewers"]
+        for name, request in requests.items():
+            with self.subTest(name):
+                self._write_request(request)
+
+                result = self._run()
+
+                self.assertEqual(result.returncode, 1)
+                self.assertEqual(result.stdout, b"")
+                self.assertEqual(
+                    result.stderr, b"recovery preimage preparation failed\n"
+                )
+                self.assertFalse(self.state.exists())
+                self.assertFalse(self.calls.exists())
+
     def test_unrelated_protection_drift_leaves_no_ready_file(self) -> None:
         self._assert_failed_without_ready("protection-drift")
 
@@ -1534,7 +2554,7 @@ class RecoveryPreimageTests(unittest.TestCase):
             time.sleep(0.01)
         else:
             self.fail("fake GitHub child survived collector retirement")
-        self.assertEqual(process.returncode, 128 + signal.SIGTERM, "stderr=" + repr(stderr) + "; statuses=" + repr([p.read_text() for p in sorted((self.state / "captures").glob("*.status.json"))]))
+        self.assertEqual(process.returncode, 128 + signal.SIGTERM)
         self.assertEqual(stdout, b"")
         self.assertEqual(stderr, b"recovery preimage preparation interrupted\n")
         self.assertFalse((self.state / "ready.json").exists())
@@ -1549,6 +2569,7 @@ class RecoveryPreimageTests(unittest.TestCase):
                 "outcome": "interrupted",
             },
         )
+        self._assert_interruption_recorded(self.state, signal.SIGTERM)
         self._assert_read_only_calls()
 
     def test_signal_during_process_spawn_is_honored_after_registration(self) -> None:
@@ -1556,7 +2577,7 @@ class RecoveryPreimageTests(unittest.TestCase):
 
         result = self._run_with_collector_fault("popen-signal")
 
-        self.assertEqual(result.returncode, 128 + signal.SIGTERM, "stderr=" + repr(result.stderr) + "; statuses=" + repr([p.read_text() for p in sorted((self.state / "captures").glob("*.status.json"))]))
+        self.assertEqual(result.returncode, 128 + signal.SIGTERM)
         self.assertEqual(result.stdout, b"")
         self.assertEqual(result.stderr, b"recovery preimage preparation interrupted\n")
         self.assertFalse((self.state / "ready.json").exists())
@@ -1569,6 +2590,7 @@ class RecoveryPreimageTests(unittest.TestCase):
                 "outcome": "interrupted",
             },
         )
+        self._assert_interruption_recorded(self.state, signal.SIGTERM)
 
     def test_signal_during_state_mkdir_retains_state_without_publishing(self) -> None:
         result = self._run_with_collector_fault("mkdir-signal")
@@ -1579,6 +2601,30 @@ class RecoveryPreimageTests(unittest.TestCase):
         self.assertTrue(self.state.is_dir())
         self.assertFalse((self.state / "ready.json").exists())
         self.assertFalse(self.calls.exists())
+        # The signal preceded every capture, so the state-level record is the only
+        # evidence of the interruption.
+        self.assertEqual(os.listdir(self.state), ["interrupted.json"])
+        self._assert_interruption_recorded(self.state, signal.SIGTERM)
+
+    def test_signal_between_captures_is_durably_recorded(self) -> None:
+        result = self._run_with_collector_fault("between-capture-signal")
+
+        self.assertEqual(result.returncode, 128 + signal.SIGTERM)
+        self.assertEqual(result.stdout, b"")
+        self.assertEqual(result.stderr, b"recovery preimage preparation interrupted\n")
+        self.assertEqual(
+            sorted(os.listdir(self.state)),
+            ["captures", "interrupted.json", "payloads"],
+        )
+        self._assert_interruption_recorded(self.state, signal.SIGTERM)
+        statuses = sorted((self.state / "captures").glob("*.status.json"))
+        self.assertEqual([path.name for path in statuses], ["001-a-pull.status.json"])
+        self.assertEqual(
+            json.loads(statuses[0].read_bytes()),
+            {"exit_status": 0, "method": "GET", "outcome": "exited"},
+        )
+        self.assertEqual(os.listdir(self.state / "payloads"), [])
+        self.assertEqual(self._endpoints_since(0), [PULL_ENDPOINT])
 
     def test_signal_after_ready_rename_defers_to_the_successful_commit(self) -> None:
         result = self._run_with_collector_fault("rename-signal-success")
@@ -1587,6 +2633,7 @@ class RecoveryPreimageTests(unittest.TestCase):
         self.assertEqual(result.stdout, b"recovery preimage ready\n")
         self.assertEqual(result.stderr, b"")
         self.assertTrue((self.state / "ready.json").is_file())
+        self._assert_no_interruption_record(self.state)
 
     def test_failed_ready_rename_restores_signal_delivery_and_publishes_nothing(
         self,
@@ -1597,6 +2644,35 @@ class RecoveryPreimageTests(unittest.TestCase):
         self.assertEqual(result.stdout, b"")
         self.assertEqual(result.stderr, b"recovery preimage preparation interrupted\n")
         self.assertFalse((self.state / "ready.json").exists())
+        self._assert_interruption_recorded(self.state, signal.SIGTERM)
+
+    def test_unsynced_interruption_record_fails_closed(self) -> None:
+        triggers = {
+            "before-capture": "mkdir-signal",
+            "between-captures": "between-capture-signal",
+            "ready-commit-failure": "rename-signal-failure",
+        }
+        durability_faults = {
+            "file": "record-file-fsync-failure",
+            "directory": "record-directory-fsync-failure",
+        }
+        for trigger_name, trigger in triggers.items():
+            for fault_name, fault in durability_faults.items():
+                with self.subTest(trigger=trigger_name, fault=fault_name):
+                    state = self.private / f"state-{trigger_name}-{fault_name}"
+
+                    result = self._run_with_collector_fault(
+                        trigger, fault, state=state
+                    )
+
+                    self.assertEqual(result.returncode, 1)
+                    self.assertEqual(result.stdout, b"")
+                    self.assertEqual(
+                        result.stderr, b"recovery preimage preparation failed\n"
+                    )
+                    self.assertTrue(state.is_dir())
+                    self.assertFalse((state / "ready.json").exists())
+                    self._assert_no_interruption_record(state)
 
     def test_uncertain_group_retirement_is_a_retained_failure(self) -> None:
         self._set_scenario("hang")
@@ -1616,6 +2692,44 @@ class RecoveryPreimageTests(unittest.TestCase):
                 "outcome": "unverified-retirement",
             },
         )
+        self._assert_no_interruption_record(self.state)
+
+    def test_transient_group_eperm_does_not_abort_verified_retirement(self) -> None:
+        # macos-14 answers EPERM for a group whose only members are exiting or
+        # unreaped: after the caught signal's group SIGTERM, and after retirement's
+        # own signals. One such answer must defer to the absence proof that follows.
+        self._set_scenario("hang")
+        cases = {
+            "probe-after-caught-signal": ("registered-signal", "transient-probe-eperm"),
+            "probe-after-retirement-signal": ("popen-signal", "transient-probe-eperm"),
+            "retirement-signal": ("popen-signal", "transient-signal-eperm"),
+        }
+        for name, faults in cases.items():
+            with self.subTest(name):
+                state = self.private / f"state-{name}"
+
+                result = self._run_with_collector_fault(*faults, state=state)
+
+                self.assertEqual(
+                    result.returncode,
+                    128 + signal.SIGTERM,
+                    result.stderr.decode("utf-8", "replace"),
+                )
+                self.assertEqual(result.stdout, b"")
+                self.assertEqual(
+                    result.stderr, b"recovery preimage preparation interrupted\n"
+                )
+                statuses = sorted((state / "captures").glob("*.status.json"))
+                self.assertEqual(len(statuses), 1)
+                self.assertEqual(
+                    json.loads(statuses[0].read_bytes()),
+                    {
+                        "caught_signal": signal.SIGTERM,
+                        "method": "GET",
+                        "outcome": "interrupted",
+                    },
+                )
+                self._assert_interruption_recorded(state, signal.SIGTERM)
 
     def test_normal_leader_exit_with_resistant_descendant_fails_after_retirement(
         self,
@@ -1666,7 +2780,7 @@ class RecoveryPreimageTests(unittest.TestCase):
         elapsed = time.monotonic() - started
 
         try:
-            self.assertEqual(process.returncode, 128 + signal.SIGTERM, "stderr=" + repr(stderr) + "; statuses=" + repr([p.read_text() for p in sorted((self.state / "captures").glob("*.status.json"))]))
+            self.assertEqual(process.returncode, 128 + signal.SIGTERM)
             self.assertEqual(stdout, b"")
             self.assertEqual(stderr, b"recovery preimage preparation interrupted\n")
             self.assertLess(elapsed, 6)
@@ -1680,6 +2794,7 @@ class RecoveryPreimageTests(unittest.TestCase):
                     "outcome": "interrupted",
                 },
             )
+            self._assert_interruption_recorded(self.state, signal.SIGTERM)
             self._assert_process_and_group_absent(
                 int(record["pid"]), int(record["pgid"])
             )
@@ -1790,10 +2905,24 @@ class RecoveryPreimageTests(unittest.TestCase):
                 "total_timeout_seconds",
             },
         )
-        self.assertEqual(ready["schema"], "issue286-recovery-preimage-ready/v1")
+        self.assertEqual(ready["schema"], READY_SCHEMA)
         self.assertEqual(ready["outcome"], "ready")
         self.assertEqual(ready["graphql_query_sha256"], GRAPHQL_QUERY_SHA256)
         self.assertEqual(ready["request_sha256"], _sha256(self.request.read_bytes()))
+        self.assertEqual(
+            set(ready["binding"]),
+            {
+                "base_commit",
+                "branch",
+                "head_commit",
+                "pull_request_number",
+                "repository",
+                "required_check_sources",
+                "required_checks",
+                "reviewed_source_commit",
+                "trusted_reviewers",
+            },
+        )
         self.assertEqual(ready["binding"]["base_commit"], BASE_COMMIT)
         self.assertEqual(ready["binding"]["head_commit"], HEAD_COMMIT)
         self.assertEqual(
@@ -1868,13 +2997,8 @@ class RecoveryPreimageTests(unittest.TestCase):
             ),
             2,
         )
-        self.assertEqual(
-            endpoints.count(
-                "repos/nisavid/dotfiles/rulesets"
-                "?includes_parents=true&per_page=100&page=1"
-            ),
-            2,
-        )
+        self.assertEqual(endpoints.count(STATUSES_FIRST_PAGE), 2)
+        self.assertEqual(endpoints.count(RULESETS_FIRST_PAGE), 2)
         graphql_inputs = [
             json.loads(line) for line in self.graphql_inputs.read_text().splitlines()
         ]

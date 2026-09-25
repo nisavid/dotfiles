@@ -21,14 +21,6 @@ jobs:
         run: |
           set -euo pipefail
           for tool in jq zsh shasum; do command -v "$tool"; done
-      - name: Observe Darwin process-group errors
+      - name: Verify corrected retirement repeatedly
         shell: bash
-        run: python3 -B tests/diagnose_age_recovery_signals.py
-      - name: Capture the three original signal failures
-        if: always()
-        shell: bash
-        run: |
-          python3 -B -m unittest -v \
-            tests.test_age_admission_recovery_preimage.RecoveryPreimageTests.test_caught_signal_records_interruption_and_leaves_no_ready_file \
-            tests.test_age_admission_recovery_preimage.RecoveryPreimageTests.test_signal_during_process_spawn_is_honored_after_registration \
-            tests.test_age_admission_recovery_preimage.RecoveryPreimageTests.test_repeated_signals_keep_first_status_and_do_not_extend_retirement
+        run: python3 -B -m tests.verify_age_recovery_signals
