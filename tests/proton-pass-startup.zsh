@@ -911,10 +911,16 @@ write_helper_status() {
 
 # Exhaustion names a reason recorded during this run: one that changed the
 # status after startup read it. A status that was already there is not.
+# These cases run the installed startup on the host's own platform, so the
+# native-store guidance follows the host.
+case $OSTYPE in
+  darwin*) native_store_guidance='unlock the login keychain and retry' ;;
+  *) native_store_guidance='unlock the native credential store and retry' ;;
+esac
 export FAKE_STARTUP_SCENARIO=fail-status
 for reason_case in \
   'login-token-rejected:replace the Proton Pass bootstrap token' \
-  'native-store-unavailable:unlock the native credential store and retry' \
+  "native-store-unavailable:$native_store_guidance" \
   'session-probe-timeout:check the network; secret-backed tools retry when used' \
   'session-state-unknown:secret-backed tools retry when used'; do
   reset_fixture
@@ -1004,6 +1010,12 @@ cat >"$fake_busctl" <<'EOF'
 set -euo pipefail
 
 print -r -- "$*" >>"$FAKE_BUSCTL_LOG"
+# A boot clock that advances with real time from FAKE_UPTIME_ORIGIN.
+if [[ -n ${FAKE_UPTIME_ORIGIN:-} ]]; then
+  zmodload zsh/datetime
+  printf '%.2f 50.00\n' $(( 100 + EPOCHREALTIME - FAKE_UPTIME_ORIGIN )) \
+    >"$FAKE_STARTUP_UPTIME_FILE"
+fi
 wallet_query='--user --no-pager get-property org.freedesktop.secrets'
 wallet_query+=' /org/freedesktop/secrets/aliases/default'
 wallet_query+=' org.freedesktop.Secret.Collection Locked'
@@ -1065,8 +1077,24 @@ ln -s -- fake-notifier "$test_dir/osascript"
 export FAKE_NOTIFY_LOG=$test_dir/notify.log
 export FAKE_STARTUP_UPTIME_FILE=
 
+# Linux-only waits run on a boot clock that the fake busctl advances with real
+# time, so no case reads the host's /proc/uptime.
+linux_boot_clock=$test_dir/linux-boot-clock
+start_linux_boot_clock() {
+  print -r -- '100.00 50.00' >"$linux_boot_clock"
+  export FAKE_STARTUP_UPTIME_FILE=$linux_boot_clock
+  export FAKE_UPTIME_ORIGIN=$EPOCHREALTIME
+}
+stop_linux_boot_clock() {
+  rm -f -- "$linux_boot_clock"
+  export FAKE_STARTUP_UPTIME_FILE=
+  unset FAKE_UPTIME_ORIGIN
+}
+
 # Only fixed paths and the wait bound are substituted, each at an anchor that
-# must exist; the probes, capture, wait, and reporting run as shipped.
+# must exist; the probes, capture, wait, and reporting run as shipped. An empty
+# platform keeps the host's OSTYPE, so each case that expects one platform's
+# behavior names it.
 run_startup_functions() {
   emulate -L zsh
 
@@ -1111,13 +1139,13 @@ run_startup_functions() {
 }
 
 typeset -a prerequisite_cases=(
-  'unlocked:global::none:0:0'
-  'unlocks-on-third:global::none:1:3'
-  'unlocked:site::network-offline:3:5'
-  'locked:global::native-store-locked:3:5'
-  'unreachable:global::native-store-locked:3:5'
-  'extra-line:global::native-store-locked:3:5'
-  'unlocked:absent::none:0:0'
+  'unlocked:global:linux-gnu:none:0:0'
+  'unlocks-on-third:global:linux-gnu:none:1:3'
+  'unlocked:site:linux-gnu:network-offline:3:5'
+  'locked:global:linux-gnu:native-store-locked:3:5'
+  'unreachable:global:linux-gnu:native-store-locked:3:5'
+  'extra-line:global:linux-gnu:native-store-locked:3:5'
+  'unlocked:absent:linux-gnu:none:0:0'
   'locked:site:darwin23.0:none:0:0'
 )
 for prerequisite_case in $prerequisite_cases; do
@@ -1125,6 +1153,7 @@ for prerequisite_case in $prerequisite_cases; do
   export FAKE_BUSCTL_WALLET=$case_fields[1] FAKE_BUSCTL_NETWORK=$case_fields[2]
   : >"$FAKE_BUSCTL_LOG"
   rm -f -- "$FAKE_BUSCTL_WALLET_CALLS"
+  start_linux_boot_clock
   prerequisite_output=$(
     run_startup_functions "$case_fields[3]" '
       zmodload zsh/datetime
@@ -1140,6 +1169,7 @@ for prerequisite_case in $prerequisite_cases; do
   (( elapsed >= case_fields[5] && elapsed <= case_fields[6] )) ||
     fail "prerequisites $prerequisite_case must wait ${case_fields[5]}-${case_fields[6]} s, not $elapsed"
 done
+stop_linux_boot_clock
 [[ ! -s $FAKE_BUSCTL_LOG ]] ||
   fail 'the prerequisite wait must not probe outside Linux'
 
@@ -1151,7 +1181,7 @@ export FAKE_STARTUP_UPTIME_FILE=$fake_uptime FAKE_UPTIME_STEP=30
 export FAKE_BUSCTL_WALLET=locked FAKE_BUSCTL_NETWORK=global
 rm -f -- "$FAKE_BUSCTL_WALLET_CALLS"
 uptime_output=$(
-  run_startup_functions '' '
+  run_startup_functions linux-gnu '
     zmodload zsh/datetime
     typeset -F started=$EPOCHREALTIME
     await_prerequisites
@@ -1164,7 +1194,7 @@ uptime_output=$(
 rm -f -- "$fake_uptime" "$FAKE_BUSCTL_WALLET_CALLS"
 unset FAKE_UPTIME_STEP
 uptime_output=$(
-  run_startup_functions '' '
+  run_startup_functions linux-gnu '
     await_prerequisites
     print -r -- "${PROTON_PASS_UNMET_PREREQUISITE:-none}"'
 ) || fail 'the wait must survive an unreadable boot clock'
@@ -1176,7 +1206,7 @@ export FAKE_STARTUP_UPTIME_FILE=
 reset_fixture
 export FAKE_STARTUP_SCENARIO=ready FAKE_BUSCTL_WALLET=locked FAKE_BUSCTL_NETWORK=site
 : >"$FAKE_BUSCTL_LOG"
-run_startup_functions '' main ||
+run_startup_functions linux-gnu main ||
   fail 'startup without the prerequisite flag must reach readiness'
 [[ ! -s $FAKE_BUSCTL_LOG ]] ||
   fail 'startup without the prerequisite flag must not probe prerequisites'
@@ -1199,9 +1229,10 @@ for precedence_case in \
   export FAKE_STARTUP_SCENARIO=fail-status
   export FAKE_BUSCTL_WALLET=$case_fields[1] FAKE_BUSCTL_NETWORK=$case_fields[2]
   export FAKE_STARTUP_STATUS_REASON=$case_fields[3]
+  start_linux_boot_clock
   set +e
   prerequisite_failure_output=$(
-    run_startup_functions '' main --await-prerequisites 2>&1
+    run_startup_functions linux-gnu main --await-prerequisites 2>&1
   )
   prerequisite_failure_status=$?
   set -e
@@ -1215,17 +1246,18 @@ for precedence_case in \
   [[ -s $FAKE_BUSCTL_LOG ]] ||
     fail 'the prerequisite flag must probe prerequisites'
 done
+stop_linux_boot_clock
 unset FAKE_STARTUP_STATUS_REASON
 rm -rf -- "$XDG_STATE_HOME"
 
 # The notification carries the same verdict as the diagnostic. macOS passes
 # the text to its script as arguments, never inside the script source.
 typeset -a notification_cases=(
-  ':native-store-locked::notify-send --app-name=Secret-backed tools|Credential provider unavailable|Unlock the native credential store. Secret-backed tools will retry when used.'
-  ':network-offline::notify-send --app-name=Secret-backed tools|Credential provider unavailable|Proton Pass could not be reached. Secret-backed tools will retry when used.'
-  '::login-token-malformed:notify-send --app-name=Secret-backed tools|Credential provider unavailable|The Proton Pass bootstrap token is invalid or was rejected. Replace it; secret-backed tools cannot recover until then.'
-  '::session-state-unknown:notify-send --app-name=Secret-backed tools|Credential provider unavailable|Proton Pass is unavailable (session-state-unknown). Secret-backed tools will retry when used.'
-  ':::notify-send --app-name=Secret-backed tools|Credential provider unavailable|Proton Pass is unavailable. Secret-backed tools will retry when used.'
+  'linux-gnu:native-store-locked::notify-send --app-name=Secret-backed tools|Credential provider unavailable|Unlock the native credential store. Secret-backed tools will retry when used.'
+  'linux-gnu:network-offline::notify-send --app-name=Secret-backed tools|Credential provider unavailable|Proton Pass could not be reached. Secret-backed tools will retry when used.'
+  'linux-gnu::login-token-malformed:notify-send --app-name=Secret-backed tools|Credential provider unavailable|The Proton Pass bootstrap token is invalid or was rejected. Replace it; secret-backed tools cannot recover until then.'
+  'linux-gnu::session-state-unknown:notify-send --app-name=Secret-backed tools|Credential provider unavailable|Proton Pass is unavailable (session-state-unknown). Secret-backed tools will retry when used.'
+  'linux-gnu:::notify-send --app-name=Secret-backed tools|Credential provider unavailable|Proton Pass is unavailable. Secret-backed tools will retry when used.'
   'darwin23.0:native-store-locked::osascript -e|on run argv|-e|display notification (item 1 of argv) with title (item 2 of argv)|-e|end run|Unlock the login keychain. Secret-backed tools will retry when used.|Credential provider unavailable'
 )
 for notification_case in $notification_cases; do
