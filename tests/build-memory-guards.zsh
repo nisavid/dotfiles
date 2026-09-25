@@ -73,6 +73,16 @@ done
 ln -s -- "${commands[env]}" "$bin/env"
 cat >"$bin/systemd-run" <<'EOF'
 #!/bin/sh
+# Answer the dispatcher's version query like the installed systemd-run, which
+# colours the version line even through a pipe when SYSTEMD_COLORS is set.
+if [ "${1-}" = --version ]; then
+  version=${FAKE_SYSTEMD_VERSION-systemd 261 (261.2-1-arch)}
+  if [ -n "${SYSTEMD_COLORS-}" ]; then
+    version=$(printf '\033[0;1;39m%s\033[0m' "$version")
+  fi
+  printf '%s\n' "$version" '+PAM +AUDIT'
+  exit 0
+fi
 {
   printf 'systemd-run'
   printf ' [%s]' "$@"
@@ -289,6 +299,19 @@ expect_fallback 'manager that does not answer under LD_PRELOAD' "$unreachable" \
   XDG_RUNTIME_DIR="$runtime" FAKE_SYSTEMCTL_STATUS=1 LD_PRELOAD=
 expect_fallback 'builds.slice without a unit file' 'builds.slice has no unit file' \
   "$(probe_log; direct_log)" XDG_RUNTIME_DIR="$runtime" FAKE_FRAGMENT=
+# systemd-run before 254 rejects --expand-environment=no after the exec, so the
+# dispatcher checks the version first; output without a version counts as old.
+for version in 'systemd 253 (253.5-1)' 'systemd 252 (252.39-1~deb12u2)' 'systemd' ''; do
+  expect_fallback "systemd-run reporting [$version]" \
+    "$bin/systemd-run does not report systemd 254 or newer" "$(direct_log)" \
+    XDG_RUNTIME_DIR="$runtime" FAKE_SYSTEMD_VERSION="$version"
+done
+run_shim XDG_RUNTIME_DIR="$runtime" FAKE_SYSTEMD_VERSION='systemd 254 (254.1-1)' ||
+  fail 'systemd 254 run failed'
+expect_log "$(scoped_log 500)" 'systemd-run 254 runs the tool in the slice'
+# A caller's SYSTEMD_COLORS must not hide the version.
+run_shim XDG_RUNTIME_DIR="$runtime" SYSTEMD_COLORS=1 || fail 'SYSTEMD_COLORS run failed'
+expect_log "$(scoped_log 500)" 'SYSTEMD_COLORS does not hide the systemd-run version'
 for tool in systemd-run systemctl choom; do
   chmod -x "$bin/$tool"
   expect_fallback "missing $tool" "$bin/$tool is unavailable" "$(direct_log)" \
@@ -336,12 +359,22 @@ expect_refusal 'the dispatcher run by its own name' 2 \
   'builds-slice-command: run this through a cmake, makepkg, or ninja symlink' \
   "$dispatcher"
 
-# makepkg.conf runs the pacman that makepkg starts through sudo at OOM score 0.
-makepkg_auth=$(
-  bash -c 'source "$1" && printf "[%s]" "${PACMAN_AUTH[@]}"' _ \
-    "$repo_root/home/dot_config/pacman/makepkg.conf"
-)
-[[ $makepkg_auth == '[sudo][-k][choom][-n][0][--]' ]] ||
-  fail "makepkg.conf sets PACMAN_AUTH to $makepkg_auth"
+# makepkg.conf runs the pacman that makepkg starts through sudo at OOM score 0,
+# and leaves makepkg's default when choom is missing. makepkg treats a config
+# whose last status is nonzero as broken, so both cases must source cleanly.
+makepkg_conf=$repo_root/home/dot_config/pacman/makepkg.conf
+grep -Fq '/usr/bin/choom' "$makepkg_conf" ||
+  fail 'makepkg.conf does not check for /usr/bin/choom'
+for choom_path expected in \
+  "$bin/choom" '[sudo][-k][choom][-n][0][--]' \
+  "$test_root/missing-choom" '[]'; do
+  sed "s#/usr/bin/choom#$choom_path#" "$makepkg_conf" >"$test_root/makepkg.conf"
+  makepkg_auth=$(
+    bash -c 'source "$1" || exit 9; printf "[%s]" "${PACMAN_AUTH[@]}"' _ \
+      "$test_root/makepkg.conf"
+  ) || fail "makepkg.conf does not source cleanly with choom at $choom_path"
+  [[ $makepkg_auth == $expected ]] ||
+    fail "makepkg.conf sets PACMAN_AUTH to $makepkg_auth with choom at $choom_path"
+done
 
 print -r -- 'build memory guards: PASS'

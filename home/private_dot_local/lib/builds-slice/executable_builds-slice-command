@@ -31,9 +31,10 @@
 #
 # Every path ends in exec, so the tool keeps this process's PID, stdio, signals,
 # exit status, and environment. When systemd-run, systemctl, or choom is
-# missing, the systemd user manager does not answer, or builds.slice has no unit
-# file, this script warns once and runs the tool without the cap. When the tool
-# itself is missing, it fails with status 127, like a missing command.
+# missing, systemd-run does not report systemd 254 or newer, the systemd user
+# manager does not answer, or builds.slice has no unit file, this script warns
+# once and runs the tool without the cap. When the tool itself is missing, it fails with
+# status 127, like a missing command.
 #
 # choom raises everything the tool starts, including the `sudo pacman` that
 # makepkg -s, -r, and -i run, and pacman's hooks. ~/.config/pacman/makepkg.conf
@@ -91,6 +92,18 @@ query_slice_fragment() (
   "$systemctl" --user show -P FragmentPath "$slice" 2>/dev/null
 )
 
+# systemd-run before systemd 254 rejects --expand-environment=no, and it would
+# do so after the exec, too late to fall back. Output that names no version
+# counts as too old. SYSTEMD_COLORS would colour the version line even through
+# a pipe and hide the version, so the query runs without it.
+systemd_run_supported() (
+  unset SYSTEMD_COLORS
+  version=$("$systemd_run" --version 2>/dev/null) || exit 1
+  version=${version#systemd }
+  version=${version%%[!0-9]*}
+  [ -n "$version" ] && [ "$version" -ge 254 ]
+)
+
 main() {
   # The kernel hands the shell the path the caller ran, not the symlink's
   # target, so $0 ends in the tool's name.
@@ -120,6 +133,8 @@ main() {
     reason="$systemctl is unavailable"
   elif [ ! -x "$choom" ]; then
     reason="$choom is unavailable"
+  elif ! systemd_run_supported; then
+    reason="$systemd_run does not report systemd 254 or newer"
   elif ! user_manager_reachable; then
     reason='the systemd user manager is unreachable'
   elif ! fragment=$(query_slice_fragment); then
