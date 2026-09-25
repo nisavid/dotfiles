@@ -497,7 +497,17 @@ class ProvisioningInputs:
             with open({os.fspath(self.provider_log)!r}, "a", encoding="ascii") as stream:
                 stream.write(json.dumps(record, sort_keys=True) + "\\n")
             with open({os.fspath(self.control)!r}, encoding="ascii") as stream:
-                read_field = json.load(stream).get("adapter_field_read", False)
+                control = json.load(stream)
+            read_field = control.get("adapter_field_read", False)
+            if (
+                control.get("adapter_switch_primary_reader")
+                and os.environ.get("PROTON_PASS_SESSION_DIR") == {os.fspath(self.primary_session)!r}
+            ):
+                with open({os.fspath(self.provider_state)!r}, encoding="ascii") as stream:
+                    state = json.load(stream)
+                state["primary_reader_name_override"] = "issue286-other-token"
+                with open({os.fspath(self.provider_state)!r}, "w", encoding="ascii") as stream:
+                    json.dump(state, stream)
             if read_field:
                 # Select the one hidden field as the reviewed adapter does.
                 view = subprocess.run(
@@ -663,6 +673,8 @@ class ProvisioningInputs:
         *,
         token_shape: str | None = None,
         adapter_field_read: bool = False,
+        primary_reader_drift_from_call: int | None = None,
+        adapter_switch_primary_reader: bool = False,
     ) -> None:
         control: dict[str, object] = {"behaviors": behaviors}
         if owner_drift is not None:
@@ -671,6 +683,10 @@ class ProvisioningInputs:
             control["token_shape"] = token_shape
         if adapter_field_read:
             control["adapter_field_read"] = True
+        if primary_reader_drift_from_call is not None:
+            control["primary_reader_drift_from_call"] = primary_reader_drift_from_call
+        if adapter_switch_primary_reader:
+            control["adapter_switch_primary_reader"] = True
         self.control.write_bytes(canonical_json(control))
         self.control.chmod(0o600)
 
@@ -682,20 +698,30 @@ class ProvisioningInputs:
         *,
         token_shape: str | None = None,
         adapter_field_read: bool = False,
+        adapter_switch_primary_reader: bool = False,
         **behaviors: str,
     ) -> None:
-        """Select an agent-token shape and whether the adapter reads its field."""
+        """Select provider token, adapter-read, and session-change behavior."""
         self._write_control(
             behaviors,
             token_shape=token_shape,
             adapter_field_read=adapter_field_read,
+            adapter_switch_primary_reader=adapter_switch_primary_reader,
         )
 
     def set_owner_drift(self, from_call: int, info: dict[str, object]) -> None:
         """Answer the owner profile's JSON info with ``info`` from ``from_call`` on."""
         self._write_control({}, {"from_call": from_call, "info": info})
 
+    def set_primary_reader_drift(self, from_call: int) -> None:
+        self._write_control({}, primary_reader_drift_from_call=from_call)
+
     def _write_fake_pass_cli(self) -> None:
+        primary_info_name = (
+            "issue286-automation"
+            if self.primary == "existing-pat"
+            else "[Agent] issue286-primary"
+        )
         body = textwrap.dedent(
             f"""\
             import hashlib
@@ -1024,9 +1050,18 @@ class ProvisioningInputs:
                             owner_info = drift["info"]
                     print(json.dumps(owner_info))
                 elif session == PRIMARY_SESSION:
+                    primary_name = state.get(
+                        "primary_reader_name_override", {primary_info_name!r}
+                    )
+                    drift_from = load(CONTROL).get("primary_reader_drift_from_call")
+                    if drift_from is not None:
+                        state["primary_info_calls"] = state.get("primary_info_calls", 0) + 1
+                        save(state)
+                        if state["primary_info_calls"] >= drift_from:
+                            primary_name = "issue286-other-token"
                     print(json.dumps({{
                         "release_track": "stable", "id": "N/A",
-                        "personal_access_token_name": "[Agent] issue286-primary",
+                        "personal_access_token_name": primary_name,
                         "session_has_lock": False,
                     }}))
                 elif state["logged_in"]:
@@ -1157,6 +1192,13 @@ class ProvisioningInputs:
     def sessions_request(self, primary: str) -> dict[str, str]:
         if primary == "owner":
             return {"owner": os.fspath(self.owner_session), "primary": "owner"}
+        if primary == "existing-pat":
+            return {
+                "owner": os.fspath(self.owner_session),
+                "primary": "existing-pat",
+                "primary_reader_profile": os.fspath(self.primary_session),
+                "primary_reader_name": "issue286-automation",
+            }
         return {
             "owner": os.fspath(self.owner_session),
             "primary": "existing-agent",
@@ -2246,6 +2288,78 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
                     self.assertEqual(inputs.log(), [])
                 finally:
                     temporary.cleanup()
+
+    def test_existing_pat_reads_signing_key_through_selected_profile(self) -> None:
+        temporary, inputs = self.make_inputs(primary="existing-pat")
+        self.addCleanup(temporary.cleanup)
+        inputs.set_provider_controls(adapter_field_read=True)
+
+        result = inputs.run()
+
+        self.assertEqual(
+            (result.returncode, result.stdout, result.stderr),
+            (0, b"qualified-clean\n", b""),
+        )
+        state = json.loads((inputs.state / "state.json").read_bytes())
+        self.assertEqual(
+            state["request"]["sessions"], inputs.sessions_request("existing-pat")
+        )
+        self.assertEqual(state["bindings"]["owner_id"], "user_issue286")
+        self.assertEqual(
+            [session for kind, session in inputs.session_calls() if kind == "item-view"],
+            ["primary", "recovery", "recovery", "primary"],
+        )
+        self.assertEqual(
+            [
+                session
+                for kind, session in inputs.session_calls()
+                if kind == "provider-adapter"
+            ],
+            ["primary", "recovery", "primary"],
+        )
+        for kind, session in inputs.session_calls():
+            if kind in {"item-create", "item-delete", "agent-create", "agent-delete"}:
+                self.assertEqual(session, "owner")
+
+    def test_pat_reader_change_after_readiness_stops_before_key_read(self) -> None:
+        temporary, inputs = self.make_inputs(primary="existing-pat")
+        self.addCleanup(temporary.cleanup)
+        inputs.set_primary_reader_drift(2)
+
+        result = inputs.run()
+
+        self.assertEqual(
+            (result.returncode, result.stdout, result.stderr),
+            (1, b"", b"age-admission signer provisioning failed\n"),
+        )
+        calls = inputs.session_calls()
+        self.assertIn(("readiness", "primary"), calls)
+        self.assertNotIn(("provider-adapter", "primary"), calls)
+        self.assertEqual(
+            json.loads((inputs.state / "state.json").read_bytes())["outcome"],
+            "rolled-back",
+        )
+
+    def test_pat_reader_change_inside_adapter_stops_before_recovery_setup(self) -> None:
+        temporary, inputs = self.make_inputs(primary="existing-pat")
+        self.addCleanup(temporary.cleanup)
+        inputs.set_provider_controls(
+            adapter_field_read=True, adapter_switch_primary_reader=True
+        )
+
+        result = inputs.run()
+
+        self.assertEqual(
+            (result.returncode, result.stdout, result.stderr),
+            (1, b"", b"age-admission signer provisioning failed\n"),
+        )
+        calls = inputs.session_calls()
+        self.assertIn(("provider-adapter", "primary"), calls)
+        self.assertNotIn(("agent-create", "owner"), calls)
+        self.assertEqual(
+            json.loads((inputs.state / "state.json").read_bytes())["outcome"],
+            "rolled-back",
+        )
 
     def test_owner_primary_qualification_reads_through_the_owner_profile(
         self,
@@ -5302,6 +5416,11 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
         self,
     ) -> None:
         self.assert_real_builder_contract(primary="owner")
+
+    def test_real_builder_adapter_reads_through_the_existing_pat_profile(
+        self,
+    ) -> None:
+        self.assert_real_builder_contract(primary="existing-pat")
 
     def assert_real_builder_contract(self, *, primary: str) -> None:
         temporary, inputs = self.make_inputs(real_local_tools=True, primary=primary)

@@ -1228,6 +1228,8 @@ def _validate_request(
             "primary_enrollment",
             "primary_enrollment_name",
         }
+    elif primary_kind == "existing-pat":
+        session_keys = {"owner", "primary", "primary_reader_profile", "primary_reader_name"}
     else:
         raise ProvisioningError("routine reader selection is invalid")
     sessions = _exact_keys(raw_sessions, session_keys, "session request")
@@ -1243,6 +1245,17 @@ def _validate_request(
         normalized_sessions["primary_enrollment"] = os.fspath(primary)
         normalized_sessions["primary_enrollment_name"] = _private_name(
             sessions["primary_enrollment_name"], "primary enrollment name"
+        )
+    elif primary_kind == "existing-pat":
+        primary = _absolute_path(sessions["primary_reader_profile"])
+        if owner == primary:
+            raise ProvisioningError(
+                "owner and primary profile roots are not distinct"
+            )
+        _validate_existing_profile_root(primary, "primary PAT")
+        normalized_sessions["primary_reader_profile"] = os.fspath(primary)
+        normalized_sessions["primary_reader_name"] = _private_name(
+            sessions["primary_reader_name"], "primary PAT name"
         )
     _validate_existing_profile_root(owner, "owner")
 
@@ -2218,13 +2231,28 @@ def _run_provider_read(
     return result
 
 
-def _closed_info(data: bytes, *, expected_agent: str | None) -> str:
+def _closed_info(
+    data: bytes, *, expected_agent: str | None, expected_reader_name: str | None = None
+) -> str:
     value = _parse_json_output(data)
     if not isinstance(value, dict):
         raise ProvisioningError("provider info output is invalid")
     common = {"id", "release_track", "session_has_lock"}
     optional = {"install_source", "session_lock_after_seconds"}
-    if expected_agent is None:
+    if expected_reader_name is not None:
+        if expected_agent is not None:
+            raise ProvisioningError("provider info role is ambiguous")
+        required = common | {"personal_access_token_name"}
+        allowed = required | optional
+        if (
+            not required <= set(value) <= allowed
+            or value["id"] != "N/A"
+            or value["personal_access_token_name"] != expected_reader_name
+            or not isinstance(value["release_track"], str)
+            or not value["release_track"]
+        ):
+            raise ProvisioningError("primary PAT info output is invalid")
+    elif expected_agent is None:
         required = common | {"email", "username"}
         allowed = required | optional | {"env"}
         if (
@@ -2502,6 +2530,7 @@ def _check_info(
     session: Path,
     tools_directory: Path,
     expected_agent: str | None,
+    expected_reader_name: str | None = None,
 ) -> str:
     result = _run_provider_read(
         state,
@@ -2510,7 +2539,9 @@ def _check_info(
         tools_directory=tools_directory,
     )
     return _closed_info(
-        _require_read_success(result, "provider info"), expected_agent=expected_agent
+        _require_read_success(result, "provider info"),
+        expected_agent=expected_agent,
+        expected_reader_name=expected_reader_name,
     )
 
 
@@ -3000,11 +3031,17 @@ def _verify_receipt(
         raise ProvisioningError("synthetic receipt verification failed")
 
 
-def _primary_reader(request: dict[str, Any]) -> tuple[Path, str | None]:
+def _primary_reader(request: dict[str, Any]) -> tuple[Path, str | None, str | None]:
     sessions = request["sessions"]
     if sessions["primary"] == "owner":
-        return Path(sessions["owner"]), None
-    return Path(sessions["primary_enrollment"]), sessions["primary_enrollment_name"]
+        return Path(sessions["owner"]), None, None
+    if sessions["primary"] == "existing-pat":
+        return Path(sessions["primary_reader_profile"]), None, sessions["primary_reader_name"]
+    return (
+        Path(sessions["primary_enrollment"]),
+        sessions["primary_enrollment_name"],
+        None,
+    )
 
 
 def _perform_readback(
@@ -3015,17 +3052,31 @@ def _perform_readback(
     session: Path,
     expected_agent: str | None,
     receipt_label: str,
+    expected_reader_name: str | None = None,
 ) -> None:
     observed_id = _check_info(
         state,
         session=session,
         tools_directory=fixture_directory / "tools",
         expected_agent=expected_agent,
+        expected_reader_name=expected_reader_name,
     )
     # A user-login read must still be the owner captured before any effect.
-    if expected_agent is None and observed_id != state["bindings"]["owner_id"]:
+    if (
+        expected_agent is None
+        and expected_reader_name is None
+        and observed_id != state["bindings"]["owner_id"]
+    ):
         raise ProvisioningError("owner identity changed before routine read")
     _check_readiness(state, session=session, fixture_directory=fixture_directory)
+    if expected_reader_name is not None:
+        _check_info(
+            state,
+            session=session,
+            tools_directory=fixture_directory / "tools",
+            expected_agent=None,
+            expected_reader_name=expected_reader_name,
+        )
     receipt_relative = f"private/{receipt_label}.receipt"
     if receipt_relative in state["artifacts"]["receipts"]:
         raise ProvisioningError("receipt label was reused")
@@ -3043,6 +3094,14 @@ def _perform_readback(
     _check_signal()
     if not _acknowledged(result) or result.stdout:
         raise ProvisioningError("provider adapter readback failed")
+    if expected_reader_name is not None:
+        _check_info(
+            state,
+            session=session,
+            tools_directory=fixture_directory / "tools",
+            expected_agent=None,
+            expected_reader_name=expected_reader_name,
+        )
     _verify_receipt(state_directory, state, fixture_directory, receipt_relative)
 
 
@@ -3507,7 +3566,7 @@ def _execute_workflow(
         tools_directory=tools,
         expected_agent=None,
     )
-    primary_session, primary_agent = _primary_reader(request)
+    primary_session, primary_agent, primary_reader_name = _primary_reader(request)
 
     _write_item_template(state_directory, state)
     item_id = _mutation(
@@ -3548,6 +3607,7 @@ def _execute_workflow(
         fixture_directory=fixture_directory,
         session=primary_session,
         expected_agent=primary_agent,
+        expected_reader_name=primary_reader_name,
         receipt_label="primary",
     )
     state["checks"]["primary_readback"] = True
@@ -3660,6 +3720,7 @@ def _execute_workflow(
         fixture_directory=fixture_directory,
         session=primary_session,
         expected_agent=primary_agent,
+        expected_reader_name=primary_reader_name,
         receipt_label="primary-after-revocation",
     )
     state["checks"]["primary_after_revocation"] = True

@@ -585,14 +585,13 @@ These are prepared interfaces, not authorization to run them. The owner must
 separately authorize every disposable or production item, vault/share,
 enrollment, provider write, revocation, deletion, and retained resource. That
 live-operation boundary must also name the routine reader (`sessions.primary`),
-the exact owner profile root and, for `existing-agent`, the primary enrollment
-root and name, the keyring backend, ordinary startup maintenance and
-invalidation effects, the shared legacy keyring credential deletion described
-below, timeout
-behavior, and preservation or incident handling. A timeout does not roll back a
-provider startup effect. The later protection exception, recovery merge,
-restoration, and consumer receipts for PRs #285, #287, #302, #303, and #323
-remain separate owner-held effects outside this helper.
+the exact owner profile root and, for a token-backed reader, its separate
+profile root and token name. It must cover the keyring backend, ordinary startup
+maintenance and invalidation, the shared legacy keyring credential deletion
+described below, timeouts, and preservation or incident handling. A timeout does
+not roll back a provider startup effect. The later protection exception,
+recovery merge, restoration, and consumer receipts for PRs #285, #287, #302,
+#303, and #323 remain separate owner-held effects outside this helper.
 
 Every pass-cli logout route deletes two keyring credentials under service
 `ProtonPassCLI`. One is the profile root's own scoped credential,
@@ -636,8 +635,9 @@ the keyring before any provisioning request is written:
 2. Run `pass-cli info --output json` once on that root and classify the
    provider session without assuming its role. An owner-account session
    reports an ID other than `N/A`, a username, and an email, with no token
-   name. An agent session reports ID `N/A` and token name `[Agent] <name>`.
-   Any other result stops.
+   name. A token session reports ID `N/A` and its token name; an Agent name
+   begins with `[Agent] `. A regular PAT name is accepted for routine reads.
+   Any unrecognized or malformed result stops.
 
 Proceed to qualification only if the legacy credential is absent, or if the
 owner explicitly accepts its deletion after confirming that every pass-cli
@@ -784,7 +784,9 @@ closed shape:
   "schema": "issue286-provisioning/v3",
   "sessions": {
     "owner": "/private-operation/profiles/owner",
-    "primary": "owner"
+    "primary": "existing-pat",
+    "primary_reader_profile": "/private-operation/profiles/primary",
+    "primary_reader_name": "issue286-synthetic-primary"
   }
 }
 ```
@@ -794,7 +796,9 @@ profile-root paths stay only in the mode-`0600` request and private state.
 `sessions.primary` explicitly names the routine reader and closes the rest of
 `sessions`. `"owner"` allows exactly `owner` and `primary`. `"existing-agent"`
 requires exactly `owner`, `primary`, `primary_enrollment`, and
-`primary_enrollment_name`, for example:
+`primary_enrollment_name`. `"existing-pat"` requires exactly `owner`,
+`primary`, `primary_reader_profile`, and `primary_reader_name`. An existing
+Agent enrollment uses the other token-backed shape:
 
 ```json
 {
@@ -806,18 +810,20 @@ requires exactly `owner`, `primary`, `primary_enrollment`, and
 ```
 
 A missing or unknown selector, or any extra or missing key, is rejected. The
-helper never infers the reader from paths: an `existing-agent` request whose
-owner and primary enrollment roots are equal is rejected. Every named root is
-an existing Proton profile root, not its `.session` child; each root and its
+helper never infers the reader from paths: a request for either token-backed
+mode with matching owner and primary roots is rejected. Every named root is an
+existing Proton profile root, not its `.session` child; each root and its
 `.session` child must already be caller-owned, nonsymlink, mode-`0700`
 directories. A malformed root is rejected before `pass-cli` is resolved or
 started.
 
 Every role acts under the owner's single Proton account; no second account is
 needed. A profile root holds at most one provider session. An owner-account
-session is logged in to that account directly. An agent session is logged in
-with a personal access token the owner account created, and `info` names it
-`[Agent] <name>`. An enrollment in this procedure is such an agent.
+session is logged in to that account directly. Both regular PAT and Agent
+sessions authenticate with a token created under that account. `info` reports
+the token name; an Agent session uses `[Agent] <name>`. The selected token opens
+Proton Pass access to the vault item. The separate private key in that item
+signs the receipt.
 
 `sessions.owner` names a profile root with an owner-account session. It runs
 the version and `info` checks, item creation and listing, agent creation and
@@ -830,16 +836,19 @@ owner root again and requires a user login with the same ID. A different
 answer fails before readiness or the adapter and takes the ordinary rollback.
 Routine signing in this mode uses the owner account's full authority.
 
-With `"existing-agent"`, both routine readbacks use the named enrollment in
-a different profile root. Its `info` must report
-`[Agent] <primary_enrollment_name>` before each readback. Routine signing in
-this mode uses the selected enrollment. In both modes, the recovery agent is
-a new enrollment in the task-created `private/recovery-session` root. Resume
-rejects a state whose `bindings.owner_id` is absent, null, or `N/A`.
+With `"existing-agent"` or `"existing-pat"`, both routine readbacks use
+the selected token session in a different profile root. `info` must report
+`[Agent] <primary_enrollment_name>` for the Agent mode, or exactly
+`<primary_reader_name>` for the PAT mode. The PAT mode checks the name before
+readiness, after readiness, and after the adapter readback because readiness can
+repair the session. The token must actually retrieve the designated item field;
+its name alone does not prove access. In every mode, the recovery Agent is a new
+enrollment in the task-created `private/recovery-session` root. Resume rejects
+a state whose `bindings.owner_id` is absent, null, or `N/A`.
 Terminal markers and commit records do not carry that ID. The routine
 readbacks stand in for routine signing and demonstrate access through the
 selected reader. Discovery identifies the existing root's login; use the
-matching mode and provide a separate owner root for `"existing-agent"`.
+matching mode and provide a separate owner root for either token-backed mode.
 
 The request carries no executable path: each child resolves `pass-cli` through
 its ordinary runtime `PATH`. The helper binds the observed path, exact version
@@ -1081,8 +1090,8 @@ readback/probe children receive
 
 Provider-required IDs and names may occur in the exact private child argv and
 state. Linux forces the D-Bus keyring; Darwin removes that override. The
-owner root and, for `existing-agent`, the primary enrollment root are existing
-Proton profile roots; pass-cli appends `.session` to each root. The recovery
+owner root and the selected primary Agent or PAT root are existing Proton
+profile roots; pass-cli appends `.session` to each root. The recovery
 enrollment uses its own task-created profile root,
 which does not isolate the shared legacy keyring credential. All use the OS
 keyring, update checks disabled, and the verified staged age directory. Every
