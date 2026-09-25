@@ -211,6 +211,24 @@ output=$(tool-a)
   fail 'the shim must preserve the invoked name of a symlinked multi-call executable'
 rm -- "$real_bin/tool-a"
 
+# A PATH entry that leaves a symlink through `..` must exec the file the
+# dispatcher checked, not the one a lexical `..` removal names.
+dotdot_dir=$test_dir/dotdot
+mkdir -p -- "$dotdot_dir/real/nested"
+ln -s real/nested "$dotdot_dir/link"
+print -r -- $'#!/bin/sh\necho checked' > "$dotdot_dir/real/tool-a"
+print -r -- $'#!/bin/sh\necho lexical' > "$dotdot_dir/tool-a"
+chmod +x "$dotdot_dir/real/tool-a" "$dotdot_dir/tool-a"
+cd "$dotdot_dir"
+for dotdot_entry in "$dotdot_dir/link/.." link/..; do
+  PATH=$shim_dir:$dotdot_entry:$real_bin:$backend_bin:$fixture_home/.local/bin:/usr/bin:/bin
+  output=$(tool-a)
+  [[ $output == checked ]] ||
+    fail "a symlink-then-.. PATH entry must exec the checked file ($dotdot_entry): $output"
+done
+PATH=$shim_dir:$real_bin:$backend_bin:$fixture_home/.local/bin:/usr/bin:/bin
+cd "$original_directory"
+
 # Provenance marker: an already-injected profile skips the provider lookup, but
 # the launcher still scrubs every other managed name.
 launcher=$fixture_home/.local/bin/secret-exec
