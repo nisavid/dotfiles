@@ -991,7 +991,7 @@ The frozen planning input observed these classic `main` protections:
 
 | Setting | Observed value |
 | --- | --- |
-| Required checks | `check conventional commit compliance` (`15368`), `CodeRabbit` (`347564`), `Greptile Review` (`867647`), `zsh deployment portability` (`15368`), and `Verify trusted base against candidate data` (`15368`) |
+| Required checks | `check conventional commit compliance` (`15368`), `CodeRabbit` (`347564`), `zsh deployment portability` (`15368`), and `Verify trusted base against candidate data` (`15368`) |
 | Strict checks | enabled |
 | Pull-request review | one approval; stale reviews dismissed |
 | Administrator enforcement | enabled |
@@ -1077,7 +1077,6 @@ root = "https://api.github.com/repos/nisavid/dotfiles/branches/main/protection"
 checks = [
     {"context": "check conventional commit compliance", "app_id": 15368},
     {"context": "CodeRabbit", "app_id": 347564},
-    {"context": "Greptile Review", "app_id": 867647},
     {"context": "zsh deployment portability", "app_id": 15368},
     {
         "context": "Verify trusted base against candidate data",
@@ -1473,7 +1472,7 @@ try:
     ):
         stop("request binding")
     checks = request["required_checks"]
-    if not isinstance(checks, list) or len(checks) != 5:
+    if not isinstance(checks, list) or len(checks) != 4:
         stop("required checks")
     contexts = set()
     for record in checks:
@@ -1874,7 +1873,7 @@ exit "$merge_command_status"
 ```
 
 Canonicalize and compare the fresh full response with the saved preimage,
-including all five app-pinned checks and every unrelated protection. Repeat the
+including all four app-pinned checks and every unrelated protection. Repeat the
 effective-rule and ruleset reads. Keep the merge freeze until the comparison
 passes and live `main` is shown to contain the reviewed recovery tree and the
 single new allowed-signer fingerprint.

@@ -27,10 +27,10 @@ EXCEPTION_CONTEXT = "Verify trusted base against candidate data"
 REQUIRED_CHECKS = [
     {"context": "check conventional commit compliance", "app_id": 15368},
     {"context": "CodeRabbit", "app_id": 347564},
-    {"context": "Greptile Review", "app_id": 867647},
     {"context": "zsh deployment portability", "app_id": 15368},
     {"context": EXCEPTION_CONTEXT, "app_id": 15368},
 ]
+RETIRED_REQUIRED_CHECK = {"context": "Greptile Review", "app_id": 867647}
 GRAPHQL_QUERY = """query Issue286RecoveryReviewThreads(
   $owner: String!
   $name: String!
@@ -545,6 +545,14 @@ class RecoveryPreimageTests(unittest.TestCase):
                             run["conclusion"] = "success"
                 if scenario == "protection-drift" and path.endswith("/branches/main/protection"):
                     value["enforce_admins"]["enabled"] = False
+                if scenario == "retired-check-readded" and path.endswith("/branches/main/protection"):
+                    retired = {RETIRED_REQUIRED_CHECK!r}
+                    value["required_status_checks"]["contexts"].append(retired["context"])
+                    value["required_status_checks"]["checks"].append(retired)
+                if scenario == "required-check-app-drift" and path.endswith("/branches/main/protection"):
+                    for check in value["required_status_checks"]["checks"]:
+                        if check["context"] == {EXCEPTION_CONTEXT!r}:
+                            check["app_id"] += 1
                 if (
                     scenario == "stale-between-passes"
                     and path.endswith("/git/ref/heads/main")
@@ -1341,7 +1349,7 @@ class RecoveryPreimageTests(unittest.TestCase):
             for run in observations["check_runs"]["check_runs"]
             if run["name"] == EXCEPTION_CONTEXT and run["app"]["id"] == 15368
         ]
-        self.assertEqual([run["id"] for run in matches], [5, 101, 102])
+        self.assertEqual([run["id"] for run in matches], [4, 101, 102])
         self.assertTrue(all(run["status"] == "completed" for run in matches))
         self.assertTrue(all(run["conclusion"] == "failure" for run in matches))
         self._assert_read_only_calls()
@@ -1406,6 +1414,12 @@ class RecoveryPreimageTests(unittest.TestCase):
 
     def test_unrelated_protection_drift_leaves_no_ready_file(self) -> None:
         self._assert_failed_without_ready("protection-drift")
+
+    def test_readded_retired_required_check_leaves_no_ready_file(self) -> None:
+        self._assert_failed_without_ready("retired-check-readded")
+
+    def test_required_check_app_drift_leaves_no_ready_file(self) -> None:
+        self._assert_failed_without_ready("required-check-app-drift")
 
     def test_stale_evidence_between_observations_leaves_no_ready_file(self) -> None:
         self._assert_failed_without_ready("stale-between-passes")
@@ -1672,6 +1686,37 @@ class RecoveryPreimageTests(unittest.TestCase):
         finally:
             self._force_process_group_cleanup(int(record["pgid"]))
 
+    def test_request_outside_the_four_check_contract_fails_before_state_creation(
+        self,
+    ) -> None:
+        without_age_check = [
+            check for check in REQUIRED_CHECKS if check["context"] != EXCEPTION_CONTEXT
+        ]
+        cases = {
+            "retired check restored": [*REQUIRED_CHECKS, RETIRED_REQUIRED_CHECK],
+            "exception-window set": without_age_check,
+            "age check omitted": [*without_age_check, RETIRED_REQUIRED_CHECK],
+        }
+        for name, checks in cases.items():
+            with self.subTest(name):
+                request = self._request_value()
+                request["required_checks"] = checks
+                status = request["expected_protection"]["required_status_checks"]
+                status["contexts"] = [check["context"] for check in checks]
+                status["checks"] = checks
+                self.request.write_bytes(_json_bytes(request))
+                self.request.chmod(0o600)
+
+                result = self._run()
+
+                self.assertEqual(result.returncode, 1)
+                self.assertEqual(result.stdout, b"")
+                self.assertEqual(
+                    result.stderr, b"recovery preimage preparation failed\n"
+                )
+                self.assertFalse(self.state.exists())
+                self.assertFalse(self.calls.exists())
+
     def test_nonpositive_required_app_id_fails_before_state_creation(self) -> None:
         request = self._request_value()
         checks = json.loads(json.dumps(request["required_checks"]))
@@ -1793,8 +1838,8 @@ class RecoveryPreimageTests(unittest.TestCase):
         exception = json.loads(
             (self.state / ready["payloads"]["exception_checks"]["path"]).read_bytes()
         )
-        self.assertEqual(len(restore["checks"]), 5)
-        self.assertEqual(len(exception["checks"]), 4)
+        self.assertEqual(len(restore["checks"]), 4)
+        self.assertEqual(len(exception["checks"]), 3)
         self.assertNotIn(
             EXCEPTION_CONTEXT, {item["context"] for item in exception["checks"]}
         )

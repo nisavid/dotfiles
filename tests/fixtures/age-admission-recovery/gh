@@ -79,13 +79,12 @@ if [[ ${1:-} == api ]]; then
         (.app_id | type) == "number" and .app_id > 0 and
         .app_id == (.app_id | floor))
     ' "$input_file" >/dev/null || return 65
-    if [[ $check_count == 4 ]]; then
+    if [[ $check_count == 3 ]]; then
       jq -e '
         ([.checks[] | [.context, .app_id]] | sort) ==
         ([
           ["check conventional commit compliance", 15368],
           ["CodeRabbit", 347564],
-          ["Greptile Review", 867647],
           ["zsh deployment portability", 15368]
         ] | sort)
       ' "$input_file" >/dev/null || return 65
@@ -114,7 +113,6 @@ if [[ ${1:-} == api ]]; then
         ([
           ["check conventional commit compliance", 15368],
           ["CodeRabbit", 347564],
-          ["Greptile Review", 867647],
           ["zsh deployment portability", 15368],
           ["Verify trusted base against candidate data", 15368]
         ] | sort)
