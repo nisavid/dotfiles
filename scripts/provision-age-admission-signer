@@ -3796,7 +3796,8 @@ def _execute_workflow(
         postcondition="exact recovery agent existing session",
         success_state="present",
         expected_output=_expected_exact(
-            f"Successfully logged in as personal access token: {agent_name}\n".encode()
+            b"Personal access token session created successfully\n"
+            + f"Successfully logged in as personal access token: {agent_name}\n".encode()
         ),
         login_credential=login_credential,
     )

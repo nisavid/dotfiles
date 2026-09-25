@@ -962,6 +962,10 @@ Before every provider mutation it persists the exact pending request, target,
 captures, prior resource state, and `requesting` or `removing` state with file
 and directory synchronization. A spawn failure restores the prior local state;
 once a child is created, an unacknowledged effect is never treated as absent.
+Recovery Agent login requires status zero, empty standard error, and exactly
+two success lines: `Personal access token session created successfully`, then
+`Successfully logged in as personal access token: <agent-name>`. An unmatched
+transcript remains subject to the read-only session-info reconciliation path.
 
 A source-test run may use only disposable fakes and ends with a value-free
 `qualified-clean.json` marker, exact output `qualified-clean\n`, and

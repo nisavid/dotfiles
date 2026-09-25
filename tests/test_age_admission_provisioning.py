@@ -1209,6 +1209,7 @@ class ProvisioningInputs:
                     raise SystemExit(10)
                 state["logged_in"] = True
                 save(state)
+                print("Personal access token session created successfully")
                 print("Successfully logged in as personal access token: issue286-recovery")
             elif kind == "agent-monitor":
                 print(json.dumps([{{
