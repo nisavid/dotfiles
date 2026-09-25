@@ -966,8 +966,11 @@ once a child is created, an unacknowledged effect is never treated as absent.
 A source-test run may use only disposable fakes and ends with a value-free
 `qualified-clean.json` marker, exact output `qualified-clean\n`, and
 `production_eligible=false`. It proves source behavior, not live-provider
-acceptance. A separately owner-authorized run against disposable real provider
-resources uses `qualification="live-disposable-provider"`. Only its
+acceptance. The provisioner puts the fixture's checksum-verified `age`,
+`age-keygen`, and `age-inspect` ahead of ambient tools on `PATH` for provider
+readback and synthetic receipt creation; the local admitter rejects different
+ambient bytes. A separately owner-authorized run against disposable real
+provider resources uses `qualification="live-disposable-provider"`. Only its
 schema-valid, value-free, fully cleaned result may set
 `production_eligible=true`; the label alone does not prove the provider was
 live.

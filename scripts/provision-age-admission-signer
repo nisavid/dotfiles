@@ -1381,6 +1381,10 @@ def _provider_environment(
     environment = os.environ.copy()
     environment.pop(LOGIN_CREDENTIAL_FIELD, None)
     environment.pop("PROTON_PASS_AGENT_REASON", None)
+    ambient_path = environment.get("PATH")
+    environment["PATH"] = os.fspath(tools_directory) + (
+        os.pathsep + ambient_path if ambient_path else ""
+    )
     environment.update(
         {
             "AGE_TOOLING_DIRECTORY": os.fspath(tools_directory),

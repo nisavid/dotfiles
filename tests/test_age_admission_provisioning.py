@@ -5673,7 +5673,16 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
     ) -> None:
         self.assert_real_builder_contract(primary="existing-pat")
 
-    def assert_real_builder_contract(self, *, primary: str) -> None:
+    def test_real_builder_uses_pinned_age_tools_with_different_ambient_binaries(
+        self,
+    ) -> None:
+        self.assert_real_builder_contract(
+            primary="existing-pat", different_ambient_age=True
+        )
+
+    def assert_real_builder_contract(
+        self, *, primary: str, different_ambient_age: bool = False
+    ) -> None:
         temporary, inputs = self.make_inputs(real_local_tools=True, primary=primary)
         self.addCleanup(temporary.cleanup)
         self.assertEqual(inputs.archive.parent, inputs.root)
@@ -5706,6 +5715,12 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
         self.assertFalse((inputs.support_bin / "pass-cli").exists())
         for source in inputs.support_bin.iterdir():
             (secure_support / source.name).symlink_to(source.resolve(strict=True))
+        if different_ambient_age:
+            for name in ("age", "age-inspect", "age-keygen"):
+                ambient = secure_support / name
+                ambient.unlink()
+                ambient.write_text("#!/bin/sh\nexit 77\n")
+                ambient.chmod(0o755)
         inputs.support_bin = secure_support
         if not trusted_path_ancestors_supported(inputs.root):
             self.skipTest("trusted-wrapper ancestors are UID-mapped in this sandbox")
