@@ -833,7 +833,7 @@ set +e
 (
   unset DISPLAY DBUS_SESSION_BUS_ADDRESS XDG_RUNTIME_DIR
   run_with_test_deadline \
-    "$test_dir/deadline-output" 68 \
+    "$test_dir/deadline-output" 88 \
     "$fixture_bin/proton-pass-startup"
 )
 deadline_status=$?
@@ -856,7 +856,7 @@ test_process_fixture_stop_all
   fail 'the real deadline must cover exactly two readiness attempts'
 [[ ${#adapter_pids} == 2 && ${#descendant_pids} == 2 ]] ||
   fail 'the deadline fixture must reach both adapters and descendants'
-(( deadline_elapsed >= 56.0 && deadline_elapsed < 66.0 )) ||
+(( deadline_elapsed >= 76.0 && deadline_elapsed < 86.0 )) ||
   fail 'the real startup deadline must bound whole-entrypoint failure'
 (( adapter_survived == 0 )) ||
   fail 'startup must terminate and reap both timed-out readiness adapters'
