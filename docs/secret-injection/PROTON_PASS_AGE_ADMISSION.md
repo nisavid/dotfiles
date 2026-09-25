@@ -1947,6 +1947,11 @@ refreshed adapter, trusted-wrapper, and creator digests, and refresh its own
 then-current base and head. A local candidate, an earlier digest handoff, or
 another consumer's transition is not an operating input.
 
+PR [#323](https://github.com/nisavid/dotfiles/pull/323) is also registered as a
+consumer in [issue #286](https://github.com/nisavid/dotfiles/issues/286#issuecomment-5822092645).
+Its owning task follows the same reviewed-procedure and fresh-transition
+requirements.
+
 Once the new key is trusted, protection is restored, and operational acceptance
 is recorded, each owning task may, under its separate authority, create a new
 receipt through the routine path, replace that PR's prior marker, and require a
