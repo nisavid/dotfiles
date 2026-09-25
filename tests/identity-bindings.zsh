@@ -76,6 +76,8 @@ rm -- "$deployed_git_config"
 chezmoi_bin=$(command -v chezmoi)
 helper_bin=$test_dir/helper-bin
 mkdir -p -- "$helper_bin" "$test_dir/no-helper-bin"
+# lookPath returns a cleaned path, and macOS's TMPDIR ends in a slash.
+helper_bin=${helper_bin:A}
 for helper in glab git-credential-oauth; do
   print -r -- '#!/bin/sh' > "$helper_bin/$helper"
   chmod 755 "$helper_bin/$helper"
