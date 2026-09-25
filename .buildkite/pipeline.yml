@@ -35,6 +35,8 @@ steps:
         command: .buildkite/run-group.sh "{{matrix}}"
         agents:
           queue: macos-14-medium
+        # Remove this skip once the Buildkite plan includes macOS minutes again.
+        skip: "The trial's macOS minutes are used up (issue #321)"
         timeout_in_minutes: 25
         matrix:
           - shell-bindings
