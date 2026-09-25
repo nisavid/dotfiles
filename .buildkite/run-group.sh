@@ -8,6 +8,8 @@ set -euo pipefail
 
 readonly CHEZMOI_VERSION=2.71.0
 readonly AGE_VERSION=1.3.1
+readonly AGE_LINUX_SHA256=bdc69c09cbdd6cf8b1f333d372a1f58247b3a33146406333e30c0f26e8f51377
+readonly AGE_DARWIN_SHA256=01120ea2cbf0463d4c6bd767f99f3271bbed1cdc8a9aa718a76ba1fe4f01998b
 readonly UV_VERSION=0.11.32
 readonly PYTHON_VERSION=3.12
 # privacy-scan allows /home/runner paths, matching GitHub-hosted runners.
@@ -25,18 +27,18 @@ fetch_verified() {
 
 install_tools() {
   local tools=$1 platform=$2 python=$3
-  [[ ! -f $tools/.installed ]] || return 0
+  [[ ! -f $tools/.installed || ! -f $tools/age-v${AGE_VERSION}-${platform}.tar.gz ]] || return 0
   local chezmoi_digest age_digest uv_asset uv_digest
   case "$platform" in
     linux-amd64)
       chezmoi_digest=6ea2040ecc0e82d3dac604289e100b0157afefcd94ebb818e5f6e31655156d34
-      age_digest=bdc69c09cbdd6cf8b1f333d372a1f58247b3a33146406333e30c0f26e8f51377
+      age_digest=$AGE_LINUX_SHA256
       uv_asset=uv-x86_64-unknown-linux-gnu
       uv_digest=aab924fd522efd06f1c5f3b93a243864fc453132c94b2dc49f1371b528a4b967
       ;;
     darwin-arm64)
       chezmoi_digest=8b03d7be6b5d500a503c712ae6da7dd6817b6c3328223b4ae8be7a8be5a2fa3a
-      age_digest=01120ea2cbf0463d4c6bd767f99f3271bbed1cdc8a9aa718a76ba1fe4f01998b
+      age_digest=$AGE_DARWIN_SHA256
       uv_asset=uv-aarch64-apple-darwin
       uv_digest=ed336d0ba49db8ef89b2b41fffa372ce63bd032f22a56f001c265891aec32829
       ;;
@@ -54,6 +56,7 @@ install_tools() {
   fetch_verified \
     "https://github.com/FiloSottile/age/releases/download/v${AGE_VERSION}/age-v${AGE_VERSION}-${platform}.tar.gz" \
     "$age_digest" "$downloads/age.tar.gz"
+  install -m 0644 "$downloads/age.tar.gz" "$tools/age-v${AGE_VERSION}-${platform}.tar.gz"
   tar -xzf "$downloads/age.tar.gz" -C "$downloads"
   install -m 0755 "$downloads/age/age" "$downloads/age/age-keygen" \
     "$downloads/age/age-inspect" "$tools/bin"
@@ -117,6 +120,8 @@ main() {
         HOME="/home/$CI_USER" USER="$CI_USER" LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
         PATH="$tools/venv/bin:$tools/bin:/usr/local/bin:/usr/bin:/bin" \
         AGE_TOOLING_DIRECTORY="$tools/bin" \
+        AGE_TOOLING_ARCHIVE="$tools/age-v${AGE_VERSION}-${platform}.tar.gz" \
+        AGE_TOOLING_ARCHIVE_SHA256="$AGE_LINUX_SHA256" \
         bash scripts/ci-test-group "$group" || status=$?
       ;;
     Darwin)
@@ -128,6 +133,8 @@ main() {
       install_tools "$tools" "$platform" ""
       PYTHONDONTWRITEBYTECODE=1 PATH="$tools/venv/bin:$tools/bin:$PATH" \
         AGE_TOOLING_DIRECTORY="$tools/bin" \
+        AGE_TOOLING_ARCHIVE="$tools/age-v${AGE_VERSION}-${platform}.tar.gz" \
+        AGE_TOOLING_ARCHIVE_SHA256="$AGE_DARWIN_SHA256" \
         bash scripts/ci-test-group "$group" || status=$?
       ;;
     *)
