@@ -46,7 +46,9 @@ def resolved_non_provider_support(name: str) -> Path:
         raise AssertionError(f"unsupported test command: {name}")
     command = shutil.which(name)
     if command is None:
-        raise unittest.SkipTest(f"required test support command is unavailable: {name}")
+        require_age_tooling_or_skip(
+            f"required test support command is unavailable: {name}"
+        )
     return Path(command).resolve(strict=True)
 
 
@@ -1888,7 +1890,9 @@ class AgeAdmissionProviderFixtureTests(unittest.TestCase):
         )
         self.addCleanup(temporary.cleanup)
         if not self.trusted_path_ancestors_supported(inputs.root):
-            self.skipTest("trusted-wrapper ancestors are UID-mapped in this sandbox")
+            require_age_tooling_or_skip(
+                "trusted-wrapper ancestors are UID-mapped in this sandbox"
+            )
 
         signing_key = inputs.root / "admission-signer"
         generated = subprocess.run(
@@ -1898,7 +1902,9 @@ class AgeAdmissionProviderFixtureTests(unittest.TestCase):
             timeout=15,
         )
         if generated.returncode != 0:
-            self.skipTest("disposable SSH Ed25519 key generation is unavailable")
+            require_age_tooling_or_skip(
+                "disposable SSH Ed25519 key generation is unavailable"
+            )
         signer_public_key = Path(f"{signing_key}.pub")
         signer_public_key.chmod(0o600)
         inputs.signer_public_key = signer_public_key

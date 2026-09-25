@@ -1549,7 +1549,9 @@ pathlib.Path({os.fspath(self.wrapper_marker)!r}).write_text(
                             signal.SIGTERM,
                         )
                         blocked = signal.pthread_sigmask(signal.SIG_BLOCK, set())
-                        pathlib.Path({os.fspath(child_state_path)!r}).write_text(
+                        state_path = pathlib.Path({os.fspath(child_state_path)!r})
+                        pending_state_path = state_path.with_suffix(".pending")
+                        pending_state_path.write_text(
                             json.dumps(
                                 {{
                                     "blocked": sorted(int(item) for item in blocked),
@@ -1566,6 +1568,7 @@ pathlib.Path({os.fspath(self.wrapper_marker)!r}).write_text(
                             ),
                             encoding="ascii",
                         )
+                        os.replace(pending_state_path, state_path)
                         time.sleep(30)
                         """
                     ),

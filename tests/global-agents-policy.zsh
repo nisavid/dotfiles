@@ -40,7 +40,10 @@ mode_of() {
 
 [[ -f "$template" ]] || fail "private source template is missing"
 [[ ! -e "$source_root/dot_codex/AGENTS.md.tmpl" ]] || fail "public-mode source template still exists"
-[[ $(mode_of "$template") == 644 ]] || fail "source template mode must be 0644"
+source_git_mode=$(git -C "$repo_root" ls-files --stage -- home/dot_codex/private_AGENTS.md.tmpl | awk '{print $1}')
+[[ $source_git_mode == 100644 ]] || fail "source template Git mode must be 100644"
+[[ -r "$template" ]] || fail "source template is not readable"
+[[ ! -x "$template" ]] || fail "source template must not be executable"
 [[ $(chezmoi -S "$source_root" target-path "$template") == "$HOME/.codex/AGENTS.md" ]] ||
   fail "source template targets the wrong file"
 [[ -f "$preflight_partial" ]] || fail "ticket-tracker preflight partial is missing"
