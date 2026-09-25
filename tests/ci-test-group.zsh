@@ -39,36 +39,73 @@ typeset -A equivalents=(
   'captured_state_output="$({' 'captured_state_output="$({'
 )
 
-typeset -A script_lines
-while IFS= read -r line; do
-  line=${line##[[:space:]]#}
-  [[ -n $line ]] && script_lines[$line]=1
-done < "$script"
+# Lines only the script needs: this check itself and a local declaration.
+typeset -A script_only=(
+  'zsh -f tests/ci-test-group.zsh' 1
+  'local captured_state_output captured_state_status' 1
+)
 
+# Print the trimmed, non-empty body lines of one group function.
+group_lines() {
+  emulate -L zsh
+  awk -v start="group_${1//-/_}() {" '
+    $0 == start { in_group = 1; next }
+    in_group && $0 == "}" { exit }
+    in_group { sub(/^ +/, ""); if ($0 != "") print }
+  ' "$script"
+}
+
+# Compare a workflow's test steps with the groups that partition them, in both
+# directions, so neither side can gain or lose a command unnoticed.
 integer checked=0
-check_step() {
-  local workflow=$repo_root/.github/workflows/$1 step=$2 line expected
-  local -a lines
-  lines=("${(@f)$(run_block "$workflow" "$step")}")
-  (( ${#lines} > 1 )) || fail "no run block found for $1: $step"
-  for line in "${lines[@]}"; do
-    expected=$line
-    if (( ${+equivalents[$line]} )); then
-      expected=${equivalents[$line]}
-      [[ -z $expected ]] && continue
-    fi
-    (( ${+script_lines[$expected]} )) ||
-      fail "scripts/ci-test-group is missing a command from $1 ($step): $line"
+typeset -a partitioned_groups
+check_partition() {
+  local label=$1 step_list=$2 group_list=$3 step group line
+  local workflow=$repo_root/.github/workflows/$label
+  local -a steps groups lines
+  local -A expected actual
+  steps=("${(@s:|:)step_list}")
+  groups=("${(@s: :)group_list}")
+  partitioned_groups+=("${groups[@]}")
+  for step in "${steps[@]}"; do
+    lines=("${(@f)$(run_block "$workflow" "$step")}")
+    (( ${#lines} > 1 )) || fail "no run block found for $label: $step"
+    for line in "${lines[@]}"; do
+      if (( ${+equivalents[$line]} )); then
+        line=${equivalents[$line]}
+        [[ -z $line ]] && continue
+      fi
+      expected[$line]=1
+    done
+  done
+  for group in "${groups[@]}"; do
+    lines=("${(@f)$(group_lines "$group")}")
+    (( ${#lines} > 0 )) || fail "group $group has no commands"
+    for line in "${lines[@]}"; do
+      (( ${+script_only[$line]} )) || actual[$line]=1
+    done
+  done
+  for line in "${(@k)expected}"; do
+    (( ${+actual[$line]} )) ||
+      fail "groups ($group_list) are missing a command from $label: $line"
     (( ++checked ))
+  done
+  for line in "${(@k)actual}"; do
+    (( ${+expected[$line]} )) ||
+      fail "groups ($group_list) run a command that $label does not: $line"
   done
 }
 
-check_step platform-portability.yml 'Verify shell syntax'
-check_step platform-portability.yml 'Verify platform bindings'
-check_step platform-portability.yml 'Verify private-skill transaction'
-check_step zsh-deployment-portability.yml 'Verify user-session deployment contracts'
+check_partition platform-portability.yml \
+  'Verify shell syntax|Verify platform bindings|Verify private-skill transaction' \
+  'shell-bindings proton-pass discover python-checks'
+check_partition zsh-deployment-portability.yml \
+  'Verify user-session deployment contracts' \
+  'zsh-deployment'
 
 listed=("${(@f)$(bash "$script" --list)}")
+[[ ${(j: :)${(o)listed}} == ${(j: :)${(o)partitioned_groups}} ]] ||
+  fail 'every group must partition exactly one workflow'
 [[ ${(j: :)listed} == 'shell-bindings proton-pass discover python-checks zsh-deployment' ]] ||
   fail "unexpected group list: ${(j: :)listed}"
 for group in "${listed[@]}"; do
