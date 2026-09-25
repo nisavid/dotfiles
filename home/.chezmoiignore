@@ -1,7 +1,9 @@
 # Never manage the age identity (private key) — it is machine-local and must not be committed.
 .config/age
 
-# Machine-local git overrides (e.g. coderabbit machineId); not tracked.
+# Machine-local Git overrides; not tracked. Tools that use `git config --global`,
+# such as CodeRabbit for its machineId, can't reach this file: plain --global
+# reads skip includes and writes go to ~/.config/git/config.
 .config/git/config.local
 
 {{ if ne .chezmoi.os "darwin" }}

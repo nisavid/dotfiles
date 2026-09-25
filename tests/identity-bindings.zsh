@@ -19,6 +19,7 @@ fixture_data='{
   "chezmoi": {
     "os": "linux",
     "homeDir": "'"${fixture_home}"'",
+    "destDir": "'"${fixture_home}"'",
     "hostname": "fixture-workstation"
   },
   "gitIdentity": {
@@ -51,6 +52,26 @@ chezmoi -S "$repo_root/home" execute-template --override-data "$fixture_data" \
   < home/dot_config/git/config.tmpl > "$git_config"
 rg -F 'email = developer@example.invalid' "$git_config" >/dev/null ||
   fail 'Git config did not select the synthetic host identity'
+git config --file "$git_config" --list >/dev/null ||
+  fail 'Rendered Git config does not parse'
+[[ $(git config --file "$git_config" filter.lfs.required) == true ]] ||
+  fail 'Git config does not require the LFS filter'
+[[ -z $(git config --file "$git_config" --default '' coderabbit.machineId) ]] ||
+  fail 'Git config invented a CodeRabbit machine ID'
+
+deployed_git_config=$fixture_home/.config/git/config
+mkdir -p -- "${deployed_git_config:h}"
+print -r -- $'[coderabbit]\n\tmachineId = cli/fixture-id' > "$deployed_git_config"
+chezmoi -S "$repo_root/home" execute-template --override-data "$fixture_data" \
+  < home/dot_config/git/config.tmpl > "$git_config"
+[[ $(git config --file "$git_config" coderabbit.machineId) == cli/fixture-id ]] ||
+  fail 'Git config dropped the deployed CodeRabbit machine ID'
+print -r -- $'[coderabbit]\n\tmachineId = "fixture id"' > "$deployed_git_config"
+if chezmoi -S "$repo_root/home" execute-template --override-data "$fixture_data" \
+  < home/dot_config/git/config.tmpl >/dev/null 2>&1; then
+  fail 'Git config accepted a malformed CodeRabbit machine ID'
+fi
+rm -- "$deployed_git_config"
 
 personal_include=$test_dir/personal-include
 chezmoi -S "$repo_root/home" execute-template --override-data "$fixture_data" \

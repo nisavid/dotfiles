@@ -142,6 +142,7 @@ jobs:
           set -euo pipefail
           bash -n \
             home/run_after_restore-acl.sh \
+            home/run_before_refuse-legacy-gitconfig.sh \
             home/run_before_save-acl.sh \
             scripts/private-skill-transaction \
             scripts/private-skill-transaction.d/*.bash
