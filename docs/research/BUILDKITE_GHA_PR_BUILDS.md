@@ -180,24 +180,27 @@ steps:
   - label: ":github: Prepare workflow · ${GITHUB_WORKFLOW}"
     plugin: github-actions
   - label: ":octagonal_sign: Cancel superseded ${GITHUB_WORKFLOW}"
-    if: build.pull_request.id != null && build.env("BUILDKITE_REBUILT_FROM_BUILD_ID") == null
+    if: build.pull_request.id != null
     checkout:
       skip: true
     secrets:
       CANCEL_API_TOKEN: dotfiles-cancel-token   # read_builds + write_builds
     command: |
+      set -euo pipefail
+      # A rebuild gets a higher number, so it would cancel newer builds.
+      [ -z "$${BUILDKITE_REBUILT_FROM_BUILD_ID:-}" ] || exit 0
       api="https://api.buildkite.com/v2/organizations/$$BUILDKITE_ORGANIZATION_SLUG/pipelines/$$BUILDKITE_PIPELINE_SLUG/builds"
-      curl -fsS -G -H "Authorization: Bearer $$CANCEL_API_TOKEN" "$$api" \
+      builds="$$(curl -fsS -G --oauth2-bearer "$$CANCEL_API_TOKEN" "$$api" \
         --data-urlencode "branch=$$BUILDKITE_BRANCH" \
-        -d 'state[]=scheduled' -d 'state[]=running' -d 'state[]=failing' -d exclude_jobs=true |
-        jq -r --arg ref "$$GITHUB_WORKFLOW_REF" --argjson n "$$BUILDKITE_BUILD_NUMBER" \
-          '.[] | select(.number < $$n and .env.GITHUB_WORKFLOW_REF == $$ref) | .number' |
+        -d 'state[]=scheduled' -d 'state[]=running' -d 'state[]=failing' -d exclude_jobs=true)"
+      jq -r --arg ref "$$GITHUB_WORKFLOW_REF" --argjson n "$$BUILDKITE_BUILD_NUMBER" \
+        '.[] | select(.number < $$n and .env.GITHUB_WORKFLOW_REF == $$ref) | .number' <<<"$$builds" |
         while read -r old; do
-          curl -fsS -X PUT -H "Authorization: Bearer $$CANCEL_API_TOKEN" "$$api/$$old/cancel" >/dev/null
+          curl -fsS -X PUT --oauth2-bearer "$$CANCEL_API_TOKEN" "$$api/$$old/cancel" >/dev/null
         done
 ```
 
-The `if:` variables are documented for step conditions ([variables][d-cond-vars]). The step has no `depends_on`, so it runs beside the importer and never waits on a gate.
+The `if:` variable is documented for step conditions ([variables][d-cond-vars]). The rebuild check runs inside the command because Buildkite sets `BUILDKITE_REBUILT_FROM_BUILD_ID` to an empty string, not leaves it unset, on ordinary builds. Capturing the build list before `jq` makes a failed API call fail the step instead of cancelling nothing. The step has no `depends_on`, so it runs beside the importer and never waits on a gate.
 
 ## Open questions and unverified points
 
