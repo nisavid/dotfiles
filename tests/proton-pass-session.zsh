@@ -20,18 +20,22 @@ process_fixture_helper=$repo_root/tests/helpers/process-fixture.zsh
 [[ -r $process_fixture_helper ]] ||
   fail 'the shared process-fixture helper is required'
 source "$process_fixture_helper"
-if /bin/zsh -f -c '
-  source "$1"
-  test_process_fixture_init "$2"
-' -- "$process_fixture_helper" "$repo_root"; then
-  fail 'the process-fixture helper must reject recursive cleanup outside the temporary root'
-fi
 test_dir=$(mktemp -d "${TMPDIR:-/tmp}/proton-pass-session.XXXXXX")
 test_process_fixture_init "$test_dir" || fail 'could not initialize process-fixture cleanup'
 trap test_process_fixture_cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+# Build both roots here: the checkout itself may live under TMPDIR, as it does
+# on Buildkite's GitHub Actions runner.
+containment_dir=$test_dir/containment
+mkdir -p -- "$containment_dir/temporary-root" "$containment_dir/outside"
+if TMPDIR=$containment_dir/temporary-root /bin/zsh -f -c '
+  source "$1"
+  test_process_fixture_init "$2"
+' -- "$process_fixture_helper" "$containment_dir/outside"; then
+  fail 'the process-fixture helper must reject recursive cleanup outside the temporary root'
+fi
 cleanup_diagnostic=$test_dir/cleanup-diagnostic
 : > "$cleanup_diagnostic"
 set +e
