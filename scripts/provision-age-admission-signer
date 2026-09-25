@@ -38,16 +38,16 @@ from typing import Any
 
 os.umask(0o077)
 
-REQUEST_SCHEMA = "issue286-provisioning/v3"
+REQUEST_SCHEMA = "issue286-provisioning/v4"
 MANIFEST_SCHEMA = "issue286-reviewed-source-manifest/v1"
 FIXTURE_SCHEMA = "issue286-provider-fixture-binding/v1"
 QUALIFIED_CLEAN_SCHEMA = "issue286-qualified-clean/v2"
 READY_FOR_RECOVERY_SCHEMA = "issue286-ready-for-recovery/v2"
-STATE_SCHEMA = "issue286-provisioning-state/v3"
+STATE_SCHEMA = "issue286-provisioning-state/v4"
 TERMINAL_COMMIT_SCHEMA = "issue286-terminal-commit/v1"
 FIXTURE_REQUEST_SCHEMA = "issue286-provider-fixture/v1"
 PASS_CLI_SOURCE_COMMIT = "51a4c9b110a0ffe6e81f4f5d3877b9e5a0c24112"
-PROVIDER_COMMAND_SCHEMA = "issue286-pass-cli-2.3.3-provider-commands/v3"
+PROVIDER_COMMAND_SCHEMA = "issue286-pass-cli-2.3.3-provider-commands/v4"
 SOURCE_MANIFEST_SHA256 = (
     "95c0f8d872b308adb741cc21541a090ca4842cb894ece48370938955cb42ae6b"
 )
@@ -1261,7 +1261,15 @@ def _validate_request(
 
     provider = _exact_keys(
         document["provider"],
-        {"expiration", "item_title", "recovery_agent_name", "share_id", "vault_name"},
+        {
+            "expiration",
+            "item_title",
+            "primary_share_id",
+            "recovery_agent_name",
+            "share_id",
+            "vault_id",
+            "vault_name",
+        },
         "provider request",
     )
     if provider["expiration"] not in {"1h", "1d", "1w", "1m", "3m", "6m", "1y"}:
@@ -1269,6 +1277,17 @@ def _validate_request(
     share_id = provider["share_id"]
     if not isinstance(share_id, str) or IDENTIFIER.fullmatch(share_id) is None:
         raise ProvisioningError("share ID is invalid")
+    primary_share_id = provider["primary_share_id"]
+    if (
+        not isinstance(primary_share_id, str)
+        or IDENTIFIER.fullmatch(primary_share_id) is None
+    ):
+        raise ProvisioningError("primary share ID is invalid")
+    if primary_kind == "owner" and primary_share_id != share_id:
+        raise ProvisioningError("owner routine share differs from owner mutation share")
+    vault_id = provider["vault_id"]
+    if not isinstance(vault_id, str) or IDENTIFIER.fullmatch(vault_id) is None:
+        raise ProvisioningError("vault ID is invalid")
     item_title = _private_name(provider["item_title"], "item title")
     recovery_name = _private_name(provider["recovery_agent_name"], "agent name")
     vault_name = _private_name(provider["vault_name"], "vault name")
@@ -1309,8 +1328,10 @@ def _validate_request(
         "provider": {
             "expiration": provider["expiration"],
             "item_title": item_title,
+            "primary_share_id": primary_share_id,
             "recovery_agent_name": recovery_name,
             "share_id": share_id,
+            "vault_id": vault_id,
             "vault_name": vault_name,
         },
         "provider_schema": dict(provider_schema),
@@ -1975,6 +1996,7 @@ def _validate_prior_qualified_clean(
         {
             "fixture",
             "owner_id",
+            "recovery_share_id",
             "pass_cli",
             "platform",
             "provider_schema",
@@ -1984,6 +2006,11 @@ def _validate_prior_qualified_clean(
         "qualified-clean producer bindings",
     )
     _owner_id(producer_bindings["owner_id"], "qualified-clean producer owner ID")
+    if (
+        not isinstance(producer_bindings["recovery_share_id"], str)
+        or IDENTIFIER.fullmatch(producer_bindings["recovery_share_id"]) is None
+    ):
+        raise ProvisioningError("qualified-clean producer recovery share is invalid")
     producer_pass_cli = _exact_keys(
         producer_bindings["pass_cli"],
         {"build_sha256", "observed_path", "version_stdout"},
@@ -2149,6 +2176,7 @@ def _new_state(
         "bindings": {
             "fixture": None,
             "owner_id": None,
+            "recovery_share_id": None,
             "pass_cli": {
                 "build_sha256": request["pass_cli"]["build_sha256"],
                 "observed_path": os.fspath(pass_cli_path),
@@ -2563,6 +2591,55 @@ def _check_readiness(
         )
 
 
+def _vault_share_for_session(
+    state: dict[str, Any],
+    *,
+    session: Path,
+    fixture_directory: Path,
+    expected_share_id: str | None,
+) -> str:
+    request = state["request"]
+    result = _run_provider_read(
+        state,
+        ["pass-cli", "vault", "list", "--output", "json"],
+        session=session,
+        tools_directory=fixture_directory / "tools",
+    )
+    value = _parse_json_output(_require_read_success(result, "vault listing"))
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"vaults"}
+        or not isinstance(value["vaults"], list)
+        or len(value["vaults"]) > 10_000
+    ):
+        raise ProvisioningError("vault listing is invalid")
+    matches = []
+    for record in value["vaults"]:
+        if (
+            not isinstance(record, dict)
+            or set(record) != {"name", "vault_id", "share_id"}
+            or not isinstance(record["name"], str)
+            or not record["name"]
+            or any(
+                not isinstance(record[key], str)
+                or IDENTIFIER.fullmatch(record[key]) is None
+                for key in ("vault_id", "share_id")
+            )
+        ):
+            raise ProvisioningError("vault listing record is invalid")
+        if record["name"] == request["provider"]["vault_name"]:
+            matches.append(record)
+    if (
+        len(matches) != 1
+        or matches[0]["vault_id"] != request["provider"]["vault_id"]
+    ):
+        raise ProvisioningError("selected vault binding is invalid")
+    share_id = matches[0]["share_id"]
+    if expected_share_id is not None and share_id != expected_share_id:
+        raise ProvisioningError("selected share binding is invalid")
+    return share_id
+
+
 def _valid_item_summary(value: object) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ProvisioningError("item listing record is invalid")
@@ -2647,6 +2724,7 @@ def _confirm_item_listing(state: dict[str, Any], *, fixture_directory: Path) -> 
         for record in records
         if record["id"] == expected_id
         and record["share_id"] == request["provider"]["share_id"]
+        and record["vault_id"] == request["provider"]["vault_id"]
         and record["title"] == request["provider"]["item_title"]
         and record["state"] == "Active"
         and record["item_type"] == "custom"
@@ -2933,6 +3011,7 @@ def _receipt_command(
     state: dict[str, Any],
     fixture_directory: Path,
     receipt_relative: str,
+    share_id: str,
 ) -> list[str]:
     fixture = state["bindings"]["fixture"]["document"]
     base = fixture["repositories"]["base"]
@@ -2945,7 +3024,7 @@ def _receipt_command(
         os.fspath(
             fixture_directory / fixture["staged_tools"]["provider_adapter"]["path"]
         ),
-        f"--share-id={state['request']['provider']['share_id']}",
+        f"--share-id={share_id}",
         f"--item-id={state['resources']['item']['id']}",
         "--expected-fingerprint",
         fixture["signer"]["fingerprint"],
@@ -3052,8 +3131,11 @@ def _perform_readback(
     session: Path,
     expected_agent: str | None,
     receipt_label: str,
+    share_id: str,
     expected_reader_name: str | None = None,
 ) -> None:
+    if not isinstance(share_id, str) or IDENTIFIER.fullmatch(share_id) is None:
+        raise ProvisioningError("readback share ID is invalid")
     observed_id = _check_info(
         state,
         session=session,
@@ -3084,7 +3166,9 @@ def _perform_readback(
     _atomic_state_write(state_directory, state)
     _ensure_pass_cli_binding(state)
     result = _run_child(
-        _receipt_command(state_directory, state, fixture_directory, receipt_relative),
+        _receipt_command(
+            state_directory, state, fixture_directory, receipt_relative, share_id
+        ),
         environment=_provider_environment(
             session, fixture_directory / "tools", reason=True
         ),
@@ -3184,8 +3268,13 @@ def _logout(
 def _confirm_revoked_probe(
     state_directory: Path, state: dict[str, Any], fixture_directory: Path
 ) -> None:
-    request = state["request"]
     item_id = state["resources"]["item"]["id"]
+    recovery_share_id = state["bindings"]["recovery_share_id"]
+    if (
+        not isinstance(recovery_share_id, str)
+        or IDENTIFIER.fullmatch(recovery_share_id) is None
+    ):
+        raise ProvisioningError("recovery share ID is not bound")
     session = _state_path(state_directory, state["resources"]["session"]["directory"])
     result = _run_provider_read(
         state,
@@ -3193,7 +3282,7 @@ def _confirm_revoked_probe(
             "pass-cli",
             "item",
             "view",
-            f"--share-id={request['provider']['share_id']}",
+            f"--share-id={recovery_share_id}",
             f"--item-id={item_id}",
             "--field",
             ITEM_FIELD,
@@ -3567,6 +3656,26 @@ def _execute_workflow(
         expected_agent=None,
     )
     primary_session, primary_agent, primary_reader_name = _primary_reader(request)
+    _vault_share_for_session(
+        state,
+        session=owner_session,
+        fixture_directory=fixture_directory,
+        expected_share_id=request["provider"]["share_id"],
+    )
+    if primary_session != owner_session:
+        _check_info(
+            state,
+            session=primary_session,
+            tools_directory=tools,
+            expected_agent=primary_agent,
+            expected_reader_name=primary_reader_name,
+        )
+        _vault_share_for_session(
+            state,
+            session=primary_session,
+            fixture_directory=fixture_directory,
+            expected_share_id=request["provider"]["primary_share_id"],
+        )
 
     _write_item_template(state_directory, state)
     item_id = _mutation(
@@ -3609,6 +3718,7 @@ def _execute_workflow(
         expected_agent=primary_agent,
         expected_reader_name=primary_reader_name,
         receipt_label="primary",
+        share_id=request["provider"]["primary_share_id"],
     )
     state["checks"]["primary_readback"] = True
     state["phase"] = "primary-readback-verified"
@@ -3692,6 +3802,12 @@ def _execute_workflow(
         tools_directory=tools,
         expected_agent=agent_name,
     )
+    state["bindings"]["recovery_share_id"] = _vault_share_for_session(
+        state,
+        session=recovery_session,
+        fixture_directory=fixture_directory,
+        expected_share_id=None,
+    )
     state["phase"] = "session-existing"
     _atomic_state_write(state_directory, state)
 
@@ -3702,6 +3818,7 @@ def _execute_workflow(
         session=recovery_session,
         expected_agent=agent_name,
         receipt_label="recovery",
+        share_id=state["bindings"]["recovery_share_id"],
     )
     state["checks"]["recovery_readback"] = True
     _confirm_monitor(state, fixture_directory=fixture_directory)
@@ -3722,6 +3839,7 @@ def _execute_workflow(
         expected_agent=primary_agent,
         expected_reader_name=primary_reader_name,
         receipt_label="primary-after-revocation",
+        share_id=request["provider"]["primary_share_id"],
     )
     state["checks"]["primary_after_revocation"] = True
     _atomic_state_write(state_directory, state)
@@ -3995,6 +4113,7 @@ def _validate_resume_state(state: dict[str, Any], state_directory: Path) -> None
         {
             "fixture",
             "owner_id",
+            "recovery_share_id",
             "pass_cli",
             "platform",
             "provider_schema",
@@ -4007,6 +4126,12 @@ def _validate_resume_state(state: dict[str, Any], state_directory: Path) -> None
         raise ProvisioningError("state platform binding is invalid")
     # Every provider request is armed after the owner ID is captured.
     _owner_id(bindings["owner_id"], "state owner ID")
+    recovery_share_id = bindings["recovery_share_id"]
+    if recovery_share_id is not None and (
+        not isinstance(recovery_share_id, str)
+        or IDENTIFIER.fullmatch(recovery_share_id) is None
+    ):
+        raise ProvisioningError("state recovery share ID is invalid")
     pass_cli = _exact_keys(
         bindings["pass_cli"],
         {"build_sha256", "observed_path", "version_stdout"},
@@ -4454,6 +4579,7 @@ def _resume_item_observation(
             }
             for record in records
             if record["share_id"] == request["provider"]["share_id"]
+            and record["vault_id"] == request["provider"]["vault_id"]
             and record["title"] == request["provider"]["item_title"]
             and record["state"] == "Active"
             and record["item_type"] == "custom"
@@ -4470,6 +4596,8 @@ def _resume_item_observation(
             }
             for record in records
             if record["id"] == retained
+            and record["share_id"] == request["provider"]["share_id"]
+            and record["vault_id"] == request["provider"]["vault_id"]
         ]
     state["resources"]["item"]["candidates"] = candidates
 

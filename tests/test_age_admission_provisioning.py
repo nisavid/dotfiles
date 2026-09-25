@@ -56,7 +56,10 @@ def provider_id(lead: int, label: str) -> str:
     return base64.urlsafe_b64encode(bytes([lead]) + digest[1:]).decode("ascii")
 
 
-SHARE_ID = provider_id(0xF8, "issue286 share")
+OWNER_SHARE_ID = provider_id(0xF8, "issue286 owner share")
+PRIMARY_SHARE_ID = provider_id(0xF7, "issue286 primary share")
+RECOVERY_SHARE_ID = provider_id(0xF6, "issue286 recovery share")
+SHARE_ID = OWNER_SHARE_ID
 ITEM_ID = provider_id(0xF9, "issue286 item")
 PAT_ID = provider_id(0xFA, "issue286 recovery PAT")
 COLLISION_PAT_ID = provider_id(0xFC, "issue286 collision PAT")
@@ -463,7 +466,6 @@ class ProvisioningInputs:
         return f"#!{sys.executable} -B\n".encode() + body
 
     def provider_adapter_stub(self) -> bytes:
-        share_argument = f"--share-id={SHARE_ID}"
         item_argument = f"--item-id={ITEM_ID}"
         body = textwrap.dedent(
             f"""\
@@ -474,10 +476,28 @@ class ProvisioningInputs:
             import sys
 
             arguments = sys.argv[1:]
+            session = os.environ.get("PROTON_PASS_SESSION_DIR")
+            def is_recovery_session(path):
+                return (
+                    isinstance(path, str)
+                    and os.path.basename(path) == "recovery-session"
+                    and os.path.basename(os.path.dirname(path)) == "private"
+                    and os.path.dirname(os.path.dirname(os.path.dirname(path)))
+                    == {os.fspath(self.private)!r}
+                )
+            share = (
+                {OWNER_SHARE_ID!r} if session == {os.fspath(self.owner_session)!r}
+                else {PRIMARY_SHARE_ID!r} if session == {os.fspath(self.primary_session)!r}
+                else {RECOVERY_SHARE_ID!r} if is_recovery_session(session)
+                else None
+            )
+            if share is None:
+                raise SystemExit(2)
+            share_argument = "--share-id=" + share
             # argparse reads a separate "-..." token as an option, so the
             # provisioner must attach each provider ID to its option.
             if (
-                arguments.count({share_argument!r}) != 1
+                arguments.count(share_argument) != 1
                 or arguments.count({item_argument!r}) != 1
                 or "--share-id" in arguments
                 or "--item-id" in arguments
@@ -515,7 +535,7 @@ class ProvisioningInputs:
                         "pass-cli",
                         "item",
                         "view",
-                        {share_argument!r},
+                        share_argument,
                         {item_argument!r},
                         "--field",
                         "SSH.private_key",
@@ -693,6 +713,13 @@ class ProvisioningInputs:
     def set_behaviors(self, **behaviors: str) -> None:
         self._write_control(behaviors)
 
+    def set_vault_records(self, profile: str, records: list[dict[str, str]]) -> None:
+        assert profile in {"owner", "primary", "recovery"}
+        self.control.write_bytes(canonical_json({
+            "behaviors": {}, "vault_records": {profile: records},
+        }))
+        self.control.chmod(0o600)
+
     def set_provider_controls(
         self,
         *,
@@ -739,17 +766,28 @@ class ProvisioningInputs:
             PRIMARY_SESSION = {os.fspath(self.primary_session)!r}
             # Only the requested routine reader and the recovery agent read items.
             ROUTINE_SESSION = {os.fspath(self.routine_session)!r}
-            RECOVERY_SESSION = {os.fspath(self.state / "private/recovery-session")!r}
+            PRIVATE_PARENT = {os.fspath(self.private)!r}
             ITEM = {os.fspath(self.stored_item)!r}
             LOGIN_CREDENTIAL = {self.LOGIN_CREDENTIAL!r}
             TOKEN_OUTPUTS = {self.agent_token_outputs()!a}
-            SHARE_ID = {SHARE_ID!r}
+            OWNER_SHARE_ID = {OWNER_SHARE_ID!r}
+            PRIMARY_SHARE_ID = {PRIMARY_SHARE_ID!r}
+            RECOVERY_SHARE_ID = {RECOVERY_SHARE_ID!r}
             ITEM_ID = {ITEM_ID!r}
             PAT_ID = {PAT_ID!r}
             COLLISION_PAT_ID = {COLLISION_PAT_ID!r}
             VAULT_ID = {VAULT_ID!r}
             RECORD_ID = {RECORD_ID!r}
             ID_OPTIONS = ("--item-id", "--pat-id", "--share-id")
+
+            def is_recovery_session(path):
+                return (
+                    isinstance(path, str)
+                    and os.path.basename(path) == "recovery-session"
+                    and os.path.basename(os.path.dirname(path)) == "private"
+                    and os.path.dirname(os.path.dirname(os.path.dirname(path)))
+                    == PRIVATE_PARENT
+                )
 
             def load(path):
                 with open(path, encoding="ascii") as stream:
@@ -874,6 +912,8 @@ class ProvisioningInputs:
                 kind = "item-create"
             elif arguments[:2] == ["item", "list"]:
                 kind = "item-list"
+            elif arguments == ["vault", "list", "--output", "json"]:
+                kind = "vault-list"
             elif arguments[:2] == ["item", "view"]:
                 kind = "item-view"
             elif arguments[:2] == ["item", "delete"]:
@@ -924,11 +964,17 @@ class ProvisioningInputs:
                 stream.write(json.dumps(record, sort_keys=True) + "\\n")
 
             ids = provider_ids(arguments)
+            reader_share = (
+                OWNER_SHARE_ID if session == OWNER_SESSION
+                else PRIMARY_SHARE_ID if session == PRIMARY_SESSION
+                else RECOVERY_SHARE_ID if is_recovery_session(session)
+                else None
+            )
             expected_ids = {{
-                "item-create": {{"--share-id": SHARE_ID}},
-                "item-delete": {{"--item-id": ITEM_ID, "--share-id": SHARE_ID}},
-                "item-list": {{"--share-id": SHARE_ID}},
-                "item-view": {{"--item-id": ITEM_ID, "--share-id": SHARE_ID}},
+                "item-create": {{"--share-id": OWNER_SHARE_ID}},
+                "item-delete": {{"--item-id": ITEM_ID, "--share-id": OWNER_SHARE_ID}},
+                "item-list": {{"--share-id": OWNER_SHARE_ID}},
+                "item-view": {{"--item-id": ITEM_ID, "--share-id": reader_share}},
             }}.get(kind, {{}})
             if arguments[:2] == ["pat", "delete"]:
                 expected_ids = {{"--pat-id": ids.get("--pat-id")}}
@@ -1072,6 +1118,20 @@ class ProvisioningInputs:
                     }}))
                 else:
                     raise SystemExit(9)
+            elif kind == "vault-list":
+                if session == OWNER_SESSION:
+                    profile, share = "owner", OWNER_SHARE_ID
+                elif session == PRIMARY_SESSION:
+                    profile, share = "primary", PRIMARY_SHARE_ID
+                elif is_recovery_session(session) and state["logged_in"]:
+                    profile, share = "recovery", RECOVERY_SHARE_ID
+                else:
+                    raise SystemExit(9)
+                vaults = load(CONTROL).get("vault_records", {{}}).get(profile, [{{
+                    "name": "Synthetic Vault", "vault_id": VAULT_ID,
+                    "share_id": share,
+                }}])
+                print(json.dumps({{"vaults": vaults}}))
             elif kind == "item-create":
                 with open(ITEM, "w", encoding="ascii") as stream:
                     json.dump(item, stream)
@@ -1091,7 +1151,7 @@ class ProvisioningInputs:
                 items = []
                 if state["item"] and behavior != "empty":
                     record = {{
-                        "id": ITEM_ID, "share_id": SHARE_ID,
+                        "id": ITEM_ID, "share_id": OWNER_SHARE_ID,
                         "vault_id": VAULT_ID, "state": "Active", "flags": [],
                         "create_time": "2026-09-16T00:00:00", "modify_time": "2026-09-16T00:00:00",
                         "title": "issue286-item", "item_type": "custom",
@@ -1101,9 +1161,9 @@ class ProvisioningInputs:
                         items.append(dict(record))
                 print(json.dumps({{"items": items}}))
             elif kind == "item-view":
-                if session not in {{ROUTINE_SESSION, RECOVERY_SESSION}}:
+                if session != ROUTINE_SESSION and not is_recovery_session(session):
                     raise SystemExit(11)
-                if state["revoked"] and session == RECOVERY_SESSION:
+                if state["revoked"] and is_recovery_session(session):
                     print("revoked", file=sys.stderr)
                     raise SystemExit(8)
                 if "--field" not in arguments:
@@ -1229,11 +1289,16 @@ class ProvisioningInputs:
                 "expiration": "1h",
                 "item_title": "issue286-item",
                 "recovery_agent_name": "issue286-recovery",
-                "share_id": SHARE_ID,
+                "share_id": OWNER_SHARE_ID,
+                "primary_share_id": (
+                    OWNER_SHARE_ID if (primary or self.primary) == "owner"
+                    else PRIMARY_SHARE_ID
+                ),
+                "vault_id": VAULT_ID,
                 "vault_name": "Synthetic Vault",
             },
             "provider_schema": {
-                "command_schema": "issue286-pass-cli-2.3.3-provider-commands/v3",
+                "command_schema": "issue286-pass-cli-2.3.3-provider-commands/v4",
                 "source_commit": "51a4c9b110a0ffe6e81f4f5d3877b9e5a0c24112",
                 "source_manifest_sha256": "95c0f8d872b308adb741cc21541a090ca4842cb894ece48370938955cb42ae6b",
             },
@@ -1247,7 +1312,7 @@ class ProvisioningInputs:
                 },
                 "repository": os.fspath(self.source),
             },
-            "schema": "issue286-provisioning/v3",
+            "schema": "issue286-provisioning/v4",
             "sessions": self.sessions_request(primary or self.primary),
         }
         self.rewrite_request()
@@ -1941,7 +2006,7 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
         self.assertEqual(
             (state["schema"], marker["schema"], record["schema"]),
             (
-                "issue286-provisioning-state/v3",
+                "issue286-provisioning-state/v4",
                 f"issue286-{outcome}/v2",
                 "issue286-terminal-commit/v1",
             ),
@@ -2321,7 +2386,171 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
             if kind in {"item-create", "item-delete", "agent-create", "agent-delete"}:
                 self.assertEqual(session, "owner")
 
-    def test_pat_reader_change_after_readiness_stops_before_key_read(self) -> None:
+    def test_distinct_session_shares_route_reads_and_owner_mutations(self) -> None:
+        temporary, inputs = self.make_inputs(primary="existing-pat")
+        self.addCleanup(temporary.cleanup)
+        inputs.set_provider_controls(adapter_field_read=True)
+
+        result = inputs.run()
+
+        self.assertEqual(
+            (result.returncode, result.stdout, result.stderr),
+            (0, b"qualified-clean\n", b""),
+        )
+        state = json.loads((inputs.state / "state.json").read_bytes())
+        self.assertEqual(state["bindings"]["recovery_share_id"], RECOVERY_SHARE_ID)
+        self.assertEqual(
+            state["request"]["provider"]["primary_share_id"], PRIMARY_SHARE_ID
+        )
+        self.assertEqual(state["request"]["provider"]["share_id"], OWNER_SHARE_ID)
+        self.assertEqual(state["request"]["provider"]["vault_id"], VAULT_ID)
+        log = inputs.log()
+        self.assertEqual(
+            [record["session"] for record in log if record["kind"] == "vault-list"],
+            [
+                os.fspath(inputs.owner_session),
+                os.fspath(inputs.primary_session),
+                os.fspath(inputs.state / "private/recovery-session"),
+            ],
+        )
+        kinds = [record["kind"] for record in log]
+        vault_indices = [
+            index for index, kind in enumerate(kinds) if kind == "vault-list"
+        ]
+        self.assertTrue(
+            all(index < kinds.index("item-create") for index in vault_indices[:2])
+        )
+        recovery_adapter = next(
+            index for index, record in enumerate(log)
+            if record["kind"] == "provider-adapter"
+            and record["session"] == os.fspath(inputs.state / "private/recovery-session")
+        )
+        self.assertLess(kinds.index("agent-login"), vault_indices[2])
+        self.assertLess(vault_indices[2], recovery_adapter)
+        for record in log:
+            if record["kind"] in {"item-create", "item-list", "item-delete"}:
+                self.assertIn(f"--share-id={OWNER_SHARE_ID}", record["args"])
+            elif record["kind"] in {"provider-adapter", "item-view"}:
+                expected = (
+                    PRIMARY_SHARE_ID
+                    if record["session"] == os.fspath(inputs.primary_session)
+                    else RECOVERY_SHARE_ID
+                )
+                self.assertIn(f"--share-id={expected}", record["args"])
+        self.assertNotIn(inputs.SIGNER, inputs.provider_log.read_bytes())
+
+    def test_v4_vault_identifiers_are_required_before_provider_invocation(self) -> None:
+        for label, primary, field in (
+            ("missing primary share", "existing-agent", "primary_share_id"),
+            ("missing vault ID", "existing-agent", "vault_id"),
+            ("owner primary share differs", "owner", "primary_share_id"),
+        ):
+            with self.subTest(label=label):
+                temporary, inputs = self.make_inputs(primary=primary)
+                try:
+                    if label == "owner primary share differs":
+                        inputs.request_document["provider"][field] = PRIMARY_SHARE_ID
+                    else:
+                        del inputs.request_document["provider"][field]
+                    inputs.rewrite_request()
+
+                    result = inputs.run()
+
+                    self.assertEqual(
+                        (result.returncode, result.stdout, result.stderr),
+                        (1, b"", b"age-admission signer provisioning failed\n"),
+                    )
+                    self.assertEqual(inputs.log(), [])
+                    self.assertFalse(inputs.state.exists())
+                finally:
+                    temporary.cleanup()
+
+    def test_wrong_primary_share_stops_before_mutation(self) -> None:
+        temporary, inputs = self.make_inputs(primary="existing-agent")
+        self.addCleanup(temporary.cleanup)
+        inputs.set_vault_records(
+            "primary",
+            [{
+                "name": "Synthetic Vault",
+                "vault_id": VAULT_ID,
+                "share_id": OWNER_SHARE_ID,
+            }],
+        )
+
+        result = inputs.run()
+
+        self.assertEqual(
+            (result.returncode, result.stdout, result.stderr),
+            (1, b"", b"age-admission signer provisioning failed\n"),
+        )
+        self.assertEqual(
+            [session for kind, session in inputs.session_calls() if kind == "vault-list"],
+            ["owner", "primary"],
+        )
+        self.assertNotIn("item-create", [record["kind"] for record in inputs.log()])
+        self.assertNotIn("agent-create", [record["kind"] for record in inputs.log()])
+
+    def test_wrong_owner_vault_stops_before_mutation(self) -> None:
+        temporary, inputs = self.make_inputs(primary="owner")
+        self.addCleanup(temporary.cleanup)
+        inputs.set_vault_records(
+            "owner",
+            [{
+                "name": "Synthetic Vault",
+                "vault_id": provider_id(0xF5, "issue286 wrong vault"),
+                "share_id": OWNER_SHARE_ID,
+            }],
+        )
+
+        result = inputs.run()
+
+        self.assertEqual(
+            (result.returncode, result.stdout, result.stderr),
+            (1, b"", b"age-admission signer provisioning failed\n"),
+        )
+        self.assertEqual(
+            [session for kind, session in inputs.session_calls() if kind == "vault-list"],
+            ["owner"],
+        )
+        self.assertNotIn("item-create", [record["kind"] for record in inputs.log()])
+
+    def test_recovery_vault_must_be_unique_and_match_configured_vault(self) -> None:
+        valid = {
+            "name": "Synthetic Vault",
+            "vault_id": VAULT_ID,
+            "share_id": RECOVERY_SHARE_ID,
+        }
+        for label, records in (
+            ("missing", []),
+            ("duplicate", [valid, dict(valid)]),
+            (
+                "wrong vault",
+                [dict(valid, vault_id=provider_id(0xF5, "issue286 wrong vault"))],
+            ),
+        ):
+            with self.subTest(label=label):
+                temporary, inputs = self.make_inputs(primary="existing-agent")
+                try:
+                    inputs.set_vault_records("recovery", records)
+
+                    result = inputs.run()
+
+                    self.assertEqual(
+                        (result.returncode, result.stdout, result.stderr),
+                        (1, b"", b"age-admission signer provisioning failed\n"),
+                    )
+                    calls = inputs.session_calls()
+                    self.assertIn(("agent-login", "recovery"), calls)
+                    self.assertIn(("vault-list", "recovery"), calls)
+                    self.assertNotIn(("provider-adapter", "recovery"), calls)
+                    self.assertFalse((inputs.state / "qualified-clean.json").exists())
+                    state = json.loads((inputs.state / "state.json").read_bytes())
+                    self.assertNotEqual(state["outcome"], "qualified-clean")
+                    self.assertFalse(inputs.provider_document()["item"])
+                finally:
+                    temporary.cleanup()
+
+    def test_pat_reader_change_before_readiness_stops_before_key_read(self) -> None:
         temporary, inputs = self.make_inputs(primary="existing-pat")
         self.addCleanup(temporary.cleanup)
         inputs.set_primary_reader_drift(2)
@@ -2333,7 +2562,8 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
             (1, b"", b"age-admission signer provisioning failed\n"),
         )
         calls = inputs.session_calls()
-        self.assertIn(("readiness", "primary"), calls)
+        self.assertIn(("vault-list", "primary"), calls)
+        self.assertNotIn(("readiness", "primary"), calls)
         self.assertNotIn(("provider-adapter", "primary"), calls)
         self.assertEqual(
             json.loads((inputs.state / "state.json").read_bytes())["outcome"],
@@ -2373,7 +2603,15 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
             (result.returncode, result.stdout, result.stderr),
             (0, b"qualified-clean\n", b""),
         )
-        self.assertEqual(inputs.session_calls(), OWNER_PRIMARY_QUALIFICATION_CALLS)
+        calls = inputs.session_calls()
+        self.assertEqual(
+            [call for call in calls if call[0] != "vault-list"],
+            OWNER_PRIMARY_QUALIFICATION_CALLS,
+        )
+        self.assertEqual(
+            [session for kind, session in calls if kind == "vault-list"],
+            ["owner", "recovery"],
+        )
         disposition = self.assert_terminal_disposition(inputs, "qualified-clean")
         state = json.loads((inputs.state / "state.json").read_bytes())
         self.assertEqual(
@@ -2461,7 +2699,10 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
                         (result.returncode, result.stdout, result.stderr),
                         (1, b"", b"age-admission signer provisioning failed\n"),
                     )
-                    self.assertEqual(inputs.session_calls(), expected_calls)
+                    self.assertEqual(
+                        [call for call in inputs.session_calls() if call[0] != "vault-list"],
+                        expected_calls,
+                    )
                     state = json.loads((inputs.state / "state.json").read_bytes())
                     self.assertEqual(state["outcome"], "rolled-back")
                     self.assertIsNone(state["pending_request"])
@@ -2508,8 +2749,14 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
         )
         self.assert_terminal_disposition(inputs, "ready-for-recovery")
         # Production stops after the audit check and retains its resources.
+        production_calls = inputs.session_calls()[before:]
         self.assertEqual(
-            inputs.session_calls()[before:], OWNER_PRIMARY_QUALIFICATION_CALLS[:15]
+            [call for call in production_calls if call[0] != "vault-list"],
+            OWNER_PRIMARY_QUALIFICATION_CALLS[:15],
+        )
+        self.assertEqual(
+            [session for kind, session in production_calls if kind == "vault-list"],
+            ["owner", "recovery"],
         )
         state = json.loads((inputs.state / "state.json").read_bytes())
         self.assertEqual(
@@ -2788,7 +3035,7 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
             os.fspath(inputs.pass_cli),
             "item",
             "view",
-            f"--share-id={SHARE_ID}",
+            f"--share-id={PRIMARY_SHARE_ID}",
             f"--item-id={ITEM_ID}",
             "--field",
             "SSH.private_key",
@@ -2823,6 +3070,10 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
                     )
                 )
                 template.chmod(0o600)
+                create_environment = dict(environment)
+                create_environment["PROTON_PASS_SESSION_DIR"] = os.fspath(
+                    inputs.owner_session
+                )
                 created = subprocess.run(
                     [
                         os.fspath(inputs.pass_cli),
@@ -2835,7 +3086,7 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
                     ],
                     check=False,
                     capture_output=True,
-                    env=environment,
+                    env=create_environment,
                     timeout=20,
                 )
                 self.assertEqual(
@@ -5305,7 +5556,7 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
         self.assertIsNone(state["pending_request"])
         self.assertEqual(state["outcome"], "rolled-back")
         kinds = [record["kind"] for record in inputs.log()]
-        self.assertEqual(kinds[-1], "info")
+        self.assertEqual(kinds[-1], "vault-list")
         self.assertNotIn("item-create", kinds)
 
     def test_provider_mutation_timeout_is_unknown_and_retains_capture(self) -> None:

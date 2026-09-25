@@ -614,9 +614,10 @@ opened match; it cannot claim global name uniqueness. Before approval,
 discovery must enumerate the provider's full returned private vault metadata
 set under hard byte and time bounds, capture both streams, reject truncation
 and nonempty standard error, expose only the selected projection, and have the
-operator confirm its vault and share IDs. Successful selected-field readback by
-the exact share ID is the final positive binding. An ambiguous or wrong
-name-resolved grant is an incident and cannot produce a success marker. If the
+operator confirm the owner and routine reader's separate share IDs against
+the same vault ID. Successful selected-field readback by each session's own
+share ID is the final positive binding. An ambiguous or wrong name-resolved
+grant is an incident and cannot produce a success marker. If the
 operator does not accept that bounded risk, an exact-share-ID grant sequence is
 a separate source-design decision before live qualification.
 
@@ -744,7 +745,7 @@ test "$(file_uid "$staged_provisioner")" = "$EUID"
 test "$(file_sha256 "$staged_provisioner")" = "${provisioner_entry#* }"
 ```
 
-A canonical `issue286-provisioning/v3` source-test request has this exact
+A canonical `issue286-provisioning/v4` source-test request has this exact
 closed shape:
 
 ```json
@@ -762,12 +763,14 @@ closed shape:
   "provider": {
     "expiration": "1h",
     "item_title": "issue286-synthetic-item",
+    "primary_share_id": "-BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB==",
     "recovery_agent_name": "issue286-synthetic-recovery",
     "share_id": "-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+    "vault_id": "-CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC==",
     "vault_name": "Synthetic Vault"
   },
   "provider_schema": {
-    "command_schema": "issue286-pass-cli-2.3.3-provider-commands/v3",
+    "command_schema": "issue286-pass-cli-2.3.3-provider-commands/v4",
     "source_commit": "51a4c9b110a0ffe6e81f4f5d3877b9e5a0c24112",
     "source_manifest_sha256": "95c0f8d872b308adb741cc21541a090ca4842cb894ece48370938955cb42ae6b"
   },
@@ -781,7 +784,7 @@ closed shape:
     },
     "repository": "/private-operation/input/reviewed-object-database"
   },
-  "schema": "issue286-provisioning/v3",
+  "schema": "issue286-provisioning/v4",
   "sessions": {
     "owner": "/private-operation/profiles/owner",
     "primary": "existing-pat",
@@ -842,9 +845,19 @@ the selected token session in a different profile root. `info` must report
 `<primary_reader_name>` for the PAT mode. The PAT mode checks the name before
 readiness, after readiness, and after the adapter readback because readiness can
 repair the session. The token must actually retrieve the designated item field;
-its name alone does not prove access. In every mode, the recovery Agent is a new
-enrollment in the task-created `private/recovery-session` root. Resume rejects
-a state whose `bindings.owner_id` is absent, null, or `N/A`.
+its name alone does not prove access. `provider.share_id` is the owner's share
+for item creation, listing, deletion, and reconciliation.
+`provider.primary_share_id` is the selected routine reader's share; it equals
+the owner share in owner mode. `provider.vault_id` identifies the one target
+vault across those sessions. Before item creation, `vault list --output json`
+must return exactly one named vault with that ID and each session's supplied
+share ID. Item listing must confirm that same vault ID. In every mode, the
+recovery Agent is a new enrollment in the task-created
+`private/recovery-session` root. After its login, a bounded vault listing must
+return one same-name, same-vault record; the provisioner retains that Agent's
+own share ID for recovery readback and the revoked-access probe. Its share ID
+is not assumed to equal either existing session's share. Resume rejects a
+state whose `bindings.owner_id` is absent, null, or `N/A`.
 Terminal markers and commit records do not carry that ID. The routine
 readbacks stand in for routine signing and demonstrate access through the
 selected reader. Discovery identifies the existing root's login; use the
@@ -857,7 +870,7 @@ operation. The observed path is not a package-location policy and need not be
 equal across hosts.
 
 The closed
-`issue286-pass-cli-2.3.3-provider-commands/v3` provider schema binds pass-cli
+`issue286-pass-cli-2.3.3-provider-commands/v4` provider schema binds pass-cli
 source commit `51a4c9b110a0ffe6e81f4f5d3877b9e5a0c24112` to the maintained,
 revision-wide
 `docs/secret-injection/pass-cli-2.3.3-source-manifest.json`. Its SHA-256 is
@@ -868,19 +881,18 @@ mode, Git object type and ID, byte count, and raw-byte SHA-256. The recovered
 six-command `pass-cli-reconciliation-source-manifest.json`, whose SHA-256 is
 `1bab100ede30e745b674a5f961c1a1d7347875454685876da5e923248a330bcb`,
 remains valid historical v1 schema evidence. It is not missing, and it is not
-the v3 provider-source binding.
+the v4 provider-source binding.
 
-v3 changes only the closed command shape from v2. Every provider ID is attached
-to its option (`--share-id=<id>`, `--item-id=<id>`, `--pat-id=<id>`) and must
-be exactly 86 URL-safe base64 characters followed by `==`. The same rule
-covers every ID the helper reads from provider output. Pinned source rejects
-other shapes outright only for PAT deletion; live-disposable qualification
-must confirm the shape of the other ID fields, and the helper fails closed if
-they differ. The source-manifest binding and marker schemas are unchanged
-by that provider-command revision. Requests, states, and qualified-clean
-evidence bound to
-the v2 command schema are rejected, so earlier qualification evidence cannot
-qualify a v3 run.
+The v4 command contract uses each session's own share ID and binds returned
+vault-list records to one expected vault ID. Every provider ID is attached to
+its option (`--share-id=<id>`, `--item-id=<id>`, `--pat-id=<id>`) and must be
+exactly 86 URL-safe base64 characters followed by `==`. The same rule covers
+IDs read from provider output. Pinned source rejects other shapes outright
+only for PAT deletion; live-disposable qualification must confirm the other
+returned ID fields, and the helper fails closed if they differ. The source
+manifest and terminal marker shapes remain unchanged. Requests, states, and
+qualified-clean evidence bound to an earlier provider command schema cannot
+qualify a v4 run.
 
 All trace paths below are relative to the
 [bound public source tree](https://github.com/ProtonPass/pass-cli/tree/51a4c9b110a0ffe6e81f4f5d3877b9e5a0c24112).
@@ -890,6 +902,7 @@ The map is limited to claims this procedure consumes:
 | --- | --- | --- |
 | Applicable command routing | `pass-cli/src/main.rs`; `pass-cli/src/commands/item/mod.rs`; `pass-cli/src/commands/agent/mod.rs`; `pass-cli/src/commands/personal_access_token/mod.rs` | The top-level parser routes `item`, `agent`, `info`, `logout`, and `personal-access-token` (alias `pat`) into these handlers. The PAT delete form requires an ID through `--personal-access-token-id` or its `--pat-id` alias; the helper passes it as `--pat-id=<id>`. pass-cli uses clap 4.5 (`pass-cli/Cargo.toml`) without `allow_hyphen_values`, so a separate value beginning with `-` would parse as a flag, not as the ID. That parser behavior is general clap knowledge; clap's source is outside the bound tree. |
 | Create acknowledgment | `pass-cli/src/commands/item/create/custom.rs`; `pass/src/item/create/custom.rs`; `pass/src/item/create/common.rs`; `pass-cli/src/commands/agent/create.rs`; `pass/src/personal_access_token/create.rs` | Custom-item creation prints the returned item ID after the create response. Agent creation prints token and instruction JSON only after PAT creation and Viewer grants return; it does not print the returned PAT ID. |
+| Session-specific vault listing | `pass-cli/src/commands/vault/list.rs`; `pass/src/vault/list.rs` | JSON output includes each opened vault's name, stable vault ID, and the share ID visible to the selected session. Shares that cannot be opened are skipped, so a returned unique match is positive evidence; absence alone does not prove a remote vault is absent. |
 | Selected-field addressing | `pass-cli/src/commands/item/create/custom.rs`; `pass/src/item/create/custom.rs`; `pass-domain/src/models/item/field.rs`; `pass-cli/src/commands/item/view.rs` | The template's section and field names pass through unchanged to create, which only trims them and trims each text, hidden, or TOTP value. A custom field is exposed as `<section>.<field>`. `get_field` first compares the whole requested name case-insensitively, then compares it with the part of each exposed name after its last `.`. A field `private_key` in section `SSH` is therefore selected by `SSH.private_key`; a field named `SSH.private_key` in that section is exposed as `SSH.SSH.private_key` and matches neither rule. A miss fails the view with a nonzero status; human output prints the selected value followed by one LF. |
 | Agent token shape | `pass-cli/src/commands/agent/create.rs`; `pass/src/personal_access_token/create.rs`; `pass-auth/src/personal_access_token.rs`; `pass-domain/src/crypto.rs`; `docs/public/docs/commands/agent.md` | Pinned create generates a 32-byte key and prints the `token` member as `<pat token>::<key>`, with the key encoded as URL-safe base64 without padding; the code adds no prefix. Login requires `pst_` followed by 64 bytes, exactly one `::`, and that key encoding. The public command docs show a `PROTON_PASS_PERSONAL_ACCESS_TOKEN=` prefix. The live shape is therefore a qualification observation. The helper accepts exactly two shapes: `pst_`, 64 printable non-space ASCII characters other than `:`, `::`, and 43 URL-safe characters that decode canonically to 32 bytes; or that value preceded by exactly `PROTON_PASS_PERSONAL_ACCESS_TOKEN=`. Any other shape returns 20 with a live Viewer PAT and needs an owner incident. |
 | Positive-only listing and skipped records | `pass-cli/src/commands/item/list.rs`; `pass/src/item/list.rs`; `pass/src/item/open.rs`; `pass-cli/src/commands/agent/list.rs`; `pass/src/personal_access_token/list.rs` | Item listing emits successfully opened item summaries and can skip records that fail state, key, content, or payload opening. PAT listing skips records it cannot open, and agent listing filters the remaining records to the agent flag. A returned exact match is positive evidence; zero matches do not prove absence or completeness. |
@@ -899,7 +912,7 @@ The map is limited to claims this procedure consumes:
 | Profile-root and startup behavior | `pass-cli/src/utils.rs`; `pass-cli/src/features/mod.rs`; `pass-cli/src/features/keyring.rs`; `pass-cli/src/main.rs`; `pass-cli/src/commands/info.rs`; `pass-auth/src/store.rs` | `PROTON_PASS_SESSION_DIR` is a profile root; pass-cli appends `.session`. Provider startup may maintain or invalidate profile, keyring, database, and authentication state, and may process core events, telemetry, or refreshed authentication before the requested command completes. |
 | Session-info and audit schemas | `pass-cli/src/commands/info.rs`; `pass-cli/src/commands/agent/monitor.rs`; `pass/src/monitor.rs` | JSON info distinguishes user and agent/PAT sessions through its closed optional fields. Agent monitor serializes record, vault, object, action, payload, and time fields after resolving the named agent to a PAT ID. |
 
-The v3 cleanup target is the exact retained PAT ID. The agent name remains a
+The v4 cleanup target is the exact retained PAT ID. The agent name remains a
 diagnostic handle. Agent-create acknowledgment establishes that the remote PAT
 exists but does not establish its ID. Before arming deletion, one listing must
 return exactly one same-name record with a syntactically valid PAT ID and the
@@ -962,8 +975,8 @@ Terminal disposition uses these closed successors and fixed relative names:
 
 | Producer artifact | Closed schema | Fixed relative name |
 | --- | --- | --- |
-| Provisioning request | `issue286-provisioning/v3` | Owner-selected mode-`0600` request path |
-| Producer state | `issue286-provisioning-state/v3` | `state.json` |
+| Provisioning request | `issue286-provisioning/v4` | Owner-selected mode-`0600` request path |
+| Producer state | `issue286-provisioning-state/v4` | `state.json` |
 | Qualified-clean marker | `issue286-qualified-clean/v2` | `qualified-clean.json` |
 | Ready-for-recovery marker | `issue286-ready-for-recovery/v2` | `ready-for-recovery.json` |
 | Prepared commit record | `issue286-terminal-commit/v1` | `.terminal-commit.prepared` |
@@ -987,7 +1000,7 @@ commit record has this exact closed shape:
     },
     "platform": "linux",
     "provider_schema": {
-      "command_schema": "issue286-pass-cli-2.3.3-provider-commands/v3",
+      "command_schema": "issue286-pass-cli-2.3.3-provider-commands/v4",
       "source_commit": "51a4c9b110a0ffe6e81f4f5d3877b9e5a0c24112",
       "source_manifest_sha256": "95c0f8d872b308adb741cc21541a090ca4842cb894ece48370938955cb42ae6b"
     },
