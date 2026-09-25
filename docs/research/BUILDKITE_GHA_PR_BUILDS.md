@@ -21,6 +21,7 @@ Evidence tags:
 - **`dotfiles` returns to Option A** (server-side dispatch, skip and cancel off) as the known-good compatibility-plugin baseline. The native-webhook probe (Option B) has been rolled back, including its repository webhook.
 - **Evaluate Buildkite natively instead of through `buildkite-gha`.** A separate `dotfiles-native` pipeline will run the Platform portability and Zsh deployment portability test battery from a repository-versioned `.buildkite/pipeline.yml`. The battery is split into parallel groups defined once in a shared script, which GitHub Actions can adopt once workflow admission works again. GitHub Actions stays the required gate during the trial.
 - **Success metric:** push-to-green time for a PR commit, against the GitHub Actions baseline of 13m24s median and 15m59s p90 (15 PR commits, 2026-09-24/25). Queue wait with several PRs in flight and projected cost are guardrails.
+- **Update, later on 2026-09-25: `dotfiles` is paused and the evaluation is Linux-only.** The trial's macOS M4 vCPU minutes ran out. Most were spent by `dotfiles`' `macos-14` Platform portability jobs, each of which ran about 20 minutes into the Homebrew migration timeout before failing. Its GitHub Actions trigger is now disabled, and `dotfiles-native` skips its macOS group until the plan includes macOS minutes again. Before the minutes ran out, all five macOS groups passed natively; the longest ran 256s.
 
 ## Evidence base
 
