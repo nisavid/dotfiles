@@ -13,7 +13,6 @@ import subprocess
 import sys
 import tarfile
 import textwrap
-import threading
 import time
 import unittest
 from pathlib import Path
@@ -1090,6 +1089,9 @@ class ProvisioningInputs:
                             if signal.getsignal(member) == signal.SIG_IGN
                         ],
                     )
+                if FAULT == "popen-pre-spawn-failure" and is_item_create:
+                    record("popen-not-spawned")
+                    raise OSError(errno.ENOENT, "synthetic pre-spawn failure")
                 if FAULT == "popen-pre-spawn-signal" and is_item_create:
                     triggered = True
                     record("popen-not-spawned")
@@ -3444,32 +3446,21 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
     def test_pre_spawn_failure_after_durable_arming_restores_absent_state(self) -> None:
         temporary, inputs = self.make_inputs()
         self.addCleanup(temporary.cleanup)
-        armed = threading.Event()
+        process = inputs.start_fault_process("popen-pre-spawn-failure")
 
-        def remove_selected_executable() -> None:
-            deadline = time.monotonic() + 20
-            while time.monotonic() < deadline:
-                try:
-                    state = json.loads((inputs.state / "state.json").read_bytes())
-                    pending = state.get("pending_request")
-                    if (
-                        isinstance(pending, dict)
-                        and pending.get("kind") == "item-create"
-                    ):
-                        inputs.pass_cli.rename(inputs.fake_bin / "pass-cli.removed")
-                        armed.set()
-                        return
-                except (FileNotFoundError, json.JSONDecodeError):
-                    pass
-                time.sleep(0.0005)
+        stdout, stderr = process.communicate(timeout=10)
 
-        watcher = threading.Thread(target=remove_selected_executable, daemon=True)
-        watcher.start()
-        result = inputs.run()
-        watcher.join(timeout=2)
-
-        self.assertTrue(armed.is_set(), "the mutation was not observed durably armed")
-        self.assertEqual(result.returncode, 1)
+        self.assertEqual(
+            (process.returncode, stdout, stderr),
+            (1, b"", b"age-admission signer provisioning failed\n"),
+        )
+        self.assertEqual(
+            [
+                record["event"]
+                for record in inputs.fault_trace("popen-pre-spawn-failure")
+            ],
+            ["popen-not-spawned"],
+        )
         state = json.loads((inputs.state / "state.json").read_bytes())
         self.assertEqual(state["resources"]["item"]["state"], "absent")
         self.assertIsNone(state["pending_request"])
