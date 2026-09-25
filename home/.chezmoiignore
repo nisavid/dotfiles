@@ -26,4 +26,9 @@ Library
 # The provider selector and readiness unit are Linux session integrations.
 .config/environment.d/98-proton-pass.conf
 .config/systemd
+
+# Only Linux desktops read freedesktop desktop entries; this tree currently
+# holds only the protonpass:// scheme handler. The inventory test requires an
+# explicit policy update before another target can be added beneath this tree.
+.local/share/applications
 {{ end }}

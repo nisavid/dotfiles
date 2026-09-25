@@ -1,0 +1,26 @@
+{{- if eq .chezmoi.os "linux" -}}
+#!/usr/bin/zsh -f
+# Rerun when the entry changes or when xdg-mime appears or moves.
+# handler entry: {{ include "private_dot_local/private_share/applications/proton-pass-url-handler.desktop" | sha256sum }}
+# xdg-mime: {{ lookPath "xdg-mime" }}
+
+main() {
+  emulate -L zsh
+  setopt err_return no_unset pipe_fail
+
+  if (( ! $+commands[xdg-mime] )); then
+    print -ru2 -- \
+      'Proton Pass URL handler: xdg-mime is unavailable on PATH; this run did not set the protonpass:// scheme default, and the first apply that finds xdg-mime will'
+    return 0
+  fi
+
+  # Browsers resolve the sign-in callback through GIO, which needs an explicit
+  # default when the user's mimeinfo.cache does not list the entry.
+  xdg-mime default proton-pass-url-handler.desktop x-scheme-handler/protonpass
+}
+
+main "$@"
+{{- else -}}
+#!/bin/sh
+exit 0
+{{- end -}}

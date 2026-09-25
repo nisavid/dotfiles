@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Proton Pass (URL handler)
+Comment=Routes protonpass:// sign-in callbacks to the Proton Pass desktop app
+TryExec=proton-pass
+Exec=proton-pass %u
+Icon=proton-pass
+NoDisplay=true
+MimeType=x-scheme-handler/protonpass;
