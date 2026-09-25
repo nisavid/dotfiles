@@ -183,7 +183,52 @@ class ProvisioningInputs:
         b"issue286-fast-fixture-private-key\n"
         b"-----END " + b"OPENSSH " + b"PRIVATE KEY-----\n"
     )
-    LOGIN_CREDENTIAL = "p" + "st_issue286" + "::synthetic-token"
+    # pass-auth's grammar: "pst_", 64 characters, "::", then an unpadded
+    # URL-safe encoding of the 32-byte key.
+    LOGIN_CREDENTIAL = (
+        "p"
+        + "st_"
+        + "issue286" * 8
+        + "::"
+        + base64.urlsafe_b64encode(bytes(range(32))).decode("ascii").rstrip("=")
+    )
+
+    @classmethod
+    def agent_token_outputs(cls) -> dict[str, str]:
+        """Return each named ``token`` member the fake agent create can print."""
+        prefix = "PROTON_PASS_PERSONAL_ACCESS" + "_TOKEN="
+        bare = cls.LOGIN_CREDENTIAL
+        pat_token, _separator, key = bare.partition("::")
+        marker = "p" + "st_"
+        body = pat_token[len(marker) :]
+        alphabet = (
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+        )
+        # A canonical 43-character key leaves its final two bits clear.
+        noncanonical = key[:-1] + alphabet[alphabet.index(key[-1]) ^ 1]
+
+        def encoded(size: int) -> str:
+            return base64.urlsafe_b64encode(bytes(size)).decode("ascii").rstrip("=")
+
+        return {
+            "bare": bare,
+            "prefixed": prefix + bare,
+            "body-63": prefix + marker + body[:63] + "::" + key,
+            "body-65": prefix + marker + body + "x::" + key,
+            "missing-pst": prefix + body + "::" + key,
+            "key-42": prefix + pat_token + "::" + key[:42],
+            "key-44": prefix + pat_token + "::" + key + "A",
+            "key-31-bytes": prefix + pat_token + "::" + encoded(31),
+            "key-33-bytes": prefix + pat_token + "::" + encoded(33),
+            "noncanonical-key": prefix + pat_token + "::" + noncanonical,
+            "wrong-prefix": "PROTON_PASS_ACCESS" + "_TOKEN=" + bare,
+            "doubled-prefix": prefix + prefix + bare,
+            "leading-whitespace": " " + prefix + bare,
+            "trailing-whitespace": prefix + bare + "\n",
+            "extra-separator": prefix + bare + "::" + key,
+            "non-ascii": prefix + marker + body[:63] + "é::" + key,
+            "oversize": prefix + marker + "x" * (16 * 1024) + "::" + key,
+        }
 
     def __init__(
         self,
@@ -221,7 +266,7 @@ class ProvisioningInputs:
         self.control = self.private / "provider-control.json"
         self.child_marker = self.private / "provider-child.json"
         self.child_term_log = Path(os.fspath(self.child_marker) + ".terms")
-        self.stored_signer = self.private / "provider-stored-signer"
+        self.stored_item = self.private / "provider-stored-item.json"
         self.fake_home = self.private / "home"
         self.xdg_config = self.private / "xdg-config"
         self.xdg_state = self.private / "xdg-state"
@@ -422,8 +467,10 @@ class ProvisioningInputs:
         item_argument = f"--item-id={ITEM_ID}"
         body = textwrap.dedent(
             f"""\
+            import hashlib
             import json
             import os
+            import subprocess
             import sys
 
             arguments = sys.argv[1:]
@@ -449,6 +496,33 @@ class ProvisioningInputs:
             }}
             with open({os.fspath(self.provider_log)!r}, "a", encoding="ascii") as stream:
                 stream.write(json.dumps(record, sort_keys=True) + "\\n")
+            with open({os.fspath(self.control)!r}, encoding="ascii") as stream:
+                read_field = json.load(stream).get("adapter_field_read", False)
+            if read_field:
+                # Select the one hidden field as the reviewed adapter does.
+                view = subprocess.run(
+                    [
+                        "pass-cli",
+                        "item",
+                        "view",
+                        {share_argument!r},
+                        {item_argument!r},
+                        "--field",
+                        "SSH.private_key",
+                        "--output",
+                        "human",
+                    ],
+                    stdin=subprocess.DEVNULL,
+                    capture_output=True,
+                    check=False,
+                )
+                if (
+                    view.returncode
+                    or view.stderr
+                    or hashlib.sha256(view.stdout).hexdigest()
+                    != {sha256(self.SIGNER)!r}
+                ):
+                    raise SystemExit(3)
             descriptor = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             os.write(descriptor, b"synthetic-receipt\\n")
             os.close(descriptor)
@@ -586,15 +660,36 @@ class ProvisioningInputs:
         self,
         behaviors: dict[str, str],
         owner_drift: dict[str, object] | None = None,
+        *,
+        token_shape: str | None = None,
+        adapter_field_read: bool = False,
     ) -> None:
         control: dict[str, object] = {"behaviors": behaviors}
         if owner_drift is not None:
             control["owner_drift"] = owner_drift
+        if token_shape is not None:
+            control["token_shape"] = token_shape
+        if adapter_field_read:
+            control["adapter_field_read"] = True
         self.control.write_bytes(canonical_json(control))
         self.control.chmod(0o600)
 
     def set_behaviors(self, **behaviors: str) -> None:
         self._write_control(behaviors)
+
+    def set_provider_controls(
+        self,
+        *,
+        token_shape: str | None = None,
+        adapter_field_read: bool = False,
+        **behaviors: str,
+    ) -> None:
+        """Select an agent-token shape and whether the adapter reads its field."""
+        self._write_control(
+            behaviors,
+            token_shape=token_shape,
+            adapter_field_read=adapter_field_read,
+        )
 
     def set_owner_drift(self, from_call: int, info: dict[str, object]) -> None:
         """Answer the owner profile's JSON info with ``info`` from ``from_call`` on."""
@@ -619,8 +714,9 @@ class ProvisioningInputs:
             # Only the requested routine reader and the recovery agent read items.
             ROUTINE_SESSION = {os.fspath(self.routine_session)!r}
             RECOVERY_SESSION = {os.fspath(self.state / "private/recovery-session")!r}
-            SIGNER = {os.fspath(self.stored_signer)!r}
+            ITEM = {os.fspath(self.stored_item)!r}
             LOGIN_CREDENTIAL = {self.LOGIN_CREDENTIAL!r}
+            TOKEN_OUTPUTS = {self.agent_token_outputs()!a}
             SHARE_ID = {SHARE_ID!r}
             ITEM_ID = {ITEM_ID!r}
             PAT_ID = {PAT_ID!r}
@@ -665,6 +761,81 @@ class ProvisioningInputs:
                         raise SystemExit(1)
                     values[name] = value
                 return values
+
+            def stored_item(template_path):
+                # Create trims section and field names and each field value.
+                with open(template_path, encoding="ascii") as stream:
+                    template = json.load(stream)
+                legacy = (
+                    load(CONTROL).get("behaviors", {{}}).get("item-create")
+                    == "legacy-field-name"
+                )
+                sections = []
+                for section in template.get("sections", []):
+                    fields = []
+                    for field in section.get("fields", []):
+                        fields.append({{
+                            # The legacy control stores the pre-fix whole name.
+                            "field_name": (
+                                "SSH.private_key" if legacy else field["field_name"].strip()
+                            ),
+                            "field_type": field["field_type"].lower(),
+                            "value": field["value"].strip(),
+                        }})
+                    sections.append({{
+                        "fields": fields,
+                        "section_name": section["section_name"].strip(),
+                    }})
+                return {{"sections": sections, "title": template["title"]}}
+
+            def item_names(item):
+                return {{
+                    "sections": [
+                        {{
+                            "fields": [
+                                {{
+                                    "field_name": field["field_name"],
+                                    "field_type": field["field_type"],
+                                }}
+                                for field in section["fields"]
+                            ],
+                            "section_name": section["section_name"],
+                        }}
+                        for section in item["sections"]
+                    ],
+                    "title": item["title"],
+                }}
+
+            def get_field(item, query):
+                # pass-domain Item::get_field over the title and each
+                # "<section>.<field>": a whole-name match, then a match on the
+                # part after the last ".", both case-insensitive.
+                fields = [("title", item["title"])] if item["title"] else []
+                for section in item["sections"]:
+                    for field in section["fields"]:
+                        fields.append((
+                            section["section_name"] + "." + field["field_name"],
+                            field["value"],
+                        ))
+                lowered = query.lower()
+                for name, value in fields:
+                    if name.lower() == lowered:
+                        return value
+                for name, value in fields:
+                    if name.rsplit(".", 1)[-1].lower() == lowered:
+                        return value
+                return None
+
+            def agent_create_output():
+                shape = load(CONTROL).get("token_shape", "prefixed")
+                document = {{
+                    "token": TOKEN_OUTPUTS[shape],
+                    "instruction": "synthetic login instruction",
+                }}
+                # serde_json::to_string_pretty output, then println!'s LF.
+                return (
+                    json.dumps(document, ensure_ascii=False, indent=2) + "\\n"
+                ).encode("utf-8")
 
             arguments = sys.argv[1:]
             session = os.environ.get("PROTON_PASS_SESSION_DIR")
@@ -718,6 +889,11 @@ class ProvisioningInputs:
                 "token_digest": hashlib.sha256(login_credential.encode()).hexdigest() if login_credential else None,
                 "token_present": login_credential is not None,
             }}
+            item = None
+            if kind == "item-create":
+                item = stored_item(arguments[arguments.index("--from-template") + 1])
+                # Only names and types are logged, never the field value.
+                record["item"] = item_names(item)
             with open(LOG, "a", encoding="ascii") as stream:
                 stream.write(json.dumps(record, sort_keys=True) + "\\n")
 
@@ -808,7 +984,8 @@ class ProvisioningInputs:
                         state["agent_pat_ids"] = [PAT_ID]
                         state["revoked"] = False
                         save(state)
-                        print(json.dumps({{"token": "PROTON_PASS_PERSONAL_ACCESS_TOKEN=" + LOGIN_CREDENTIAL, "instruction": "synthetic"}}), flush=True)
+                        sys.stdout.buffer.write(agent_create_output())
+                        sys.stdout.buffer.flush()
                 time.sleep(120)
             if behavior == "overflow":
                 sys.stdout.buffer.write(b"x" * (1024 * 1024 + 1))
@@ -817,7 +994,7 @@ class ProvisioningInputs:
                 if kind == "item-create":
                     print(ITEM_ID)
                 elif kind == "agent-create":
-                    print(json.dumps({{"token": "PROTON_PASS_PERSONAL_ACCESS_TOKEN=" + LOGIN_CREDENTIAL, "instruction": "synthetic"}}))
+                    sys.stdout.buffer.write(agent_create_output())
                 raise SystemExit(7)
             if behavior == "nonzero":
                 print("synthetic provider failure", file=sys.stderr)
@@ -861,12 +1038,9 @@ class ProvisioningInputs:
                 else:
                     raise SystemExit(9)
             elif kind == "item-create":
-                template = arguments[arguments.index("--from-template") + 1]
-                with open(template, encoding="ascii") as stream:
-                    value = json.load(stream)["sections"][0]["fields"][0]["value"]
-                with open(SIGNER, "w", encoding="ascii") as stream:
-                    stream.write(value)
-                os.chmod(SIGNER, 0o600)
+                with open(ITEM, "w", encoding="ascii") as stream:
+                    json.dump(item, stream)
+                os.chmod(ITEM, 0o600)
                 state["item"] = True
                 save(state)
                 if behavior == "drift-after-success":
@@ -897,8 +1071,15 @@ class ProvisioningInputs:
                 if state["revoked"] and session == RECOVERY_SESSION:
                     print("revoked", file=sys.stderr)
                     raise SystemExit(8)
-                with open(SIGNER, "rb") as stream:
-                    sys.stdout.buffer.write(stream.read())
+                if "--field" not in arguments:
+                    raise SystemExit(12)
+                field = arguments[arguments.index("--field") + 1]
+                value = get_field(load(ITEM), field)
+                if value is None:
+                    print("Error: Field does not exist: " + field, file=sys.stderr)
+                    raise SystemExit(1)
+                # Human output prints the selected value and one LF.
+                sys.stdout.buffer.write((value + "\\n").encode("utf-8"))
             elif kind == "item-delete":
                 state["item"] = False
                 save(state)
@@ -909,10 +1090,7 @@ class ProvisioningInputs:
                 state["agent_pat_ids"] = [PAT_ID]
                 state["revoked"] = False
                 save(state)
-                print(json.dumps({{
-                    "token": "PROTON_PASS_PERSONAL_ACCESS_TOKEN=" + LOGIN_CREDENTIAL,
-                    "instruction": "synthetic login instruction",
-                }}))
+                sys.stdout.buffer.write(agent_create_output())
             elif kind == "agent-list":
                 agents = []
                 if state["agent"] and behavior != "empty":
@@ -1227,6 +1405,13 @@ class ProvisioningInputs:
                     ["pass-cli", "pat", "delete"],
                 ):
                     child_kind = "agent-delete"
+                elif os.path.basename(command_list[0]) == "git":
+                    repository = command_list[command_list.index("-C") + 1]
+                    child_kind = (
+                        "fixture-git"
+                        if repository.startswith(os.path.join(STATE, "fixture") + os.sep)
+                        else "git"
+                    )
                 else:
                     child_kind = "other"
                 is_item_create = child_kind == "item-create"
@@ -1279,6 +1464,8 @@ class ProvisioningInputs:
                     "transient-item-retirement": "item-create",
                     "zombie-only-item-retirement": "item-create",
                     "unverified-agent-delete-retirement": "agent-delete",
+                    "unverified-fixture-git-retirement": "fixture-git",
+                    "unverified-git-retirement": "git",
                     "unverified-item-retirement": "item-create",
                     "unverified-version-retirement": "version",
                 }}.get(FAULT)
@@ -1339,13 +1526,18 @@ class ProvisioningInputs:
                     raise OSError(errno.EIO, "synthetic terminal rename failure")
                 settles_resume_capture = False
                 arms_rollback_delete = False
+                acknowledges_rollback_delete = False
+                acknowledges_rollback_logout = False
                 if (
                     destination_value == os.path.join(STATE, "state.json")
                     and FAULT
                     in {{
                         "classification-persist-failure",
                         "resume-state-commit-signal",
+                        "rollback-classification-persist-failure",
+                        "rollback-delete-acknowledged-signal",
                         "rollback-delete-armed-signal",
+                        "rollback-logout-acknowledged-signal",
                     }}
                 ):
                     try:
@@ -1363,6 +1555,41 @@ class ProvisioningInputs:
                     ):
                         record("classification-persist-failed")
                         raise OSError(errno.EIO, "synthetic classification persistence failure")
+                    if (
+                        FAULT == "rollback-classification-persist-failure"
+                        and triggered
+                        and isinstance(document, dict)
+                        and document.get("outcome") == "remote-cleanup-incomplete"
+                    ):
+                        record("rollback-classification-persist-failed")
+                        raise OSError(
+                            errno.EIO,
+                            "synthetic rollback classification persistence failure",
+                        )
+                    acknowledges_rollback_delete = (
+                        FAULT
+                        in {{
+                            "rollback-classification-persist-failure",
+                            "rollback-delete-acknowledged-signal",
+                        }}
+                        and not triggered
+                        and isinstance(document, dict)
+                        and document.get("pending_request") is None
+                        and document.get("resources", {{}})
+                        .get("agent", {{}})
+                        .get("state")
+                        == "removed"
+                    )
+                    acknowledges_rollback_logout = (
+                        FAULT == "rollback-logout-acknowledged-signal"
+                        and not triggered
+                        and isinstance(document, dict)
+                        and document.get("pending_request") is None
+                        and document.get("resources", {{}})
+                        .get("session", {{}})
+                        .get("state")
+                        == "removed"
+                    )
                     settles_resume_capture = (
                         FAULT == "resume-state-commit-signal"
                         and isinstance(document, dict)
@@ -1402,6 +1629,10 @@ class ProvisioningInputs:
                     inject_signals("resume-state-commit-signals")
                 if arms_rollback_delete:
                     inject_signals("rollback-delete-armed-signals")
+                if acknowledges_rollback_delete:
+                    inject_signals("rollback-delete-acknowledged-signals")
+                if acknowledges_rollback_logout:
+                    inject_signals("rollback-logout-acknowledged-signals")
                 return result
 
             def faulting_open(path, flags, *args, **kwargs):
@@ -2337,6 +2568,180 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
             * len(observations),
         )
 
+    def test_item_template_puts_one_hidden_private_key_field_in_section_ssh(
+        self,
+    ) -> None:
+        temporary, inputs = self.make_inputs(primary="owner")
+        self.addCleanup(temporary.cleanup)
+
+        result = inputs.run()
+
+        self.assertEqual(
+            (result.returncode, result.stdout, result.stderr),
+            (0, b"qualified-clean\n", b""),
+        )
+        self.assertEqual(
+            [
+                record["item"]
+                for record in inputs.log()
+                if record["kind"] == "item-create"
+            ],
+            [
+                {
+                    "sections": [
+                        {
+                            "fields": [
+                                {"field_name": "private_key", "field_type": "hidden"}
+                            ],
+                            "section_name": "SSH",
+                        }
+                    ],
+                    "title": "issue286-item",
+                }
+            ],
+        )
+        self.assertNotIn(inputs.SIGNER, inputs.provider_log.read_bytes())
+
+    def test_selected_field_readback_qualifies_through_either_routine_reader(
+        self,
+    ) -> None:
+        for primary in ("owner", "existing-agent"):
+            with self.subTest(primary=primary):
+                temporary, inputs = self.make_inputs(primary=primary)
+                try:
+                    inputs.set_provider_controls(adapter_field_read=True)
+
+                    result = inputs.run()
+
+                    self.assertEqual(
+                        (result.returncode, result.stdout, result.stderr),
+                        (0, b"qualified-clean\n", b""),
+                    )
+                    self.assert_terminal_disposition(inputs, "qualified-clean")
+                    routine = "owner" if primary == "owner" else "primary"
+                    self.assertEqual(
+                        [
+                            session
+                            for kind, session in inputs.session_calls()
+                            if kind == "item-view"
+                        ],
+                        [routine, "recovery", "recovery", routine],
+                    )
+                    self.assertTrue(
+                        all(
+                            record["args"][-4:]
+                            == ["--field", "SSH.private_key", "--output", "human"]
+                            for record in inputs.log()
+                            if record["kind"] == "item-view"
+                        )
+                    )
+                finally:
+                    temporary.cleanup()
+
+    def test_whole_qualified_field_name_fails_the_routine_readback(self) -> None:
+        temporary, inputs = self.make_inputs(primary="owner")
+        self.addCleanup(temporary.cleanup)
+        inputs.set_provider_controls(
+            adapter_field_read=True, **{"item-create": "legacy-field-name"}
+        )
+
+        result = inputs.run()
+
+        self.assertEqual(
+            (result.returncode, result.stdout, result.stderr),
+            (1, b"", b"age-admission signer provisioning failed\n"),
+        )
+        for name in ("qualified-clean.json", "terminal-commit.json"):
+            self.assertFalse((inputs.state / name).exists(), name)
+        state = json.loads((inputs.state / "state.json").read_bytes())
+        self.assertEqual(state["outcome"], "rolled-back")
+        self.assertEqual(state["resources"]["item"]["state"], "removed")
+        self.assertFalse(state["checks"]["primary_readback"])
+        kinds = [record["kind"] for record in inputs.log()]
+        self.assertEqual(kinds[-3:], ["provider-adapter", "item-view", "item-delete"])
+        self.assertEqual(kinds.count("item-delete"), 1)
+        self.assertNotIn("agent-create", kinds)
+        self.assertNotIn("agent-login", kinds)
+
+    def test_fake_item_view_follows_pinned_selected_field_addressing(self) -> None:
+        temporary, inputs = self.make_inputs()
+        self.addCleanup(temporary.cleanup)
+        environment = inputs.environment()
+        environment.pop("PROTON_PASS_PERSONAL_ACCESS" + "_TOKEN")
+        environment["PROTON_PASS_SESSION_DIR"] = os.fspath(inputs.routine_session)
+        template = inputs.private / "direct-item-template.json"
+        view = [
+            os.fspath(inputs.pass_cli),
+            "item",
+            "view",
+            f"--share-id={SHARE_ID}",
+            f"--item-id={ITEM_ID}",
+            "--field",
+            "SSH.private_key",
+            "--output",
+            "human",
+        ]
+        missing = b"Error: Field does not exist: SSH.private_key\n"
+        for section_name, field_name, expected in (
+            ("SSH", "SSH.private_key", (1, b"", missing)),
+            (" SSH ", " private_key ", (0, inputs.SIGNER, b"")),
+        ):
+            with self.subTest(field_name=field_name.strip()):
+                # Create trims each name and the hidden value; view adds one LF.
+                template.write_bytes(
+                    canonical_json(
+                        {
+                            "sections": [
+                                {
+                                    "fields": [
+                                        {
+                                            "field_name": field_name,
+                                            "field_type": "hidden",
+                                            "value": inputs.SIGNER.decode("ascii")
+                                            + "\n",
+                                        }
+                                    ],
+                                    "section_name": section_name,
+                                }
+                            ],
+                            "title": "issue286-item",
+                        }
+                    )
+                )
+                template.chmod(0o600)
+                created = subprocess.run(
+                    [
+                        os.fspath(inputs.pass_cli),
+                        "item",
+                        "create",
+                        "custom",
+                        "--from-template",
+                        os.fspath(template),
+                        f"--share-id={SHARE_ID}",
+                    ],
+                    check=False,
+                    capture_output=True,
+                    env=environment,
+                    timeout=20,
+                )
+                self.assertEqual(
+                    (created.returncode, created.stdout, created.stderr),
+                    (0, f"{ITEM_ID}\n".encode("ascii"), b""),
+                )
+
+                viewed = subprocess.run(
+                    view,
+                    check=False,
+                    capture_output=True,
+                    env=environment,
+                    timeout=20,
+                )
+
+                self.assertEqual(
+                    (viewed.returncode, viewed.stdout, viewed.stderr), expected
+                )
+        self.assertNotIn(inputs.SIGNER, inputs.provider_log.read_bytes())
+
     def test_known_nonzero_create_with_valid_output_remains_unknown(self) -> None:
         temporary, inputs = self.make_inputs()
         self.addCleanup(temporary.cleanup)
@@ -2884,6 +3289,138 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
         self.assertEqual(kinds[-1], "item-delete")
         self.assertEqual(kinds.count("item-delete"), 1)
 
+    def test_signal_after_rollback_delete_acknowledgment_records_remote_cleanup(
+        self,
+    ) -> None:
+        temporary, inputs = self.make_inputs()
+        self.addCleanup(temporary.cleanup)
+        inputs.set_behaviors(**{"agent-monitor": "malformed"})
+        process = inputs.start_fault_process(
+            "rollback-delete-acknowledged-signal",
+            first_signal=signal.SIGINT,
+            later_signal=signal.SIGTERM,
+        )
+
+        stdout, stderr = process.communicate(timeout=40)
+
+        self.assertEqual(
+            (process.returncode, stdout, stderr),
+            (
+                128 + signal.SIGINT,
+                b"",
+                b"age-admission signer provisioning interrupted\n",
+            ),
+        )
+        # No child is started after the injected signals.
+        self.assertEqual(
+            inputs.fault_trace("rollback-delete-acknowledged-signal"),
+            [
+                {
+                    "event": "rollback-delete-acknowledged-signals",
+                    "first_signal": int(signal.SIGINT),
+                    "later_signal": int(signal.SIGTERM),
+                }
+            ],
+        )
+        state = json.loads((inputs.state / "state.json").read_bytes())
+        self.assertEqual(state["outcome"], "remote-cleanup-incomplete")
+        self.assertIsNone(state["pending_request"])
+        self.assertEqual(state["resources"]["agent"]["state"], "removed")
+        self.assertEqual(state["resources"]["agent"]["pat_id"], PAT_ID)
+        self.assertEqual(
+            (
+                state["resources"]["item"]["state"],
+                state["resources"]["item"]["id"],
+            ),
+            ("present", ITEM_ID),
+        )
+        self.assertEqual(state["resources"]["session"]["state"], "present")
+        self.assertTrue((inputs.state / "private/admission-ed25519").exists())
+        self.assertTrue((inputs.state / state["artifacts"]["agent_token"]).exists())
+        kinds = [record["kind"] for record in inputs.log()]
+        self.assertEqual(kinds[-1], "agent-delete")
+        self.assertEqual(kinds.count("agent-delete"), 1)
+
+    def test_signal_after_rollback_logout_acknowledgment_records_local_cleanup(
+        self,
+    ) -> None:
+        temporary, inputs = self.make_inputs()
+        self.addCleanup(temporary.cleanup)
+        inputs.set_behaviors(**{"agent-monitor": "malformed"})
+        process = inputs.start_fault_process(
+            "rollback-logout-acknowledged-signal",
+            first_signal=signal.SIGHUP,
+            later_signal=signal.SIGTERM,
+        )
+
+        stdout, stderr = process.communicate(timeout=40)
+
+        self.assertEqual(
+            (process.returncode, stdout, stderr),
+            (
+                128 + signal.SIGHUP,
+                b"",
+                b"age-admission signer provisioning interrupted\n",
+            ),
+        )
+        self.assertEqual(
+            inputs.fault_trace("rollback-logout-acknowledged-signal"),
+            [
+                {
+                    "event": "rollback-logout-acknowledged-signals",
+                    "first_signal": int(signal.SIGHUP),
+                    "later_signal": int(signal.SIGTERM),
+                }
+            ],
+        )
+        state = json.loads((inputs.state / "state.json").read_bytes())
+        self.assertEqual(state["outcome"], "local-cleanup-incomplete")
+        self.assertIsNone(state["pending_request"])
+        self.assertEqual(
+            {name: resource["state"] for name, resource in state["resources"].items()},
+            {"agent": "removed", "item": "removed", "session": "removed"},
+        )
+        self.assertTrue((inputs.state / "private/admission-ed25519").exists())
+        kinds = [record["kind"] for record in inputs.log()]
+        self.assertEqual(kinds[-1], "local-logout")
+        self.assertEqual(kinds.count("local-logout"), 1)
+
+    def test_failed_rollback_interrupt_classification_uses_failure_status(
+        self,
+    ) -> None:
+        temporary, inputs = self.make_inputs()
+        self.addCleanup(temporary.cleanup)
+        inputs.set_behaviors(**{"agent-monitor": "malformed"})
+        process = inputs.start_fault_process(
+            "rollback-classification-persist-failure",
+            first_signal=signal.SIGTERM,
+            later_signal=signal.SIGINT,
+        )
+
+        stdout, stderr = process.communicate(timeout=40)
+
+        self.assertEqual(
+            (process.returncode, stdout, stderr),
+            (1, b"", b"age-admission signer provisioning failed\n"),
+        )
+        self.assertEqual(
+            [
+                record["event"]
+                for record in inputs.fault_trace(
+                    "rollback-classification-persist-failure"
+                )
+            ],
+            [
+                "rollback-delete-acknowledged-signals",
+                "rollback-classification-persist-failed",
+            ],
+        )
+        state = json.loads((inputs.state / "state.json").read_bytes())
+        self.assertEqual(state["outcome"], "running")
+        self.assertEqual(state["resources"]["agent"]["state"], "removed")
+        self.assertIsNone(state["pending_request"])
+        self.assertEqual([record["kind"] for record in inputs.log()][-1], "agent-delete")
+
     def test_children_do_not_inherit_blocked_or_ignored_termination_signals(self) -> None:
         temporary, inputs = self.make_inputs()
         self.addCleanup(temporary.cleanup)
@@ -3078,6 +3615,86 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
         self.assertTrue((inputs.state / "private/admission-ed25519").exists())
         with self.assertRaises(ProcessLookupError):
             os.kill(child_pid, 0)
+
+    def test_unverified_git_retirement_before_state_uses_cleanup_status(
+        self,
+    ) -> None:
+        temporary, inputs = self.make_inputs()
+        self.addCleanup(temporary.cleanup)
+        process = inputs.start_fault_process("unverified-git-retirement")
+
+        stdout, stderr = process.communicate(timeout=40)
+
+        self.assertEqual(
+            (process.returncode, stdout, stderr),
+            (
+                21,
+                b"",
+                b"age-admission signer provisioning cleanup incomplete\n",
+            ),
+        )
+        trace = inputs.fault_trace("unverified-git-retirement")
+        self.assertEqual(
+            [record for record in trace if record["event"] == "fault-child-returned"],
+            [{"event": "fault-child-returned", "kind": "git", "pgid": trace[0]["pgid"]}],
+        )
+        self.assertIn("group-probe-unverified", [record["event"] for record in trace])
+        self.assertFalse(inputs.state.exists())
+        self.assertEqual(inputs.log(), [])
+
+    def test_unverified_git_retirement_during_resume_validation_writes_nothing(
+        self,
+    ) -> None:
+        for fault, kind in (
+            ("unverified-git-retirement", "git"),
+            ("unverified-fixture-git-retirement", "fixture-git"),
+        ):
+            with self.subTest(fault=fault):
+                temporary, inputs = self.make_inputs()
+                try:
+                    inputs.set_behaviors(**{"item-create": "nonzero-valid"})
+                    self.assertEqual(inputs.run().returncode, 20)
+                    inputs.set_behaviors()
+                    state_bytes = (inputs.state / "state.json").read_bytes()
+                    captures = {
+                        path.name: path.read_bytes()
+                        for path in (inputs.state / "captures").iterdir()
+                    }
+                    provider_calls = inputs.log()
+                    process = inputs.start_fault_process(fault, verb="resume")
+
+                    stdout, stderr = process.communicate(timeout=40)
+
+                    self.assertEqual(
+                        (process.returncode, stdout, stderr),
+                        (
+                            21,
+                            b"",
+                            b"age-admission signer provisioning cleanup incomplete\n",
+                        ),
+                    )
+                    trace = inputs.fault_trace(fault)
+                    self.assertEqual(
+                        [
+                            record["kind"]
+                            for record in trace
+                            if record["event"] == "fault-child-returned"
+                        ],
+                        [kind],
+                    )
+                    self.assertEqual(
+                        (inputs.state / "state.json").read_bytes(), state_bytes
+                    )
+                    self.assertEqual(
+                        {
+                            path.name: path.read_bytes()
+                            for path in (inputs.state / "captures").iterdir()
+                        },
+                        captures,
+                    )
+                    self.assertEqual(inputs.log(), provider_calls)
+                finally:
+                    temporary.cleanup()
 
     def test_failed_interruption_classification_uses_failure_status(self) -> None:
         temporary, inputs = self.make_inputs()
@@ -3590,16 +4207,234 @@ class AgeAdmissionProvisioningTests(unittest.TestCase):
             [record["kind"] for record in inputs.log()][-1], "agent-create"
         )
 
+    def test_bare_and_prefixed_agent_tokens_log_in_with_the_bare_value(self) -> None:
+        credential = ProvisioningInputs.LOGIN_CREDENTIAL
+        for token_shape in ("bare", "prefixed"):
+            for primary in ("owner", "existing-agent"):
+                with self.subTest(token_shape=token_shape, primary=primary):
+                    temporary, inputs = self.make_inputs(primary=primary)
+                    try:
+                        inputs.set_provider_controls(token_shape=token_shape)
+
+                        result = inputs.run()
+
+                        self.assertEqual(
+                            (result.returncode, result.stdout, result.stderr),
+                            (0, b"qualified-clean\n", b""),
+                        )
+                        log = inputs.log()
+                        carriers = [record for record in log if record["token_present"]]
+                        self.assertEqual(
+                            [
+                                (record["kind"], record["token_digest"])
+                                for record in carriers
+                            ],
+                            [("agent-login", sha256(credential.encode("ascii")))],
+                        )
+                        self.assertFalse(
+                            any(
+                                credential in argument
+                                for record in log
+                                for argument in record["args"]
+                            )
+                        )
+                        self.assertNotIn(
+                            credential.encode("ascii"),
+                            result.stdout
+                            + result.stderr
+                            + (inputs.state / "state.json").read_bytes()
+                            + inputs.provider_log.read_bytes(),
+                        )
+                    finally:
+                        temporary.cleanup()
+
+    def test_other_agent_token_shapes_remain_unknown_without_a_token_file(
+        self,
+    ) -> None:
+        outputs = ProvisioningInputs.agent_token_outputs()
+        for token_shape in sorted(set(outputs) - {"bare", "prefixed"}):
+            with self.subTest(token_shape=token_shape):
+                temporary, inputs = self.make_inputs(primary="owner")
+                try:
+                    inputs.set_provider_controls(token_shape=token_shape)
+
+                    result = inputs.run()
+
+                    self.assertEqual(
+                        (result.returncode, result.stdout, result.stderr),
+                        (
+                            20,
+                            b"",
+                            b"age-admission signer provisioning requires reconciliation\n",
+                        ),
+                    )
+                    state = json.loads((inputs.state / "state.json").read_bytes())
+                    self.assertEqual(state["outcome"], "reconciliation-required")
+                    self.assertEqual(state["resources"]["agent"]["state"], "unknown")
+                    pending = state["pending_request"]
+                    self.assertEqual(pending["kind"], "agent-create")
+                    self.assertEqual(
+                        pending["targets"]["observed_result"],
+                        {"outcome": "exited", "signal": None, "status": 0},
+                    )
+                    capture = inputs.state / pending["captures"]["stdout"]
+                    self.assertEqual(
+                        json.loads(capture.read_bytes())["token"],
+                        outputs[token_shape],
+                    )
+                    self.assertFalse(
+                        (inputs.state / state["artifacts"]["agent_token"]).exists()
+                    )
+                    kinds = [record["kind"] for record in inputs.log()]
+                    self.assertEqual(kinds[-1], "agent-create")
+                    self.assertNotIn("agent-login", kinds)
+                finally:
+                    temporary.cleanup()
+
+    def test_agent_capture_settles_lost_status_only_for_an_accepted_shape(
+        self,
+    ) -> None:
+        for token_shape, settles in (
+            ("bare", True),
+            ("body-63", False),
+            ("wrong-prefix", False),
+        ):
+            with self.subTest(token_shape=token_shape):
+                temporary, inputs = self.make_inputs()
+                try:
+                    inputs.set_provider_controls(
+                        token_shape=token_shape,
+                        **{"agent-create": "sleep-after-output"},
+                    )
+                    process = inputs.start_process()
+                    inputs.wait_for_child("agent-create")
+                    deadline = time.monotonic() + 5
+                    while time.monotonic() < deadline:
+                        try:
+                            state = json.loads(
+                                (inputs.state / "state.json").read_bytes()
+                            )
+                            capture = (
+                                inputs.state
+                                / state["pending_request"]["captures"]["stdout"]
+                            )
+                            if capture.stat().st_size:
+                                break
+                        except (FileNotFoundError, TypeError):
+                            pass
+                        time.sleep(0.01)
+                    else:
+                        self.fail("source-ordered agent output was not captured")
+
+                    os.kill(process.pid, signal.SIGTERM)
+                    stdout, stderr = process.communicate(timeout=10)
+
+                    self.assertEqual(
+                        (process.returncode, stdout, stderr),
+                        (143, b"", b"age-admission signer provisioning interrupted\n"),
+                    )
+                    state = json.loads((inputs.state / "state.json").read_bytes())
+                    self.assertEqual(state["outcome"], "reconciliation-required")
+                    token_path = inputs.state / state["artifacts"]["agent_token"]
+                    if settles:
+                        self.assertEqual(
+                            state["resources"]["agent"]["state"], "present"
+                        )
+                        self.assertIsNone(state["pending_request"])
+                        self.assertEqual(
+                            token_path.read_bytes(),
+                            (inputs.LOGIN_CREDENTIAL + "\n").encode("ascii"),
+                        )
+                    else:
+                        self.assertEqual(
+                            state["resources"]["agent"]["state"], "unknown"
+                        )
+                        self.assertEqual(
+                            state["pending_request"]["kind"], "agent-create"
+                        )
+                        self.assertFalse(token_path.exists())
+                    self.assertNotIn(
+                        "agent-login", [record["kind"] for record in inputs.log()]
+                    )
+                finally:
+                    temporary.cleanup()
+
+    def test_resume_settles_only_an_accepted_agent_token_capture(self) -> None:
+        for token_shape, settles in (
+            ("bare", True),
+            ("prefixed", True),
+            ("key-42", False),
+            ("doubled-prefix", False),
+        ):
+            with self.subTest(token_shape=token_shape):
+                temporary, inputs = self.make_inputs()
+                try:
+                    self._host_loss_at_create(
+                        inputs,
+                        "agent-create",
+                        with_output=True,
+                        token_shape=token_shape,
+                    )
+                    before = len(inputs.log())
+                    inputs.set_provider_controls(token_shape=token_shape)
+
+                    result = inputs.run("resume")
+
+                    self.assertEqual(
+                        (result.returncode, result.stdout, result.stderr),
+                        (
+                            20,
+                            b"",
+                            b"age-admission signer provisioning requires reconciliation\n",
+                        ),
+                    )
+                    state = json.loads((inputs.state / "state.json").read_bytes())
+                    self.assertEqual(state["outcome"], "reconciliation-required")
+                    token_path = inputs.state / state["artifacts"]["agent_token"]
+                    resumed = [record["kind"] for record in inputs.log()[before:]]
+                    if settles:
+                        self.assertEqual(
+                            state["resources"]["agent"]["state"], "present"
+                        )
+                        self.assertIsNone(state["pending_request"])
+                        self.assertEqual(
+                            token_path.read_bytes(),
+                            (inputs.LOGIN_CREDENTIAL + "\n").encode("ascii"),
+                        )
+                        self.assertEqual(resumed, [])
+                    else:
+                        self.assertEqual(
+                            state["resources"]["agent"]["state"], "unknown"
+                        )
+                        self.assertEqual(
+                            state["pending_request"]["kind"], "agent-create"
+                        )
+                        self.assertFalse(token_path.exists())
+                        self.assertEqual(resumed, ["agent-list"])
+                finally:
+                    temporary.cleanup()
+
     def _host_loss_at_item_create(
         self, inputs: ProvisioningInputs, *, with_output: bool
     ) -> None:
-        inputs.set_behaviors(
-            **{"item-create": ("sleep-after-output" if with_output else "sleep")}
+        self._host_loss_at_create(inputs, "item-create", with_output=with_output)
+
+    def _host_loss_at_create(
+        self,
+        inputs: ProvisioningInputs,
+        kind: str,
+        *,
+        with_output: bool,
+        token_shape: str | None = None,
+    ) -> None:
+        inputs.set_provider_controls(
+            token_shape=token_shape,
+            **{kind: ("sleep-after-output" if with_output else "sleep")},
         )
         process = inputs.start_process()
         child_pid: int | None = None
         try:
-            child_pid = inputs.wait_for_child("item-create")
+            child_pid = inputs.wait_for_child(kind)
             if with_output:
                 deadline = time.monotonic() + 5
                 while time.monotonic() < deadline:

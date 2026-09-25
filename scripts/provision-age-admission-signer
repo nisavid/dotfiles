@@ -84,8 +84,11 @@ DIGEST = re.compile(r"[0-9a-f]{64}\Z", re.ASCII)
 IDENTIFIER = re.compile(r"[A-Za-z0-9_-]{86}==\Z", re.ASCII)
 FINGERPRINT = re.compile(r"SHA256:[A-Za-z0-9+/]{43}\Z", re.ASCII)
 VERSION_OUTPUT = re.compile(rb"Proton Pass CLI 2\.3\.3 \([0-9a-f]{7,40}\)\n\Z")
-TOKEN_ASSIGNMENT = re.compile(
-    r"PROTON_PASS_PERSONAL_ACCESS_TOKEN=(pst_[^\s:=]+::[^\s]+)\Z",
+# Pinned agent create prints the bare `pst_<64>::<key>` value; its public docs
+# show an assignment prefix. The key is a URL-safe no-pad 32-byte encoding.
+AGENT_TOKEN = re.compile(
+    r"(?:PROTON_PASS_PERSONAL_ACCESS_TOKEN=)?"
+    r"(pst_[!-9;-~]{64}::([A-Za-z0-9_-]{43}))\Z",
     re.ASCII,
 )
 SOURCE_PATH = re.compile(r"[A-Za-z0-9._/-]+\Z", re.ASCII)
@@ -2278,17 +2281,26 @@ def _parse_agent_token(data: bytes) -> str:
     value = _parse_json_output(data)
     if not isinstance(value, dict) or list(value) != ["token", "instruction"]:
         raise ProvisioningError("agent create output is invalid")
-    token_assignment = value["token"]
+    token_output = value["token"]
     instruction = value["instruction"]
     if (
-        not isinstance(token_assignment, str)
+        not isinstance(token_output, str)
         or not isinstance(instruction, str)
         or not instruction
-        or len(token_assignment.encode("utf-8")) > MAX_TOKEN_BYTES
+        or len(token_output.encode("utf-8")) > MAX_TOKEN_BYTES
     ):
         raise ProvisioningError("agent create output is invalid")
-    matched = TOKEN_ASSIGNMENT.fullmatch(token_assignment)
+    matched = AGENT_TOKEN.fullmatch(token_output)
     if matched is None:
+        raise ProvisioningError("agent create token is invalid")
+    key = matched.group(2)
+    try:
+        decoded = base64.urlsafe_b64decode(key + "=")
+    except (binascii.Error, ValueError) as error:
+        raise ProvisioningError("agent create token is invalid") from error
+    # Nonzero trailing bits still decode, but do not re-encode to the key.
+    canonical = base64.urlsafe_b64encode(decoded).decode("ascii")
+    if len(decoded) != 32 or canonical != key + "=":
         raise ProvisioningError("agent create token is invalid")
     return matched.group(1)
 
@@ -2863,17 +2875,20 @@ def _write_item_template(state_directory: Path, state: dict[str, Any]) -> None:
         raise ProvisioningError("signer private key is not UTF-8") from error
     if not signer_text or "\x00" in signer_text:
         raise ProvisioningError("signer private key is invalid")
+    # pass-cli exposes a custom field as "<section>.<field>", so the selected
+    # name is split rather than stored whole inside its section.
+    section_name, field_name = ITEM_FIELD.split(".", 1)
     template = {
         "sections": [
             {
                 "fields": [
                     {
-                        "field_name": ITEM_FIELD,
+                        "field_name": field_name,
                         "field_type": "hidden",
                         "value": signer_text,
                     }
                 ],
-                "section_name": "SSH",
+                "section_name": section_name,
             }
         ],
         "title": state["request"]["provider"]["item_title"],
@@ -3679,11 +3694,15 @@ def _start(arguments: argparse.Namespace) -> str:
         raise ProvisioningError("reviewed source manifest digest does not match")
     manifest = _parse_canonical_json(manifest_data)
     entries = _validate_manifest(manifest, commit=request["reviewed_source"]["commit"])
-    sources = _read_reviewed_sources(
-        Path(request["reviewed_source"]["repository"]),
-        request["reviewed_source"]["commit"],
-        entries,
-    )
+    try:
+        sources = _read_reviewed_sources(
+            Path(request["reviewed_source"]["repository"]),
+            request["reviewed_source"]["commit"],
+            entries,
+        )
+    except UnverifiedChildRetirement:
+        # No state directory exists yet, so there is nothing to record.
+        raise ProvisioningStop(21)
     pass_cli_path, pass_cli_sha256 = _resolve_executable("pass-cli")
     if pass_cli_sha256 != request["pass_cli"]["build_sha256"]:
         raise ProvisioningError("pass-cli build digest does not match")
@@ -3751,6 +3770,20 @@ def _start(arguments: argparse.Namespace) -> str:
                 fixture_directory if fixture_directory.exists() else None,
             )
         except ProvisioningStop:
+            raise
+        except ProvisioningInterrupted:
+            # An acknowledged rollback delete or logout already persisted its
+            # resource; classify what remains and take no further step.
+            if state["outcome"] == "running":
+                state["outcome"] = (
+                    "remote-cleanup-incomplete"
+                    if any(
+                        resource["state"] not in {"absent", "removed"}
+                        for resource in state["resources"].values()
+                    )
+                    else "local-cleanup-incomplete"
+                )
+                _atomic_state_write(state_directory, state)
             raise
         except ProvisioningError as rollback_error:
             if isinstance(rollback_error, PreSpawnFailure) and rollback_error.kind in {
@@ -4401,7 +4434,11 @@ def _resume_agent_observation(
 def _resume(arguments: argparse.Namespace) -> str:
     state_directory = _absolute_path(os.fspath(arguments.state_directory))
     state = _read_state(state_directory)
-    _validate_resume_state(state, state_directory)
+    try:
+        _validate_resume_state(state, state_directory)
+    except UnverifiedChildRetirement:
+        # Unvalidated state is left byte-identical, keeping its classification.
+        raise ProvisioningStop(21)
     pending = state["pending_request"]
     kind = pending["kind"]
     resource = pending["resource"]

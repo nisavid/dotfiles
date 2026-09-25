@@ -54,7 +54,8 @@ The adapter supports one input shape:
   URL-safe base64 characters (`[A-Za-z0-9_-]`) followed by `==`, the
   88-character shape pass-cli's `is_id` accepts; because an ID may begin with
   `-`, each is passed attached, as `--share-id=<id>` and `--item-id=<id>`;
-- the hidden field `SSH.private_key` only;
+- one hidden field `private_key` in the custom section `SSH`, selected as
+  `SSH.private_key`, and no other field;
 - one unencrypted OpenSSH Ed25519 private key no larger than 64 KiB;
 - a pinned `SHA256:...` SSH public fingerprint;
 - lowercase 40-character base and head commit IDs; and
@@ -880,6 +881,8 @@ The map is limited to claims this procedure consumes:
 | --- | --- | --- |
 | Applicable command routing | `pass-cli/src/main.rs`; `pass-cli/src/commands/item/mod.rs`; `pass-cli/src/commands/agent/mod.rs`; `pass-cli/src/commands/personal_access_token/mod.rs` | The top-level parser routes `item`, `agent`, `info`, `logout`, and `personal-access-token` (alias `pat`) into these handlers. The PAT delete form requires an ID through `--personal-access-token-id` or its `--pat-id` alias; the helper passes it as `--pat-id=<id>`. pass-cli uses clap 4.5 (`pass-cli/Cargo.toml`) without `allow_hyphen_values`, so a separate value beginning with `-` would parse as a flag, not as the ID. That parser behavior is general clap knowledge; clap's source is outside the bound tree. |
 | Create acknowledgment | `pass-cli/src/commands/item/create/custom.rs`; `pass/src/item/create/custom.rs`; `pass/src/item/create/common.rs`; `pass-cli/src/commands/agent/create.rs`; `pass/src/personal_access_token/create.rs` | Custom-item creation prints the returned item ID after the create response. Agent creation prints token and instruction JSON only after PAT creation and Viewer grants return; it does not print the returned PAT ID. |
+| Selected-field addressing | `pass-cli/src/commands/item/create/custom.rs`; `pass/src/item/create/custom.rs`; `pass-domain/src/models/item/field.rs`; `pass-cli/src/commands/item/view.rs` | The template's section and field names pass through unchanged to create, which only trims them and trims each text, hidden, or TOTP value. A custom field is exposed as `<section>.<field>`. `get_field` first compares the whole requested name case-insensitively, then compares it with the part of each exposed name after its last `.`. A field `private_key` in section `SSH` is therefore selected by `SSH.private_key`; a field named `SSH.private_key` in that section is exposed as `SSH.SSH.private_key` and matches neither rule. A miss fails the view with a nonzero status; human output prints the selected value followed by one LF. |
+| Agent token shape | `pass-cli/src/commands/agent/create.rs`; `pass/src/personal_access_token/create.rs`; `pass-auth/src/personal_access_token.rs`; `pass-domain/src/crypto.rs`; `docs/public/docs/commands/agent.md` | Pinned create generates a 32-byte key and prints the `token` member as `<pat token>::<key>`, with the key encoded as URL-safe base64 without padding; the code adds no prefix. Login requires `pst_` followed by 64 bytes, exactly one `::`, and that key encoding. The public command docs show a `PROTON_PASS_PERSONAL_ACCESS_TOKEN=` prefix. The live shape is therefore a qualification observation. The helper accepts exactly two shapes: `pst_`, 64 printable non-space ASCII characters other than `:`, `::`, and 43 URL-safe characters that decode canonically to 32 bytes; or that value preceded by exactly `PROTON_PASS_PERSONAL_ACCESS_TOKEN=`. Any other shape returns 20 with a live Viewer PAT and needs an owner incident. |
 | Positive-only listing and skipped records | `pass-cli/src/commands/item/list.rs`; `pass/src/item/list.rs`; `pass/src/item/open.rs`; `pass-cli/src/commands/agent/list.rs`; `pass/src/personal_access_token/list.rs` | Item listing emits successfully opened item summaries and can skip records that fail state, key, content, or payload opening. PAT listing skips records it cannot open, and agent listing filters the remaining records to the agent flag. A returned exact match is positive evidence; zero matches do not prove absence or completeness. |
 | Exact-ID PAT deletion acknowledgment | `pass-cli/src/main.rs`; `pass-cli/src/commands/personal_access_token/mod.rs`; `pass-cli/src/commands/personal_access_token/delete.rs`; `pass/src/utils.rs`; `pass/src/personal_access_token/delete.rs` | `pass-cli pat delete --pat-id=<retained_pat_id>` requires an 88-character ID ending in `==` (`is_id`), then passes that ID to the client. The client sends DELETE for that ID and applies the response success guard before the command prints `Personal access token deleted successfully`. No name lookup occurs. |
 | Exact-ID item deletion acknowledgment | `pass-cli/src/commands/item/mod.rs`; `pass-cli/src/commands/item/delete.rs`; `pass/src/item/delete.rs` | The command passes the supplied `--share-id=<id>` and `--item-id=<id>` values to the client and prints `Item <item-id> deleted successfully` only after the delete response succeeds and returns. |
@@ -1057,11 +1060,21 @@ then commits `ready-for-recovery.json`, emits exact `ready-for-recovery\n`, and
 still grants no GitHub mutation authority. Qualification and rollback also
 remove the public key, and no private-key bytes are retained locally.
 
+The item template has exactly one custom section `SSH` with exactly one hidden
+field `private_key` holding the signer text. The adapter and the revoked probe
+select it as `SSH.private_key`. Pinned create trims the section and field names
+and the hidden value, and human `item view` prints the value followed by one
+LF. Readback is therefore byte-identical only for a key that ends in exactly
+one LF; `ssh-keygen` output does, and the adapter's fingerprint check remains
+the guard.
+
 The helper gives signer private bytes only to mode-`0600` signer/template files
 and provider storage; they never enter argv, any environment, state JSON,
 terminal evidence, standard output, or standard error. The agent token remains
 in its private file and enters only the single `pass-cli login` child
-environment with the assignment prefix removed. Other child environments,
+environment with any exact `PROTON_PASS_PERSONAL_ACCESS_TOKEN=` prefix
+removed. Neither state, argv, nor terminal output records which accepted
+shape the provider printed. Other child environments,
 including Git, remove the token and reason first. Only selected-field
 readback/probe children receive
 `PROTON_PASS_AGENT_REASON=age-admission signing-key retrieval`.
@@ -1093,6 +1106,14 @@ The terminal results are closed and byte-exact:
 | Cleanup incomplete | 21; empty stdout; `age-admission signer provisioning cleanup incomplete\n` | A delete or logout effect, local cleanup, or local/read-only process-group retirement is unknown; stop as an incident |
 | Interrupted | `128 + signal`; empty stdout; `age-admission signer provisioning interrupted\n` | Every child group is absent and the provider state and retained evidence are durable |
 
+A local Git child whose retirement is unverified before a validated state
+exists also returns 21 with the cleanup-incomplete diagnostic, but without a
+state record. `start` has not yet created its state directory and creates
+none. `resume` leaves `state.json` and its captures byte-identical, so an
+existing state keeps its prior classification and pending request; status 21
+is then the only report that a local Git group may survive. Unverified
+retirement takes precedence over a latched signal.
+
 Qualified clean is limited to task-created disposable provider resources, the
 task-created recovery enrollment, and task-local sensitive artifacts. It does not
 claim that preexisting owner or selected routine-reader profiles were
@@ -1121,7 +1142,13 @@ revocation, deletion, or cleanup provider call.
 A signal that arrives while a failed run is rolling back is handled the same
 way. If it arrives after a rollback deletion is durably armed and before that
 process exists, the helper restores the resource, records
-`remote-cleanup-incomplete`, and makes no provider call. If it arrives during
+`remote-cleanup-incomplete`, and makes no provider call. If it arrives after a
+rollback deletion or logout is acknowledged and durably recorded, the helper
+takes no further rollback step, local cleanup, or provider call, and keeps the
+resources, handles, and pending request as recorded. It records
+`remote-cleanup-incomplete` when the agent, item, or session is in any state
+other than absent or removed, and `local-cleanup-incomplete` otherwise; an
+outcome that is already classified is left unchanged. If it arrives during
 rollback's local cleanup, that cleanup finishes and records `rolled-back`.
 Once the rollback classification is durable, the helper returns
 `128 + first signal` with the interrupted diagnostic. If it cannot write the
@@ -1817,8 +1844,11 @@ Run the exception, one merge attempt, and restoration in one shell. The shell
 arms restoration before the exception request because a failed request can
 still have changed the server. One re-entrant-safe EXIT finalizer owns
 restoration after any later `set -e` failure, failed comparison, or catchable
-interruption. The first HUP, INT, or TERM fixes the eventual signal status;
-later signals latch without aborting or re-entering restoration. A nonzero
+interruption. The first HUP, INT, or TERM fixes the eventual signal status.
+The shell's handlers only latch later signals and never re-enter restoration,
+but a terminal-generated INT or HUP also reaches the foreground `gh` child and
+can kill an in-flight restoration or verification request; see the limits
+after the script. A nonzero
 exception PATCH never permits the merge, even if a subsequent read shows the
 requested exception. A nonzero merge command is adjudicated only after
 restoration by fresh pull-request and `main` reads; it is never retried.
@@ -2492,8 +2522,10 @@ single new allowed-signer fingerprint.
 The state machine prevents its own merge attempt after an ambiguous exception
 PATCH or failed exception comparison. Restoration stays armed until a fresh
 full protection response exactly matches the saved preimage. The first caught
-signal fixes the eventual status; signals received while restoration or the
-EXIT finalizer runs only latch and cannot re-enter or abort finalization. Exit
+signal fixes the eventual status. While restoration or the EXIT finalizer runs,
+the shell's handlers only latch later signals and do not re-enter
+finalization; they do not stop a signal from ending a foreground `gh` request.
+Exit
 or a signal after arming but before an explicit restore causes one EXIT restore
 attempt. An explicit restore that succeeds or observes the exact preimage uses
 one restore PATCH. A failed explicit restore receives one EXIT retry, for two
@@ -2502,6 +2534,13 @@ total; a failed EXIT-initiated attempt is not recursively retried.
 These controls cannot make the GitHub operations atomic, survive `SIGKILL`,
 power loss, host loss, or a sustained GitHub API or network outage, or stop
 another authorized actor from merging while the required check is absent.
+They also cannot shield the `gh` children from terminal signals. A
+terminal-generated INT or HUP goes to the whole foreground process group, so
+it can kill an in-flight restoration PATCH or verification read even though
+the shell handler only latches it. Restoration is then unverified, the script
+exits 125, and the exception may still be in place. Run the script in a
+hangup-resistant detached session, and send it no further signals once
+restoration starts.
 
 No supported enforceable recovery-only hold is present in the recorded policy.
 During the exception window, repository protection does not technically block
