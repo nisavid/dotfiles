@@ -1,0 +1,2 @@
+Scratch file for verifying the Buildkite dotfiles pipeline (issue #321). Not for merge.
+probe 1
