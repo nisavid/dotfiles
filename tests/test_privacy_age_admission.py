@@ -126,7 +126,7 @@ class PrivacyAgeAdmissionCreatorTests(unittest.TestCase):
         raw_tool = shutil.which("ssh-keygen")
         self.assertIsNotNone(raw_tool)
         canonical_tool = Path(raw_tool).resolve(strict=True)
-        with TemporaryDirectory(dir=ROOT.parent) as temporary:
+        with TemporaryDirectory(dir=Path.home()) as temporary:
             symlink = Path(temporary) / "ssh-keygen"
             symlink.symlink_to(canonical_tool)
 
@@ -153,7 +153,7 @@ class PrivacyAgeAdmissionCreatorTests(unittest.TestCase):
     def test_verifier_rejects_a_symlink_to_a_writable_target_parent(self) -> None:
         raw_tool = shutil.which("ssh-keygen")
         self.assertIsNotNone(raw_tool)
-        with TemporaryDirectory(dir=ROOT.parent) as temporary:
+        with TemporaryDirectory(dir=Path.home()) as temporary:
             root = Path(temporary)
             writable_target_parent = root / "writable-tools"
             writable_target_parent.mkdir(mode=0o775)

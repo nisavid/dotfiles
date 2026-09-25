@@ -186,6 +186,8 @@ jobs:
           set -euo pipefail
           # Deployment fixtures assert modes created with these public defaults.
           umask 022
+          # A runner's checkout umask can leave this reviewed source group-writable.
+          chmod 0755 scripts/provision-age-admission-signer
           zsh -f tests/claude-skill-sync.zsh
           zsh -f tests/platform-portability.zsh
           zsh -f tests/container-runtime-bindings.zsh
