@@ -12,16 +12,21 @@ unset RUST_BACKTRACE RUST_LIB_BACKTRACE PASS_LOG_LEVEL MUON_LOG_LEVEL \
 set -euo pipefail
 umask 077
 
-# A failed first probe falls through to the locked classifying probe, so only
-# the classifying probe and verification need headroom for slow requests.
+# A failed first probe falls through to the exclusive classifying probe, so
+# only the classifying probe and verification need headroom for slow requests.
 readonly PROTON_PASS_READY_PROBE_TIMEOUT_SECONDS=3
 readonly PROTON_PASS_CLASSIFY_PROBE_TIMEOUT_SECONDS=5
 readonly PROTON_PASS_VERIFY_TIMEOUT_SECONDS=5
 readonly PROTON_PASS_LOGOUT_TIMEOUT_SECONDS=3
 # A timed-out classifying probe releases the lock after its deadline plus
-# cleanup, so the takeover window must stay longer than that deadline.
+# cleanup, so the takeover window must stay longer than that deadline. A
+# shared holder runs only the shorter first probe.
 readonly PROTON_PASS_LOCK_TAKEOVER_SECONDS=6
 readonly PROTON_PASS_CONCURRENT_REPAIR_WAIT_SECONDS=20
+# The first probe waits this long behind an exclusive holder before taking the
+# exclusive path, whose own waits cover repairs. The wait adds to the slowest
+# call, and the 36-second startup budget leaves room for about one second.
+readonly PROTON_PASS_READY_LOCK_WAIT_SECONDS=1
 readonly PROTON_PASS_NATIVE_STORE_TIMEOUT_SECONDS=3
 readonly PROTON_PASS_LOGIN_TIMEOUT_SECONDS=8
 readonly PROTON_PASS_POLL_CENTISECONDS=1
@@ -87,11 +92,12 @@ readonly PROTON_PASS_LOGIN_ALREADY_AUTHENTICATED_DIAGNOSTIC \
 typeset -g PROTON_PASS_ACTIVE_CHILD_NAME=
 typeset -gi PROTON_PASS_ACTIVE_CHILD_PGID=0
 typeset -gi PROTON_PASS_CHILD_SEQUENCE=0
-# Never export inherited copies of private diagnostic state to children.
+# Never export inherited copies of private diagnostic or lock state to children.
 unset PROTON_PASS_DIAGNOSTIC_FILE PROTON_PASS_DIAGNOSTIC_TEXT \
   PROTON_PASS_DIAGNOSTIC_WRITE_FD PROTON_PASS_DIAGNOSTIC_READ_FD \
   PROTON_PASS_LOGIN_FAILURE_REASON PROTON_PASS_LOGIN_FAILURE_MESSAGE \
-  2>/dev/null || true
+  PROTON_PASS_READINESS_LOCK_FD 2>/dev/null || true
+typeset -gi PROTON_PASS_READINESS_LOCK_FD=0
 typeset -g PROTON_PASS_DIAGNOSTIC_FILE=
 typeset -gi PROTON_PASS_DIAGNOSTIC_WRITE_FD=0
 typeset -gi PROTON_PASS_DIAGNOSTIC_READ_FD=0
@@ -818,9 +824,94 @@ classify_session_state() {
   fi
 }
 
-# Every login runs under the readiness lock, and the lock dies with its
-# holder. A marker found while holding the lock therefore belongs to a repair
-# that never reached verification or cleanup, and whatever it stored is
+# Opens, validates, and locks the readiness lock, shared or exclusive, waiting
+# up to the given seconds, and leaves the locked descriptor in
+# PROTON_PASS_READINESS_LOCK_FD. Returns 2 when the wait expires; every other
+# failure fails readiness. zsh locks with fcntl(2), so the lock belongs to this
+# process alone: children never inherit it, and it ends when the process exits
+# or closes any descriptor for the file.
+lock_readiness() {
+  emulate -L zsh
+
+  local lock_file=$1
+  local lock_mode=$2
+  local wait_seconds=$3
+  local -a lock_options=(-t "$wait_seconds" -i 0.05)
+  case $lock_mode in
+    shared) lock_options+=(-r) ;;
+    exclusive) ;;
+    *) die 'invalid readiness lock mode' ;;
+  esac
+  typeset -gi PROTON_PASS_READINESS_LOCK_FD=0
+  zmodload zsh/stat || die 'zsh/stat is required'
+  zmodload zsh/system ||
+    fail_readiness unsafe-lock 'zsh/system is required for readiness locking' unrecorded
+  [[ ! -L $lock_file ]] ||
+    fail_readiness unsafe-lock 'readiness lock must not be a symbolic link' unrecorded
+  if [[ -e $lock_file ]]; then
+    [[ -f $lock_file ]] ||
+      fail_readiness unsafe-lock 'readiness lock must be a regular file' unrecorded
+    local -A existing_lock
+    zstat -H existing_lock -- "$lock_file" ||
+      fail_readiness unsafe-lock 'cannot inspect the readiness lock' unrecorded
+    (( existing_lock[uid] == EUID )) ||
+      fail_readiness unsafe-lock 'readiness lock must be owned by the current user' unrecorded
+  fi
+  integer lock_create_fd
+  exec {lock_create_fd}>>"$lock_file" ||
+    fail_readiness unsafe-lock 'cannot open the readiness lock' unrecorded
+  local -A opened_lock published_lock
+  zstat -H opened_lock -f "$lock_create_fd" ||
+    fail_readiness unsafe-lock 'cannot inspect the opened readiness lock' unrecorded
+  zstat -H published_lock -- "$lock_file" ||
+    fail_readiness unsafe-lock 'cannot inspect the published readiness lock' unrecorded
+  (( opened_lock[device] == published_lock[device] &&
+    opened_lock[inode] == published_lock[inode] )) ||
+    fail_readiness unsafe-lock 'readiness lock changed while opening' unrecorded
+  (( opened_lock[uid] == EUID )) ||
+    fail_readiness unsafe-lock 'readiness lock must be owned by the current user' unrecorded
+  (( (opened_lock[mode] & 8#7777) == 8#600 )) ||
+    fail_readiness unsafe-lock 'readiness lock must have mode 0600' unrecorded
+  exec {lock_create_fd}>&-
+
+  integer lock_fd
+  integer lock_status=0
+  zsystem flock "${lock_options[@]}" -f lock_fd "$lock_file" || lock_status=$?
+  if (( lock_status != 0 )); then
+    (( lock_status != 2 )) || return 2
+    fail_readiness unsafe-lock 'cannot acquire the readiness lock' unrecorded
+  fi
+  [[ ! -L $lock_file ]] || {
+    zsystem flock -u lock_fd
+    fail_readiness unsafe-lock 'readiness lock must not be a symbolic link' unrecorded
+  }
+  zstat -H opened_lock -f "$lock_fd" || {
+    zsystem flock -u lock_fd
+    fail_readiness unsafe-lock 'cannot inspect the locked readiness file' unrecorded
+  }
+  zstat -H published_lock -- "$lock_file" || {
+    zsystem flock -u lock_fd
+    fail_readiness unsafe-lock 'cannot inspect the published readiness lock' unrecorded
+  }
+  (( opened_lock[device] == published_lock[device] &&
+    opened_lock[inode] == published_lock[inode] )) || {
+    zsystem flock -u lock_fd
+    fail_readiness unsafe-lock 'readiness lock changed while locking' unrecorded
+  }
+  (( opened_lock[uid] == EUID )) || {
+    zsystem flock -u lock_fd
+    fail_readiness unsafe-lock 'readiness lock must be owned by the current user' unrecorded
+  }
+  (( (opened_lock[mode] & 8#7777) == 8#600 )) || {
+    zsystem flock -u lock_fd
+    fail_readiness unsafe-lock 'readiness lock must have mode 0600' unrecorded
+  }
+  typeset -gi PROTON_PASS_READINESS_LOCK_FD=$lock_fd
+}
+
+# Every login runs under the exclusive readiness lock, and the lock dies with
+# its holder. A marker found while holding the lock therefore belongs to a
+# repair that never reached verification or cleanup, and whatever it stored is
 # suspect: pass-cli writes its session before its private token key.
 login_marker_usable() {
   emulate -L zsh
@@ -928,93 +1019,44 @@ main() {
   backend=$(select_pass_cli_command)
   local state_dir=${XDG_STATE_HOME:-$HOME/.local/state}/secret-exec
   local login_marker=$state_dir/proton-pass-login.pending
-  # Info accepts the partial session an interrupted login leaves, so only the
-  # locked path may judge the session while a login marker remains. A repair
-  # can record its marker while this check runs, so it is checked again after.
-  if [[ ! -e $login_marker && ! -L $login_marker ]] &&
-    session_ready "$backend" "$PROTON_PASS_READY_PROBE_TIMEOUT_SECONDS" &&
-    [[ ! -e $login_marker && ! -L $login_marker ]]; then
-    write_status ready existing-session unrecorded
-    return 0
-  fi
-
-  prepare_state_directory "$state_dir"
-  zmodload zsh/system ||
-    fail_readiness unsafe-lock 'zsh/system is required for readiness locking' unrecorded
   local lock_file=$state_dir/proton-pass-readiness.lock
-  [[ ! -L $lock_file ]] ||
-    fail_readiness unsafe-lock 'readiness lock must not be a symbolic link' unrecorded
-  if [[ -e $lock_file ]]; then
-    [[ -f $lock_file ]] ||
-      fail_readiness unsafe-lock 'readiness lock must be a regular file' unrecorded
-    local -A existing_lock
-    zstat -H existing_lock -- "$lock_file" ||
-      fail_readiness unsafe-lock 'cannot inspect the readiness lock' unrecorded
-    (( existing_lock[uid] == EUID )) ||
-      fail_readiness unsafe-lock 'readiness lock must be owned by the current user' unrecorded
-  fi
-  integer lock_create_fd
-  exec {lock_create_fd}>>"$lock_file" ||
-    fail_readiness unsafe-lock 'cannot open the readiness lock' unrecorded
-  local -A opened_lock published_lock
-  zstat -H opened_lock -f "$lock_create_fd" ||
-    fail_readiness unsafe-lock 'cannot inspect the opened readiness lock' unrecorded
-  zstat -H published_lock -- "$lock_file" ||
-    fail_readiness unsafe-lock 'cannot inspect the published readiness lock' unrecorded
-  (( opened_lock[device] == published_lock[device] &&
-    opened_lock[inode] == published_lock[inode] )) ||
-    fail_readiness unsafe-lock 'readiness lock changed while opening' unrecorded
-  (( opened_lock[uid] == EUID )) ||
-    fail_readiness unsafe-lock 'readiness lock must be owned by the current user' unrecorded
-  (( (opened_lock[mode] & 8#7777) == 8#600 )) ||
-    fail_readiness unsafe-lock 'readiness lock must have mode 0600' unrecorded
-  exec {lock_create_fd}>&-
+  prepare_state_directory "$state_dir"
 
-  integer lock_fd
+  # Info accepts the partial session a login leaves, and every repair holds the
+  # lock exclusively from before it records its marker until it publishes its
+  # status. The first probe therefore runs under a shared lock: it waits out a
+  # repair instead of racing it, and readers still run side by side. A marker
+  # seen here belongs to a repair that never finished, so only the exclusive
+  # path may judge that session. The shared lock is released before that path
+  # starts, never upgraded, and a wait that expires goes straight there.
   integer lock_status=0
+  lock_readiness "$lock_file" shared "$PROTON_PASS_READY_LOCK_WAIT_SECONDS" ||
+    lock_status=$?
+  if (( lock_status == 0 )); then
+    integer existing_session_ready=0
+    if login_marker_usable "$login_marker" && [[ ! -e $login_marker ]] &&
+      session_ready "$backend" "$PROTON_PASS_READY_PROBE_TIMEOUT_SECONDS"; then
+      write_status ready existing-session unrecorded
+      existing_session_ready=1
+    fi
+    zsystem flock -u PROTON_PASS_READINESS_LOCK_FD
+    (( ! existing_session_ready )) || return 0
+  fi
+
   integer waited_for_concurrent_repair=0
-  zsystem flock -t "$PROTON_PASS_LOCK_TAKEOVER_SECONDS" -i 0.05 \
-    -f lock_fd "$lock_file" || lock_status=$?
+  lock_status=0
+  lock_readiness "$lock_file" exclusive "$PROTON_PASS_LOCK_TAKEOVER_SECONDS" ||
+    lock_status=$?
   if (( lock_status != 0 )); then
-    (( lock_status == 2 )) ||
-      fail_readiness unsafe-lock 'cannot acquire the readiness lock' unrecorded
     waited_for_concurrent_repair=1
     lock_status=0
-    zsystem flock -t "$PROTON_PASS_CONCURRENT_REPAIR_WAIT_SECONDS" -i 0.05 \
-      -f lock_fd "$lock_file" || lock_status=$?
-    if (( lock_status != 0 )); then
-      if (( lock_status == 2 )); then
-        fail_readiness lock-timeout \
-          'timed out waiting for provider-session repair' unrecorded
-      fi
-      fail_readiness unsafe-lock 'cannot acquire the readiness lock' unrecorded
-    fi
+    lock_readiness "$lock_file" exclusive \
+      "$PROTON_PASS_CONCURRENT_REPAIR_WAIT_SECONDS" || lock_status=$?
+    (( lock_status == 0 )) ||
+      fail_readiness lock-timeout \
+        'timed out waiting for provider-session repair' unrecorded
   fi
-  [[ ! -L $lock_file ]] || {
-    zsystem flock -u lock_fd
-    fail_readiness unsafe-lock 'readiness lock must not be a symbolic link' unrecorded
-  }
-  zstat -H opened_lock -f "$lock_fd" || {
-    zsystem flock -u lock_fd
-    fail_readiness unsafe-lock 'cannot inspect the locked readiness file' unrecorded
-  }
-  zstat -H published_lock -- "$lock_file" || {
-    zsystem flock -u lock_fd
-    fail_readiness unsafe-lock 'cannot inspect the published readiness lock' unrecorded
-  }
-  (( opened_lock[device] == published_lock[device] &&
-    opened_lock[inode] == published_lock[inode] )) || {
-    zsystem flock -u lock_fd
-    fail_readiness unsafe-lock 'readiness lock changed while locking' unrecorded
-  }
-  (( opened_lock[uid] == EUID )) || {
-    zsystem flock -u lock_fd
-    fail_readiness unsafe-lock 'readiness lock must be owned by the current user' unrecorded
-  }
-  (( (opened_lock[mode] & 8#7777) == 8#600 )) || {
-    zsystem flock -u lock_fd
-    fail_readiness unsafe-lock 'readiness lock must have mode 0600' unrecorded
-  }
+  integer lock_fd=$PROTON_PASS_READINESS_LOCK_FD
 
   # An unusable marker stops the call before anything is classified or reset.
   login_marker_usable "$login_marker" || {

@@ -713,25 +713,28 @@ case $1 in
       zmodload zsh/datetime
       trap 'print -r -- "$EPOCHREALTIME" >> "$FAKE_PASS_INFO_EXIT_LOG"' EXIT
     fi
-    # Hold this caller's first probe until another caller owns the lock.
-    if [[ -n ${FAKE_PASS_INFO_AWAIT_LOCK_ONCE:-} &&
-      ! -e $FAKE_PASS_INFO_AWAIT_LOCK_ONCE ]]; then
-      : > "$FAKE_PASS_INFO_AWAIT_LOCK_ONCE"
-      zmodload zsh/system
+    # Hold this check, well inside its three-second deadline, until a second
+    # check also runs, and record whether one did.
+    if [[ -n ${FAKE_PASS_INFO_BARRIER:-} ]]; then
       zmodload zsh/zselect
-      integer await_lock_polls=500 await_lock_fd=0
-      while (( await_lock_polls-- > 0 )); do
-        if [[ -e $FAKE_PASS_READINESS_LOCK ]]; then
-          zsystem flock -t 0 -f await_lock_fd "$FAKE_PASS_READINESS_LOCK" \
-            2>/dev/null || break
-          zsystem flock -u $await_lock_fd
-        fi
+      : > "$FAKE_PASS_INFO_BARRIER/$$"
+      integer barrier_polls=200
+      barrier_arrivals=( "$FAKE_PASS_INFO_BARRIER"/<->(N) )
+      while (( barrier_polls-- > 0 && ${#barrier_arrivals} < 2 )); do
         zselect -t 1 || true
+        barrier_arrivals=( "$FAKE_PASS_INFO_BARRIER"/<->(N) )
       done
-      (( await_lock_polls >= 0 )) || exit 81
+      if (( ${#barrier_arrivals} >= 2 )); then
+        print -r -- met >> "$FAKE_PASS_INFO_BARRIER.log"
+      else
+        print -r -- alone >> "$FAKE_PASS_INFO_BARRIER.log"
+      fi
     fi
     # Hold this caller's first check, well inside its three-second deadline,
     # until a concurrent login stores a session, and record whether it did.
+    # A check that saw one and has FAKE_PASS_INFO_HOLD_WHILE then waits until
+    # that path is gone and reports the session ready, as a check that read
+    # it before a repair's cleanup would.
     if [[ -n ${FAKE_PASS_INFO_AWAIT_SESSION_ONCE:-} &&
       ! -e $FAKE_PASS_INFO_AWAIT_SESSION_ONCE ]]; then
       zmodload zsh/zselect
@@ -742,6 +745,14 @@ case $1 in
       done
       if [[ -e $FAKE_PASS_LOCAL_SESSION && -e $FAKE_PASS_REMOTE_SESSION ]]; then
         print -r -- seen > "$FAKE_PASS_INFO_AWAIT_SESSION_ONCE"
+        if [[ -n ${FAKE_PASS_INFO_HOLD_WHILE:-} ]]; then
+          integer hold_polls=100
+          while (( hold_polls-- > 0 )) && [[ -e $FAKE_PASS_INFO_HOLD_WHILE ]]; do
+            zselect -t 1 || true
+          done
+          print -r -- 'account-metadata-canary'
+          exit 0
+        fi
       else
         print -r -- missed > "$FAKE_PASS_INFO_AWAIT_SESSION_ONCE"
       fi
@@ -1040,6 +1051,21 @@ case $1 in
       : > "$FAKE_PASS_REMOTE_SESSION"
       hang_forever
     fi
+    # The same partial session from a login that then fails, once
+    # FAKE_PASS_LOGIN_PARTIAL_GATE, when set, records an observation.
+    if [[ -e $FAKE_PASS_LOGIN_PARTIAL_FAIL ]]; then
+      : > "$FAKE_PASS_LOCAL_SESSION"
+      : > "$FAKE_PASS_REMOTE_SESSION"
+      if [[ -n ${FAKE_PASS_LOGIN_PARTIAL_GATE:-} ]]; then
+        zmodload zsh/zselect
+        integer partial_gate_polls=300
+        while (( partial_gate_polls-- > 0 )) &&
+          [[ ! -s $FAKE_PASS_LOGIN_PARTIAL_GATE ]]; do
+          zselect -t 1 || true
+        done
+      fi
+      exit 71
+    fi
     if [[ -e $FAKE_PASS_LOGIN_DIAGNOSTIC ]]; then
       login_flow_lines=(
         'Error: Error in personal access token login flow'
@@ -1262,6 +1288,7 @@ export FAKE_PASS_LOGOUT_HANG=$test_dir/logout-hang
 export FAKE_PASS_LOGIN_EXIT_124=$test_dir/login-exit-124
 export FAKE_PASS_LOGIN_HANG=$test_dir/login-hang
 export FAKE_PASS_LOGIN_PARTIAL_HANG=$test_dir/login-partial-hang
+export FAKE_PASS_LOGIN_PARTIAL_FAIL=$test_dir/login-partial-fail
 export FAKE_PASS_LOGIN_DESCENDANT=$test_dir/login-descendant
 export FAKE_PASS_LOCAL_SESSION=$test_dir/local-session
 export FAKE_PASS_REMOTE_SESSION=$test_dir/remote-session
@@ -1964,21 +1991,54 @@ login_count=$(/usr/bin/grep -Fxc login "$FAKE_PASS_LOG")
 (( login_count == 1 )) ||
   fail 'concurrent ensure-ready invocations must perform exactly one login'
 
+# Healthy readers share the lock: their first checks run side by side rather
+# than in turn, and each reports the existing session.
+reader_barrier=$test_dir/reader-barrier
+rm -rf -- "$reader_barrier" "$reader_barrier.log"
+mkdir -- "$reader_barrier"
+: > "$FAKE_PASS_LOCAL_SESSION"
+: > "$FAKE_PASS_REMOTE_SESSION"
+: > "$FAKE_PASS_LOG"
+typeset -a shared_reader_pids=()
+for attempt in 1 2; do
+  FAKE_PASS_INFO_BARRIER=$reader_barrier zsh "$ensure_ready" \
+    >"$test_dir/shared-reader-$attempt.out" 2>&1 &
+  shared_reader_pids+=($!)
+  test_process_fixture_track_pid $!
+done
+integer shared_reader_failures=0
+for readiness_pid in $shared_reader_pids; do
+  wait $readiness_pid || (( ++shared_reader_failures ))
+  test_process_fixture_untrack_pid $readiness_pid
+done
+(( shared_reader_failures == 0 )) ||
+  fail "concurrent healthy readers must both report ready: $(<"$test_dir/shared-reader-1.out") $(<"$test_dir/shared-reader-2.out")"
+[[ $(<"$reader_barrier.log") == $'met\nmet' ]] ||
+  fail "concurrent healthy readers must check side by side: $(<"$reader_barrier.log")"
+[[ $(<"$FAKE_PASS_LOG") == $'info\ninfo' ]] ||
+  fail "concurrent healthy readers must each take only the first check: $(<"$FAKE_PASS_LOG")"
+grep -Fqx 'reason=existing-session' "$status_file" ||
+  fail 'concurrent healthy readers must record the existing session'
+rm -rf -- "$reader_barrier" "$reader_barrier.log"
+
 rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION"
 : > "$FAKE_PASS_LOG"
 : > "$FAKE_SECRET_TOOL_LOG"
 : > "$FAKE_PASS_LOGIN_DELAY"
 slow_repair_started=$test_dir/slow-repair-started
-# The owner's login must outlast the 6-second takeover window and stay inside
-# the 8-second login deadline, with about one second of margin on each side.
+# From the owner's login, its login and verification outlast the waiter's
+# shared wait and 6-second takeover window by about two seconds, so the waiter
+# ends in the extended wait. Each delayed stage keeps about one second of
+# headroom below its own deadline.
 /usr/bin/env \
   FAKE_PASS_LOGIN_DELAY_SECONDS=7 \
+  FAKE_PASS_INFO_DELAY_SECONDS=2 \
   PROVIDER_START_MARKER="$slow_repair_started" \
   zsh "$ensure_ready" >"$test_dir/slow-repair-owner.out" \
   2>"$test_dir/slow-repair-owner.err" &
 slow_repair_owner_pid=$!
 test_process_fixture_track_pid $slow_repair_owner_pid
-integer slow_repair_start_polls=200
+integer slow_repair_start_polls=1000
 while [[ ! -s $slow_repair_started && slow_repair_start_polls -gt 0 ]]; do
   (( --slow_repair_start_polls ))
   zselect -t 1 2>/dev/null || true
@@ -2013,10 +2073,11 @@ rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION"
 : > "$FAKE_PASS_LOGIN_DELAY"
 : > "$FAKE_PASS_LOGIN_FAIL"
 failed_repair_started=$test_dir/failed-repair-started
-# Same margin as the valid slow repair: outlast takeover, finish before login's
-# deadline.
+# Same margins as the valid slow repair, with the cleanup after the failed
+# login in place of verification.
 /usr/bin/env \
   FAKE_PASS_LOGIN_DELAY_SECONDS=7 \
+  FAKE_PASS_LOGOUT_DELAY_SECONDS=2 \
   PROVIDER_START_MARKER="$failed_repair_started" \
   zsh "$ensure_ready" >"$test_dir/failed-repair-owner.out" \
   2>"$test_dir/failed-repair-owner.err" &
@@ -2061,11 +2122,10 @@ grep -Fqx 'reason=concurrent-repair-failed' "$status_file" ||
 # A slow but healthy cleanup repair holds the lock longer than the old
 # five-plus-thirteen-second wait; the waiter must still observe its success.
 # Each delayed stage keeps one second of headroom below its own deadline.
-slow_cleanup_info_calls() {
+info_call_count() {
   /usr/bin/grep -Fxc info "$FAKE_PASS_LOG" || true
 }
-rm -f -- "$FAKE_PASS_REMOTE_SESSION" \
-  "$test_dir/slow-cleanup-owner.exits" "$test_dir/slow-cleanup-waiter.exits"
+rm -f -- "$FAKE_PASS_REMOTE_SESSION" "$test_dir/slow-cleanup-owner.exits"
 : > "$FAKE_PASS_LOCAL_SESSION"
 : > "$FAKE_PASS_REQUIRE_LOGOUT"
 : > "$FAKE_PASS_INFO_ORPHANED"
@@ -2084,15 +2144,14 @@ slow_cleanup_owner_pid=$!
 test_process_fixture_track_pid $slow_cleanup_owner_pid
 integer slow_cleanup_classify_polls=1000
 while (( slow_cleanup_classify_polls-- > 0 &&
-  $(slow_cleanup_info_calls) < 2 )); do
+  $(info_call_count) < 2 )); do
   zselect -t 1 2>/dev/null || true
 done
-(( $(slow_cleanup_info_calls) >= 2 )) ||
+(( $(info_call_count) >= 2 )) ||
   fail 'the slow cleanup owner must reach its locked classification'
+typeset -F slow_cleanup_waiter_started=$EPOCHREALTIME
 set +e
-/usr/bin/env \
-  FAKE_PASS_INFO_EXIT_LOG="$test_dir/slow-cleanup-waiter.exits" \
-  zsh "$ensure_ready" >"$test_dir/slow-cleanup-waiter.out" \
+zsh "$ensure_ready" >"$test_dir/slow-cleanup-waiter.out" \
   2>"$test_dir/slow-cleanup-waiter.err"
 slow_cleanup_waiter_status=$?
 set -e
@@ -2108,12 +2167,11 @@ rm -f -- "$FAKE_PASS_LOGIN_DELAY" "$FAKE_PASS_REQUIRE_LOGOUT" \
   fail "a slow healthy cleanup repair must establish readiness: $(<"$test_dir/slow-cleanup-owner.err")"
 (( slow_cleanup_waiter_status == 0 )) ||
   fail "a waiter must outlast a slow healthy cleanup repair: $(<"$test_dir/slow-cleanup-waiter.err")"
-# The waiter starts its lock wait after its first probe exits and the owner
-# holds the lock through its verification, so this bounds the lock wait itself.
+# The waiter starts once the owner holds the lock to classify, and the owner
+# holds it through its verification, so this bounds the waiter's lock wait.
 slow_cleanup_owner_exits=("${(@f)$(<"$test_dir/slow-cleanup-owner.exits")}")
-slow_cleanup_waiter_exits=("${(@f)$(<"$test_dir/slow-cleanup-waiter.exits")}")
 typeset -F slow_cleanup_lock_wait=$((
-  slow_cleanup_owner_exits[-1] - slow_cleanup_waiter_exits[1] ))
+  slow_cleanup_owner_exits[-1] - slow_cleanup_waiter_started ))
 (( slow_cleanup_lock_wait >= 18.5 )) ||
   fail "the slow cleanup fixture must hold the lock beyond the former wait: lock-wait=$slow_cleanup_lock_wait"
 grep -Fqx 'reason=concurrent-repair' "$status_file" ||
@@ -2129,13 +2187,15 @@ grep -Fqx 'reason=concurrent-repair' "$status_file" ||
 
 # A timed-out classifying probe must release the lock inside the takeover
 # window of a caller that began waiting as the lock was taken, so that caller
-# can still repair instead of failing as a concurrent waiter.
+# can still repair instead of failing as a concurrent waiter. The successor
+# starts once the stalled owner holds the lock to classify, so its shared wait
+# expires and it goes to the exclusive path without a first check.
 takeover_values=("${(@f)$(<"$ensure_ready_source")}")
 integer takeover_seconds=${${(M)takeover_values:#readonly PROTON_PASS_LOCK_TAKEOVER_SECONDS=*}#*=}
 integer classify_seconds=${${(M)takeover_values:#readonly PROTON_PASS_CLASSIFY_PROBE_TIMEOUT_SECONDS=*}#*=}
 (( classify_seconds > 0 && takeover_seconds >= classify_seconds + 1 )) ||
   fail "the takeover window must outlast a timed-out classifying probe: takeover=$takeover_seconds classify=$classify_seconds"
-rm -f -- "$FAKE_PASS_REMOTE_SESSION" "$test_dir/takeover-awaited"
+rm -f -- "$FAKE_PASS_REMOTE_SESSION"
 : > "$FAKE_PASS_LOCAL_SESSION"
 : > "$FAKE_PASS_REQUIRE_LOGOUT"
 : > "$FAKE_PASS_INFO_ORPHANED"
@@ -2146,12 +2206,15 @@ rm -f -- "$FAKE_PASS_REMOTE_SESSION" "$test_dir/takeover-awaited"
   2>"$test_dir/takeover-stalled.err" &
 takeover_stalled_pid=$!
 test_process_fixture_track_pid $takeover_stalled_pid
-zselect -t 100 2>/dev/null || true
+integer takeover_classify_polls=1000
+while (( takeover_classify_polls-- > 0 &&
+  $(info_call_count) < 2 )); do
+  zselect -t 1 2>/dev/null || true
+done
+(( $(info_call_count) >= 2 )) ||
+  fail 'the stalled lock owner must reach its classifying probe'
 set +e
-/usr/bin/env \
-  FAKE_PASS_INFO_AWAIT_LOCK_ONCE="$test_dir/takeover-awaited" \
-  FAKE_PASS_READINESS_LOCK="$state_home/secret-exec/proton-pass-readiness.lock" \
-  zsh "$ensure_ready" >"$test_dir/takeover-successor.out" \
+zsh "$ensure_ready" >"$test_dir/takeover-successor.out" \
   2>"$test_dir/takeover-successor.err"
 takeover_successor_status=$?
 set -e
@@ -2161,8 +2224,7 @@ else
   takeover_stalled_status=$?
 fi
 test_process_fixture_untrack_pid $takeover_stalled_pid
-rm -f -- "$FAKE_PASS_REQUIRE_LOGOUT" "$FAKE_PASS_INFO_ORPHANED" \
-  "$test_dir/takeover-awaited"
+rm -f -- "$FAKE_PASS_REQUIRE_LOGOUT" "$FAKE_PASS_INFO_ORPHANED"
 (( takeover_stalled_status != 0 )) &&
   [[ $(<"$test_dir/takeover-stalled.err") ==
     'proton-pass-ensure-ready: provider-session readiness check timed out' ]] ||
@@ -2174,6 +2236,10 @@ rm -f -- "$FAKE_PASS_REQUIRE_LOGOUT" "$FAKE_PASS_INFO_ORPHANED" \
 [[ $(/usr/bin/grep -Fxc login "$FAKE_PASS_LOG") == 1 &&
   $(/usr/bin/grep -Fxc 'logout --force' "$FAKE_PASS_LOG") == 1 ]] ||
   fail 'a takeover repair must clean up and log in exactly once'
+# The owner's two checks, then only the successor's classification and
+# verification.
+[[ $(info_call_count) == 4 ]] ||
+  fail "a successor whose shared wait expires must skip the first check: $(<"$FAKE_PASS_LOG")"
 grep -Fqx 'reason=repaired' "$status_file" ||
   fail 'a takeover repair must record its value-free reason'
 assert_no_private_diagnostics 'a takeover repair'
@@ -2670,7 +2736,7 @@ grep -Fqx 'reason=repaired' "$status_file" ||
 zsh "$ensure_ready" ||
   fail 'the repaired session must stay ready'
 [[ $(<"$FAKE_PASS_LOG") == info ]] ||
-  fail 'without a login marker, a ready session must take the unlocked check'
+  fail 'without a login marker, a ready session must take the shared first check'
 
 # An unclassified check behind a marker keeps both the session and the marker.
 rm -f -- "$FAKE_PASS_REMOTE_SESSION" "$FAKE_HANGING_CHILD_PID"
@@ -2743,66 +2809,51 @@ done
 rm -f -- "$login_marker_target" "$FAKE_PASS_LOCAL_SESSION" \
   "$FAKE_PASS_REMOTE_SESSION"
 
-# A repair can record its marker while an unlocked check runs. The check must
-# then defer to the locked path, not report the half-written session ready.
-# The reader's check starts before the marker exists and finishes on the
-# half-written session; it must then defer to the lock. The repair holds the
-# lock past the reader's takeover window, so the reader ends as a waiter.
-marker_race_window=$test_dir/marker-race-window
+# A failed repair stores a partial session, then forces it out and clears its
+# marker. A fast check that runs beside it can read that session before the
+# cleanup and finish after the marker is gone, so a marker check cannot catch
+# it. The reader's check starts first and waits for a session; the repair's
+# login stores one and fails once the reader records what it saw. The reader
+# must never report that session ready.
+partial_race_window=$test_dir/partial-race-window
 rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION" \
-  "$FAKE_HANGING_CHILD_PID" "$marker_race_window"
+  "$partial_race_window"
 : > "$FAKE_PASS_LOG"
-: > "$FAKE_PASS_LOGIN_PARTIAL_HANG"
-test_process_fixture_track_pid_file "$FAKE_HANGING_CHILD_PID"
-FAKE_PASS_INFO_AWAIT_SESSION_ONCE=$marker_race_window zsh "$ensure_ready" \
-  >"$test_dir/marker-race-reader.out" 2>&1 &
-marker_race_reader_pid=$!
-test_process_fixture_track_pid $marker_race_reader_pid
+: > "$FAKE_PASS_LOGIN_PARTIAL_FAIL"
+/usr/bin/env \
+  FAKE_PASS_INFO_AWAIT_SESSION_ONCE="$partial_race_window" \
+  FAKE_PASS_INFO_HOLD_WHILE="$login_marker" \
+  zsh "$ensure_ready" >"$test_dir/partial-race-reader.out" 2>&1 &
+partial_race_reader_pid=$!
+test_process_fixture_track_pid $partial_race_reader_pid
 zmodload zsh/zselect
-integer marker_race_polls=500
+integer partial_race_polls=500
 # The reader's check is running once its info call is logged.
-while (( marker_race_polls-- > 0 )) && [[ ! -s $FAKE_PASS_LOG ]]; do
+while (( partial_race_polls-- > 0 )) && [[ ! -s $FAKE_PASS_LOG ]]; do
   zselect -t 1 2>/dev/null || true
 done
-zsh "$ensure_ready" >"$test_dir/marker-race-repair.out" 2>&1 &
-marker_race_repair_pid=$!
-test_process_fixture_track_pid $marker_race_repair_pid
-marker_race_polls=500
-while (( marker_race_polls-- > 0 )) && [[ ! -s $FAKE_HANGING_CHILD_PID ]]; do
-  zselect -t 1 2>/dev/null || true
-done
-[[ -s $FAKE_HANGING_CHILD_PID ]] ||
-  fail 'the racing repair must reach its login'
-# Later logins complete normally.
-rm -f -- "$FAKE_PASS_LOGIN_PARTIAL_HANG"
+[[ -s $FAKE_PASS_LOG ]] || fail 'the racing reader must start its check'
 set +e
-wait $marker_race_repair_pid
-marker_race_repair_status=$?
-wait $marker_race_reader_pid
-marker_race_reader_status=$?
+/usr/bin/env FAKE_PASS_LOGIN_PARTIAL_GATE="$partial_race_window" \
+  zsh "$ensure_ready" >"$test_dir/partial-race-repair.out" 2>&1
+partial_race_repair_status=$?
+wait $partial_race_reader_pid
+partial_race_reader_status=$?
 set -e
-test_process_fixture_untrack_pid $marker_race_repair_pid
-test_process_fixture_untrack_pid $marker_race_reader_pid
-hanging_child_pid=$(<"$FAKE_HANGING_CHILD_PID")
-test_process_fixture_wait_for_pid_exit $hanging_child_pid 100 ||
-  fail 'the racing repair must reap its hanging login'
-test_process_fixture_untrack_pid_file "$FAKE_HANGING_CHILD_PID"
-(( marker_race_repair_status != 0 )) ||
-  fail 'the racing repair fixture must time out its login'
-[[ $(<"$marker_race_window") == seen ]] ||
-  fail 'the reader fixture must finish its unlocked check on the half-written session'
-(( marker_race_reader_status != 0 )) ||
-  fail "an unlocked check that finishes behind a marker must not report ready: $(<"$test_dir/marker-race-reader.out")"
-[[ $(<"$test_dir/marker-race-reader.out") ==
-  'proton-pass-ensure-ready: the concurrent provider-session repair did not establish readiness' ]] ||
-  fail "the reader behind a marker must wait for the repair: $(<"$test_dir/marker-race-reader.out")"
-[[ $(grep -Fxc login "$FAKE_PASS_LOG") == 1 ]] ||
-  fail "the waiting reader must not start a second login: $(<"$FAKE_PASS_LOG")"
-grep -Fqx 'reason=concurrent-repair-failed' "$status_file" ||
-  fail 'the waiting reader must record concurrent-repair-failed'
-[[ ! -e $login_marker ]] ||
-  fail 'the racing repair must clear its marker after its cleanup'
-rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION"
+test_process_fixture_untrack_pid $partial_race_reader_pid
+rm -f -- "$FAKE_PASS_LOGIN_PARTIAL_FAIL"
+(( partial_race_repair_status != 0 )) ||
+  fail 'the racing repair fixture must fail its login'
+(( partial_race_reader_status != 0 )) &&
+  ! grep -Fqx 'reason=existing-session' "$status_file" ||
+  fail "a check beside a failed repair must not report its partial session ready: status=$partial_race_reader_status check=$(<"$partial_race_window") output=$(<"$test_dir/partial-race-reader.out")"
+[[ $(<"$partial_race_window") == missed ]] ||
+  fail 'a fast check must not overlap a repair that stores a partial session'
+[[ $(<"$test_dir/partial-race-reader.out") ==
+  'proton-pass-ensure-ready: provider-session repair failed' ]] ||
+  fail "the reader must repair after the failed repair, not reuse it: $(<"$test_dir/partial-race-reader.out")"
+[[ ! -e $FAKE_PASS_LOCAL_SESSION && ! -e $login_marker ]] ||
+  fail 'failed repairs must leave neither a partial session nor a marker'
 
 rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION" \
   "$FAKE_DESCENDANT_PID" "$FAKE_DESCENDANT_TOKEN_MARKER"
@@ -2887,6 +2938,8 @@ hanging_child_pid=$(<"$FAKE_HANGING_CHILD_PID")
 test_process_fixture_untrack_pid_file "$FAKE_HANGING_CHILD_PID"
 rm -f -- "$FAKE_PASS_VERIFY_HANG"
 
+# A holder that keeps the lock past every wait: the first check's shared wait
+# expires, then the exclusive path's takeover window and extended wait.
 rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION"
 : > "$FAKE_PASS_LOG"
 lock_file=$state_home/secret-exec/proton-pass-readiness.lock
@@ -2899,7 +2952,7 @@ zsh -f -c '
   integer lock_fd
   zsystem flock -t 1 -f lock_fd "$1"
   : > "$2"
-  zselect -t 2750 || true
+  zselect -t 6000 || true
 ' -- "$lock_file" "$lock_ready" &
 lock_holder_pid=$!
 test_process_fixture_track_pid $lock_holder_pid
@@ -2913,18 +2966,19 @@ lock_output=$(zsh "$ensure_ready" 2>&1)
 lock_status=$?
 set -e
 typeset -F lock_timeout_elapsed=$(( EPOCHREALTIME - lock_timeout_started ))
-wait $lock_holder_pid
+kill $lock_holder_pid 2>/dev/null || true
+wait $lock_holder_pid 2>/dev/null || true
 test_process_fixture_untrack_pid $lock_holder_pid
 (( lock_status != 0 )) || fail 'a repair lock timeout must fail readiness'
-(( lock_timeout_elapsed >= 25.5 )) ||
-  fail "a lock timeout must cover the takeover window and extended concurrent wait: elapsed=$lock_timeout_elapsed"
+(( lock_timeout_elapsed >= 26.5 )) ||
+  fail "a lock timeout must cover the shared wait, takeover window, and extended concurrent wait: elapsed=$lock_timeout_elapsed"
 [[ $lock_output ==
   'proton-pass-ensure-ready: timed out waiting for provider-session repair' ]] ||
   fail 'a lock timeout must report one value-free error'
 grep -Fqx 'reason=lock-timeout' "$status_file" ||
   fail 'a lock timeout must record its value-free reason'
-! /usr/bin/grep -Fqx login "$FAKE_PASS_LOG" ||
-  fail 'a lock timeout must not attempt provider login'
+[[ ! -s $FAKE_PASS_LOG ]] ||
+  fail "a caller whose lock waits expire must not call the provider: $(<"$FAKE_PASS_LOG")"
 
 rm -f -- "$FAKE_PASS_LOCAL_SESSION" "$FAKE_PASS_REMOTE_SESSION"
 : > "$FAKE_PASS_LOG"
