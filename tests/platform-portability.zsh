@@ -568,7 +568,8 @@ if legacy_git_message=$(
 ); then
   fail 'Legacy Git config guard accepted ~/.gitconfig with a CodeRabbit ID'
 fi
-mkdir -p "$legacy_git_home/.config/git"
+[[ ${${(f)legacy_git_message}[-1]} == *'git config --file'*coderabbit.machineId* ]] ||
+  fail 'Legacy Git config guard did not print a CodeRabbit ID copy command'
 /bin/sh -c "${${(f)legacy_git_message}[-1]}"
 [[ $(git config --file "$legacy_git_home/.config/git/config" coderabbit.machineId) == cli/fixture-id ]] ||
   fail 'Legacy Git config guard did not print a working CodeRabbit ID copy command'
