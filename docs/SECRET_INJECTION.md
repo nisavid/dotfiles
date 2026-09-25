@@ -31,10 +31,82 @@ descendants run in a dedicated process group; timeout cleanup sends `TERM`,
 then `KILL`, and reaps the managed child before the launcher returns. Resolved
 values travel only through inherited anonymous descriptors and shell memory.
 
+The launcher also exports `SECRET_EXEC_INJECTED_PROFILES`, a non-secret
+provenance marker that names the profile whose values the target received. The
+launcher drops any inherited marker before it resolves anything, so readiness
+checks, providers, and failed launches never see a stale one. Because the scrub
+removes every other profile's credentials, a nested launch replaces the marker
+rather than appending to it: after `secret-exec A -- secret-exec B -- cmd`, the
+marker names only `B`. The marker never carries a value. Profiles must not map
+or unset it or any other `SECRET_EXEC_*` name, which the launcher reserves for
+its own state.
+
+When the inherited marker names the selected profile as a whole
+space-separated word and every value that profile maps is present, non-empty,
+and a single line, the launcher reuses those values. It skips readiness and
+resolution, still removes every other managed name, including names the profile
+unsets with `!`, and then execs the target with the marker set to that profile.
+A marker that merely contains the name, such as `typesafe-extra` for
+`typesafe`, does not match. If any value is missing, the launcher resolves the
+profile normally. `aws-credential-process` always resolves.
+
+The marker is not authenticated, and reuse trusts the inherited value. A
+process that sets the marker next to its own value for a mapped name gets that
+value passed through in place of the managed one, exactly as if it had run the
+target directly. A spoofed marker cannot make the launcher fetch, reveal, or
+widen access to any value: it only suppresses a lookup whose result would have
+replaced the caller's own value.
+
 Proton Pass sessions are local to each host and can become unauthenticated
 while local session files remain. A successful remote `pass-cli info` call,
 with its output suppressed, is the readiness signal. Local files, a running
 Secret Service, and notification delivery are not readiness signals.
+
+### Best-effort launches
+
+`secret-exec --best-effort <profile> -- <command> [args...]` injects exactly
+like an ordinary launch while the provider is available. If it is not, the
+launcher starts the target without the profile's credentials instead of
+failing. Profile names cannot start with `-`, so the option cannot be mistaken
+for a profile. Shims reach it through `name=profile?` mappings (see
+[Command shims](#command-shims)); agent-equipment MCP routes still require the
+profile as the launcher's first argument and do not accept the option.
+
+Best-effort covers provider availability, not the launch contract. These
+failures stop the launch in both modes:
+
+- usage errors: a missing `--` or target, or `--best-effort` combined with
+  `aws-credential-process`
+- profile-catalog errors: directory or file permissions, symbolic links,
+  malformed or duplicate mappings, unsupported locators, an unknown or empty
+  profile, or a profile that manages a reserved `SECRET_EXEC_*` name
+- a failure to remove an inherited credential name
+
+The fallback boundary is the scrub. Once the catalog has loaded and every
+managed name is gone, a later resolution failure falls back. That includes a
+missing or failing readiness helper (a locked native store, for example), a
+missing or untrusted provider command, a provider timeout or failure, including
+one whose process group became unmanageable, and a resolved value that is empty
+or spans lines. Two post-scrub failures still stop the launch: signals, and a
+failure to close the launcher's diagnostic channel after every value resolved.
+
+On fallback, the launcher unsets every value it had already exported and the
+provider request variables, and it does not export the provenance marker.
+Standard error keeps the usual value-free diagnostic and gains one `starting
+<command> without <profile> credentials` line. The launcher sends one desktop
+notification and then execs the target, so the target's own exit status is the
+launch status.
+
+The notification's title is `Credentials unavailable`. Its body names only the
+profile and the command's base name, or `A command` when that name contains
+unusual characters. It never includes a value, locator, or provider output,
+and it does not guess at a cause: it asks only for a restart once the
+credential provider is available. Stderr keeps the value-free reason, and so
+does the readiness status when the readiness helper records the failure. Linux sends it with `notify-send`; macOS passes the text to
+`osascript` as arguments, not as script source. Either command is found on
+`PATH`, like `pass-cli`, and a missing notifier skips the notification. It runs
+detached with its output discarded and is killed after two seconds, so it
+neither delays the target nor outlives its bound.
 
 ## Provider readiness and recovery
 
@@ -319,7 +391,22 @@ contract.
 The encrypted catalog may also map command names to profiles. Apply renders the
 map privately and manages a shim for each command. A shim resolves the first
 later executable with the same name, then launches it through the mapped
-profile.
+profile. The shim launches that executable by its `PATH` location without
+resolving symbolic links, so a symlinked multi-call binary still receives the
+command name it dispatches on.
+
+Every shim goes through the launcher. Inside a process tree that already
+carries the mapped profile, the launcher reuses the injected values instead of
+repeating the provider lookup (see [Profile contract](#profile-contract)), so a
+shimmed command still receives only its profile's credentials.
+
+A mapping ends with `?`, as in `name=profile?`, to make it best-effort. Its
+shim launches through `secret-exec --best-effort`, so an unavailable provider
+starts the command without that profile's credentials and sends a
+notification (see [Best-effort launches](#best-effort-launches)). A mapping
+without the suffix keeps failing closed. The suffix follows the profile name
+exactly once: `name=profile??`, `name=?`, and `name=?profile` are malformed.
+A command may appear only once, with or without the suffix.
 
 The dispatcher rejects missing, duplicate, malformed, and recursive mappings.
 An absolute executable path bypasses command lookup and therefore bypasses the

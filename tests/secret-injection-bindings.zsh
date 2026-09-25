@@ -298,9 +298,23 @@ rendered_commands=$test_dir/rendered-commands.env
 chezmoi -S home execute-template \
   --override-data-file tests/fixtures/secret-exec-public.toml \
   < "$commands_template" > "$rendered_commands"
+command_mapping_line_valid() {
+  [[ -z $1 || $1 == \#* ||
+    $1 == [A-Za-z0-9][A-Za-z0-9_.+-]#=[A-Za-z0-9][A-Za-z0-9_.-]#(|[?]) ]]
+}
+for command_line in tool=profile 'tool=profile?' 'tool.x+y=pro_file-1.2?'; do
+  command_mapping_line_valid "$command_line" ||
+    fail "the command-map syntax must accept $command_line"
+done
+for command_line in 'tool=profile??' 'tool=?' 'tool=?profile' 'tool=pro?file' \
+  'tool?=profile' 'tool=profile ?' 'tool=' '=profile'; do
+  ! command_mapping_line_valid "$command_line" ||
+    fail "the command-map syntax must reject $command_line"
+done
+grep -Fqx 'tool-b=aws?' "$rendered_commands" ||
+  fail 'the fixture command map must exercise a best-effort mapping'
 while IFS= read -r command_line || [[ -n $command_line ]]; do
-  [[ -z $command_line || $command_line == \#* ||
-    $command_line == [A-Za-z0-9][A-Za-z0-9_.+-]#=[A-Za-z0-9][A-Za-z0-9_.-]# ]] || \
+  command_mapping_line_valid "$command_line" || \
     fail 'the fixture command map contains an invalid mapping'
 done < "$rendered_commands"
 
