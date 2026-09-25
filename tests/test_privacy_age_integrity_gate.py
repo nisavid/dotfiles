@@ -44,6 +44,7 @@ BOOTSTRAP_AUTHORITY_REVISION = "5c037de7462d9e4a52af4b95b69c37eae7b33343"
 BOOTSTRAP_AUTHORITY_SOURCE_FIXTURE = (
     ROOT / "tests/fixtures/age-admission-bootstrap"
 )
+BOOTSTRAP_HISTORICAL_SIGNER_PATH = ".github/age-admission/allowed_signers"
 BOOTSTRAP_HISTORICAL_SOURCE_PATHS = (
     "scripts/admit-age-envelopes",
     "scripts/create-age-admission-receipt",
@@ -139,13 +140,19 @@ def write_files(root: Path) -> None:
 
 
 def historical_bootstrap_source(relative: str) -> Path:
-    if relative in BOOTSTRAP_HISTORICAL_SOURCE_PATHS:
+    if (
+        relative in BOOTSTRAP_HISTORICAL_SOURCE_PATHS
+        or relative == BOOTSTRAP_HISTORICAL_SIGNER_PATH
+    ):
         return BOOTSTRAP_AUTHORITY_SOURCE_FIXTURE / relative
     return ROOT / relative
 
 
 def write_historical_bootstrap_authority(root: Path) -> None:
-    for relative in BOOTSTRAP_HISTORICAL_SOURCE_PATHS:
+    for relative in (
+        *BOOTSTRAP_HISTORICAL_SOURCE_PATHS,
+        BOOTSTRAP_HISTORICAL_SIGNER_PATH,
+    ):
         destination = root / relative
         destination.write_bytes(historical_bootstrap_source(relative).read_bytes())
         destination.chmod(BOOTSTRAP_REQUIRED_MODES[relative])
@@ -390,11 +397,12 @@ class PrivacyAgeIntegrityGateTests(TestCase):
                 tracked_mode,
             )
 
-    def test_bootstrap_signer_allowlist_matches_reviewed_tree(self) -> None:
+    def test_bootstrap_signer_fixture_matches_reviewed_tree(self) -> None:
         path = ROOT / ".github/age-admission/allowed_signers"
+        historical = historical_bootstrap_source(BOOTSTRAP_HISTORICAL_SIGNER_PATH)
         self.assertEqual(
             BOOTSTRAP_REVIEWED_SIGNER_ENTRY[2].decode("ascii"),
-            run("git", "hash-object", "--", os.fspath(path), cwd=ROOT),
+            run("git", "hash-object", "--", os.fspath(historical), cwd=ROOT),
         )
         staged = run(
             "git",
